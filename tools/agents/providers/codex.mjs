@@ -507,6 +507,27 @@ export async function deploy(opts) {
   const ruleFiles = [];
   const normalizedMode = normalizeDeploymentMode(mode);
 
+  // Check for addon-style directory structure (direct agents/, commands/, skills/, rules/ subdirs)
+  // This handles deployment when --source points to an addon or project-local extension directory
+  const isAddonSource = fs.existsSync(path.join(srcRoot, 'agents')) ||
+                        fs.existsSync(path.join(srcRoot, 'commands')) ||
+                        fs.existsSync(path.join(srcRoot, 'skills')) ||
+                        fs.existsSync(path.join(srcRoot, 'rules'));
+
+  if (isAddonSource) {
+    const addonAgentsDir = path.join(srcRoot, 'agents');
+    if (fs.existsSync(addonAgentsDir)) {
+      agentFiles.push(...listMdFiles(addonAgentsDir));
+    }
+
+    if (shouldDeployRules || rulesOnly) {
+      const addonRulesDir = path.join(srcRoot, 'rules');
+      if (fs.existsSync(addonRulesDir)) {
+        ruleFiles.push(...listMdFiles(addonRulesDir));
+      }
+    }
+  }
+
   // Frameworks discovered from manifests/directory structure
   const frameworks = getFrameworksForMode(srcRoot, normalizedMode);
   for (const framework of frameworks) {

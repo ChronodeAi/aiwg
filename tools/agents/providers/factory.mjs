@@ -956,6 +956,41 @@ export async function deploy(opts) {
   const skillDirs = [];
   const normalizedMode = normalizeDeploymentMode(mode);
 
+  // Check for addon-style directory structure (direct agents/, commands/, skills/, rules/ subdirs)
+  // This handles deployment when --source points to an addon or project-local extension directory
+  const isAddonSource = fs.existsSync(path.join(srcRoot, 'agents')) ||
+                        fs.existsSync(path.join(srcRoot, 'commands')) ||
+                        fs.existsSync(path.join(srcRoot, 'skills')) ||
+                        fs.existsSync(path.join(srcRoot, 'rules'));
+
+  if (isAddonSource) {
+    const addonAgentsDir = path.join(srcRoot, 'agents');
+    if (fs.existsSync(addonAgentsDir)) {
+      agentFiles.push(...listMdFiles(addonAgentsDir));
+    }
+
+    if (shouldDeployCommands || commandsOnly) {
+      const addonCommandsDir = path.join(srcRoot, 'commands');
+      if (fs.existsSync(addonCommandsDir)) {
+        commandFiles.push(...listMdFiles(addonCommandsDir));
+      }
+    }
+
+    if (shouldDeploySkills || skillsOnly) {
+      const addonSkillsDir = path.join(srcRoot, 'skills');
+      if (fs.existsSync(addonSkillsDir)) {
+        skillDirs.push(...listSkillDirs(addonSkillsDir));
+      }
+    }
+
+    if (shouldDeployRules || rulesOnly) {
+      const addonRulesDir = path.join(srcRoot, 'rules');
+      if (fs.existsSync(addonRulesDir)) {
+        ruleFiles.push(...listMdFiles(addonRulesDir));
+      }
+    }
+  }
+
   // All addons (dynamically discovered)
   if (normalizedMode === 'general' || normalizedMode === 'sdlc' || normalizedMode === 'both' || normalizedMode === 'all') {
     agentFiles.push(...getAddonAgentFiles(srcRoot));
