@@ -111,7 +111,7 @@ export const capabilities = {
 export function mapModel(originalModel, modelCfg, modelsConfig) {
   const gptModels = {
     'opus': 'gpt-5.4',
-    'sonnet': 'gpt-5.3-codex',
+    'sonnet': 'gpt-5.5',
     'haiku': 'gpt-5.1-codex-mini'
   };
 
@@ -176,7 +176,7 @@ export function transformAgent(srcPath, content, opts) {
 
   const models = {
     reasoning: reasoningModel || 'gpt-5.4',
-    coding: codingModel || 'gpt-5.3-codex',
+    coding: codingModel || 'gpt-5.5',
     efficiency: efficiencyModel || 'gpt-5.1-codex-mini'
   };
 
