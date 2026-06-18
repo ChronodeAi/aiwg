@@ -283,11 +283,12 @@ export async function deploy(opts) {
   const skillDirs = [];
   const ruleFiles = [];
 
-  // Check for addon-style directory structure (direct agents/, commands/, skills/ subdirs)
-  // This handles deployment when --source points to an addon directory
+  // Check for addon-style directory structure (direct agents/, commands/, skills/, rules/ subdirs)
+  // This handles deployment when --source points to an addon or project-local extension directory
   const isAddonSource = fs.existsSync(path.join(srcRoot, 'agents')) ||
                         fs.existsSync(path.join(srcRoot, 'commands')) ||
-                        fs.existsSync(path.join(srcRoot, 'skills'));
+                        fs.existsSync(path.join(srcRoot, 'skills')) ||
+                        fs.existsSync(path.join(srcRoot, 'rules'));
 
   if (isAddonSource) {
     // Deploy from addon-style directory structure
