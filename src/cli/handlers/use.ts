@@ -43,7 +43,7 @@ import {
   appendProjectLocalActivity,
   emitDiscoverEventsDeduped,
 } from '../../extensions/project-local-activity.js';
-import { hashBundleArtifacts } from '../../extensions/project-local-remove.js';
+import { hashDeployedArtifactsForProvider } from '../../extensions/project-local-remove.js';
 import { installAiwgHooks } from '../../extensions/claude-hooks-installer.js';
 import { detectScope, mirrorToUserScope, rejectOpenClawProjectScope } from '../scope-resolver.js';
 import { maybeWarnProjectIsolation } from '../project-isolation/index.js';
@@ -1113,9 +1113,15 @@ async function deployProjectLocalBundles(opts: {
         // Hash the bundle's manifest.json for stale detection
         const manifestAbsPath = path.join(bundle.bundlePath, 'manifest.json');
         const mHash = await hashManifest(manifestAbsPath);
-        // #1037 — record per-artifact source hashes so `aiwg remove` can
-        // detect pristine vs mutated vs replaced deployed files.
-        const artifactHashes = await hashBundleArtifacts(bundle.bundlePath);
+        // #1037 — record per-provider deployed artifact hashes so
+        // `aiwg remove` and `aiwg doctor --project-local` can compare
+        // against the post-transform file that actually exists on disk.
+        const perProviderHashes = await hashDeployedArtifactsForProvider(
+          bundle.bundlePath,
+          provider,
+          projectDir,
+        );
+        const artifactHashes = { [provider]: perProviderHashes };
         const updated = updateInstalled(config, bundle.id, provider, result.counts, {
           version: bundle.manifest.version,
           source: 'project-local',
