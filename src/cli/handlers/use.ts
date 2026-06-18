@@ -950,8 +950,9 @@ async function deployOneProjectLocalBundle(opts: {
   dryRun: boolean;
   verbose: boolean;
   quiet: boolean;
+  force?: boolean;
 }): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number } }> {
-  const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet } = opts;
+  const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force } = opts;
 
   const runner = createScriptRunner(frameworkRoot);
   const args: string[] = [
@@ -971,6 +972,7 @@ async function deployOneProjectLocalBundle(opts: {
   ];
   if (dryRun) args.push('--dry-run');
   if (verbose) args.push('--verbose');
+  if (force) args.push('--force');
   if (quiet && !verbose) args.push('--quiet');
   // Project-local bundles are addon-shaped — never trigger the legacy commands
   // migration prompt (which is only relevant for full-framework deploys).
@@ -1015,8 +1017,10 @@ async function deployProjectLocalBundles(opts: {
   quiet: boolean;
   /** When set, restrict to the bundle whose id matches. */
   onlyBundleId?: string;
+  /** Bypass sidecar skip-on-match for project-local bundles. */
+  force?: boolean;
 }): Promise<{ deployed: number; failed: number; bundles: ProjectLocalBundle[] }> {
-  const { ctx, frameworkRoot, projectDir, provider, target, dryRun, verbose, quiet, onlyBundleId } = opts;
+  const { ctx, frameworkRoot, projectDir, provider, target, dryRun, verbose, quiet, onlyBundleId, force } = opts;
 
   const discovery = await discoverProjectLocalBundles(projectDir);
 
@@ -1085,7 +1089,7 @@ async function deployProjectLocalBundles(opts: {
     }
 
     const result = await deployOneProjectLocalBundle({
-      bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet,
+      bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force,
     });
 
     if (result.exitCode !== 0) {
@@ -1479,6 +1483,7 @@ export class UseHandler implements CommandHandler {
             dryRun,
             verbose,
             quiet: !verbose && !dryRun,
+            force,
           });
           if (plResult.failed > 0) {
             ui.warn(`${plResult.failed} project-local bundle(s) failed to deploy`);
@@ -1543,6 +1548,7 @@ export class UseHandler implements CommandHandler {
         const explicitProvider = providerIdx >= 0 && remainingArgs[providerIdx + 1] ? remainingArgs[providerIdx + 1] : null;
         const dryRunSingle = remainingArgs.includes('--dry-run');
         const verboseSingle = remainingArgs.includes('--verbose') || remainingArgs.includes('-v');
+        const forceSingle = remainingArgs.includes('--force');
         const targetIdxSingle = remainingArgs.findIndex(a => a === '--target');
         const targetSingle = targetIdxSingle >= 0 && remainingArgs[targetIdxSingle + 1] ? remainingArgs[targetIdxSingle + 1] : process.cwd();
 
@@ -1559,6 +1565,7 @@ export class UseHandler implements CommandHandler {
             ctx, frameworkRoot, projectDir, provider: p, target: targetSingle,
             dryRun: dryRunSingle, verbose: verboseSingle, quiet: !verboseSingle && !dryRunSingle,
             onlyBundleId: framework,
+            force: forceSingle,
           });
           totalDeployed += r.deployed;
           totalFailed += r.failed;
@@ -1945,6 +1952,7 @@ export class UseHandler implements CommandHandler {
         dryRun,
         verbose,
         quiet,
+        force,
       });
       if (plResult.deployed > 0 && quiet) {
         ui.dim(`  + ${plResult.deployed} project-local bundle(s)`);
