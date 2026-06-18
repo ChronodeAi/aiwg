@@ -189,7 +189,12 @@ export async function buildProjectLocalDoctorSection(
       for (const provider of Object.keys(entry.deployedTo)) {
         const prefix = PROVIDER_PREFIX[provider];
         if (!prefix) continue;
-        for (const [sourceRel, expectedHash] of Object.entries(hashes)) {
+        const providerHashes = hashes[provider];
+        if (!providerHashes) {
+          unhashedSeen = true;
+          continue;
+        }
+        for (const [sourceRel, expectedHash] of Object.entries(providerHashes)) {
           const deployedAbs = resolve(projectDir, `${prefix}/${sourceRel}`);
           const actualHash = await hashDeployed(deployedAbs);
           if (actualHash === null) {

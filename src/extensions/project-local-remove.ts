@@ -143,6 +143,45 @@ export async function hashBundleArtifacts(
 }
 
 /**
+ * Compute hashes for the deployed artifacts of a project-local bundle for a
+ * specific provider, keyed by source-relative path.
+ *
+ * Unlike `hashBundleArtifacts()` which hashes the raw source files, this
+ * function walks the same source-relative paths but reads them from the
+ * provider's deployed location (e.g., `.codex/agents/...`). This captures the
+ * post-transform state so `aiwg doctor --project-local` and `aiwg remove` can
+ * compare against the file that actually exists on disk after deployment.
+ *
+ * Home-deploying providers (openclaw, hermes) are skipped because revert is out
+ * of scope for this iteration.
+ */
+export async function hashDeployedArtifactsForProvider(
+  bundleAbsPath: string,
+  provider: string,
+  projectDir: string,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const prefix = PROVIDER_PREFIX[provider];
+  if (!prefix) return out;
+
+  const sourceHashes = await hashBundleArtifacts(bundleAbsPath);
+  for (const sourceRel of Object.keys(sourceHashes)) {
+    const candidates = candidateDeployedPaths(provider, sourceRel);
+    for (const c of candidates) {
+      const absPath = resolve(projectDir, c);
+      try {
+        out[sourceRel] = await sha256Hex(absPath);
+        break;
+      } catch {
+        // Candidate missing — try next (e.g., .md vs .mdc for cursor rules)
+      }
+    }
+  }
+
+  return out;
+}
+
+/**
  * Provider-specific deploy-path conventions for the artifact directories
  * we currently emit. Keyed by provider, value is the prefix relative to
  * the project (or HOME for HOME-deploying providers — those are out of
@@ -249,10 +288,10 @@ function resolveOwnership(
     if (name === selfBundleId) continue;
     if (entry.source !== 'project-local') continue;
     if (!entry.artifactHashes) continue;
-    if (sourceRel in entry.artifactHashes) {
+    const providerHashes = entry.artifactHashes[provider];
+    if (providerHashes && sourceRel in providerHashes) {
       // Same source-rel path claimed by another project-local bundle —
       // the deployed file (if present) is theirs, not ours.
-      void provider;
       return name;
     }
   }
@@ -300,8 +339,9 @@ export async function removeProjectLocalBundle(
 
   for (const provider of providers) {
     let providerHadSkip = false;
+    const providerHashes = artifactHashes[provider] ?? {};
 
-    for (const sourceRel of Object.keys(artifactHashes)) {
+    for (const sourceRel of Object.keys(providerHashes)) {
       const owner = resolveOwnership(config, bundleId, provider, sourceRel);
       if (owner) {
         providerHadSkip = true;
@@ -329,7 +369,7 @@ export async function removeProjectLocalBundle(
       let detectedCase: RemoveCase = 'missing';
       for (const c of candidates) {
         const abs = resolve(projectDir, c);
-        const k = await classify(artifactHashes[sourceRel], abs);
+        const k = await classify(providerHashes[sourceRel], abs);
         if (k !== 'missing') {
           resolvedAbs = abs;
           detectedCase = k;
