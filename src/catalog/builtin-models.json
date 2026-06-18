@@ -236,6 +236,35 @@
       "source": "builtin",
       "lastVerified": "2026-02-06"
     },
+    "gpt-5.5": {
+      "provider": "openai",
+      "displayName": "GPT-5.5",
+      "releaseDate": "2026-06-18",
+      "status": "active",
+      "deprecated": false,
+      "deprecationDate": null,
+      "successorModel": null,
+      "capabilities": {
+        "contextWindow": 256000,
+        "maxOutputTokens": 16384,
+        "vision": true,
+        "toolUse": true,
+        "streaming": true,
+        "reasoning": "excellent",
+        "coding": "excellent",
+        "speed": "good"
+      },
+      "pricing": {
+        "inputPer1kTokens": 0.012,
+        "outputPer1kTokens": 0.048,
+        "currency": "USD",
+        "lastUpdated": "2026-06-18"
+      },
+      "aliases": ["gpt-5.5", "gpt5.5"],
+      "tags": ["flagship", "coding", "reasoning", "codex"],
+      "source": "builtin",
+      "lastVerified": "2026-06-18"
+    },
     "gpt-5.4": {
       "provider": "openai",
       "displayName": "GPT-5.4",
