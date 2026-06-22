@@ -1,0 +1,77 @@
+{
+  "id": "ring-governance",
+  "type": "addon",
+  "name": "Ring Governance",
+  "version": "0.1.0",
+  "description": "Governance boundary patterns for no self-grading, evaluator immutability, evolution adapter review, and memory-is-not-proof discipline.",
+  "core": false,
+  "autoInstall": false,
+  "author": "ChronodeAi",
+  "license": "MIT",
+  "repository": "https://github.com/ChronodeAi/aiwg",
+  "keywords": [
+    "ring",
+    "governance",
+    "self-improvement",
+    "evolution",
+    "grader",
+    "verdict",
+    "fortemi",
+    "memory",
+    "protected-set"
+  ],
+  "governanceFoundation": {
+    "role": "Portable governance principles; addon skills operate on the caller's current live workspace or explicitly supplied corpus.",
+    "principles": [
+      "An untrusted producer may propose work but must not judge, promote, or edit the evaluator.",
+      "Fortemi and semantic memory provide context and provenance, never proof authority.",
+      "Evolution/search adapters such as evo-hq own proposal strategy while governance owns integrity gates."
+    ]
+  },
+  "entry": {
+    "agents": "agents/",
+    "skills": "skills/",
+    "rules": "rules/",
+    "templates": "templates/"
+  },
+  "agents": [
+    "governance-skeptic"
+  ],
+  "commands": [],
+  "skills": [
+    "governance-escape-hatch-audit",
+    "governance-corpus-inventory",
+    "evolution-surface-review"
+  ],
+  "rules": [
+    "no-self-grading",
+    "governance-boundary",
+    "memory-is-not-proof",
+    "evaluator-immutability"
+  ],
+  "templates": [
+    "protected-surface-inventory",
+    "criterion-set-review",
+    "evolution-adapter-card",
+    "fortemi-boundary-card"
+  ],
+  "dependencies": {
+    "required": [
+      "aiwg-utils"
+    ],
+    "optional": [
+      "rlm",
+      "semantic-memory",
+      "agent-loop",
+      "aiwg-evals"
+    ]
+  },
+  "configuration": {
+    "defaults": {
+      "portRingCode": false,
+      "allowMemoryVerdicts": false,
+      "requireProtectedEvaluator": true,
+      "requireProducerGraderSeparation": true
+    }
+  }
+}
