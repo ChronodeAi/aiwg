@@ -1,7 +1,9 @@
 # Ring Governance
 
-Ring Governance is a content-only AIWG addon seed mined from the Ring workspace. It captures the
-portable governance lessons without copying Ring's Python implementation.
+Ring Governance is a content-only AIWG addon for reviewing governance boundaries in agent,
+optimizer, harness, and evolution-loop workflows. It was initially seeded from Ring workspace
+lessons, but its skills operate on the caller's current live workspace or an explicitly supplied
+corpus.
 
 ## Purpose
 
@@ -17,7 +19,8 @@ The core rule is simple:
 
 - Rules for no self-grading, evaluator immutability, governance-boundary protection, and
   memory-is-not-proof.
-- Skills for Ring corpus mining, governance escape-hatch audits, and evolution adapter review.
+- Skills for governance corpus inventory, governance escape-hatch audits, and evolution adapter
+  review.
 - Templates for protected surfaces, criterion sets, evolution adapters, and Fortemi boundaries.
 - A governance skeptic agent for adversarial review.
 
@@ -29,10 +32,8 @@ The core rule is simple:
 - No evolution adapter is considered safe until its evaluator, criteria, policy, and promotion path are
   outside the producer's edit surface.
 
-## Source Baseline
+## Provenance
 
-The first local baseline is:
-
-`.aiwg/reports/ring-mining-baseline-2026-06-22.md`
-
-Use it as the starting inventory before adding executable behavior.
+The addon was generalized from prior governance-harness work, but it does not require a private
+report, local archive, or Ring checkout. Any project using this addon should derive its own baseline
+from the live `.aiwg/` workspace in the invocation cwd or from an explicitly supplied corpus.
