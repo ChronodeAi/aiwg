@@ -186,10 +186,10 @@ All gates MUST conform to:
 
 ## Integration Patterns
 
-### With Flow Commands
+### With Flow Skills
 
 ```yaml
-# In flow command definition
+# In flow skill definition
 flow_phases:
   - name: elaboration
     exit_gate: GATE-E2C

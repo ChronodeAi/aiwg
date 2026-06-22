@@ -1,26 +1,28 @@
 ---
 paths:
   - ".aiwg/**"
-  - ".claude/commands/flow-*.md"
-  - ".claude/commands/intake-*.md"
-  - ".claude/commands/project-*.md"
+  - "AIWG.md"
+  - "AGENTS.md"
+  - "CLAUDE.md"
 ---
 
 # SDLC Orchestration Rules
 
-These rules apply when working with AIWG SDLC artifacts and workflow commands.
+These rules apply when working with AIWG SDLC artifacts, workflow skills, and flow skills.
 
 ## Core Platform Orchestrator Role
 
-**IMPORTANT**: You (Claude Code) are the **Core Orchestrator** for SDLC workflows, not a command executor.
+**IMPORTANT**: The active assistant in the current provider is the **Core Orchestrator** for SDLC
+workflows, not a provider-shortcut executor. This rule applies across Claude Code, Factory, and
+Codex CLI.
 
 ### Orchestration Responsibilities
 
-When users request SDLC workflows (natural language or commands):
+When users request SDLC workflows by natural language or by naming a skill:
 
 #### 0. Right-size before launching anything
 
-**REQUIRED**: Before invoking any intake, flow, or phase-transition command, apply the right-sizing heuristic from the `sdlc-right-sizing` rule:
+**REQUIRED**: Before invoking any intake, flow, or phase-transition skill, apply the right-sizing heuristic from the `sdlc-right-sizing` rule:
 
 - Most changes do NOT need intake, Inception, or phase-gate flows
 - Issues + (optional) ADR is the right answer for small / medium features
@@ -39,11 +41,12 @@ Map user requests to flow templates:
 - "Create architecture baseline" -> Extract SAD generation from flow
 - "Run iteration 5" -> `flow-iteration-dual-track` with iteration=5
 
-See full translation table: `@~/.local/share/ai-writing-guide/docs/simple-language-translations.md`
+See full translation table:
+`@$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/docs/simple-language-translations.md`
 
-#### 2. Read Flow Commands as Orchestration Templates
+#### 2. Read Flow Skills as Orchestration Templates
 
-**NOT bash scripts to execute**, but orchestration guides containing:
+Flow skills are **not bash scripts to execute**. They are orchestration guides containing:
 
 - **Artifacts to generate**: What documents/deliverables
 - **Agent assignments**: Who is Primary Author, who reviews
@@ -51,9 +54,11 @@ See full translation table: `@~/.local/share/ai-writing-guide/docs/simple-langua
 - **Multi-agent workflow**: Review cycles, consensus process
 - **Archive instructions**: Where to save final artifacts
 
-Flow commands are located in `.claude/commands/flow-*.md`
+Resolve the active workflow with `aiwg discover "<intent>"` and `aiwg show skill <name>`. Provider
+prompts, shortcuts, or legacy slash-command views are compatibility surfaces over the skill corpus;
+the skill is the canonical source.
 
-#### 3. Launch Multi-Agent Workflows via Task Tool
+#### 3. Launch Multi-Agent Workflows via Provider-Native Delegation
 
 **Follow this pattern for every artifact**:
 
@@ -63,7 +68,16 @@ Primary Author -> Parallel Reviewers -> Synthesizer -> Archive
   Draft v0.1    Reviews (3-5)      Final merge    .aiwg/archive/
 ```
 
-**CRITICAL**: Launch parallel reviewers in **single message** with multiple Task tool calls.
+Use the active provider's native delegation mechanism:
+
+- Claude Code: multiple Task tool calls in one assistant message when parallel review is warranted.
+- Factory: Factory-native agent/delegation primitives when available; otherwise run the same review
+  sequence serially with explicit reviewer roles.
+- Codex CLI: use available subagent tooling when present; otherwise perform the review inline and
+  clearly label the provider fallback.
+
+Respect the workspace parallelism cap in `AGENTS.md` / AIWG context. If the provider cannot launch
+parallel reviewers, preserve the review pattern and record that execution was serial or inline.
 
 #### 4. Track Progress and Communicate
 
@@ -76,9 +90,10 @@ Update user throughout with clear indicators:
 [!!] = Warning/attention needed
 ```
 
-## Natural Language Command Translation
+## Natural Language Skill Routing
 
-**Users don't type slash commands. They use natural language.**
+Users usually use natural language. When they name a legacy slash command or provider shortcut, treat
+it as an alias for the corresponding AIWG skill and resolve it through `aiwg discover` / `aiwg show`.
 
 ### Common Phrases
 
@@ -116,7 +131,9 @@ Update user throughout with clear indicators:
 
 ### Response Pattern
 
-**Always confirm understanding before starting**:
+**Confirm understanding before starting only when the request is ambiguous or the workflow is
+materially heavy.** If the user explicitly asks for a known flow, skill, or phase transition, act
+after applying right-sizing and discovery.
 
 ```text
 User: "Let's transition to Elaboration"
@@ -129,57 +146,61 @@ This will generate:
 - Master Test Plan
 - Elaboration Phase Plan
 
-I'll coordinate multiple agents for comprehensive review.
+I'll coordinate the appropriate provider-native reviewers for comprehensive review.
 Starting orchestration..."
 ```
 
-## Available Commands
+## Skill Discovery
+
+The examples below are common SDLC capabilities, not an exhaustive skill registry. Prefer
+`aiwg discover "<intent>"` followed by `aiwg show skill <name>` so Claude Code, Factory, and Codex CLI
+all resolve the same canonical AIWG surface even when provider shortcut directories differ.
 
 **Intake & Inception**:
-- `/intake-wizard` - Generate or complete intake forms
-- `/intake-from-codebase` - Analyze existing codebase
-- `/intake-start` - Kick off Inception phase
-- `/flow-concept-to-inception` - Concept -> Inception workflow
+- `intake-wizard` - Generate or complete intake forms
+- `intake-from-codebase` - Analyze existing codebase
+- `intake-start` - Kick off Inception phase
+- `flow-concept-to-inception` - Concept -> Inception workflow
 
 **Phase Transitions**:
-- `/flow-inception-to-elaboration` - To Elaboration
-- `/flow-elaboration-to-construction` - To Construction
-- `/flow-construction-to-transition` - To Transition
+- `flow-inception-to-elaboration` - To Elaboration
+- `flow-elaboration-to-construction` - To Construction
+- `flow-construction-to-transition` - To Transition
 
 **Continuous Workflows**:
-- `/flow-risk-management-cycle` - Risk identification
-- `/flow-requirements-evolution` - Requirements refinement
-- `/flow-architecture-evolution` - Architecture changes
-- `/flow-test-strategy-execution` - Test execution
-- `/flow-security-review-cycle` - Security validation
-- `/flow-performance-optimization` - Performance tuning
+- `flow-risk-management-cycle` - Risk identification
+- `flow-requirements-evolution` - Requirements refinement
+- `flow-architecture-evolution` - Architecture changes
+- `flow-test-strategy-execution` - Test execution
+- `flow-security-review-cycle` - Security validation
+- `flow-performance-optimization` - Performance tuning
 
 **Quality & Gates**:
-- `/flow-gate-check <phase>` - Validate gate criteria
-- `/flow-handoff-checklist <from> <to>` - Handoff validation
-- `/project-status` - Current phase and progress
-- `/project-health-check` - Health metrics
+- `flow-gate-check <phase>` - Validate gate criteria
+- `flow-handoff-checklist <from> <to>` - Handoff validation
+- `project-status` - Current phase and progress
+- `project-health-check` - Health metrics
 
 **Team & Process**:
-- `/flow-team-onboarding <member> [role]`
-- `/flow-knowledge-transfer <from> <to> [domain]`
-- `/flow-cross-team-sync <team-a> <team-b>`
-- `/flow-retrospective-cycle <type> [iteration]`
+- `flow-team-onboarding <member> [role]`
+- `flow-knowledge-transfer <from> <to> [domain]`
+- `flow-cross-team-sync <team-a> <team-b>`
+- `flow-retrospective-cycle <type> [iteration]`
 
 **Deployment & Operations**:
-- `/flow-deploy-to-production`
-- `/flow-hypercare-monitoring <days>`
-- `/flow-incident-response <id> [severity]`
+- `flow-deploy-to-production`
+- `flow-hypercare-monitoring <days>`
+- `flow-incident-response <id> [severity]`
 
 **Compliance & Governance**:
-- `/flow-compliance-validation <framework>`
-- `/flow-change-control <type> [id]`
-- `/check-traceability <path>`
-- `/security-gate`
+- `flow-compliance-validation <framework>`
+- `flow-change-control <type> [id]`
+- `check-traceability <path>`
+- `security-gate`
 
-### Command Parameters
+### Skill Arguments
 
-All flow commands support:
+Flow skills commonly support:
 - `[project-directory]` - Path to project root (default: `.`)
 - `--guidance "text"` - Strategic guidance
 - `--interactive` - Interactive mode
@@ -187,14 +208,19 @@ All flow commands support:
 ## AIWG-Specific Rules
 
 1. **Artifact Location**: All SDLC artifacts MUST be in `.aiwg/` subdirectories
-2. **Template Usage**: Use templates from `~/.local/share/ai-writing-guide/agentic/code/frameworks/sdlc-complete/templates/`
-3. **Agent Orchestration**: Follow Primary Author -> Parallel Reviewers -> Synthesizer -> Archive
+2. **Template Usage**: Use templates from `$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/templates/`
+3. **Agent Orchestration**: Follow Primary Author -> Reviewers -> Synthesizer -> Archive, using
+   provider-native parallelism when available
 4. **Phase Gates**: Validate gate criteria before transitioning
 5. **Traceability**: Maintain requirements -> code -> tests -> deployment links
 6. **Guidance First**: Use `--guidance` or `--interactive` upfront
-7. **Parallel Execution**: Launch independent agents in single message
-8. **Wire-As-You-Go**: Include @-mentions in ALL generated artifacts (see `.claude/rules/mention-wiring.md`)
-9. **Complete Docset by Default**: Never silently skip or abbreviate artifacts based on inferred project type, size, or complexity. If an artifact seems low-value for the project context, surface a HITL gate asking the user to confirm the skip — never silently omit documentation. Completeness is the default; incompleteness requires explicit user consent.
+7. **Parallel Execution**: Launch independent reviewers in one provider-native batch when supported;
+   otherwise run them serially and disclose the fallback
+8. **Wire-As-You-Go**: Include @-mentions in generated artifacts when the provider supports them; use
+   plain `$AIWG_ROOT/...` paths otherwise
+9. **Right-Sized Completeness**: Once a workflow is selected, do not silently omit artifacts required by
+   that workflow. But do not launch a heavier workflow merely to satisfy a "complete docset" reflex.
+   Apply `sdlc-right-sizing` first; completeness applies inside the chosen artifact set.
 
 ## Phase Overview
 
@@ -211,6 +237,6 @@ All flow commands support:
 ## Reference Documentation
 
 For detailed documentation, use @-mentions:
-- `@~/.local/share/ai-writing-guide/agentic/code/frameworks/sdlc-complete/docs/orchestrator-architecture.md`
-- `@~/.local/share/ai-writing-guide/agentic/code/frameworks/sdlc-complete/docs/multi-agent-documentation-pattern.md`
-- `@~/.local/share/ai-writing-guide/agentic/code/frameworks/sdlc-complete/docs/simple-language-translations.md`
+- `@$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/docs/orchestrator-architecture.md`
+- `@$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/docs/multi-agent-documentation-pattern.md`
+- `@$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/docs/simple-language-translations.md`

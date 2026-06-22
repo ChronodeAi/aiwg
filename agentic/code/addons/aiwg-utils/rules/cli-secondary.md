@@ -17,7 +17,7 @@ The agent's preferred path for any action, in strict priority order:
 |---|---|---|
 | **1. Local skill or agent** | Already loaded in your context (kernel skills, framework quickrefs, deployed agents) | Always check here first — these are free to invoke |
 | **2. Discovered skill or agent** | Reachable via `aiwg discover "<need>"` + `aiwg show <type> <name>` | When no local skill matches; query the index before improvising or falling to the CLI |
-| **3. Raw CLI command** | Imperative invocation of `aiwg <command>` | Only when no skill exists, OR you are on the discovery surface, OR you are inside a skill that is calling the CLI as its step |
+| **3. Raw CLI command** | Imperative invocation of `aiwg <command>` | Only when no skill exists, OR you are on the discovery surface, OR you are inside a skill that is calling the CLI as its implementation step |
 | **4. Manual file operations** | Direct edits without going through skill or CLI | Last resort — bypasses both priming AND registry update logic |
 
 **Rule of thumb**: if the agent is reaching for the raw CLI for an *action* (mutation, deploy, scaffold, regenerate), it should first ask "is there a skill for this — locally or via `aiwg discover`?" If yes, route through the skill.
@@ -104,7 +104,7 @@ Some commands carry both discovery and action subcommands. Classify per subcomma
 
 ### Rule 4: Action Commands — Always Prefer Skill
 
-The following CLI commands have paired skills/agents. When the user's intent maps to one of these, invoke the skill — not the raw CLI:
+The following CLI commands have paired skills/agents. When the user's intent maps to one of these, invoke the skill — not the raw CLI. Legacy provider slash commands and prompts are aliases into this same skill-first surface, not a separate preferred entry point.
 
 | CLI command | Paired skill/agent | Why the skill matters |
 |---|---|---|
@@ -116,7 +116,7 @@ The following CLI commands have paired skills/agents. When the user's intent map
 | `aiwg new my-project` | `new-project` skill / intake-wizard | Scaffold + intake guidance |
 | `aiwg promote` | promote skill | Hash verification, source preservation invariant |
 | `aiwg remove` | use/remove skill | Reverts cleanly without orphaning |
-| `aiwg add-agent` / `add-command` / `add-skill` / `add-behavior` / `add-template` | AgentSmith / CommandSmith / SkillSmith / template-engine | Scaffold validation, metadata pre-fill, deployment wiring |
+| `aiwg add-agent` / legacy `add-command` / `add-skill` / `add-behavior` / `add-template` | AgentSmith / CommandSmith / SkillSmith / template-engine | Scaffold validation, metadata pre-fill, deployment wiring |
 | `aiwg scaffold-{addon,extension,framework}` | scaffold skills | Manifest validation, naming conventions, deployment path |
 | `aiwg ralph` | `ralph` skill | Completion-criteria validation, recovery protocol, anti-laziness gates |
 | `aiwg mc start/dispatch` | `mission-control` skill | Concurrency budget, supervisor wiring |
@@ -147,7 +147,7 @@ The CLI is responsible for narrow imperative execution. It should return structu
 Documentation MAY keep CLI examples, but paired action examples must be framed as one of:
 
 1. a step the skill calls internally,
-2. an explicit operator command typed by the user, or
+2. an explicit raw CLI invocation typed by the user, or
 3. a diagnostic/status command from the discovery surface.
 
 If docs imply `aiwg <action>` is the agent's preferred path while a paired skill exists, file/fix drift under #1480.
@@ -166,7 +166,7 @@ And every CLI command reference doc (e.g. `docs/cli-reference.md`) MUST, for pai
 
 The agent may invoke the CLI directly without going through a paired skill ONLY when:
 
-1. The user explicitly typed the raw command (`"run aiwg refresh"`, not `"refresh AIWG"`)
+1. The user explicitly typed the raw CLI invocation (`"run aiwg refresh"`, not `"refresh AIWG"`)
 2. No paired skill exists for the command
 3. The command is on the discovery surface (Rule 2)
 4. The agent is inside a paired skill, and that skill is calling the CLI as its imperative step
@@ -219,7 +219,7 @@ Before invoking any CLI command, walk the hierarchy in order:
   - This is a mixed command and I'm using a discovery subcommand (Rule 3)
   - No paired skill exists (Rule 4 table doesn't list one; discover returns no results)
   - I'm inside a paired skill that is calling the CLI as its step
-  - The user explicitly typed the raw command
+  - The user explicitly typed the raw CLI invocation
 
 If priority 1 or 2 has a match and I'm still reaching for the CLI — stop and route through the skill.
 
