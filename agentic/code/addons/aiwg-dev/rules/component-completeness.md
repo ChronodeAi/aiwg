@@ -14,7 +14,7 @@ Common incompleteness patterns that reach code review:
 
 - A SKILL.md exists but the skill is not listed in the addon's `manifest.json` — the deployment pipeline ignores it
 - An agent has a description file but missing required frontmatter fields — the provider cannot load it
-- A command has a TypeScript definition in `definitions.ts` but no handler — the CLI throws at runtime
+- A legacy command bridge has a TypeScript definition in `definitions.ts` but no handler — the CLI throws at runtime
 - A rule file exists but is not included in `RULES-INDEX.md` — it is never deployed
 - An addon directory exists but has no `README.md` — users cannot understand what it does
 
@@ -66,7 +66,7 @@ At least one example showing input and expected output.
 | `tools:` frontmatter | Required YAML frontmatter field (may be empty array) |
 | Manifest registration | Agent name listed in parent addon's `manifest.json` `agents` array |
 
-### Command (CLI)
+### Legacy Command Bridge (CLI)
 
 | Requirement | Detail |
 |-------------|--------|
@@ -85,7 +85,7 @@ At least one example showing input and expected output.
 | `version` field | Required in manifest (CalVer: `YYYY.M.PATCH`) |
 | `description` field | Required in manifest |
 | `README.md` | Required at addon root |
-| At least one artifact | Addon must contain skills, agents, rules, commands, or templates |
+| At least one artifact | Addon must contain skills, agents, rules, templates, or an explicit legacy command bridge |
 
 ### Behavior
 
@@ -148,7 +148,7 @@ Use this checklist before marking any artifact as done:
 - [ ] `name:`, `description:`, `model:`, `tools:` all in frontmatter
 - [ ] Agent listed in `manifest.json` `agents` array
 
-### Command Checklist
+### Legacy Command Bridge Checklist
 
 - [ ] Entry in `src/extensions/commands/definitions.ts`
 - [ ] TypeScript handler registered in `allHandlers` OR `executedViaSkillRunner: true`
@@ -180,8 +180,8 @@ Use this checklist before marking any artifact as done:
 ## References
 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/skill-placement.md — Placement requirements
-- @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/no-circular-skill-calls.md — Skill-executed command requirements
-- @$AIWG_ROOT/src/extensions/commands/definitions.ts — Command definition registry
+- @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/no-circular-skill-calls.md — Skill-executed legacy command bridge requirements
+- @$AIWG_ROOT/src/extensions/commands/definitions.ts — Legacy command bridge definition registry
 - @$AIWG_ROOT/src/extensions/types.ts — Extension type definitions
 - @$AIWG_ROOT/docs/extensions/creating-extensions.md — Extension creation guide
 
