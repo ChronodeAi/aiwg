@@ -507,8 +507,12 @@ export async function deploy(opts) {
   const ruleFiles = [];
   const normalizedMode = normalizeDeploymentMode(mode);
 
-  // Check for addon-style directory structure (direct agents/, commands/, skills/, rules/ subdirs)
-  // This handles deployment when --source points to an addon or project-local extension directory
+  // Check for addon-style directory structure (direct agents/ and rules/
+  // subdirs). Handles deployment when --source points at a project-local
+  // bundle (.aiwg/extensions/<name>/) rather than $AIWG_ROOT. Mirrors the
+  // reference implementation in claude.mjs (#124). Commands and skills are
+  // resolved from srcRoot inside deployCommands/deploySkills, so only agents
+  // and rules need the explicit short-circuit here.
   const isAddonSource = fs.existsSync(path.join(srcRoot, 'agents')) ||
                         fs.existsSync(path.join(srcRoot, 'commands')) ||
                         fs.existsSync(path.join(srcRoot, 'skills')) ||

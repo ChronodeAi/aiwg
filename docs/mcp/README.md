@@ -22,11 +22,27 @@ aiwg mcp info
 
 | Tool | Description |
 |------|-------------|
-| `workflow-run` | Execute AIWG workflows programmatically |
+| `discover` | Search AIWG skills, agents, commands, and rules |
+| `skill-list` / `skill-show` | List skills and fetch full SKILL.md bodies |
+| `command-list` / `command-show` | List CLI commands and fetch command definitions |
+| `rule-list` / `rule-show` | List rules and fetch rule bodies |
+| `agent-list` / `agent-show` | List agents and fetch agent definitions |
+| `template-list` / `template-show` / `template-render` | List, fetch, and render templates |
+| `command-run` | Run allow-listed `aiwg` CLI commands |
 | `artifact-read` | Read artifacts from .aiwg/ directory |
 | `artifact-write` | Write artifacts to .aiwg/ directory |
-| `template-render` | Render templates with variables |
-| `agent-list` | List available agents |
+
+Opt-in toolsets add Flow, Mission, memory, knowledge-base, research,
+activity-log, index, Ralph, Mission Control, and ops tools:
+
+```bash
+aiwg mcp serve --toolsets=flows,missions
+aiwg mcp serve --toolsets=all
+```
+
+`workflow-run` has been removed from the core MCP surface. Use `command-run`
+for general CLI execution, the `flows` toolset for `flow-list` / `flow-show` /
+`flow-run`, or the `missions` toolset for Mission guide, dispatch, and status.
 
 ## Available Prompts
 
