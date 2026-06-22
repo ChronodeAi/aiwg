@@ -3,7 +3,7 @@
   "type": "addon",
   "name": "Ring Governance",
   "version": "0.1.0",
-  "description": "Governance boundary patterns mined from Ring: no self-grading, evaluator immutability, evolution adapter review, and memory-is-not-proof discipline.",
+  "description": "Governance boundary patterns for no self-grading, evaluator immutability, evolution adapter review, and memory-is-not-proof discipline.",
   "core": false,
   "autoInstall": false,
   "author": "ChronodeAi",
@@ -20,11 +20,13 @@
     "memory",
     "protected-set"
   ],
-  "researchFoundation": {
-    "RING-BASELINE": ".aiwg/reports/ring-mining-baseline-2026-06-22.md",
-    "RING-PRINCIPLE-1": "An untrusted producer may propose work but must not judge, promote, or edit the evaluator.",
-    "RING-PRINCIPLE-2": "Fortemi and semantic memory provide context and provenance, never proof authority.",
-    "RING-PRINCIPLE-3": "Evolution/search adapters such as evo-hq own proposal strategy while governance owns integrity gates."
+  "governanceFoundation": {
+    "role": "Portable governance principles; addon skills operate on the caller's current live workspace or explicitly supplied corpus.",
+    "principles": [
+      "An untrusted producer may propose work but must not judge, promote, or edit the evaluator.",
+      "Fortemi and semantic memory provide context and provenance, never proof authority.",
+      "Evolution/search adapters such as evo-hq own proposal strategy while governance owns integrity gates."
+    ]
   },
   "entry": {
     "agents": "agents/",
@@ -38,7 +40,7 @@
   "commands": [],
   "skills": [
     "governance-escape-hatch-audit",
-    "mine-ring-corpus",
+    "governance-corpus-inventory",
     "evolution-surface-review"
   ],
   "rules": [
