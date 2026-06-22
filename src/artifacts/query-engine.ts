@@ -16,6 +16,7 @@ import type { QueryParams, QueryResult, MetadataEntry, GraphType, ArtifactIndex 
 import { loadMetadataIndex, loadGraphIndexFile } from './index-reader.js';
 import { bm25Rank, type FullTextDoc } from './fulltext.js';
 import { parseFrontmatter } from './index-builder.js';
+import { applyFacetFusion } from './discover-facets.js';
 
 /**
  * Resolve an index entry's source file path and read its body (frontmatter
@@ -617,12 +618,21 @@ export async function discoverCapability(
   // Filter by type
   const candidates = entries.filter(e => types.includes(e.type));
 
-  // Score (strict overlap gate)
-  let scored = candidates
+  // Score (strict overlap gate). Keep the full sorted list so the facet
+  // fusion below can inject/lift curated capabilities into the top-K before
+  // truncation — a capability that the lexical pass ranked outside `limit`
+  // (or missed entirely) still surfaces when the query activates its facet.
+  const strictScored = candidates
     .map(entry => ({ entry, score: scoreEntry(entry, params.phrase) }))
     .filter(r => r.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score);
+
+  // Single-pass facet fusion (#1623 U3): fuse the curated feature→capability
+  // facets (expansion / persona / project / provider-capability) into the
+  // lexical ranking so canonical domain phrases rank their owning capability
+  // top-K instead of being out-scored by artifacts that merely mention the
+  // word. Facet activation can also rescue an otherwise-empty strict pass.
+  let scored = (await applyFacetFusion(strictScored, candidates, params.phrase)).slice(0, limit);
 
   // #1561 — verbose-query fallback. A wordy full-sentence query
   // ("find me a skill that handles intake forms") dilutes the token hit ratio
@@ -639,11 +649,11 @@ export async function discoverCapability(
     // if nothing clears the floor, we fall through to the no-match hint, which
     // is more honest than surfacing a 0.01 path match.
     const RELAXED_MIN_SCORE = 0.02;
-    const relaxedScored = candidates
+    const relaxedFull = candidates
       .map(entry => ({ entry, score: scoreEntry(entry, params.phrase, { relaxOverlap: true }) }))
       .filter(r => r.score >= RELAXED_MIN_SCORE)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
+      .sort((a, b) => b.score - a.score);
+    const relaxedScored = (await applyFacetFusion(relaxedFull, candidates, params.phrase)).slice(0, limit);
     if (relaxedScored.length > 0) {
       scored = relaxedScored;
       relaxed = true;
@@ -823,6 +833,64 @@ async function findCorpusArtifact(
           // not present — continue
         }
       }
+    }
+  }
+
+  // Top-level agents live at `agentic/code/agents/<category>/<name>.md`
+  // (e.g. `personas/aiwg-writer.md`) — a flat-under-category layout the
+  // bundle groups above do not cover. Scan it directly so persona/agent
+  // `show` survives un-indexed (or stale-framework-index) workspaces, where
+  // the corpus fallback is the only resolution path. (#1623 U5)
+  if (typeFilter.length === 0 || typeFilter.includes('agent')) {
+    const agentMatch = await findAgentInCorpus(
+      path.join(aiwgRoot, 'agentic/code/agents'),
+      name,
+    );
+    if (agentMatch) {
+      return { path: agentMatch, type: 'agent', bundleKind: null, bundleId: null };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Recursively scan `agentic/code/agents` for a flat `<name>.md` agent file.
+ *
+ * Agents use an `agents/<category>/<name>.md` layout (e.g. `personas/`) that
+ * differs from the bundle `<dir>/<bundle>/<sub>/<name>.md` layout the generic
+ * corpus scan walks, so persona agents are otherwise missed. Bounded depth —
+ * the agents tree is shallow. Returns the first matching absolute path, or
+ * null. Direct files at each level take priority over subdirectories. (#1623)
+ */
+async function findAgentInCorpus(
+  agentsRoot: string,
+  name: string,
+  depth = 0,
+): Promise<string | null> {
+  if (depth > 3) return null;
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const fsp = fs.promises;
+
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = await fsp.readdir(agentsRoot, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+
+  // Prefer a direct `<name>.md` at this level before descending.
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name === `${name}.md`) {
+      return path.join(agentsRoot, entry.name);
+    }
+  }
+  // Descend into category subdirectories (e.g. personas/).
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      const found = await findAgentInCorpus(path.join(agentsRoot, entry.name), name, depth + 1);
+      if (found) return found;
     }
   }
   return null;

@@ -566,8 +566,9 @@ aiwg remove my-team-rules --force
 
 **Routing:**
 
-- If `<id>` matches a project-local entry in `aiwg.config.installed`, routes to the project-local revert handler ([design](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/design-aiwg-remove-revert.md)) which uses recorded `artifactHashes` to detect pristine vs mutated vs replaced deployed files.
-- Otherwise, falls through to the upstream framework / plugin uninstaller.
+- If `<id>` matches a project-local entry in `aiwg.config.installed`, routes to the project-local revert handler ([design](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/design-aiwg-remove-revert.md)) which uses recorded `artifactHashes` to detect pristine vs mutated vs replaced deployed files. The `--provider` and `--keep-registry` flags apply only to this path.
+- Otherwise, falls through to the upstream framework / plugin uninstaller, which accepts `--force`, `--keep-data`, and `--dry-run`. Unknown flags are rejected with a clear message (exit 2) instead of being silently ignored, and an unknown `<id>` reports `Plugin '<id>' is not installed` (exit 1) rather than crashing.
+- `--provider` is supported only for project-local removal or user-scope removal (`--scope user --provider <p>`). Passing it to an upstream framework removal returns a clear error naming the supported alternatives.
 
 **Source preservation invariant:** `aiwg remove` never deletes content under `.aiwg/<type>/<name>/`. To remove the source, use `rm -rf` explicitly.
 
@@ -1181,27 +1182,32 @@ Start the AIWG MCP server.
 
 ```bash
 aiwg mcp serve
-aiwg mcp serve --toolsets=memory,kb,ralph    # opt-in toolsets
-aiwg mcp serve --toolsets=all                # everything (61 tools, including deprecated compatibility tools)
+aiwg mcp serve --toolsets=flows,missions,ralph    # opt-in toolsets
+aiwg mcp serve --toolsets=all                      # everything (66 tools)
 ```
 
 **Options:**
 
-- `--toolsets <csv>` — Enable opt-in subsystem toolsets (overrides `AIWG_MCP_TOOLSETS` env var). Known: `memory`, `kb`, `research`, `activity-log`, `index`, `ralph`, `mc`, `ops`, `all`. The `core` set is always on.
+- `--toolsets <csv>` — Enable opt-in subsystem toolsets (overrides `AIWG_MCP_TOOLSETS` env var). Known: `flows`, `missions`, `memory`, `kb`, `research`, `activity-log`, `index`, `ralph`, `mc`, `ops`, `all`. The `core` set is always on.
 
 **Actions:**
 
 - Starts stdio-based MCP server
-- Exposes 16 core tools by default (discover, *-list/*-show pairs, command-run, artifact-read/write, and deprecated workflow-run compatibility)
-- Additional 45 tools available via opt-in toolsets
+- Exposes 15 core tools by default (discover, *-list/*-show pairs, command-run, and artifact-read/write)
+- Additional 51 tools available via opt-in toolsets
 - Supports Claude Desktop, Cursor, Factory, Hermes (as MCP sidecar)
 
-**Default surface (16 tools; schema cost should be re-measured after tool changes)**:
+**Default surface (15 tools; schema cost should be re-measured after tool changes)**:
 - `discover` — semantic search across skills/agents/commands/rules
 - `skill-list` / `skill-show`, `command-list` / `command-show`, `rule-list` / `rule-show`, `agent-list` / `agent-show`, `template-list` / `template-render` / `template-show`
 - `command-run` — allow-listed CLI dispatch
 - `artifact-read` / `artifact-write`
-- `workflow-run` — deprecated compatibility stub; use `command-run`
+
+`workflow-run` has been removed from the core MCP surface. Use `command-run`
+for general AIWG CLI execution, `AIWG_MCP_TOOLSETS=flows` with
+`flow-list` / `flow-show` / `flow-run` for declarative Flow access, or
+`AIWG_MCP_TOOLSETS=missions` with `mission-guide` / `mission-dispatch` /
+`mission-status` for Mission access.
 
 **Opt-in toolsets**: see [MCP capability audit](./integrations/mcp-capability-audit.md) and [Tool reference](./integrations/hermes-quickstart.md#tool-name-mangling) for details.
 
@@ -3517,6 +3523,7 @@ aiwg index <subcommand> [options]
 - `show` - Print the full text of a specific skill/agent/command/rule (canonical form is the top-level [`aiwg show`](#show))
 - `deps` - Show artifact dependency graph
 - `stats` - Show index statistics
+- `status` - Enumerate the durable index-graph registry (built-in + module + operator graphs) with build state, freshness, and drift; flags registered-but-unbuilt indices, on-disk dirs matching no graph, and graph-config defs that previously failed to load silently (#1624). Alias: `list`. Add `--json` for a stable envelope.
 - `neighbors` - Get neighbors of a node in a graph
 - `set` - Set operations (intersection, union, difference) on neighbor sets
 - `watch` - Filesystem watcher for automatic incremental updates
@@ -4042,6 +4049,62 @@ aiwg activity-log rotate --keep-last 90d
 ```
 
 **Auto-append hook (#978):** A post-command hook auto-logs qualifying CLI commands (`use`, `refresh`, `remove`, `add-{agent,command,skill,template,behavior}`, `validate-metadata`, `index`, `ops`). Honors `AIWG_SKIP_ACTIVITY_LOG=1`. Failures non-fatal.
+
+---
+
+### command-log
+
+Report the optional local CLI command invocation log. This is off by default and
+separate from `activity-log`: `activity-log` is an audit trail of AIWG artifact
+operations, while `command-log` is a privacy-preserving usage analysis stream
+for future heatmap/suggestion work (#1611).
+
+```bash
+aiwg command-log [--json] [--scope project|global|all] [--limit N]
+```
+
+**Enable logging:**
+
+```bash
+# Project-local store only
+aiwg config set --project command_log.enabled true
+aiwg config set --project command_log.scopes project
+
+# Project + operator-global stores
+aiwg config set --project command_log.scopes project,global
+
+# One invocation or shell session override
+AIWG_COMMAND_LOG=project aiwg doctor
+AIWG_COMMAND_LOG=global aiwg doctor
+AIWG_COMMAND_LOG=both aiwg doctor
+AIWG_COMMAND_LOG=off aiwg doctor
+```
+
+**Precedence:** `AIWG_COMMAND_LOG` overrides `.aiwg/aiwg.config`
+`command_log.*` for that process. With no env override, project config controls
+logging. With no project config, logging is disabled.
+
+**Stores:**
+
+- Project: `.aiwg/telemetry/cli-commands.jsonl`
+- Global: `$XDG_STATE_HOME/aiwg/cli-commands.jsonl` or `~/.local/state/aiwg/cli-commands.jsonl`
+
+**Privacy model:** events include command identity, timestamp, duration, exit
+status, AIWG version, scope, flag names, positional argument count, hashed cwd,
+and hashed project root plus project-relative cwd when available. Events do not
+store prompts, stdout/stderr, file contents, secrets, full raw argv, or absolute
+local paths by default.
+
+**Bounds:** stores rotate to `.1` when `command_log.max_bytes` or
+`AIWG_COMMAND_LOG_MAX_BYTES` is exceeded. The default bound is 1 MiB per store.
+
+**Examples:**
+
+```bash
+aiwg command-log
+aiwg command-log --json
+aiwg command-log --scope global --limit 50
+```
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "aiwg",
-  "version": "2026.6.1",
+  "version": "2026.6.7",
   "description": "Deployment tool and support utility for AI context. Copies agents, skills, commands, rules, and behaviors into the paths each AI platform reads (Claude Code, Codex, Copilot, Cursor, Warp, OpenClaw, and 6 more) so one source of truth works across 10 platforms. Optional utilities for persistent artifact memory, background orchestration, autonomous loops, and artifact indexing.",
   "type": "module",
   "bin": {
@@ -44,6 +44,9 @@
     "uat:factory": "vitest run --config config/vitest.uat-live.config.js --reporter=verbose ralph-live-factory",
     "uat:daemon": "vitest run --config config/vitest.uat-daemon.config.js",
     "uat:daemon:claude": "vitest run --config config/vitest.uat-daemon.config.js --reporter=verbose daemon-live-claude",
+    "uat:cockpit-live": "vitest run --config config/vitest.uat-cockpit-live.config.js",
+    "uat:cockpit-live:matrix": "AIWG_COCKPIT_LIVE_REQUIRED=1 AIWG_COCKPIT_LIVE_MATRIX_REQUIRED=1 vitest run --config config/vitest.uat-cockpit-live.config.js",
+    "e2e:cockpit-dev": "node test/e2e/cockpit-dev-e2e.mjs",
     "lint:schemas": "node tools/scripts/lint-schemas.mjs",
     "lint:dep-sources": "node tools/lint/dep-source.mjs",
     "lint:affected-packages": "node tools/lint/affected-packages.mjs",
@@ -264,7 +267,7 @@
     }
   },
   "devDependencies": {
-    "@pagenary/publisher": "^2026.6.4",
+    "@pagenary/publisher": "^2026.6.13",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.8.0",
     "@types/semver": "^7.7.1",
@@ -278,7 +281,6 @@
     "graphology-traversal": "^0.3.0",
     "graphology-types": "^0.24.0",
     "simple-statistics": "^7.8.8",
-    "terser": "^5.47.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^2.1.0"

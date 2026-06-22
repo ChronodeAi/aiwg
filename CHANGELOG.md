@@ -7,6 +7,197 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.6.7] - 2026-06-21 — "@aiwg/cockpit provenance metadata"
+
+Maintenance cut to validate the new `@aiwg/cockpit` npm trusted-publishing leg
+after npm rejected 2026.6.6 with a provenance repository mismatch.
+
+### Fixed
+
+- **`@aiwg/cockpit` declares repository metadata for npm provenance** — the
+  package now publishes with `repository.url: https://github.com/jmagly/aiwg`
+  and `repository.directory: apps/cockpit`, matching the GitHub Actions source
+  identity in the Sigstore provenance bundle while still pointing consumers at
+  the subpackage location.
+- **Cockpit publishability guard covers provenance metadata** — the
+  `cockpit-base-footprint` smoke test now asserts the scoped package's
+  repository metadata, so the next missing/empty `repository.url` fails before
+  the release tag is pushed.
+- **Cockpit lockfile root version is back in lockstep** — the cockpit lockfile
+  root metadata now matches the release version.
+
+### Upgrade notes
+
+- **No action required.** Release-pipeline/package-metadata validation cut; no
+  CLI behavior changes.
+
+## [2026.6.6] - 2026-06-21 — "Release-pipeline hardening, cont."
+
+Follow-on hardening surfaced while validating 2026.6.5's GitHub-mirror fix.
+
+### Fixed
+
+- **GitHub mirror tag-push is idempotent** — `github-mirror.yml` now tolerates
+  an already-existing tag on the mirror (matching the main-push guard), so a
+  workflow re-run — or a manual push that races the workflow — proceeds to
+  GitHub Release creation instead of failing on "tag already exists."
+- **Docsite strict-link build** — the v2026.6.4 and v2026.6.5 announcements
+  linked the CHANGELOG via a relative path that resolved outside the docs tree
+  and failed the docsite's strict-link check. They now use the absolute GitHub
+  URL like every prior announcement.
+
+### Changed
+
+- **Release runbook** — `CLAUDE.md` / `AIWG.md` step 8 no longer instructs a
+  manual `git push github`: the Gitea tag push (step 7) triggers the mirror
+  workflow, which pushes `main` + the tag to GitHub and creates the Release
+  itself. The manual push raced that and is now documented as not-to-do.
+
+### Upgrade notes
+
+- **No action required.** Tooling/release-process release; no CLI changes.
+
+## [2026.6.5] - 2026-06-21 — "Release-pipeline hardening"
+
+A pipeline-fix cut. Two gaps surfaced while cutting 2026.6.4 are closed so
+releases publish cleanly and the GitHub mirror actually creates Release pages.
+
+### Fixed
+
+- **`cut-tag.sh` now gates `package-lock.json` version lockstep** (new pre-tag
+  check 5/12). The 2026.6.4 prep bumped `package.json`, `marketplace.json`, and
+  `apps/cockpit` but not the lockfile, so CI's `check:versions` / `npm ci`
+  failed *after* the tag was pushed and the npm publish never ran. The wrapper
+  now catches a stale lockfile before tagging.
+- **GitHub mirror creates Release pages again** — `github-mirror.yml` checked
+  `secrets.GH_TOKEN`, but the configured Gitea Actions secret is
+  `GH_ACCESS_TOKEN`. The name mismatch made the mirror silently skip GitHub
+  Release creation (while reporting success) for v2026.6.2, v2026.6.3, and
+  v2026.6.4. It now reads `GH_ACCESS_TOKEN`, so stable tags get their GitHub
+  Release automatically.
+
+### Upgrade notes
+
+- **No action required.** Maintenance release; no API or CLI surface changes.
+
+## [2026.6.4] - 2026-06-21 — "Project-local deploy parity + safer `aiwg remove`"
+
+A correctness cut. Project-local extension/addon bundles now deploy to **every**
+provider the same way they always did for Claude, `aiwg remove` fails cleanly
+instead of crashing, and the kernel-skill prune can no longer wipe your skills
+directory when it can't find the AIWG root. Plus the npm-publish pipeline is
+hardened so a single failing step no longer strands the `@next` channel.
+
+### Why this matters to users
+
+| What changed | What it gives you |
+|---|---|
+| **Project-local bundles deploy to Factory & Codex** | A `.aiwg/extensions/<id>/` bundle with `agents/` or `rules/` now lands in `.factory/droids` + `.factory/rules` and `.codex/agents` + `.codex/rules`, not just `.claude/`. Previously Factory and Codex silently deployed 0 agents and 0 rules from project-local bundles. (#124) |
+| **`AIWG_ROOT` is no longer required for project-local agent bundles** | Deploying an agent-shadowing bundle without `AIWG_ROOT` set no longer empties your provider's kernel skill directory (e.g. `.claude/skills/`). The CLI injects the root automatically, and the prune now skips rather than deleting everything when the root can't be resolved. (#123) |
+| **`aiwg remove` fails cleanly** | `aiwg remove all --provider X` and `aiwg remove <unknown-id>` no longer crash with a `path argument must be of type string` TypeError. Unknown flags on the upstream path are rejected with a clear message (exit 2); an unknown id reports `Plugin '<id>' is not installed` (exit 1). (#118) |
+| **`@next` channel can't be stranded by one bad step** | The npm-publish workflow advances `@next` even when an earlier publish step fails, so a partial failure no longer leaves the prerelease channel behind. |
+
+### Fixed
+
+- **Project-local bundles deploy on Factory and Codex (#124)** — `factory.mjs` and `codex.mjs` gained the same `isAddonSource` short-circuit `claude.mjs` already had, so bundle `agents/`/`rules/` deploy to the provider's paths instead of being skipped.
+- **Kernel-skill prune is null-safe (#123)** — `computeAllKernelNames` now returns `null` (and validates a stale `AIWG_ROOT`) when no `agentic/code/{frameworks,addons}` tree is locatable, and `pruneStaleAiwgSkills` skips on `null` rather than treating an empty set as "delete every AIWG skill." The `use` CLI also injects `AIWG_ROOT` into the project-local deploy subprocess. `hermes.mjs` guards the null before spreading.
+- **`aiwg remove` no longer crashes (#118)** — the plugin-uninstaller CLI constructed the uninstaller with an options object where an `aiwgRoot` string was expected (the source of the TypeError), never forwarded its options to `uninstall()`, and read non-existent result fields. It now uses `createUninstaller()`, forwards `{ force, dryRun, keepProjects }`, reports from `result.errors`/`result.stats`, and rejects unknown flags before doing any work.
+
+### Changed
+
+- **npm-publish hardening (CI)** — advance `@next` even when an earlier publish step fails; publish `@aiwg/cockpit` from `./apps/cockpit` rather than `npm --prefix`; scope the Gitea publish workflow to the Gitea npm registry only.
+
+### Docs
+
+- **Versioning runbook** — added package-ownership + npm-registry runbook to `docs/contributing/versioning.md`.
+- **`aiwg remove` reference** — clarified that `--provider`/`--keep-registry` apply only to the project-local revert path, that the upstream uninstaller rejects unknown flags (exit 2), and that an unknown id reports a clean "not installed" error.
+
+### Upgrade notes
+
+- **No action required.** If you previously set `AIWG_ROOT` solely to protect your kernel skills directory when deploying project-local agent bundles, that workaround is no longer necessary (it remains honored if set).
+
+## [2026.6.3] - 2026-06-20 — "Cockpit groundwork → usable operator surface (real-executor proof)"
+
+June's closing cut turns the AIWG Cockpit from beta substrate into a control
+plane an operator can actually drive against a **real** agentic-sandbox. The
+running board is derived from real A2A tasks, starting a session is a single
+explicit picker, the attach view renders a true terminal, and the whole stack
+comes up with one command. None of this changes the base `npm i -g aiwg`
+footprint — Cockpit remains the opt-in `@aiwg/cockpit` package.
+
+### Why this matters to users
+
+| What changed | What it gives you |
+|---|---|
+| **Cockpit is usable against real executors** | The running board derives from real A2A tasks (#1639); Home stays usable against a real v2 executor and degrades the running/approvals panes instead of collapsing to "No stack connected" (#1638). The Bridge defaults off the executor port range and refuses reserved-port collisions. |
+| **Starting a session is one explicit picker** | A session-start modal (#1640, #1641) is the single home for both the dashboard verb and the Sessions tab: pick instance · runtime · loadout · backend · posture, confirm, attach. It surfaces the **full** loadout catalog via a new Bridge `/api/loadouts` passthrough, guards against silently replacing an attached session, and shows failures inline — no more param-less start that read as a no-op. |
+| **The attach view is a real terminal** | The Sessions pane renders the PTY through xterm.js, so ANSI/VT/tmux redraws are interpreted, not dumped as raw escape bytes. |
+| **One command brings up the whole stack** | A canonical one-command dev bring-up harness replaces the ad-hoc `/tmp` rigs, with documented test stages and a contract guard that pins the mock's admin surface to the real v2 divergence. |
+| **Capability injection + lookup are correct** | Picking a skill injects its plain name (discover-first resolves it), not a `/`-prefixed pseudo-command (#1642); `/api/show` resolves by the discovered path so same-named artifacts (e.g. two `aiwg-steward`) no longer 502 — ambiguity is a 4xx now (#1643). |
+
+### Added
+
+- **Cockpit running board from real A2A tasks (#1639, running half)** — the board is derived from the executor's real task surface, not a mock.
+- **Session-start picker modal (#1640, #1641)** — instance/runtime/loadout/backend/posture, the single home for both start paths; clobber guard + inline errors.
+- **Bridge `/api/loadouts` passthrough (#1641)** — proxies the executor loadout catalog (`/api/v1/loadouts`, v2 `/loadouts`), normalized to `{id,label,description,runtimes}`, so the picker offers the full set rather than echoing the instance's own loadout.
+- **One-command dev bring-up harness** — replaces the `/tmp` rigs; plus a dev-stage full-system e2e harness with documented test stages and a mock↔real contract guard.
+
+### Changed
+
+- **Running vs Sessions made legible (#1644)** — each panel opens with a one-line purpose statement (Running = fleet overview board; Sessions = attached workspace) and names the relationship.
+- **Release pattern + config-defaults gate formalized** for `@aiwg/cockpit` (sane tested defaults, packaging discipline).
+
+### Fixed
+
+- **Cockpit attach renders via xterm.js**, not raw bytes — escape sequences are interpreted (colors, tmux redraws, titles, bracketed paste).
+- **Cockpit Home degrades gracefully** against real v2 executors instead of collapsing to "No stack connected" (#1638); running/approvals panes degrade independently.
+- **Bridge port hygiene** — defaults off the executor port range and refuses reserved-port collisions.
+- **Capability injection** uses the plain skill name, not a `/` prefix (#1642).
+- **`/api/show` resolves by discovered path**; ambiguous same-named artifacts return a 4xx with disambiguation text instead of a 502 (#1643, bridge half — the persona-vs-agent indexing dedup is tracked separately).
+- **Deploy-adjacent tests hardened** against `/tmp` and untracked scratch.
+
+### Docs
+
+- **ADR: Cockpit chat-style agent view + output-parsing model (#1645)** — a per-session Terminal↔Chat toggle over the existing observer-default attach, a normalized `ChatEvent` contract, structured-stream-preferred / PTY-parser-fallback sourcing, first-in-scope Claude Code.
+- **LFD control-patterns research spike (#1585)** captured under research-planning.
+- **Docsite on Pagenary 6.13** — upgraded `@pagenary/publisher` to the self-minifying 6.13 line (roctinam/pagenary#14); dropped the redundant `terser` devDependency; fixed 3 broken doc links so the strict-link validation build passes.
+- **Docs Map enabled on docs.aiwg.io** — Pagenary's concept-derived relationship graph (444 nodes / 1,683 edges) is now a navigable view (#33).
+- **Refreshed docs.aiwg.io welcome copy** — accurate counts: 200+ agents, 8 frameworks, 29 addons, 11 platforms.
+
+### Upgrade notes
+
+- **No action required.** Cockpit is the opt-in `@aiwg/cockpit` package; the base CLI footprint is unchanged.
+
+## [2026.6.2] - 2026-06-18 — "Cockpit live-proof hardening"
+
+This patch release tightens the AIWG Cockpit live UAT gate so release evidence
+must prove a real agentic framework can start inside an agentic-sandbox session
+and use AIWG discovery from there.
+
+### Changed
+
+- **Cockpit live matrix proof is stricter.** Provider workloads now must emit
+  both `AIWG_COCKPIT_LIVE_OK` and an expected AIWG discovery result
+  (`issue-audit` by default). The default prompt asks the running provider to
+  use AIWG discovery to choose the capability for auditing open issue state and
+  release blockers.
+- **Codex live workload command updated.** Cockpit now invokes Codex with
+  `codex exec -s read-only`, matching the currently supported Codex CLI syntax.
+- **Docs synced from code.** Ran `docs:collect` to publish the current
+  code-to-docs component corpus and generated docs manifest.
+
+### Fixed
+
+- Cockpit live reports now record the discovery expectation and fail when the
+  provider only proves shell plumbing instead of real AIWG discovery.
+
+### Upgrade notes
+
+- No migration is required.
+- The 2026-06-18 host proof passed with Codex in a managed agentic-sandbox
+  `tmux` session. Claude launched in the same session but required login, so
+  Claude auth-state injection remains a separate follow-up.
+
 ## [2026.6.1] - 2026-06-15 — "AIWG Cockpit groundwork (beta), leaner agents & doc accuracy"
 
 A consolidation release on top of 2026.6.0. The headline is the **AIWG Cockpit** — a UX-first control plane over an AIWG install and multi-stack agentic sessions — landing as **beta groundwork**: the registry-bound core, instance-control bridge, Tauri + VS Code shells, local control-surface auth, and the UI contribution model are all in place, with the full operator UX arriving in a later release. Alongside it: the bulk **declarative-Flow migration** and the **cross-stack Mission conductor** are now complete, a fleet-wide **agent-definition debloat** brings every agent under the 16 KB dispatch ceiling, and a **documentation-accuracy pass** reconciles every skill/agent count against source.
@@ -1170,7 +1361,10 @@ The 2026.5.0 stable tag. The 2026.4.0 stable tag was never cut — the rc series
 - New unit tests: 7 for `aiwg skill-lint` rubric (perfect/stub/no-triggers/agent-only/broken-YAML fixtures + threshold modes). Behavior-loader and concierge integration tests updated for canonical metadata.* shape.
 - `.agents/` deployment directory is now gitignored, mirroring `.claude/` and `.codex/` (#949). 395 generated files removed from the index; regenerable via `aiwg use`.
 
-[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.3.2...HEAD
+[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.6.2...HEAD
+[2026.6.2]: https://github.com/jmagly/aiwg/compare/v2026.6.1...v2026.6.2
+[2026.6.1]: https://github.com/jmagly/aiwg/compare/v2026.6.0...v2026.6.1
+[2026.6.0]: https://github.com/jmagly/aiwg/compare/v2026.5.13...v2026.6.0
 
 ## [2026.3.2] - 2026-03-04 – Service Release
 
