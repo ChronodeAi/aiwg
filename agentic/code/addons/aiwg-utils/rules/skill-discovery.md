@@ -7,7 +7,7 @@
 
 ## Overview
 
-AIWG ships hundreds of skills, agents, commands, and rules across its installed frameworks. Agentic platforms (Claude Code, OpenClaw, Codex, Cursor, Factory, etc.) cap how many skills they will list in any given context — Claude Code at 25% of context window by default, OpenClaw at 150 hard, others on similar trajectories. To work within those caps, AIWG deploys two tiers:
+AIWG ships hundreds of skills, agents, rules, and provider compatibility surfaces across its installed frameworks. Agentic platforms (Claude Code, OpenClaw, Codex, Cursor, Factory, etc.) cap how many skills they will list in any given context — Claude Code at 25% of context window by default, OpenClaw at 150 hard, others on similar trajectories. To work within those caps, AIWG deploys two tiers:
 
 - **Kernel skills** at the platform-native skills directory (`.claude/skills/`, `.factory/skills/`, etc.) — always loaded. ~10 today: one quickref per installed framework + a small core utility set.
 - **Standard skills** at `<provider-dir>/.aiwg/skills/` — *not* listed by the platform. Reachable only through the AIWG artifact index.
@@ -85,7 +85,7 @@ Before saying "AIWG doesn't have a skill for that" or "no workflow exists for th
 aiwg discover "<the user's need, paraphrased>"
 ```
 
-The index covers every deployed AIWG skill, agent, command, and rule — including the 90%+ that aren't loaded in your context. If `discover` returns ranked candidates, load and use the top match. If multiple are close, present the top-3 to the user.
+The index covers every deployed AIWG skill, agent, rule, and legacy command bridge — including the 90%+ that aren't loaded in your context. If `discover` returns ranked candidates, load and use the top match. If multiple are close, present the top-3 to the user.
 
 **FORBIDDEN**:
 ```
@@ -103,7 +103,7 @@ Agent: *runs `aiwg discover "deploy production"`*
 
 ### Rule 1.5: Query Discover BEFORE Filesystem Search (the discover-first protocol)
 
-For any user request mentioning **AIWG**, framework names (**sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator, knowledge-base**), or capability keywords (**skill, agent, rule, command, addon, workflow, flow, template**), `aiwg discover` MUST be the first information-gathering tool call.
+For any user request mentioning **AIWG**, framework names (**sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator, knowledge-base**), or capability keywords (**skill, agent, rule, addon, workflow, flow, template, or legacy command**), `aiwg discover` MUST be the first information-gathering tool call.
 
 Filesystem `Grep` / `Glob` / `Read` against any of the following directories is **FORBIDDEN** for AIWG-related lookups until `aiwg discover` has been consulted at least once in the current session:
 
@@ -160,7 +160,7 @@ Task(subagent_type="aiwg-finder", prompt="find the skill or agent for: <user's i
 #### When you may skip the discover query (same as Rule 4 below — kept here for proximity)
 
 You may skip the index query when:
-- The user named a specific skill or command (`/flow-deploy-to-production`, `aiwg use sdlc`).
+- The user named a specific skill or legacy command alias (`flow-deploy-to-production`, `/flow-deploy-to-production`, `aiwg use sdlc`).
 - The capability is clearly outside AIWG's scope (general programming, weather, translation).
 - You've already queried for the same need within the current session.
 - The kernel quickref directly lists the skill the user needs.
@@ -195,7 +195,7 @@ The quickrefs also explicitly say "don't enumerate from memory — query the ind
 
 You may proceed without querying the index when:
 
-- The user named a specific skill or command (`/flow-deploy-to-production`, `aiwg use sdlc`)
+- The user named a specific skill or legacy command alias (`flow-deploy-to-production`, `/flow-deploy-to-production`, `aiwg use sdlc`)
 - The capability is clearly outside AIWG's scope (e.g., "what's the weather", "translate to French", general programming questions unrelated to AIWG)
 - You queried for the same need within the current session and the result is in working memory
 - The kernel quickref directly lists the skill the user needs (in which case you've already done the lookup mentally)
@@ -372,7 +372,7 @@ Universal. Every AIWG-supported provider has a skill-listing budget; the index-d
 Before declining a user request on the grounds that AIWG can't do it, verify:
 
 - [ ] Did I run `aiwg discover "<paraphrased need>"`?
-- [ ] Did I check the right `--type` filter (skill, agent, command, rule)?
+- [ ] Did I check the right `--type` filter (skill, agent, rule, or command only for legacy bridge lookup)?
 - [ ] Did I read the top result's `capability` description, not just its name?
 - [ ] If multiple results were close, did I report them to the user?
 - [ ] Have I confirmed the need is genuinely outside AIWG's scope?
