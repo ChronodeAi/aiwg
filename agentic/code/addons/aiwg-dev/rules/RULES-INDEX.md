@@ -1,6 +1,6 @@
 # AIWG Developer Tools Rules Index
 
-Contributor-focused rules for building AIWG addons, frameworks, skills, agents, and commands correctly. Install explicitly with `aiwg use aiwg-dev` — not included in `aiwg use all`.
+Contributor-focused rules for building AIWG addons, frameworks, skills, agents, rules, templates, and legacy CLI bridges correctly. Install explicitly with `aiwg use aiwg-dev` — not included in `aiwg use all`.
 
 ---
 
@@ -14,19 +14,19 @@ Contributor-focused rules for building AIWG addons, frameworks, skills, agents, 
 **Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/aiwg-ci-safety.md
 
 #### skill-placement
-**Summary**: New skills, agents, commands, rules, and templates MUST go into `agentic/code/addons/<name>/` or `agentic/code/frameworks/<name>/`. Files placed directly in `.claude/`, `.github/`, `.cursor/`, `.warp/`, `.codex/`, `.windsurf/`, `.opencode/`, or `~/.openclaw/` are deployment targets — they are overwritten by `aiwg sync` and are invisible to the installer. A file only ships to users if it lives in `agentic/code/`.
-**When to apply**: Creating any new AIWG artifact (skill, agent, command, rule, template), editing a deployed file, onboarding as a new AIWG contributor
+**Summary**: New skills, agents, rules, templates, and legacy command bridge definitions MUST go into `agentic/code/addons/<name>/` or `agentic/code/frameworks/<name>/`. Files placed directly in `.claude/`, `.github/`, `.cursor/`, `.warp/`, `.codex/`, `.windsurf/`, `.opencode/`, or `~/.openclaw/` are deployment targets — they are overwritten by `aiwg sync` and are invisible to the installer. A file only ships to users if it lives in `agentic/code/`.
+**When to apply**: Creating any new AIWG artifact (skill, agent, rule, template, legacy CLI bridge), editing a deployed file, onboarding as a new AIWG contributor
 **Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/skill-placement.md
 
 #### no-circular-skill-calls
-**Summary**: A command marked `executedViaSkillRunner: true` removes its TypeScript handler from the CLI routing table. If the SKILL.md then invokes `aiwg <same-command>`, the CLI has no handler to receive the call — creating an infinite loop. SKILL.md for skill-executed commands MUST perform all work via provider tools (Read, Write, Bash, Task) or direct script invocation. Never call back into the CLI command by name. `sdlc-accelerate` is the reference implementation.
-**When to apply**: Setting `executedViaSkillRunner: true` on a command, writing SKILL.md for a CLI command, auditing existing skill-executed commands
+**Summary**: A legacy command bridge marked `executedViaSkillRunner: true` removes its TypeScript handler from the CLI routing table. If the SKILL.md then invokes `aiwg <same-command>`, the CLI has no handler to receive the call — creating an infinite loop. SKILL.md for skill-executed bridges MUST perform all work via provider tools or direct script invocation. Never call back into the CLI command by name. `sdlc-accelerate` is the reference implementation.
+**When to apply**: Setting `executedViaSkillRunner: true` on a legacy CLI bridge, writing SKILL.md for a CLI bridge, auditing existing skill-executed bridges
 **Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/no-circular-skill-calls.md
 
 ### MEDIUM
 
 #### component-completeness
-**Summary**: Each artifact type has required files before it is considered complete. Skill: SKILL.md with `description:` frontmatter, title, behavior section, and manifest registration. Agent: `.md` with `name`, `description`, `model`, `tools` frontmatter and manifest registration. Command: definition in `definitions.ts` plus handler or `executedViaSkillRunner: true`. Addon: `manifest.json` with required fields and a `README.md`. Rule: `.md` file with priority level and entry in `RULES-INDEX.md`. Incomplete components cause silent deployment failures.
+**Summary**: Each artifact type has required files before it is considered complete. Skill: SKILL.md with `description:` frontmatter, title, behavior section, and manifest registration. Agent: `.md` with `name`, `description`, `model`, `tools` frontmatter and manifest registration. Legacy command bridge: definition in `definitions.ts` plus handler or `executedViaSkillRunner: true`. Addon: `manifest.json` with required fields and a `README.md`. Rule: `.md` file with priority level and entry in `RULES-INDEX.md`. Incomplete components cause silent deployment failures.
 **When to apply**: Before marking any artifact as done, before filing a PR, after scaffolding a new component, during code review of new extensions
 **Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/component-completeness.md
 
@@ -47,7 +47,7 @@ Contributor-focused rules for building AIWG addons, frameworks, skills, agents, 
 | Task Type | Relevant Rules |
 |-----------|---------------|
 | **Creating a new skill or agent** | skill-placement, component-completeness |
-| **Creating a new CLI command** | component-completeness, no-circular-skill-calls |
+| **Maintaining a legacy CLI bridge** | component-completeness, no-circular-skill-calls |
 | **Setting `executedViaSkillRunner: true`** | no-circular-skill-calls |
 | **Creating or extending an addon** | skill-placement, component-completeness, addon-boundaries |
 | **Adding schemas or templates** | addon-boundaries |
