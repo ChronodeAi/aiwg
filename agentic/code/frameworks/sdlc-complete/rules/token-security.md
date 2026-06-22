@@ -184,9 +184,9 @@ When creating agent definitions that require API access:
    - @$AIWG_ROOT/agentic/code/addons/security/secure-token-load.md
    ```
 
-## Command/Skill Requirements
+## Skill and Legacy CLI Bridge Requirements
 
-When creating commands or skills that use tokens:
+When creating skills or legacy CLI bridges that use tokens:
 
 1. **MUST check for token file existence**:
    ```bash

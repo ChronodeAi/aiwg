@@ -6,11 +6,11 @@
 
 ## Overview
 
-A command definition marked `executedViaSkillRunner: true` MUST NOT have a SKILL.md whose execution path calls back into `aiwg <same-command>`. This creates an infinite loop with no exit condition.
+A legacy CLI command bridge marked `executedViaSkillRunner: true` MUST NOT have a SKILL.md whose execution path calls back into `aiwg <same-command>`. This creates an infinite loop with no exit condition. This rule governs CLI bridge internals only; new workflow authoring should still treat `SKILL.md` as the canonical surface.
 
 ## Problem Statement
 
-AIWG's skill runner executes commands by reading the associated SKILL.md and running the instructions using provider tools (Read, Write, Bash, Task). When a command is marked `executedViaSkillRunner: true`, its TypeScript handler is removed from the CLI routing table — the CLI defers entirely to the SKILL.md.
+AIWG's skill runner executes legacy command bridges by reading the associated SKILL.md and running the instructions using provider tools (Read, Write, Bash, Task, or provider equivalents). When a command is marked `executedViaSkillRunner: true`, its TypeScript handler is removed from the CLI routing table — the CLI defers entirely to the SKILL.md.
 
 If that SKILL.md then invokes the CLI command (e.g. says "run `aiwg doctor`"), the system enters a loop:
 
@@ -34,7 +34,7 @@ This is a silent failure mode: the loop may appear to run for several iterations
 
 ### Rule 1: Self-Contained SKILL.md When Using `executedViaSkillRunner: true`
 
-If a command has `executedViaSkillRunner: true` in its definition, its SKILL.md MUST perform all work using provider tools directly — it MUST NOT invoke the CLI command by name.
+If a legacy command bridge has `executedViaSkillRunner: true` in its definition, its SKILL.md MUST perform all work using provider tools directly — it MUST NOT invoke the CLI command by name.
 
 **FORBIDDEN** (when `executedViaSkillRunner: true`):
 ```markdown
@@ -53,14 +53,14 @@ aiwg doctor
 
 1. Read `.aiwg/frameworks/registry.json` using the Read tool
 2. Verify the registry is valid JSON
-3. Check that `.claude/agents/` contains expected agent files
+3. Check that the active provider deployment contains expected agent files
 4. Read Node.js version: `node --version`
 5. Report pass/fail for each check
 ```
 
-### Rule 2: Commands With TypeScript Handlers May Reference CLI Commands
+### Rule 2: Legacy Command Bridges With TypeScript Handlers May Reference CLI Commands
 
-If a command retains its TypeScript handler (i.e. does NOT set `executedViaSkillRunner: true`), its SKILL.md may reference the CLI command — the handler will receive the invocation and execute the logic.
+If a legacy command bridge retains its TypeScript handler (i.e. does NOT set `executedViaSkillRunner: true`), its SKILL.md may reference the CLI command — the handler will receive the invocation and execute the logic.
 
 This is the correct pattern when:
 - The command does substantial work in TypeScript (file I/O, npm calls, complex logic)
@@ -77,7 +77,7 @@ Before adding `executedViaSkillRunner: true` to any command definition, perform 
 
 ## Reference Implementation
 
-`sdlc-accelerate` is the canonical example of a correct `executedViaSkillRunner: true` command. Its SKILL.md orchestrates entirely through Task/Write/Read tool calls with no CLI callback. Use it as a style reference when building new skill-executed commands.
+`sdlc-accelerate` is the canonical example of a correct `executedViaSkillRunner: true` legacy command bridge. Its SKILL.md orchestrates entirely through provider tools with no CLI callback. Use it as a style reference when maintaining skill-executed command bridges.
 
 **Location**: `agentic/code/addons/aiwg-utils/skills/` (check the sdlc-accelerate skill directory)
 
@@ -93,14 +93,14 @@ Before adding `executedViaSkillRunner: true` to any command definition, perform 
 ## Safe Pattern Reference
 
 ```
-Command: my-command
+Legacy command bridge: my-command
   executedViaSkillRunner: true
   ↓
 SKILL.md — must do all work with:
   - Read tool (read files)
   - Write tool (write files)
-  - Bash tool (run shell commands)
-  - Task tool (delegate to subagents)
+  - Bash tool or provider shell equivalent (run shell commands)
+  - Task tool or provider delegation equivalent (delegate to subagents)
   - Direct script invocation: node tools/cli/my-script.mjs
 
 MUST NOT contain:
@@ -110,9 +110,9 @@ MUST NOT contain:
 
 ## References
 
-- @$AIWG_ROOT/src/extensions/commands/definitions.ts — Command definitions with `executedViaSkillRunner` field
+- @$AIWG_ROOT/src/extensions/commands/definitions.ts — Legacy command bridge definitions with `executedViaSkillRunner` field
 - @$AIWG_ROOT/src/cli/handlers/ — TypeScript handlers (absent when `executedViaSkillRunner: true`)
-- @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/component-completeness.md — Command completeness requirements
+- @$AIWG_ROOT/agentic/code/addons/aiwg-dev/rules/component-completeness.md — Legacy command bridge completeness requirements
 
 ---
 

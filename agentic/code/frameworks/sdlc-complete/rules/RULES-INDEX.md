@@ -20,7 +20,7 @@ Filesystem `Grep`/`Glob`/`Read` against any provider artifact directory (`.claud
 
 When the platform supports subagent delegation (Claude Code Task tool, Hermes `delegate_task`, Factory droid spawn), prefer the `aiwg-finder` subagent over self-service `aiwg discover` + `aiwg show` — it keeps the discover transcript out of the parent context.
 
-**You may skip discover only when**: the user named a specific skill (`/flow-deploy-to-production`), the capability is clearly outside AIWG's scope (general programming, weather, translation), or you've already queried for the same need in the current session.
+**You may skip discover only when**: the user named a specific skill (`flow-deploy-to-production`) or legacy provider alias (`/flow-deploy-to-production`), the capability is clearly outside AIWG's scope (general programming, weather, translation), or you've already queried for the same need in the current session.
 
 **Full rule**: @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/skill-discovery.md (Rule 1.5)
 
@@ -84,7 +84,7 @@ SDLC rules enforce workflow quality when the SDLC framework is deployed via `aiw
 
 #### mention-wiring
 **Summary**: Wire @-mentions during artifact creation, not as a separate step. Semantic tags indicate relationship types (implements, tests, depends, etc.). Enables traceability and bidirectional linking.
-**When to apply**: Artifact generation (code, docs, agents, commands, skills), reference creation
+**When to apply**: Artifact generation (code, docs, agents, skills, rules, templates), reference creation
 **Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/mention-wiring.md
 
 #### hitl-gates
@@ -114,7 +114,7 @@ SDLC rules enforce workflow quality when the SDLC framework is deployed via `aiw
 
 #### sdlc-orchestration
 **Summary**: Core orchestrator for SDLC workflows: interprets natural language, reads flow templates, launches multi-agent workflows. Pattern: Primary Author > Parallel Reviewers > Synthesizer > Archive.
-**When to apply**: Phase transitions, workflow execution, natural language commands, agent coordination
+**When to apply**: Phase transitions, workflow execution, natural language skill routing, agent coordination
 **Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/sdlc-orchestration.md
 
 #### agent-friendly-code
@@ -133,7 +133,7 @@ SDLC rules enforce workflow quality when the SDLC framework is deployed via `aiw
 **Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/artifact-discovery.md
 
 #### self-maintenance
-**Summary**: Prefer AIWG CLI commands for installation/deployment tasks when available — the CLI keeps the registry in sync and handles provider detection. Run `aiwg sync --dry-run` at start of long sessions. Use Mission Control (`aiwg mc`) for parallel background work. Use whatever tools best complete the task; CLI is preferred, not mandatory.
+**Summary**: Prefer AIWG skills for installation/deployment tasks; those skills call CLI operations when needed so registry updates, provider detection, and preservation gates stay intact. Run `aiwg sync --dry-run` at start of long sessions. Use Mission Control (`aiwg mc`) for parallel background work. Use whatever tools best complete the task, but do not bypass a paired skill without a reason.
 **When to apply**: Framework deployment, version updates, provider changes, long orchestration sessions, background task dispatch
 **Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/self-maintenance.md
 
