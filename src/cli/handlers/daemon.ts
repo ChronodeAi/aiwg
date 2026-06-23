@@ -35,6 +35,18 @@ abstract class DaemonHandler implements CommandHandler {
 }
 
 /**
+ * Daemon Handler
+ *
+ * Delegates to the daemon command namespace implementation.
+ */
+class DaemonCommandHandler extends DaemonHandler {
+  id = 'daemon';
+  name = 'Daemon';
+  description = 'Manage the AIWG daemon and its subsystems';
+  scriptPath = 'tools/daemon/index.mjs';
+}
+
+/**
  * Behavior Handler
  *
  * Manages behavior YAML bundles that bind directives and toolsets to agent types.
@@ -61,6 +73,7 @@ class DaemonInitHandler extends DaemonHandler {
 /**
  * Exported handler instances
  */
+export const daemonHandler: CommandHandler = new DaemonCommandHandler();
 export const behaviorHandler: CommandHandler = new BehaviorHandler();
 export const daemonInitHandler: CommandHandler = new DaemonInitHandler();
 
@@ -68,6 +81,7 @@ export const daemonInitHandler: CommandHandler = new DaemonInitHandler();
  * All daemon handlers for registration
  */
 export const daemonHandlers: CommandHandler[] = [
+  daemonHandler,
   behaviorHandler,
   daemonInitHandler,
 ];
