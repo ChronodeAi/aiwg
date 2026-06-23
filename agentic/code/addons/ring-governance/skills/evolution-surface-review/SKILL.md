@@ -20,8 +20,9 @@ Use this skill when an optimizer, proposer, or search harness generates candidat
 1. Fill out `templates/evolution-adapter-card.md`.
 2. Identify what the proposer can read and write.
 3. Identify evaluator, criteria, policy, population/frontier state, and promotion owner.
-4. Apply `evaluator-immutability` and `no-self-grading`.
-5. Decide whether the adapter is:
+4. If the adapter uses an LLM judge, fill out `templates/judge-validation-card.md`.
+5. Apply `evaluator-immutability`, `judge-validation-protocol`, and `no-self-grading`.
+6. Decide whether the adapter is:
    - `reference-only`;
    - `prototype`;
    - `candidate-for-executable-extraction`.
@@ -31,6 +32,8 @@ Use this skill when an optimizer, proposer, or search harness generates candidat
 - Can the proposer edit the evaluator, criteria, policy, or promotion path?
 - Is population/frontier state bounded and governance-owned?
 - Is verifier output bound to the candidate artifact?
+- If an LLM judge is used, is raw agreement supplemented by chance-corrected agreement,
+  test-retest, task-family transfer, and bias-audit evidence?
 - Are criteria plural or rotatable enough to resist overfitting?
 - Is memory used only as context/provenance?
 

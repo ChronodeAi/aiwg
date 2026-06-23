@@ -1,0 +1,40 @@
+name: verdict-binding-check
+version: "0.1.0"
+description: >
+  Runtime governance guard requiring promotion and verdict claims to bind to
+  exact candidate artifacts, evaluator state, evidence, and reviewer identity.
+
+agentTypes:
+  - daemon
+  - ralph-loop
+  - agent-loop
+  - long-running-agent
+
+directives:
+  - id: verdicts-bind-to-candidates
+    rule: >
+      Any acceptance, promotion, deployment, release, gate approval, or final
+      verdict must identify the exact candidate artifact, commit, run ID, or
+      workspace state being accepted. Ambiguous verdicts are not valid final
+      acceptance.
+    defaults:
+      require_candidate_binding: true
+
+  - id: verdicts-bind-to-evaluator-state
+    rule: >
+      Any acceptance verdict must identify the evaluator version, criterion
+      set, verification command, and evidence used. If evaluator state changed
+      during the task, require evaluator-drift review before final acceptance.
+    defaults:
+      require_evaluator_binding: true
+      drift_behavior: evaluator-drift-watch
+
+  - id: verdicts-record-reviewer-custody
+    rule: >
+      Record who made the judgment and whether that reviewer was independent
+      from the producer. If reviewer custody is unclear, label the verdict
+      provisional rather than final.
+    defaults:
+      provisional_label: provisional-governance-verdict
+
+tools: []
