@@ -346,9 +346,27 @@ class DaemonMain {
     try {
       const { createMessagingHub } = await import('../messaging/index.mjs');
       const messagingConfig = this.config.get('messaging');
+      // 2-way AI chat is on by default. Setting messaging.chat.enabled: false in
+      // daemon.yaml restricts the bot to slash-commands + event notifications
+      // (no free-text claude-p workers). Passing chatHandler:false to the hub is
+      // the documented way to disable it (see tools/messaging/index.mjs).
+      const chatEnabled = messagingConfig?.chat?.enabled !== false;
+      // Write-command authorization: users granted 'write' may run write-class
+      // commands (/approve, /reject, ...). Sourced from AIWG_WRITE_USERS (CSV)
+      // and/or messaging.write_users in daemon.yaml. Without any grant, write
+      // commands are denied to everyone (read stays open to allowlisted chats).
+      const writeUsers = [
+        ...(process.env.AIWG_WRITE_USERS || '')
+          .split(',')
+          .map((u) => u.trim())
+          .filter(Boolean),
+        ...(Array.isArray(messagingConfig?.write_users) ? messagingConfig.write_users.map(String) : []),
+      ];
       this.messagingBus = await createMessagingHub({
         roomManager: this.roomManager,
         messagingConfig,
+        ...(writeUsers.length > 0 ? { writeUsers } : {}),
+        ...(chatEnabled ? {} : { chatHandler: false }),
       });
       if (this.messagingBus) {
         this.log(`Messaging hub initialized with ${this.messagingBus.adapterCount} adapter(s)`);
