@@ -55,13 +55,14 @@ corpus.
    test/eval, audit/report, memory/provenance, workflow/gate, adapter/evolution, and provider bridge.
 3. For each artifact, identify who can edit it, who relies on it, and whether it can affect its own
    evaluation or promotion path.
-4. Mark protected surfaces: evaluator code/config, criteria, rubrics, benchmark data, policies,
-   promotion gates, issue-closing rules, memory verdict rules, and deployment hooks.
+4. Mark protected surfaces: evaluator code/config, LLM judge prompts, judge calibration packages,
+   criteria, rubrics, benchmark data, policies, promotion gates, issue-closing rules, memory verdict
+   rules, and deployment hooks.
 5. Trace producer-to-verdict flow: proposal source, execution path, evidence collection, judgement,
    promotion, rollback, and audit log.
-6. Flag governance smells: self-grading, editable evaluator, mutable criteria, memory-as-proof,
-   policy widening, hidden promotion path, unverifiable audit trail, and evolution adapter ownership
-   overlap.
+6. Flag governance smells: self-grading, editable evaluator, unvalidated LLM judge, raw agreement as
+   sole judge metric, mutable criteria, memory-as-proof, policy widening, hidden promotion path,
+   unverifiable audit trail, and evolution adapter ownership overlap.
 7. Assign a disposition and cite evidence paths. Do not promote a pattern into addon content unless it
    is reusable without private project names, private paths, or local runtime state.
 
@@ -69,6 +70,8 @@ corpus.
 
 - Producer/grader separation.
 - Protected evaluator, criteria, rubric, policy, corpus, and promotion path.
+- LLM-as-judge validation packages: chance-corrected agreement, test-retest, task-family transfer,
+  bias audits, and protected judge prompts/calibration data.
 - Memory, retrieval, provenance, and semantic-context boundaries.
 - Optimizer, search, evolution, or adapter boundaries.
 - Audit, event, log, and proof-authority surfaces.

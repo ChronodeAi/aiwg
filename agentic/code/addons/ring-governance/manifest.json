@@ -3,7 +3,7 @@
   "type": "addon",
   "name": "Ring Governance",
   "version": "0.1.0",
-  "description": "Governance boundary patterns for no self-grading, evaluator immutability, evolution adapter review, and memory-is-not-proof discipline.",
+  "description": "Governance boundary patterns for no self-grading, evaluator immutability, validated LLM judges, evolution adapter review, and memory-is-not-proof discipline.",
   "core": false,
   "autoInstall": false,
   "author": "ChronodeAi",
@@ -15,6 +15,9 @@
     "self-improvement",
     "evolution",
     "grader",
+    "judge-validation",
+    "llm-as-judge",
+    "bias-audit",
     "verdict",
     "fortemi",
     "memory",
@@ -24,6 +27,7 @@
     "role": "Portable governance principles; addon skills operate on the caller's current live workspace or explicitly supplied corpus.",
     "principles": [
       "An untrusted producer may propose work but must not judge, promote, or edit the evaluator.",
+      "LLM-as-judge evaluators need validation beyond exact-match agreement: chance-corrected agreement, repeatability, benchmark transfer, and bias audits.",
       "Fortemi and semantic memory provide context and provenance, never proof authority.",
       "Evolution/search adapters such as evo-hq own proposal strategy while governance owns integrity gates."
     ]
@@ -47,11 +51,13 @@
     "no-self-grading",
     "governance-boundary",
     "memory-is-not-proof",
-    "evaluator-immutability"
+    "evaluator-immutability",
+    "judge-validation-protocol"
   ],
   "templates": [
     "protected-surface-inventory",
     "criterion-set-review",
+    "judge-validation-card",
     "evolution-adapter-card",
     "fortemi-boundary-card"
   ],
@@ -70,7 +76,9 @@
     "defaults": {
       "portRingCode": false,
       "allowMemoryVerdicts": false,
+      "allowUnvalidatedLLMJudgeVerdicts": false,
       "requireProtectedEvaluator": true,
+      "requireJudgeValidationPackage": true,
       "requireProducerGraderSeparation": true
     }
   }

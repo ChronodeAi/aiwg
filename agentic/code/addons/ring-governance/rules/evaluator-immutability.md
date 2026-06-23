@@ -1,8 +1,8 @@
 # Evaluator Immutability
 
 **Enforcement Level**: HIGH
-**Scope**: Evaluators, verifiers, criteria, rubric data, policies, result parsers, credentials,
-signing keys, and promotion wrappers.
+**Scope**: Evaluators, verifiers, LLM judges, judge prompts, calibration data, criteria, rubric data,
+policies, result parsers, credentials, signing keys, and promotion wrappers.
 **Addon**: ring-governance
 **Status**: DRAFT
 
@@ -26,12 +26,16 @@ credentials, signing keys, and any wrapper that transforms evaluator output into
 - Prove policy and protected-set definitions cannot be widened by the candidate.
 - Prove the evaluator runs from a trusted baseline or independent deployment.
 - Prove promotion requires a verdict bound to the candidate tree or artifact being promoted.
+- For LLM-as-judge evaluators, prove the validation package is protected and current for the task
+  family being judged.
 
 ## Required Controls
 
 - Evaluator inputs, criteria, corpora, and result parsers must be versioned or otherwise attributable.
 - Candidate code must not control evaluator import paths, environment variables, plugin loading, or
   result parsing.
+- Candidate code must not control judge prompts, calibration cases, answer ordering, threshold floors,
+  or bias-audit logic.
 - Promotion must fail closed when verdict binding is missing or ambiguous.
 - Any evaluator change must be reviewed as governance-surface work, not ordinary feature work.
 

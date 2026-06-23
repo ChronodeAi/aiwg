@@ -25,6 +25,8 @@ claims that a goal has been completed.
 - Do not let generated reports, self-written status, or advisory event logs mint acceptance.
 - Require an external or protected verifier for promotion, merge, deployment, or arming decisions.
 - Require verdicts to cite primary evidence and the exact candidate artifact or tree.
+- Require LLM-as-judge verdicts to cite a protected judge-validation package; exact-match agreement
+  alone is diagnostic, not proof.
 - Fail closed when the producer can alter the evaluator, criteria, evidence set, parser, threshold, or
   promotion rule.
 
@@ -36,4 +38,5 @@ final acceptance unless a protected verifier independently rechecks the result.
 ## Failure Smell
 
 If the candidate can alter the question, the scorer, the answer key, the benchmark corpus, the policy
-file, or the promotion rule, the result is not a trustworthy pass.
+file, the judge prompt, the judge calibration set, the bias audit, or the promotion rule, the result is
+not a trustworthy pass.
