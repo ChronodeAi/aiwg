@@ -22,6 +22,7 @@ behavior.
 ## Protected Surface Classes
 
 - evaluator and verifier code
+- LLM judge prompts, calibration reports, judge-validation thresholds, and result parsers
 - criteria, rubrics, benchmark corpora, and answer keys
 - policy files and capability-token rules
 - arming floors, thresholds, and promotion gates
@@ -45,3 +46,5 @@ behavior.
 - A policy, allowlist, or threshold can be widened without governance review.
 - A provider bridge can route around the intended reviewer, verifier, or gate.
 - A generated report can substitute for primary evidence or executable verification.
+- A raw LLM-judge agreement score substitutes for chance-corrected agreement, retest evidence, and
+  bias-audit evidence.

@@ -14,6 +14,7 @@
 | Who owns search strategy? |  |
 | Who owns criteria? |  |
 | Who owns verifier execution? |  |
+| Who owns judge validation? |  |
 | Who owns population/frontier state? |  |
 | Who owns promotion? |  |
 | Can proposer edit evaluator or criteria? |  |
@@ -22,6 +23,7 @@
 
 - [ ] Proposer is treated as untrusted.
 - [ ] Evaluator and criteria are outside proposer edit surface.
+- [ ] Any LLM judge has a protected validation package for the judged task family.
 - [ ] Population/frontier state is recoverable and bounded.
 - [ ] Verdict is bound to candidate artifact.
 - [ ] Promotion is separate from proposal.

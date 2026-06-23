@@ -1,0 +1,47 @@
+name: memory-proof-guard
+version: "0.1.0"
+description: >
+  Runtime governance guard that prevents Fortemi, semantic memory, summaries,
+  reports, or recall artifacts from being promoted into proof authority.
+
+agentTypes:
+  - daemon
+  - ralph-loop
+  - agent-loop
+  - long-running-agent
+
+directives:
+  - id: memory-is-context-not-proof
+    rule: >
+      Treat memory, embeddings, summaries, retrieval results, and provenance
+      notes as context. They may explain where to look, but they do not prove
+      that a claim passed unless the primary evidence is also cited.
+    defaults:
+      allowed_memory_role: context
+      disallowed_memory_role: final_verdict
+
+  - id: proof-claims-require-primary-evidence
+    rule: >
+      Any claim that work is approved, verified, passed, complete, safe, or
+      governed must bind to primary evidence such as command output, test
+      artifacts, immutable logs, signed review records, commits, or frozen run
+      outputs. If only memory is available, report the claim as unverified.
+    defaults:
+      proof_terms:
+        - approved
+        - verified
+        - passed
+        - complete
+        - safe
+        - governed
+
+  - id: fortemi-boundary-preserved
+    rule: >
+      Fortemi or any semantic memory system may store observations, decisions,
+      and references, but must not become the authority that judges or promotes
+      work. For Fortemi-backed decisions, cite the primary artifact that Fortemi
+      summarizes.
+    defaults:
+      boundary_template: fortemi-boundary-card
+
+tools: []

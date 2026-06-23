@@ -1,0 +1,56 @@
+name: governance-boundary-sentinel
+version: "0.1.0"
+description: >
+  Runtime governance guard for daemons and long-running agent loops. Keeps
+  governance-defining surfaces visible and prevents silent acceptance of work
+  that changes its own review boundary.
+
+agentTypes:
+  - daemon
+  - ralph-loop
+  - agent-loop
+  - long-running-agent
+
+directives:
+  - id: protected-governance-surface-awareness
+    rule: >
+      Treat changes to AIWG rules, skills, agents, behaviors, templates,
+      provider bridge files, evaluator definitions, criterion sets, gates,
+      promotion paths, and verdict artifacts as governance-boundary changes.
+      Do not summarize such changes as ordinary implementation work; surface
+      them explicitly in the activity log and final report.
+    defaults:
+      protected_surfaces:
+        - ".aiwg/**"
+        - "AGENTS.md"
+        - "AIWG.md"
+        - "CLAUDE.md"
+        - "WARP.md"
+        - ".codex/**"
+        - ".claude/**"
+        - ".factory/**"
+        - ".agents/**"
+
+  - id: boundary-change-requires-review
+    rule: >
+      If a task changes a governance-defining surface, require an explicit
+      governance review before treating the task as complete. The reviewer
+      must verify whether the producer can edit its own evaluator, promotion
+      gate, or verdict path.
+    defaults:
+      review_skill: governance-escape-hatch-audit
+      inventory_skill: governance-corpus-inventory
+
+  - id: no-silent-provider-bypass
+    rule: >
+      When provider bridge files or generated context files change, verify that
+      the active providers still receive equivalent governance intent. Do not
+      allow one provider to become a bypass path for no-self-grading,
+      memory-is-not-proof, discover-first, or evaluator immutability rules.
+    defaults:
+      providers:
+        - claude-code
+        - codex
+        - factory
+
+tools: []

@@ -1,0 +1,50 @@
+name: provider-bridge-watch
+version: "0.1.0"
+description: >
+  Runtime governance guard for provider bridge and generated context drift
+  across Claude Code, Codex, Factory, and other AIWG providers.
+
+agentTypes:
+  - daemon
+  - ralph-loop
+  - agent-loop
+  - long-running-agent
+
+directives:
+  - id: provider-bridge-is-governance-surface
+    rule: >
+      Treat provider bridge files, generated context, deployed rules, deployed
+      skills, and provider-specific command surfaces as governance surfaces
+      because they determine what an agent actually sees and can invoke.
+    defaults:
+      bridge_files:
+        - "AGENTS.md"
+        - "AIWG.md"
+        - "CLAUDE.md"
+        - "WARP.md"
+        - ".codex/**"
+        - ".claude/**"
+        - ".factory/**"
+        - ".agents/**"
+
+  - id: regenerate-after-provider-change
+    rule: >
+      When provider bridge files or provider deployment configuration changes,
+      require AIWG regeneration before declaring the workspace aligned. Then
+      verify that active providers preserve equivalent governance constraints.
+    defaults:
+      regenerate_skill: aiwg-regenerate
+      check_providers:
+        - claude-code
+        - codex
+        - factory
+
+  - id: no-provider-specific-hardcoding
+    rule: >
+      Do not hard-code provider command directories or provider implementation
+      paths into governance rules when AIWG owns the transformation. Provider
+      differences should be handled by AIWG provider adapters and regeneration.
+    defaults:
+      owner: aiwg-provider-adapters
+
+tools: []
