@@ -440,7 +440,7 @@ export class TelegramAdapter extends BaseAdapter {
 
       for (const update of updates) {
         this.#updateOffset = Math.max(this.#updateOffset, update.update_id + 1);
-        await this.#handleUpdate(update);
+        await this.handleUpdate(update);
       }
     } catch (error) {
       clearTimeout(timeoutId);
@@ -451,12 +451,24 @@ export class TelegramAdapter extends BaseAdapter {
   }
 
   /**
-   * Handle a Telegram update.
+   * Handle a Telegram update (one getUpdates result element, or a webhook
+   * payload). Public so it can be driven by polling, by a future webhook
+   * server, and by tests. Enforces the inbound chat allowlist (security: H-1)
+   * before routing to command/message handlers.
    *
    * @param {Object} update
    */
-  async #handleUpdate(update) {
+  async handleUpdate(update) {
     try {
+      // Security: only process updates from configured (allowlisted) chats.
+      // Without this, anyone who discovers the bot username can DM it and run
+      // read commands (/status, /ask, ...). Fail closed — drop unknown chats.
+      const updateChatId =
+        update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
+      if (updateChatId !== undefined && !this.#isAllowedChat(updateChatId)) {
+        return;
+      }
+
       // Handle text messages (commands)
       if (update.message?.text) {
         await this.#handleMessage(update.message);
@@ -470,6 +482,21 @@ export class TelegramAdapter extends BaseAdapter {
       console.error('[telegram] Error handling update:', error);
       this._recordError(error);
     }
+  }
+
+  /**
+   * Check whether an inbound chat is allowlisted (a configured room or the
+   * default chat). Inbound commands from any other chat are dropped.
+   *
+   * @param {string|number} chatId
+   * @returns {boolean}
+   */
+  #isAllowedChat(chatId) {
+    const id = String(chatId);
+    if (this.#defaultChatId && id === String(this.#defaultChatId)) {
+      return true;
+    }
+    return this.getRooms().has(id);
   }
 
   /**
