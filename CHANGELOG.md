@@ -7,6 +7,96 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.6.10] - 2026-06-22 - "Docsite-clean media research release"
+
+Recovery cut for the `2026.6.9` release line. The `2026.6.9` package reached
+the Gitea npm registry before the release tag was corrected, so this patch
+release republishes the media/research feature set from the corrected commit
+with strict docsite links fixed.
+
+### Fixed
+
+- **Docsite strict-link build is green again** - Agent-loop and LLM Wiki docs
+  now use repository URLs for source-tree-only references instead of generated
+  docsite-relative links that do not exist in `docs/`.
+- **Release tag now points at the corrected source** - `v2026.6.10` includes the
+  type-flexible Media Curator work, Research Complete media REF support, and the
+  docsite-link repair in one signed release commit.
+
+### Upgrade notes
+
+- **Prefer `2026.6.10` over `2026.6.9`.** The feature surface is the same, but
+  `2026.6.10` includes the docsite-link repair in the published package.
+
+## [2026.6.9] - 2026-06-22 - "Type-flexible media curation + research media REF support"
+
+Feature cut for media collections that are not purely music libraries. Media
+Curator now starts unknown and mixed collections with an assess-and-plan path,
+and Research Complete can induct time-based media into REF artifacts with
+timestamp citations.
+
+### Added
+
+- **Type-flexible media routing** - Media Curator documents a generic
+  assess-and-plan entry point for arbitrary or mixed media collections before
+  selecting discography, acquisition, transcript, tagging, export, or research
+  handoff paths.
+- **Research media induction** - Research Complete adds an `induct-media` skill
+  and `reference-media.md` template for talks, lectures, podcasts, interviews,
+  videos, and other time-based sources.
+- **Timestamp citation contract** - Citation sidecars, citation guard guidance,
+  and source-type metadata now cover media REF artifacts, transcript segment
+  hashes, and exact timestamped quotes.
+- **Media-curator to research handoff docs** - The integration guide now
+  covers acquisition, transcript sidecars, storage policy, and downstream REF
+  outputs for time-based media.
+
+### Changed
+
+- **Media Curator docs are no longer music-first only** - Framework overview,
+  quickref, and curate skill guidance make music/discography handling a selected
+  route rather than the default for every media request.
+- **Research source types include audio/video/media** - Source taxonomy and
+  tests now recognize time-based media with transcript-aware citation metadata.
+- **Doc-sync includes skills and agents as code** - The release doc-sync audit
+  treats `agentic/code/**` and repository Markdown as the code-to-doc source of
+  truth, then republishes generated component docs.
+
+### Fixed
+
+- **Provider-specific generated guidance is not a substitute for source sync** -
+  Filed the Devin/Windsurf provider-copying follow-up as issue #1650 instead
+  of manually syncing quickrefs.
+
+### Upgrade notes
+
+- **No action required.** Existing media-curator and research workflows continue
+  to work. New `/curate`, `/transcribe-media`, and `/induct-media` guidance is
+  available after redeploying the relevant frameworks.
+
+## [2026.6.8] - 2026-06-21 — "@aiwg/cockpit npm README polish"
+
+Maintenance cut to refresh the `@aiwg/cockpit` npm package page after the
+trusted-publishing path was validated.
+
+### Changed
+
+- **Cockpit README now matches the npm-facing AIWG style** — the package README
+  opens with a centered product block, npm/source badges, quick install commands,
+  clear "what it is / what it is not" positioning, troubleshooting, and an
+  operator-focused feature summary before the existing architecture and
+  validation details.
+- **Install guidance points at the supported AIWG path first** — `aiwg use
+  cockpit` is documented as the recommended install because it keeps
+  `@aiwg/cockpit` outside the base footprint while version-locking it to the base
+  `aiwg` CLI. Direct `npm i -g @aiwg/cockpit` remains documented for package
+  testing.
+
+### Upgrade notes
+
+- **No action required.** Documentation/package-page release; no CLI behavior
+  changes.
+
 ## [2026.6.7] - 2026-06-21 — "@aiwg/cockpit provenance metadata"
 
 Maintenance cut to validate the new `@aiwg/cockpit` npm trusted-publishing leg
