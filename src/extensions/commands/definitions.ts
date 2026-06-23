@@ -2613,6 +2613,8 @@ export const behaviorCommand: Extension = {
   category: 'daemon',
   platforms: {
     claude: 'full',
+    factory: 'full',
+    codex: 'full',
     generic: 'full',
   },
   deployment: {
@@ -2630,6 +2632,36 @@ export const behaviorCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const daemonCommand: Extension = {
+  id: 'daemon',
+  type: 'skill',
+  name: 'Daemon',
+  description: 'Manage the AIWG daemon and its subsystems',
+  version: '1.0.0',
+  capabilities: ['cli', 'daemon', 'background-agent', 'automation'],
+  keywords: ['daemon', 'start', 'stop', 'status', 'logs', 'background', 'automation'],
+  category: 'daemon',
+  platforms: {
+    claude: 'full',
+    factory: 'full',
+    codex: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: false,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['daemon', 'daemon start', 'daemon status', 'daemon logs', 'manage daemon'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '<init|start|stop|status|logs|restart|attach|chat|task|rooms|autonomous|schedule|memory|pty> [options]',
+      allowedTools: ['Bash', 'Read', 'Write'],
+    },
+  } satisfies SkillMetadata,
+};
+
 export const daemonInitCommand: Extension = {
   id: 'daemon-init',
   type: 'skill',
@@ -2641,6 +2673,8 @@ export const daemonInitCommand: Extension = {
   category: 'daemon',
   platforms: {
     claude: 'full',
+    factory: 'full',
+    codex: 'full',
     generic: 'full',
   },
   deployment: {
@@ -3361,7 +3395,8 @@ export const commandDefinitions: Extension[] = [
   checkpointCommand,
   reproducibilityValidateCommand,
 
-  // Daemon (2)
+  // Daemon (3)
+  daemonCommand,
   behaviorCommand,
   daemonInitCommand,
 
