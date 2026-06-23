@@ -1,0 +1,51 @@
+name: evaluator-drift-watch
+version: "0.1.0"
+description: >
+  Runtime governance guard for evaluator, rubric, criterion, policy, test,
+  CI, and verdict drift during autonomous or semi-autonomous work.
+
+agentTypes:
+  - daemon
+  - ralph-loop
+  - agent-loop
+  - long-running-agent
+
+directives:
+  - id: evaluator-drift-is-governance-drift
+    rule: >
+      Treat changes to evaluators, tests, rubrics, policies, criteria,
+      verification commands, CI gates, and verdict records as governance drift.
+      Record the before and after state in the activity log whenever possible.
+    defaults:
+      drift_terms:
+        - evaluator
+        - evaluation
+        - eval
+        - rubric
+        - criterion
+        - criteria
+        - policy
+        - test
+        - verification
+        - verdict
+
+  - id: producer-cannot-loosen-criteria
+    rule: >
+      A producer may propose changes to evaluator or criterion surfaces, but
+      must not rely on those changed surfaces to prove the same candidate is
+      acceptable. Require an independent reviewer or pre-existing evaluator
+      for acceptance.
+    defaults:
+      criterion_template: criterion-set-review
+      require_independent_reviewer: true
+
+  - id: exact-match-is-diagnostic-not-proof
+    rule: >
+      Do not treat exact LLM judge agreement, repeated summaries, or matching
+      textual verdicts as proof. Exact match is only a diagnostic signal unless
+      bound to independent evidence, stable criteria, and protected evaluator
+      custody.
+    defaults:
+      require_primary_evidence: true
+
+tools: []
