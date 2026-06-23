@@ -1,6 +1,6 @@
 /**
  * Unit tests for daemon.ts handler
- * Covers behavior and daemon-init commands.
+ * Covers daemon, behavior, and daemon-init commands.
  *
  * @issue #689
  * @parent #684
@@ -22,6 +22,7 @@ vi.mock('../../../../src/channel/manager.mjs', () => ({
 }));
 
 import {
+  daemonHandler,
   behaviorHandler,
   daemonInitHandler,
   daemonHandlers,
@@ -37,6 +38,39 @@ function makeCtx(args: string[] = []): HandlerContext {
     frameworkRoot: '/mock/framework/root',
   };
 }
+
+// ── daemonHandler ─────────────────────────────────────────────
+
+describe('daemonHandler', () => {
+  beforeEach(() => { vi.clearAllMocks(); mockRun.mockResolvedValue({ exitCode: 0 }); });
+
+  it('has correct metadata', () => {
+    expect(daemonHandler.id).toBe('daemon');
+    expect(daemonHandler.category).toBe('daemon');
+    expect(daemonHandler.name).toBe('Daemon');
+    expect(typeof daemonHandler.execute).toBe('function');
+  });
+
+  it('aliases contain id', () => {
+    expect(daemonHandler.aliases).toContain('daemon');
+  });
+
+  it('delegates to tools/daemon/index.mjs', async () => {
+    await daemonHandler.execute(makeCtx(['status']));
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['status']);
+  });
+
+  it('passes start args', async () => {
+    await daemonHandler.execute(makeCtx(['start', '--foreground']));
+    expect(mockRun).toHaveBeenCalledWith('tools/daemon/index.mjs', ['start', '--foreground']);
+  });
+
+  it('forwards non-zero exit', async () => {
+    mockRun.mockResolvedValue({ exitCode: 1 });
+    const result = await daemonHandler.execute(makeCtx(['start']));
+    expect(result.exitCode).toBe(1);
+  });
+});
 
 // ── behaviorHandler ───────────────────────────────────────────
 
@@ -133,9 +167,10 @@ describe('daemonInitHandler', () => {
 // ── daemonHandlers array ──────────────────────────────────────
 
 describe('daemonHandlers', () => {
-  it('exports exactly 2 handlers', () => {
-    expect(daemonHandlers).toHaveLength(2);
+  it('exports exactly 3 handlers', () => {
+    expect(daemonHandlers).toHaveLength(3);
     const ids = daemonHandlers.map(h => h.id);
+    expect(ids).toContain('daemon');
     expect(ids).toContain('behavior');
     expect(ids).toContain('daemon-init');
   });

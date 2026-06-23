@@ -71,9 +71,39 @@ class DaemonMain {
       this.startHeartbeat();
       this.log('Daemon started successfully');
     } catch (error) {
-      this.log(`Fatal error during startup: ${error.message}`);
+      this.logStartupFailure(error);
+      await this.cleanupStartupFailure();
       process.exit(1);
     }
+  }
+
+  logStartupFailure(error) {
+    const timestamp = new Date().toISOString();
+    const detail = error?.stack || `${error?.name || 'Error'}: ${error?.message || String(error)}`;
+    const message = `[${timestamp}] Fatal error during startup:\n${detail}\n`;
+    try {
+      fs.appendFileSync(this.logFile, message);
+    } catch {
+      process.stderr.write(message);
+    }
+  }
+
+  async cleanupStartupFailure() {
+    try {
+      if (this.ipcServer) {
+        await this.ipcServer.stop();
+      }
+    } catch {
+      // Best-effort startup cleanup; preserve the original startup error.
+    }
+
+    try {
+      this.stopSubsystems();
+    } catch {
+      // Best-effort startup cleanup; preserve the original startup error.
+    }
+
+    this.cleanup();
   }
 
   setupDirectories() {
