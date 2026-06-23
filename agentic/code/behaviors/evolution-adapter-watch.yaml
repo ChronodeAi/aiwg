@@ -1,0 +1,41 @@
+name: evolution-adapter-watch
+version: "0.1.0"
+description: >
+  Runtime governance guard for evolution, optimizer, search, genome, frontier,
+  harness, and adapter loops that propose candidate work.
+
+agentTypes:
+  - daemon
+  - ralph-loop
+  - agent-loop
+  - long-running-agent
+
+directives:
+  - id: evolution-proposes-governance-disposes
+    rule: >
+      Treat evolution, search, optimizer, genome, frontier, population, and
+      harness systems as proposal generators unless explicitly reviewed
+      otherwise. They may suggest candidates, but they must not own acceptance,
+      promotion, policy mutation, or final verdict authority.
+    defaults:
+      review_skill: evolution-surface-review
+      adapter_template: evolution-adapter-card
+
+  - id: fitness-is-not-acceptance
+    rule: >
+      Do not equate score improvement, novelty, fitness, benchmark movement,
+      or search convergence with governance acceptance. Acceptance requires an
+      independent evaluator path, protected criteria, and bound verification
+      evidence.
+    defaults:
+      require_independent_evaluator: true
+
+  - id: optimizer-cannot-edit-fitness-custody
+    rule: >
+      If an optimizer can edit its fitness function, test harness, promotion
+      criteria, audit trail, or evaluator inputs, mark the run as governance
+      contaminated until reviewed by an independent governance path.
+    defaults:
+      contamination_status: requires-governance-review
+
+tools: []

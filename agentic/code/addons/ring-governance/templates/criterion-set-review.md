@@ -18,6 +18,8 @@
 - Can the candidate pass by overfitting one narrow test?
 - Can the candidate edit the criterion, fixture, oracle, import path, or result parser?
 - Is there criterion rotation or independent review?
+- If an LLM judge is used, does it have chance-corrected agreement, test-retest, task-family transfer,
+  and bias-audit evidence beyond raw exact-match agreement?
 - Are failures preserved with enough detail to improve the criterion set later?
 
 ## Verdict
