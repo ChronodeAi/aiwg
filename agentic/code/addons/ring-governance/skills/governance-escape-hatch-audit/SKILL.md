@@ -24,11 +24,16 @@ surface decides whether those changes are accepted.
    - `no-self-grading`
    - `governance-boundary`
    - `evaluator-immutability`
+   - `judge-validation-protocol`
    - `memory-is-not-proof`
 4. Search for loopholes:
    - candidate edits evaluator or benchmark corpus;
    - candidate widens patchable surface;
    - policy YAML or capability tokens are mutable;
+   - LLM judge uses raw agreement as proof without chance-corrected agreement, retest, task-family
+     transfer, and bias-audit evidence;
+   - candidate can edit judge prompt, calibration corpus, answer order, result parser, or validation
+     thresholds;
    - advisory events are treated as proof;
    - memory recall is treated as acceptance;
    - generated docs claim a gate is active before code proves it.
