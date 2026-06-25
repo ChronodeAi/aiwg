@@ -13,7 +13,7 @@ AIWG ships ~480 skills across the SDLC, forensics, research, marketing, and ops 
 | Claude Code | `skillListingBudgetFraction` in `~/.claude/settings.json` | `0.01` (1% of context) | Raise to `0.05` (5%) |
 | Claude Code | `skillListingMaxDescChars` | `1536` | Lower to `1024` to keep more skills full-length |
 | Codex (OpenAI) | `project_doc_max_bytes` for AGENTS.md | 32 KiB | Nest AGENTS.md per-subdir; do not raise blindly |
-| Codex | Skill listing cap | ~2% of context / 8000 chars | Built-in; reduce skill count or split workspaces |
+| Codex | `codex.skillListingCharCap` in `.aiwg/aiwg.config` | `8000` chars | Raise to `25000` for larger kernel listings, or reduce skill count/split workspaces |
 | Cursor / Warp / Windsurf | Aggregated AGENTS.md | platform-defined | See "Reduce footprint" below |
 
 ---
@@ -76,7 +76,7 @@ Codex uses **progressive disclosure**: only skill `name`, `description`, and fil
 
 | Limit | Value | Setting |
 |-------|-------|---------|
-| Skill listing in initial context | ~2% of model context, or ~8,000 chars | Built-in; not user-configurable |
+| Skill listing in initial context | AIWG default diagnostic cap: 8,000 chars | Project override: `codex.skillListingCharCap` in `.aiwg/aiwg.config` |
 | Per-AGENTS.md size | 32 KiB | `project_doc_max_bytes` (advanced config) |
 
 When the AGENTS.md size limit is hit, **Codex stops adding files silently** ([openai/codex#7138](https://github.com/openai/codex/issues/7138), [#13386](https://github.com/openai/codex/issues/13386)). Instructions near the end of an oversized file are ignored without warning.
@@ -86,6 +86,16 @@ When the AGENTS.md size limit is hit, **Codex stops adding files silently** ([op
 1. **Nest AGENTS.md per subdirectory** rather than one giant root file. Codex respects nearest-ancestor first.
 2. **Don't blindly raise `project_doc_max_bytes`** — it lifts the cap but doesn't help if descriptions are bloated.
 3. **Reduce framework count** if you see truncation (see below).
+
+### Raising the AIWG Codex skill cap
+
+To raise the Codex skill listing budget used by AIWG doctor and deployment checks in a project:
+
+```bash
+aiwg config set --project codex.skillListingCharCap 25000
+```
+
+The override is stored in `.aiwg/aiwg.config`. Use this when your Codex environment can tolerate a larger kernel skill listing; otherwise prefer `aiwg use <framework>` or workspace profiles to keep the initial context small.
 
 ---
 
@@ -208,7 +218,7 @@ Doctor also warns when the total deployed skill inventory exceeds a platform def
 | Platform | Budget |
 |----------|--------|
 | Claude Code | `skillListingBudgetFraction × context_window` (default `1% × 200,000 = 2,000 tokens`) |
-| Codex | Fixed 8,000-char built-in cap |
+| Codex | `codex.skillListingCharCap` project override, default 8,000 chars |
 | Other | Info-only line — no documented budget |
 
 The check honors:

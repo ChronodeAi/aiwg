@@ -194,6 +194,15 @@ describe('doctor: deployed skill budget warning', () => {
     expect(content).toContain('aiwg list --deployed');
   });
 
+  it('deduplicates skill paths before aggregate budget checks', async () => {
+    const { readFileSync } = await import('fs');
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain('seenRealPaths');
+    expect(content).toContain('await fs.realpath(skillsDir)');
+    expect(content).toContain('if (seenRealPaths.size <= 1) return;');
+  });
+
   it('uses the same Claude override budget for deployed skill count warnings', async () => {
     const { readFileSync } = await import('fs');
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
