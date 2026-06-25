@@ -866,7 +866,7 @@ Options:
 
         try {
           const { PTYAdapter } = await import('./pty-adapter.mjs');
-          const adapter = new PTYAdapter({ platform, args: extraArgs, cols, rows });
+          const adapter = PTYAdapter.auto({ platform, args: extraArgs, cols, rows });
 
           adapter.on('data', (chunk) => process.stdout.write(chunk));
           adapter.on('exit', ({ exitCode }) => {
@@ -875,7 +875,11 @@ Options:
           });
 
           const sessionId = await adapter.start();
-          console.error(`PTY session started: ${sessionId} (platform: ${platform}, PID: ${adapter.getPid()})`);
+          const transport = process.env.AIWG_SANDBOX_ENDPOINT ? 'sandbox' : 'local';
+          const detail = transport === 'sandbox'
+            ? `sandbox=${process.env.AIWG_SANDBOX_ENDPOINT} agent=${process.env.AIWG_SANDBOX_AGENT_ID || 'agent-01'}`
+            : `PID: ${adapter.getPid()}`;
+          console.error(`PTY session started: ${sessionId} (platform: ${platform}, transport: ${transport}, ${detail})`);
           console.error('Input is forwarded to the PTY. Press Ctrl+C to stop.');
 
           // Forward stdin to the PTY
@@ -938,7 +942,16 @@ Options:
             process.exit(1);
           }
 
-          try { process.kill(session.pid, 'SIGTERM'); } catch { /* already gone */ }
+          if (session.transport === 'sandbox') {
+            try {
+              await fetch(`${session.httpEndpoint.replace(/\/$/, '')}/api/v1/tasks/${session.commandId}`, {
+                method: 'DELETE',
+              });
+            } catch { /* best-effort cancellation */ }
+          } else {
+            try { process.kill(session.pid, 'SIGTERM'); } catch { /* already gone */ }
+          }
+
           // Also stop tmux session if one was created
           if (session.tmuxSession) {
             try {

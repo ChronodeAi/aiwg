@@ -102,7 +102,8 @@ function parseDoctorArgs(argv) {
 //   claude   — `skillListingBudgetFraction` × context window (default 1%
 //              × 200k = 2000 tokens). User override read from
 //              ~/.claude/settings.json.
-//   codex    — fixed 8000-char cap built into Codex itself.
+//   codex    — 8000-char default, with optional project override via
+//              .aiwg/aiwg.config codex.skillListingCharCap.
 //   others   — skip (no documented budget).
 //
 // Token estimation: ~4 chars/token is the standard rough heuristic. Each
@@ -111,7 +112,7 @@ function parseDoctorArgs(argv) {
 
 const CLAUDE_DEFAULT_BUDGET_FRACTION = 0.01;
 const CLAUDE_DEFAULT_CONTEXT_WINDOW = 200_000;
-const CODEX_LISTING_CHAR_CAP = 8000;
+const CODEX_DEFAULT_LISTING_CHAR_CAP = 8000;
 const CHARS_PER_TOKEN = 4;
 
 async function readClaudeBudgetOverride() {
@@ -165,6 +166,28 @@ async function resolveClaudeListingBudget() {
     ctx,
     ctxDirective,
     fraction,
+    override,
+  };
+}
+
+async function readCodexBudgetOverride() {
+  const p = path.join(process.cwd(), '.aiwg', 'aiwg.config');
+  try {
+    const txt = await fs.readFile(p, 'utf-8');
+    const data = JSON.parse(txt);
+    const v = data?.codex?.skillListingCharCap;
+    const n = typeof v === 'number' ? v : (typeof v === 'string' ? Number(v) : NaN);
+    if (Number.isInteger(n) && n > 0) return { value: n, source: p };
+  } catch {
+    /* missing, invalid, or unreadable — use default */
+  }
+  return null;
+}
+
+async function resolveCodexListingBudget() {
+  const override = await readCodexBudgetOverride();
+  return {
+    budgetChars: override?.value ?? CODEX_DEFAULT_LISTING_CHAR_CAP,
     override,
   };
 }
@@ -253,11 +276,21 @@ async function checkTotalDeployedSkillBudgetForProvider(provName, label, provide
   if (paths.size === 0) return;
 
   const measurements = [];
+  const seenRealPaths = new Set();
   for (const relPath of paths) {
     const skillsDir = resolveProviderPath(relPath);
     if (!skillsDir || !(await fileExists(skillsDir))) continue;
+    let realPath = path.resolve(skillsDir);
+    try {
+      realPath = await fs.realpath(skillsDir);
+    } catch {
+      // Fall back to the resolved string when the path disappears mid-check.
+    }
+    if (seenRealPaths.has(realPath)) continue;
+    seenRealPaths.add(realPath);
     measurements.push(await measureSkillsListing(skillsDir));
   }
+  if (seenRealPaths.size <= 1) return;
 
   const stats = mergeSkillMeasurements(measurements);
   if (!stats) return;
@@ -278,12 +311,16 @@ async function checkTotalDeployedSkillBudgetForProvider(provName, label, provide
         `${stats.count} deployed skills estimate ${stats.totalTokens.toLocaleString()} tokens, within Claude Code's configured listing budget (${budgetTokens.toLocaleString()} tokens at ${(fraction * 100).toFixed(2)}%).`,
       );
     }
-  } else if (provName === 'codex' && stats.totalChars > CODEX_LISTING_CHAR_CAP) {
-    check(
-      `${label} Deployed Skill Count`,
-      'warn',
-      `${stats.count} deployed skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's default listing cap (${CODEX_LISTING_CHAR_CAP.toLocaleString()} chars). Run \`aiwg use all\` for workspace-aware filtering or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
-    );
+  } else if (provName === 'codex') {
+    const { budgetChars, override } = await resolveCodexListingBudget();
+    if (stats.totalChars > budgetChars) {
+      const budgetLabel = override ? 'configured listing cap' : 'default listing cap';
+      check(
+        `${label} Deployed Skill Count`,
+        'warn',
+        `${stats.count} deployed skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's ${budgetLabel} (${budgetChars.toLocaleString()} chars). Run \`aiwg use all\` for workspace-aware filtering or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
+      );
+    }
   }
 }
 
@@ -328,13 +365,18 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
       recommendations.push('see docs/skills-budget-guide.md for full options');
     }
   } else if (provName === 'codex') {
-    budget = CODEX_LISTING_CHAR_CAP;
+    const { budgetChars, override } = await resolveCodexListingBudget();
+    budget = budgetChars;
     budgetUnit = 'chars';
     usage = stats.totalChars;
     usageUnit = 'chars';
-    budgetSource = `${CODEX_LISTING_CHAR_CAP.toLocaleString()}-char built-in cap`;
+    budgetSource = override
+      ? `${budgetChars.toLocaleString()}-char project override in ${override.source.replace(os.homedir(), '~')}`
+      : `${CODEX_DEFAULT_LISTING_CHAR_CAP.toLocaleString()}-char default cap`;
     if (usage > budget) {
-      recommendations.push('Codex caps the listing at 8 000 chars — trim skill descriptions or remove unused frameworks');
+      const verb = override ? 'raise' : 'set';
+      recommendations.push(`${verb} codex.skillListingCharCap to ${Math.ceil((usage * 1.25) / 1000) * 1000} in .aiwg/aiwg.config`);
+      recommendations.push('or trim skill descriptions / remove unused frameworks');
       recommendations.push('see docs/skills-budget-guide.md');
     }
   } else {
