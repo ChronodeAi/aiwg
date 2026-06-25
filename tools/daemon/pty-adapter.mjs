@@ -244,6 +244,9 @@ export class PTYAdapter extends EventEmitter {
       })
       .filter(Boolean)
       .filter((s) => {
+        if (s.transport === 'sandbox') {
+          return Boolean(s.commandId && s.httpEndpoint);
+        }
         if (!s.pid) return false;
         try {
           process.kill(s.pid, 0);   // signal 0 = existence check
@@ -266,6 +269,9 @@ export class PTYAdapter extends EventEmitter {
     if (!fs.existsSync(p)) return null;
     try {
       const s = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (s.transport === 'sandbox') {
+        return s.commandId && s.httpEndpoint ? s : null;
+      }
       if (!s.pid) return null;
       process.kill(s.pid, 0);
       return s;

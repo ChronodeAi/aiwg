@@ -192,6 +192,7 @@ const INTEGER_FIELDS: Record<string, { min: number; max: number }> = {
   'parallelism.max_parallel_ralph_loops': { min: 1, max: 20 },
   'parallelism.max_parallel_mc_missions': { min: 1, max: 20 },
   'command_log.max_bytes': { min: 1024, max: 104_857_600 },
+  'codex.skillListingCharCap': { min: 1_000, max: 1_000_000 },
 };
 
 async function projectConfigGet(key: string, args: string[]): Promise<void> {
