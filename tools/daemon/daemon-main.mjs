@@ -487,6 +487,7 @@ class DaemonMain {
         uptime_seconds: Math.floor((Date.now() - this.startTime) / 1000),
         started_at: new Date(this.startTime).toISOString(),
         health: 'healthy',
+        configured_behaviors: this.config.get('supervisor.behaviors') || [],
         subsystems: {
           ipc: { clients: this.ipcServer.clientCount },
           supervisor: this.supervisor.getStatus(),
@@ -680,6 +681,22 @@ class DaemonMain {
         return this.autonomousEngine ? this.autonomousEngine.getStatus() : { enabled: false };
       },
 
+      'autonomous.rehearseAction': (params) => {
+        if (!this.autonomousEngine) {
+          const err = new Error('Autonomous engine not initialized');
+          err.code = 'INVALID_STATE';
+          throw err;
+        }
+        if (!params?.action) {
+          const err = new Error('Missing required parameter: action');
+          err.code = 'INVALID_PARAMS';
+          throw err;
+        }
+        return this.autonomousEngine.rehearseAction(params.action, {
+          estimatedCostUsd: params.estimatedCostUsd,
+        });
+      },
+
       'autonomous.enable': () => {
         if (!this.autonomousEngine) {
           const err = new Error('Autonomous engine not initialized');
@@ -817,6 +834,8 @@ class DaemonMain {
       rooms: this.roomManager ? this.roomManager.getStatus() : null,
       scheduled_tasks: this.scheduledTaskRunner ? this.scheduledTaskRunner.getStatus() : null,
       autonomous: this.autonomousEngine ? this.autonomousEngine.getStatus() : null,
+      configured_behaviors: this.config.get('supervisor.behaviors') || [],
+      behaviors: this.behaviorLoader ? this.behaviorLoader.getStatus() : { active: {}, count: 0 },
       health: {
         status: 'healthy',
         last_check: new Date().toISOString(),
