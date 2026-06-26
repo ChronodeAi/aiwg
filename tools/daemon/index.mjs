@@ -234,6 +234,9 @@ class DaemonCLI {
       console.log(`Started: ${state.started_at}`);
       console.log(`Uptime: ${state.uptime_seconds}s`);
       console.log(`Health: ${state.health}`);
+      if (Array.isArray(state.configured_behaviors)) {
+        console.log(`Configured behaviors: ${state.configured_behaviors.join(', ') || '(none)'}`);
+      }
 
       const sub = state.subsystems;
       console.log(`\nIPC clients: ${sub.ipc?.clients || 0}`);
@@ -258,6 +261,13 @@ class DaemonCLI {
       if (sub.messaging?.enabled) {
         console.log(`Messaging: enabled (${sub.messaging.adapters} adapters)`);
       }
+      if (sub.behaviors) {
+        const names = Object.keys(sub.behaviors.active || {});
+        console.log(`\nBehaviors: ${sub.behaviors.count || 0} active`);
+        if (names.length > 0) {
+          console.log(`  ${names.join(', ')}`);
+        }
+      }
       return;
     } catch {
       // IPC unavailable, fall back to state file
@@ -270,6 +280,9 @@ class DaemonCLI {
         console.log(`Uptime: ${state.uptime_seconds}s`);
         console.log(`Last heartbeat: ${state.last_heartbeat}`);
         console.log(`Health: ${state.health.status}`);
+        if (Array.isArray(state.configured_behaviors)) {
+          console.log(`Configured behaviors: ${state.configured_behaviors.join(', ') || '(none)'}`);
+        }
 
         if (state.agents) {
           console.log(`\nAgents:`);
@@ -289,6 +302,13 @@ class DaemonCLI {
           console.log('\nIssues:');
           for (const issue of state.health.issues) {
             console.log(`  - ${issue}`);
+          }
+        }
+        if (state.behaviors) {
+          const names = Object.keys(state.behaviors.active || {});
+          console.log(`\nBehaviors: ${state.behaviors.count || 0} active`);
+          if (names.length > 0) {
+            console.log(`  ${names.join(', ')}`);
           }
         }
       } catch (error) {
@@ -480,6 +500,27 @@ class DaemonCLI {
         case 'disable': {
           const result = await client.request('autonomous.disable');
           console.log(`Autonomous mode: ${result.enabled ? 'enabled' : 'disabled'}`);
+          break;
+        }
+        case 'rehearse': {
+          const action = process.argv[4];
+          if (!action) {
+            console.error('Usage: aiwg daemon autonomous rehearse <action> [estimatedCostUsd]');
+            process.exit(1);
+          }
+          const estimatedCostUsd = process.argv[5] !== undefined ? Number(process.argv[5]) : undefined;
+          if (estimatedCostUsd !== undefined && Number.isNaN(estimatedCostUsd)) {
+            console.error('estimatedCostUsd must be a number');
+            process.exit(1);
+          }
+          const result = await client.request('autonomous.rehearseAction', {
+            action,
+            ...(estimatedCostUsd !== undefined ? { estimatedCostUsd } : {}),
+          });
+          console.log(`Autonomous rehearsal: ${result.accepted ? 'accepted' : 'denied'}`);
+          console.log(`  Action: ${result.action}`);
+          console.log(`  Reason: ${result.reason || 'none'}`);
+          console.log(`  No LLM: ${result.noLlm}`);
           break;
         }
         case 'status':
@@ -1120,7 +1161,7 @@ Commands:
   chat <message>    Send a message to the daemon agent
   task <sub>        Manage agent tasks (submit, list, get, cancel, stats)
   rooms             List connected messaging rooms
-  autonomous <sub>  Manage autonomous mode (status, enable, disable)
+  autonomous <sub>  Manage autonomous mode (status, enable, disable, rehearse)
   schedule          Show scheduled task status and history
   memory <sub>      Manage cross-session memory (show, clear)
 
@@ -1142,6 +1183,7 @@ Examples:
   aiwg daemon status
   aiwg daemon rooms                    # List messaging rooms
   aiwg daemon autonomous status        # Check autonomous mode
+  aiwg daemon autonomous rehearse rbi-mission-status-report
   aiwg daemon autonomous enable        # Enable self-directed thinking
   aiwg daemon schedule                 # Show scheduled tasks
   aiwg daemon attach
