@@ -72,6 +72,24 @@ export class AutonomousEngine extends EventEmitter {
   #running = false;
 
   /**
+   * Resolve configured budget cap while preserving explicit zero.
+   *
+   * @returns {number}
+   */
+  #budgetCapUsd() {
+    return this.#config.budget_cap_usd ?? 5;
+  }
+
+  /**
+   * Resolve configured daily task limit while preserving explicit zero.
+   *
+   * @returns {number}
+   */
+  #dailyTaskLimit() {
+    return this.#config.max_daily_tasks ?? 10;
+  }
+
+  /**
    * @param {AutonomousEngineOptions} options
    */
   constructor(options) {
@@ -166,12 +184,12 @@ export class AutonomousEngine extends EventEmitter {
     this.#resetDailyCountersIfNeeded();
 
     // Check daily limits
-    if (this.#dailyTaskCount >= (this.#config.max_daily_tasks || 10)) {
+    if (this.#dailyTaskCount >= this.#dailyTaskLimit()) {
       console.log('[autonomous] Daily task limit reached, skipping');
       return;
     }
 
-    if (this.#dailySpendUsd >= (this.#config.budget_cap_usd || 5)) {
+    if (this.#dailySpendUsd >= this.#budgetCapUsd()) {
       console.log('[autonomous] Daily budget cap reached, skipping');
       return;
     }
@@ -220,7 +238,7 @@ Constraints:
 - You may ONLY perform actions in this allowlist: [${allowed}]
 - You may NOT perform: [${blocked}]
 - Keep the task under 10 minutes estimated execution time
-- Keep estimated cost under $${this.#config.budget_cap_usd || 5}
+- Keep estimated cost under $${this.#budgetCapUsd()}
 
 Respond with ONLY a JSON object (no markdown fences):
 {
@@ -293,12 +311,50 @@ If the project is in good shape and nothing needs doing, set skip: true.`;
       return false;
     }
 
-    if ((this.#dailySpendUsd + (proposal.estimatedCostUsd || 0)) > (this.#config.budget_cap_usd || 5)) {
+    if ((this.#dailySpendUsd + (proposal.estimatedCostUsd || 0)) > this.#budgetCapUsd()) {
       console.warn('[autonomous] Proposal would exceed daily budget');
       return false;
     }
 
     return true;
+  }
+
+  /**
+   * Deterministically validate an action against autonomous safety constraints
+   * without submitting work to a provider-backed agent.
+   *
+   * @param {string} action
+   * @param {{ estimatedCostUsd?: number }} [options]
+   * @returns {{ accepted: boolean, action: string, reason: string|null, noLlm: boolean }}
+   */
+  rehearseAction(action, options = {}) {
+    const proposal = {
+      id: 'rehearsal',
+      action,
+      description: 'deterministic daemon safety rehearsal',
+      prompt: '',
+      estimatedMinutes: 0,
+      estimatedCostUsd: options.estimatedCostUsd ?? 0,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+
+    const allowed = this.#config.allowed_actions || [];
+    const blocked = this.#config.blocked_actions || [];
+
+    if (blocked.includes(proposal.action)) {
+      return { accepted: false, action, reason: 'blocked-action', noLlm: true };
+    }
+
+    if (allowed.length > 0 && !allowed.includes(proposal.action)) {
+      return { accepted: false, action, reason: 'not-allowed', noLlm: true };
+    }
+
+    if ((this.#dailySpendUsd + proposal.estimatedCostUsd) > this.#budgetCapUsd()) {
+      return { accepted: false, action, reason: 'budget-exceeded', noLlm: true };
+    }
+
+    return { accepted: true, action, reason: null, noLlm: true };
   }
 
   /**
@@ -332,9 +388,9 @@ If the project is in good shape and nothing needs doing, set skip: true.`;
       enabled: this.#config.enabled,
       running: this.#running,
       dailyTaskCount: this.#dailyTaskCount,
-      dailyTaskLimit: this.#config.max_daily_tasks || 10,
+      dailyTaskLimit: this.#dailyTaskLimit(),
       dailySpendUsd: this.#dailySpendUsd,
-      budgetCapUsd: this.#config.budget_cap_usd || 5,
+      budgetCapUsd: this.#budgetCapUsd(),
       pendingProposals: this.getPendingProposals().length,
       allowedActions: this.#config.allowed_actions || [],
       blockedActions: this.#config.blocked_actions || [],

@@ -91,9 +91,59 @@ describe('AutonomousEngine', () => {
       expect(status.allowedActions).toContain('doc-sync');
       expect(status.blockedActions).toContain('deploy');
     });
+
+    it('preserves explicit zero budget caps in status', () => {
+      engine = new AutonomousEngine({
+        supervisor,
+        config: defaultConfig({ budget_cap_usd: 0 }),
+      });
+
+      expect(engine.getStatus().budgetCapUsd).toBe(0);
+    });
   });
 
   describe('proposal validation', () => {
+    it('deterministically accepts allowed zero-cost actions without submitting work', () => {
+      engine = new AutonomousEngine({
+        supervisor,
+        config: defaultConfig({
+          budget_cap_usd: 0,
+          allowed_actions: ['rbi-mission-status-report'],
+          blocked_actions: ['broadcast'],
+        }),
+      });
+
+      const result = engine.rehearseAction('rbi-mission-status-report');
+
+      expect(result).toEqual({
+        accepted: true,
+        action: 'rbi-mission-status-report',
+        reason: null,
+        noLlm: true,
+      });
+      expect(supervisor.submit).not.toHaveBeenCalled();
+    });
+
+    it('deterministically denies blocked actions without submitting work', () => {
+      engine = new AutonomousEngine({
+        supervisor,
+        config: defaultConfig({
+          allowed_actions: ['rbi-mission-status-report'],
+          blocked_actions: ['broadcast'],
+        }),
+      });
+
+      const result = engine.rehearseAction('broadcast');
+
+      expect(result).toEqual({
+        accepted: false,
+        action: 'broadcast',
+        reason: 'blocked-action',
+        noLlm: true,
+      });
+      expect(supervisor.submit).not.toHaveBeenCalled();
+    });
+
     it('rejects proposals with blocked actions', () => {
       engine = new AutonomousEngine({
         supervisor,
