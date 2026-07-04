@@ -131,6 +131,12 @@ jobs:
         # entries against ci/expected-tarball-top-level.txt.
         run: npm run lint:tarball
 
+      - name: Verify Fortemi Core prebuilt index package (#1697)
+        # Runs npm pack through prepack, then verifies the Fortemi Core v2
+        # framework export + manifest are present in the tarball and match
+        # their checksum/schema contract.
+        run: npm run lint:fortemi-prebuilt-package
+
       - name: Check Cockpit package contents
         run: npm pack ./apps/cockpit --dry-run
 
@@ -323,13 +329,40 @@ jobs:
 
       - name: Verify .aiwg/ excluded from package
         run: |
-          if grep -q '\.aiwg/' pack-output.txt; then
-            echo "FATAL: .aiwg/ found in npm package contents!"
-            echo ".aiwg/ is project-local SDLC artifacts — must never be published."
-            grep '\.aiwg/' pack-output.txt
-            exit 1
-          fi
+          npm pack --dry-run --json > pack-files.json
+          node <<'NODE'
+          const fs = require('fs');
+          const stdout = fs.readFileSync('pack-files.json', 'utf8');
+          function parseNpmPackJson(text) {
+            try {
+              return JSON.parse(text);
+            } catch {
+              const start = text.lastIndexOf('\n[');
+              if (start >= 0) return JSON.parse(text.slice(start + 1));
+              const first = text.indexOf('[');
+              if (first >= 0) return JSON.parse(text.slice(first));
+              throw new Error('no JSON array found in npm pack output');
+            }
+          }
+          const pack = parseNpmPackJson(stdout);
+          const files = pack?.[0]?.files ?? [];
+          const aiwgFiles = files
+            .map((file) => file.path)
+            .filter((path) => path === '.aiwg' || path.startsWith('.aiwg/'));
+          if (aiwgFiles.length > 0) {
+            console.error('FATAL: .aiwg/ found in npm package contents!');
+            console.error('.aiwg/ is project-local SDLC artifacts — must never be published.');
+            for (const file of aiwgFiles) console.error(file);
+            process.exit(1);
+          }
+          NODE
           echo "✓ .aiwg/ correctly excluded from npm package"
+
+      - name: Verify Fortemi Core prebuilt index package (#1697)
+        # Runs npm pack through prepack, then verifies the Fortemi Core v2
+        # framework export + manifest are present in the tarball and match
+        # their checksum/schema contract.
+        run: npm run lint:fortemi-prebuilt-package
 
       - name: Audit dep-graph signatures (#1288 / A12)
         # Hard gate: `npm audit signatures` verifies every package in the

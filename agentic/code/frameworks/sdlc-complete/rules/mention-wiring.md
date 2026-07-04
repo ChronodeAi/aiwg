@@ -1,6 +1,11 @@
+---
+enforcement: medium
+---
+
 # @-Mention Wiring Rules
 
-These rules apply when generating ANY artifact (documents, code, agents, skills, rules, templates).
+**Enforcement Level**: MEDIUM
+These rules apply when generating ANY artifact (documents, code, agents, commands, skills, rules, templates).
 
 ## Wire-As-You-Go Pattern
 

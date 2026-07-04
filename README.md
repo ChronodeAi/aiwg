@@ -6,15 +6,22 @@
 
 **Multi-agent AI framework for Claude Code, Copilot, Cursor, Warp, and 6 more platforms**
 
-200+ agents, 67+ CLI commands, 400+ deployable agent/skill/command/rule artifacts, 8 core frameworks + training marketplace plugin, 27 addons. SDLC workflows, digital forensics, research management, marketing operations, media curation, ops infrastructure, knowledge base, and fine-tuning dataset curation — all deployable with one command.
+200+ agents, 67+ CLI commands, 400+ deployable agent/skill/command/rule artifacts, 8 core frameworks, 27 addons, and a training marketplace package. SDLC workflows, digital forensics, research management, marketing operations, media curation, ops infrastructure, knowledge base, and fine-tuning dataset curation — all deployable with one command.
 
 ```bash
 npm i -g aiwg        # install globally
 aiwg use sdlc        # deploy SDLC framework
 ```
 
+Then ask your AI assistant to set up the project for AIWG. The agent-led setup
+conversation should establish remotes, issue storage, delivery behavior,
+signing policy, and provider choices; the assistant may call `aiwg setup project`
+as the underlying CLI helper.
+
 macOS users: if npm fails with `EACCES` under `/usr/local/lib/node_modules`,
 use the [macOS Install Guide](docs/getting-started/macos-install.md).
+Agents and stewards setting up AIWG end-to-end should use the
+[Agentic Install Runbook](docs/agentic-install-runbook.md).
 
 [![npm version](https://img.shields.io/npm/v/aiwg/latest?label=npm&color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/aiwg)
 [![npm downloads](https://img.shields.io/npm/dm/aiwg?color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/aiwg)
@@ -93,7 +100,10 @@ Around that core, AIWG ships agent-facing utilities for things the base platform
 
 The trade-off is real: when the same agent set loads into every session, context from one project can bleed into reasoning about another. Research (REF-720, *Lost in Multi-Turn Conversation*, MSR/Salesforce 2025) measured a 39% capability drop when this happens. The non-blocking project-isolation warning surfaces the trade-off at deploy time so the scope choice is informed. Neither scope is wrong; pick the one that fits the workflow.
 
-See `docs/cli-reference.md` (under `aiwg use` → "Scope models") for the per-provider details and the global-install rough-edge inventory.
+See the [Agentic Install Runbook](docs/agentic-install-runbook.md) for the
+zero-to-running setup path, and `docs/cli-reference.md` (under `aiwg use` →
+"Scope models") for the per-provider details and the global-install rough-edge
+inventory.
 
 ## Simple Building Blocks
 
@@ -128,7 +138,8 @@ The user surface is the conversation with your AI tool. You install AIWG, deploy
 The CLI exists mostly for the agent to call under the hood. The commands a user typically runs by hand are a short list:
 
 - `aiwg use <framework>` — deploy AIWG to your project (one-time per framework, per project)
-- `aiwg wizard` — guided first-run setup
+- Project setup agent/skill — recommended guided setup conversation for repo, tracker, delivery, signing, and provider policy
+- `aiwg wizard` — guided first-run goal routing
 - `aiwg new <project>` — scaffold a new project
 - `aiwg status` — what's deployed and engaged in this workspace
 - `aiwg doctor` — health check
@@ -448,7 +459,7 @@ The orchestration pattern: **Primary Author → Parallel Reviewers → Synthesiz
 - **35 enforcement rules** — anti-laziness detection, token security, citation integrity, executable feedback, failure mitigation across 6 LLM archetypes
 - **334 artifact templates** — progressive disclosure templates for requirements, architecture, testing, security, deployment, and more
 - **8 platform support** — deploy to Claude Code, Copilot, Cursor, Warp, Factory AI, OpenCode, Codex, and Windsurf
-- **8 core frameworks + training marketplace plugin** — SDLC, Digital Forensics, Marketing Operations, Research Management, Media Curation, Ops Infrastructure, Knowledge Base, Security Engineering, plus [`aiwg-training`](https://github.com/jmagly/aiwg-training) for fine-tuning dataset curation (corpus-to-dataset pipeline with DPO/KTO/ORPO/SimPO export)
+- **8 core frameworks + training marketplace package** — SDLC, Digital Forensics, Marketing Operations, Research Management, Media Curation, Ops Infrastructure, Knowledge Base, Security Engineering, plus [`aiwg-training`](https://github.com/jmagly/aiwg-training) for fine-tuning dataset curation (corpus-to-dataset pipeline with DPO/KTO/ORPO/SimPO export)
 - **27 addons** — semantic-memory kernel, llm-wiki (Obsidian-native knowledge base), RLM recursive decomposition, voice profiles, testing quality, mutation testing, UAT automation, and more
 - **Agent Loop** — iterative task execution with automatic error recovery and crash resilience (6-8 hour sessions)
 - **RLM addon** — recursive context decomposition for processing 10M+ tokens via sub-agent delegation
@@ -498,8 +509,9 @@ aiwg doctor
 ### Customize Without Forking
 
 Author project-specific rules, skills, agents, addons, or frameworks
-directly under `.aiwg/{extensions,addons,frameworks,plugins}/<name>/`.
-No fork, no rebuild. Discovered automatically by `aiwg use`.
+directly under `.aiwg/{extensions,addons,frameworks}/<name>/`. Use
+`.aiwg/plugins/<name>/` only when you are wrapping a bundle for marketplace
+delivery. No fork, no rebuild. Discovered automatically by `aiwg use`.
 
 ```bash
 aiwg new-bundle my-team-rules --type extension --starter rule
@@ -514,7 +526,7 @@ The bundle is **byte-identical** in shape to its upstream form, so
 [customization guide](docs/customization/README.md) for the three paths
 (project-local, fork, corpus).
 
-### Claude Code Plugin (Alternative)
+### Claude Code Marketplace (Alternative)
 
 ```bash
 /plugin marketplace add jmagly/ai-writing-guide
@@ -1083,13 +1095,18 @@ The headline operator surface for finding and reading AIWG capabilities. Most AI
 aiwg discover "deploy production"           # → flow-deploy-to-production
 aiwg discover "create intake"               # → intake-* family
 aiwg discover "audit security" --type skill --limit 5
-aiwg discover "<phrase>" --json             # stable schema for sub-agents
+aiwg discover "<phrase>" --format json      # stable ids for sub-agents, no paths
+aiwg discover "<phrase>" --format json --compact
 
 # Fetch the full body of a specific artifact (companion to discover)
+aiwg show skill aiwg:skill:6f1477d99813ca8d
 aiwg show skill flow-deploy-to-production
 aiwg show agent aiwg-steward
 aiwg show command discover
 aiwg show rule no-attribution
+
+# Inspect Fortemi metadata and resolved paths when needed
+aiwg show metadata aiwg:skill:6f1477d99813ca8d --json
 ```
 
 The kernel quickrefs ship **curated, validated discovery phrases per capability domain** — phrases tested against the live scorer to surface the right top-3 candidates. The 6 self-maintenance ops (`steward`, `aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`) stay loaded so the agent retains repair surfaces even when discovery itself is broken. See [`docs/discovery-and-kernel-skills.md`](docs/discovery-and-kernel-skills.md) for the full best-practices guide, ASCII flow diagrams, and verification steps.
@@ -1270,7 +1287,7 @@ All 8 platforms receive agents, commands, skills, and rules. Deployment adapts t
 | **Workspace** | `status`, `migrate-workspace`, `rollback-workspace` | Workspace health and migration |
 | **MCP** | `mcp serve`, `mcp install`, `mcp info` | Model Context Protocol server |
 | **Catalog** | `catalog list`, `catalog info`, `catalog search` | Browse available extensions |
-| **Plugins** | `install-plugin`, `uninstall-plugin`, `plugin-status`, `package-plugin`, `package-all-plugins` | Plugin management |
+| **Marketplace packaging** | `install-plugin`, `uninstall-plugin`, `plugin-status`, `package-plugin`, `package-all-plugins` | Install and package delivery wrappers |
 | **Scaffolding** | `add-agent`, `add-command`, `add-skill`, `add-template`, `scaffold-addon`, `scaffold-extension`, `scaffold-framework` | Create new extensions |
 | **Ralph** | `ralph`, `ralph-status`, `ralph-abort`, `ralph-resume`, `ralph-external`, `ralph-memory`, `ralph-config` | Iterative execution engine |
 | **Metrics** | `cost-report`, `cost-history`, `metrics-tokens` | Token usage and cost tracking |

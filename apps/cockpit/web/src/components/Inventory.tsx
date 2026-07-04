@@ -9,6 +9,7 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
   const [data, setData] = useState<Inv | null>(null);
   const [err, setErr] = useState('');
   const [actionErr, setActionErr] = useState('');
+  const [actionMsg, setActionMsg] = useState('');
 
   const load = useCallback(() => {
     api<Inv>('/api/inventory').then((d) => { setData(d); setErr(''); }).catch((e) => setErr((e as Error).message));
@@ -16,7 +17,16 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
   useEffect(() => { load(); }, [load]);
 
   const control = (path: string, method: string) =>
-    api(path, { method }).then(() => { setActionErr(''); load(); }).catch((e) => setActionErr((e as Error).message));
+    api<{ already_gone?: boolean; message?: string }>(path, { method })
+      .then((result) => {
+        setActionErr('');
+        setActionMsg(result.already_gone ? (result.message ?? 'Instance already removed; inventory refreshed.') : '');
+        load();
+      })
+      .catch((e) => {
+        setActionMsg('');
+        setActionErr((e as Error).message);
+      });
 
   if (err) return <p className="err">Could not load inventory: {err}</p>;
   if (!data) return <p className="empty">Loading…</p>;
@@ -40,6 +50,7 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
         {onLaunchInstance && <button className="cta" onClick={onLaunchInstance}>＋ New instance + session</button>}
       </div>
       {actionErr && <p className="err">Action failed: {actionErr}</p>}
+      {actionMsg && <p className="hint" role="status">{actionMsg}</p>}
       <table>
         <caption>Available instance deployments</caption>
         <thead>
@@ -105,8 +116,7 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
                   : <button aria-label={`Start instance ${fmtId(i.id)}`} onClick={() => control(`/api/instances/${encodeURIComponent(i.id)}/start`, 'POST')}>Start Instance</button>}{' '}
                 <button
                   aria-label={`Destroy instance ${fmtId(i.id)}`}
-                  disabled={i.state !== 'running' && i.runtime === 'docker'}
-                  title={i.state !== 'running' && i.runtime === 'docker' ? 'Sandbox reports this stopped Docker row but admin-v2 no longer has a destroyable instance record.' : undefined}
+                  title={i.state !== 'running' && i.runtime === 'docker' ? 'Stopped Docker row — Destroy removes the container directly (admin-v2 has no instance record).' : undefined}
                   onClick={() => { if (confirm(`Destroy ${fmtId(i.id)}? This cannot be undone.`)) control(`/api/instances/${encodeURIComponent(i.id)}`, 'DELETE'); }}
                 >
                   Destroy

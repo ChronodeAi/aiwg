@@ -1,8 +1,8 @@
 # Project-Local Artifact Lifecycle
 
-Reference for managing project-local artifacts across all four bundle
-types over their full lifetime: discovery → deploy → conflict resolution
-→ inspection → graduation → removal.
+Reference for managing project-local bundles across all five bundle
+types over their full lifetime: discovery → deploy or provider selection
+→ conflict resolution → inspection → graduation → removal.
 
 ## Layout
 
@@ -11,20 +11,28 @@ types over their full lifetime: discovery → deploy → conflict resolution
 ├── extensions/<id>/    # Single-capability bundles
 ├── addons/<id>/        # Focused feature packs
 ├── frameworks/<id>/    # Complete workflow domains
-└── plugins/<id>/       # Marketplace-packaged bundles
+├── plugins/<id>/       # Marketplace-packaged bundles
+└── providers/<id>/     # Custom provider definitions
 ```
 
-Each `<id>/` contains a `manifest.json` plus the artifacts (skills/,
-rules/, agents/, commands/). The directory is **byte-identical** in
-shape to its upstream counterpart at `agentic/code/{addons,frameworks}/`
-so `aiwg promote` is a copy, not a migration.
+Each `<id>/` contains a `manifest.json`. Artifact-bearing bundles also
+contain artifacts (skills/, rules/, agents/, commands/). Provider bundles
+are metadata-only in phase 0: `providerConfig.extends` selects an existing
+writer adapter while preserving a custom provider id at the CLI boundary.
+Provider bundles may also declare `providerConfig.capabilities` as
+data-only overrides consumed by `aiwg steward capabilities --provider <custom>`.
+The directory is **byte-identical** in shape to its upstream counterpart
+at `agentic/code/{addons,frameworks,providers}/` so `aiwg promote` is a
+copy, not a migration.
 
 ## Lifecycle commands
 
 | Command | Action |
 |---------|--------|
 | `aiwg new-bundle <name>` | Scaffold a new bundle with manifest + starter + README |
+| `aiwg new-provider <name>` | Scaffold a custom provider bundle under `.aiwg/providers/` |
 | `aiwg use <name>` | Deploy a single project-local bundle to configured providers |
+| `aiwg use <framework> --provider <custom>` | Select a project-local provider bundle |
 | `aiwg use <framework>` | Deploys upstream + auto-deploys all project-local bundles |
 | `aiwg list --project-local` | List discovered bundles + validation status |
 | `aiwg doctor --project-local` | Health check: counts, validation, shadows, drift, matrix |
@@ -35,9 +43,11 @@ so `aiwg promote` is a copy, not a migration.
 ## Discovery
 
 `aiwg use`, `aiwg doctor`, and `aiwg list --project-local` all run the
-same discovery scanner. It walks `.aiwg/{extensions,addons,frameworks,plugins}/`,
-validates each `manifest.json` against the canonical Zod schema, and
-returns structured results.
+same discovery scanner. It walks `.aiwg/{extensions,addons,frameworks}/`
+for content bundles, `.aiwg/plugins/` for marketplace delivery wrappers,
+and `.aiwg/providers/` for custom provider definitions. It validates each
+`manifest.json` against the canonical Zod schema and returns structured
+results.
 
 What discovery enforces:
 - Manifest matches the JSON Schema (kebab-case ids, ≤ 64 KB, ≤ 200
@@ -52,9 +62,41 @@ Validation errors are surfaced — they never crash the operation.
 
 ## Deploy
 
-`aiwg use <bundle-name>` deploys a specific project-local bundle.
+`aiwg use <bundle-name>` deploys a specific artifact-bearing
+project-local bundle.
 `aiwg use <framework>` (e.g., `sdlc`) deploys the upstream framework
 **and** all project-local bundles in the same pass.
+
+Provider bundles are selected, not deployed as artifact bundles:
+
+```bash
+aiwg new-provider my-provider
+aiwg use sdlc --provider my-provider
+```
+
+The generated manifest contains `providerConfig.extends` (default:
+`claude`). In phase 0, this delegates output writing to the existing
+provider adapter. It does **not** define new writer behavior or new
+filesystem targets by itself.
+
+To customize steward guidance, add optional capability overrides:
+
+```json
+{
+  "providerConfig": {
+    "extends": "codex",
+    "displayName": "my-codex",
+    "capabilities": {
+      "nativeFeatures": { "cron": true },
+      "emulation": { "mission_control": "aiwg-mc" }
+    }
+  }
+}
+```
+
+Supported feature keys are `cron`, `agent_teams`, `tasks`, `mcp`,
+`behaviors`, `mission_control`, and `daemon`. Invalid feature keys fail
+manifest validation.
 
 Per-bundle deploy:
 1. Resolve shadows against the upstream registry
@@ -157,7 +199,8 @@ What promote does:
    after the move) — `--force` overrides
 4. SHA-256 snapshots every source file
 5. Recursive copy to the destination (`agentic/code/addons/<name>/` for
-   extension/addon/plugin, `agentic/code/frameworks/<name>/` for framework)
+   extension/addon/plugin, `agentic/code/frameworks/<name>/` for framework,
+   `agentic/code/providers/<name>/` for provider)
 6. Re-hashes every destination file; rolls back (deletes the dest
    directory) on any mismatch
 7. Updates the registry: `source: 'project-local'` → `'bundled'` (or

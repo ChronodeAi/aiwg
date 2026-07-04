@@ -44,8 +44,9 @@ agentic
 apps
 bin
 dist
+docs
 man
 package.json
-plugins
+prebuilt
 templates
 tools

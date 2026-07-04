@@ -1,6 +1,6 @@
 {
   "name": "@aiwg/cockpit",
-  "version": "2026.6.11",
+  "version": "2026.7.10",
   "description": "AIWG Cockpit — UX-first control plane over AIWG + multi-stack agentic sessions. Opt-in, separately published; NOT shipped in the base aiwg npm package (guarded by test/smoke/cockpit-base-footprint.test.js).",
   "type": "module",
   "license": "MIT",
@@ -39,6 +39,7 @@
   "scripts": {
     "start:bridge": "node bridge/src/server.mjs",
     "dev": "bash scripts/cockpit-dev.sh",
+    "up": "bash scripts/cockpit-up.sh",
     "build:web": "npm --prefix web install --no-audit --no-fund && npm --prefix web run build",
     "pack:dry": "npm pack --dry-run",
     "publish:dry": "npm publish --dry-run --access public",
