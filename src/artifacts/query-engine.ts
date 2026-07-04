@@ -13,10 +13,16 @@ import { minimatch } from 'minimatch';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { QueryParams, QueryResult, MetadataEntry, GraphType, ArtifactIndex } from './types.js';
+import { loadGlobalGraphConfigs } from './types.js';
 import { loadMetadataIndex, loadGraphIndexFile } from './index-reader.js';
 import { bm25Rank, type FullTextDoc } from './fulltext.js';
 import { parseFrontmatter } from './index-builder.js';
 import { applyFacetFusion } from './discover-facets.js';
+import {
+  recordTypeForEntry,
+  stableRecordId,
+  type AiwgFortemiRecord,
+} from './browser-export.js';
 
 /**
  * Resolve an index entry's source file path and read its body (frontmatter
@@ -46,6 +52,103 @@ function readEntryBody(cwd: string, entryPath: string): string | null {
 export interface QueryOptions {
   json?: boolean;
   graph?: GraphType;
+  backend?: 'local' | 'fortemi-core';
+}
+
+const DEFAULT_ARTIFACT_SEARCH_BACKEND: 'fortemi-core' = 'fortemi-core';
+
+const DISCOVER_TYPE_ORDER = new Map(
+  ['skill', 'agent', 'command', 'rule', 'flow', 'behavior', 'template', 'doc'].map((type, index) => [type, index]),
+);
+
+function canonicalLocalityRank(entryPath: string): number {
+  const normalized = entryPath.replace(/\\/g, '/');
+  if (normalized.startsWith('.aiwg/') || normalized.includes('/.aiwg/')) return 0;
+  if (normalized.includes('/plugins/') || normalized.startsWith('agentic/code/plugins/')) return 3;
+  if (
+    normalized.includes('/frameworks/') ||
+    normalized.includes('/addons/') ||
+    normalized.includes('/extensions/') ||
+    normalized.startsWith('agentic/code/frameworks/') ||
+    normalized.startsWith('agentic/code/addons/') ||
+    normalized.startsWith('agentic/code/extensions/')
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+type ProvenancedEntry = MetadataEntry & {
+  indexGraph?: string;
+  indexScope?: 'project' | 'user' | 'packaged' | 'codebase' | 'custom';
+};
+
+function graphScope(graph: GraphType): ProvenancedEntry['indexScope'] {
+  if (graph === 'project') return 'project';
+  if (graph === 'user' || graph.startsWith('user-')) return 'user';
+  if (graph === 'framework') return 'packaged';
+  if (graph === 'codebase' || graph === 'source') return 'codebase';
+  return 'custom';
+}
+
+function withIndexProvenance(entry: MetadataEntry, graph: GraphType): ProvenancedEntry {
+  return { ...entry, indexGraph: graph, indexScope: graphScope(graph) };
+}
+
+function discoveryIdForEntry(entry: MetadataEntry): string {
+  return stableRecordId(recordTypeForEntry(entry, 'v2'), entry.path);
+}
+
+function logicalDiscoverKey(entry: MetadataEntry): string {
+  const identity = (entry.name ?? entry.title ?? path.basename(entry.path))
+    .toLowerCase()
+    .replace(/[-_\s]+/g, ' ')
+    .trim();
+  return `${entry.type}:${identity}`;
+}
+
+function dedupeDiscoverResults(results: QueryResult[]): QueryResult[] {
+  const bestByIdentity = new Map<string, QueryResult>();
+  for (const result of results) {
+    const key = logicalDiscoverKey(result.entry);
+    const existing = bestByIdentity.get(key);
+    if (!existing || compareDiscoverResults(result, existing) < 0) {
+      bestByIdentity.set(key, result);
+    }
+  }
+  return Array.from(bestByIdentity.values()).sort(compareDiscoverResults);
+}
+
+function scopeRank(entry: MetadataEntry): number {
+  const scope = (entry as ProvenancedEntry).indexScope;
+  if (scope === 'project') return 0;
+  if (scope === 'user') return 1;
+  if (scope === 'custom') return 2;
+  if (scope === 'packaged') return 3;
+  if (scope === 'codebase') return 4;
+  return canonicalLocalityRank(entry.path);
+}
+
+function compareText(left: string | undefined, right: string | undefined): number {
+  return (left ?? '').localeCompare(right ?? '');
+}
+
+export function compareDiscoverResults(left: QueryResult, right: QueryResult): number {
+  const scoreCmp = right.score - left.score;
+  if (scoreCmp !== 0) return scoreCmp;
+
+  const localityCmp = scopeRank(left.entry) - scopeRank(right.entry);
+  if (localityCmp !== 0) return localityCmp;
+
+  const typeCmp =
+    (DISCOVER_TYPE_ORDER.get(left.entry.type) ?? 99) -
+    (DISCOVER_TYPE_ORDER.get(right.entry.type) ?? 99);
+  if (typeCmp !== 0) return typeCmp;
+
+  const nameCmp = compareText(left.entry.name ?? left.entry.title, right.entry.name ?? right.entry.title);
+  if (nameCmp !== 0) return nameCmp;
+
+  return left.entry.path.localeCompare(right.entry.path);
 }
 
 /**
@@ -185,6 +288,7 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
   // for multi-token queries gives a tighter (content-only) phrase to match.
   // Pure-stopword queries fall back to the raw text.
   const lower = tokens.length > 0 ? tokens.join(' ') : text.toLowerCase().trim();
+  const rawLower = text.toLowerCase().trim();
   let score = 0;
 
   // Exact-name floor (#1233) — if the query (normalized) exactly matches
@@ -216,7 +320,7 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
   const typeLower = entry.type.toLowerCase();
   const capabilityLower = entry.capability ? entry.capability.toLowerCase() : '';
   const tagsLower = entry.tags.map(t => t.toLowerCase());
-  const triggersLower = entry.triggers ?? [];
+  const triggersLower = (entry.triggers ?? []).map(trigger => trigger.toLowerCase());
 
   // For multi-token queries, require ≥50% token overlap to count
   // partial matches. This keeps gibberish queries (e.g.,
@@ -237,10 +341,14 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
   // phrase wins big; substring or token-overlap is still strong.
   if (triggersLower.length > 0) {
     for (const trigger of triggersLower) {
-      if (trigger === lower) {
-        score += 0.4 * 4;
-        break;
-      } else if (trigger.includes(lower) || lower.includes(trigger)) {
+      if (trigger === lower || trigger === rawLower) {
+        return 1.0008;
+      } else if (
+        trigger.includes(lower) ||
+        lower.includes(trigger) ||
+        trigger.includes(rawLower) ||
+        rawLower.includes(trigger)
+      ) {
         score += 0.25 * 4;
       } else if (useMultiToken) {
         const hits = tokens.filter(t => trigger.includes(t)).length;
@@ -311,11 +419,29 @@ export async function queryIndex(
   options: QueryOptions = {}
 ): Promise<void> {
   const { graph } = options;
+  const backend = options.backend ?? DEFAULT_ARTIFACT_SEARCH_BACKEND;
   const startTime = Date.now();
 
   let candidates: MetadataEntry[];
 
-  if (graph) {
+  if (backend === 'fortemi-core') {
+    const { loadFortemiCoreMetadataEntries } = await import('./fortemi-core-query-adapter.js');
+    const loaded = loadFortemiCoreMetadataEntries(cwd, graph ?? 'project');
+    if (loaded.reason) {
+      if (options.json) {
+        console.log(JSON.stringify({
+          query: { text: params.text, backend: 'fortemi-core', graph: graph ?? 'project' },
+          results: [],
+          total: 0,
+          hint: loaded.reason ?? 'Fortemi Core static index is unavailable.',
+        }, null, 2));
+      } else {
+        console.error('Error: ' + (loaded.reason ?? 'Fortemi Core static index is unavailable.'));
+      }
+      process.exit(1);
+    }
+    candidates = loaded.entries;
+  } else if (graph) {
     // Single graph mode
     const index = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', graph);
     if (!index) {
@@ -370,7 +496,49 @@ export async function queryIndex(
   // Score and rank
   let results: QueryResult[];
   const matchedById = new Map<string, string[]>();
-  if (params.text && params.fulltext) {
+  if (params.text && params.fulltext && backend === 'fortemi-core') {
+    const { queryFortemiCoreStaticFulltextIndex } = await import('./fortemi-core-query-adapter.js');
+    const queried = queryFortemiCoreStaticFulltextIndex(cwd, {
+      graph: graph ?? 'project',
+      text: params.text,
+      limit: params.limit ?? 20,
+      path: params.path,
+      type: params.type,
+      phase: params.phase,
+      tags: params.tags,
+    });
+    if (queried.reason) {
+      if (options.json) {
+        console.log(JSON.stringify({
+          query: { text: params.text, backend: 'fortemi-core', graph: graph ?? 'project' },
+          mode: 'fulltext',
+          results: [],
+          total: 0,
+          hint: queried.reason,
+        }, null, 2));
+      } else {
+        console.error('Error: ' + queried.reason);
+      }
+      process.exit(1);
+    }
+    results = queried.results.map(result => {
+      const entry: MetadataEntry = {
+        path: result.path,
+        type: result.type,
+        phase: result.phase,
+        title: result.title,
+        tags: result.tags,
+        created: '',
+        updated: '',
+        checksum: '',
+        summary: result.summary,
+        dependencies: [],
+        dependents: [],
+      };
+      matchedById.set(result.path, result.matched);
+      return { entry, score: result.score };
+    });
+  } else if (params.text && params.fulltext) {
     // Lexical full-text (#1494): read candidate bodies and BM25-rank. The
     // index is the candidate set; ranking is over actual body content, not
     // the metadata/summary the default path scores.
@@ -393,7 +561,7 @@ export async function queryIndex(
     results = candidates
       .map(entry => ({ entry, score: scoreEntry(entry, params.text!) }))
       .filter(r => r.score > 0)
-      .sort((a, b) => b.score - a.score);
+      .sort(compareDiscoverResults);
   } else {
     // No keyword — return all filtered results with score 1.0
     results = candidates.map(entry => ({ entry, score: 1.0 }));
@@ -408,7 +576,7 @@ export async function queryIndex(
   // Output
   if (options.json) {
     console.log(JSON.stringify({
-      query: { text: params.text, filters: { type: params.type, phase: params.phase, tags: params.tags, path: params.path } },
+      query: { text: params.text, filters: { type: params.type, phase: params.phase, tags: params.tags, path: params.path }, backend },
       mode: params.fulltext ? 'fulltext' : 'metadata',
       results: results.map(r => ({
         path: r.entry.path,
@@ -464,8 +632,18 @@ export interface DiscoverParams {
   limit?: number;
   /** JSON output mode */
   json?: boolean;
+  /** Pretty-print JSON output. Defaults to true for CLI compatibility. */
+  jsonPretty?: boolean;
   /** Override default graph (defaults to `framework`, falls back to `project`) */
   graph?: GraphType;
+  /** Query backend. Defaults to Fortemi Core; use local for the legacy path. */
+  backend?: 'local' | 'fortemi-core';
+  /**
+   * Include filesystem paths in public discovery output. Default is true for
+   * direct API compatibility; CLI callers set false so discover stays
+   * capability-oriented and agents use the stable id with `show metadata`.
+   */
+  includePaths?: boolean;
 }
 
 // `flow` is included so discoverable YAML Flow documents (flow.aiwg.io/v1 /
@@ -474,6 +652,30 @@ export interface DiscoverParams {
 // capabilities — a "deploy to production" Flow should surface next to the
 // flow-deploy-to-production skill.
 const DEFAULT_DISCOVER_TYPES = ['skill', 'agent', 'command', 'rule', 'flow'];
+
+const DEFAULT_CAPABILITY_GRAPHS: GraphType[] = ['project', 'user', 'framework'];
+
+function projectAllowsUserIndices(cwd: string): boolean {
+  try {
+    const configPath = path.join(cwd, '.aiwg', 'aiwg.config');
+    if (!fs.existsSync(configPath)) return true;
+    const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    const index = parsed.index as Record<string, unknown> | undefined;
+    const userIndices = index?.userIndices as Record<string, unknown> | undefined;
+    if (userIndices?.enabled === false) return false;
+    const indices = parsed.indices as Record<string, unknown> | undefined;
+    const user = indices?.user as Record<string, unknown> | undefined;
+    if (user?.enabled === false) return false;
+  } catch {
+    return true;
+  }
+  return true;
+}
+
+function defaultCapabilityGraphs(cwd: string): GraphType[] {
+  if (projectAllowsUserIndices(cwd)) return DEFAULT_CAPABILITY_GRAPHS;
+  return DEFAULT_CAPABILITY_GRAPHS.filter((graph) => graph !== 'user' && !graph.startsWith('user-'));
+}
 
 /**
  * Resolve the AIWG installation root for path-anchoring discover output.
@@ -503,6 +705,13 @@ function buildRunHint(entry: MetadataEntry): string {
   return `aiwg run skill ${name}${argsHint}`;
 }
 
+function showHintForDiscoverResult(entry: MetadataEntry, id: string): string {
+  if (['skill', 'agent', 'command', 'rule'].includes(entry.type)) {
+    return `aiwg show ${entry.type} ${id}`;
+  }
+  return `aiwg show ${id}`;
+}
+
 async function getAiwgRootForDiscover(): Promise<string | null> {
   if (process.env.AIWG_ROOT) return process.env.AIWG_ROOT;
   try {
@@ -522,6 +731,7 @@ export async function discoverCapability(
   cwd: string,
   params: DiscoverParams,
 ): Promise<void> {
+  loadGlobalGraphConfigs();
   const startTime = Date.now();
   const types = params.typeFilter && params.typeFilter.length > 0
     ? params.typeFilter
@@ -539,9 +749,53 @@ export async function discoverCapability(
   // Source: prefer `framework` graph (built post-deploy), fall back to
   // project / codebase / legacy depending on what's available.
   let entries: MetadataEntry[] = [];
-  if (params.graph) {
+  const backend = params.backend ?? DEFAULT_ARTIFACT_SEARCH_BACKEND;
+  let fortemiCoreDiscoveryScores: Map<string, number> | null = null;
+
+  if (backend === 'fortemi-core') {
+    const graphs = params.graph ? [params.graph] : defaultCapabilityGraphs(cwd);
+    const {
+      loadFortemiCoreMetadataEntries,
+      queryFortemiCoreAiwgDiscovery,
+    } = await import('./fortemi-core-query-adapter.js');
+    let unavailableReason: string | undefined;
+    for (const graph of graphs) {
+      const loaded = loadFortemiCoreMetadataEntries(cwd, graph);
+      if (loaded.reason) unavailableReason ??= loaded.reason;
+      entries.push(...loaded.entries.map((entry) => withIndexProvenance(entry, graph)));
+      const discovered = await queryFortemiCoreAiwgDiscovery(cwd, {
+        graph,
+        text: params.phrase,
+        limit: Math.max(limit * 10, 50),
+        types,
+      });
+      if (!discovered.reason) {
+        fortemiCoreDiscoveryScores ??= new Map();
+        for (const result of discovered.results) {
+          if (result.score <= 0) continue;
+          fortemiCoreDiscoveryScores.set(
+            result.entry.path,
+            Math.max(fortemiCoreDiscoveryScores.get(result.entry.path) ?? 0, result.score),
+          );
+        }
+      }
+    }
+    if (entries.length === 0 && unavailableReason) {
+      if (params.json) {
+        console.log(JSON.stringify({
+          query: { phrase: params.phrase, types, limit, backend: 'fortemi-core', graph: params.graph ?? 'capability-default' },
+          results: [],
+          total: 0,
+          hint: unavailableReason,
+        }, null, 2));
+      } else {
+        console.error('Error: ' + unavailableReason);
+      }
+      process.exit(1);
+    }
+  } else if (params.graph) {
     const idx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', params.graph);
-    if (idx) entries = Object.values(idx.entries);
+    if (idx) entries = Object.values(idx.entries).map((entry) => withIndexProvenance(entry, params.graph!));
   } else {
     // discover is EXCLUSIVELY the agentic-capability surface (#1545): source
     // the `framework` graph (deployed AIWG capabilities) + project-local
@@ -583,19 +837,24 @@ export async function discoverCapability(
         fwIdx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'framework');
       }
     }
-    if (fwIdx) entries.push(...Object.values(fwIdx.entries));
+    const includeUser = projectAllowsUserIndices(cwd);
     // Project-local capability artifacts (skills/agents/commands/rules authored
     // in this project). The DEFAULT_DISCOVER_TYPES filter keeps non-capability
     // project artifacts (requirements, ADRs, …) out of results.
     const projIdx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'project');
-    if (projIdx) entries.push(...Object.values(projIdx.entries));
+    if (projIdx) entries.push(...Object.values(projIdx.entries).map((entry) => withIndexProvenance(entry, 'project')));
+    if (includeUser) {
+      const userIdx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'user');
+      if (userIdx) entries.push(...Object.values(userIdx.entries).map((entry) => withIndexProvenance(entry, 'user')));
+    }
+    if (fwIdx) entries.push(...Object.values(fwIdx.entries).map((entry) => withIndexProvenance(entry, 'framework')));
     if (entries.length === 0) {
       const legacy = loadMetadataIndex(cwd);
       if (legacy) entries.push(...Object.values(legacy.entries));
     }
   }
 
-  if (entries.length === 0) {
+  if (entries.length === 0 && backend !== 'fortemi-core') {
     // Empty-index case (#1221). Surface a hint that explains the gap rather
     // than returning a bare zero-result envelope — the latter trains agents
     // to conclude "AIWG doesn't have a skill for that" when in fact the
@@ -622,17 +881,32 @@ export async function discoverCapability(
   // fusion below can inject/lift curated capabilities into the top-K before
   // truncation — a capability that the lexical pass ranked outside `limit`
   // (or missed entirely) still surfaces when the query activates its facet.
-  const strictScored = candidates
-    .map(entry => ({ entry, score: scoreEntry(entry, params.phrase) }))
+  const legacyStrictScored = candidates
+    .map(entry => {
+      const legacyScore = scoreEntry(entry, params.phrase);
+      const fortemiScore = fortemiCoreDiscoveryScores?.get(entry.path) ?? 0;
+      return {
+        entry,
+        score: legacyScore > 0 ? legacyScore : fortemiScore * 0.2,
+        legacyScore,
+      };
+    })
     .filter(r => r.score > 0)
-    .sort((a, b) => b.score - a.score);
+    .sort(compareDiscoverResults);
+  const strictScored = (
+    legacyStrictScored.some(result => result.legacyScore > 0)
+      ? legacyStrictScored.filter(result => result.legacyScore > 0)
+      : legacyStrictScored
+  ).map(({ entry, score }) => ({ entry, score }));
 
   // Single-pass facet fusion (#1623 U3): fuse the curated feature→capability
   // facets (expansion / persona / project / provider-capability) into the
   // lexical ranking so canonical domain phrases rank their owning capability
   // top-K instead of being out-scored by artifacts that merely mention the
   // word. Facet activation can also rescue an otherwise-empty strict pass.
-  let scored = (await applyFacetFusion(strictScored, candidates, params.phrase)).slice(0, limit);
+  let scored = dedupeDiscoverResults(
+    await applyFacetFusion(strictScored, candidates, params.phrase),
+  ).slice(0, limit);
 
   // #1561 — verbose-query fallback. A wordy full-sentence query
   // ("find me a skill that handles intake forms") dilutes the token hit ratio
@@ -652,8 +926,10 @@ export async function discoverCapability(
     const relaxedFull = candidates
       .map(entry => ({ entry, score: scoreEntry(entry, params.phrase, { relaxOverlap: true }) }))
       .filter(r => r.score >= RELAXED_MIN_SCORE)
-      .sort((a, b) => b.score - a.score);
-    const relaxedScored = (await applyFacetFusion(relaxedFull, candidates, params.phrase)).slice(0, limit);
+      .sort(compareDiscoverResults);
+    const relaxedScored = dedupeDiscoverResults(
+      await applyFacetFusion(relaxedFull, candidates, params.phrase),
+    ).slice(0, limit);
     if (relaxedScored.length > 0) {
       scored = relaxedScored;
       relaxed = true;
@@ -684,26 +960,37 @@ export async function discoverCapability(
 
   // Build a hint string when the index has entries but no scored matches —
   // this is the second silent-failure mode #1221 calls out. When the workspace
-  // has project-local content (.aiwg/{extensions,addons,frameworks,plugins}/)
+  // has project-local content (.aiwg/{extensions,addons,frameworks,plugins,providers}/)
   // surface a project-graph rebuild hint (#1235).
   // discover-appropriate hint (#1545): never push index/graph mechanics. If
   // nothing scored, the phrase didn't match an indexed capability — suggest a
   // broader phrase / type filter, and a capability refresh via `aiwg use`.
   const emptyResultHint = scored.length === 0
-    ? `No capability matched "${params.phrase}" among ${entries.length} indexed capabilities. Try a broader phrase or a \`--type\` filter. If you just installed or authored capabilities, refresh discovery with \`aiwg use <framework>\` (or \`aiwg index build\`).`
+    ? backend === 'fortemi-core'
+      ? `No capability matched "${params.phrase}" among ${entries.length} Fortemi Core static-cache capabilities. Try a broader phrase or a \`--type\` filter. If the local index changed, refresh the cache with \`aiwg index sync\`, or pass \`--backend local\` to use the legacy local index.`
+      : `No capability matched "${params.phrase}" among ${entries.length} indexed capabilities. Try a broader phrase or a \`--type\` filter. If you just installed or authored capabilities, refresh discovery with \`aiwg use <framework>\` (or \`aiwg index build\`).`
     : null;
 
+  const includePaths = params.includePaths ?? true;
+
   if (params.json) {
+    const jsonIndent = params.jsonPretty === false ? undefined : 2;
     console.log(JSON.stringify({
-      query: { phrase: params.phrase, types, limit, aiwg_root: aiwgRoot ?? null },
+      query: { phrase: params.phrase, types, limit, aiwg_root: aiwgRoot ?? null, backend, graph: backend === 'fortemi-core' ? params.graph ?? 'capability-default' : params.graph },
       results: scored.map(r => ({
-        path: resolvePath(r.entry),
+        id: discoveryIdForEntry(r.entry),
+        ...(includePaths ? { path: resolvePath(r.entry) } : {}),
         type: r.entry.type,
+        name: r.entry.name,
         title: r.entry.title,
         score: Math.round(r.score * 100) / 100,
         triggers: r.entry.triggers ?? [],
         capability: r.entry.capability ?? r.entry.summary,
         kernel: r.entry.kernel ?? false,
+        provenance: {
+          graph: (r.entry as ProvenancedEntry).indexGraph ?? null,
+          scope: (r.entry as ProvenancedEntry).indexScope ?? null,
+        },
         // #1227 — surface script-bearing skills so agents know to use
         // `aiwg run skill <name>` instead of executing instructions
         // themselves.
@@ -718,7 +1005,7 @@ export async function discoverCapability(
       query_time_ms: queryTimeMs,
       ...(relaxed ? { relaxed_overlap: true } : {}),
       ...(emptyResultHint ? { hint: emptyResultHint } : {}),
-    }, null, 2));
+    }, null, jsonIndent));
     return;
   }
 
@@ -731,27 +1018,38 @@ export async function discoverCapability(
   const relaxedNote = relaxed ? ' — relaxed match (verbose query)' : '';
   console.log(`Discovery results for "${params.phrase}" (${scored.length} matches, ${queryTimeMs}ms)${relaxedNote}:`);
   console.log('');
-  for (const r of scored) {
-    const score = r.score.toFixed(2).padStart(4);
-    const type = r.entry.type.padEnd(7);
-    const kernelTag = r.entry.kernel ? '★ ' : '  ';
-    const execTag = r.entry.script ? ' [exec]' : '';
+  for (let i = 0; i < scored.length; i++) {
+    const r = scored[i];
+    const id = discoveryIdForEntry(r.entry);
+    const score = r.score.toFixed(2);
+    const flags = [
+      r.entry.kernel ? 'kernel' : null,
+      r.entry.script ? 'exec' : null,
+    ].filter(Boolean).join(', ');
+    const locator = includePaths ? resolvePath(r.entry) : id;
     const topTrigger = r.entry.triggers && r.entry.triggers.length > 0
       ? r.entry.triggers[0]
       : '';
-    console.log(`  ${kernelTag}score=${score}  ${type} ${resolvePath(r.entry)}${execTag}`);
-    if (r.entry.capability) {
-      console.log(`               ${r.entry.capability}`);
+    console.log(`${i + 1}. ${r.entry.title}`);
+    console.log(`   type: ${r.entry.type}  score: ${score}${flags ? `  flags: ${flags}` : ''}`);
+    console.log(`   ${includePaths ? 'path' : 'id'}: ${locator}`);
+    if (r.entry.name) {
+      console.log(`   name: ${r.entry.name}`);
     }
-    if (r.entry.script) {
-      console.log(`               run: ${buildRunHint(r.entry)}`);
+    if (r.entry.capability) {
+      console.log(`   capability: ${r.entry.capability}`);
     }
     if (topTrigger) {
-      console.log(`               trigger: "${topTrigger}"`);
+      console.log(`   trigger: "${topTrigger}"`);
     }
+    if (r.entry.script) {
+      console.log(`   run: ${buildRunHint(r.entry)}`);
+    } else if (!includePaths) {
+      console.log(`   show: ${showHintForDiscoverResult(r.entry, id)}`);
+    }
+    console.log('');
   }
-  console.log('');
-  console.log('★ = kernel skill (always-loaded). Others are reachable via the index.');
+  console.log('Use `--format json` for machine-readable output. Use `aiwg show metadata <id>` for paths and full metadata.');
 }
 
 export interface ShowParams {
@@ -765,13 +1063,139 @@ export interface ShowParams {
   graph?: GraphType;
   /** When ambiguous, pick the first match instead of erroring */
   first?: boolean;
+  /** Query backend. Defaults to Fortemi Core; use local for the legacy path. */
+  backend?: 'local' | 'fortemi-core';
+}
+
+export interface ShowMetadataParams extends ShowParams {}
+
+function resolveMetadataPath(cwd: string, aiwgRoot: string | null, entry: MetadataEntry): string {
+  if (path.isAbsolute(entry.path)) return entry.path;
+  if (aiwgRoot && entry.path.startsWith('agentic/code/')) {
+    return path.join(aiwgRoot, entry.path);
+  }
+  if ((entry as ProvenancedEntry).indexScope === 'user' && entry.path.startsWith('~/.aiwg/')) {
+    return path.join(process.env.HOME ?? '', entry.path.slice(2));
+  }
+  return path.join(cwd, entry.path);
+}
+
+async function loadShowEntries(
+  cwd: string,
+  params: Pick<ShowParams, 'backend' | 'graph' | 'json' | 'name'>,
+): Promise<{ entries: MetadataEntry[]; aiwgRoot: string | null }> {
+  const aiwgRoot = await getAiwgRootForDiscover();
+  let entries: MetadataEntry[] = [];
+  if (params.backend === 'fortemi-core') {
+    const { loadFortemiCoreMetadataEntries } = await import('./fortemi-core-query-adapter.js');
+    const graphs = params.graph ? [params.graph] : defaultCapabilityGraphs(cwd);
+    let unavailableReason: string | undefined;
+    for (const graph of graphs) {
+      const loaded = loadFortemiCoreMetadataEntries(cwd, graph);
+      if (loaded.reason) unavailableReason ??= loaded.reason;
+      entries.push(...loaded.entries.map((entry) => withIndexProvenance(entry, graph)));
+    }
+    if (entries.length === 0 && unavailableReason) {
+      if (params.json) {
+        console.log(JSON.stringify({
+          backend: 'fortemi-core',
+          name: params.name,
+          error: unavailableReason,
+        }, null, 2));
+      } else {
+        console.error('Error: ' + unavailableReason);
+      }
+      process.exit(1);
+    }
+  } else if (params.graph) {
+    const idx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', params.graph);
+    if (idx) entries = Object.values(idx.entries).map((entry) => withIndexProvenance(entry, params.graph!));
+  } else {
+    for (const g of defaultCapabilityGraphs(cwd) as GraphType[]) {
+      const idx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', g);
+      if (idx) entries.push(...Object.values(idx.entries).map((entry) => withIndexProvenance(entry, g)));
+    }
+    if (entries.length === 0) {
+      const legacy = loadMetadataIndex(cwd);
+      if (legacy) entries.push(...Object.values(legacy.entries));
+    }
+  }
+  return { entries, aiwgRoot };
+}
+
+function findShowMatches(entries: MetadataEntry[], types: string[], needle: string): MetadataEntry[] {
+  const needleLower = needle.toLowerCase();
+  const candidates = entries.filter(e => types.includes(e.type));
+
+  let matches = candidates.filter(e => discoveryIdForEntry(e) === needle);
+  if (matches.length === 0) matches = candidates.filter(e => e.path === needle);
+  if (matches.length === 0) {
+    matches = candidates.filter(e => {
+      const dirStem = path.basename(path.dirname(e.path));
+      const basename = path.basename(e.path);
+      const fileStem = path.basename(e.path).replace(/\.[^.]+$/, '');
+      return (basename === 'SKILL.md' && dirStem === needle) || fileStem === needle || e.name === needle;
+    });
+  }
+  if (matches.length === 0) {
+    matches = candidates.filter(e =>
+      typeof e.title === 'string' && e.title.toLowerCase() === needleLower,
+    );
+  }
+
+  matches = uniqueEntriesByPath(matches);
+  matches = matches.sort((a, b) => scopeRank(a) - scopeRank(b) || a.path.localeCompare(b.path));
+
+  if (matches.length > 1) {
+    const sameIdentity = matches.every((entry) =>
+      entry.type === matches[0].type &&
+      (entry.name ?? '').toLowerCase() === (matches[0].name ?? '').toLowerCase(),
+    );
+    if (sameIdentity && scopeRank(matches[0]) < scopeRank(matches[1])) {
+      matches = [matches[0]];
+    }
+  }
+  if (matches.length > 1 && types.includes('skill')) {
+    const frameworkSkillMatches = matches.filter(e => isFrameworkSourceSkillPath(e.path));
+    if (frameworkSkillMatches.length === 1) matches = frameworkSkillMatches;
+  }
+  if (matches.length > 1 && types.includes('skill')) {
+    const sourceSkillMatches = matches.filter(e => isCanonicalSourceSkillPath(e.path));
+    if (sourceSkillMatches.length === 1) matches = sourceSkillMatches;
+  }
+  if (matches.length > 1 && types.includes('agent')) {
+    const canonicalSourceMatches = matches.filter(e => isCanonicalSourceAgentPath(e.path));
+    if (canonicalSourceMatches.length === 1) matches = canonicalSourceMatches;
+  }
+  if (matches.length > 1 && types.includes('agent')) {
+    const canonicalBundleMatches = matches.filter(e => isCanonicalBundleAgentPath(e.path));
+    const canonicalBundlePaths = uniqueEntriesByPath(canonicalBundleMatches);
+    if (canonicalBundlePaths.length === 1) matches = canonicalBundlePaths;
+  }
+  if (matches.length > 1 && types.includes('agent')) {
+    const nonPersonaMatches = matches.filter(e => !isTopLevelPersonaAgentPath(e.path));
+    if (nonPersonaMatches.length === 1) matches = nonPersonaMatches;
+  }
+  return matches;
+}
+
+async function fortemiRecordForEntry(
+  cwd: string,
+  entry: MetadataEntry,
+): Promise<AiwgFortemiRecord | null> {
+  const graph = ((entry as ProvenancedEntry).indexGraph ?? 'project') as GraphType;
+  const { loadFortemiCoreExport } = await import('./fortemi-core-query-adapter.js');
+  const loaded = loadFortemiCoreExport(cwd, graph);
+  if (!loaded.exported) return null;
+  const id = discoveryIdForEntry(entry);
+  return loaded.exported.items.find((record) => record.id === id || record.source.path === entry.path) ?? null;
 }
 
 /**
  * Scan the AIWG_ROOT corpus for an artifact matching `name` (#1221).
  *
  * Walks the well-known artifact layouts under
- * `agentic/code/{frameworks,addons,extensions}/<bundle>/{skills,agents,commands,rules,templates}/`
+ * `agentic/code/{frameworks,addons,extensions,plugins}/<bundle>/{skills,agents,commands,rules,templates}/`
  * and returns the first match. Used as a fallback in `aiwg show` when an
  * artifact isn't in any built index — either because the workspace hasn't
  * been deployed to yet, or because the bundle hasn't been installed.
@@ -786,17 +1210,18 @@ async function findCorpusArtifact(
 ): Promise<{
   path: string;
   type: string;
-  bundleKind: 'framework' | 'addon' | 'extension' | null;
+  bundleKind: 'framework' | 'addon' | 'extension' | 'plugin' | null;
   bundleId: string | null;
 } | null> {
   const fs = await import('node:fs');
   const path = await import('node:path');
   const fsp = fs.promises;
 
-  const groups: Array<{ kind: 'framework' | 'addon' | 'extension'; dir: string }> = [
+  const groups: Array<{ kind: 'framework' | 'addon' | 'extension' | 'plugin'; dir: string }> = [
     { kind: 'framework', dir: path.join(aiwgRoot, 'agentic/code/frameworks') },
     { kind: 'addon', dir: path.join(aiwgRoot, 'agentic/code/addons') },
     { kind: 'extension', dir: path.join(aiwgRoot, 'agentic/code/extensions') },
+    { kind: 'plugin', dir: path.join(aiwgRoot, 'agentic/code/plugins') },
   ];
 
   // (subdir, type, layout) — 'flat' = `<name>.md`, 'slug' = `<name>/SKILL.md`
@@ -903,11 +1328,12 @@ async function findAgentInCorpus(
  * location.
  *
  * Lookup order:
- *   1. Exact path match against any indexed entry's stored path
- *   2. Basename match (e.g. `intake-wizard` matches an entry whose
+ *   1. Stable discover/Fortemi id
+ *   2. Exact path match against any indexed entry's stored path
+ *   3. Basename match (e.g. `intake-wizard` matches an entry whose
  *      directory basename is `intake-wizard`)
- *   3. Title match (case-insensitive)
- *   4. Corpus fallback under AIWG_ROOT (#1221)
+ *   4. Title match (case-insensitive)
+ *   5. Corpus fallback under AIWG_ROOT (#1221)
  *
  * On ambiguity, lists all matches and exits with code 2 unless
  * `--first` is supplied.
@@ -916,59 +1342,21 @@ export async function showArtifact(
   cwd: string,
   params: ShowParams,
 ): Promise<void> {
+  loadGlobalGraphConfigs();
   const { promises: fs } = await import('node:fs');
-  const path = await import('node:path');
   const types = params.typeFilter && params.typeFilter.length > 0
     ? params.typeFilter
     : DEFAULT_DISCOVER_TYPES;
-  const aiwgRoot = await getAiwgRootForDiscover();
+  const { entries, aiwgRoot } = await loadShowEntries(cwd, params);
 
-  // Source the same graphs as discoverCapability for symmetry.
-  let entries: MetadataEntry[] = [];
-  if (params.graph) {
-    const idx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', params.graph);
-    if (idx) entries = Object.values(idx.entries);
-  } else {
-    for (const g of ['framework', 'project', 'codebase'] as GraphType[]) {
-      const idx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', g);
-      if (idx) entries.push(...Object.values(idx.entries));
-    }
-    if (entries.length === 0) {
-      const legacy = loadMetadataIndex(cwd);
-      if (legacy) entries.push(...Object.values(legacy.entries));
-    }
-  }
-
-  if (entries.length === 0) {
+  if (entries.length === 0 && params.backend !== 'fortemi-core') {
     console.error('Error: No artifact index found.');
     console.error('Run `aiwg index build --graph framework` (or `aiwg use <framework>`) first.');
     process.exit(1);
   }
 
-  const candidates = entries.filter(e => types.includes(e.type));
   const needle = params.name.trim();
-  const needleLower = needle.toLowerCase();
-
-  // Exact path match — most precise.
-  let matches = candidates.filter(e => e.path === needle);
-
-  // Basename match — directory name (skills/<name>/SKILL.md) or filename
-  // stem for agent/command/rule files.
-  if (matches.length === 0) {
-    matches = candidates.filter(e => {
-      const dirStem = path.basename(path.dirname(e.path));
-      const basename = path.basename(e.path);
-      const fileStem = path.basename(e.path).replace(/\.[^.]+$/, '');
-      return (basename === 'SKILL.md' && dirStem === needle) || fileStem === needle;
-    });
-  }
-
-  // Title match (case-insensitive) — last-resort fallback.
-  if (matches.length === 0) {
-    matches = candidates.filter(e =>
-      typeof e.title === 'string' && e.title.toLowerCase() === needleLower,
-    );
-  }
+  let matches = findShowMatches(entries, types, needle);
 
   if (matches.length === 0) {
     // Corpus fallback (#1221): when the artifact isn't in any indexed graph,
@@ -976,7 +1364,7 @@ export async function showArtifact(
     // "(uninstalled)" banner. This keeps `aiwg show` useful in workspaces
     // where the operator hasn't run `aiwg use` yet, or where the framework
     // index is stale, rather than exiting with a misleading "not found".
-    if (aiwgRoot) {
+    if (aiwgRoot && params.backend !== 'fortemi-core') {
       const corpusMatch = await findCorpusArtifact(aiwgRoot, needle, types);
       if (corpusMatch) {
         let content: string;
@@ -1025,14 +1413,7 @@ export async function showArtifact(
   // Resolve relative framework-graph paths to absolute paths.
   // Kernel entries are anchored the same way as non-kernel framework entries
   // (#1230) — show reads the source corpus, not platform deploy mirrors.
-  function resolvePath(entry: MetadataEntry): string {
-    if (path.isAbsolute(entry.path)) return entry.path;
-    if (aiwgRoot && entry.path.startsWith('agentic/code/')) {
-      return path.join(aiwgRoot, entry.path);
-    }
-    // Project-graph entries are stored relative to the project root (cwd).
-    return path.join(cwd, entry.path);
-  }
+  const resolvePath = (entry: MetadataEntry) => resolveMetadataPath(cwd, aiwgRoot, entry);
 
   if (matches.length > 1 && !params.first) {
     if (params.json) {
@@ -1040,19 +1421,25 @@ export async function showArtifact(
         ambiguous: true,
         name: needle,
         matches: matches.map(e => ({
+          id: discoveryIdForEntry(e),
           path: resolvePath(e),
           type: e.type,
+          name: e.name,
           title: e.title,
           kernel: e.kernel ?? false,
+          provenance: {
+            graph: (e as ProvenancedEntry).indexGraph ?? null,
+            scope: (e as ProvenancedEntry).indexScope ?? null,
+          },
         })),
       }, null, 2));
     } else {
-      console.error(`Ambiguous: "${needle}" matches ${matches.length} artifacts. Disambiguate with --type or pass the full path:`);
+      console.error(`Ambiguous: "${needle}" matches ${matches.length} artifacts. Disambiguate with --type or pass the stable id:`);
       for (const e of matches) {
-        console.error(`  ${e.type.padEnd(7)} ${resolvePath(e)}`);
+        console.error(`  ${e.type.padEnd(7)} ${discoveryIdForEntry(e)} ${e.title}`);
       }
       console.error('');
-      console.error('Re-run with `--first` to pick the top match, or `--type skill` to filter.');
+      console.error('Re-run with `--first` to pick the top match, `--type skill` to filter, or `aiwg show metadata <id>` for paths.');
     }
     process.exit(2);
   }
@@ -1070,10 +1457,16 @@ export async function showArtifact(
 
   if (params.json) {
     console.log(JSON.stringify({
+      id: discoveryIdForEntry(entry),
       path: filePath,
       type: entry.type,
+      name: entry.name,
       title: entry.title,
       kernel: entry.kernel ?? false,
+      provenance: {
+        graph: (entry as ProvenancedEntry).indexGraph ?? null,
+        scope: (entry as ProvenancedEntry).indexScope ?? null,
+      },
       // #1227 — surface script-bearing skills so callers can route to
       // `aiwg run skill <name>` instead of treating SKILL.md as
       // instructions for the agent to execute itself.
@@ -1095,4 +1488,127 @@ export async function showArtifact(
   }
   process.stdout.write(content);
   if (!content.endsWith('\n')) process.stdout.write('\n');
+}
+
+export async function showMetadata(
+  cwd: string,
+  params: ShowMetadataParams,
+): Promise<void> {
+  loadGlobalGraphConfigs();
+  const types = params.typeFilter && params.typeFilter.length > 0
+    ? params.typeFilter
+    : DEFAULT_DISCOVER_TYPES;
+  const { entries, aiwgRoot } = await loadShowEntries(cwd, params);
+
+  if (entries.length === 0 && params.backend !== 'fortemi-core') {
+    console.error('Error: No artifact index found.');
+    console.error('Run `aiwg index build --graph framework` (or `aiwg use <framework>`) first.');
+    process.exit(1);
+  }
+
+  const needle = params.name.trim();
+  const matches = findShowMatches(entries, types, needle);
+
+  if (matches.length === 0) {
+    console.error(`Error: no artifact metadata found matching "${needle}".`);
+    console.error('Try `aiwg discover "<phrase>" --json` to find the stable id.');
+    process.exit(1);
+  }
+
+  const resolvePath = (entry: MetadataEntry) => resolveMetadataPath(cwd, aiwgRoot, entry);
+
+  if (matches.length > 1 && !params.first) {
+    if (params.json) {
+      console.log(JSON.stringify({
+        ambiguous: true,
+        name: needle,
+        matches: matches.map((entry) => ({
+          id: discoveryIdForEntry(entry),
+          type: entry.type,
+          name: entry.name,
+          title: entry.title,
+          provenance: {
+            graph: (entry as ProvenancedEntry).indexGraph ?? null,
+            scope: (entry as ProvenancedEntry).indexScope ?? null,
+          },
+        })),
+      }, null, 2));
+    } else {
+      console.error(`Ambiguous: "${needle}" matches ${matches.length} artifacts. Disambiguate with the stable id:`);
+      for (const entry of matches) {
+        console.error(`  ${entry.type.padEnd(7)} ${discoveryIdForEntry(entry)} ${entry.title}`);
+      }
+    }
+    process.exit(2);
+  }
+
+  const entry = matches[0];
+  const absolutePath = resolvePath(entry);
+  const record = params.backend === 'fortemi-core'
+    ? await fortemiRecordForEntry(cwd, entry)
+    : null;
+  const payload = {
+    id: discoveryIdForEntry(entry),
+    backend: params.backend ?? DEFAULT_ARTIFACT_SEARCH_BACKEND,
+    type: entry.type,
+    name: entry.name,
+    title: entry.title,
+    paths: {
+      absolute: absolutePath,
+      indexed: entry.path,
+      repo_relative: record?.source.repo_relative_path ?? entry.path,
+      locator: record?.source.locator ?? entry.name ?? entry.title,
+    },
+    provenance: {
+      graph: (entry as ProvenancedEntry).indexGraph ?? null,
+      scope: (entry as ProvenancedEntry).indexScope ?? null,
+    },
+    metadata: record ?? entry,
+  };
+
+  if (params.json) {
+    console.log(JSON.stringify(payload, null, 2));
+    return;
+  }
+
+  console.log(`${payload.type} ${payload.title}`);
+  console.log(`  id: ${payload.id}`);
+  if (payload.name) console.log(`  name: ${payload.name}`);
+  console.log(`  graph: ${payload.provenance.graph ?? 'unknown'}`);
+  console.log(`  scope: ${payload.provenance.scope ?? 'unknown'}`);
+  console.log(`  path: ${payload.paths.absolute}`);
+  console.log(`  indexed_path: ${payload.paths.indexed}`);
+  console.log('');
+  console.log(JSON.stringify(payload.metadata, null, 2));
+}
+
+function isTopLevelPersonaAgentPath(entryPath: string): boolean {
+  return /(^|[/\\])agentic[/\\]code[/\\]agents[/\\]personas[/\\][^/\\]+\.md$/.test(entryPath);
+}
+
+function isCanonicalBundleAgentPath(entryPath: string): boolean {
+  return /(^|[/\\])agentic[/\\]code[/\\](?:frameworks|addons|extensions|plugins)[/\\][^/\\]+[/\\]agents[/\\][^/\\]+\.md$/.test(entryPath);
+}
+
+function isCanonicalSourceAgentPath(entryPath: string): boolean {
+  return /(^|[/\\])agentic[/\\]code[/\\](?:frameworks|addons|extensions)[/\\][^/\\]+[/\\]agents[/\\][^/\\]+\.md$/.test(entryPath);
+}
+
+function isFrameworkSourceSkillPath(entryPath: string): boolean {
+  return /(^|[/\\])agentic[/\\]code[/\\]frameworks[/\\][^/\\]+[/\\]skills[/\\][^/\\]+[/\\]SKILL\.md$/.test(entryPath);
+}
+
+function isCanonicalSourceSkillPath(entryPath: string): boolean {
+  return /(^|[/\\])agentic[/\\]code[/\\](?:frameworks|addons|extensions)[/\\][^/\\]+[/\\]skills[/\\][^/\\]+[/\\]SKILL\.md$/.test(entryPath);
+}
+
+function uniqueEntriesByPath(entries: MetadataEntry[]): MetadataEntry[] {
+  const seen = new Set<string>();
+  const unique: MetadataEntry[] = [];
+  for (const entry of entries) {
+    if (seen.has(entry.path)) continue;
+    seen.add(entry.path);
+    unique.push(entry);
+  }
+  return unique;
 }

@@ -12,6 +12,7 @@ import { pathToFileURL } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
+import { scanStartupContext } from '../lint/claude-context-inventory.mjs';
 
 const { getFrameworkRoot, getVersionInfo } = await importImpl(
   import.meta.url,
@@ -33,6 +34,10 @@ const { readIndexConfig, validateIndexConfig } = await importImpl(
 const { collectIndexStatus } = await importImpl(
   import.meta.url,
   'artifacts/index-status.js'
+);
+const { getFortemiCorePrebuiltStatus, getFortemiCoreSyncStatus } = await importImpl(
+  import.meta.url,
+  'artifacts/fortemi-core-sync.js'
 );
 
 // AIWG_ROOT: env override > channel-manager resolved path > legacy edge path
@@ -61,6 +66,7 @@ const PROVIDER_LABELS = {
   warp:     'Warp',
   windsurf: 'Windsurf',
   openclaw: 'OpenClaw',
+  openhuman: 'OpenHuman',
   hermes:   'Hermes',
 };
 
@@ -76,6 +82,7 @@ const PROVIDER_AGENT_DIRS = {
   opencode: '.opencode/agent',
   warp:     '.warp/agents',
   windsurf: '.windsurf/agents',
+  openhuman: '.agents/agents',
   // openclaw/hermes deploy to ~/.{provider}/ — handled separately
 };
 
@@ -362,6 +369,54 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
   }
 }
 
+// Startup-context budget (#1673). The skill-listing budget above covers skill
+// names/descriptions; this measures the aggregate context Claude Code inlines at
+// session start — memory files + every `.claude/rules/*.md` (full body, no
+// progressive disclosure) — against the 200K standard Sonnet window. On heavy
+// `aiwg use all` deployments this is the dominant exhaustion driver (#1672): the
+// standing rules alone can exceed the window before any prompt, forcing the
+// credit-gated 1M upgrade or immediate `Context limit reached`. Claude-only;
+// non-fatal (re-deploy can't fix a structural over-budget — see the
+// enforcement-tiered deployment ADR).
+async function checkStartupContextBudget(provName, label) {
+  if (provName !== 'claude') return;
+  let startup;
+  try {
+    startup = await scanStartupContext({ rootDir: process.cwd() });
+  } catch {
+    return; // best-effort; never block doctor on the budget probe
+  }
+  if (!startup || startup.components.length === 0) return; // nothing deployed here
+
+  const k = (n) => `${Math.round(n / 1000)}K`;
+  const top = startup.components
+    .slice(0, 2)
+    .map((c) => `${c.label} ~${k(c.approxTokens)}`)
+    .join(', ');
+  const headline =
+    `~${k(startup.totalTokens)} tok of ${k(startup.budgetTokens)} standard window ` +
+    `(memory + .claude/rules); top: ${top}`;
+
+  if (startup.status === 'over') {
+    check(
+      `${label} Startup Context`,
+      'warn',
+      `OVER budget — ${headline}. Exceeds the standard Sonnet window before any prompt; ` +
+        `forces the credit-gated 1M tier or immediate exhaustion. Reduce always-on rules ` +
+        `(see the enforcement-tiered deployment ADR / #1673) or narrow the install.`,
+    );
+  } else if (startup.status === 'warn') {
+    check(
+      `${label} Startup Context`,
+      'warn',
+      `tight — ${headline}. Limited headroom for real work on standard Sonnet. ` +
+        `Run \`npm run lint:claude-context -- --startup\` for the breakdown (#1673).`,
+    );
+  } else {
+    check(`${label} Startup Context`, 'ok', headline);
+  }
+}
+
 async function loadProvider(name) {
   try {
     const providerPath = path.join(AIWG_ROOT, 'tools/agents/providers', `${name}.mjs`);
@@ -417,6 +472,92 @@ async function fileExists(filePath) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function parseOpenHumanHarnessToml(content) {
+  const scalar = (key) => {
+    const match = new RegExp(`^\\s*${key}\\s*=\\s*"([^"]*)"`, 'm').exec(content);
+    return match?.[1] ?? '';
+  };
+  const file = /^\s*file\s*=\s*"([^"]+)"/m.exec(content)?.[1] ?? '';
+  const inline = /^\s*inline\s*=\s*(?:'''([\s\S]*?)'''|"([^"]*)")/m.exec(content);
+  return {
+    id: scalar('id'),
+    whenToUse: scalar('when_to_use'),
+    hasSystemPromptTable: /^\s*\[system_prompt\]\s*$/m.test(content),
+    file,
+    inline: inline ? (inline[1] ?? inline[2] ?? '') : '',
+    hasSubagents: /^\s*subagents\s*=/m.test(content),
+  };
+}
+
+async function checkOpenHumanHarnessTier2() {
+  const roots = [
+    { scope: 'project', dir: path.join(process.cwd(), 'agents') },
+    { scope: 'user', dir: path.join(process.env.OPENHUMAN_HOME || path.join(os.homedir(), '.openhuman'), 'agents') },
+  ];
+  const findings = [];
+  const ids = new Map();
+  let fileCount = 0;
+
+  for (const root of roots) {
+    let entries = [];
+    try {
+      entries = await fs.readdir(root.dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.startsWith('aiwg_') || !entry.name.endsWith('.toml')) continue;
+      fileCount += 1;
+      const tomlPath = path.join(root.dir, entry.name);
+      let content = '';
+      try {
+        content = await fs.readFile(tomlPath, 'utf-8');
+      } catch (err) {
+        findings.push(`${tomlPath}: unreadable (${err?.message ?? err})`);
+        continue;
+      }
+      const parsed = parseOpenHumanHarnessToml(content);
+      if (!parsed.id) findings.push(`${tomlPath}: missing id`);
+      if (parsed.id && !parsed.id.startsWith('aiwg_')) findings.push(`${tomlPath}: id '${parsed.id}' is not aiwg_-prefixed`);
+      if (parsed.id) {
+        const prior = ids.get(parsed.id);
+        if (prior) findings.push(`${tomlPath}: duplicate id '${parsed.id}' also in ${prior}`);
+        else ids.set(parsed.id, tomlPath);
+      }
+      if (!parsed.whenToUse.trim()) findings.push(`${tomlPath}: missing when_to_use`);
+      if (!parsed.hasSystemPromptTable) findings.push(`${tomlPath}: missing [system_prompt] table`);
+      if (parsed.hasSubagents) findings.push(`${tomlPath}: Worker-tier AIWG harness definitions must not set subagents`);
+
+      if (root.scope === 'project') {
+        if (!parsed.file) {
+          findings.push(`${tomlPath}: project-scope harness definition must use [system_prompt] file`);
+        } else {
+          const promptPath = path.join(process.cwd(), 'agent', 'prompts', parsed.file);
+          try {
+            const prompt = await fs.readFile(promptPath, 'utf-8');
+            if (!prompt.trim()) findings.push(`${tomlPath}: prompt file is empty (${promptPath})`);
+            if (/^---\s*$/m.test(prompt)) findings.push(`${tomlPath}: prompt file still contains YAML frontmatter (${promptPath})`);
+          } catch {
+            findings.push(`${tomlPath}: prompt file missing (${promptPath})`);
+          }
+        }
+        if (parsed.inline) findings.push(`${tomlPath}: project-scope harness definition should not inline the prompt`);
+      } else {
+        if (!parsed.inline.trim()) findings.push(`${tomlPath}: user-scope harness definition must contain a non-empty inline prompt`);
+        if (parsed.file) findings.push(`${tomlPath}: user-scope harness definition should not use file prompts`);
+      }
+    }
+  }
+
+  if (findings.length > 0) {
+    check('OpenHuman Tier-2 harness', 'error', findings.slice(0, 4).join('; ') + (findings.length > 4 ? `; +${findings.length - 4} more` : ''));
+  } else if (fileCount > 0) {
+    check('OpenHuman Tier-2 harness', 'ok', `${fileCount} AIWG native harness definition(s) valid`);
+  } else {
+    check('OpenHuman Tier-2 harness', 'ok', 'No AIWG native harness definitions installed');
   }
 }
 
@@ -663,6 +804,11 @@ async function runDoctor() {
       const budgetPath = provider.kernelSkillsPath || provider.paths.skills;
       await checkSkillBudgetForProvider(provName, label, budgetPath);
       await checkTotalDeployedSkillBudgetForProvider(provName, label, provider);
+      await checkStartupContextBudget(provName, label);
+    }
+
+    if (provName === 'openhuman') {
+      await checkOpenHumanHarnessTier2();
     }
   }
 
@@ -1604,6 +1750,26 @@ async function runDoctor() {
     }
   } catch {
     // Non-fatal — never break doctor on the durable-index probe.
+  }
+
+  // 13c. Fortemi Core prebuilt framework index (#1697) — release packages
+  // should include this cache so Fortemi-backed discovery can answer framework
+  // queries without forcing a local rebuild first.
+  try {
+    const local = getFortemiCoreSyncStatus(process.cwd(), 'framework');
+    const prebuilt = getFortemiCorePrebuiltStatus('framework');
+    if (prebuilt.built && !prebuilt.stale) {
+      const localNote = local.built && !local.stale ? '; local cache also ready' : '';
+      check('fortemi-core-index', 'ok', `prebuilt framework index present (${prebuilt.itemCount ?? 0} items${localNote})`);
+    } else if (local.built && !local.stale) {
+      check('fortemi-core-index', 'ok', `local framework cache ready (${local.itemCount ?? 0} items); prebuilt package index not present`);
+    } else if (prebuilt.optedIn && prebuilt.stale) {
+      check('fortemi-core-index', 'warn', `${prebuilt.reason ?? 'prebuilt framework index is stale'} — run "npm run release:fortemi-index" before release packaging`);
+    } else {
+      check('fortemi-core-index', 'info', 'no prebuilt framework index packaged; Fortemi discovery will require "aiwg index sync --backend fortemi-core --graph framework"');
+    }
+  } catch {
+    // Non-fatal — older installs may not expose the helper yet.
   }
 
   // Print results

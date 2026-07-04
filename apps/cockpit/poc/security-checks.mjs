@@ -18,6 +18,23 @@ const base = `http://127.0.0.1:${BRIDGE_PORT}`;
 
 const reachable = async (url) => { try { return (await fetch(url)).ok; } catch { return false; } };
 async function waitOk(url, ms = 6000) { const end = Date.now() + ms; while (Date.now() < end) { if (await reachable(url)) return; await sleep(100); } throw new Error('never up: ' + url); }
+async function readRuntime({ port, pid, ms = 6000 } = {}) {
+  const end = Date.now() + ms;
+  let last;
+  while (Date.now() < end) {
+    try {
+      const runtime = JSON.parse(await readFile(RUNTIME, 'utf8'));
+      if ((port === undefined || runtime.port === port) && (pid === undefined || runtime.pid === pid)) {
+        return runtime;
+      }
+      last = new Error(`runtime file has stale bridge identity port=${runtime.port} pid=${runtime.pid}`);
+    } catch (err) {
+      last = err;
+    }
+    await sleep(100);
+  }
+  throw last;
+}
 
 const mock = spawn(process.execPath, [MOCK], { env: { ...process.env, PORT: String(MOCK_PORT) }, stdio: 'ignore' });
 const bridge = spawn(process.execPath, [BRIDGE], {
@@ -33,7 +50,7 @@ const bridge = spawn(process.execPath, [BRIDGE], {
 try {
   await waitOk(`http://127.0.0.1:${MOCK_PORT}/health`);
   await waitOk(`${base}/healthz`);
-  const rt = JSON.parse(await readFile(RUNTIME, 'utf8'));
+  const rt = await readRuntime({ port: BRIDGE_PORT, pid: bridge.pid });
   const TOKEN = rt.token;
   const api = (p, o = {}) => fetch(base + p, { ...o, headers: { ...(o.headers || {}), authorization: `Bearer ${TOKEN}` } });
 

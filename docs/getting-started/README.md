@@ -9,6 +9,7 @@ Find the scenario that matches where you are right now.
 | I want to... | Guide |
 |---|---|
 | Get one useful AIWG result before learning the whole system | [Start Here](start-here.md) |
+| Have an agent or steward install AIWG from zero to running | [Agentic Install Runbook](../agentic-install-runbook.md) |
 | Install AIWG on macOS or fix npm `EACCES` | [macOS Install Guide](macos-install.md) |
 | Walk through provider, project, framework, deployment, and verification choices | [Start Here: guided wizard](start-here.md#minimal-command-path) |
 | Ask AIWG which path to use first | [Ask The Steward To Route You](first-success-ask-steward.md) |
@@ -57,6 +58,10 @@ Read the one-paragraph version of each below, then click the one that sounds rig
 
 **Start Here** — You are new to AIWG and want one useful result. Tell the agent what you are trying to do, run `aiwg wizard` when you're ready for guided deployment, then ask the agent to verify the workspace is engaged.
 
+**Agentic Install Runbook** — You want one canonical setup document an agent can
+follow from prerequisites through deployment, verification, provider handoff,
+and common repair paths.
+
 **Ask The Steward To Route You** — You want AIWG to choose a path for your goal. Ask the steward in chat for one recommendation; the agent verifies it against AIWG's capability index before answering.
 
 **Provider Handoff** — You know whether you are using Claude Code, Codex, Cursor, Copilot, Factory, OpenCode, Warp, Windsurf, Hermes, or OpenClaw, and need the short handoff from local deployment to that tool.
@@ -97,7 +102,7 @@ Read the one-paragraph version of each below, then click the one that sounds rig
 
 **Key Addons** — Al (iterative loops), RLM (large codebase handling), Voice Framework (consistent writing style), and other capabilities that extend any framework.
 
-**Project-Local Customization** — How to add project-specific agents, skills, and scripts under `.aiwg/{extensions,addons,frameworks,plugins}/<name>/` so they deploy automatically with `aiwg use` and survive platform-directory resets. Keeps platform dirs (`.claude/`, `.codex/`, etc.) fully expendable.
+**Project-Local Customization** — How to add project-specific agents, skills, and scripts under `.aiwg/{extensions,addons,frameworks}/<name>/` so they deploy automatically with `aiwg use` and survive platform-directory resets. Use `.aiwg/plugins/<name>/` only for marketplace delivery wrappers. Keeps platform dirs (`.claude/`, `.codex/`, etc.) fully expendable.
 
 **Onboarding Validation** — A lightweight checklist for maintainers to confirm that a new user can move from docs to install, wizard, verification, and one useful AIWG workflow.
 

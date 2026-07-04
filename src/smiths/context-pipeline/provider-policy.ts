@@ -18,6 +18,7 @@
  */
 
 import type { Platform } from '../../agents/types.js';
+import { getProviderDefinition, listProviderDefinitions } from '../../providers/provider-definitions.js';
 
 /**
  * Providers that receive AGENTS.md emission at project root.
@@ -26,29 +27,18 @@ import type { Platform } from '../../agents/types.js';
  * - ADR-1 §3 default-on rollout (`.aiwg/architecture/adr-agents-md-aggregation.md`)
  * - ADR-1 §4 per-provider variants table (file-name + twin-file emission)
  */
-export const AGENTS_MD_PROVIDERS: ReadonlySet<Platform> = new Set([
-  'codex',
-  'copilot',
-  'cursor',
-  'windsurf',
-  'hermes',
-  'warp',
-  'factory',
-  'opencode',
-  // OpenHuman (#1552) ships `.agents/` + `AGENTS.md` natively; its bridge IS
-  // AGENTS.md (commands/rules aggregate there, discover-first is induced
-  // through it — see adr-openhuman-agent-target.md). The induction wired the
-  // path layer (getConfigFileName('openhuman') === 'AGENTS.md') but missed this
-  // policy gate, so AGENTS.md was never emitted (#1560 validation finding).
-  'openhuman',
-]);
+export const AGENTS_MD_PROVIDERS: ReadonlySet<Platform> = new Set(
+  listProviderDefinitions()
+    .filter((definition) => definition.paths.contextFiles.agentsMd)
+    .map((definition) => definition.id),
+);
 
-export type AgentsMdProvider = Platform & ('codex' | 'copilot' | 'cursor' | 'windsurf' | 'hermes' | 'warp' | 'factory' | 'opencode' | 'openhuman');
+export type AgentsMdProvider = Platform & ('codex' | 'copilot' | 'cursor' | 'windsurf' | 'hermes' | 'warp' | 'factory' | 'opencode');
 
 /**
  * Whether the context-pipeline has ANY work to do for this provider.
  * Returns false only for providers that have no project-local context
- * footprint: OpenClaw (home-dir-only) and 'generic' (no specific provider).
+ * footprint: OpenClaw/OpenHuman (home-dir-only) and 'generic' (no specific provider).
  *
  * Claude returns TRUE — it needs AIWG.md + a CLAUDE.md hook update.
  */
@@ -58,10 +48,10 @@ export function shouldEmitContextFiles(provider: Platform): boolean {
 
 /**
  * Whether to emit AIWG.md at project root. True for every project-local
- * provider; false only for OpenClaw (home-dir-only) and 'generic'.
+ * provider; false only for home-dir-only providers and 'generic'.
  */
 export function shouldEmitAiwgMd(provider: Platform): boolean {
-  return provider !== 'openclaw' && provider !== 'generic';
+  return getProviderDefinition(provider)?.paths.contextFiles.aiwgMd ?? false;
 }
 
 /**
@@ -71,7 +61,7 @@ export function shouldEmitAiwgMd(provider: Platform): boolean {
  * and generic.
  */
 export function shouldEmitAgentsMd(provider: Platform): boolean {
-  return AGENTS_MD_PROVIDERS.has(provider);
+  return getProviderDefinition(provider)?.paths.contextFiles.agentsMd ?? false;
 }
 
 /**
@@ -80,5 +70,5 @@ export function shouldEmitAgentsMd(provider: Platform): boolean {
  * `@AIWG.md` include; operator content outside the block is preserved.
  */
 export function shouldEmitClaudeMdHook(provider: Platform): boolean {
-  return provider === 'claude';
+  return getProviderDefinition(provider)?.paths.contextFiles.claudeMdHook ?? false;
 }

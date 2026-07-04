@@ -45,6 +45,8 @@ import {
   initializeFrameworkWorkspace,
   normalizeDeploymentMode,
   collectFrameworkArtifacts,
+  listOnDemandRuleFiles,
+  writeOnDemandRuleIndex,
   cleanupOldRuleFiles,
   filterCommandsAgainstSkills,
   deploySoulCompanions
@@ -579,6 +581,17 @@ export async function deploy(opts) {
     console.log(`\nDeploying ${ruleFiles.length} rules...`);
     // Use inline deployment (external script relied on commands/ dirs which are now skills)
     deployRulesInline(ruleFiles, target, opts);
+
+    // On-demand index (#1675): list the MEDIUM/LOW rules tier-gated out of the
+    // always-on set so agents can fetch them via `aiwg show rule`.
+    const onDemandCount = writeOnDemandRuleIndex(
+      path.join(target, paths.rules),
+      listOnDemandRuleFiles(srcRoot),
+      opts,
+    );
+    if (onDemandCount > 0) {
+      console.log(`  On-demand rules (not inlined): ${onDemandCount} → RULES-ONDEMAND.md`);
+    }
   }
 
   // Post-deployment
@@ -604,7 +617,7 @@ export async function deploy(opts) {
  * Layout produced:
  *   <targetDir>/.cursor-plugin/plugin.json  — the plugin manifest
  *
- * @param {string} targetDir - Plugin bundle root (typically plugins/<name>/)
+ * @param {string} targetDir - Plugin bundle root (typically agentic/code/plugins/<name>/)
  * @param {{ dryRun?: boolean, srcRoot?: string, name?: string, version?: string, description?: string, contents?: object }} opts
  */
 export function generatePluginBundle(targetDir, opts = {}) {

@@ -7,6 +7,382 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.7.10] - 2026-07-04 - "npm tarball recovery"
+
+Supersedes `2026.7.9` after npmjs.org accepted package metadata and provenance
+for the base `aiwg` package while its immutable tarball URL temporarily returned
+404 during install checks. This reissues the same release payload with a fresh
+package version and verified install target.
+
+### Fixed
+
+- **npmjs.org base package installability** — reissues `aiwg` with a fresh
+  immutable package version after `2026.7.9` metadata initially pointed at a
+  missing registry tarball object; `@aiwg/cockpit@2026.7.9` remained healthy.
+
+## [2026.7.9] - 2026-07-04 - "Release manifest publish gate"
+
+Supersedes `2026.7.8` after the GitHub npmjs.org publish workflow stopped in
+the full test gate before publishing any npm artifacts. This release keeps the
+Cockpit merged-console and issue-question workflow changes while relaxing a
+stale release-manifest test that assumed the Fortemi preview announcement would
+remain the newest release forever.
+
+### Fixed
+
+- **Release manifest regression test** — the Fortemi preview release-notes test
+  now asserts that `v2026.7.1-announcement` remains listed in the release
+  manifest, not that it is permanently the first entry.
+
+## [2026.7.8] - 2026-07-04 - "Cockpit merged console and issue questions"
+
+This release completes the current Cockpit merged-console slice and tightens the
+address-issues workflow so unresolved issue questions remain findable from the
+tracker label surface.
+
+### Added
+
+- **Cockpit merged console surfaces** — the Cockpit shell now exposes Bridge
+  mission projection, unified event snapshots, telemetry, memory, missions, and
+  apps/web compatibility surfaces for the merged operator-console workflow.
+- **Issue question tracking label** — address-issues now creates or reuses a
+  `question` label when filing unresolved questions in issue comments, then
+  removes it once the question has been answered to satisfaction.
+
+### Fixed
+
+- **Pathless Cockpit smoke compatibility** — Cockpit smoke coverage now handles
+  Fortemi discover results without filesystem paths by preserving result names
+  and using a known release-flow skill path for the library clone check.
+
+## [2026.7.7] - 2026-07-03 - "Pathless discovery package gate"
+
+Supersedes `2026.7.6` after the first tag's npm publish workflow stopped at
+the Fortemi Core prebuilt package gate. This release keeps the pathless
+discovery and canonical capability index changes while aligning the release
+gate with the new `show metadata` path contract.
+
+### Fixed
+
+- **Fortemi prebuilt package gate** — the release smoke test now validates
+  pathless discover results by resolving each stable id through
+  `aiwg show metadata`, then checking the indexed path from metadata.
+- **npm publish follow-up guard** — the GitHub `@next` dist-tag step now waits
+  for the publish and verification gates to succeed before trying to tag a
+  version on npmjs.org.
+
+## [2026.7.6] - 2026-07-03 - "Pathless discovery and canonical capability index"
+
+This release tightens the AIWG discover/show workflow for agents: discovery
+now returns stable capability identifiers instead of file paths, detailed path
+metadata moves behind an explicit command, and the framework capability index
+stops indexing provider/plugin mirror copies.
+
+### Added
+
+- **Discover metadata lookup** — `aiwg show metadata <id-or-name>` now emits
+  the stable discover id, full path set, provenance, and Fortemi Core metadata
+  for a discovered artifact.
+
+### Changed
+
+- **Pathless capability discovery** — `aiwg discover` CLI output now fronts a
+  stable artifact identifier instead of filesystem paths. `aiwg show` resolves
+  those identifiers first while preserving exact path lookup as a secondary,
+  backward-compatible parameter.
+- **Canonical capability indexing** — the framework capability graph no longer
+  indexes provider/plugin mirror copies under `agentic/code/plugins`; discovery
+  and Fortemi caches now index the canonical framework/addon/extension source
+  set once.
+- **Readable discovery text output** — `aiwg discover` now supports
+  `--format json|text`, `--pretty`, and `--compact`, and renders default text
+  results as numbered, multi-line blocks with explicit `show` follow-up
+  commands.
+
+## [2026.7.5] - 2026-07-03 - "Fortemi runtime dependency packaging"
+
+Ships the Fortemi Core runtime dependency in the global npm package so the
+default Fortemi-backed discovery path works immediately after install.
+
+### Fixed
+
+- **Fortemi Core runtime dependency** — `@fortemi/core` now ships as a runtime
+  dependency, allowing global installs to run `aiwg discover` without manually
+  installing `@fortemi/core` beside the CLI.
+- **Production package smoke coverage** — the Fortemi prebuilt package gate now
+  installs the packed tarball with development dependencies omitted and runs
+  `aiwg discover "test"` from that install to catch missing runtime packages.
+
+## [2026.7.4] - 2026-07-03 - "Fortemi discovery release alignment"
+
+Supersedes `2026.7.3` as the artifact-aligned stable release after the first
+tag push published `aiwg@2026.7.3` before `main` was rebased onto the latest
+remote documentation commit. This release keeps the Fortemi capability
+discovery parity fixes and restores package, tag, and `main` consistency.
+
+### Fixed
+
+- **Release artifact alignment** — publishes the Fortemi capability discovery
+  parity fix from the current `main` lineage, including the latest Pagenary
+  documentation dependency update already present on origin.
+
+## [2026.7.3] - 2026-07-03 - "Fortemi capability discovery parity"
+
+Restores the default AIWG capability discovery contract after the Fortemi Core
+backend became the default search path. Framework skills, project-local custom
+skills, and quickref-guided discover phrases now resolve through the Fortemi
+static cache without requiring `--graph framework` or `--backend local`.
+
+### Fixed
+
+- **Framework capability discovery default** — `aiwg discover` and `aiwg show`
+  now use the capability-default graph surface on the Fortemi backend, merging
+  framework and project caches instead of searching only the project graph.
+- **Canonical skill lookup** — bare `aiwg show skill doc-sync` and
+  `aiwg show skill flow-release` resolve canonical framework source skills
+  instead of returning ambiguity envelopes caused by plugin mirror copies.
+- **Release-flow discoverability** — `flow-release` now declares `release flow`
+  and related trigger phrases, and exact trigger matches rank above generic
+  substring hits.
+- **Project-local custom skill search** — project `.aiwg/skills/.../SKILL.md`
+  capabilities are included in the default Fortemi discovery/show surface after
+  the project graph is built and synced.
+
+### Added
+
+- **Real-corpus Fortemi parity tests** — the integration matrix now compares
+  Fortemi default discovery against local framework discovery over the real AIWG
+  corpus by ordered paths, not only idealized fixtures.
+- **Project custom capability regression** — tests create a project-local custom
+  skill and verify default Fortemi discovery/show can find it.
+- **Quickref-guided UAT evidence** — live validation now checks curated
+  quickref discover phrases across the core and framework quickref corpus.
+
+### Follow-up
+
+- Filed #1709 to design user/global `~/.aiwg` sidecar capability indices so
+  personal custom skills can ride alongside framework and project caches without
+  mutating AIWG's packaged framework index.
+
+## [2026.7.2] - 2026-07-03 - "Fortemi Core package gate correction"
+
+Reissues the Fortemi Core index migration preview after the `v2026.7.1`
+publish workflow stopped before npm publication. The package contents were
+clean, but the publish gate grepped lifecycle output and matched the prepack
+log line for the generated local `.aiwg/.index/framework/` cache.
+
+### Fixed
+
+- **Structured `.aiwg/` package exclusion gate** — GitHub and Gitea publish
+  workflows now verify `.aiwg/` exclusion from npm's structured
+  `npm pack --dry-run --json` file list instead of scanning lifecycle logs.
+  The integration test uses the same structured check so generated prepack
+  diagnostics cannot produce a false positive.
+
+## [2026.7.1] - 2026-07-03 - "Fortemi Core index migration preview"
+
+Adds an opt-in Fortemi Core static-cache backend for AIWG project indexes while
+preserving the existing local `.aiwg/.index` backend as the default and rollback
+path. The migration preview targets the newly released
+`@fortemi/core@2026.7.0` AIWG index surface without making Fortemi Core a
+required runtime dependency for normal discovery/search commands.
+
+### Added
+
+- **Fortemi v2 export contract** — `aiwg index export --format fortemi
+  --schema-version v2` emits AIWG domain records with search projections, typed
+  relationships, privacy locality, source-body chunks, and embedding metadata
+  slots for the shared Fortemi semantic path.
+- **Fortemi Core static cache preview** — `aiwg index sync --backend
+  fortemi-core` materializes `.aiwg/.index/fortemi-core/<graph>/` cache files
+  that opt-in commands can read explicitly with `--backend fortemi-core`.
+- **Valid empty-cache semantics** — a synced Fortemi Core cache with zero items
+  is treated as a valid empty index: queries return empty result sets,
+  discovery reports a Fortemi static-cache no-match hint, and `show` does not
+  fall back to the local AIWG corpus when the backend is explicit.
+- **Fortemi-backed query parity** — discovery/show, metadata query,
+  fulltext/static semantic/hybrid query, dependency traversal, neighbor
+  traversal, set operations, KB/research graph traversal, and `research-query`
+  source selection now have no-regression parity fixtures.
+- **Prebuilt framework discovery index** — npm packages now build and include
+  `prebuilt/fortemi-core/framework/` through `prepack`, with a release gate that
+  validates the matrix, tarball contents, manifest checksum, size ceiling, and
+  packaged Fortemi Core fallback discovery. The packaged cache is a compact
+  metadata/capability projection; source-body fulltext remains a local sync
+  behavior.
+- **Install-size budget rebased for prebuilt indices** — the package budget now
+  accounts for the intentionally bundled Fortemi Core framework index that users
+  previously had to build locally, while the Fortemi-specific gate still caps
+  the prebuilt export.
+
+### Changed
+
+- **Research query command metadata** — provider command definitions now expose
+  `research-query --save` with `Write` permission so command-surface metadata
+  matches the CLI and skill documentation.
+- **Fortemi boundary docs** — KB/memory storage routing, the Fortemi MCP storage
+  backend, and local issue search now explicitly remain separate from the
+  default Fortemi Core static index/search backend, with legacy local fallback
+  selected through `--backend local`. Related tracker items #1551 and #1508 remain
+  non-closing follow-ups for body-level embedding and the provider-neutral
+  corpus-to-storage/index boundary; direct Fortemi REST import and
+  hardcoded-token patterns stay out of scope.
+- **Legacy rollback gate docs** — release and integration notes keep legacy
+  backend removal gated on #1691 parity fixtures, valid-empty-cache behavior,
+  and `--backend local` rollback evidence.
+- **Legacy Fortemi storage wording** — storage docs now mark the `fortemi` MCP
+  backend as persistence-only and deprecated for discovery/search routing; the
+  Fortemi Core static cache is the documented search path.
+
+### Documentation
+
+- Added the Fortemi index export integration guide, Fortemi migration ADR,
+  surface inventory, traceability matrix, completion gate audit, and release
+  announcement for the preview.
+
+## [2026.7.0] - 2026-07-01 - "MCP elicitation and native interaction routing"
+
+Adds an MCP `ask-user` interaction tool that can emit protocol-native
+elicitation requests when the client supports them, with a markdown fallback
+for surfaces that do not. The provider capability matrix now records native
+interactive-question support so AIWG can route human-in-the-loop prompts through
+the best available UX per provider.
+
+### Added
+
+- **MCP `ask-user` tool** — emits MCP elicitation requests with structured
+  schema support and falls back to markdown prompts when elicitation is
+  unavailable.
+- **Elicitation helper coverage** — unit tests cover protocol-native
+  elicitation, markdown fallback behavior, and response normalization.
+- **Native UX capability metadata** — provider capability data now advertises
+  interactive-question support, with coverage for the native UX interaction
+  mapping.
+
+### Changed
+
+- **Codex interaction guidance** — documents the `request_user_input`
+  interactive-question mechanism and mode gating so AIWG routing can prefer the
+  provider-native path when available.
+- **Cockpit console topology ADR** — accepts the merged console topology
+  direction for Cockpit session UX.
+
+### Documentation
+
+- Published the June 2026 AIWG progress report and updated the docs manifests.
+
+## [2026.6.13] - 2026-06-30 - "Tiered rules — leaner startup context"
+
+Lands enforcement-tiered rule deployment: rules now declare a canonical
+enforcement level, and only CRITICAL/HIGH rules are inlined into each provider's
+always-on context while MEDIUM/LOW rules become on-demand (reachable via
+`aiwg show rule` and a generated `RULES-ONDEMAND.md` index). Combined with
+compression of the largest always-on rule bodies, a full `aiwg use all` Claude
+startup drops from ~193K to ~110K tokens — comfortably under the 120K working-
+headroom target on the standard Sonnet window. Also extends the Cockpit session
+workspace with a read-only observe terminal and persistent instance/session
+navigation, and hardens executor enrollment.
+
+### Added
+
+- **Enforcement-tiered rule deployment (#1673)** — every rule now carries a
+  canonical `enforcement:` frontmatter level (CRITICAL/HIGH/MEDIUM/LOW). Deploy
+  inlines only the always-on CRITICAL/HIGH tier into each provider's rule
+  directory; MEDIUM/LOW rules stay on-demand. A CI guard keeps the tiering
+  honest. See `.aiwg/architecture/adr-rule-deployment-context-budget.md`.
+- **`RULES-ONDEMAND.md` across all providers (#1675)** — the on-demand rule
+  index (the MEDIUM/LOW tier, each fetchable via `aiwg show rule <name>`) now
+  ships from every provider, not just Claude. File-based providers (codex,
+  factory, cursor, copilot, opencode, windsurf, openclaw) write
+  `RULES-ONDEMAND.md` into their rule directory; aggregated providers note the
+  tier in their bridge file — warp in `WARP.md`, hermes/openhuman in `AGENTS.md`
+  (via a `{{ON_DEMAND_RULES}}` template token).
+- **Claude startup-context budget in `aiwg doctor` (#1672)** — doctor reports
+  the aggregate context Claude Code inlines at session start versus the standard
+  Sonnet window with an OK/WARN/OVER verdict. `npm run lint:claude-context --
+  --startup [--strict]` enforces the budget in CI.
+- **Cockpit read-only observe terminal** — observe a running session's terminal
+  output read-only, with auto-observe when a session is selected.
+- **Cockpit persistent instances + sessions navigation (#1670)** — a persistent
+  instances/sessions nav for the session workspace, refreshed on an interval.
+
+### Changed
+
+- **Compressed the largest always-on rule bodies (#1674)** — `anti-laziness`,
+  `skill-discovery`, `subagent-scoping`, `rlm-context-management`,
+  `cli-secondary`, `citation-policy`, `auto-compact-continue`,
+  `provenance-tracking`, `failure-mitigation`, and others were trimmed of
+  non-normative illustration (research-quote blocks, metrics dashboards,
+  integration YAML, prompt-reinforcement galleries, ASCII diagrams) while
+  preserving every FORBIDDEN/REQUIRED directive, rule statement, and enforcement
+  level. Component `RULES-INDEX.md` summaries were tightened to one line.
+  Detailed material remains reachable via `aiwg show rule`.
+
+### Fixed
+
+- **Protect `RULES-ONDEMAND.md` in rule-dir cleanup (#1675)** — the generated
+  on-demand index is now guarded from pruning, symmetric with `RULES-INDEX.md`.
+- **Cockpit executor enrollment hardening (#1669, #1670, #1671)** — the executor
+  binds to `0.0.0.0` in `cockpit-up` so Docker agents can enroll; the vsock CID
+  registry auto-heals before executor start (agentic-sandbox #595); longer
+  session-ready wait with all-tier executor wiring; interactive attach retries
+  through the PTY-readiness window; the attach URL is built from the instance id
+  rather than the resolved agent name.
+- **Cockpit session-list robustness** — session lists are de-duplicated by id
+  (executor double-registration), ws error/close handling is de-duplicated and a
+  keyframe is requested on re-attach, unique instance names per launch avoid
+  docker/VM agent-id collisions, and stale stopped-Docker rows are destroyable.
+
+### Documentation
+
+- Reconciled `docs/how-it-works.md` rule-loading sections with the tiered model:
+  always-loaded = CRITICAL/HIGH (inlined); on-demand = MEDIUM/LOW (indexed in
+  `RULES-ONDEMAND.md`, fetched via `aiwg show rule <name>`).
+
+## [2026.6.12] - 2026-06-28 - "Cockpit VM sessions over vsock"
+
+Validates the Cockpit live VM session path end to end against the
+agentic-sandbox vsock transport line, adds a launcher that brings the executor
+and Cockpit up together, hardens stale-instance handling, and fixes two
+artifact-index edge cases.
+
+### Added
+
+- **`cockpit-up` launcher (#1657)** — `npm run cockpit:up` (and
+  `apps/cockpit/scripts/cockpit-up.sh`) ensures both halves of the stack are
+  running: it health-checks the agentic-sandbox executor, starts the latest
+  sandbox via its `management/dev.sh` if it is down, then brings up the Cockpit
+  Bridge and web UI. `--rebuild` forces a fresh web build.
+- **`acquire → induct-media` handoff contract (media-curator, research)** — the
+  media-curator acquisition flow now emits an explicit, validated handoff to the
+  research `induct-media` step so acquired media flows into the research corpus
+  without a manual bridge.
+
+### Fixed
+
+- **Cockpit live VM sessions validated over vsock (#561, #1659)** — re-ran the
+  Cockpit live matrix against the agentic-sandbox vsock transport line
+  (`v2026.6.31`–`v2026.6.34`). The VM target now provisions, enrolls over vsock,
+  reaches boot-ready, runs the provider workload, and tears down cleanly — the
+  path that previously hung at `bootstrap-pending`. Evidence:
+  `.aiwg/testing/cockpit-vm-vsock-2026-06-27.md/.json`.
+- **Cockpit treats a stale destroy 404 as already-gone (#1660)** — destroying an
+  instance the executor has already reaped no longer surfaces a raw 404; the
+  Bridge maps it to an `already_gone` result and refreshes inventory.
+- **Artifact index: prefer canonical agents over persona mirrors** — index
+  builds now resolve the canonical agent definition rather than a persona mirror
+  when both exist, preventing duplicate/incorrect agent records.
+- **Artifact index: handle missing graphs in `index build` all-graph mode** — a
+  missing graph no longer aborts an all-graph index build.
+
+### Documentation
+
+- Refreshed the Cockpit README agentic-sandbox compatibility notes to record the
+  `v2026.6.34` container and VM matrix re-validation.
+- Added explicit `aiwg discover` triggers to the media-curator
+  `transcribe-media` skill.
+- Refreshed the deployed-agent count in `AGENTS.md` to 198.
+
 ## [2026.6.11] - 2026-06-23 - "Tiered provider-context bridge"
 
 Shrinks default agent startup context with a tiered provider-context model,
