@@ -87,6 +87,7 @@ import {
   reflectionsHandler,
   provenanceHandler,
   researchStoreHandler,
+  researchQueryHandler,
   chunkHandler,
   fanoutHandler,
   rlmPrepHandler,
@@ -109,6 +110,7 @@ import { installHandler } from './install.js';
 import { packagesHandler } from './packages.js';
 import { marketplaceHandler } from './marketplace.js';
 import { initHandler } from './init.js';
+import { setupHandler } from './setup.js';
 import { runHandler } from './run.js';
 import { stewardHandler, stewardHandlers } from './steward.js';
 import { serveHandler } from './serve.js';
@@ -145,6 +147,7 @@ export {
   packagesHandler,
   marketplaceHandler,
   initHandler,
+  setupHandler,
   issueHandler,
   issueAuditHandler,
   runHandler,
@@ -178,6 +181,7 @@ export {
   reflectionsHandler,
   provenanceHandler,
   researchStoreHandler,
+  researchQueryHandler,
   runtimeInfoHandler,
   agentcardHandler,
 
@@ -306,6 +310,7 @@ export const allHandlers: CommandHandler[] = [
   newBundleHandler,
   newProjectHandler,
   initHandler,
+  setupHandler,
   issueHandler,
   issueAuditHandler,
   runHandler,
@@ -393,6 +398,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Research subsystem (#934, #968)
   researchStoreHandler,
+  researchQueryHandler,
 
   // Agentic Tools (RLM support tools)
   chunkHandler,

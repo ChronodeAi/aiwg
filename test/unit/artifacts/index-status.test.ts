@@ -38,18 +38,20 @@ describe('collectIndexStatus (#1624)', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('enumerates the three built-in graphs and flags missing durable indices', () => {
+  it('enumerates the built-in graphs and flags missing durable indices', () => {
     const report = collectIndexStatus(tmp);
     const names = report.graphs.map((g) => g.name).sort();
-    expect(names).toEqual(['codebase', 'framework', 'project']);
+    expect(names).toEqual(['codebase', 'framework', 'project', 'source', 'user']);
     // Nothing built in a fresh workspace.
     expect(report.summary.built).toBe(0);
     // project + codebase opt into default builds → flagged missing; framework
-    // does not (defaultBuild:false) → not flagged.
+    // source/user/framework do not (defaultBuild:false) → not flagged.
     const byName = Object.fromEntries(report.graphs.map((g) => [g.name, g]));
     expect(byName.project.missing).toBe(true);
     expect(byName.codebase.missing).toBe(true);
     expect(byName.framework.missing).toBe(false);
+    expect(byName.source.missing).toBe(false);
+    expect(byName.user.missing).toBe(false);
     expect(byName.project.origin).toBe('builtin');
   });
 
@@ -102,6 +104,14 @@ describe('collectIndexStatus (#1624)', () => {
     const report = collectIndexStatus(tmp);
     expect(report.orphanIndexDirs.some((d) => d.endsWith('ghost-graph'))).toBe(true);
     expect(report.summary.orphans).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not flag the managed Fortemi Core cache namespace as an orphan', () => {
+    const fortemiCache = path.join(tmp, '.aiwg', '.index', 'fortemi-core', 'project');
+    fs.mkdirSync(fortemiCache, { recursive: true });
+    const report = collectIndexStatus(tmp);
+    expect(report.orphanIndexDirs.some((d) => d.includes('fortemi-core'))).toBe(false);
+    expect(report.summary.orphans).toBe(0);
   });
 
   it('registers a valid operator graph and does not flag it as orphan', () => {

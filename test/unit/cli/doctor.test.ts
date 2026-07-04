@@ -291,6 +291,34 @@ describe('doctor: .gitignore check', () => {
   });
 });
 
+describe('doctor: durable index findings (#1691)', () => {
+  it('imports collectIndexStatus and reports durable-index drift through doctor', async () => {
+    const { readFileSync } = await import('fs');
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain('collectIndexStatus');
+    expect(content).toContain("'durable-indices'");
+    expect(content).toContain('graph-config problem(s) previously dropped silently');
+    expect(content).toContain('on-disk index dir(s) match no registered graph');
+    expect(content).toContain('registered durable index(es) not built');
+    expect(content).toContain('run "aiwg index status"');
+    expect(content).toContain('run "aiwg index build --all"');
+  });
+});
+
+describe('doctor: Fortemi Core prebuilt index findings (#1697)', () => {
+  it('reports packaged prebuilt framework index readiness and stale states', async () => {
+    const { readFileSync } = await import('fs');
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain('getFortemiCorePrebuiltStatus');
+    expect(content).toContain('getFortemiCoreSyncStatus');
+    expect(content).toContain('fortemi-core-index');
+    expect(content).toContain('prebuilt framework index present');
+    expect(content).toContain('run "npm run release:fortemi-index" before release packaging');
+  });
+});
+
 // ── Provider awareness (regression: doctor defaults to Claude Code) ──
 //
 // Bug report: `aiwg doctor` is hardcoded to .claude/agents and .claude/commands,
@@ -310,6 +338,16 @@ describe('doctor: provider awareness (regression)', () => {
     const hasProviderFlag = /--provider|providerArg|argv\.provider/.test(content);
     const importsProviderRegistry = /providers\/index\.mjs|loadProvider|getProvider/.test(content);
     expect(hasProviderFlag || importsProviderRegistry).toBe(true);
+  });
+
+  it('knows OpenHuman and validates optional Tier-2 harness stubs', async () => {
+    const { readFileSync } = await import('fs');
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toMatch(/openhuman:\s*'OpenHuman'/);
+    expect(content).toContain('checkOpenHumanHarnessTier2');
+    expect(content).toContain('OpenHuman Tier-2 harness');
+    expect(content).toContain("'agent', 'prompts'");
   });
 
   it('source script does not hardcode only .claude/ paths for agent/command checks', async () => {
@@ -435,5 +473,44 @@ describe('tools/cli/doctor.mjs — agent-def size ceiling (#1587)', () => {
     const ci = readFileSync(resolve(__dirname, '../../../.gitea/workflows/ci.yml'), 'utf-8');
     expect(pkg.scripts['lint:agent-sizes']).toBe('node tools/lint/agent-def-sizes.mjs');
     expect(ci).toContain('npm run lint:agent-sizes');
+  });
+});
+
+// ── Startup-context budget (#1673) ───────────────────────────
+
+describe('tools/cli/doctor.mjs — startup-context budget (#1673)', () => {
+  let content: string;
+  beforeEach(async () => {
+    const { readFileSync } = await import('fs');
+    content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  });
+
+  it('imports the shared startup-context scanner', () => {
+    expect(content).toContain('scanStartupContext');
+    expect(content).toContain("from '../lint/claude-context-inventory.mjs'");
+  });
+
+  it('defines and invokes a claude-only startup-context check', () => {
+    expect(content).toContain('async function checkStartupContextBudget');
+    expect(content).toContain('await checkStartupContextBudget(provName, label)');
+    // Claude-only guard
+    expect(content).toMatch(/checkStartupContextBudget[\s\S]*?if \(provName !== 'claude'\) return;/);
+  });
+
+  it('respects the --no-budget-check opt-out', () => {
+    // The call lives inside the existing `if (!noBudgetCheck)` block.
+    expect(content).toMatch(/if \(!noBudgetCheck\)[\s\S]*?checkStartupContextBudget/);
+  });
+
+  it('reports over/near budget as non-fatal warn, not a doctor-failing error', () => {
+    const fn = content.slice(
+      content.indexOf('async function checkStartupContextBudget'),
+      content.indexOf('async function loadProvider'),
+    );
+    expect(fn).toContain("'over'");
+    expect(fn).toContain("'warn'");
+    // Must not fail doctor (error => exit 1) for a structural over-budget.
+    expect(fn).not.toContain("'error'");
+    expect(fn).toContain('Startup Context');
   });
 });
