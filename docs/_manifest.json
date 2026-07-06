@@ -30,6 +30,7 @@
     "welcome",
     "getting-started",
     "getting-started/start-here",
+    "agentic-install-runbook",
     "getting-started/language-map",
     "getting-started/first-success-ask-steward",
     "getting-started/first-success-find-capability",
@@ -72,6 +73,8 @@
     "reference",
     "CLI_USAGE",
     "cli-reference",
+    "fortemi-core-prebuilt-indices",
+    "user-level-indices",
     "local-issues",
     "ralph-guide",
     "simple-language-translations",
@@ -116,6 +119,7 @@
     "contributing/testing-requirements",
     "contributing/publishing-blog-posts",
     "blog",
+    "blog/2026-6-aiwg-june-2026-report",
     "blog/2026-6-aiwg-cockpit-desktop-control-plane",
     "blog/2026-6-aiwg-2026-6-0",
     "blog/2026-5-how-aiwg-builds-your-system-prompt",
@@ -428,6 +432,13 @@
       "parent": "getting-started"
     },
     {
+      "id": "agentic-install-runbook",
+      "title": "Agentic Install Runbook",
+      "summary": "Canonical zero-to-running setup path for agents and stewards",
+      "file": "agentic-install-runbook.md",
+      "parent": "getting-started"
+    },
+    {
       "id": "getting-started/language-map",
       "title": "Beginner Language Map",
       "summary": "Translate plain-language goals into AIWG discovery paths",
@@ -715,6 +726,20 @@
       "title": "All Commands",
       "summary": "Every aiwg command with examples",
       "file": "cli-reference.md",
+      "parent": "reference"
+    },
+    {
+      "id": "fortemi-core-prebuilt-indices",
+      "title": "Fortemi Core Prebuilt Indices",
+      "summary": "Packaged Fortemi Core framework index artifacts and release gates",
+      "file": "fortemi-core-prebuilt-indices.md",
+      "parent": "reference"
+    },
+    {
+      "id": "user-level-indices",
+      "title": "User-Level Indices",
+      "summary": "Shared user-level capability and corpus indices",
+      "file": "user-level-indices.md",
       "parent": "reference"
     },
     {
@@ -1014,6 +1039,13 @@
       "title": "Blog",
       "summary": "AIWG engineering blog",
       "collapsed": true
+    },
+    {
+      "id": "blog/2026-6-aiwg-june-2026-report",
+      "title": "AIWG — June 2026 Report",
+      "summary": "A month-end report covering Cockpit, OpenHuman support, plain-words search, media research notes, and leaner startup context.",
+      "file": "blog/2026-6-aiwg-june-2026-report.md",
+      "parent": "blog"
     },
     {
       "id": "blog/2026-6-aiwg-cockpit-desktop-control-plane",

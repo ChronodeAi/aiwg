@@ -32,8 +32,11 @@ A typical fork-based customization has three kinds of changes:
 | New CLI commands | **No** — extend AIWG itself |
 | Build / deploy pipeline changes | **No** |
 
-The first four categories are exactly what `.aiwg/{extensions,addons,frameworks,plugins}/<name>/`
-bundles are for. The last three need the fork.
+The first four categories are exactly what `.aiwg/{extensions,addons,frameworks}/<name>/`
+content bundles are for. Use `.aiwg/plugins/<name>/` only when wrapping one
+of those bundles for marketplace delivery, and `.aiwg/providers/<name>/`
+when you need a custom provider selector that reuses an existing adapter.
+The last three need the fork.
 
 You can mix: keep the fork for AIWG core changes, **and** use
 project-local bundles in your repo for everything else. The two compose

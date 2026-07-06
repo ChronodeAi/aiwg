@@ -31,7 +31,7 @@ Schema per entry: purpose, when to use, when not to use, curated discovery phras
 - When not to use: A direct CLI command or loaded skill already handles the work.
 - Curated discovery phrases: `aiwg discover "agent for <task>"`; `aiwg discover "<domain> specialist agent"`; `aiwg discover "review <artifact> agent"`
 - Deep-load target: `aiwg show agent <name>` after discovery selects the exact item.
-- Deployed summary: 194 recorded; examples: Accessibility Checker, Accessibility Specialist, Acquisition Manager, AgentSmith, AI/ML Engineer, +189 more.
+- Deployed summary: 198 recorded; examples: Accessibility Checker, Accessibility Specialist, Acquisition Manager, AgentSmith, AI/ML Engineer, +193 more.
 - Verification cue: Selected agent name and scope match the user request before delegation.
 
 ### Rules
@@ -41,7 +41,7 @@ Schema per entry: purpose, when to use, when not to use, curated discovery phras
 - When not to use: The user asks for broad framework discovery rather than a specific guardrail.
 - Curated discovery phrases: `aiwg discover "rule for <constraint>"`; `aiwg discover "<provider> routing rule"`; `aiwg discover "context budget rule"`
 - Deep-load target: `aiwg show rule <name>` after discovery selects the exact item.
-- Deployed summary: 58 recorded; examples: RULES-INDEX, activity-log, agent-deployment, api-abi-stability, auto-compact-continue, +53 more.
+- Deployed summary: 0 recorded; examples: none deployed.
 - Verification cue: The applied rule is named and the action taken conforms to it.
 
 ### Skills

@@ -12,9 +12,14 @@
 import { readFile, writeFile, mkdir, access, readdir, rename, unlink } from 'fs/promises';
 import { createHash, randomBytes } from 'crypto';
 import { resolve, join, isAbsolute } from 'path';
-import { homedir } from 'os';
 import type { ProjectLocalType } from '../extensions/manifest.js';
 import { normalizeNamedCaptures } from '../artifacts/index-builder.js';
+import {
+  getProviderDefinition,
+  PROVIDER_IDS,
+  resolveProviderPathValue,
+} from '../providers/provider-definitions.js';
+import type { Platform } from '../agents/types.js';
 
 const CONFIG_FILENAME = 'aiwg.config';
 const AIWG_DIR = '.aiwg';
@@ -40,7 +45,7 @@ export interface InstalledEntry {
    * Source of the deployment:
    *   "bundled"       — came from the npm package
    *   "cache"         — came from ~/.cache/aiwg/packages/ (#557)
-   *   "project-local" — came from .aiwg/{extensions,addons,frameworks,plugins}/<id>/ (#1035)
+   *   "project-local" — came from .aiwg/{extensions,addons,frameworks,plugins,providers}/<id>/ (#1035)
    *   git URL         — direct source URL
    */
   source: 'bundled' | 'cache' | 'project-local' | string;
@@ -199,6 +204,12 @@ export interface AiwgConfig {
   index?: IndexConfig;
 
   /**
+   * User/global index shorthand. `indices.user.roots.<name>.path` declares a
+   * shared user-level graph available from any project.
+   */
+  indices?: UserIndicesConfig;
+
+  /**
    * Research-complete framework settings — corpus root for the research
    * corpus (references/citations/radar/profiles under `<corpusRoot>/documentation/`).
    * @implements #1497
@@ -210,6 +221,13 @@ export interface AiwgConfig {
    * @implements #1614
    */
   command_log?: CommandLogConfig;
+
+  /**
+   * Project build policy. Large build workflows consult this before expensive
+   * package installs, TypeScript compilation, or web bundle generation.
+   * @implements #1692
+   */
+  build?: BuildConfig;
 }
 
 /** Research-complete framework settings (#1497). */
@@ -226,6 +244,35 @@ export interface CommandLogConfig {
   scopes?: Array<'project' | 'global'>;
   /** Maximum bytes per JSONL store before rotation to `.1`. */
   max_bytes?: number;
+}
+
+/** Large-build host resource preflight mode (#1692). */
+export type BuildResourcePreflightMode = 'auto_detect' | 'configured';
+
+/** Explicit host resource thresholds for large builds (#1692). */
+export interface BuildResourceRequirements {
+  min_memory_gb?: number;
+  min_free_disk_gb?: number;
+  min_cpus?: number;
+  min_swap_gb?: number;
+}
+
+/** Cheap host-resource preflight run before expensive build commands (#1692). */
+export interface BuildResourcePreflightConfig {
+  /** Enable preflight checks for project build scripts. Defaults to false when absent. */
+  enabled?: boolean;
+  /**
+   * `configured` checks only explicit requirements. `auto_detect` fills omitted
+   * requirements with conservative defaults before checking the host.
+   */
+  mode?: BuildResourcePreflightMode;
+  /** Project-specific minimum host resources. */
+  requirements?: BuildResourceRequirements;
+}
+
+/** Project build policy block (#1692). */
+export interface BuildConfig {
+  resource_preflight?: BuildResourcePreflightConfig;
 }
 
 /**
@@ -475,6 +522,20 @@ export function resolveParallelism(
  */
 export interface IndexConfig {
   graphs?: Record<string, IndexGraphDef | IndexMarkdownIndices>;
+  userIndices?: {
+    enabled?: boolean;
+  };
+}
+
+export interface UserIndicesConfig {
+  user?: {
+    enabled?: boolean;
+    roots?: Record<string, {
+      path: string;
+      backend?: 'local' | 'fortemi-core';
+      extensions?: string[];
+    }>;
+  };
 }
 
 /** A JSON node/edge index graph def. Mirrors GraphConfig (src/artifacts/types.ts). */
@@ -719,14 +780,8 @@ export function resolveRemotes(remotes: RemotesConfig | undefined): ResolvedRemo
   };
 }
 
-/**
- * Valid provider names (mirrors PROVIDER_PATHS in use.ts)
- */
-export const VALID_PROVIDERS = [
-  'claude', 'factory', 'codex', 'opencode', 'copilot',
-  'cursor', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman',
-] as const;
-export type Provider = typeof VALID_PROVIDERS[number];
+export const VALID_PROVIDERS = PROVIDER_IDS.filter((provider) => provider !== 'generic');
+export type Provider = Exclude<Platform, 'generic'>;
 
 /**
  * Empty config template.
@@ -962,22 +1017,19 @@ export async function hashManifest(manifestPath: string): Promise<string | undef
   }
 }
 
-/**
- * Provider → relative deployment directories (project-relative unless absolute).
- * Mirrors PROVIDER_PATHS in use.ts; kept here to avoid circular imports.
- */
-const PROVIDER_DEPLOY_DIRS: Record<string, { agents: string; skills: string; commands: string; rules: string }> = {
-  claude:   { agents: '.claude/agents',       skills: '.claude/.aiwg/skills', commands: '.claude/commands',    rules: '.claude/rules'          },
-  copilot:  { agents: '.github/agents',       skills: '.github/.aiwg/skills', commands: '.github/commands',   rules: '.github/copilot-rules'   },
-  cursor:   { agents: '.cursor/agents',       skills: '.cursor/.aiwg/skills', commands: '.cursor/commands',    rules: '.cursor/rules'           },
-  opencode: { agents: '.opencode/agent',      skills: '.opencode/.aiwg/skill', commands: '.opencode/command',  rules: '.opencode/rule'           },
-  warp:     { agents: '.warp/agents',         skills: '.warp/.aiwg/skills',   commands: '.warp/commands',      rules: '.warp/rules'             },
-  windsurf: { agents: '.windsurf/agents',     skills: '.windsurf/.aiwg/skills', commands: '.windsurf/workflows', rules: '.windsurf/rules'       },
-  factory:  { agents: '.factory/droids',      skills: '.factory/.aiwg/skills', commands: '.factory/commands',   rules: '.factory/rules'          },
-  codex:    { agents: '.codex/agents',        skills: '.codex/.aiwg/skills',  commands: '.codex/commands',     rules: '.codex/rules'            },
-  hermes:   { agents: '',                     skills: join(homedir(), '.hermes', '.aiwg', 'skills'), commands: '',  rules: ''                    },
-  openclaw: { agents: join(homedir(), '.openclaw', 'agents'), skills: join(homedir(), '.openclaw', '.aiwg', 'skills'), commands: join(homedir(), '.openclaw', 'commands'), rules: join(homedir(), '.openclaw', 'rules') },
-};
+function getProviderDeployDirs(
+  provider: string,
+  projectDir: string,
+): { agents: string; skills: string; commands: string; rules: string } | null {
+  const artifacts = getProviderDefinition(provider)?.paths.artifacts;
+  if (!artifacts) return null;
+  return {
+    agents: resolveProviderPathValue(artifacts.agents, projectDir),
+    skills: resolveProviderPathValue(artifacts.skills, projectDir),
+    commands: resolveProviderPathValue(artifacts.commands, projectDir),
+    rules: resolveProviderPathValue(artifacts.rules, projectDir),
+  };
+}
 
 /**
  * Count .md files or subdirectories in a deployment directory.
@@ -1018,7 +1070,7 @@ export async function populateDeployedTo(
   if (entriesNeedingPopulation.length === 0) return config;
 
   for (const provider of config.providers) {
-    const dirs = PROVIDER_DEPLOY_DIRS[provider];
+    const dirs = getProviderDeployDirs(provider, projectDir);
     if (!dirs) continue;
 
     const counts: DeployedArtifactCounts = {

@@ -18,22 +18,95 @@
  */
 
 import type { GraphType } from './types.js';
-import { GRAPH_CONFIGS, loadUserGraphConfigs } from './types.js';
+import { GRAPH_CONFIGS, loadUserGraphConfigs, loadGlobalGraphConfigs } from './types.js';
 import { SUPPORTED_VIEWS } from './corpus-views/renderers.js';
 
 /** Parse --graph flag from args, returns undefined for "all graphs" */
 function parseGraphFlag(args: string[]): GraphType | undefined {
   const idx = args.indexOf('--graph');
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
+  if (idx === -1) return undefined;
+  if (idx + 1 >= args.length || args[idx + 1].startsWith('--')) {
+    console.error('Error: --graph requires a graph name');
+    process.exit(1);
+  }
   const val = args[idx + 1];
   // Load user-defined graphs so validation is complete
   loadUserGraphConfigs(process.cwd());
+  loadGlobalGraphConfigs();
   if (val in GRAPH_CONFIGS) return val;
   // Corpus markdown views (#1490) are valid --graph targets for `index build`.
   if ((SUPPORTED_VIEWS as readonly string[]).includes(val)) return val;
   const validNames = [...Object.keys(GRAPH_CONFIGS), ...SUPPORTED_VIEWS].join(', ');
   console.error(`Error: Invalid graph type '${val}'. Valid: ${validNames}`);
   process.exit(1);
+}
+
+function parseBackendFlag(args: string[]): 'local' | 'fortemi-core' | undefined {
+  const idx = args.indexOf('--backend');
+  if (idx === -1) return undefined;
+  const value = args[idx + 1];
+  if (value === 'local' || value === 'fortemi-core') return value;
+  console.error('Error: --backend must be local or fortemi-core');
+  process.exit(1);
+}
+
+function parseSearchBackendFlag(args: string[]): 'local' | 'fortemi-core' {
+  return parseBackendFlag(args) ?? 'fortemi-core';
+}
+
+function firstPositionalArg(args: string[], valueFlags: string[]): string | undefined {
+  const skip = new Set<number>();
+  for (let i = 0; i < args.length; i++) {
+    if (valueFlags.includes(args[i]) && i + 1 < args.length) skip.add(i + 1);
+  }
+  return args.find((arg, index) => !arg.startsWith('--') && !skip.has(index));
+}
+
+function parseDirectionFlag<T extends string>(
+  args: string[],
+  allowed: readonly T[],
+  defaultValue: T,
+  label: string,
+): T {
+  const idx = args.indexOf('--direction');
+  if (idx === -1) return defaultValue;
+  const value = args[idx + 1];
+  if (allowed.includes(value as T)) return value as T;
+  console.error(`Error: --direction must be ${label}`);
+  process.exit(1);
+}
+
+function parseFlagValue(args: string[], flag: string, errorMessage: string): string | undefined {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return undefined;
+  const value = args[idx + 1];
+  if (!value || value.startsWith('--')) {
+    console.error(errorMessage);
+    process.exit(1);
+  }
+  return value;
+}
+
+function parsePositiveIntegerFlag(args: string[], flag: string, defaultValue: number, errorMessage: string): number {
+  const value = parseFlagValue(args, flag, errorMessage);
+  if (value === undefined) return defaultValue;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || String(parsed) !== value) {
+    console.error(errorMessage);
+    process.exit(1);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveIntegerFlag(args: string[], flag: string, errorMessage: string): number | undefined {
+  const value = parseFlagValue(args, flag, errorMessage);
+  if (value === undefined) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || String(parsed) !== value) {
+    console.error(errorMessage);
+    process.exit(1);
+  }
+  return parsed;
 }
 
 /**
@@ -70,6 +143,14 @@ export async function main(args: string[]): Promise<void> {
 
     case 'export':
       await handleExport(subcommandArgs);
+      break;
+
+    case 'sync':
+      await handleSync(subcommandArgs);
+      break;
+
+    case 'migrate-legacy':
+      await handleMigrateLegacy(subcommandArgs);
       break;
 
     case 'deps':
@@ -136,7 +217,7 @@ export async function main(args: string[]): Promise<void> {
 
     default:
       console.error(`Error: Unknown index subcommand '${subcommand}'`);
-      console.log('Available: build, query, discover, show, export, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, watch');
+      console.log('Available: build, query, discover, show, export, sync, migrate-legacy, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, watch');
       process.exit(1);
   }
 }
@@ -150,6 +231,8 @@ function printIndexUsage(): void {
   console.log('  discover   Capability search across skills/agents/commands/rules (#1214)');
   console.log('  show       Print the full text of a specific skill/agent/command/rule');
   console.log('  export     Export a browser-consumable index contract');
+  console.log('  sync       Materialize the Fortemi Core static index cache');
+  console.log('  migrate-legacy  Move legacy root indexes into graph sidecar indexes');
   console.log('  deps       Show artifact dependency graph');
   console.log('  stats      Show index statistics');
   console.log('  status     Enumerate the index-graph registry (freshness + drift); alias: list');
@@ -161,7 +244,7 @@ function printIndexUsage(): void {
   console.log('  watch      Start a filesystem watcher for automatic incremental index updates');
   console.log('');
   console.log('Options:');
-  console.log('  --graph <name>  Target a specific graph (framework, project, codebase, or user-defined)');
+  console.log('  --graph <name>  Target a specific graph (framework, project, codebase, source, user, or user-defined)');
   console.log('  --all           Build all known graphs (including user-defined)');
   console.log('');
   console.log('Examples:');
@@ -173,8 +256,10 @@ function printIndexUsage(): void {
   console.log('  aiwg index discover "audit security" --type skill');
   console.log('  aiwg index show skill intake-wizard');
   console.log('  aiwg index show skill flow-deploy-to-production --json');
+  console.log('  aiwg index show metadata aiwg:skill:4840fa441622f676 --json');
   console.log('  aiwg index show agent aiwg-steward');
   console.log('  aiwg index export --format fortemi --graph project --out aiwg-fortemi-index.json');
+  console.log('  aiwg index migrate-legacy --scope project --dry-run');
   console.log('  aiwg index query "authentication" --type use-case');
   console.log('  aiwg index query "security rules" --graph framework --json');
   console.log('  aiwg index query "mixture of experts" --fulltext --graph papers   # body text, BM25');
@@ -288,8 +373,8 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('  --scope <dir>    Limit scan to a specific subdirectory');
     console.log('  --graph <name>   Build a specific graph only (built-in or user-defined)');
     console.log('');
-    console.log('Built-in graph names: project, codebase, framework');
-    console.log('User-defined graphs: configure under index.graphs in .aiwg/config.yaml');
+    console.log('Built-in graph names: project, codebase, source, user, framework');
+    console.log('User-defined graphs: configure under index.graphs in .aiwg/aiwg.config');
     console.log('');
     console.log('Default behavior (no --graph): builds all graphs with defaultBuild: true');
     console.log('  Built-in defaults: project (always), codebase (skipped if src/test/tools absent)');
@@ -298,6 +383,8 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('  aiwg index build');
     console.log('  aiwg index build --force');
     console.log('  aiwg index build --graph codebase --force');
+    console.log('  aiwg index build --graph source --force');
+    console.log('  aiwg index build --graph user --force');
     console.log('  aiwg index build --graph references            # user-defined graph');
     console.log('  aiwg index build --scope documentation/references');
     console.log('  aiwg index build --all');
@@ -324,6 +411,7 @@ async function handleBuild(args: string[]): Promise<void> {
 
   // Load user-defined graphs
   loadUserGraphConfigs(cwd);
+  loadGlobalGraphConfigs();
 
   let jsonBuilt = false;
   if (graph) {
@@ -426,24 +514,15 @@ async function handleQuery(args: string[]): Promise<void> {
   const json = flags.includes('--json');
   const fulltext = flags.includes('--fulltext');
 
-  // Parse filter flags
-  let type: string | undefined;
-  let phase: string | undefined;
-  let tags: string | undefined;
-  let updatedAfter: string | undefined;
-  let limit: number | undefined;
-  let pathPattern: string | undefined;
-
-  for (let i = 0; i < flags.length; i++) {
-    if (flags[i] === '--type' && i + 1 < flags.length) { type = flags[++i]; }
-    else if (flags[i] === '--phase' && i + 1 < flags.length) { phase = flags[++i]; }
-    else if (flags[i] === '--tags' && i + 1 < flags.length) { tags = flags[++i]; }
-    else if (flags[i] === '--updated-after' && i + 1 < flags.length) { updatedAfter = flags[++i]; }
-    else if (flags[i] === '--limit' && i + 1 < flags.length) { limit = parseInt(flags[++i], 10); }
-    else if (flags[i] === '--path' && i + 1 < flags.length) { pathPattern = flags[++i]; }
-  }
+  const type = parseFlagValue(flags, '--type', 'Error: --type requires a value');
+  const phase = parseFlagValue(flags, '--phase', 'Error: --phase requires a value');
+  const tags = parseFlagValue(flags, '--tags', 'Error: --tags requires a value');
+  const updatedAfter = parseFlagValue(flags, '--updated-after', 'Error: --updated-after requires a value');
+  const limit = parseOptionalPositiveIntegerFlag(flags, '--limit', 'Error: --limit must be a positive integer');
+  const pathPattern = parseFlagValue(flags, '--path', 'Error: --path requires a value');
 
   const graph = parseGraphFlag(flags);
+  const backend = parseSearchBackendFlag(flags);
 
   // --semantic (#1493): conceptual similarity via the embedding index.
   if (flags.includes('--semantic')) {
@@ -451,20 +530,46 @@ async function handleQuery(args: string[]): Promise<void> {
       console.error('Error: --semantic requires a query string.');
       process.exit(1);
     }
-    await runSemanticQuery(cwd, text, graph, limit ?? 10, json);
+    await runSemanticQuery(cwd, text, graph, limit ?? 10, json, backend);
     return;
   }
 
-  await queryIndex(cwd, {
-    text,
-    type,
-    phase,
-    tags: tags?.split(','),
-    updatedAfter,
-    limit,
-    path: pathPattern,
-    fulltext,
-  }, { json, graph });
+  if (flags.includes('--hybrid')) {
+    if (!text) {
+      console.error('Error: --hybrid requires a query string.');
+      process.exit(1);
+    }
+    await runHybridQuery(
+      cwd,
+      {
+        text,
+        graph,
+        limit: limit ?? 10,
+        path: pathPattern,
+        type,
+        phase,
+        tags: tags?.split(','),
+      },
+      json,
+      backend,
+    );
+    return;
+  }
+
+  await queryIndex(
+    cwd,
+    {
+      text,
+      type,
+      phase,
+      tags: tags?.split(','),
+      updatedAfter,
+      limit,
+      path: pathPattern,
+      fulltext,
+    },
+    { json, graph, backend },
+  );
 }
 
 /** Resolve the embedding index dir for a graph, or null if deps/index absent (with guidance printed). */
@@ -494,19 +599,88 @@ async function runSemanticQuery(
   graph: GraphType | undefined,
   topK: number,
   json: boolean,
+  backend: 'local' | 'fortemi-core' | undefined,
 ): Promise<void> {
+  if (backend === 'fortemi-core') {
+    const { queryFortemiCoreStaticSemanticIndex } = await import('./fortemi-core-query-adapter.js');
+    const queried = queryFortemiCoreStaticSemanticIndex(cwd, {
+      graph,
+      text,
+      limit: topK,
+    });
+    if (queried.reason) {
+      if (json) {
+        console.log(
+          JSON.stringify(
+            {
+              query: { text, backend: 'fortemi-core' },
+              mode: 'semantic',
+              graph: graph ?? null,
+              results: [],
+              total: 0,
+              hint: queried.reason,
+            },
+            null,
+            2,
+          ),
+        );
+      } else {
+        console.error(`Error: ${queried.reason}`);
+      }
+      process.exit(1);
+    }
+    if (json) {
+      console.log(
+        JSON.stringify(
+          {
+            query: { text, backend: 'fortemi-core' },
+            mode: 'semantic',
+            graph: graph ?? null,
+            results: queried.results,
+            total: queried.results.length,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    console.log(`Fortemi Core static semantic results for "${text}" (${queried.results.length}):`);
+    console.log('');
+    for (let i = 0; i < queried.results.length; i++) {
+      const r = queried.results[i];
+      console.log(`  ${String(i + 1).padStart(3)}  ${r.score.toFixed(3)}  ${r.path}  ${r.title}`);
+    }
+    return;
+  }
+
   const dir = await requireEmbeddingIndex(cwd, graph);
   if (!dir) process.exit(1);
   const { semanticQuery } = await import('./embedding-index.js');
   const { loadGraphIndexFile } = await import('./index-reader.js');
-  const index = loadGraphIndexFile<{ entries: Record<string, { type: string; phase: string; title: string; summary: string }> }>(cwd, 'metadata.json', graph);
+  const index = loadGraphIndexFile<{
+    entries: Record<string, { type: string; phase: string; title: string; summary: string }>;
+  }>(cwd, 'metadata.json', graph);
   const results = await semanticQuery(text, dir!, topK);
   if (json) {
-    console.log(JSON.stringify({
-      query: { text }, mode: 'semantic', graph: graph ?? null,
-      results: results.map((r) => ({ path: r.nodeId, score: Math.round(r.score * 100) / 100, title: index?.entries[r.nodeId]?.title, summary: index?.entries[r.nodeId]?.summary })),
-      total: results.length,
-    }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          query: { text },
+          mode: 'semantic',
+          graph: graph ?? null,
+          results: results.map((r) => ({
+            path: r.nodeId,
+            score: Math.round(r.score * 100) / 100,
+            title: index?.entries[r.nodeId]?.title,
+            summary: index?.entries[r.nodeId]?.summary,
+          })),
+          total: results.length,
+        },
+        null,
+        2,
+      ),
+    );
     return;
   }
   console.log(`Semantic results for "${text}" (${results.length}):`);
@@ -515,6 +689,77 @@ async function runSemanticQuery(
     const r = results[i];
     const title = index?.entries[r.nodeId]?.title ?? '';
     console.log(`  ${String(i + 1).padStart(3)}  ${r.score.toFixed(3)}  ${r.nodeId}${title ? `  ${title}` : ''}`);
+  }
+}
+
+interface HybridQueryOptions {
+  text: string;
+  graph: GraphType | undefined;
+  limit: number;
+  path?: string;
+  type?: string;
+  phase?: string;
+  tags?: string[];
+}
+
+/** `aiwg index query "..." --hybrid` — static semantic scoring plus filters/facets. */
+async function runHybridQuery(
+  cwd: string,
+  options: HybridQueryOptions,
+  json: boolean,
+  backend: 'local' | 'fortemi-core' | undefined,
+): Promise<void> {
+  if (backend !== 'fortemi-core') {
+    console.error('Error: --hybrid uses the Fortemi Core static contract by default. Remove --backend local or use local semantic/fulltext modes separately.');
+    process.exit(1);
+  }
+
+  const { queryFortemiCoreStaticHybridIndex } = await import('./fortemi-core-query-adapter.js');
+  const queried = queryFortemiCoreStaticHybridIndex(cwd, options);
+  if (queried.reason) {
+    if (json) {
+      console.log(
+        JSON.stringify(
+          {
+            query: { text: options.text, backend: 'fortemi-core' },
+            mode: 'hybrid',
+            graph: options.graph ?? null,
+            results: [],
+            total: 0,
+            hint: queried.reason,
+          },
+          null,
+          2,
+        ),
+      );
+    } else {
+      console.error(`Error: ${queried.reason}`);
+    }
+    process.exit(1);
+  }
+
+  if (json) {
+    console.log(
+      JSON.stringify(
+        {
+          query: { text: options.text, backend: 'fortemi-core' },
+          mode: 'hybrid',
+          graph: options.graph ?? null,
+          results: queried.results,
+          total: queried.results.length,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  console.log(`Fortemi Core static hybrid results for "${options.text}" (${queried.results.length}):`);
+  console.log('');
+  for (let i = 0; i < queried.results.length; i++) {
+    const r = queried.results[i];
+    console.log(`  ${String(i + 1).padStart(3)}  ${r.score.toFixed(3)}  ${r.path}  ${r.title}`);
   }
 }
 
@@ -608,6 +853,7 @@ async function handleExport(args: string[]): Promise<void> {
     console.log('  --out <path>           Write JSON to a file instead of stdout');
     console.log('  --repo <name>          Source repository label (default: cwd basename)');
     console.log('  --privacy <level>      private, sanitized, or public (default: private)');
+    console.log('  --schema-version <v>   Export contract version: v1 or v2 (default: v1)');
     console.log('  --generated-at <iso>   Override generated timestamp for deterministic fixtures');
     console.log('');
     console.log('Examples:');
@@ -616,26 +862,26 @@ async function handleExport(args: string[]): Promise<void> {
     return;
   }
 
-  const formatIdx = args.indexOf('--format');
-  const format = formatIdx !== -1 && formatIdx + 1 < args.length ? args[formatIdx + 1] : undefined;
+  const format = parseFlagValue(args, '--format', 'Error: index export requires --format fortemi');
   if (format !== 'fortemi') {
     console.error('Error: index export requires --format fortemi');
     process.exit(1);
   }
 
   const graph = parseGraphFlag(args);
-  const outIdx = args.indexOf('--out');
-  const out = outIdx !== -1 && outIdx + 1 < args.length ? args[outIdx + 1] : undefined;
-  const repoIdx = args.indexOf('--repo');
-  const repo = repoIdx !== -1 && repoIdx + 1 < args.length ? args[repoIdx + 1] : undefined;
-  const privacyIdx = args.indexOf('--privacy');
-  const privacy = privacyIdx !== -1 && privacyIdx + 1 < args.length ? args[privacyIdx + 1] : undefined;
+  const out = parseFlagValue(args, '--out', 'Error: --out requires a file path');
+  const repo = parseFlagValue(args, '--repo', 'Error: --repo requires a value');
+  const privacy = parseFlagValue(args, '--privacy', 'Error: --privacy must be private, sanitized, or public');
   if (privacy && !['private', 'sanitized', 'public'].includes(privacy)) {
     console.error('Error: --privacy must be private, sanitized, or public');
     process.exit(1);
   }
-  const generatedAtIdx = args.indexOf('--generated-at');
-  const generatedAt = generatedAtIdx !== -1 && generatedAtIdx + 1 < args.length ? args[generatedAtIdx + 1] : undefined;
+  const generatedAt = parseFlagValue(args, '--generated-at', 'Error: --generated-at requires an ISO timestamp value');
+  const schemaVersion = parseFlagValue(args, '--schema-version', 'Error: --schema-version must be v1 or v2');
+  if (schemaVersion && !['v1', 'v2'].includes(schemaVersion)) {
+    console.error('Error: --schema-version must be v1 or v2');
+    process.exit(1);
+  }
 
   const { buildAiwgFortemiIndexExport, writeAiwgFortemiIndexExport } = await import('./browser-export.js');
   try {
@@ -644,8 +890,144 @@ async function handleExport(args: string[]): Promise<void> {
       repo,
       privacy: privacy as 'private' | 'sanitized' | 'public' | undefined,
       generatedAt,
+      schemaVersion: schemaVersion as 'v1' | 'v2' | undefined,
     });
     writeAiwgFortemiIndexExport(exported, out);
+  } catch (err) {
+    console.error('Error: ' + (err instanceof Error ? err.message : String(err)));
+    process.exit(1);
+  }
+}
+
+/**
+ * Handle 'index sync' command
+ */
+async function handleSync(args: string[]): Promise<void> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: aiwg index sync [--backend fortemi-core] [options]');
+    console.log('');
+    console.log('Options:');
+    console.log('  --backend fortemi-core  Materialize the Fortemi Core static index cache (default)');
+    console.log('  --graph <name>          Graph to sync (default: project)');
+    console.log('  --repo <name>           Source repository label (default: cwd basename)');
+    console.log('  --privacy <level>       private, sanitized, or public (default: private)');
+    console.log('  --generated-at <iso>    Override generated timestamp for deterministic fixtures');
+    console.log('  --json                  Print the sync manifest as JSON');
+    return;
+  }
+
+  const backend = parseSearchBackendFlag(args);
+  if (backend !== 'fortemi-core') {
+    console.error('Error: index sync only supports the fortemi-core backend; omit --backend or pass --backend fortemi-core');
+    process.exit(1);
+  }
+
+  const graph = parseGraphFlag(args);
+  const repo = parseFlagValue(args, '--repo', 'Error: --repo requires a value');
+  const privacy = parseFlagValue(args, '--privacy', 'Error: --privacy must be private, sanitized, or public');
+  if (privacy && !['private', 'sanitized', 'public'].includes(privacy)) {
+    console.error('Error: --privacy must be private, sanitized, or public');
+    process.exit(1);
+  }
+  const generatedAt = parseFlagValue(args, '--generated-at', 'Error: --generated-at requires an ISO timestamp value');
+  const json = args.includes('--json');
+
+  const { syncFortemiCoreIndex } = await import('./fortemi-core-sync.js');
+  try {
+    const manifest = syncFortemiCoreIndex(process.cwd(), {
+      graph,
+      repo,
+      privacy: privacy as 'private' | 'sanitized' | 'public' | undefined,
+      generatedAt,
+    });
+    if (json) {
+      console.log(JSON.stringify(manifest, null, 2));
+      return;
+    }
+    console.log(`Fortemi Core ${manifest.status}: ${manifest.item_count} item(s) → ${manifest.export_path}`);
+  } catch (err) {
+    console.error('Error: ' + (err instanceof Error ? err.message : String(err)));
+    process.exit(1);
+  }
+}
+
+/**
+ * Handle 'index migrate-legacy' command.
+ */
+async function handleMigrateLegacy(args: string[]): Promise<void> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: aiwg index migrate-legacy [--scope project|user|global | --all] [options]');
+    console.log('');
+    console.log('Migrates compatible legacy root index files into graph sidecar index');
+    console.log('directories. Project scope moves .aiwg/.index/*.json to');
+    console.log('.aiwg/.index/project/*.json and refreshes the Fortemi Core static');
+    console.log('cache. User/global scopes report or migrate their corresponding');
+    console.log('sidecar locations without modifying packaged/prebuilt AIWG indexes.');
+    console.log('');
+    console.log('Options:');
+    console.log('  --scope <name>         Scope to migrate: project, user, or global (default: project)');
+    console.log('  --all                  Migrate project, user, and global scopes');
+    console.log('  --dry-run              Print planned changes without writing files');
+    console.log('  --no-fortemi-sync      Do not refresh the project Fortemi Core static cache');
+    console.log('  --generated-at <iso>   Override generated timestamp for deterministic fixtures');
+    console.log('  --json                 Print the migration report as JSON');
+    console.log('');
+    console.log('Examples:');
+    console.log('  aiwg index migrate-legacy --scope project --dry-run');
+    console.log('  aiwg index migrate-legacy --all --json');
+    return;
+  }
+
+  const all = args.includes('--all');
+  const scopeValue = parseFlagValue(args, '--scope', 'Error: --scope requires project, user, or global');
+  if (all && scopeValue) {
+    console.error('Error: pass either --all or --scope, not both');
+    process.exit(1);
+  }
+  const allowedScopes = ['project', 'user', 'global'] as const;
+  const scopes = all
+    ? [...allowedScopes]
+    : scopeValue
+      ? [scopeValue]
+      : ['project'];
+  const invalidScope = scopes.find((scope) => !allowedScopes.includes(scope as typeof allowedScopes[number]));
+  if (invalidScope) {
+    console.error('Error: --scope must be project, user, or global');
+    process.exit(1);
+  }
+
+  const generatedAt = parseFlagValue(args, '--generated-at', 'Error: --generated-at requires an ISO timestamp value');
+  const { migrateLegacyIndex } = await import('./legacy-index-migration.js');
+  try {
+    const report = migrateLegacyIndex(process.cwd(), {
+      scopes: scopes as Array<'project' | 'user' | 'global'>,
+      dryRun: args.includes('--dry-run'),
+      syncFortemi: !args.includes('--no-fortemi-sync'),
+      generatedAt,
+    });
+
+    if (args.includes('--json')) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(`Legacy index migration ${report.dryRun ? '(DRY RUN)' : 'complete'}`);
+    for (const result of report.results) {
+      const entries = result.entries === null ? 'unknown' : String(result.entries);
+      const detail = result.reason ? ` — ${result.reason}` : '';
+      console.log(`  ${result.scope}: ${result.status} (${entries} entries)${detail}`);
+      for (const file of result.files) {
+        console.log(`    ${file.name}: ${file.status}`);
+      }
+      if (result.fortemiCore) {
+        console.log(
+          `    fortemi-core: ${result.fortemiCore.status} (${result.fortemiCore.itemCount} item(s)) → ${result.fortemiCore.exportPath}`,
+        );
+      }
+    }
+    if (report.reportPath) {
+      console.log(`  report: ${report.reportPath}`);
+    }
   } catch (err) {
     console.error('Error: ' + (err instanceof Error ? err.message : String(err)));
     process.exit(1);
@@ -662,39 +1044,38 @@ async function handleDeps(args: string[]): Promise<void> {
   const cwd = process.cwd();
 
   // First non-flag arg is the artifact path
-  const artifactPath = args.find(a => !a.startsWith('--'));
+  const artifactPath = firstPositionalArg(args, ['--backend', '--direction', '--depth', '--edge-type', '--graph']);
   if (!artifactPath) {
     console.error('Error: Artifact path required');
-    console.log('Usage: aiwg index deps <path> [--direction upstream|downstream|both] [--depth N] [--json]');
+    console.log(
+      'Usage: aiwg index deps <path> [--direction upstream|downstream|both] [--depth N] [--json] [--backend fortemi-core|local]',
+    );
     process.exit(1);
   }
 
   const json = args.includes('--json');
 
-  let direction: 'upstream' | 'downstream' | 'both' = 'both';
-  const dirIdx = args.indexOf('--direction');
-  if (dirIdx !== -1 && dirIdx + 1 < args.length) {
-    const val = args[dirIdx + 1];
-    if (val === 'upstream' || val === 'downstream' || val === 'both') {
-      direction = val;
-    }
-  }
+  const direction = parseDirectionFlag(
+    args,
+    ['upstream', 'downstream', 'both'] as const,
+    'both',
+    'upstream, downstream, or both',
+  );
 
-  let depth = 3;
-  const depthIdx = args.indexOf('--depth');
-  if (depthIdx !== -1 && depthIdx + 1 < args.length) {
-    depth = parseInt(args[depthIdx + 1], 10);
-  }
-
-  let edgeType: string | undefined;
-  const etIdx = args.indexOf('--edge-type');
-  if (etIdx !== -1 && etIdx + 1 < args.length) {
-    edgeType = args[etIdx + 1];
-  }
+  const depth = parsePositiveIntegerFlag(args, '--depth', 3, 'Error: --depth must be a positive integer');
+  const edgeType = parseFlagValue(args, '--edge-type', 'Error: --edge-type requires a value');
 
   const graph = parseGraphFlag(args);
+  const backend = parseBackendFlag(args) ?? 'fortemi-core';
 
-  await showDeps(cwd, artifactPath, { direction, depth, json, graph, edgeType });
+  await showDeps(cwd, artifactPath, {
+    direction,
+    depth,
+    json,
+    graph,
+    edgeType,
+    backend,
+  });
 }
 
 /**
@@ -750,6 +1131,7 @@ async function handleNeighbors(args: string[]): Promise<void> {
     console.log('  --node <id>         Node path or REF-XXX identifier (required)');
     console.log('  --direction <dir>   in (upstream), out (downstream), or both (default: both)');
     console.log('  --edge-type <type>  Filter by edge type (e.g., "cites", "depends-on")');
+  console.log('  --backend <name>    fortemi-core or local legacy fallback (default: fortemi-core)');
     console.log('  --json              Output as JSON');
     console.log('');
     console.log('Examples:');
@@ -767,38 +1149,33 @@ async function handleNeighbors(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  let node: string | undefined;
-  const nodeIdx = args.indexOf('--node');
-  if (nodeIdx !== -1 && nodeIdx + 1 < args.length) {
-    node = args[nodeIdx + 1];
-  }
+  let node = parseFlagValue(
+    args,
+    '--node',
+    'Error: --node is required for neighbors command',
+  );
   if (!node) {
     // Try first positional arg
-    node = args.find(a => !a.startsWith('--') && args.indexOf(a) !== args.indexOf('--graph') + 1);
+    node = firstPositionalArg(args, ['--backend', '--direction', '--edge-type', '--graph', '--node']);
   }
   if (!node) {
     console.error('Error: --node is required for neighbors command');
     process.exit(1);
   }
 
-  let direction: 'in' | 'out' | 'both' = 'both';
-  const dirIdx = args.indexOf('--direction');
-  if (dirIdx !== -1 && dirIdx + 1 < args.length) {
-    const val = args[dirIdx + 1];
-    if (val === 'in' || val === 'out' || val === 'both') {
-      direction = val;
-    }
-  }
+  const direction = parseDirectionFlag(
+    args,
+    ['in', 'out', 'both'] as const,
+    'both',
+    'in, out, or both',
+  );
 
-  let edgeType: string | undefined;
-  const etIdx = args.indexOf('--edge-type');
-  if (etIdx !== -1 && etIdx + 1 < args.length) {
-    edgeType = args[etIdx + 1];
-  }
+  const edgeType = parseFlagValue(args, '--edge-type', 'Error: --edge-type requires a value');
 
   const json = args.includes('--json');
+  const backend = parseSearchBackendFlag(args);
 
-  await showNeighbors(cwd, { graph, node, direction, edgeType, json });
+  await showNeighbors(cwd, { graph, node, direction, edgeType, json, backend });
 }
 
 /**
@@ -822,14 +1199,19 @@ async function handleSetQuery(args: string[]): Promise<void> {
     console.log('  --node-b <id>       Second node (required)');
     console.log('  --direction <dir>   in (upstream) or out (downstream) (default: in)');
     console.log('  --edge-type <type>  Filter by edge type');
+  console.log('  --backend <name>    fortemi-core or local legacy fallback (default: fortemi-core)');
     console.log('  --json              Output as JSON');
     console.log('');
     console.log('Examples:');
     console.log('  # Papers that cited both REF-008 and REF-016');
-    console.log('  aiwg index set --graph citation-network --op intersection --node-a REF-008 --node-b REF-016 --direction in');
+    console.log(
+      '  aiwg index set --graph citation-network --op intersection --node-a REF-008 --node-b REF-016 --direction in',
+    );
     console.log('');
     console.log('  # Papers cited by REF-004 but not cited by REF-001');
-    console.log('  aiwg index set --graph citation-network --op difference --node-a REF-004 --node-b REF-001 --direction out');
+    console.log(
+      '  aiwg index set --graph citation-network --op difference --node-a REF-004 --node-b REF-001 --direction out',
+    );
     return;
   }
 
@@ -842,43 +1224,35 @@ async function handleSetQuery(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  let op: string | undefined;
-  const opIdx = args.indexOf('--op');
-  if (opIdx !== -1 && opIdx + 1 < args.length) {
-    op = args[opIdx + 1];
-  }
+  const op = parseFlagValue(
+    args,
+    '--op',
+    'Error: --op is required (intersection, union, difference)',
+  );
   if (!op || !['intersection', 'union', 'difference'].includes(op)) {
     console.error('Error: --op is required (intersection, union, difference)');
     process.exit(1);
   }
 
-  let nodeA: string | undefined;
-  const naIdx = args.indexOf('--node-a');
-  if (naIdx !== -1 && naIdx + 1 < args.length) nodeA = args[naIdx + 1];
-
-  let nodeB: string | undefined;
-  const nbIdx = args.indexOf('--node-b');
-  if (nbIdx !== -1 && nbIdx + 1 < args.length) nodeB = args[nbIdx + 1];
+  const nodeA = parseFlagValue(args, '--node-a', 'Error: --node-a and --node-b are required');
+  const nodeB = parseFlagValue(args, '--node-b', 'Error: --node-a and --node-b are required');
 
   if (!nodeA || !nodeB) {
     console.error('Error: --node-a and --node-b are required');
     process.exit(1);
   }
 
-  let direction: 'in' | 'out' = 'in';
-  const dirIdx = args.indexOf('--direction');
-  if (dirIdx !== -1 && dirIdx + 1 < args.length) {
-    const val = args[dirIdx + 1];
-    if (val === 'in' || val === 'out') direction = val;
-  }
+  const direction = parseDirectionFlag(
+    args,
+    ['in', 'out'] as const,
+    'in',
+    'in or out',
+  );
 
-  let edgeType: string | undefined;
-  const etIdx = args.indexOf('--edge-type');
-  if (etIdx !== -1 && etIdx + 1 < args.length) {
-    edgeType = args[etIdx + 1];
-  }
+  const edgeType = parseFlagValue(args, '--edge-type', 'Error: --edge-type requires a value');
 
   const json = args.includes('--json');
+  const backend = parseSearchBackendFlag(args);
 
   await executeSetQuery(cwd, {
     graph,
@@ -888,6 +1262,7 @@ async function handleSetQuery(args: string[]): Promise<void> {
     direction,
     edgeType,
     json,
+    backend,
   });
 }
 
@@ -923,41 +1298,49 @@ async function handleDiscover(args: string[]): Promise<void> {
   if (!phrase) {
     console.error('Error: aiwg index discover requires a search phrase');
     console.log('');
-    console.log('Usage: aiwg index discover "<phrase>" [--type <kinds>] [--limit N] [--json] [--graph <name>]');
+    console.log(
+      'Usage: aiwg index discover "<phrase>" [--type <kinds>] [--limit N] [--json|--format json|text] [--pretty|--compact] [--graph <name>] [--backend local|fortemi-core]',
+    );
     console.log('');
     console.log('Examples:');
     console.log('  aiwg index discover "create intake"');
     console.log('  aiwg index discover "deploy production" --limit 5');
     console.log('  aiwg index discover "audit security" --type skill,agent');
-    console.log('  aiwg index discover "intake" --json');
+    console.log('  aiwg index discover "intake" --format json --pretty');
     process.exit(1);
   }
 
-  // Parse flags
-  let typeFilter: string[] | undefined;
+  const typeValue = parseFlagValue(flags, '--type', 'Error: --type requires a value');
+  const typeFilter = typeValue
+    ?.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   // K=5 default — see query-engine.ts comment (#1218 Wave A).
-  let limit = 5;
-  let json = false;
-
-  for (let i = 0; i < flags.length; i++) {
-    if (flags[i] === '--type' && i + 1 < flags.length) {
-      typeFilter = flags[++i].split(',').map(s => s.trim()).filter(Boolean);
-    } else if (flags[i] === '--limit' && i + 1 < flags.length) {
-      const n = parseInt(flags[++i], 10);
-      if (!Number.isNaN(n) && n > 0) limit = n;
-    } else if (flags[i] === '--json') {
-      json = true;
-    }
+  const limit = parsePositiveIntegerFlag(flags, '--limit', 5, 'Error: --limit must be a positive integer');
+  const format = parseFlagValue(flags, '--format', 'Error: --format requires text or json') ?? 'text';
+  if (format !== 'text' && format !== 'json') {
+    console.error('Error: --format must be text or json');
+    process.exit(1);
   }
+  const json = flags.includes('--json') || format === 'json';
+  if (flags.includes('--pretty') && flags.includes('--compact')) {
+    console.error('Error: --pretty and --compact cannot be used together');
+    process.exit(1);
+  }
+  const jsonPretty = !flags.includes('--compact');
 
   const graph = parseGraphFlag(flags);
+  const backend = parseSearchBackendFlag(flags);
 
   await discoverCapability(cwd, {
     phrase,
     typeFilter,
     limit,
     json,
+    jsonPretty,
     graph,
+    backend,
+    includePaths: false,
   });
 }
 
@@ -966,7 +1349,7 @@ async function handleDiscover(args: string[]): Promise<void> {
  * artifact by type and name.
  *
  * Shape (#1218):
- *   aiwg show <type> <name> [--json] [--first] [--graph <name>]
+ *   aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]
  *
  * Type is positional (not a flag) so the verb reads as
  * "show <kind> <name>". `<type>` is one of: skill, agent, command, rule.
@@ -975,7 +1358,7 @@ async function handleDiscover(args: string[]): Promise<void> {
  * the artifact body so consumers don't need to navigate the filesystem.
  */
 async function handleShow(args: string[]): Promise<void> {
-  const { showArtifact } = await import('./query-engine.js');
+  const { showArtifact, showMetadata } = await import('./query-engine.js');
   const cwd = process.cwd();
 
   const positional: string[] = [];
@@ -990,7 +1373,8 @@ async function handleShow(args: string[]): Promise<void> {
   const ALLOWED_TYPES = ['skill', 'agent', 'command', 'rule'];
   const HELP_TEXT = [
     '',
-    'Usage: aiwg show <type> <name> [--json] [--first] [--graph <name>]',
+    'Usage: aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]',
+    '       aiwg show metadata <id-or-name-or-path> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]',
     '       aiwg index show <type> <name> ...',
     '',
     'Types: skill | agent | command | rule',
@@ -998,16 +1382,23 @@ async function handleShow(args: string[]): Promise<void> {
     'Examples:',
     '  aiwg show skill intake-wizard',
     '  aiwg show skill flow-deploy-to-production --json',
+    '  aiwg show metadata aiwg:skill:4840fa441622f676 --json',
     '  aiwg show agent aiwg-steward',
     '  aiwg show command discover',
     '',
-    'Tip: use `aiwg discover "<phrase>"` first to find the right name.',
+    'Tip: use `aiwg discover "<phrase>" --json` first to find the stable id.',
   ].join('\n');
 
   if (positional.length === 0) {
     console.error('Error: aiwg show requires a type and name');
     console.error(HELP_TEXT);
     process.exit(1);
+  }
+
+  const firstLower = positional[0].toLowerCase();
+  const metadataMode = firstLower === 'metadata';
+  if (metadataMode) {
+    positional.shift();
   }
 
   // Wave A (#1218): if the first positional is a known type, treat it
@@ -1017,8 +1408,14 @@ async function handleShow(args: string[]): Promise<void> {
   // with the disambiguation list (existing behavior in showArtifact).
   let type: string | null = null;
   let name: string;
-  const firstLower = positional[0].toLowerCase();
-  if (ALLOWED_TYPES.includes(firstLower)) {
+  if (metadataMode) {
+    name = positional.join(' ').trim();
+    if (!name) {
+      console.error('Error: aiwg show metadata requires an id, name, or path');
+      console.error(HELP_TEXT);
+      process.exit(1);
+    }
+  } else if (ALLOWED_TYPES.includes(firstLower)) {
     type = firstLower;
     name = positional.slice(1).join(' ').trim();
     if (!name) {
@@ -1046,12 +1443,17 @@ async function handleShow(args: string[]): Promise<void> {
   }
 
   const graph = parseGraphFlag(flags);
+  const backend = parseSearchBackendFlag(flags);
 
-  await showArtifact(cwd, {
+  const params = {
     name,
     typeFilter: type ? [type] : undefined,
     json,
     first,
     graph,
-  });
+    backend,
+  };
+
+  if (metadataMode) await showMetadata(cwd, params);
+  else await showArtifact(cwd, params);
 }

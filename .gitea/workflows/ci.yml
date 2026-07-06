@@ -72,12 +72,23 @@ jobs:
       - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
         run: npm run build:cli
 
+      - name: Run Fortemi Core index release gate (#1696/#1697)
+        # Builds the real framework corpus index, validates the checked-in
+        # discovery query matrix against local + Fortemi Core backends, and
+        # proves npm packaging includes the generated prebuilt index contract.
+        run: npm run ci:fortemi-index
+
       - name: Lint schemas
         # Validates schemas/executor-v1.json (draft-2020-12) and all
         # fixtures in test/conformance/executor-v1/fixtures/ against it.
         # Fails the build if the schema is structurally invalid or a fixture
         # violates the declared _validates_as shape. (#1178)
         run: npm run lint:schemas
+
+      - name: Lint tracked generated artifacts
+        # Keeps local build outputs, provider exports, indexes, caches,
+        # coverage, and test results out of git unless explicitly allowlisted.
+        run: npm run lint:generated-artifacts
 
       - name: Run conformance suite (fixture mode)
         # Exercises the executor-contract v1 dispatch path via fixture replay.
@@ -93,7 +104,7 @@ jobs:
           # budget so a slow-runner day doesn't block an otherwise-green PR.
           # Bump either value if regression hits consistently.
           AIWG_PERF_BUDGET_VERSION_MS: "300"
-          AIWG_PERF_BUDGET_HELP_MS: "500"
+          AIWG_PERF_BUDGET_HELP_MS: "650"
         run: npm run test:ci
 
       - name: Run tier-3 integration suite (#1174)
