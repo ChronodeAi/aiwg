@@ -87,13 +87,13 @@ describe('Artifact Query Engine', () => {
   });
 
   it('should find entries by keyword in title', async () => {
-    await queryIndex(tmpDir, { text: 'Login' });
+    await queryIndex(tmpDir, { text: 'Login' }, { backend: 'local' });
     const output = consoleSpy.mock.calls.map(c => c[0]).join('\n');
     expect(output).toContain('Login');
   });
 
   it('should filter by type', async () => {
-    await queryIndex(tmpDir, { type: 'adr' }, { json: true });
+    await queryIndex(tmpDir, { type: 'adr' }, { json: true, backend: 'local' });
     const jsonOutput = consoleSpy.mock.calls.map(c => c[0]).join('');
     const parsed = JSON.parse(jsonOutput);
     expect(parsed.results).toHaveLength(1);
@@ -101,7 +101,7 @@ describe('Artifact Query Engine', () => {
   });
 
   it('should filter by phase', async () => {
-    await queryIndex(tmpDir, { phase: 'testing' }, { json: true });
+    await queryIndex(tmpDir, { phase: 'testing' }, { json: true, backend: 'local' });
     const jsonOutput = consoleSpy.mock.calls.map(c => c[0]).join('');
     const parsed = JSON.parse(jsonOutput);
     expect(parsed.results).toHaveLength(1);
@@ -109,7 +109,7 @@ describe('Artifact Query Engine', () => {
   });
 
   it('should filter by tags (AND logic)', async () => {
-    await queryIndex(tmpDir, { tags: ['auth', 'security'] }, { json: true });
+    await queryIndex(tmpDir, { tags: ['auth', 'security'] }, { json: true, backend: 'local' });
     const jsonOutput = consoleSpy.mock.calls.map(c => c[0]).join('');
     const parsed = JSON.parse(jsonOutput);
     // Only UC-001 has both auth AND security
@@ -118,28 +118,28 @@ describe('Artifact Query Engine', () => {
   });
 
   it('should return all entries when no text query provided', async () => {
-    await queryIndex(tmpDir, {}, { json: true });
+    await queryIndex(tmpDir, {}, { json: true, backend: 'local' });
     const jsonOutput = consoleSpy.mock.calls.map(c => c[0]).join('');
     const parsed = JSON.parse(jsonOutput);
     expect(parsed.results).toHaveLength(4);
   });
 
   it('should respect limit parameter', async () => {
-    await queryIndex(tmpDir, { limit: 2 }, { json: true });
+    await queryIndex(tmpDir, { limit: 2 }, { json: true, backend: 'local' });
     const jsonOutput = consoleSpy.mock.calls.map(c => c[0]).join('');
     const parsed = JSON.parse(jsonOutput);
     expect(parsed.results).toHaveLength(2);
   });
 
   it('should output human-readable format by default', async () => {
-    await queryIndex(tmpDir, { text: 'Login' });
+    await queryIndex(tmpDir, { text: 'Login' }, { backend: 'local' });
     const output = consoleSpy.mock.calls.map(c => c[0]).join('\n');
     expect(output).toContain('Results for');
     expect(output).toContain('Score');
   });
 
   it('should handle no results gracefully', async () => {
-    await queryIndex(tmpDir, { text: 'nonexistent-xyz' });
+    await queryIndex(tmpDir, { text: 'nonexistent-xyz' }, { backend: 'local' });
     const output = consoleSpy.mock.calls.map(c => c[0]).join('\n');
     expect(output).toContain('No results found');
   });
@@ -150,7 +150,7 @@ describe('Artifact Query Engine', () => {
       throw new Error('process.exit');
     });
 
-    await expect(queryIndex(emptyDir, {})).rejects.toThrow('process.exit');
+    await expect(queryIndex(emptyDir, {}, { backend: 'local' })).rejects.toThrow('process.exit');
 
     exitSpy.mockRestore();
     fs.rmSync(emptyDir, { recursive: true, force: true });
@@ -199,6 +199,44 @@ describe('Artifact Query Engine', () => {
 
     expect(output).toContain('# Project Status');
     expect(consoleErrorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Ambiguous'));
+  });
+
+  it('prefers canonical bundle agents over top-level persona mirrors for duplicate names (#1643)', async () => {
+    const canonicalPath = 'agentic/code/addons/aiwg-utils/agents/aiwg-steward.md';
+    const personaPath = 'agentic/code/agents/personas/aiwg-steward.md';
+    fs.mkdirSync(path.join(tmpDir, path.dirname(canonicalPath)), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, path.dirname(personaPath)), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, canonicalPath), '---\nname: aiwg-steward\n---\n\n# Canonical Steward\n');
+    fs.writeFileSync(path.join(tmpDir, personaPath), '---\nname: aiwg-steward\n---\n\n# Persona Steward\n');
+
+    const indexPath = path.join(tmpDir, INDEX_DIR, 'metadata.json');
+    const idx: ArtifactIndex = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    idx.entries[canonicalPath] = createMockEntry({
+      path: canonicalPath,
+      type: 'agent',
+      title: 'AIWG Steward',
+      summary: 'Canonical steward',
+    });
+    idx.entries[personaPath] = createMockEntry({
+      path: personaPath,
+      type: 'agent',
+      title: 'AIWG Steward',
+      summary: 'OpenHuman persona mirror',
+    });
+    fs.writeFileSync(indexPath, JSON.stringify(idx));
+
+    const prevRoot = process.env.AIWG_ROOT;
+    process.env.AIWG_ROOT = tmpDir;
+    try {
+      await showArtifact(tmpDir, { typeFilter: ['agent'], name: 'aiwg-steward', json: true });
+      const parsed = JSON.parse(consoleSpy.mock.calls.map(c => c[0]).join(''));
+      expect(parsed.path).toBe(path.join(tmpDir, canonicalPath));
+      expect(parsed.content).toContain('# Canonical Steward');
+      expect(consoleErrorSpy).not.toHaveBeenCalledWith(expect.stringContaining('Ambiguous'));
+    } finally {
+      if (prevRoot === undefined) delete process.env.AIWG_ROOT;
+      else process.env.AIWG_ROOT = prevRoot;
+    }
   });
 
   it('resolves a persona agent via the corpus fallback when not in any index (#1623 U5)', async () => {

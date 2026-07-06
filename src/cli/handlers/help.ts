@@ -60,6 +60,8 @@ function displayHelp(): void {
 
   helpGroup('PROJECT', [
     ['new <name>', 'Create new project with SDLC templates'],
+    ['init', 'Create the baseline .aiwg/aiwg.config file'],
+    ['setup project', 'CLI helper used by agents for repo/tracker/delivery/signing policy'],
   ]);
 
   helpGroup('WORKSPACE', [
@@ -107,11 +109,12 @@ function displayHelp(): void {
   ]);
 
   helpGroup('SCAFFOLDING', [
-    ['new-bundle <name>', 'Create project-local bundle (--type extension|addon|framework|plugin, --starter skill|rule|agent|minimal, --dry-run)'],
+    ['new-bundle <name>', 'Create project-local bundle (--type extension|addon|framework|plugin|provider, --starter skill|rule|agent|minimal, --dry-run)'],
     ['new-extension <name>', 'Alias for new-bundle --type extension'],
     ['new-addon <name>', 'Alias for new-bundle --type addon'],
     ['new-framework <name>', 'Alias for new-bundle --type framework'],
     ['new-plugin <name>', 'Alias for new-bundle --type plugin'],
+    ['new-provider <name>', 'Alias for new-bundle --type provider'],
     ['add-agent <name>', 'Add agent to existing bundle'],
     ['add-command <name>', 'Add command to existing bundle'],
     ['add-skill <name>', 'Add skill to existing bundle'],

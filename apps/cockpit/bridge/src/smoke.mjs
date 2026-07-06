@@ -1,8 +1,9 @@
 // End-to-end data-path smoke: executor fixture (admin) -> Bridge (/api/inventory) -> served screen.
 // Self-contained (own ports); no deps. Exits non-zero on failure.
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 import { createExecutor } from '../../mock-executor/src/server.mjs';
-import { createBridge } from './server.mjs';
+import { createBridge, normalizeSessionRows } from './server.mjs';
 
 const mock = createExecutor();
 await new Promise((r) => mock.listen(0, '127.0.0.1', r));
@@ -55,6 +56,32 @@ try {
   assert.equal(demo.backend, 'native', 'demo session backend');
   assert.equal(demo.role_policy, 'observe-default', 'session role policy');
 
+  const qemuDedup = normalizeSessionRows({
+    executorUrl,
+    instanceId: 'vm-1',
+    sessionAgentId: 'vm-agent-name',
+    sessions: [
+      {
+        id: 'sess-formal',
+        session_id: 'sess-formal',
+        command_id: 'cmd-real',
+        session_name: 'terminal-qemu',
+        command: '/bin/bash',
+        has_screen: true,
+      },
+      {
+        id: 'sess-formal',
+        session_id: 'sess-formal',
+        command_id: 'sess-formal',
+        session_name: 'sess-formal',
+        command: '/bin/bash -l',
+        has_screen: false,
+      },
+    ],
+  });
+  assert.equal(qemuDedup.sessions.length, 1, 'QEMU formal session + fallback row dedupe to one session');
+  assert.equal(qemuDedup.sessions[0].session_name, 'terminal-qemu', 'dedupe keeps the named screen-backed session');
+
   // missing instance param is a 400
   assert.equal((await f("/api/sessions")).status, 400, 'sessions requires instance');
 
@@ -74,9 +101,13 @@ try {
   assert.match(shown.body, /name:\s*flow-deploy-to-production/, 'show returns the skill body');
   assert.equal((await f("/api/capabilities")).status, 400, 'capabilities requires q');
   // show by discovered PATH — deterministic, sidesteps ambiguous same-named artifacts (#1643)
-  const shownByPath = await (await f(`/api/show?path=${encodeURIComponent(hit.path)}`)).json();
-  assert.match(shownByPath.body, /name:\s*flow-deploy-to-production/, 'show-by-path returns the body');
-  assert.equal(shownByPath.path, hit.path, 'show-by-path echoes the resolved path');
+  if (hit.path) {
+    const shownByPath = await (await f(`/api/show?path=${encodeURIComponent(hit.path)}`)).json();
+    assert.match(shownByPath.body, /name:\s*flow-deploy-to-production/, 'show-by-path returns the body');
+    assert.equal(shownByPath.path, hit.path, 'show-by-path echoes the resolved path');
+  } else {
+    assert.ok(hit.id, 'pathless discover result carries a stable id');
+  }
   // a missing artifact is a 4xx, never a 502 (ambiguous/not-found map to operator-correctable input)
   assert.equal((await f('/api/show?type=agent&name=__definitely_not_a_real_artifact__')).status, 404, 'unknown artifact -> 404 not 502');
   // a path outside the AIWG corpus is refused (no traversal)
@@ -123,7 +154,8 @@ try {
 
   // user asset library: clone a catalog asset into the library, list it, delete it.
   // (AIWG source is read-only — clone copies into ~/.aiwg/cockpit/library, never the reverse.)
-  const cloneRes = await f(`/api/library/clone?type=${encodeURIComponent(hit.type)}&name=${encodeURIComponent(hit.name)}&path=${encodeURIComponent(hit.path)}`, { method: 'POST' });
+  const libraryPath = hit.path || fileURLToPath(new URL('../../../../agentic/code/frameworks/sdlc-complete/skills/flow-deploy-to-production/SKILL.md', import.meta.url));
+  const cloneRes = await f(`/api/library/clone?type=${encodeURIComponent(hit.type)}&name=${encodeURIComponent(hit.name)}&path=${encodeURIComponent(libraryPath)}`, { method: 'POST' });
   assert.ok([201, 400].includes(cloneRes.status), 'clone returns 201 (new) or 400 (already present)');
   const lib1 = await (await f('/api/library')).json();
   assert.ok(lib1.library.some((a) => a.name === hit.name), 'cloned asset appears in the user library');
