@@ -240,7 +240,7 @@ export const useCommand: Extension = {
     triggerPhrases: ['use framework', 'deploy framework', 'install framework', 'use sdlc', 'use addon'],
     commandHint: {
       template: 'orchestration',
-      argumentHint: '<framework|addon> [--provider <p>] [--prefix <dir>] [--profile <name>]',
+      argumentHint: '<framework|addon> [--provider <p>] [--prefix <dir>] [--profile <name>] [--harness-agents <list>]',
       allowedTools: ['Read', 'Write', 'Bash', 'Glob'],
       executionSteps: [
         'Validate framework name',
@@ -350,7 +350,7 @@ export const newBundleCommand: Extension = {
   description: 'Scaffold a project-local bundle under .aiwg/{type}/{name}/',
   version: '1.0.0',
   capabilities: ['cli', 'scaffolding', 'project-local'],
-  keywords: ['new', 'bundle', 'scaffold', 'project-local', 'extension', 'addon', 'framework', 'plugin'],
+  keywords: ['new', 'bundle', 'scaffold', 'project-local', 'extension', 'addon', 'framework', 'plugin', 'provider'],
   category: 'scaffolding',
   platforms: {
     claude: 'full',
@@ -362,10 +362,10 @@ export const newBundleCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['new bundle', 'scaffold project-local', 'new extension', 'new addon'],
+    triggerPhrases: ['new bundle', 'scaffold project-local', 'new extension', 'new addon', 'new provider'],
     commandHint: {
       template: 'utility',
-      argumentHint: '<name> [--type extension|addon|framework|plugin] [--starter skill|rule|agent|minimal] [--description "..."]',
+      argumentHint: '<name> [--type extension|addon|framework|plugin|provider] [--starter skill|rule|agent|minimal] [--description "..."]',
       allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,
@@ -512,6 +512,39 @@ export const initCommand: Extension = {
     commandHint: {
       template: 'utility',
       allowedTools: ['Read', 'Write'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const setupCommand: Extension = {
+  id: 'setup',
+  type: 'skill',
+  name: 'Setup',
+  description: 'CLI helper for agent-led project setup policy previews and writes',
+  version: '1.0.0',
+  capabilities: ['cli', 'project', 'config', 'setup', 'issues', 'delivery-policy'],
+  keywords: ['setup', 'agent-led setup', 'repo policy', 'tracker', 'delivery', 'signing', 'remotes'],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'setup project',
+      'configure repo policy',
+      'configure issue tracker',
+      'configure delivery policy',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'project [--yes] [--dry-run] [--target <dir>]',
+      allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,
 };
@@ -1134,6 +1167,34 @@ export const corpusCommand: Extension = {
       template: 'utility',
       argumentHint: '<radar-*|profile-*|curator-*|discovery-log|funder-network> [options]',
       allowedTools: ['Read', 'Glob', 'Grep', 'Write'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const researchQueryCommand: Extension = {
+  id: 'research-query',
+  type: 'skill',
+  name: 'Research Query',
+  description: 'Select local or Fortemi Core-backed research sources for a question',
+  version: '1.0.0',
+  capabilities: ['cli', 'research', 'corpus', 'query', 'citations', 'fortemi-core'],
+  keywords: ['research-query', 'research query', 'corpus query', 'sources-only', 'GRADE', 'REF', 'Fortemi Core'],
+  category: 'index',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['research query', 'query the corpus', 'what does the research say', 'search research'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '<question> [--backend local|fortemi-core] [--depth quick|thorough] [--sources-only] [--max-sources N] [--json] [--save]',
+      allowedTools: ['Bash', 'Read', 'Write'],
+      executionSteps: [
+        'Parse question and retrieval options',
+        'Load local or Fortemi Core static index records',
+        'Rank research REF/PROF/synthesis sources',
+        'Emit source-selection table or JSON for skill-mediated synthesis',
+      ],
     },
   } satisfies SkillMetadata,
 };
@@ -3291,6 +3352,7 @@ export const commandDefinitions: Extension[] = [
   // Project
   newCommand,
   initCommand,
+  setupCommand,
   issueCommand,
   issueAuditCommand,
   addressIssuesCommand,
@@ -3383,6 +3445,7 @@ export const commandDefinitions: Extension[] = [
   // Index + Discovery (3)
   indexCommand,
   corpusCommand,
+  researchQueryCommand,
   discoverCommand,
   showCommand,
 

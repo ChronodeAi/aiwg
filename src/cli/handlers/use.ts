@@ -13,6 +13,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import YAML from 'yaml';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { createScriptRunner } from './script-runner.js';
 import { getFrameworkRoot, getVersionInfo } from '../../channel/manager.mjs';
@@ -53,6 +54,12 @@ import {
   resolveWorkspaceSignalPlan,
   writeWorkspaceSignalPlan,
 } from '../workspace-signals.js';
+import {
+  getProviderArtifactPathStrings,
+  getProviderKernelSkillPath,
+  normalizeProviderDefinitionId,
+  type ProviderArtifactPathStrings,
+} from '../../providers/provider-definitions.js';
 
 // Module-level guard so the iteration loops further down (which re-enter
 // execute() per framework/provider) don't re-emit the warning each pass.
@@ -218,133 +225,15 @@ export function addonPath(frameworkRoot: string, name: string): string {
   return path.join(frameworkRoot, 'agentic/code/addons', folderName);
 }
 
-/**
- * Provider to deployment paths mapping
- *
- * The `behaviors` field tracks where behavior artifacts are deployed per provider.
- * OpenClaw is the first platform with native behavior support (~/.openclaw/behaviors/).
- * Other providers receive behaviors via emulation: Claude Code via .claude/hooks/,
- * Warp via aggregation into WARP.md (empty string = aggregated, not file-per-behavior),
- * all others via the provider rules directory.
- *
- * @implements #609
- */
-const PROVIDER_PATHS: Record<string, { agents: string; skills: string; commands: string; rules: string; behaviors: string }> = {
-  claude: {
-    agents: '.claude/agents',
-    // Skills hidden under .claude/.aiwg/skills so Claude Code's flat-namespace
-    // skill-listing budget doesn't truncate them. Discovery is index-driven
-    // via `aiwg index` (epic #1212). Kernel skills (always-loaded set) deploy
-    // separately to .claude/skills/ for native platform discovery.
-    skills: '.claude/.aiwg/skills',
-    commands: '.claude/commands',
-    rules: '.claude/rules',
-    behaviors: '.claude/hooks',  // Emulated via hook wrapper
-  },
-  factory: {
-    agents: '.factory/droids',
-    // Skills hidden under .aiwg/ for index-driven discovery (#1212)
-    skills: '.factory/.aiwg/skills',
-    commands: '.factory/commands',
-    rules: '.factory/rules',
-    behaviors: '.factory/rules', // Emulated via session wrapper in rules dir
-  },
-  codex: {
-    agents: '.codex/agents',
-    skills: '.codex/.aiwg/skills',
-    commands: '.codex/commands',
-    rules: '.codex/rules',
-    behaviors: '.codex/rules',   // Emulated via session wrapper
-  },
-  opencode: {
-    agents: '.opencode/agent',  // Discovered via {agent,agents}/**/*.md glob (#773)
-    skills: '.opencode/.aiwg/skill',
-    commands: '.opencode/command', // OpenCode scans .opencode/command/**/*.md via ConfigCommand.load() (PUW-006 #1107)
-    rules: '.opencode/rule',
-    behaviors: '.opencode/rule', // Emulated via session wrapper
-  },
-  copilot: {
-    agents: '.github/agents',
-    skills: '.github/.aiwg/skills',
-    commands: '.github/commands',
-    rules: '.github/copilot-rules',
-    behaviors: '.github/copilot-rules', // Emulated via session wrapper
-  },
-  cursor: {
-    agents: '.cursor/agents',
-    skills: '.cursor/.aiwg/skills',
-    commands: '.cursor/commands',
-    rules: '.cursor/rules',
-    behaviors: '.cursor/rules',  // Emulated via session wrapper
-  },
-  warp: {
-    agents: '.warp/agents',
-    skills: '.warp/.aiwg/skills',
-    commands: '.warp/commands',
-    rules: '.warp/rules',
-    behaviors: '',               // Aggregated into WARP.md behaviors section
-  },
-  windsurf: {
-    agents: '.windsurf/agents',
-    skills: '.windsurf/.aiwg/skills',
-    commands: '.windsurf/workflows',
-    rules: '.windsurf/rules',
-    behaviors: '.windsurf/rules', // Emulated via session wrapper
-  },
-  hermes: {
-    agents: '',                                                              // Aggregated into AGENTS.md at project root
-    // The .aiwg/ subdir is the legacy sequester (#1212) for non-kernel
-    // standard skills. Post-rc.14 kernel pivot, kernel skills land one
-    // level up at ~/.hermes/skills/<name>/ where Hermes natively scans;
-    // this `.aiwg/skills/` path stays empty in current deploys but is
-    // preserved here for the legacy mirror code path. See #1241.
-    skills: path.join(os.homedir(), '.hermes', '.aiwg', 'skills'),
-    commands: '',                                                            // Served via MCP, not file-deployed
-    rules: '',                                                               // Not applicable — Hermes uses AGENTS.md
-    behaviors: '',                                                           // Not yet supported
-  },
-  openclaw: {
-    agents: path.join(os.homedir(), '.openclaw', 'agents'),
-    // Sequestered under ~/.openclaw/.aiwg/skills/ for index-driven discovery
-    // (#1212). OpenClaw's 150-skill cap is the binding constraint; the kernel
-    // set goes to ~/.openclaw/skills/aiwg/<name> (preserved by the provider's
-    // own deploySkills, not represented here).
-    skills: path.join(os.homedir(), '.openclaw', '.aiwg', 'skills'),
-    commands: path.join(os.homedir(), '.openclaw', 'commands'),
-    rules: path.join(os.homedir(), '.openclaw', 'rules'),
-    behaviors: path.join(os.homedir(), '.openclaw', 'behaviors'), // Native behavior support
-  },
-  openhuman: {
-    agents: '.agents/agents',          // Markdown personas (Tier-1); workspace-scoped — reaches the external coding hosts OpenHuman drives. Harness TOML is Tier-2 (#1559)
-    // Global/home-dir install like OpenClaw (#1553 follow-up): OpenHuman's
-    // Skills library scans ~/.openhuman/skills/ (user scope, ungated). Standard
-    // skills sequestered under ~/.openhuman/.aiwg/skills/ for index-driven
-    // discovery; kernel set → PROVIDER_KERNEL_SKILL_PATHS (~/.openhuman/skills/).
-    skills: path.join(os.homedir(), '.openhuman', '.aiwg', 'skills'),
-    commands: '',                      // Aggregated into AGENTS.md (no native command dir)
-    rules: '',                         // Aggregated into AGENTS.md (### Rule: inline)
-    behaviors: '',                     // Not supported
-  },
-};
+function getProviderPaths(provider: string): ProviderArtifactPathStrings {
+  const paths = getProviderArtifactPathStrings(provider) ?? getProviderArtifactPathStrings('claude');
+  if (!paths) throw new Error(`Missing provider paths for ${provider}`);
+  return paths;
+}
 
-const PROVIDER_KERNEL_SKILL_PATHS: Record<string, string> = {
-  claude: '.claude/skills',
-  factory: '.factory/skills',
-  // Project-local .agents/skills/ — the cross-provider canonical path codex-rs
-  // scans (codex-rs/core-skills/src/loader.rs). The legacy ~/.codex/skills/
-  // home dir is deprecated and pruned on deploy; writing both made codex list
-  // every kernel skill twice (#766 regression fix).
-  codex: '.agents/skills',
-  opencode: '.opencode/skill',
-  copilot: '.github/skills',
-  cursor: '.cursor/skills',
-  warp: '.warp/skills',
-  windsurf: '.windsurf/skills',
-  openclaw: path.join(os.homedir(), '.openclaw', 'skills', 'aiwg'),
-  // Global/home-dir native scan root (ops_discover.rs, one-level: ~/.openhuman/skills/<name>/SKILL.md).
-  // User-scope is ungated — no trust marker needed — and is what OpenHuman's Skills library surfaces (#1553).
-  openhuman: path.join(os.homedir(), '.openhuman', 'skills'),
-};
+function getProviderKernelSkillsPath(provider: string): string {
+  return getProviderKernelSkillPath(provider) || getProviderKernelSkillPath('claude');
+}
 
 const MIRRORED_STANDARD_COMMAND_SKILLS = new Set([
   'aiwg-setup-project',
@@ -466,7 +355,7 @@ async function runPreDeployCollisionCheck(opts: {
   const skillNames = await listSourceSkillNames(sourceSkillsDir);
   if (skillNames.length === 0) return true; // nothing to check
 
-  const providerPaths = PROVIDER_PATHS[provider] ?? PROVIDER_PATHS.claude;
+  const providerPaths = getProviderPaths(provider);
   const skillsBaseDir = path.isAbsolute(providerPaths.skills)
     ? providerPaths.skills
     : path.join(target, providerPaths.skills);
@@ -493,147 +382,58 @@ async function runPreDeployCollisionCheck(opts: {
   return true;
 }
 
+function agenticNextSteps(openStep: string): string[] {
+  return [
+    openStep,
+    'Ask the steward:  "Check that AIWG is installed correctly and tell me what I can do here."',
+    'Regenerate:       Use aiwg-regenerate in-session when context files need rebuilding.',
+    'Install runbook:  docs/agentic-install-runbook.md',
+    'Diagnostics:      aiwg doctor',
+  ];
+}
+
 /**
- * Framework-specific next steps guidance
+ * Framework-specific next steps guidance.
+ *
+ * Keep this handoff user-facing: `aiwg use` is the main human CLI entry point;
+ * discovery, capability lookup, and agent-loop commands are agent tools.
  *
  * Keyed as `<provider>/<framework>` with fallback to `<framework>`.
  * The 'claude' provider is the default (shown for all unrecognized providers).
  */
 const NEXT_STEPS: Record<string, string[]> = {
-  // Claude Code (default)
-  //
-  // Standard skills no longer deploy as slash commands. Reach AIWG
-  // capabilities through `aiwg discover` (CLI) or natural-language
-  // requests (the agent queries the index for you).
-  'sdlc': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Browse via Claude: open Claude and ask for the "accelerated SDLC" or "create intake"',
-    'Direct CLI:        aiwg sdlc-accelerate "Your project idea"',
-    'Check health:      aiwg doctor',
-  ],
-  'marketing': [
-    'Find a skill:      aiwg discover "<marketing need>"',
-    'Browse via Claude: ask for "marketing intake" or "campaign kickoff" — agent queries the index',
-    'Check health:      aiwg doctor',
-  ],
-  'media-curator': [
-    'Find a skill:      aiwg discover "<media task>"',
-    'Browse via Claude: ask "analyze [artist] discography" or "find sources for [content]"',
-    'Check health:      aiwg doctor',
-  ],
-  'research': [
-    'Find a skill:      aiwg discover "<research task>"',
-    'Browse via Claude: ask "research workflow" or "induct [paper]" — agent queries the index',
-    'Check health:      aiwg doctor',
-  ],
-  'security-engineering': [
-    'Find a skill:      aiwg discover "<security decision>"',
-    'Crypto primitives: ask "choose AEAD" or "ad-hoc KDF review"',
-    'Chain of trust:    ask "review the boot chain" or "signed bootstrap design"',
-    'Decision template: agentic/code/frameworks/security-engineering/templates/cryptographic-decisions.md',
-    'Check health:      aiwg doctor',
-  ],
-  'all': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Browse via Claude: open Claude and describe your need — agent queries the index',
-    'Direct CLI:        aiwg sdlc-accelerate "Your project idea"',
-    'Check health:      aiwg doctor',
-  ],
+  'sdlc': agenticNextSteps('Open platform:    Open Claude Code, Codex, Cursor, Warp, or your chosen AI tool.'),
+  'marketing': agenticNextSteps('Open platform:    Open your chosen AI tool and ask for a campaign or marketing intake.'),
+  'media-curator': agenticNextSteps('Open platform:    Open your chosen AI tool and ask for a media collection next action.'),
+  'research': agenticNextSteps('Open platform:    Open your chosen AI tool and ask for a research workflow next action.'),
+  'security-engineering': agenticNextSteps('Open platform:    Open your chosen AI tool and ask for a security-engineering decision path.'),
+  'all': agenticNextSteps('Open platform:    Open Claude Code, Codex, Cursor, Warp, or your chosen AI tool.'),
 
-  // Hermes Agent (MCP-based)
-  // Verified against Hermes v0.4.0+ source (hermes_cli/main.py:10860 —
-  // mcp subcommand surface is `serve`, `add`, `remove`, `list`, `test`,
-  // `configure`; no `install` subcommand). #1243.
-  'hermes/sdlc': [
-    'Connect via MCP:   hermes mcp add aiwg --command aiwg --args mcp serve',
-    '   (or manual:     add aiwg to ~/.hermes/config.yaml — see `aiwg mcp info`)',
-    'Start Hermes:      hermes chat "Create an architecture decision for..."',
-    'MCP guide:         docs/integrations/hermes-quickstart.md',
-  ],
-  'hermes/marketing': [
-    'Connect via MCP:   hermes mcp add aiwg --command aiwg --args mcp serve',
-    '   (or manual:     add aiwg to ~/.hermes/config.yaml — see `aiwg mcp info`)',
-    'Start Hermes:      hermes chat "Create a marketing campaign for..."',
-    'MCP guide:         docs/integrations/hermes-quickstart.md',
-  ],
-  'hermes/all': [
-    'Connect via MCP:   hermes mcp add aiwg --command aiwg --args mcp serve',
-    '   (or manual:     add aiwg to ~/.hermes/config.yaml — see `aiwg mcp info`)',
-    'Start Hermes:      hermes chat',
-    'AIWG MCP guide:   docs/integrations/hermes-quickstart.md',
-  ],
+  'hermes/sdlc': agenticNextSteps('Start Hermes:      Open a Hermes chat attached to this project.'),
+  'hermes/marketing': agenticNextSteps('Start Hermes:      Open a Hermes chat attached to this project.'),
+  'hermes/all': agenticNextSteps('Start Hermes:      Open a Hermes chat attached to this project.'),
 
-  // Factory AI
-  'factory/sdlc': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Open Factory:      factory (droids deployed; ask for "accelerated SDLC")',
-    'Direct CLI:        aiwg sdlc-accelerate "Your project idea"',
-    'Check health:      aiwg doctor',
-  ],
-
-  // Cursor
-  'cursor/sdlc': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Open Cursor:       cursor . (agents in .cursor/agents/; ask for "accelerated SDLC")',
-    'Direct CLI:        aiwg sdlc-accelerate "Your project idea"',
-    'Check health:      aiwg doctor',
-  ],
-
-  // Warp Terminal
-  'warp/sdlc': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Open Warp:         warp (agents/commands aggregated into WARP.md)',
-    'Direct CLI:        aiwg sdlc-accelerate "Your project idea"',
-    'Check health:      aiwg doctor',
-  ],
-
-  // GitHub Copilot
-  'copilot/sdlc': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Open VS Code:      code . (Copilot agents in .github/agents/)',
-    'Copilot chat:      @workspace use the SDLC workflow agents',
-    'Check health:      aiwg doctor',
-  ],
-
-  // OpenAI Codex
-  'codex/sdlc': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Open Codex:        codex (agents in .codex/agents/, prompts in ~/.codex/prompts/)',
-    'Direct CLI:        aiwg sdlc-accelerate "Your project idea"',
-    'Check health:      aiwg doctor',
-  ],
-
-  // Windsurf
-  'windsurf/sdlc': [
-    'Find a skill:      aiwg discover "<what you want to do>"',
-    'Open Windsurf:     AGENTS.md and .windsurf/ are ready',
-    'Ask Cascade:       "accelerated SDLC for my project" — agent queries the index',
-    'Check health:      aiwg doctor',
-  ],
-
-  // OpenClaw
-  'openclaw/sdlc': [
-    'Configure MCP:     Add aiwg to ~/.openclaw/config.yaml (see docs/openclaw-guide.md)',
-    'Start OpenClaw:    openclaw (agents, skills, commands, rules, behaviors deployed)',
-    'Verify:            openclaw skills list | grep aiwg',
-  ],
-  'openclaw/marketing': [
-    'Configure MCP:     Add aiwg to ~/.openclaw/config.yaml (see docs/openclaw-guide.md)',
-    'Start OpenClaw:    openclaw (marketing agents and skills deployed)',
-    'Verify:            openclaw skills list | grep aiwg',
-  ],
-  'openclaw/all': [
-    'Configure MCP:     Add aiwg to ~/.openclaw/config.yaml (see docs/openclaw-guide.md)',
-    'Start OpenClaw:    openclaw (all frameworks deployed)',
-    'Full guide:        docs/openclaw-guide.md',
-  ],
+  'factory/sdlc': agenticNextSteps('Open Factory:      Start Factory from this project root.'),
+  'cursor/sdlc': agenticNextSteps('Open Cursor:       Open this project in Cursor.'),
+  'warp/sdlc': agenticNextSteps('Open Warp:         Start a Warp session in this project root.'),
+  'copilot/sdlc': agenticNextSteps('Open VS Code:      Open this workspace and use Copilot Chat.'),
+  'codex/sdlc': agenticNextSteps('Open Codex:        Restart Codex in this project root.'),
+  'windsurf/sdlc': agenticNextSteps('Open Windsurf:     Open this project in Windsurf and ask Cascade for AIWG status.'),
+  'openclaw/sdlc': agenticNextSteps('Start OpenClaw:    Open OpenClaw with this project workspace.'),
+  'openclaw/marketing': agenticNextSteps('Start OpenClaw:    Open OpenClaw with this project workspace.'),
+  'openclaw/all': agenticNextSteps('Start OpenClaw:    Open OpenClaw with this project workspace.'),
+  'openhuman/sdlc': agenticNextSteps('Open OpenHuman:    Open OpenHuman and check the Skills view for AIWG kernel skills.'),
+  'openhuman/marketing': agenticNextSteps('Open OpenHuman:    Open OpenHuman and check the Skills view for AIWG kernel skills.'),
+  'openhuman/all': agenticNextSteps('Open OpenHuman:    Open OpenHuman and check the Skills view for AIWG kernel skills.'),
 };
 
-function printNextSteps(framework: Framework, provider: string = 'claude'): void {
-  // Try provider-specific first, fall back to generic
+export function nextStepsFor(framework: Framework, provider: string = 'claude'): string[] {
   const providerKey = `${provider}/${framework}`;
-  const steps = NEXT_STEPS[providerKey] ?? NEXT_STEPS[framework] ?? NEXT_STEPS.sdlc;
-  ui.section('Next steps:', steps);
+  return NEXT_STEPS[providerKey] ?? NEXT_STEPS[framework] ?? NEXT_STEPS.sdlc;
+}
+
+function printNextSteps(framework: Framework, provider: string = 'claude'): void {
+  ui.section('Next steps:', nextStepsFor(framework, provider));
 }
 
 /**
@@ -998,8 +798,10 @@ async function deployOneProjectLocalBundle(opts: {
 }
 
 /**
- * Discover and deploy all project-local bundles from `.aiwg/{extensions,addons,
- * frameworks,plugins}/<id>/` for one provider. Updates `aiwg.config.installed`
+ * Discover and deploy artifact-bearing project-local bundles from
+ * `.aiwg/{extensions,addons,frameworks,plugins,providers}/<id>/` for one
+ * provider. Provider bundles are metadata and are consumed by --provider
+ * resolution, not deployed as artifacts. Updates `aiwg.config.installed`
  * with `source: 'project-local'` entries.
  *
  * Returns the number of bundles deployed and any deploy errors.
@@ -1030,7 +832,7 @@ async function deployProjectLocalBundles(opts: {
 
   const targetBundles = onlyBundleId
     ? discovery.bundles.filter(b => b.id === onlyBundleId)
-    : discovery.bundles;
+    : discovery.bundles.filter(b => b.type !== 'provider');
 
   if (targetBundles.length === 0) {
     return { deployed: 0, failed: 0, bundles: [] };
@@ -1155,7 +957,43 @@ async function deployProjectLocalBundles(opts: {
   return { deployed, failed, bundles: targetBundles };
 }
 
+async function resolveProjectLocalProviderAdapter(
+  projectDir: string,
+  provider: string,
+): Promise<{ provider: string; requestedProvider?: string; bundle?: ProjectLocalBundle }> {
+  const discovery = await discoverProjectLocalBundles(projectDir);
+  const bundle = discovery.bundles.find((candidate) => candidate.type === 'provider' && candidate.id === provider);
+  const extendsProvider = bundle?.manifest.providerConfig?.extends;
+  if (!bundle || !extendsProvider) return { provider };
+  return { provider: extendsProvider, requestedProvider: provider, bundle };
+}
+
+function resolveBuiltInProviderForUse(provider: string): { provider: string; requestedProvider?: string } {
+  const normalized = normalizeProviderDefinitionId(provider);
+  if (normalized && normalized !== provider) {
+    return { provider: normalized, requestedProvider: provider };
+  }
+  return { provider };
+}
+
+function unsupportedProviderMessage(provider: string): string | null {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === 'devin' || normalized === 'devin-cli') {
+    return [
+      `Unsupported provider: ${provider}`,
+      '',
+      'Devin Desktop is supported through the Windsurf compatibility adapter:',
+      '  aiwg use sdlc --provider windsurf',
+      '  aiwg use sdlc --provider devin-desktop',
+      '',
+      'Devin CLI has distinct rules/skills surfaces and is recorded as future-provider metadata; AIWG does not emit .devin/ provider output yet.',
+    ].join('\n');
+  }
+  return null;
+}
+
 const USE_FLAGS_WITH_VALUES = new Set([
+  '--harness-agents',
   '--profile',
   '--provider',
   '--platform',
@@ -1164,6 +1002,372 @@ const USE_FLAGS_WITH_VALUES = new Set([
   '--scope',
   '--target',
 ]);
+
+type OpenHumanHarnessScope = 'project' | 'user';
+
+export const OPENHUMAN_DEFAULT_HARNESS_AGENTS = [
+  'architecture-designer',
+  'code-reviewer',
+  'project-manager',
+  'requirements-analyst',
+  'security-auditor',
+  'software-implementer',
+  'technical-writer',
+  'test-engineer',
+] as const;
+
+interface OpenHumanHarnessProfile {
+  modelHint: 'agentic' | 'coding' | 'reasoning';
+  temperature: number;
+  maxIterations: number;
+  iterationPolicy: 'strict' | 'extended';
+  maxResultChars: number;
+  maxTurnOutputTokens: number;
+  timeoutSecs: number;
+  sandboxMode: 'none' | 'read_only' | 'sandboxed';
+  tokenjuiceCompression: 'auto' | 'full' | 'light' | 'off';
+}
+
+const OPENHUMAN_DEFAULT_HARNESS_PROFILE: OpenHumanHarnessProfile = {
+  modelHint: 'agentic',
+  temperature: 0.35,
+  maxIterations: 10,
+  iterationPolicy: 'strict',
+  maxResultChars: 18000,
+  maxTurnOutputTokens: 6000,
+  timeoutSecs: 900,
+  sandboxMode: 'none',
+  tokenjuiceCompression: 'auto',
+};
+
+const OPENHUMAN_HARNESS_PROFILES: Record<string, Partial<OpenHumanHarnessProfile>> = {
+  'architecture-designer': {
+    modelHint: 'reasoning',
+    maxIterations: 14,
+    iterationPolicy: 'extended',
+    maxResultChars: 24000,
+    maxTurnOutputTokens: 8000,
+    timeoutSecs: 1200,
+  },
+  'code-reviewer': {
+    modelHint: 'coding',
+    temperature: 0.25,
+    maxIterations: 10,
+    maxResultChars: 20000,
+    tokenjuiceCompression: 'light',
+  },
+  'project-manager': {
+    modelHint: 'agentic',
+    maxIterations: 8,
+    maxResultChars: 14000,
+  },
+  'requirements-analyst': {
+    modelHint: 'reasoning',
+    maxIterations: 12,
+    iterationPolicy: 'extended',
+    maxResultChars: 22000,
+  },
+  'security-auditor': {
+    modelHint: 'coding',
+    temperature: 0.2,
+    maxIterations: 12,
+    iterationPolicy: 'extended',
+    maxResultChars: 24000,
+    maxTurnOutputTokens: 8000,
+    timeoutSecs: 1200,
+    tokenjuiceCompression: 'light',
+  },
+  'software-implementer': {
+    modelHint: 'coding',
+    temperature: 0.25,
+    maxIterations: 16,
+    iterationPolicy: 'extended',
+    maxResultChars: 26000,
+    maxTurnOutputTokens: 9000,
+    timeoutSecs: 1500,
+    tokenjuiceCompression: 'light',
+  },
+  'technical-writer': {
+    modelHint: 'agentic',
+    temperature: 0.45,
+    maxIterations: 8,
+    maxResultChars: 18000,
+  },
+  'test-engineer': {
+    modelHint: 'coding',
+    temperature: 0.25,
+    maxIterations: 14,
+    iterationPolicy: 'extended',
+    maxResultChars: 24000,
+    maxTurnOutputTokens: 8000,
+    timeoutSecs: 1200,
+    tokenjuiceCompression: 'light',
+  },
+};
+
+export interface OpenHumanHarnessDeployResult {
+  emitted: number;
+  tomlPaths: string[];
+  promptPaths: string[];
+}
+
+interface ParsedAgentMarkdown {
+  slug: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+}
+
+function readFlagValue(args: string[], name: string): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === name) return args[i + 1];
+    if (arg.startsWith(`${name}=`)) return arg.slice(name.length + 1);
+  }
+  return undefined;
+}
+
+function removeFlagWithOptionalValue(args: string[], name: string): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === name) {
+      i++;
+      continue;
+    }
+    if (arg.startsWith(`${name}=`)) continue;
+    result.push(arg);
+  }
+  return result;
+}
+
+function withProviderOverride(args: string[], provider: string): string[] {
+  const result: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if ((arg === '--provider' || arg === '--platform') && i + 1 < args.length) {
+      i++;
+      continue;
+    }
+    result.push(arg);
+  }
+  result.push('--provider', provider);
+  return result;
+}
+
+export function parseOpenHumanHarnessAgentSelector(args: string[]): string[] {
+  const value = readFlagValue(args, '--harness-agents');
+  if (!value) return [];
+  return Array.from(new Set(
+    value
+      .split(',')
+      .map((entry) => slugifyAgentName(entry))
+      .filter(Boolean)
+  ));
+}
+
+function hasFlag(args: string[], name: string): boolean {
+  return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
+}
+
+export function resolveOpenHumanHarnessAgentSelectors(args: string[]): string[] {
+  if (args.includes('--no-harness-agents')) return [];
+  if (hasFlag(args, '--harness-agents')) return parseOpenHumanHarnessAgentSelector(args);
+  return [...OPENHUMAN_DEFAULT_HARNESS_AGENTS];
+}
+
+function slugifyAgentName(value: string): string {
+  return value
+    .trim()
+    .replace(/\.md$/i, '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function snakeAgentId(slug: string): string {
+  return slug.replace(/-/g, '_');
+}
+
+function titleFromSlug(slug: string): string {
+  return slug
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function parseAgentMarkdown(slug: string, content: string): ParsedAgentMarkdown {
+  if (!content.startsWith('---\n')) {
+    return { slug, frontmatter: {}, body: content.trimStart() };
+  }
+  const end = content.indexOf('\n---', 4);
+  if (end < 0) return { slug, frontmatter: {}, body: content.trimStart() };
+
+  const rawFrontmatter = content.slice(4, end);
+  const bodyStart = content.indexOf('\n', end + 4);
+  const body = bodyStart >= 0 ? content.slice(bodyStart + 1) : '';
+  const parsed = YAML.parse(rawFrontmatter);
+  return {
+    slug,
+    frontmatter: parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {},
+    body: body.trimStart(),
+  };
+}
+
+function frontmatterString(meta: Record<string, unknown>, key: string): string | undefined {
+  const value = meta[key];
+  if (typeof value === 'string') return value;
+  return undefined;
+}
+
+function normalizeDescription(value: string | undefined, slug: string): string {
+  const description = value?.replace(/\s+/g, ' ').trim();
+  return description || `Use the ${titleFromSlug(slug)} AIWG specialist.`;
+}
+
+function escapeTomlBasicString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function tomlMultilineLiteral(value: string): string {
+  // TOML literal strings cannot contain three consecutive apostrophes.
+  return `'''${value.replace(/'''/g, "''\\'")}'''`;
+}
+
+function openHumanHarnessProfile(slug: string): OpenHumanHarnessProfile {
+  return {
+    ...OPENHUMAN_DEFAULT_HARNESS_PROFILE,
+    ...(OPENHUMAN_HARNESS_PROFILES[slug] ?? {}),
+  };
+}
+
+function renderOpenHumanHarnessToml(agent: ParsedAgentMarkdown, promptBody: string): string {
+  const id = snakeAgentId(agent.slug);
+  const profile = openHumanHarnessProfile(agent.slug);
+  return [
+    '# AIWG-managed OpenHuman native harness agent; do not hand-edit.',
+    '# Source template: agentic/code/frameworks/sdlc-complete/templates/openhuman/agent.toml.aiwg-template',
+    `id = "aiwg_${id}"`,
+    `when_to_use = ${escapeTomlBasicString(normalizeDescription(frontmatterString(agent.frontmatter, 'description'), agent.slug))}`,
+    `display_name = ${escapeTomlBasicString(frontmatterString(agent.frontmatter, 'name') || titleFromSlug(agent.slug))}`,
+    '',
+    'agent_tier = "worker"',
+    `temperature = ${profile.temperature}`,
+    `max_iterations = ${profile.maxIterations}`,
+    `iteration_policy = "${profile.iterationPolicy}"`,
+    `max_result_chars = ${profile.maxResultChars}`,
+    `max_turn_output_tokens = ${profile.maxTurnOutputTokens}`,
+    `timeout_secs = ${profile.timeoutSecs}`,
+    `sandbox_mode = "${profile.sandboxMode}"`,
+    `tokenjuice_compression = "${profile.tokenjuiceCompression}"`,
+    '',
+    'omit_identity = true',
+    'omit_memory_context = true',
+    'omit_safety_preamble = true',
+    'omit_skills_catalog = false',
+    'omit_profile = true',
+    'omit_memory_md = false',
+    'background = false',
+    'trigger_memory_agent = "never"',
+    '',
+    '[system_prompt]',
+    `inline = ${tomlMultilineLiteral(promptBody.trim())}`,
+    '',
+    '[model]',
+    `hint = "${profile.modelHint}"`,
+    '',
+  ].join('\n');
+}
+
+function projectHarnessToml(agent: ParsedAgentMarkdown): string {
+  const id = snakeAgentId(agent.slug);
+  return [
+    '# AIWG-managed OpenHuman harness definition; do not hand-edit.',
+    `id = "aiwg_${id}"`,
+    `when_to_use = ${escapeTomlBasicString(normalizeDescription(frontmatterString(agent.frontmatter, 'description'), agent.slug))}`,
+    `display_name = ${escapeTomlBasicString(frontmatterString(agent.frontmatter, 'name') || titleFromSlug(agent.slug))}`,
+    '',
+    '[system_prompt]',
+    `file = "aiwg/${id}.md"`,
+    '',
+  ].join('\n');
+}
+
+function userHarnessToml(agent: ParsedAgentMarkdown): string {
+  return renderOpenHumanHarnessToml(agent, agent.body);
+}
+
+function assertNoSubagentsKey(toml: string): void {
+  if (/^\s*subagents\s*=/m.test(toml)) {
+    throw new Error('OpenHuman AIWG harness definitions must not emit `subagents` for Worker-tier agents');
+  }
+}
+
+function openHumanHomeDir(): string {
+  return process.env.OPENHUMAN_HOME || path.join(os.homedir(), '.openhuman');
+}
+
+async function writeManagedFile(filePath: string, content: string, dryRun: boolean): Promise<void> {
+  if (dryRun) return;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content, 'utf-8');
+}
+
+async function readSourceAgent(frameworkRoot: string, slug: string): Promise<ParsedAgentMarkdown> {
+  const candidates = [
+    path.join(frameworkRoot, 'agentic/code/frameworks/sdlc-complete/agents', `${slug}.md`),
+    path.join(frameworkRoot, 'agentic/code/agents/personas', `${slug}.md`),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const content = await fs.readFile(candidate, 'utf-8');
+      const parsed = parseAgentMarkdown(slug, content);
+      if (!parsed.body.trim()) throw new Error(`${candidate} has an empty prompt body after frontmatter stripping`);
+      return parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  throw new Error(`Unknown AIWG agent '${slug}' for --harness-agents`);
+}
+
+export async function deployOpenHumanHarnessAgents(opts: {
+  frameworkRoot: string;
+  target: string;
+  selectors: string[];
+  scope: OpenHumanHarnessScope;
+  dryRun?: boolean;
+}): Promise<OpenHumanHarnessDeployResult> {
+  const uniqueSelectors = Array.from(new Set(opts.selectors.map(slugifyAgentName).filter(Boolean)));
+  if (uniqueSelectors.length === 0) return { emitted: 0, tomlPaths: [], promptPaths: [] };
+
+  const tomlRoot = opts.scope === 'user'
+    ? path.join(openHumanHomeDir(), 'agents')
+    : path.join(opts.target, 'agents');
+  const promptRoot = path.join(opts.target, 'agent', 'prompts', 'aiwg');
+  const tomlPaths: string[] = [];
+  const promptPaths: string[] = [];
+
+  for (const slug of uniqueSelectors) {
+    const agent = await readSourceAgent(opts.frameworkRoot, slug);
+    const id = snakeAgentId(slug);
+    const toml = opts.scope === 'user' ? userHarnessToml(agent) : projectHarnessToml(agent);
+    assertNoSubagentsKey(toml);
+
+    const tomlPath = path.join(tomlRoot, `aiwg_${id}.toml`);
+    tomlPaths.push(tomlPath);
+    await writeManagedFile(tomlPath, toml, !!opts.dryRun);
+
+    if (opts.scope === 'project') {
+      const promptPath = path.join(promptRoot, `${id}.md`);
+      promptPaths.push(promptPath);
+      await writeManagedFile(promptPath, agent.body.trimStart(), !!opts.dryRun);
+    }
+  }
+
+  return { emitted: uniqueSelectors.length, tomlPaths, promptPaths };
+}
 
 function firstUsePositional(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i++) {
@@ -1344,7 +1548,7 @@ export class UseHandler implements CommandHandler {
         config = emptyConfig([autoProvider]);
         if (!_isDryRun) await writeAiwgConfig(projectDir, config);
         if (!_isDryRun && _isBulkIntent && framework === 'all') {
-          ui.dim(`  No .aiwg/aiwg.config found — auto-created with provider '${autoProvider}'. Run 'aiwg init' to customize.`);
+          ui.dim(`  No .aiwg/aiwg.config found — auto-created with provider '${autoProvider}'. Ask your AIWG agent to review repo/tracker/delivery policy.`);
         }
       } else if (process.stdin.isTTY) {
         // Interactive terminal with no config → run init wizard inline (#720)
@@ -1358,7 +1562,7 @@ export class UseHandler implements CommandHandler {
     if (!framework) {
       if (!config || Object.keys(config.installed).length === 0) {
         const advisory = !config
-          ? "\n\nRun 'aiwg init' to configure providers and track deployments."
+          ? "\n\nRun 'aiwg init', then ask your AIWG agent to establish providers, tracker, and delivery policy."
           : '';
         return {
           exitCode: 1,
@@ -1493,7 +1697,7 @@ export class UseHandler implements CommandHandler {
         if (!dryRun) {
           try {
             const registry = getRegistry();
-            const paths = PROVIDER_PATHS[providerName] || PROVIDER_PATHS.claude;
+            const paths = getProviderPaths(providerName);
             await registerDeployedExtensions(registry, {
               agentsPath: paths.agents,
               skillsPath: paths.skills,
@@ -1539,11 +1743,18 @@ export class UseHandler implements CommandHandler {
 
     // Project-local bundle resolution: when the name doesn't match an upstream
     // framework, addon, or extension, check `.aiwg/{extensions,addons,
-    // frameworks,plugins}/<id>/` for a matching bundle. (#1035)
+    // frameworks,plugins,providers}/<id>/` for a matching bundle. (#1035)
     if (!isFramework && !isAddon && !isExtension) {
       const discovery = await discoverProjectLocalBundles(projectDir);
       const match = discovery.bundles.find(b => b.id === framework);
       if (match) {
+        if (match.type === 'provider') {
+          return {
+            exitCode: 1,
+            message: `Project-local provider '${match.id}' is selected with --provider.\n\nExample: aiwg use sdlc --provider ${match.id}`,
+          };
+        }
+
         const providerIdx = remainingArgs.findIndex(a => a === '--provider' || a === '--platform');
         const explicitProvider = providerIdx >= 0 && remainingArgs[providerIdx + 1] ? remainingArgs[providerIdx + 1] : null;
         const dryRunSingle = remainingArgs.includes('--dry-run');
@@ -1623,7 +1834,7 @@ export class UseHandler implements CommandHandler {
       // Register deployed extensions
       try {
         const registry = getRegistry();
-        const paths = PROVIDER_PATHS[provider] || PROVIDER_PATHS.claude;
+        const paths = getProviderPaths(provider);
         await registerDeployedExtensions(registry, {
           agentsPath: paths.agents,
           skillsPath: paths.skills,
@@ -1765,6 +1976,7 @@ export class UseHandler implements CommandHandler {
     const ciHooksEnabled = remainingArgs.includes('--ci-hooks-enabled');
     const force = remainingArgs.includes('--force');
     const skipConflicts = remainingArgs.includes('--skip-conflicts');
+    const explicitHarnessAgentSelectors = parseOpenHumanHarnessAgentSelector(remainingArgs);
 
     // PUW-027 (#1128): --scope user|project per ADR-4. Default project.
     // #1156 Phase 1: --user is a shorthand for --scope user.
@@ -1784,12 +1996,13 @@ export class UseHandler implements CommandHandler {
       ui.dim(`  --scope user: deploy targets mirror to home-rooted paths per ADR-4 §2`);
     }
     const filteredArgs = deployArgs.filter(
-      a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--force' && a !== '--skip-conflicts'
+      a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--force' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
     );
+    const deployFilteredArgs = removeFlagWithOptionalValue(filteredArgs, '--harness-agents');
 
     // Pass --quiet to suppress deploy-agents.mjs header/footer in default mode (#460)
     // Dry-run must not capture output — its purpose is to show what would happen
-    if (!verbose && !dryRun) filteredArgs.push('--quiet');
+    if (!verbose && !dryRun) deployFilteredArgs.push('--quiet');
 
     // Extract provider and target from remainingArgs to pass to addon deployments
     // Config-first resolution (#621): explicit --provider overrides config, config overrides default 'claude'
@@ -1805,7 +2018,7 @@ export class UseHandler implements CommandHandler {
     } else {
       providers = ['claude'];
       if (!config) {
-        ui.warn("No .aiwg/aiwg.config found. Run 'aiwg init' to configure providers for this project.");
+        ui.warn("No .aiwg/aiwg.config found. Run 'aiwg init', then ask your AIWG agent to configure this project properly.");
       }
     }
 
@@ -1818,20 +2031,45 @@ export class UseHandler implements CommandHandler {
       return { exitCode: 0 };
     }
 
-    const provider = providers[0];
+    const requestedProvider = providers[0];
+    const projectLocalProviderResolution = await resolveProjectLocalProviderAdapter(projectDir, requestedProvider);
+    const builtInProviderResolution = projectLocalProviderResolution.requestedProvider
+      ? { provider: projectLocalProviderResolution.provider, requestedProvider: projectLocalProviderResolution.requestedProvider }
+      : resolveBuiltInProviderForUse(projectLocalProviderResolution.provider);
+    const unsupportedMessage = projectLocalProviderResolution.requestedProvider
+      ? null
+      : unsupportedProviderMessage(requestedProvider);
+    if (unsupportedMessage) {
+      return { exitCode: 1, message: unsupportedMessage };
+    }
+    const provider = builtInProviderResolution.provider;
+    const providerDeployArgs = builtInProviderResolution.requestedProvider
+      ? withProviderOverride(deployFilteredArgs, provider)
+      : deployFilteredArgs;
     const targetIdx = remainingArgs.findIndex(a => a === '--target');
     const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
 
-    // #1526 — OpenClaw is user-scope-only. An unflagged deploy defaults to
-    // 'project' (ADR-4 default); coerce it to 'user' rather than erroring, so
-    // `aiwg use <framework> --provider openclaw` works as the rejection message
-    // itself promises ("omit the flag"). Only an explicit `--scope project` is
-    // rejected below.
-    if (provider === 'openclaw' && scope === 'project' && !remainingArgs.includes('--scope')) {
+    if ((verbose || dryRun) && projectLocalProviderResolution.requestedProvider) {
+      ui.dim(`  project-local provider '${projectLocalProviderResolution.requestedProvider}' extends '${provider}'`);
+    } else if ((verbose || dryRun) && builtInProviderResolution.requestedProvider) {
+      ui.dim(`  provider alias '${builtInProviderResolution.requestedProvider}' resolves to '${provider}'`);
+    }
+
+    if (explicitHarnessAgentSelectors.length > 0 && provider !== 'openhuman') {
+      return {
+        exitCode: 1,
+        message: '--harness-agents is only supported with --provider openhuman',
+      };
+    }
+
+    // #1526 / OpenHuman source alignment — OpenClaw and OpenHuman are
+    // user-global app installs. An unflagged deploy should work; explicit
+    // `--scope project` is rejected below.
+    if ((provider === 'openclaw' || provider === 'openhuman') && scope === 'project' && !remainingArgs.includes('--scope')) {
       scope = 'user';
     }
 
-    // #1156 Phase 1 — OpenClaw is exclusively user-scope; reject explicit --scope project.
+    // #1156 Phase 1 — home-dir providers reject explicit --scope project.
     try {
       rejectOpenClawProjectScope(provider, scope);
     } catch (err) {
@@ -1882,10 +2120,33 @@ export class UseHandler implements CommandHandler {
       ui.blank();
     }
     const runner = createScriptRunner(ctx.frameworkRoot);
-    const mainResult = await runner.run('tools/agents/deploy-agents.mjs', filteredArgs, captureOpts);
+    const mainResult = await runner.run('tools/agents/deploy-agents.mjs', providerDeployArgs, captureOpts);
 
     if (mainResult.exitCode !== 0) {
       return mainResult;
+    }
+
+    const harnessAgentSelectors = provider === 'openhuman'
+      ? resolveOpenHumanHarnessAgentSelectors(remainingArgs)
+      : [];
+    if (harnessAgentSelectors.length > 0) {
+      try {
+        const harness = await deployOpenHumanHarnessAgents({
+          frameworkRoot,
+          target,
+          selectors: harnessAgentSelectors,
+          scope: 'user',
+          dryRun,
+        });
+        if (verbose || !quiet) {
+          ui.dim(`  OpenHuman native harness agents: ${harness.emitted}`);
+        }
+      } catch (error) {
+        return {
+          exitCode: 1,
+          message: `OpenHuman harness agent deployment failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
     }
 
     // Build common args for addon deployments (inherit provider and target)
@@ -1962,10 +2223,10 @@ export class UseHandler implements CommandHandler {
       }
     }
 
-    const paths = PROVIDER_PATHS[provider] || PROVIDER_PATHS.claude;
+    const paths = getProviderPaths(provider);
     const targetSkillsDir = resolveProviderPath(target, paths.skills);
     const targetCommandsDir = paths.commands ? resolveProviderPath(target, paths.commands) : '';
-    const kernelSkillsPath = PROVIDER_KERNEL_SKILL_PATHS[provider];
+    const kernelSkillsPath = getProviderKernelSkillsPath(provider);
     const targetKernelSkillsDir = kernelSkillsPath ? resolveProviderPath(target, kernelSkillsPath) : '';
 
     // Translate deployed skills to commands for providers that require legacy command format.
@@ -2047,7 +2308,7 @@ export class UseHandler implements CommandHandler {
     }
     try {
       const registry = getRegistry();
-      const paths = PROVIDER_PATHS[provider] || PROVIDER_PATHS.claude;
+      const paths = getProviderPaths(provider);
 
       await registerDeployedExtensions(registry, {
         agentsPath: paths.agents,
@@ -2094,8 +2355,8 @@ export class UseHandler implements CommandHandler {
         // progress through; otherwise we show a single-line spinner-
         // style message and capture the noisy stat lines.
         ui.blank();
-        ui.info('Building capability index for `aiwg discover`…');
-        ui.dim('  Indexing skills, agents, commands, and rules. Reused incrementally on next deploy.');
+        ui.info('Building capability index…');
+        ui.dim('  Indexing skills, agents, commands, and rules for agent-side lookup.');
 
         const indexStart = Date.now();
         // Capture buildIndex's own console.log noise unless verbose
@@ -2110,13 +2371,13 @@ export class UseHandler implements CommandHandler {
           console.log = origLog;
           discoverableSkillCount = await countDiscoverableSkills(aiwgRootForIndex);
           const indexElapsedSec = ((Date.now() - indexStart) / 1000).toFixed(1);
-          ui.success(`Capability index ready (${indexElapsedSec}s) — try \`aiwg discover "<phrase>"\``);
+          ui.success(`Capability index ready (${indexElapsedSec}s) — agents can search the installed capability set.`);
         } catch (error) {
           console.log = origLog;
           ui.warn(
             `Capability index build failed: ${error instanceof Error ? error.message : String(error)}`,
           );
-          ui.dim('  Deploy succeeded — skills reachable, but `aiwg discover` may return stale results until next rebuild.');
+          ui.dim('  Deploy succeeded — skills are reachable, but agent-side capability search may be stale until the next rebuild.');
         }
       } else if (verbose) {
         console.log('Framework source not found; skipping capability index rebuild');
@@ -2127,7 +2388,7 @@ export class UseHandler implements CommandHandler {
     let counts = { agents: 0, commands: 0, skills: 0, rules: 0, behaviors: 0 };
     if (quiet) {
       // Count deployed artifacts
-      const paths = PROVIDER_PATHS[provider] || PROVIDER_PATHS.claude;
+      const paths = getProviderPaths(provider);
       counts = await countDeployedArtifacts(target, paths);
       if (counts.agents > 0) ui.deployCount('Agents', counts.agents);
       if (counts.commands > 0) ui.deployCount('Commands', counts.commands);
@@ -2169,9 +2430,9 @@ export class UseHandler implements CommandHandler {
     // mirror, record the deploy in the per-user registry at
     // ~/.aiwg/installed.json so `aiwg list --scope user` and `aiwg remove
     // --scope user` can find it from any cwd.
-    if (scope === 'user' && !dryRun) {
+    if (scope === 'user' && provider !== 'openhuman' && !dryRun) {
       try {
-        const paths = PROVIDER_PATHS[provider] || PROVIDER_PATHS.claude;
+        const paths = getProviderPaths(provider);
         const resolveProjectPath = (p: string): string =>
           !p ? '' : path.isAbsolute(p) ? p : path.join(target, p);
         const projectPaths = {
@@ -2348,7 +2609,7 @@ export class UseHandler implements CommandHandler {
       const forceContext = remainingArgs.includes('--force-context-files');
 
       try {
-        const paths = PROVIDER_PATHS[provider] || PROVIDER_PATHS.claude;
+        const paths = getProviderPaths(provider);
         const sections = await discoverDeployedArtifacts(target, {
           agents: paths.agents,
           rules: paths.rules,
@@ -2364,15 +2625,6 @@ export class UseHandler implements CommandHandler {
           force: forceContext,
           skip: { aiwgMd: skipAiwgMd, agentsMd: skipAgentsMd },
         });
-
-        // OpenHuman is a global/home-dir install like OpenClaw (#1553): kernel
-        // skills land in ~/.openhuman/skills/ (ungated, surfaced by the Skills
-        // library); personas + AGENTS.md stay in this workspace for the coding
-        // hosts OpenHuman drives. Tell the operator where things went.
-        if (provider === 'openhuman') {
-          ui.dim('  Skills installed globally → ~/.openhuman/skills/ (open OpenHuman → Skills to see them)');
-          ui.dim('  The full skill set is discover-reachable: aiwg discover "<what you want to do>"');
-        }
 
         if (verbose && ctxResult.agentsMdPath) {
           ui.dim(`  Wrote AGENTS.md (${ctxResult.agentsMdBytes} bytes)`);

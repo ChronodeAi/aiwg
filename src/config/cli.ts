@@ -203,7 +203,7 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
       message: 'No .aiwg/aiwg.config in this project.',
-      hint: 'Run `aiwg init` to scaffold one, or use `aiwg use <framework>` to deploy.',
+      hint: 'Run `aiwg init`, then ask your AIWG agent to set up repo/tracker/delivery policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
   }
@@ -413,7 +413,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
       message: 'No .aiwg/aiwg.config in this project.',
-      hint: 'Run `aiwg init` to scaffold one.',
+      hint: 'Run `aiwg init`, then ask your AIWG agent to establish project policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
   }
@@ -514,7 +514,7 @@ For project-level config: aiwg config show --project [--json]
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
       message: 'No .aiwg/aiwg.config in this project.',
-      hint: 'Run `aiwg init` to scaffold one, or use `aiwg use <framework>` to deploy.',
+      hint: 'Run `aiwg init`, then ask your AIWG agent to set up repo/tracker/delivery policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
   }

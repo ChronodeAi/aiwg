@@ -22,6 +22,12 @@ export interface ResponseNeededState { needed: boolean; prompt: string; since: s
 const RESIZE_FLOOR_COLS = 20;
 const RESIZE_FLOOR_ROWS = 5;
 
+// Retry-through-readiness window (#1669). A freshly-launched instance can accept
+// the attach but stream 0 frames and close within ~2s while its PTY/tmux comes
+// up; ~7s of reconnects rides past that without a hard error.
+const MAX_READY_RETRIES = 6;
+const READY_RETRY_MS = 1200;
+
 const textEnc = new TextEncoder();
 const textDec = new TextDecoder();
 
@@ -44,6 +50,13 @@ const toB64 = (s: string): string => {
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
   return btoa(bin);
 };
+
+export function stripTerminalAutoResponses(data: string): string {
+  return data
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b\[\?[0-9;]*[cnhl]/g, '')
+    .replace(/\x1b\[[0-9;]*[Rn]/g, '');
+}
 
 function stripAnsi(text: string): string {
   return text
@@ -76,6 +89,15 @@ export function useSession() {
   const roRef = useRef<ResizeObserver | null>(null);
   const roleRef = useRef<Role>(null); // current role, read by term.onData without re-subscribing
   const outputTailRef = useRef('');
+  const connectionIdRef = useRef(0);
+  // Retry-through-readiness state (#1669): a freshly-launched VM/container can
+  // accept the pty-ws attach, send 0 frames, and close within ~2s because the
+  // agent's PTY/tmux isn't streamable yet. Rather than show a hard
+  // [connection error], reconnect a few times until the first frame arrives.
+  const gotFrameRef = useRef(false);   // any output/keyframe seen on the current attach
+  const retryRef = useRef(0);          // reconnect attempts since the last user-initiated attach
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closedByUserRef = useRef(false); // detach()/new attach — suppress reconnect
   const [state, setState] = useState<SessionState>({ attached: false, role: null, url: null });
   const [responseNeeded, setResponseNeeded] = useState<ResponseNeededState>({ needed: false, prompt: '', since: null, source: 'pty' });
 
@@ -97,7 +119,9 @@ export function useSession() {
     noteOutput(bytes);
     try { termRef.current?.write(bytes); } catch { /* term not open */ }
   };
-  const sendOp = (op: string, payload?: unknown) => { try { wsRef.current?.send(JSON.stringify(payload === undefined ? { op } : { op, payload })); } catch { /* socket closed */ } };
+  const encodeOp = (op: string, payload?: unknown) => JSON.stringify(payload === undefined ? { op } : { op, payload });
+  const sendOp = (op: string, payload?: unknown) => { try { wsRef.current?.send(encodeOp(op, payload)); } catch { /* socket closed */ } };
+  const sendOn = (ws: WebSocket, op: string, payload?: unknown) => { try { ws.send(encodeOp(op, payload)); } catch { /* socket closed */ } };
   const clearResponseNeeded = () => setResponseNeeded({ needed: false, prompt: '', since: null, source: 'pty' });
 
   // Mount the terminal into the host element (ref callback from the Sessions tab).
@@ -111,6 +135,9 @@ export function useSession() {
         convertEol: false, // the PTY/tmux emits its own CR/LF
         scrollback: 2000,
         cursorBlink: false,
+        // Read-only until control is granted: observe must not capture keystrokes
+        // at all (not just drop them on send). Flipped to false on controller.
+        disableStdin: true,
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: 13,
         theme: { background: '#0a0c10', foreground: '#cdd3de' },
@@ -122,11 +149,14 @@ export function useSession() {
       // Forward keystrokes to the PTY only while driving.
       term.onData((data) => {
         if (roleRef.current !== 'controller') return;
+        const userData = stripTerminalAutoResponses(data);
+        if (!userData) return;
         clearResponseNeeded();
-        sendOp('pty.session_input', { data: toB64(data) });
+        sendOp('pty.session_input', { data: toB64(userData) });
       });
       // Keep tmux sized to the terminal so redraws don't wrap/overflow.
       term.onResize(({ cols, rows }) => {
+        if (roleRef.current !== 'controller') return;
         if (cols < RESIZE_FLOOR_COLS || rows < RESIZE_FLOOR_ROWS) return;
         sendOp('pty.session_resize', { cols, rows });
       });
@@ -153,58 +183,114 @@ export function useSession() {
   useEffect(() => () => {
     try { roRef.current?.disconnect(); } catch { /* */ }
     try { termRef.current?.dispose(); } catch { /* */ }
+    closedByUserRef.current = true;
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    connectionIdRef.current += 1;
     wsRef.current?.close();
   }, []);
 
   const attach = useCallback((url: string, replay = false, requestedRole: Exclude<Role, null> = 'observer') => {
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    const connectionId = connectionIdRef.current + 1;
+    connectionIdRef.current = connectionId;
+    closedByUserRef.current = false;
+    retryRef.current = 0;
+    gotFrameRef.current = false;
     wsRef.current?.close();
     if (!replay) lastSeq.current = 0;
     roleRef.current = null;
+    if (termRef.current) termRef.current.options.disableStdin = true; // read-only until role_assigned grants control
     clearResponseNeeded();
     outputTailRef.current = '';
     setState({ attached: false, role: null, url });
     if (!replay) { try { termRef.current?.reset(); } catch { /* */ } }
-    const ws = new WebSocket(replay ? `${url}?replay_from=${lastSeq.current}` : url);
-    wsRef.current = ws;
-    ws.addEventListener('open', () => setState((s) => ({ ...s, attached: true, url })));
-    ws.addEventListener('close', () => { roleRef.current = null; setState((s) => ({ ...s, attached: false, role: null })); });
-    ws.addEventListener('error', () => write(textEnc.encode('\r\n[connection error]\r\n')));
-    ws.addEventListener('message', (ev) => {
-      let m: WsMsg;
-      try { m = JSON.parse(ev.data as string); } catch { return; }
-      switch (m.op) {
-        case 'binding_hello': {
-          sendOp('pty.join_session', { role: requestedRole });
-          // Tell the PTY our current dimensions up front so the first tmux redraw fits.
-          const t = termRef.current;
-          if (t && t.cols >= RESIZE_FLOOR_COLS && t.rows >= RESIZE_FLOOR_ROWS) sendOp('pty.session_resize', { cols: t.cols, rows: t.rows });
-          break;
+
+    // Open (or re-open, on a readiness retry) the data-plane socket.
+    const connect = () => {
+      if (connectionIdRef.current !== connectionId || closedByUserRef.current) return;
+      const ws = new WebSocket(replay ? `${url}?replay_from=${lastSeq.current}` : url);
+      wsRef.current = ws;
+      let gone = false; // a failing socket fires BOTH 'error' and 'close' — handle once
+      ws.addEventListener('open', () => {
+        if (connectionIdRef.current !== connectionId || wsRef.current !== ws) return;
+        setState((s) => ({ ...s, attached: true, url }));
+      });
+      const onGone = (kind: 'close' | 'error') => {
+        if (connectionIdRef.current !== connectionId || wsRef.current !== ws) return;
+        if (gone) return;
+        gone = true;
+        roleRef.current = null;
+        setState((s) => ({ ...s, attached: false, role: null }));
+        // Clean detach, or we were already streaming → leave it (a real end/drop).
+        if (closedByUserRef.current || gotFrameRef.current) return;
+        // Early empty close/error before the first frame → the agent's PTY isn't
+        // streamable yet. Reconnect through the readiness window rather than error.
+        if (retryRef.current < MAX_READY_RETRIES) {
+          retryRef.current += 1;
+          if (retryRef.current === 1) write(textEnc.encode('\r\n[waiting for session…]\r\n'));
+          retryTimerRef.current = setTimeout(connect, READY_RETRY_MS);
+          return;
         }
-        case 'role_assigned':
-          roleRef.current = m.payload?.role ?? null;
-          setState((s) => ({ ...s, role: m.payload?.role ?? null }));
-          requestAnimationFrame(() => fit());
-          break;
-        case 'output':
-          if (m.seq) lastSeq.current = Math.max(lastSeq.current, m.seq);
-          write(b64ToBytes(m.payload?.data ?? ''));
-          break;
-        case 'keyframe':
-          for (const f of m.payload?.frames ?? []) { if (f.seq) lastSeq.current = Math.max(lastSeq.current, f.seq); write(b64ToBytes(f.payload.data)); }
-          break;
-        case 'error':
-          write(textEnc.encode(`\r\n[${m.payload?.code ?? 'error'}]\r\n`));
-          break;
-      }
-    });
+        void kind;
+        write(textEnc.encode('\r\n[connection error — session did not become ready]\r\n'));
+      };
+      ws.addEventListener('close', () => onGone('close'));
+      ws.addEventListener('error', () => onGone('error'));
+      ws.addEventListener('message', (ev) => {
+        if (connectionIdRef.current !== connectionId || wsRef.current !== ws) return;
+        let m: WsMsg;
+        try { m = JSON.parse(ev.data as string); } catch { return; }
+        switch (m.op) {
+          case 'binding_hello': {
+            sendOn(ws, 'pty.join_session', { role: requestedRole, ...(replay ? { replay_from: lastSeq.current } : {}) });
+            // Tell the PTY our current dimensions up front so the first tmux redraw fits.
+            const t = termRef.current;
+            if (requestedRole === 'controller' && t && t.cols >= RESIZE_FLOOR_COLS && t.rows >= RESIZE_FLOOR_ROWS) sendOn(ws, 'pty.session_resize', { cols: t.cols, rows: t.rows });
+            break;
+          }
+          case 'role_assigned': {
+            const role = m.payload?.role ?? null;
+            roleRef.current = role;
+            setState((s) => ({ ...s, role }));
+            // Only a controller may type into the terminal; observers are read-only.
+            if (termRef.current) termRef.current.options.disableStdin = role !== 'controller';
+            // The gateway owns replay/keyframe delivery for joined sessions.
+            // Avoid probing here: on some backends keyframe requests are
+            // controller-gated and create noisy permission errors for observers.
+            requestAnimationFrame(() => fit());
+            break;
+          }
+          case 'output':
+            gotFrameRef.current = true; retryRef.current = 0; // first frame → readiness reached
+            if (m.seq) lastSeq.current = Math.max(lastSeq.current, m.seq);
+            write(b64ToBytes(m.payload?.data ?? ''));
+            break;
+          case 'keyframe':
+            gotFrameRef.current = true; retryRef.current = 0;
+            for (const f of m.payload?.frames ?? []) { if (f.seq) lastSeq.current = Math.max(lastSeq.current, f.seq); write(b64ToBytes(f.payload.data)); }
+            break;
+          case 'error':
+            write(textEnc.encode(`\r\n[${m.payload?.code ?? 'error'}]\r\n`));
+            break;
+        }
+      });
+    };
+    connect();
   }, []);
 
-  const detach = useCallback(() => { wsRef.current?.close(); wsRef.current = null; }, []);
+  const detach = useCallback(() => {
+    closedByUserRef.current = true;
+    connectionIdRef.current += 1;
+    roleRef.current = null;
+    if (termRef.current) termRef.current.options.disableStdin = true; // detached → read-only
+    if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
+    wsRef.current?.close();
+    wsRef.current = null;
+  }, []);
   const replay = useCallback((url: string, requestedRole?: Exclude<Role, null>) => {
     const role = requestedRole ?? roleRef.current ?? 'observer';
-    detach();
-    setTimeout(() => attach(url, true, role), 50);
-  }, [attach, detach]);
+    attach(url, true, role);
+  }, [attach]);
   const requestKeyframe = useCallback(() => sendOp('pty.request_keyframe'), []);
   // Composer line-input (the input row + Actions inject). Raw keystrokes go via term.onData.
   const sendInput = useCallback((text: string): boolean => {

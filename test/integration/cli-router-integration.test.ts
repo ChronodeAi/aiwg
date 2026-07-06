@@ -13,9 +13,9 @@
  * @issue #33 - Unified extension system
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { run, initRouter } from '../../src/cli/router.js';
-import type { HandlerContext, HandlerResult } from '../../src/cli/handlers/types.js';
+import type { CommandHandler, HandlerContext, HandlerResult } from '../../src/cli/handlers/types.js';
 
 // ============================================
 // Test Helpers
@@ -106,6 +106,27 @@ async function runCli(args: string[], options?: { cwd?: string }): Promise<Captu
   return captured;
 }
 
+async function runCliWithMockHandler(
+  commandId: string,
+  handler: CommandHandler,
+  args: string[],
+  options?: { cwd?: string },
+): Promise<CapturedOutput> {
+  const registry = await initRouter();
+  const original = registry.handlerMap.get(commandId);
+  registry.handlerMap.set(commandId, handler);
+
+  try {
+    return await runCli(args, options);
+  } finally {
+    if (original) {
+      registry.handlerMap.set(commandId, original);
+    } else {
+      registry.handlerMap.delete(commandId);
+    }
+  }
+}
+
 // ============================================
 // Tests
 // ============================================
@@ -176,12 +197,29 @@ describe('CLI Router Integration Tests', () => {
     });
 
     it('should route doctor command', async () => {
-      const output = await runCli(['doctor']);
+      let context: HandlerContext | undefined;
+      const output = await runCliWithMockHandler(
+        'doctor',
+        {
+          id: 'doctor',
+          name: 'Mock Doctor',
+          description: 'Mock doctor handler for router dispatch tests',
+          category: 'maintenance',
+          aliases: ['-doctor', '--doctor'],
+          async execute(ctx: HandlerContext): Promise<HandlerResult> {
+            context = ctx;
+            return { exitCode: 0, message: 'mock doctor executed' };
+          },
+        },
+        ['doctor'],
+      );
 
       // Doctor command executes (output depends on environment)
       // Just verify it doesn't show "unknown command"
       const combined = output.stdout.join('\n') + output.stderr.join('\n');
       expect(combined).not.toMatch(/Unknown command: doctor/i);
+      expect(context?.args).toEqual([]);
+      expect(context?.rawArgs).toEqual(['doctor']);
     });
 
     it('should route list command', async () => {
@@ -421,28 +459,66 @@ describe('CLI Router Integration Tests', () => {
   });
 
   describe('Argument Passthrough', () => {
-    it('should pass remaining args to handler', async () => {
-      const output = await runCli(['use', 'sdlc', '--dry-run']);
+    function mockUseHandler(onExecute: (ctx: HandlerContext) => void): CommandHandler {
+      return {
+        id: 'use',
+        name: 'Mock Use',
+        description: 'Mock use handler for router argument passthrough tests',
+        category: 'framework',
+        aliases: [],
+        async execute(ctx: HandlerContext): Promise<HandlerResult> {
+          onExecute(ctx);
+          return { exitCode: 0, message: 'mock use executed' };
+        },
+      };
+    }
 
-      // Command should execute (actual behavior depends on handler)
+    it('should pass remaining args to handler', async () => {
+      let context: HandlerContext | undefined;
+      const output = await runCliWithMockHandler(
+        'use',
+        mockUseHandler((ctx) => {
+          context = ctx;
+        }),
+        ['use', 'sdlc', '--dry-run'],
+      );
+
       const combined = output.stdout.join('\n') + output.stderr.join('\n');
       expect(combined).not.toMatch(/Unknown command/i);
-    }, 60_000);
+      expect(context?.args).toEqual(['sdlc', '--dry-run']);
+      expect(context?.rawArgs).toEqual(['use', 'sdlc', '--dry-run']);
+    });
 
     it('should support --dry-run flag', async () => {
-      const output = await runCli(['use', 'sdlc', '--dry-run']);
+      let context: HandlerContext | undefined;
+      const output = await runCliWithMockHandler(
+        'use',
+        mockUseHandler((ctx) => {
+          context = ctx;
+        }),
+        ['use', 'sdlc', '--dry-run'],
+      );
 
-      // Should execute without actually deploying
       const combined = output.stdout.join('\n') + output.stderr.join('\n');
       expect(combined).not.toMatch(/Unknown command/i);
-    }, 60_000);
+      expect(context?.dryRun).toBe(true);
+    });
 
     it('should pass multiple arguments', async () => {
-      const output = await runCli(['use', 'sdlc', '--provider', 'copilot']);
+      let context: HandlerContext | undefined;
+      const output = await runCliWithMockHandler(
+        'use',
+        mockUseHandler((ctx) => {
+          context = ctx;
+        }),
+        ['use', 'sdlc', '--provider', 'copilot'],
+      );
 
       const combined = output.stdout.join('\n') + output.stderr.join('\n');
       expect(combined).not.toMatch(/Unknown command/i);
-    }, 60_000);
+      expect(context?.args).toEqual(['sdlc', '--provider', 'copilot']);
+      expect(context?.dryRun).toBe(false);
+    });
   });
 
   describe('Working Directory Context', () => {

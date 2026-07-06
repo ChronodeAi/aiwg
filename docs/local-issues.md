@@ -2,6 +2,12 @@
 
 AIWG can keep a project-local issue tracker under `.aiwg/issues/` for projects that do not use Gitea or GitHub as the working tracker. The local tracker is a Git-friendly store: issue bodies live in markdown files, event metadata lives in JSONL files, and indexes are rebuildable.
 
+During agent-led project setup, the assistant may use
+`aiwg setup project --issue-provider local` to configure `.aiwg/aiwg.config` so
+issue operations route to the local store by setting `remotes.issue_tracker` to
+`local`. This does not migrate external issues by itself; use the import/export
+commands below for explicit migration or synchronization work.
+
 ## Layout
 
 ```text
@@ -26,14 +32,29 @@ The canonical files are `items/` and `events/`. The `index/` directory is a cach
 ```bash
 aiwg issue init --prefix PROJECT
 aiwg issue new --title "Fix import flow" --body-file issue.md
-aiwg issue list --status open
+aiwg issue list --status open --search import
 aiwg issue show PROJECT-0001 --comments last:10
 aiwg issue comment PROJECT-0001 --body "Started"
 aiwg issue close PROJECT-0001 --reason "Done"
 aiwg issue index rebuild
 ```
 
-`issue-audit --provider local` and `address-issues --provider local` consume bounded slices from the same provider instead of reading the whole backlog.
+`aiwg issue list` can filter by status, label, type, priority, assignee, and
+search text. `issue-audit --provider local` and `address-issues --provider
+local` consume bounded slices from the same provider instead of reading the
+whole backlog.
+
+## Fortemi Core Migration Note
+
+Local issue search remains served by the local issue provider in the Fortemi
+Core migration preview. The rebuildable `.aiwg/issues/index/issues.index.json`
+cache is still the source for `aiwg issue list --search` and related filters.
+`aiwg issue` commands intentionally do not accept `--backend fortemi-core`; use
+the local issue provider for issue operations and use `aiwg index` commands for
+artifact-index Fortemi Core queries.
+Fortemi exports may include `aiwg.issue` records if a later ADR joins local
+issues into the shared artifact index, but this does not change the local issue
+CLI contract or require a Fortemi backend for issue operations.
 
 ## Import And Export
 

@@ -5,21 +5,59 @@
 // cockpit is in the repo checkout though excluded from the published tarball).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createExecutor } from '../../apps/cockpit/mock-executor/src/server.mjs';
 import { createBridge, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS } from '../../apps/cockpit/bridge/src/server.mjs';
 
 let mock, bridge, base, token;
+const testMcSessionId = `mc-cockpit-test-${Date.now()}`;
+const testMcSessionDir = join(process.cwd(), '.aiwg', 'ralph-external', 'mc', 'sessions', testMcSessionId);
+const testAuditDir = join(process.cwd(), '.aiwg', 'tmp-cockpit-bridge-audit-test');
 const f = (p, o = {}) => fetch(base + p, { ...o, headers: { ...(o.headers || {}), authorization: `Bearer ${token}` } });
 
 beforeAll(async () => {
+  process.env.AIWG_COCKPIT_AUDIT_DIR = testAuditDir;
+  await rm(testAuditDir, { recursive: true, force: true });
   mock = createExecutor();
   await new Promise((r) => mock.listen(0, '127.0.0.1', r));
   bridge = createBridge({ executorUrl: `http://127.0.0.1:${mock.address().port}`, allowMockExecutor: true });
   await new Promise((r) => bridge.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${bridge.address().port}`;
   token = bridge.cockpitToken;
+  await mkdir(testMcSessionDir, { recursive: true });
+  await writeFile(join(testMcSessionDir, 'session.json'), JSON.stringify({
+    id: testMcSessionId,
+    name: 'Cockpit bridge mission projection',
+    state: 'active',
+    maxMissions: 4,
+    createdAt: '2026-07-04T12:00:00.000Z',
+    updatedAt: '2026-07-04T12:05:00.000Z',
+    missions: [{
+      id: 'm-cockpit-projection',
+      objective: 'Bridge Mission projection and unified event model',
+      completion: 'Missions render from durable MC state',
+      status: 'running',
+      loop: 2,
+      maxIterations: 5,
+      priority: 'high',
+      ralphLoopId: 'ralph-loop-1',
+    }],
+  }, null, 2));
+  await writeFile(join(testMcSessionDir, 'log.jsonl'), [
+    JSON.stringify({ event: 'session_started', ts: '2026-07-04T12:00:00.000Z', name: 'Cockpit bridge mission projection' }),
+    JSON.stringify({ event: 'mission_started', ts: '2026-07-04T12:05:00.000Z', missionId: 'm-cockpit-projection', loopId: 'ralph-loop-1' }),
+  ].join('\n') + '\n');
 });
-afterAll(() => { bridge?.close(); mock?.close(); });
+afterAll(async () => {
+  bridge?.close();
+  mock?.close();
+  await rm(testMcSessionDir, { recursive: true, force: true });
+  await rm(testAuditDir, { recursive: true, force: true });
+  delete process.env.AIWG_COCKPIT_AUDIT_DIR;
+});
 
 describe('cockpit Bridge — control surface', () => {
   it('gates /api with the per-launch token; /healthz is open', async () => {
@@ -103,8 +141,63 @@ describe('cockpit Bridge — control surface', () => {
     expect(c.sources.some((x) => x.id === 'aiwg-core')).toBe(true);
     const audit = c.actions.find((a) => a.id === 'audit-issues');
     expect(audit?.inject?.command).toMatch(/issue-audit/);
+    expect(c.screens.find((s) => s.id === 'index-live')).toMatchObject({
+      title: 'Live Index',
+      source: 'cockpit://index/live',
+      contribution: 'aiwg-core',
+    });
+    expect(c.workflows.find((w) => w.id === 'issue-resolution')?.steps.map((s) => s.action)).toEqual(['audit-issues', 'address-issues']);
     // the spawn-aiwg action-run endpoint is gone
     expect((await f('/api/actions/audit-issues/run', { method: 'POST' })).status).toBe(404);
+
+    const intent = await f('/api/audit/intent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        event: 'action.inject.requested',
+        detail: {
+          action_id: audit.id,
+          command: `${audit.inject.command} --token sk-test-secret`,
+        },
+      }),
+    });
+    expect(intent.status).toBe(201);
+    const auditLog = await (await f('/api/audit?limit=5')).json();
+    const event = auditLog.audit.find((x) => x.event === 'action.inject.requested');
+    expect(event).toMatchObject({ actor: 'operator', surface: 'cockpit-bridge' });
+    expect(JSON.stringify(event)).not.toContain('sk-test-secret');
+  });
+
+  it('rejects malformed capability search filters before shelling to aiwg discover', async () => {
+    const missingQuery = await f('/api/capabilities');
+    expect(missingQuery.status).toBe(400);
+    expect(await missingQuery.json()).toMatchObject({ error: 'q_required' });
+
+    const invalidType = await f('/api/capabilities?q=index&type=backend');
+    expect(invalidType.status).toBe(400);
+    expect(await invalidType.json()).toMatchObject({ error: 'invalid_type' });
+
+    for (const limit of ['0', '-1', '2.5', '51', 'many']) {
+      const invalidLimit = await f(`/api/capabilities?q=index&limit=${encodeURIComponent(limit)}`);
+      expect(invalidLimit.status).toBe(400);
+      expect(await invalidLimit.json()).toMatchObject({ error: 'invalid_limit' });
+    }
+  });
+
+  it('surfaces live artifact-index status and validates index query input', async () => {
+    const status = await f('/api/index/status');
+    expect(status.status).toBe(200);
+    const body = await status.json();
+    expect(body.summary).toHaveProperty('total');
+    expect(Array.isArray(body.graphs)).toBe(true);
+
+    const missingQuery = await f('/api/index/query');
+    expect(missingQuery.status).toBe(400);
+    expect(await missingQuery.json()).toMatchObject({ error: 'q_required' });
+
+    const invalidLimit = await f('/api/index/query?q=mission&limit=101');
+    expect(invalidLimit.status).toBe(400);
+    expect(await invalidLimit.json()).toMatchObject({ error: 'invalid_limit' });
   });
 
   it('drives lifecycle, approvals (no flip), and cost', async () => {
@@ -116,7 +209,39 @@ describe('cockpit Bridge — control surface', () => {
     expect(approvals.approvals[0]).toMatchObject({ status: 'pending', task_id: expect.any(String), derived: 'a2a input-required task' });
     expect((await (await f(`/api/approvals/${encodeURIComponent(approvals.approvals[0].id)}?decision=approve`, { method: 'POST' })).json()).status.state).toBe('completed');
     expect((await f(`/api/approvals/${encodeURIComponent(approvals.approvals[0].id)}?decision=deny`, { method: 'POST' })).status).toBe(409);
+    const auditLog = await (await f('/api/audit?limit=20')).json();
+    expect(auditLog.audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'approval.response.submitted', decision: 'approve', status: 200 }),
+      expect.objectContaining({ event: 'approval.response.submitted', decision: 'deny', status: 409 }),
+    ]));
     expect((await (await f('/api/cost')).json()).total.usd).toBeGreaterThan(0);
+  });
+
+  it('projects durable Mission Control state alongside live executor tasks and unified events', async () => {
+    const missions = await (await f('/api/missions')).json();
+    const mcSession = missions.sessions.find((s) => s.id === testMcSessionId);
+    expect(mcSession).toMatchObject({
+      name: 'Cockpit bridge mission projection',
+      source: 'aiwg-mc',
+      audit_count: 2,
+    });
+    expect(mcSession.missions[0]).toMatchObject({
+      id: 'm-cockpit-projection',
+      title: 'Bridge Mission projection and unified event model',
+      status: 'running',
+      ralph_loop_id: 'ralph-loop-1',
+      source: 'aiwg-mc',
+    });
+    expect(missions.sessions.some((s) => s.id === 'executor-live')).toBe(true);
+
+    const events = await (await f('/api/events/snapshot')).json();
+    expect(events.source).toBe('cockpit.unified-event-model/v1');
+    expect(events.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'mission.lifecycle', subject: 'm-cockpit-projection', state: 'running' }),
+      expect.objectContaining({ type: 'task.lifecycle' }),
+      expect.objectContaining({ type: 'inventory.instance' }),
+      expect.objectContaining({ type: 'session.lifecycle', subject: 'demo-shell', state: 'available' }),
+    ]));
   });
 });
 
@@ -163,6 +288,20 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
               launchContext: { cwd: '/work', selectedTier: 'host' },
               hostDaemon: { status: 'degraded', detail: 'reachable with warnings' },
               security: { transport: { mode: 'mtls-local-ca', source: 'v2 admin', evidence: 'peer cert fingerprint' } },
+            }, {
+              instanceId: 'ghost-vm-1',
+              runtime: { kind: 'qemu' },
+              loadout: 'vm-tools',
+              status: 'running',
+              tenantId: 'default',
+              launchContext: { selectedTier: 'vm' },
+            }, {
+              instanceId: 'ready-qemu-1',
+              runtime: { kind: 'qemu' },
+              loadout: 'vm-tools',
+              status: 'running',
+              tenantId: 'default',
+              launchContext: { selectedTier: 'vm' },
             }],
           },
         });
@@ -187,13 +326,23 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
         return send(200, { destroyed: 'v2-host-1' });
       }
       if (url.pathname === '/api/v1/agents') {
-        return send(200, { agents: [{ id: 'agent-v2-host-1', instance_id: 'v2-host-1', status: 'Ready' }] });
+        return send(200, { agents: [
+          { id: 'agent-v2-host-1', instance_id: 'v2-host-1', status: 'Ready' },
+          { id: 'agent-ready-qemu-1', instance_id: 'ready-qemu-1', status: 'Ready' },
+        ] });
       }
       if (url.pathname === '/agents/v2-host-1/sessions') return send(404, { error: 'legacy_sessions_absent' });
       if (url.pathname === '/agents/v2-host-1/v1/sessions') return send(404, { error: 'preformal_sessions_absent' });
       if (url.pathname === '/api/v1/agents/v2-host-1/sessions') return send(404, { error: 'instance_id_is_not_session_agent_id' });
       if (url.pathname === '/api/v1/agents/agent-v2-host-1/sessions' && req.method === 'GET') {
-        return send(200, { items: [{ sessionId: 'sess-v2', seq: 2, members: 1, role_policy: 'observe-default', pty_ws_url: 'wss://{host}/agents/v2-host-1/sessions/sess-v2/attach' }] });
+        // Executor can list the same session twice (double-registered in its
+        // registry); the Bridge must dedup so the picker shows it once.
+        // No pty_ws_url here on purpose, so attach_url goes through the Bridge's
+        // fallback construction — which must key the path by the instance id
+        // (v2-host-1), NOT the resolved agent name (agent-v2-host-1) the
+        // executor's pty-ws route would reject (#1671).
+        const one = { sessionId: 'sess-v2', seq: 2, members: 1, role_policy: 'observe-default' };
+        return send(200, { items: [one, { ...one }] });
       }
       // A2A task surface the Bridge derives the running board + approval inbox from (#1639).
       if (url.pathname === '/agents/agent-v2-host-1/tasks' || url.pathname === '/api/v1/agents/agent-v2-host-1/tasks') {
@@ -239,6 +388,12 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
       host_daemon: { status: 'degraded' },
     });
     expect(inv.instances[0].session_backends[0]).toMatchObject({ mode: 'managed', backend: 'tmux', available: true, drive: true });
+    expect(inv.instances.find((x) => x.id === 'ready-qemu-1')).toMatchObject({
+      runtime: 'qemu',
+      runtime_posture: { kind: 'vm', isolation: 'strong' },
+      agent_ready: true,
+      session_backends: [expect.objectContaining({ mode: 'managed', backend: 'tmux', available: true, drive: true })],
+    });
 
     const running = await (await cf('/api/running')).json();
     expect(running.running[0]).toMatchObject({ instance_id: 'v2-host-1', task_id: 'task-1', state: 'working' });
@@ -251,15 +406,20 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
     expect(approved).toMatchObject({ id: 'hitl-1', status: { state: 'completed' } });
 
     const sessions = await (await cf('/api/sessions?instance=v2-host-1')).json();
+    // Executor returned sess-v2 twice; the Bridge dedups to a single row.
+    expect(sessions.sessions).toHaveLength(1);
     expect(sessions.sessions[0]).toMatchObject({ id: 'sess-v2', instance_id: 'v2-host-1' });
+    // #1671: the fallback-built attach_url keys the agent segment by the instance
+    // id, never the resolved agent name (agent-v2-host-1), which the route rejects.
     expect(sessions.sessions[0].attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/agents\/v2-host-1\/sessions\/sess-v2\/attach$/);
+    expect(sessions.sessions[0].attach_url).not.toContain('agent-v2-host-1');
   });
 
   it('creates sessions through the formal agentic-sandbox v1 session API', async () => {
     const created = await (await cf('/api/instances/v2-host-1/sessions', { method: 'POST' })).json();
     expect(created).toMatchObject({
       id: 'sess-created-v1',
-      requested: { session_backend: 'tmux', session_class: 'managed', command: 'bash' },
+      requested: { session_backend: 'tmux', session_class: 'managed', command: 'bash', working_dir: '/work' },
     });
     expect(created.attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/agents\/v2-host-1\/sessions\/sess-created-v1\/attach$/);
   });
@@ -268,6 +428,16 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
     expect(await (await cf('/api/instances/v2-host-1/start', { method: 'POST' })).json()).toMatchObject({ status: 'running' });
     expect(await (await cf('/api/instances/v2-host-1/stop', { method: 'POST' })).json()).toMatchObject({ status: 'stopped' });
     expect(await (await cf('/api/instances/v2-host-1', { method: 'DELETE' })).json()).toMatchObject({ destroyed: 'v2-host-1' });
+  });
+
+  it('treats destroy 404 for an inventory-visible stale instance as already gone', async () => {
+    const res = await cf('/api/instances/ghost-vm-1', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      destroyed: 'ghost-vm-1',
+      already_gone: true,
+      result: { state: 'destroyed' },
+    });
   });
 });
 
@@ -384,6 +554,44 @@ describe('cockpit Bridge — port defaults off the executor range (#1634)', () =
   it('rejects an invalid PORT', () => {
     expect(() => resolveBridgePort({ PORT: 'nope' })).toThrow(/Invalid Bridge port/);
     expect(() => resolveBridgePort({ PORT: '70000' })).toThrow(/Invalid Bridge port/);
+  });
+});
+
+describe('cockpit Bridge — OS-keychain strict runtime token mode (#1595)', () => {
+  it('refuses to launch with a plaintext runtime token when strict mode cannot store to keychain', async () => {
+    const home = join(process.cwd(), '.aiwg', 'tmp-cockpit-strict-test');
+    await rm(home, { recursive: true, force: true });
+    await mkdir(home, { recursive: true });
+    const bridgePath = fileURLToPath(new URL('../../apps/cockpit/bridge/src/server.mjs', import.meta.url));
+    const port = 23000 + Math.floor(Math.random() * 1000);
+    const child = spawn(process.execPath, [bridgePath], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PORT: String(port),
+        AIWG_COCKPIT_EXECUTOR_URL: 'http://127.0.0.1:1',
+        AIWG_COCKPIT_AUTOSTART_EXECUTOR: '0',
+        AIWG_COCKPIT_KEYCHAIN_STRICT: '1',
+        AIWG_COCKPIT_KEYCHAIN_DISABLED: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += d; });
+    const code = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve('timeout');
+      }, 5000);
+      child.once('close', (c) => {
+        clearTimeout(timer);
+        resolve(c);
+      });
+    });
+    await rm(home, { recursive: true, force: true });
+    expect(code).toBe(1);
+    expect(stderr).toMatch(/failed to persist runtime token/i);
+    expect(stderr).toMatch(/keychain/i);
   });
 });
 

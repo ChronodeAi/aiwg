@@ -963,6 +963,12 @@ export function computeAllKernelNames(srcRoot) {
   const hasAiwgTree = (dir) =>
     fs.existsSync(path.join(dir, 'agentic', 'code', 'frameworks')) &&
     fs.existsSync(path.join(dir, 'agentic', 'code', 'addons'));
+  const isRootOrSourceDescendant = (candidate, original) => {
+    const root = path.resolve(candidate);
+    const source = path.resolve(original);
+    const agenticCode = path.join(root, 'agentic', 'code');
+    return source === root || source === agenticCode || source.startsWith(`${agenticCode}${path.sep}`);
+  };
 
   // Prefer an explicit AIWG_ROOT, but only when it actually points at a real
   // AIWG tree — a stale/bogus env value must not silently yield an empty
@@ -974,7 +980,7 @@ export function computeAllKernelNames(srcRoot) {
   } else {
     let cur = path.resolve(srcRoot);
     for (let i = 0; i < 8; i++) {
-      if (hasAiwgTree(cur)) { aiwgRoot = cur; break; }
+      if (hasAiwgTree(cur) && isRootOrSourceDescendant(cur, srcRoot)) { aiwgRoot = cur; break; }
       const parent = path.dirname(cur);
       if (parent === cur) break;
       cur = parent;
@@ -1169,13 +1175,19 @@ export function resolveAiwgRoot(srcRoot) {
   const hasTree = (dir) =>
     fs.existsSync(path.join(dir, 'agentic', 'code', 'frameworks')) &&
     fs.existsSync(path.join(dir, 'agentic', 'code', 'addons'));
+  const isRootOrSourceDescendant = (candidate, original) => {
+    const root = path.resolve(candidate);
+    const source = path.resolve(original);
+    const agenticCode = path.join(root, 'agentic', 'code');
+    return source === root || source === agenticCode || source.startsWith(`${agenticCode}${path.sep}`);
+  };
 
   if (process.env.AIWG_ROOT && hasTree(process.env.AIWG_ROOT)) {
     return process.env.AIWG_ROOT;
   }
   let cur = path.resolve(srcRoot);
   for (let i = 0; i < 8; i++) {
-    if (hasTree(cur)) return cur;
+    if (hasTree(cur) && isRootOrSourceDescendant(cur, srcRoot)) return cur;
     const parent = path.dirname(cur);
     if (parent === cur) break;
     cur = parent;
@@ -1230,6 +1242,7 @@ export function pruneStaleAiwgFiles(destDir, desiredStems, opts = {}) {
     const name = entry.name;
     if (name === MANIFEST_FILENAME) continue;
     if (name === 'RULES-INDEX.md') continue;
+    if (name === 'RULES-ONDEMAND.md') continue; // generated on-demand index (#1673)
     const lower = name.toLowerCase();
     if (!lower.endsWith('.md') && !lower.endsWith('.mdc')) continue;
 
@@ -1574,12 +1587,14 @@ export function buildRemotesTopologyBlock(targetDir) {
 export function interpolateContextTokens(content, opts) {
   const counts = opts?.counts || {};
   const topology = opts?.topology || '';
+  const onDemandRules = opts?.onDemandRules || '';
   return content
     .replace(/\{\{AGENTS_COUNT\}\}/g, String(counts.agents || 0))
     .replace(/\{\{COMMANDS_COUNT\}\}/g, String(counts.commands || 0))
     .replace(/\{\{SKILLS_COUNT\}\}/g, String(counts.skills || 0))
     .replace(/\{\{RULES_COUNT\}\}/g, String(counts.rules || 0))
-    .replace(/\{\{REMOTES_TOPOLOGY\}\}/g, topology);
+    .replace(/\{\{REMOTES_TOPOLOGY\}\}/g, topology)
+    .replace(/\{\{ON_DEMAND_RULES\}\}/g, onDemandRules);
 }
 
 /**
@@ -1617,10 +1632,14 @@ export function createManagedMdFromTemplate(target, destFilename, srcRoot, templ
   }
 
   let template = fs.readFileSync(templatePath, 'utf8');
-  // Token interpolation — gives every template-based provider {{REMOTES_TOPOLOGY}}
-  // and the shared count tokens for free.
+  // Token interpolation — gives every template-based provider {{REMOTES_TOPOLOGY}},
+  // {{ON_DEMAND_RULES}} (#1675), and the shared count tokens for free. The
+  // on-demand list is computed lazily only when the template references it.
   template = interpolateContextTokens(template, {
     topology: buildRemotesTopologyBlock(target),
+    onDemandRules: template.includes('{{ON_DEMAND_RULES}}')
+      ? renderOnDemandRuleSection(listOnDemandRuleFiles(srcRoot), { heading: '### On-Demand Rules' })
+      : '',
   });
 
   // Extract the AIWG section from the template (everything from its section
@@ -1967,11 +1986,13 @@ export function collectFrameworkArtifacts(srcRoot, mode, options = {}) {
           artifacts.rules.push(
             ...listMdFiles(framework.components.rules.path)
               .filter((f) => !f.endsWith(indexBase))
+              .filter(isAlwaysOnRule) // tier gate (#1673)
           );
           continue;
         }
       }
-      artifacts.rules.push(...listMdFiles(framework.components.rules.path));
+      // tier gate (#1673): inline only always-on (CRITICAL/HIGH) rules
+      artifacts.rules.push(...listMdFiles(framework.components.rules.path).filter(isAlwaysOnRule));
     }
   }
 
@@ -2092,6 +2113,133 @@ export function getAddonSkillDirs(srcRoot, excludeAddons = []) {
  * @param {string[]} excludeAddons - Addon names to exclude (default: none)
  * @returns {string[]} - Array of rule file paths
  */
+/**
+ * Read a rule's enforcement level from its `enforcement:` frontmatter
+ * (#1673). Returns 'critical' | 'high' | 'medium' | 'low' | null.
+ */
+export function ruleEnforcementLevel(content) {
+  const m = content.match(/^---\n([\s\S]*?)\n---/);
+  if (!m) return null;
+  const e = m[1].match(/^enforcement:\s*([A-Za-z]+)/m);
+  return e ? e[1].toLowerCase() : null;
+}
+
+/**
+ * Tier gate (#1673, enforcement-tiered deployment ADR). Only CRITICAL and HIGH
+ * rules are inlined into a provider's always-on rule directory; MEDIUM/LOW are
+ * left on-demand (reachable via `aiwg show rule <name>` and the assembled
+ * RULES-INDEX pointer index). Index files and rules with no enforcement marker
+ * default to always-on, so an un-triaged or structural file is never dropped.
+ */
+export function isAlwaysOnRule(filePath) {
+  const base = path.basename(filePath);
+  if (base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md') return true;
+  try {
+    const lvl = ruleEnforcementLevel(fs.readFileSync(filePath, 'utf8'));
+    return lvl !== 'medium' && lvl !== 'low';
+  } catch {
+    return true; // unreadable → keep (safe default)
+  }
+}
+
+/** Enumerate MEDIUM/LOW rule files (the on-demand tier) for the index. */
+export function listOnDemandRuleFiles(srcRoot, excludeAddons = []) {
+  const out = [];
+  const consider = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const f of listMdFiles(dir)) {
+      const b = path.basename(f);
+      if (b === 'RULES-INDEX.md' || b === 'RULES-ONDEMAND.md') continue;
+      if (!isAlwaysOnRule(f)) out.push(f);
+    }
+  };
+  for (const addon of discoverAddons(srcRoot)) {
+    if (excludeAddons.includes(addon.name)) continue;
+    consider(path.join(addon.path, 'rules'));
+  }
+  const codeRoot = path.join(resolveAiwgRoot(srcRoot) || srcRoot, 'agentic', 'code');
+  for (const fwDir of ['frameworks', 'extensions']) {
+    const base = path.join(codeRoot, fwDir);
+    if (!fs.existsSync(base)) continue;
+    for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+      if (entry.isDirectory()) consider(path.join(base, entry.name, 'rules'));
+    }
+  }
+  return out;
+}
+
+/**
+ * Sorted, de-duplicated rule names (basename minus `.md`) from a list of
+ * on-demand rule file paths. Shared by the discrete index writer and the
+ * aggregated-bridge section renderer so both stay in lock-step.
+ */
+export function onDemandRuleNames(onDemandFiles, exclude = []) {
+  const skip = new Set(exclude);
+  return [...new Set((onDemandFiles || []).map((f) => path.basename(f).replace(/\.md$/, '')))]
+    .filter((n) => !skip.has(n))
+    .sort();
+}
+
+/**
+ * Render the on-demand rule list as a markdown section (#1675) for aggregated
+ * providers whose rules live in a single bridge file (WARP.md, AGENTS.md)
+ * rather than a discrete `RULES-ONDEMAND.md`. Returns '' when nothing is
+ * on-demand so callers can skip the section entirely. `exclude` drops names
+ * already inlined verbatim in the bridge (e.g. Warp's aiwg-utils set).
+ */
+export function renderOnDemandRuleSection(onDemandFiles, opts = {}) {
+  const names = onDemandRuleNames(onDemandFiles, opts.exclude || []);
+  if (names.length === 0) return '';
+  const heading = opts.heading || '## On-Demand Rules';
+  return [
+    heading,
+    '',
+    'These MEDIUM/LOW-enforcement rules are not inlined here, to keep the',
+    'always-on context small. They still apply when relevant — fetch any body',
+    'on demand:',
+    '',
+    '```bash',
+    'aiwg show rule <name>',
+    '```',
+    '',
+    ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
+  ].join('\n');
+}
+
+/**
+ * Write a compact on-demand rule index (#1673) into a provider's rule dir.
+ * Lists the MEDIUM/LOW rules that are NOT inlined at startup, with the
+ * `aiwg show rule <name>` fetch hint. Removes a stale index when empty.
+ */
+export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
+  const indexPath = path.join(destDir, 'RULES-ONDEMAND.md');
+  const names = onDemandRuleNames(onDemandFiles);
+  if (names.length === 0) {
+    try {
+      if (fs.existsSync(indexPath) && !opts.dryRun) fs.rmSync(indexPath);
+    } catch { /* ignore */ }
+    return 0;
+  }
+  const lines = [
+    '# On-Demand Rules (not inlined at startup)',
+    '',
+    'These MEDIUM/LOW-enforcement rules are not loaded into every session, to keep',
+    'the standard-context startup budget small. They still apply when relevant —',
+    'fetch any rule body on demand:',
+    '',
+    '```bash',
+    'aiwg show rule <name>',
+    '```',
+    '',
+    ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
+    '',
+  ];
+  let content = lines.join('\n');
+  content = addManagedMarker(content, opts.deployVersion || 'unknown', opts.deploySource || 'bundled');
+  if (!opts.dryRun) fs.writeFileSync(indexPath, content, 'utf8');
+  return names.length;
+}
+
 export function getAddonRuleFiles(srcRoot, excludeAddons = []) {
   const addons = discoverAddons(srcRoot);
   const files = [];
@@ -2109,7 +2257,10 @@ export function getAddonRuleFiles(srcRoot, excludeAddons = []) {
     }
   }
 
-  return files;
+  // Tier gate (#1673): inline only always-on (CRITICAL/HIGH) rules. MEDIUM/LOW
+  // stay on-demand. Applied here so both the deploy enumeration and the prune
+  // desired-set (computeAllArtifactBasenames) exclude them for every provider.
+  return files.filter(isAlwaysOnRule);
 }
 
 /**
@@ -2527,6 +2678,7 @@ export function cleanupOldRuleFiles(rulesDir, opts = {}) {
     if (!entry.isFile()) continue;
     if (!entry.name.toLowerCase().endsWith('.md')) continue;
     if (entry.name === 'RULES-INDEX.md') continue;
+    if (entry.name === 'RULES-ONDEMAND.md') continue; // generated on-demand index (#1675) — protected like RULES-INDEX
     if (incomingBasenames.has(entry.name)) continue;
 
     const filePath = path.join(rulesDir, entry.name);

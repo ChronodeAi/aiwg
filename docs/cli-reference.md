@@ -139,7 +139,7 @@ aiwg doctor [--provider <name>] [--all-providers] [--project-local] [--quiet]
 
 **Flags:**
 
-- `--provider <name>` — Inspect a specific provider's deployment paths (claude, factory, codex, copilot, cursor, opencode, warp, windsurf, openclaw, hermes). Defaults to auto-detect across deployed providers.
+- `--provider <name>` — Inspect a specific provider's deployment paths (claude, factory, codex, copilot, cursor, opencode, warp, windsurf, openclaw, openhuman, hermes). Defaults to auto-detect across deployed providers.
 - `--all-providers` — Enumerate every supported provider, including ones with nothing deployed.
 - `--project-local` — Show only the project-local artifacts section. Exit code reflects only project-local findings.
 - `--quiet` — Suppress informational subsections (counts, shadows). Show only failures.
@@ -362,7 +362,7 @@ aiwg use <framework|addon>
 
 **Options:**
 
-- `--provider <name>` - Target platform (claude, copilot, factory, cursor, windsurf, warp, codex, opencode, hermes, openclaw, local)
+- `--provider <name>` - Target platform (claude, copilot, factory, cursor, windsurf, warp, codex, opencode, hermes, openclaw, openhuman, local)
 - `--model <name>` - Override model for all tiers (blanket)
 - `--reasoning-model <name>` - Override reasoning tier model (alias: `--reasoning`)
 - `--coding-model <name>` - Override coding tier model (alias: `--coding`)
@@ -373,6 +373,8 @@ aiwg use <framework|addon>
 - `--force` - Overwrite existing deployments
 - `--dry-run` - Preview without making changes
 - `--ci-hooks-enabled` - Also deploy CI workflow files to `.github/workflows/` and/or `.gitea/workflows/` (opt-in; detects forge from `.git/config`). Review deployed files before committing.
+- `--harness-agents <list>` - OpenHuman only: replace the default curated native `spawn_subagent` TOML agent set with a comma-separated list (for example `test-engineer,security-auditor`).
+- `--no-harness-agents` - OpenHuman only: skip native TOML harness agents and deploy only kernel skills/rules.
 - `--skip-commands-migration` - Skip deleting the legacy commands directory (warns about duplicate entries in the command palette)
 - `--profile <name>` - Select a topology profile for addons that declare multiple page templates (e.g., `llm-wiki` ships `book-companion | personal | research-deep-dive | business-team | generic`). Without the flag, an interactive prompt appears on TTY. The selection is written to `.aiwg/<namespace>/config.json` so subsequent skill invocations pick the right template.
 
@@ -459,6 +461,7 @@ aiwg use sdlc --ci-hooks-enabled --dry-run
 | OpenCode | `opencode` | `.opencode/agent/`, `.opencode/commands/`, `.opencode/skill/`, `.opencode/rule/` | — |
 | Hermes | `hermes` | `~/.hermes/skills/`, `AGENTS.md` (lean) | — |
 | OpenClaw | `openclaw` | `~/.openclaw/agents/`, `~/.openclaw/commands/`, `~/.openclaw/skills/`, `~/.openclaw/rules/`, `~/.openclaw/behaviors/` | ✓ |
+| OpenHuman | `openhuman` | `.agents/agents/`, `~/.openhuman/skills/`, `~/.openhuman/.aiwg/{skills,rules}/`, `AGENTS.md` | — |
 | Local/Ollama | `local` | Same as `claude` (local model, Claude Code paths) | — |
 
 **Commands → Skills migration:**
@@ -591,7 +594,7 @@ aiwg promote <name> [--to upstream|corpus <path>] [--dry-run] [--cleanup] [--for
 
 **Flags:**
 
-- `--to upstream` (default) — Copy to `agentic/code/addons/<name>/` (or `agentic/code/frameworks/<name>/` for `type: framework`)
+- `--to upstream` (default) — Copy to `agentic/code/addons/<name>/`, `agentic/code/frameworks/<name>/`, or `agentic/code/providers/<name>/` based on bundle type.
 - `--to corpus <path>` — Copy to `<path>/<name>/`. The path must exist; `<name>` must not pre-exist there.
 - `--dry-run` — Print the plan (source, destination, file count, total bytes); no writes.
 - `--cleanup` — Remove the `.aiwg/<type>/<name>/` source after a successful copy.
@@ -631,7 +634,7 @@ aiwg promote my-team-rules --cleanup                 # remove .aiwg source after
 Scaffold a project-local bundle under `.aiwg/{type}/{name}/` with a valid manifest, a starter artifact, and a README that includes the identical-form portability reminder.
 
 ```bash
-aiwg new-bundle <name> [--type extension|addon|framework|plugin] [--starter skill|rule|agent|minimal] [--description "..."]
+aiwg new-bundle <name> [--type extension|addon|framework|plugin|provider] [--starter skill|rule|agent|minimal] [--description "..."]
 ```
 
 **Arguments:**
@@ -640,11 +643,11 @@ aiwg new-bundle <name> [--type extension|addon|framework|plugin] [--starter skil
 
 **Flags:**
 
-- `--type` — Bundle type (default: `extension`). Inferred from invocation when called via aliases (`new-extension`, `new-addon`, `new-framework`, `new-plugin`).
-- `--starter` — Which starter artifact to drop in. Default: `skill` for addon/extension; `minimal` for framework/plugin.
+- `--type` — Bundle type (default: `extension`). Inferred from invocation when called via aliases (`new-extension`, `new-addon`, `new-framework`, `new-plugin`, `new-provider`).
+- `--starter` — Which starter artifact to drop in. Default: `skill` for addon/extension; `minimal` for framework/plugin/provider.
 - `--description` — Free-text human description for the manifest.
 
-**Aliases:** `new-extension`, `new-addon`, `new-framework`, `new-plugin`
+**Aliases:** `new-extension`, `new-addon`, `new-framework`, `new-plugin`, `new-provider`
 
 **Capabilities:** cli, scaffolding, project-local
 **Platforms:** All
@@ -664,12 +667,17 @@ aiwg new-framework healthcare-sdlc
 
 # Plugin (minimal starter)
 aiwg new-plugin my-distro --starter minimal
+
+# Provider selector that reuses an existing adapter
+aiwg new-provider my-provider
+aiwg use sdlc --provider my-provider
 ```
 
 **What gets created:**
 
 - `manifest.json` — valid against the canonical schema, all required fields filled
 - `README.md` — usage, customization tips, identical-form reminder, deploy/remove/promote commands
+- Provider bundles include `providerConfig.extends`; in phase 0 this reuses an existing writer adapter and does not define new output paths by itself. Optional `providerConfig.capabilities` overrides are consumed by `aiwg steward capabilities --provider <custom>`.
 - Starter artifact: `skills/<name>-skill/SKILL.md`, `rules/<name>.md`, or `agents/<name>.md` depending on `--starter`
 - Type-specific stubs: `src/.gitkeep` for framework, `payload/.gitkeep` for plugin
 
@@ -757,6 +765,17 @@ aiwg packages remove <key>
 ---
 
 ## Project Setup
+
+For normal use, front project setup through the AIWG agent or setup skill:
+
+```text
+Help me set up this project for AIWG.
+```
+
+The agent should work with the user interactively to establish repo behavior,
+issue storage, delivery policy, signing expectations, provider choices, and any
+local issue-store needs. The CLI commands below are the underlying tools the
+agent may call while doing that work.
 
 ### new
 
@@ -953,6 +972,48 @@ aiwg init [--force] [--non-interactive | --yes]
 **Tools:** Read, Write
 
 If a config already exists, the command exits without changes unless `--force` is passed.
+
+---
+
+### setup
+
+CLI helper for project-level repository policy, issue tracker routing, delivery
+mode, and signing metadata. This command is usually called by an AIWG
+agent/skill during the guided setup conversation rather than used as the first
+user-facing step.
+
+```bash
+aiwg setup project [--yes] [--dry-run] [--target <dir>]
+```
+
+The helper detects Git remotes and proposes `remotes.primary`,
+`remotes.issue_tracker`, `remotes.ci`, secondary mirrors, tracker tooling,
+delivery policy, committer identity, and signing metadata. Agents should use
+`--dry-run` first, discuss the preview with the user, then write only after the
+policy choices are understood. In non-interactive contexts it refuses to write
+unless `--yes` is present.
+
+Common overrides:
+
+```bash
+aiwg setup project --dry-run
+aiwg setup project --yes --providers claude,codex
+aiwg setup project --yes --issue-provider gitea --tracker-actor-login roctinam
+aiwg setup project --yes --delivery-mode direct --default-branch main
+aiwg setup project --yes --issue-provider local
+```
+
+`--issue-provider` accepts `gitea`, `github`, or `local`. Local mode writes
+`remotes.issue_tracker: "local"` and pairs with the `.aiwg/issues/` store
+managed by `aiwg issue init`. Self-hosted remotes that cannot be classified from
+their URL require an explicit provider choice or confirmation.
+
+The helper validates the proposed repo/tracker/delivery/signing combination
+before writing. Manual `.aiwg/aiwg.config` editing remains available for
+advanced cases, but the preferred user experience is the agent-led setup flow.
+
+**Capabilities:** cli, project, config, setup, issues, delivery-policy
+**Tools:** Read, Write, Bash
 
 ---
 
@@ -3035,7 +3096,7 @@ aiwg ralph-config preset conservative
 
 ### doc-sync
 
-Synchronize documentation and code to eliminate drift.
+Synchronize documentation and code with bounded, scope-first drift checks.
 
 ```bash
 aiwg doc-sync <direction> [options]
@@ -3051,7 +3112,7 @@ aiwg doc-sync <direction> [options]
 - `--guidance "text"` - Human guidance for ambiguous cases
 - `--scope "path"` - Limit to specific directory (default: `.`)
 - `--dry-run` - Audit only, no modifications
-- `--parallel N` - Max concurrent audit agents (default: 4)
+- `--parallel N` - Max concurrent audit agents (default: 2, maximum: 4)
 - `--incremental` - Git-diff since last sync instead of full scan
 - `--verbose` - Detailed per-file findings
 - `--no-commit` - Skip auto-commit
@@ -3071,15 +3132,13 @@ aiwg doc-sync <direction> [options]
 
 **Execution phases:**
 
-1. Init and file inventory
-2. Parallel domain audit (8 auditors)
-3. Cross-reference validation
-4. Drift report generation
-5. Sync planning (auto-fixable / template-fixable / human-required)
-6. Auto-fix application
-7. agent loop refinement for complex items
-8. Validation of changes
-9. Record sync state and commit
+1. Inspect changed files and derive a bounded scope
+2. Select only the audit lanes relevant to that scope
+3. Run capped auditors with concise findings and detailed notes under `.aiwg/working/doc-sync/`
+4. Merge summaries into a drift report
+5. Apply high-confidence fixes when not running `--dry-run`
+6. Validate modified files with targeted checks
+7. Record sync state and commit only when requested by the surrounding workflow
 
 **Examples:**
 
@@ -3369,10 +3428,19 @@ aiwg discover "<phrase>" [options]
 
 **Options:**
 
-- `--limit <N>` — Max ranked results (default: 10)
-- `--type <kinds>` — Comma-separated filter; defaults to `skill,agent,command,rule`. Examples: `--type skill`, `--type skill,agent`
-- `--json` — Emit a stable JSON schema (`path`, `type`, `title`, `score`, `triggers`, `capability`, `kernel`) for programmatic agent consumption
+- `--limit <N>` — Max ranked results (default: 5)
+- `--type <kinds>` — Comma-separated filter; defaults to `skill,agent,command,rule,flow`. Examples: `--type skill`, `--type skill,agent`
+- `--json` / `--format json` — Emit a stable JSON schema (`id`, `type`, `name`, `title`, `score`, `triggers`, `capability`, `kernel`, `provenance`) for programmatic agent consumption. Paths are intentionally omitted from discover output; use `aiwg show metadata <id>` when path/debug metadata is required.
+- `--format text` — Emit readable text output (default).
+- `--pretty` — Pretty-print JSON output with indentation (default for compatibility).
+- `--compact` — Emit single-line JSON output for scripts.
 - `--graph <name>` — Override the default graph. Defaults to `framework` (the AIWG capability graph), which is rebuilt automatically after every `aiwg use`.
+- `--backend <fortemi-core|local>` — Query backend. Default is
+  `fortemi-core`; `local` selects the legacy local fallback. The Fortemi Core
+  backend reads the static cache created by `aiwg index sync`. For the
+  `framework` graph it can
+  fall back to the packaged prebuilt index described in
+  [`docs/fortemi-core-prebuilt-indices.md`](fortemi-core-prebuilt-indices.md).
 
 **Examples:**
 
@@ -3380,26 +3448,26 @@ aiwg discover "<phrase>" [options]
 aiwg discover "create intake"                       # ranks intake-* skills + intake-coordinator agent
 aiwg discover "deploy production" --limit 3         # flow-deploy-to-production tops at score 0.51
 aiwg discover "audit security" --type skill         # narrow to skills only
-aiwg discover "review code" --type agent --json     # JSON for sub-agent consumption
+aiwg discover "review code" --type agent --format json --compact # JSON for sub-agent consumption
+aiwg discover "static retrieval" --json                # legacy JSON alias
 ```
 
 **Output (default):**
 
-Token-tight format optimized for in-context agent consumption — names the path, type, score, the top trigger phrase that earned the match, and the capability description.
+Readable format optimized for agent follow-up — names the stable id, type, score, top trigger phrase, capability description, and the next `aiwg show` command.
 
 ```
 Discovery results for "deploy production" (3 matches, 16ms):
 
-    score=0.51  skill   .../sdlc-complete/skills/flow-deploy-to-production/SKILL.md
-                Orchestrate production deployment with strategy selection, validation,
-                automated rollback, and regression gates
-    score=0.36  skill   .../aiwg-utils/skills/customize-rebuild/SKILL.md
-                Rebuild and redeploy AIWG from local customization source
-                trigger: "apply my changes"
-    score=0.26  agent   .../media-marketing-kit/agents/production-coordinator.md
-                Manages creative production workflows, coordinates timelines
+1. Flow Deploy To Production
+   type: skill  score: 0.51
+   id: aiwg:skill:6f1477d99813ca8d
+   name: flow-deploy-to-production
+   capability: Orchestrate production deployment with strategy selection, validation,
+   trigger: "deploy production"
+   show: aiwg show skill aiwg:skill:6f1477d99813ca8d
 
-★ = kernel skill (always-loaded). Others are reachable via the index.
+Use `--format json` for machine-readable output. Use `aiwg show metadata <id>` for paths and full metadata.
 ```
 
 **How scoring works:**
@@ -3421,44 +3489,51 @@ Multi-token queries require ≥50% token overlap to surface partial matches — 
 Print the full text of a specific AIWG skill, agent, command, or rule by name (#1218). The companion to `discover`: where discover ranks candidates, show fetches the body so consumers don't navigate AIWG's storage paths themselves.
 
 ```bash
-aiwg show <type> <name> [options]
+aiwg show <type> <id-or-name-or-path> [options]
+aiwg show metadata <id-or-name-or-path> [options]
 aiwg index show <type> <name> [options]      # equivalent
 ```
 
-**Type** is positional and required. Allowed values: `skill`, `agent`, `command`, `rule`.
+**Type** is positional for body lookup. Allowed values: `skill`, `agent`, `command`, `rule`. Metadata lookup uses `metadata` as the subcommand and accepts the same identifier/name/path forms.
 
 **Options:**
 
-- `--json` — Emit `{ path, type, title, kernel, content }` envelope. Default mode streams the file unmodified.
+- `--json` — For body lookup, emit `{ id, path, type, name, title, kernel, content }`. For `show metadata`, emit `{ id, backend, type, name, title, paths, provenance, metadata }`. Default body mode streams the file unmodified.
 - `--first` — On ambiguity, pick the top match instead of erroring with the disambiguation list.
 - `--graph <name>` — Override the default graph (defaults to `framework` then `project`).
+- `--backend <fortemi-core|local>` — Lookup backend. Default is
+  `fortemi-core`; `local` selects the legacy local fallback. The Fortemi Core
+  backend reads the static cache created by `aiwg index sync`.
 
 **Lookup order:**
 
-1. Exact path match against any indexed entry's stored path
-2. Basename match (skill directory name like `intake-wizard`, or filename stem for agents)
-3. Title match (case-insensitive)
+1. Stable discover/Fortemi id from `aiwg discover --json`
+2. Exact path match against any indexed entry's stored path (backward-compatible fallback)
+3. Basename match (skill directory name like `intake-wizard`, or filename stem for agents)
+4. Title match (case-insensitive)
 
 **Examples:**
 
 ```bash
-aiwg show skill intake-wizard                       # streams SKILL.md to stdout
-aiwg show skill flow-deploy-to-production --json    # path + content envelope
+aiwg show skill aiwg:skill:6f1477d99813ca8d         # streams SKILL.md to stdout
+aiwg show skill flow-deploy-to-production --json    # id + path + content envelope
+aiwg show metadata aiwg:skill:6f1477d99813ca8d --json # full Fortemi metadata + paths
 aiwg show agent aiwg-steward                        # agent definition
 aiwg show command discover                          # CLI command spec
 aiwg show rule no-attribution                       # rule body
+aiwg show skill research-query --json
 ```
 
 **Errors:**
 
-- Calling `aiwg show <name>` with the type omitted prints a "did you mean: aiwg show skill <name>?" hint and exits 1.
+- Calling `aiwg show <name>` with the type omitted succeeds only when the identifier/name/path is unambiguous across artifact types.
 - Ambiguous matches list all candidates and exit 2 unless `--first` is supplied.
 
-**Why a separate command:** the kernel pivot (#1212) intentionally hides ~460 skills from the platform's flat scan; the no-copy default (#1217) leaves them at `$AIWG_ROOT` rather than mirroring per-project. `aiwg show` makes them trivially reachable without the consumer needing to know the storage layout. Pair with `aiwg discover` for find → fetch.
+**Why a separate command:** the kernel pivot (#1212) intentionally hides ~460 skills from the platform's flat scan; the no-copy default (#1217) leaves them at `$AIWG_ROOT` rather than mirroring per-project. `aiwg show` makes them trivially reachable without the consumer needing to know the storage layout. Pair with `aiwg discover` for find → fetch, and use `aiwg show metadata <id>` only when you need the full metadata/path envelope.
 
 ### Best-practice usage guidance
 
-Discovery is the operator surface that makes the **kernel + on-demand model** work across all 10 supported providers (Claude Code, Cursor, Factory, Copilot, OpenCode, Warp, Windsurf, OpenClaw, Hermes, Codex). Each provider deploys a small kernel set of always-loaded quickref skills; everything else sits at `<provider-dir>/.aiwg/skills/` and is reached via `aiwg discover`.
+Discovery is the operator surface that makes the **kernel + on-demand model** work across all 11 supported providers (Claude Code, Cursor, Factory, Copilot, OpenCode, Warp, Windsurf, OpenClaw, OpenHuman, Hermes, Codex). Each provider deploys a small kernel set of always-loaded quickref skills; everything else sits at `<provider-dir>/.aiwg/skills/` and is reached via `aiwg discover`.
 
 **Lead with discovery, not with memory.** When a user describes a capability, query first:
 
@@ -3470,11 +3545,11 @@ Then surface the top match (or top-3 candidates) — this makes your reasoning a
 
 **Use type filters to tighten results.** When the user wants a workflow, restrict to `--type skill`. When they want to know who handles something, `--type agent`. When they ask about enforcement, `--type rule`.
 
-**Use `--json` from sub-agents.** The JSON schema (`path / type / title / score / triggers / capability / kernel`) is stable and compact enough to forward to a subagent without context-bloat.
+**Use `--json` from sub-agents.** The JSON schema (`id / type / name / title / score / triggers / capability / kernel / provenance`) is stable and compact enough to forward to a subagent without context-bloat. It avoids filesystem paths by default; fetch paths separately with `aiwg show metadata <id> --json` when needed.
 
 **Don't skip discovery before declining or improvising.** The `skill-discovery` HIGH framing rule mandates `aiwg discover` before saying "AIWG can't do that" or writing a custom workflow from scratch. Most AIWG skills (~460 of 480 today) are NOT in your loaded context — the kernel set is just the orientation layer + self-maintenance ops.
 
-**Read skill bodies via `aiwg show`, not via filesystem paths.** When discovery returns a candidate and you need its full body, call `aiwg show skill <name>`. Don't construct paths or `cat` files directly — the CLI is the access point and works the same regardless of where AIWG is installed.
+**Read skill bodies via `aiwg show`, not via filesystem paths.** When discovery returns a candidate and you need its full body, call `aiwg show skill <id>` (or the stable name if that is all you have). Don't construct paths or `cat` files directly — the CLI is the access point and works the same regardless of where AIWG is installed. Exact path parameters remain supported for compatibility, but identifier lookup is the primary path.
 
 **Skip discovery only when:**
 - The user named a specific skill or command (e.g., `/flow-deploy-to-production`)
@@ -3521,6 +3596,8 @@ aiwg index <subcommand> [options]
 - `query` - Search artifacts by keyword, type, phase, tags
 - `discover` - Capability search across AIWG skills/agents/commands/rules (canonical form is the top-level [`aiwg discover`](#discover); this subcommand is preserved for backward compatibility)
 - `show` - Print the full text of a specific skill/agent/command/rule (canonical form is the top-level [`aiwg show`](#show))
+- `sync` - Materialize the Fortemi Core static index cache for a graph
+- `migrate-legacy` - Move compatible legacy root indexes into graph sidecar indexes without modifying packaged/prebuilt indexes
 - `deps` - Show artifact dependency graph
 - `stats` - Show index statistics
 - `status` - Enumerate the durable index-graph registry (built-in + module + operator graphs) with build state, freshness, and drift; flags registered-but-unbuilt indices, on-disk dirs matching no graph, and graph-config defs that previously failed to load silently (#1624). Alias: `list`. Add `--json` for a stable envelope.
@@ -3730,7 +3807,9 @@ aiwg index query [search-text] [options]
 - `--limit <n>` - Maximum number of results (default: 20)
 - `--graph <type>` - Search a specific graph only
 - `--fulltext` - Lexical full-text search over artifact **bodies** (BM25), instead of the default metadata scoring. Distinct from `--semantic` (conceptual).
-- `--semantic` - Use semantic similarity search (requires embedding index)
+- `--semantic` - Use Fortemi Core static semantic scoring by default, or the legacy embedding index with `--backend local`
+- `--hybrid` - Use Fortemi Core static hybrid scoring plus the type/phase/tag/path filters
+- `--backend <fortemi-core|local>` - Query backend. Default is `fortemi-core`; `local` is the legacy fallback during the deprecation window. Fortemi Core reads the static cache created by `aiwg index sync`. For `--graph framework`, packaged releases can fall back to the prebuilt index described in [`docs/fortemi-core-prebuilt-indices.md`](fortemi-core-prebuilt-indices.md).
 - `--set-query <expr>` - Set-theoretic query, e.g. `"cited_by(REF-008) AND cited_by(REF-016)"` (SQLite backend recommended)
 - `--json` - Output as JSON (recommended for agents)
 
@@ -3741,10 +3820,12 @@ aiwg index query [search-text] [options]
 | Mode | Scope | Ranking |
 |------|-------|---------|
 | Default (any graph) | **Metadata only** — title (3x), tags (2x), capability/triggers, the 500-char summary (1x), path (0.5x). The index stores a truncated summary, **not** the full body. | Weighted field-match |
-| `--fulltext` (any graph) | **Full artifact body** — reads each candidate node's source file and matches body text (frontmatter stripped). Catches content that never reaches the summary. | BM25 (top hit normalized to 1.0; JSON adds `matched` terms + `mode: "fulltext"`) |
-| `--semantic` | Conceptual similarity via the embedding index (requires the optional embedding backend). | Cosine over embeddings |
+| `--fulltext` (local backend) | **Full artifact body** — reads each candidate node's source file and matches body text (frontmatter stripped). Catches content that never reaches the summary. | BM25 (top hit normalized to 1.0; JSON adds `matched` terms + `mode: "fulltext"`) |
+| `--fulltext` | Fortemi static-cache text/chunks exported by `aiwg index sync`. Preserves type/phase/tag/path filters without rereading source files. Use `--backend local` for legacy body reads. | BM25 over exported static text/chunks |
+| `--semantic` | Fortemi static semantic scoring by default. Use `--backend local` for the legacy embedding index. | Static Fortemi chunk scoring or cosine over local embeddings |
+| `--hybrid` | Fortemi static semantic scoring filtered by path/type/phase/tags. | Static Fortemi score plus filter/facet matches |
 
-Use the default for "find the artifact named/about X"; `--fulltext` for "find the document whose **body** discusses X"; `--semantic` for "find documents conceptually near X." The candidate set (which nodes are considered) is the same in all three modes — the graph + filter flags select candidates, the mode decides ranking.
+Use the default for "find the artifact named/about X"; `--fulltext` for "find the document whose **body** discusses X"; `--semantic` for "find documents conceptually near X"; `--hybrid` for Fortemi static-cache semantic ranking constrained by metadata filters. Pass `--backend local` only when you need the legacy local index path during the phase-out window.
 
 **Examples:**
 
@@ -3764,8 +3845,17 @@ aiwg index query "login" --type use-case --phase requirements
 # Full-text over REF/sidecar bodies (lexical, BM25) — content not in the summary
 aiwg index query "mixture of experts routing" --fulltext --graph papers
 
+# Fortemi static-cache fulltext over exported record text/chunks
+aiwg index query "static retrieval evidence" --fulltext --graph project --json
+
 # Semantic similarity search (embedding index required)
 aiwg index query "dense retrieval for question answering" --semantic --graph citation-network
+
+# Fortemi static-cache semantic search
+aiwg index query "static retrieval evidence" --semantic --graph project --json
+
+# Fortemi static-cache hybrid search with metadata filters
+aiwg index query "static retrieval architecture" --hybrid --type adr --tags search --path .aiwg/architecture --json
 
 # Set-theoretic: papers citing both REF-008 and REF-016
 aiwg index query --set-query "cited_by(REF-008) AND cited_by(REF-016)" --graph citation-network
@@ -3778,43 +3868,41 @@ aiwg index query "auth" --json
 
 ### index neighbors
 
-Show graph neighbors of a node — direct dependencies, typed edges, or semantic similarity matches.
+Show graph neighbors of a node — direct dependencies or typed edges in a
+specific index graph. Use `aiwg index similar` for semantic-neighbor lookup.
 
 ```bash
-aiwg index neighbors --node <id> [options]
+aiwg index neighbors --graph <name> --node <id> [options]
 ```
 
 **Options:**
 
+- `--graph <name>` - Target graph to query (required)
 - `--node <id>` - Node identifier (e.g., `REF-008`, `.aiwg/requirements/UC-001.md`)
 - `--direction <dir>` - `in`, `out`, or `both` (default: `both`)
 - `--edge-type <type>` - Filter by edge type (e.g., `cites`, `cited-by`, `implements`, `depends-on`)
-- `--depth <n>` - Traversal depth (default: 1)
-- `--semantic` - Return semantically similar nodes instead of graph neighbors (embedding index required)
-- `--top-k <n>` - Number of semantic results (default: 10, only with `--semantic`)
-- `--graph <name>` - Target a specific graph
+- `--backend <fortemi-core|local>` - Query backend. Default is `fortemi-core`;
+  Fortemi Core reads graph relationships from the static cache, while `local`
+  uses the legacy graph files during the phase-out window.
 - `--json` - Output as JSON
 
 **Examples:**
 
 ```bash
 # All neighbors of a node
-aiwg index neighbors --node REF-008
+aiwg index neighbors --graph citation-network --node REF-008
 
 # Papers that cite REF-008 (incoming cites edges)
-aiwg index neighbors --node REF-008 --direction in --edge-type cites
+aiwg index neighbors --graph citation-network --node REF-008 --direction in --edge-type cites
 
 # What REF-008 cites (outgoing)
-aiwg index neighbors --node REF-008 --direction out --edge-type cites
-
-# Citation neighborhood at depth 2
-aiwg index neighbors --node REF-008 --depth 2 --graph citation-network
-
-# 5 semantically similar papers
-aiwg index neighbors --node REF-008 --semantic --top-k 5
+aiwg index neighbors --graph citation-network --node REF-008 --direction out --edge-type cites
 
 # Artifacts that implement a use case (SDLC)
-aiwg index neighbors --node .aiwg/requirements/UC-001.md --edge-type implements
+aiwg index neighbors --graph project --node .aiwg/requirements/UC-001.md --edge-type implements
+
+# Fortemi static-cache graph traversal
+aiwg index neighbors --graph kb --node retrieval.md --json
 ```
 
 **Typed edge types:**
@@ -3877,6 +3965,10 @@ aiwg index deps <path> [options]
 - `--direction <dir>` - Direction: `upstream`, `downstream`, or `both` (default: `both`)
 - `--depth <n>` - Maximum traversal depth (default: 3)
 - `--graph <type>` - Use a specific graph's dependency data
+- `--backend <fortemi-core|local>` - Query backend. Default is `fortemi-core`;
+  Fortemi Core reads dependency relationships from the static cache, while
+  `local` reads dependency relationships from the legacy graph files during the
+  phase-out window.
 - `--json` - Output as JSON (recommended for agents)
 
 **Behavior:**
@@ -3901,6 +3993,9 @@ aiwg index deps .aiwg/architecture/adr-001.md --depth 2 --json
 
 # Deps within framework source
 aiwg index deps agentic/code/frameworks/sdlc-complete/rules/artifact-discovery.md --graph framework
+
+# Fortemi static-cache dependency traversal
+aiwg index deps .aiwg/architecture/search-adr.md --graph project --json
 ```
 
 ---
@@ -3946,11 +4041,48 @@ aiwg index stats --graph project --json
 aiwg index stats --graph framework
 ```
 
+### index migrate-legacy
+
+Move compatible legacy root index files into the graph sidecar layout used by
+Fortemi Core search. Project scope migrates `.aiwg/.index/*.json` into
+`.aiwg/.index/project/*.json`, then refreshes the project Fortemi Core static
+cache. User and global scopes are available for sidecar-index migration work and
+report missing legacy roots without touching packaged/prebuilt AIWG indexes.
+
+```bash
+aiwg index migrate-legacy [--scope project|user|global | --all] [options]
+```
+
+**Options:**
+
+- `--scope <name>` - Scope to migrate: `project`, `user`, or `global` (default: `project`)
+- `--all` - Inspect/migrate project, user, and global scopes
+- `--dry-run` - Report planned changes without writing files
+- `--no-fortemi-sync` - Skip Fortemi Core cache refresh for project scope
+- `--generated-at <iso>` - Deterministic timestamp for fixtures/support repros
+- `--json` - Print the migration report as JSON
+
+Examples:
+
+```bash
+aiwg index migrate-legacy --scope project --dry-run
+aiwg index migrate-legacy --scope project
+aiwg index migrate-legacy --all --json
+```
+
+If `metadata.json` is missing, unreadable, or has an incompatible schema
+version, the command reports `needs-rebuild` instead of silently falling back.
+
 ---
 
 ## Storage Commands
 
-AIWG persists artifacts (memory pages, knowledge-base entries, activity log, reflections, provenance records, research corpus, sandbox identities) through a pluggable storage adapter system (#934). By default everything lives on the local filesystem under `.aiwg/`. With `.aiwg/storage.config` you can route any subsystem to Obsidian, Logseq, Fortemi, or a different filesystem location.
+AIWG persists artifacts (memory pages, knowledge-base entries, activity log, reflections, provenance records, research corpus, sandbox identities) through a pluggable storage adapter system (#934). By default everything lives on the local filesystem under `.aiwg/`. With `.aiwg/storage.config` you can route any subsystem to Obsidian, Logseq, the legacy Fortemi MCP storage adapter, or a different filesystem location.
+
+The `fortemi` storage backend is separate from Fortemi Core index/search. Use
+`aiwg index sync` and query commands with
+`--backend local` for legacy fallback for the new static-cache search path and packaged
+prebuilt framework fallback.
 
 **See [`docs/storage/`](storage/README.md) for the full guide** — overview, security model, migration walkthrough, and per-backend pages.
 
@@ -3997,7 +4129,7 @@ aiwg storage migrate memory \
   --to-folder AIWG/memory
 ```
 
-**Implemented backends:** `fs`, `obsidian`, `logseq`, `fortemi` (alpha).
+**Implemented backends:** `fs`, `obsidian`, `logseq`, `fortemi` (alpha MCP storage adapter; legacy for search).
 **Stub (tracked):** `notion` (#959), `anythingllm` (#960), `s3` (#962), `webdav` (#963).
 
 **Migrate spec format:** `<type>:<location>` (e.g., `fs:./dir`, `obsidian:~/vault`, `logseq:./graph`, `fortemi:server-name`). Use `--from-folder`/`--to-folder` for Obsidian subfolders. See `docs/storage/migration.md` for details.
