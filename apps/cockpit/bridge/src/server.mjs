@@ -357,19 +357,23 @@ async function proxy(res, method, target) {
   return json(res, r.status, body);
 }
 
-async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption } = {}) {
+async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0 } = {}) {
   const failures = [];
   for (const candidate of candidates) {
     const target = typeof candidate === 'string' ? candidate : candidate.target;
     const requestMethod = typeof candidate === 'string' ? method : candidate.method ?? method;
     const requestHeaders = typeof candidate === 'string' ? headers : candidate.headers ?? headers;
     const requestBody = typeof candidate === 'string' ? requestBodyOption : candidate.body ?? requestBodyOption;
+    const controller = timeoutMs > 0 ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let r;
     try {
-      r = await fetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody });
+      r = await fetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) });
     } catch (err) {
       failures.push(`${target} -> ${String(err?.message ?? err)}`);
       continue;
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
     const responseBody = await r.json().catch(() => ({}));
     if (r.ok) return { target, status: r.status, body: responseBody };
@@ -687,7 +691,18 @@ function normalizeTransport(posture) {
 function normalizeSessionBackends(backends, runtimeKind, state = 'unknown', agentReady = false) {
   const list = Array.isArray(backends) ? backends : [];
   if (!list.length && runtimeKind === 'host') {
-    return [{ mode: 'managed', backend: 'tmux', observe: true, drive: true, replay: false, keyframe: false, available: true, reason: 'agentic-sandbox v1 host session API default' }];
+    return [{
+      mode: 'managed',
+      backend: 'tmux',
+      observe: true,
+      drive: true,
+      replay: false,
+      keyframe: false,
+      available: agentReady,
+      reason: agentReady
+        ? 'agentic-sandbox v1 host session API default'
+        : 'host runtime is provisioned but the host agent has not registered; PTY sessions are not ready',
+    }];
   }
   if (!list.length && ['docker', 'container', 'vm', 'qemu', 'kvm'].includes(runtimeKind) && String(state).toLowerCase() === 'running') {
     return [{
@@ -748,6 +763,28 @@ function normalizeInstance(executorUrl, i) {
     agent_ready: agentReady,
     registered_agent_id: i.registered_agent_id ?? i.registeredAgentId,
     session_backends: normalizeSessionBackends(i.session_backends ?? i.sessionBackends ?? i.session_host?.backends ?? i.sessionHost?.backends ?? i.capabilities?.session_backends ?? i.capabilities?.sessionBackends, runtimePosture.kind, i.state ?? i.status, agentReady),
+  };
+}
+
+function defaultSessionLaunch(instance) {
+  const runtime = String(instance?.runtime_posture?.kind ?? instance?.runtime ?? '').toLowerCase();
+  if (runtime === 'host') {
+    return {
+      command: 'bash',
+      args: ['-l'],
+      working_dir: instance?.launch_context?.cwd,
+    };
+  }
+  if (runtime === 'container' || runtime === 'docker' || runtime === 'vm' || runtime === 'qemu' || runtime === 'kvm') {
+    return {
+      command: '/bin/bash',
+      args: ['-lc', 'cd "${HOME:-/root}" && exec /bin/bash -l'],
+      working_dir: '/root',
+    };
+  }
+  return {
+    command: 'bash',
+    args: ['-l'],
   };
 }
 
@@ -1284,6 +1321,10 @@ async function getSessions(executorUrl, instanceId) {
     `${executorUrl}/api/v1/agents/${encodeURIComponent(agentId)}/sessions`,
   ]));
   const sessions = asArrayFromEnvelope(body, ['sessions', 'items', 'data']);
+  return normalizeSessionRows({ sessions, executorUrl, instanceId, sessionAgentId });
+}
+
+export function normalizeSessionRows({ sessions, executorUrl, instanceId, sessionAgentId = instanceId }) {
   const wsBase = executorUrl.replace(/^http/i, 'ws');
   const normalizeAttachUrl = (s, sessionId) => {
     const explicit = s.attach_url ?? s.attachUrl;
@@ -1304,26 +1345,83 @@ async function getSessions(executorUrl, instanceId) {
     // agent name is only needed for the session-list FETCH, not the attach path.
     return `${wsBase}/agents/${encodeURIComponent(instanceId)}/sessions/${encodeURIComponent(sessionId)}/attach`;
   };
-  // Dedup by session id: the executor can register/return the same session more
-  // than once (e.g. a session registered twice in its registry), which surfaced
-  // as duplicate rows that are impossible to tell apart in the Sessions picker.
-  // Keep the first occurrence of each id (and drop id-less entries).
-  const seen = new Set();
-  const deduped = [];
+  const sessionAliases = (entry, sessionId) => {
+    const aliases = [`session:${sessionId}`];
+    const commandId = entry.command_id ?? entry.commandId;
+    if (commandId) aliases.push(`command:${commandId}`);
+    return aliases;
+  };
+  const fallbackScore = (entry) => {
+    const sessionId = String(entry.id ?? entry.session_id ?? entry.sessionId ?? '');
+    const commandId = String(entry.command_id ?? entry.commandId ?? '');
+    const id = String(entry.id ?? '');
+    const name = String(entry.session_name ?? entry.sessionName ?? '');
+    const command = String(entry.command ?? '').trim();
+    let score = 0;
+    if (id && commandId && id === commandId) score += 2;
+    if (name && (name === sessionId || name === commandId)) score += 2;
+    if (/^\/?bin\/bash\s+-l$/.test(command)) score += 1;
+    if (entry.has_screen === false || entry.hasScreen === false) score += 1;
+    return score;
+  };
+  const namedScore = (entry) => {
+    const name = String(entry.session_name ?? entry.sessionName ?? '');
+    let score = name ? 1 : 0;
+    if (/^terminal-[a-z0-9-]+$/i.test(name)) score += 2;
+    if (entry.has_screen === true || entry.hasScreen === true) score += 1;
+    return score;
+  };
+  const shouldReplace = (existing, candidate) => {
+    const existingFallback = fallbackScore(existing);
+    const candidateFallback = fallbackScore(candidate);
+    if (existingFallback !== candidateFallback) return candidateFallback < existingFallback;
+    const existingNamed = namedScore(existing);
+    const candidateNamed = namedScore(candidate);
+    if (existingNamed !== candidateNamed) return candidateNamed > existingNamed;
+    return false;
+  };
+  const mergeGroups = (target, source) => {
+    if (target === source) return target;
+    for (const alias of source.aliases) {
+      target.aliases.add(alias);
+      groupsByAlias.set(alias, target);
+    }
+    source.merged = true;
+    if (!target.value || (source.value && shouldReplace(target.value, source.value))) target.value = source.value;
+    return target;
+  };
+  // Dedup by every stable alias we see. Docker/host fallback rows can share a
+  // command id with the Cockpit-created session; QEMU fallback rows can instead
+  // share only the formal session id while carrying a different command id. Keep
+  // the named/screen-backed session row so the UI exposes the working attach URL.
+  const groups = [];
+  const groupsByAlias = new Map();
   for (const s of sessions) {
     const sessionId = s.id ?? s.session_id ?? s.sessionId;
-    if (!sessionId || seen.has(sessionId)) continue;
-    seen.add(sessionId);
-    deduped.push({
+    if (!sessionId) continue;
+    const normalized = {
       ...s,
       id: sessionId,
       instance_id: s.instance_id ?? s.instanceId ?? instanceId,
       agent_id: s.agent_id ?? s.agentId ?? sessionAgentId,
       role_policy: s.role_policy ?? s.rolePolicy ?? (s.default_role === 'observer' ? 'observe-default' : s.default_role) ?? 'observe-default',
       attach_url: normalizeAttachUrl(s, sessionId),
-    });
+    };
+    const aliases = sessionAliases(s, sessionId);
+    let group = aliases.map((alias) => groupsByAlias.get(alias)).find(Boolean);
+    if (!group) {
+      group = { aliases: new Set(), value: null, merged: false };
+      groups.push(group);
+    }
+    for (const alias of aliases) {
+      const other = groupsByAlias.get(alias);
+      if (other && other !== group) group = mergeGroups(group, other);
+      group.aliases.add(alias);
+      groupsByAlias.set(alias, group);
+    }
+    if (!group.value || shouldReplace(group.value, normalized)) group.value = normalized;
   }
-  return { instance_id: instanceId, sessions: deduped };
+  return { instance_id: instanceId, sessions: groups.filter((group) => !group.merged && group.value).map((group) => group.value) };
 }
 
 async function endSession(executorUrl, instanceId, sessionId) {
@@ -1566,6 +1664,14 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         if (backend) qs.set('backend', backend);
         if (loadout) qs.set('loadout', loadout);
         const sessionAgentId = await resolveSessionAgentId(upstreamUrl, id);
+        let sessionLaunch = defaultSessionLaunch();
+        try {
+          const inventory = await getInventory(upstreamUrl);
+          sessionLaunch = defaultSessionLaunch(inventory.instances.find((inst) => inst.id === id));
+        } catch {
+          // Session creation can still proceed without an explicit cwd; the
+          // executor/agent will fall back to its own process cwd.
+        }
         const candidates = unique([sessionAgentId, id]).flatMap((agentId) => [
           {
             target: `${upstreamUrl}/api/v1/agents/${encodeURIComponent(agentId)}/sessions`,
@@ -1574,8 +1680,9 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
             body: JSON.stringify({
               session_backend: backend || 'tmux',
               session_class: mode || 'managed',
-              command: 'bash',
-              args: ['-l'],
+              command: sessionLaunch.command,
+              args: sessionLaunch.args,
+              ...(sessionLaunch.working_dir ? { working_dir: sessionLaunch.working_dir } : {}),
             }),
           },
           {
@@ -1585,7 +1692,7 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         ]);
         let sessionCreate;
         try {
-          sessionCreate = await fetchJsonFirst(candidates);
+          sessionCreate = await fetchJsonFirst(candidates, { timeoutMs: 8000 });
         } catch (err) {
           return json(res, 409, {
             error: 'agent_not_registered',
