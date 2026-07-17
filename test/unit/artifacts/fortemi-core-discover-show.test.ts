@@ -155,6 +155,48 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     return createHash("sha256").update(text).digest("hex");
   }
 
+  it("refreshes the project Fortemi Core cache after index build", async () => {
+    const skillDir = path.join(tmp, ".aiwg", "addons", "schema-registry", "skills", "schema-registry");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: schema-registry",
+        "description: Maintain schema registry artifacts",
+        "---",
+        "# Schema Registry",
+        "",
+        "Maintain schema registry artifacts for project-local bundles.",
+        "",
+      ].join("\n"),
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    try {
+      await indexCliMain(["build", "--graph", "project"]);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    const status = getFortemiCoreSyncStatus(tmp, "project");
+    expect(status.built).toBe(true);
+    expect(status.stale).toBe(false);
+    expect(status.itemCount).toBeGreaterThan(0);
+    consoleSpy.mockClear();
+
+    await showArtifact(tmp, {
+      typeFilter: ["skill"],
+      name: "schema-registry",
+      json: true,
+      graph: "project",
+      backend: "fortemi-core",
+    });
+    const shown = readConsoleJson();
+    expect(shown.path).toContain("schema-registry");
+    expect(shown.content).toContain("# Schema Registry");
+  });
+
   it("returns parity-ranked discover results from the Fortemi Core cache", async () => {
     const entries = [
       entry({}),
@@ -952,6 +994,75 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(fulltext.mode).toBe("fulltext");
     expect(fulltext.results[0].path).toBe(".aiwg/architecture/search-adr.md");
     expect(fulltext.results[0].matched).toContain("browser-only");
+  });
+
+  it("discovers, filters, and shows indexed project-local rules on Fortemi Core", async () => {
+    const rule = entry({
+      path: ".aiwg/extensions/acme-rules/rules/acme-review.md",
+      type: "rule",
+      phase: "other",
+      title: "Acme Review Rule",
+      name: "acme-review",
+      tags: ["governance", "kernel-routing"],
+      summary: "Route kernel rule discovery through metadata filters.",
+      triggers: undefined,
+      capability: "Apply the Acme review rule during rule discovery.",
+    });
+    const skill = entry({
+      path: ".aiwg/extensions/acme-rules/skills/acme-review/SKILL.md",
+      type: "skill",
+      title: "Acme Review Skill",
+      name: "acme-review",
+      tags: ["governance"],
+      summary: "Skill with a similar name that must not satisfy rule filters.",
+      capability: "Run the Acme review workflow.",
+    });
+    writeProjectGraph(tmp, [rule, skill]);
+    syncFortemiCoreIndex(tmp, {
+      graph: "project",
+      generatedAt: "2026-01-05T00:00:00.000Z",
+    });
+
+    await discoverCapability(tmp, {
+      phrase: "kernel rule discovery metadata filters",
+      typeFilter: ["rule"],
+      json: true,
+      backend: "fortemi-core",
+    });
+    const discovered = readConsoleJson();
+    expect(discovered.query.backend).toBe("fortemi-core");
+    expect(discovered.query.graph).toBe("capability-default");
+    expect(discovered.query.types).toEqual(["rule"]);
+    expect(discovered.results).toHaveLength(1);
+    expect(discovered.results[0]).toMatchObject({
+      path: rule.path,
+      type: "rule",
+      name: "acme-review",
+    });
+    consoleSpy.mockClear();
+
+    await queryIndex(
+      tmp,
+      { text: "kernel rule discovery", type: "rule", tags: ["kernel-routing"] },
+      { graph: "project", json: true, backend: "fortemi-core" },
+    );
+    const filtered = readConsoleJson();
+    expect(filtered.query.backend).toBe("fortemi-core");
+    expect(filtered.results.map((result: any) => result.path)).toEqual([
+      rule.path,
+    ]);
+    consoleSpy.mockClear();
+
+    await showArtifact(tmp, {
+      typeFilter: ["rule"],
+      name: "acme-review",
+      json: true,
+      backend: "fortemi-core",
+    });
+    const shown = readConsoleJson();
+    expect(shown.path).toBe(path.join(tmp, rule.path));
+    expect(shown.type).toBe("rule");
+    expect(shown.content).toContain("# Acme Review Rule");
   });
 
   it("serves Fortemi fulltext from the static cache when source files are unavailable", async () => {

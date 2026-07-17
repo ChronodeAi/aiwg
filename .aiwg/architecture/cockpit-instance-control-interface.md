@@ -1,7 +1,7 @@
 # Cockpit Instance-Control Interface — Binding to agentic-sandbox A2A v2 (three surfaces)
 
 **Phase**: Construction (Area 1 / SU-1.1)
-**Status**: Draft contract — the seam Cockpit binds to and the mock implements
+**Status**: Draft contract — the seam Cockpit binds to and the mock implements. **Verified live 2026-07-09** against a real executor (agentic-sandbox **v2026.7.4**): all three surfaces exercised end-to-end through the Cockpit bridge — Admin API instances now carry `transport` / `transport_posture` / `security_posture` / `host_daemon`; the per-instance A2A task surface and the `pty-ws/v1` session-listing endpoints (#140/#611) return live (no 502). Formal Draft→baseline flip pending operator sign-off. Evidence: `.aiwg/testing/cockpit-7.4-transport-verify-2026-07-09.md`.
 **Epic**: roctinam/aiwg#1588 · **Dep**: roctinam/aiwg#1589 → agentic-sandbox#460/#461
 **Grounded in** (agentic-sandbox `docs/contracts/`, read 2026-06-13): admin-api.openapi.yaml; extensions/{runtime,hitl-prompt,idempotency,multi-tenant,adapter-command,pty-extensions}/v1; bindings/pty-ws/v1. ADR-022 (three-surface), ADR-018 (A2A base), ADR-019 (extension governance).
 **Decisions (operator)**: bind **directly to A2A v2** (no Cockpit abstraction) · **direct for instance-control, serve only for cross-stack coordination** · **multi-tenant from day one** (carry `tenant_id`) · **full three-surface, conformance-checked mock**.
@@ -15,6 +15,35 @@
 | **Interactive I/O** | **`pty-ws/v1` + `pty-extensions/v1`** | WebSocket | `pty.join_session` (role + `replay_from`), `pty.session_input`/`session_resize`/`request_keyframe`; server frames `Output`/`Resize`/`RoleAssigned`/`MembershipChanged`/`Keyframe`/`Closed`/`Error` |
 
 Cockpit's Bridge is a **client of all three**. It talks to agentic-sandbox **directly** for instance control + I/O; it uses **serve/#1546 only** for cross-stack Mission coordination (the two-plane model).
+
+### 1.1. Recovery extension for stale container agents (2026-07-11)
+
+Cockpit now treats "runtime running, agent missing" as a first-class degraded
+state instead of collapsing the row out of the operator surface. For
+Docker/container instances the Bridge exposes:
+
+```
+POST /api/instances/:id/reconnect
+```
+
+Contract:
+
+- input: instance id from the admin inventory;
+- success: the sandbox or container has been asked to re-register its agent;
+- failure: returns an explanatory error when no executor route, local Docker
+  container, or `agent-reconnect` helper is available;
+- non-goal: never destroys, replaces, or reprovisions the runtime.
+
+Resolution order:
+
+1. Call executor-owned reconnect routes when advertised by the sandbox.
+2. Fall back to `docker exec <container> agent-reconnect` for local
+   Docker/container instances that carry the helper.
+
+The UI derives `agent unreachable` when the instance is still running but no
+agent id can be resolved from the agent registry/running projection. Inventory
+and Sessions both expose **Reconnect** for that state, preserving operator
+context until the agent returns.
 
 ## 2. Extension usage (per-instance A2A)
 
@@ -45,6 +74,7 @@ Security carried over (threat model): observers see everything incl. secrets (no
 
 A typed TS client `@aiwg/cockpit` instance-control module exposing (thin over the wire — no invented abstraction):
 - `provision({ runtimeKind, loadout, tenantId }) → instanceId` (admin) · `list/get/start/stop/restart/destroy` · `pollOperation`
+- `reconnect(instanceId) → recoveryResult` (Bridge recovery extension; stale Docker/container agents only)
 - `discover(instanceId) → AgentCard` · `sendMessage`/`getTask`/`listTasks`/`subscribeToTask`/`cancelTask` (A2A, tenant_id + idempotency-key on every send)
 - `attach(instanceId, { role, replayFrom }) → PtySession` with events `output`/`resize`/`membership`/`keyframe`/`roleAssigned`/`closed` and methods `input()/resize()/requestKeyframe()/leave()`
 - `approvals()` stream (hitl-prompt) → relay decisions to AIWG core

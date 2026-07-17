@@ -58,7 +58,8 @@ AIWG_COCKPIT_EXECUTOR_URL=http://127.0.0.1:8122 aiwg cockpit
 - **Home** — connected-state overview, first-run flow, and a session-first entry point.
 - **Inventory** — host, container, Docker, and VM runtime targets with lifecycle controls.
 - **Running** — active work across stacks, spend posture, and task stop controls.
-- **Sessions** — observe-first terminal attach, explicit drive/control, and replay posture.
+- **Missions** — read-only Mission Control projection: sessions, per-mission status, audit tail.
+- **Sessions** — observe-first terminal attach, explicit drive/control, replay posture, and stale-agent recovery.
 - **Approvals** — unified human-in-the-loop decision inbox.
 - **Explore** — live index status/query/rebuild plus read-only AIWG capability catalog.
 - **Library** — user-owned assets cloned/imported under `~/.aiwg/cockpit/library`.
@@ -138,7 +139,8 @@ operator / CLI:  aiwg cockpit
 | **Home** | Guided first-run: what-is-this, live status, the **Start a session** primary verb, first-run tour. |
 | **Inventory** | Instances + lifecycle (Start/Stop/Destroy). |
 | **Running** | Running work across stacks + cross-stack spend + per-task Stop. |
-| **Sessions** | Live pty terminal — observe/drive, keyframe, non-destructive replay; inline **＋ capability picker**. |
+| **Missions** | Read-only Mission Control projection — durable `aiwg mc` sessions merged with the live executor task session. |
+| **Sessions** | Live pty terminal — observe/drive, keyframe, non-destructive replay, stale-agent recovery; inline **＋ capability picker**. |
 | **Approvals** | Unified HITL inbox (`hitl-prompt/v1`); decisions = operator authorization. |
 | **Explore** | Live artifact-index status/query/rebuild plus read-only AIWG catalog search. |
 | **Library** | Your own assets — clone from the catalog / import / remove. AIWG files never overwritten. |
@@ -177,9 +179,10 @@ Set `AIWG_COCKPIT_KEYCHAIN_STRICT=1` when shells must refuse plaintext runtime
 tokens. In strict mode the Bridge exits if it cannot persist the per-launch token
 to the OS keychain, and shell-core refuses runtime files that only contain a
 plaintext token. Operator intent is also recorded in a local redacted audit log
-under `~/.aiwg/cockpit/audit/events.jsonl` for lifecycle, session, action-inject,
-and approval-response decisions; bearer material and provider credentials are
-redacted before write.
+under `~/.aiwg/cockpit/audit/events.jsonl` for lifecycle, session, and
+approval-response decisions (the web UI additionally records action injections
+as operator intents); bearer material and provider credentials are redacted
+before write.
 
 ## Run (dev/test, against a real agentic-sandbox executor)
 
@@ -196,6 +199,17 @@ binary before serving Cockpit. Override `AIWG_COCKPIT_EXECUTOR_URL` (default
 `http://127.0.0.1:8122`) or `PORT` (default `8140`). Set
 `AIWG_COCKPIT_EXECUTOR_COMMAND` to pin the autostart command, or
 `AIWG_COCKPIT_AUTOSTART_EXECUTOR=0` to require an already-running executor.
+
+**Bring up both halves at once (#1634).** `npm run cockpit:up` (→
+`apps/cockpit/scripts/cockpit-up.sh`) guarantees a real, current executor is
+listening *before* the Bridge starts: it launches the agentic-sandbox executor
+via its own `management/dev.sh` when one isn't already healthy on
+`AIWG_COCKPIT_EXECUTOR_URL` (default `http://127.0.0.1:8122`), then delegates to
+`cockpit-dev.sh` for the Bridge + UI. Set `AIWG_COCKPIT_ENSURE_EXECUTOR=0` to
+skip the executor-ensure step when a sandbox is already running, or
+`AIWG_COCKPIT_START_HOST_DAEMON=1` to also start the optional host-runtime
+daemon. `cockpit-dev.sh` stays the Cockpit-only launcher.
+
 Equivalent manual steps:
 
 ```bash
@@ -217,10 +231,10 @@ agentic-sandbox executor. The bundled mock is reserved for automated tests and
 PoCs; if a mock-like executor is detected, the Bridge refuses it unless
 `AIWG_COCKPIT_ALLOW_MOCK_EXECUTOR=1` is set by an automated harness.
 
-The Bridge keeps legacy admin-surface compatibility (`/admin/instances`,
-`/admin/running`) for automated coverage, but dev/test launches should target
-real agentic-sandbox v2 admin surfaces (`/api/v2/admin/instances`,
-`/api/v2/admin/running`). Field normalization covers snake_case and camelCase
+The Bridge probes legacy (`/admin/instances`) and v2 (`/api/v2/admin/instances`)
+admin surfaces as fallback candidates for inventory and lifecycle; running work
+and approvals are derived from per-instance A2A task lists rather than any
+admin `/running` route. Field normalization covers snake_case and camelCase
 payloads so live sandboxes can evolve without breaking the operator UI; unknown
 fields degrade to opaque posture rather than failing the screen.
 
@@ -229,6 +243,39 @@ through the real executor (`POST /api/v2/admin/instances`) for host, Docker, and
 QEMU/VM launches. Cockpit does not replace attached sessions when provisioning;
 it refreshes inventory and leaves concurrency and resource admission to
 agentic-sandbox.
+
+### Recover stale agents
+
+When a container, Docker, or VM runtime is still running but its agent
+registration has disappeared, Cockpit keeps the row visible instead of hiding
+it. Inventory and Sessions show `agent unreachable` and expose **Reconnect**
+for stale container/Docker **and vm/qemu/kvm** rows (#1778). Use this when an
+instance is alive but session attach, running projections, or actions cannot
+resolve an agent id.
+
+The Bridge handles recovery through:
+
+1. executor-owned reconnect endpoints when the sandbox exposes one, then
+2. local Docker fallback: `docker exec <container> agent-reconnect`, or
+3. VM fallback (#1778): the same reconnect SIGHUP delivered through the libvirt
+   qemu-guest-agent channel (`virsh qemu-agent-command <domain> guest-exec
+   pkill -HUP -x agent-client`). Sessions survive reconnect on agentic-sandbox
+   2026.7.8+ agents; older agents preserve only detached tmux sessions
+   (agentic-sandbox#634).
+
+The Docker fallback requires sandbox images that include the `agent-reconnect`
+helper (agentic-sandbox v2026.7.5+ images); the VM fallback requires virsh
+access to the domain from the Bridge host. If **Reconnect** reports that no
+reconnect path is available, rebuild or repull the sandbox image, then start the
+instance again. For host targets, prefer starting Cockpit with the host daemon:
+
+```bash
+AIWG_COCKPIT_START_HOST_DAEMON=1 npm run cockpit:up
+```
+
+After a successful reconnect, refresh Inventory, then attach from Sessions. A
+Reconnect action never creates a replacement instance and never destroys the
+running container; it only attempts to restore the missing agent registration.
 
 `aiwg cockpit` (the operator command) will wrap this; the Bridge serves the built
 React app token-injected, falling back to a legacy page when no build is present.
@@ -402,6 +449,25 @@ Known state as of the 2026-06-19 host live run:
   `v2026.6.34`: VM matrix PASS — provision → vsock enroll → boot-ready → provider
   workload → clean destroy. Evidence:
   `.aiwg/testing/cockpit-vm-vsock-2026-06-27.md/.json`.
+- Instance **transport posture + host-daemon** now surface from the sandbox side
+  (`dd97529 fix(admin-v2): expose instance transport posture`, plus `#611`
+  host-runtime session listing). Re-validated Cockpit-side against `v2026.7.4`
+  (2026-07-09): Inventory renders real posture per instance — Host + Container
+  `Secure transport · mtls` (Host daemon `available`), enrolled VM `Local
+  transport · vsock`, a mid-bootstrap VM showing transport `Unknown` with the
+  informative posture `bootstrap-pending` (vs the old dead `unknown`; every
+  enrolled instance now renders real posture). Session-list returns
+  cleanly (no 502 — the `#140`/`#611` endpoints are live). Runtime coverage
+  banner `host ✓ · docker ✓ · vm ✓`. Evidence:
+  `.aiwg/testing/cockpit-7.4-transport-verify-2026-07-09.md` +
+  `.aiwg/working/cockpit-7.4-inventory-2026-07-09.png`.
+- Stale Docker/container agent recovery is wired through the Bridge and UI
+  (2026-07-11): stale running instances remain visible as `agent unreachable`,
+  Inventory and Sessions expose **Reconnect**, and the Bridge tries executor
+  reconnect before Docker `agent-reconnect`. Host-daemon scoped live UAT passed
+  against the real executor with `AIWG_COCKPIT_LIVE_PROVISION=1`,
+  `AIWG_COCKPIT_LIVE_MATRIX_TARGETS=host`, and Codex provider workload evidence
+  at `test-results/cockpit-live-host-daemon-2026-07-11.md/.json`.
 - Remaining upstream follow-ups are Claude auth-state propagation
   (roctinam/agentic-sandbox#499) and agent-scoped PTY sessions not appearing in
   the formal/global session registry (roctinam/agentic-sandbox#500).
@@ -418,9 +484,11 @@ agentic-sandbox executor through `AIWG_COCKPIT_EXECUTOR_URL`. The host target
 (agentic-sandbox#460) and direct/managed multiplexer sessions
 (agentic-sandbox#461) have landed upstream; the Bridge seam is now the
 AIWG-side integration point for #1589. Runtime-tier provisioning and
-host-daemon UX are tracked in roctinam/aiwg#1615, direct/managed PTY negotiation
-in #1616, the live real-sandbox gate in #1617, and transport-trust visibility in
-#1618. Secure transport details map back to agentic-sandbox#409/#410/#412; local
+host-daemon surfacing (roctinam/aiwg#1615) and transport-trust visibility (#1618)
+**landed and are verified against `v2026.7.4`** — transport posture and
+host-daemon now render per instance (a host-daemon *detail-status* payload
+remains a residual under #1615). Direct/managed PTY negotiation (#1616) and the
+live real-sandbox gate (#1617) continue. Secure transport details map back to agentic-sandbox#409/#410/#412; local
 Browser/Tauri/VS Code-to-Bridge auth remains roctinam/aiwg#1595.
 
 ### Operator-wall review modes (#1622)

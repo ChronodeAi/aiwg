@@ -1,6 +1,6 @@
 {
   "name": "aiwg",
-  "version": "2026.7.11",
+  "version": "2026.7.13",
   "description": "Deployment tool and support utility for AI context. Copies agents, skills, commands, rules, and behaviors into the paths each AI platform reads (Claude Code, Codex, Copilot, Cursor, Warp, OpenClaw, and 6 more) so one source of truth works across 10 platforms. Optional utilities for persistent artifact memory, background orchestration, autonomous loops, and artifact indexing.",
   "type": "module",
   "bin": {
@@ -33,6 +33,7 @@
     "test:ui": "vitest --config config/vitest.config.js --ui",
     "test:watch": "vitest --config config/vitest.config.js",
     "test:node": "node --test tools/ralph-external/*.test.mjs test/unit/ralph/*.test.mjs",
+    "test:node:ralph-external": "node --test tools/ralph-external/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "clean": "npm run clean:build",
     "clean:build": "rm -rf dist build coverage",
@@ -44,6 +45,7 @@
     "check:versions": "node tools/workspace/check-marketplace-version.mjs",
     "uat": "vitest run --config config/vitest.uat.config.js",
     "uat:watch": "vitest --config config/vitest.uat.config.js",
+    "ralph:manual-test": "tools/ralph-external/manual-provider-test.sh",
     "uat:live": "vitest run --config config/vitest.uat-live.config.js",
     "uat:claude": "vitest run --config config/vitest.uat-live.config.js --reporter=verbose ralph-live-claude",
     "uat:codex": "vitest run --config config/vitest.uat-live.config.js --reporter=verbose ralph-live-codex",
@@ -65,6 +67,10 @@
     "lint:agent-sizes": "node tools/lint/agent-def-sizes.mjs",
     "lint:claude-context": "node tools/lint/claude-context-inventory.mjs",
     "lint:generated-artifacts": "node tools/lint/tracked-generated-artifacts.mjs",
+    "lint:vault-migration": "node ci/verify-vault-migration.mjs",
+    "provision:vault-migration": "node ci/provision-vault-migration.mjs",
+    "provision:vault-approle": "node ci/provision-vault-approle.mjs",
+    "configure:gitea-vault": "node ci/configure-gitea-vault-bootstrap.mjs",
     "validate:claude-context": "node tools/validation/claude-context-repro.mjs",
     "test:conformance": "vitest run --config config/vitest.conformance.config.js test/conformance/executor-v1/",
     "test:contract": "vitest run --config config/vitest.contract.config.js test/contract/",
@@ -303,7 +309,7 @@
     }
   },
   "devDependencies": {
-    "@pagenary/publisher": "^2026.7.12",
+    "@pagenary/publisher": "^2026.7.23",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.8.0",
     "@types/semver": "^7.7.1",

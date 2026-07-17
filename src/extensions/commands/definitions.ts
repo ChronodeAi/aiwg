@@ -2928,10 +2928,10 @@ export const memoryCommand: Extension = {
   id: 'memory',
   type: 'skill',
   name: 'Memory',
-  description: 'Storage operations on the AIWG memory subsystem — resolve paths, list, get, put, delete, append JSONL events through the configured backend',
+  description: 'Storage operations on the AIWG memory subsystem, plus user-level project memory registry commands under ~/.aiwg/projects',
   version: '1.0.0',
-  capabilities: ['cli', 'memory', 'semantic-memory', 'storage', 'pkm'],
-  keywords: ['memory', 'semantic-memory', 'reflections', 'pages'],
+  capabilities: ['cli', 'memory', 'semantic-memory', 'storage', 'pkm', 'project-memory', 'user-registry'],
+  keywords: ['memory', 'semantic-memory', 'project-memory', 'registry', 'reflections', 'pages'],
   category: 'utility',
   platforms: {
     claude: 'full',
@@ -2943,15 +2943,15 @@ export const memoryCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['where is memory', 'memory path', 'list memory', 'aiwg memory'],
+    triggerPhrases: ['where is memory', 'memory path', 'list memory', 'project memory', 'aiwg memory'],
     commandHint: {
       template: 'utility',
-      argumentHint: '<path|list|get|put|delete|append-log> [options]',
+      argumentHint: '<path|list|get|put|delete|append-log|project> [options]',
       allowedTools: ['Bash', 'Read'],
       executionSteps: [
         'Parse subcommand and arguments',
         'Resolve storage adapter for memory subsystem',
-        'Read/write/list/delete/append-log via the adapter',
+        'Read/write/list/delete/append-log via the adapter or manage project-memory mappings',
         'Print result',
       ],
     },
@@ -3057,6 +3057,41 @@ export const commandLogCommand: Extension = {
       executionSteps: [
         'Read project and/or global command-log JSONL stores',
         'Summarize command frequency, failures, and recent invocations',
+        'Print a human report or JSON for automation',
+      ],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const skillUsageCommand: Extension = {
+  id: 'skill-usage',
+  type: 'skill',
+  name: 'Skill Usage',
+  description: 'Report opt-in local skill, agent, and command utilization with project/global scope summaries and JSON output',
+  version: '1.0.0',
+  capabilities: ['cli', 'skill-usage', 'telemetry', 'analysis', 'self-maintenance'],
+  keywords: ['skill', 'agent', 'usage', 'telemetry', 'analysis', 'heatmap', 'invocation'],
+  category: 'utility',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['skill usage', 'show skill usage', 'agent usage analysis', 'which aiwg skills are used'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[--json] [--scope project|global|all] [--limit N] [--suggest-for "query"] | ingest-transcript <path> --provider claude-code [--project-root <path>] [--dry-run] [--json]',
+      allowedTools: ['Bash', 'Read'],
+      executionSteps: [
+        'Read project and/or global skill-usage JSONL stores',
+        'Optionally parse a targeted Claude Code JSONL transcript for structural skill/agent invocations',
+        'Summarize artifact frequency, recency heatmap, cold spots, failures, actions, and recent usage',
+        'Suggest relevant under-used skills when --suggest-for is provided',
         'Print a human report or JSON for automation',
       ],
     },
@@ -3475,6 +3510,7 @@ export const commandDefinitions: Extension[] = [
   // Activity Log (1)
   activityLogCommand,
   commandLogCommand,
+  skillUsageCommand,
 
   // Knowledge Base (1)
   kbCommand,
