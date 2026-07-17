@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useSession } from './useSession';
 import { api, TOKEN } from './api';
 import type { Approval, Instance, ResponseNeeded } from './types';
+import { runtimeFamily } from './util';
 import { Welcome } from './components/Welcome';
 import { Inventory } from './components/Inventory';
 import { Running } from './components/Running';
@@ -15,6 +16,7 @@ import { Telemetry } from './components/Telemetry';
 import { Memory } from './components/Memory';
 import { StartSessionModal } from './components/StartSessionModal';
 import { LaunchInstanceModal } from './components/LaunchInstanceModal';
+import { registryResponseNeededItems, useSessionRegistry } from './sessionRegistry';
 
 const TABS = [
   { id: 'welcome', label: 'Home' },
@@ -48,6 +50,8 @@ export function App() {
     return TABS.some((t) => t.id === hash) ? hash as TabId : 'welcome';
   });
   const session = useSession();
+  const sessionRegistry = useSessionRegistry();
+  const registryResponses = registryResponseNeededItems(sessionRegistry).filter((response) => response.id !== `pty:${sessionRegistry.activeKey}`);
   const [composer, setComposer] = useState('');
   const [chrome, setChrome] = useState<ChromeStatus | null>(null);
   const [startOpen, setStartOpen] = useState(false);
@@ -72,15 +76,16 @@ export function App() {
           api<{ approvals: Approval[] }>('/api/approvals?status=pending').catch(() => ({ approvals: [] as Approval[] })),
         ]);
         if (cancelled) return;
-        const kinds = inv.instances.map((i) => i.runtime_posture.kind);
+        const families = inv.instances.map((i) => runtimeFamily(i.runtime_posture?.kind ?? i.runtime));
+        const attachedResponseCount = session.responseNeeded.needed ? 1 : 0;
         setChrome({
           executor: health.executor_url,
           instances: inv.instances.length,
           running: run.count,
-          responses: apr.approvals.length + (session.responseNeeded.needed ? 1 : 0),
-          host: kinds.includes('host'),
-          container: kinds.includes('container') || kinds.includes('docker'),
-          vm: kinds.includes('vm'),
+          responses: apr.approvals.length + registryResponses.length + attachedResponseCount,
+          host: families.includes('host'),
+          container: families.includes('container'),
+          vm: families.includes('vm'),
         });
       } catch {
         if (!cancelled) setChrome(null);
@@ -89,7 +94,7 @@ export function App() {
     load();
     const timer = window.setInterval(load, 15_000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [session.responseNeeded.needed, refreshTick]);
+  }, [session.responseNeeded.needed, refreshTick, registryResponses.length]);
 
   useEffect(() => {
     if (typeof EventSource === 'undefined' || !TOKEN) return;
@@ -115,22 +120,36 @@ export function App() {
   const requestStart = (instanceId?: string) => { setStartInst(instanceId); setStartOpen(true); };
   const handleLaunched = async (instanceId?: string, openSession?: boolean, operationId?: string) => {
     setRefreshTick((t) => t + 1);
-    if (openSession) {
-      const inst = await waitForSessionReady(instanceId, operationId);
-      const backend = inst.session_backends.find((b) => b.available !== false && b.drive !== false)
-        ?? inst.session_backends.find((b) => b.available !== false)
-        ?? inst.session_backends[0];
-      if (!backend || backend.available === false) throw new Error(backend?.reason ?? 'No available session backend for the new instance.');
-      const qs = new URLSearchParams({ mode: backend.mode, backend: backend.backend });
-      const s = await api<{ id: string; attach_url: string }>(
-        `/api/instances/${encodeURIComponent(inst.id)}/sessions?${qs}`, { method: 'POST' },
-      );
-      session.attach(s.attach_url, false, backend.drive === false ? 'observer' : 'controller');
-      setTab('sessions');
-    } else {
+    if (!openSession) {
       setTab('inventory');
+      setRefreshTick((t) => t + 1);
+      return;
     }
-    setRefreshTick((t) => t + 1);
+    // Readiness can take minutes for heavy loadouts (e.g. full-suite) or stall if the
+    // executor is degraded. Never block the launch modal on it: switch to the Sessions
+    // workspace now and run the wait+attach in the background. If it doesn't complete,
+    // the instance is still visible under Inventory to start a session from manually.
+    setTab('sessions');
+    void (async () => {
+      try {
+        const inst = await waitForSessionReady(instanceId, operationId);
+        const backend = inst.session_backends.find((b) => b.available !== false && b.drive !== false)
+          ?? inst.session_backends.find((b) => b.available !== false)
+          ?? inst.session_backends[0];
+        if (!backend || backend.available === false) throw new Error(backend?.reason ?? 'No available session backend for the new instance.');
+        const qs = new URLSearchParams({ mode: backend.mode, backend: backend.backend });
+        const s = await api<{ id: string; attach_url: string }>(
+          `/api/instances/${encodeURIComponent(inst.id)}/sessions?${qs}`, { method: 'POST' },
+        );
+        session.attach(s.attach_url, false, backend.drive === false ? 'observer' : 'controller', { instanceId: inst.id, sessionId: s.id });
+      } catch (e) {
+        // Non-blocking: surface via console; the instance remains in Inventory.
+        console.warn('auto-session after launch did not complete:', (e as Error).message);
+      } finally {
+        setRefreshTick((t) => t + 1);
+      }
+    })();
+    return;
   };
   const copyLaunchCommand = async () => {
     await navigator.clipboard?.writeText('aiwg cockpit');
@@ -169,14 +188,14 @@ export function App() {
       </div>
       <main>
         <Panel id="welcome" tab={tab}><Welcome onStartSession={() => requestStart()} onLaunchInstance={() => setLaunchOpen(true)} goTo={(t) => setTab(t as TabId)} /></Panel>
-        <Panel id="inventory" tab={tab}><Inventory onStartSession={requestStart} onLaunchInstance={() => setLaunchOpen(true)} /></Panel>
+        <Panel id="inventory" tab={tab}><Inventory onStartSession={requestStart} onLaunchInstance={() => setLaunchOpen(true)} refreshTick={refreshTick} /></Panel>
         <Panel id="running" tab={tab}><Running refreshTick={refreshTick} /></Panel>
         <Panel id="missions" tab={tab}><Missions refreshTick={refreshTick} /></Panel>
         {/* Sessions stays mounted so the WebSocket survives tab switches */}
         <section id="panel-sessions" role="tabpanel" aria-labelledby="tab-sessions" hidden={tab !== 'sessions'}>
           <Sessions session={session} composer={composer} setComposer={setComposer} onRequestStart={requestStart} />
         </section>
-        <Panel id="approvals" tab={tab}><Approvals refreshTick={refreshTick} responses={session.responseNeeded.needed ? [sessionResponse(session)] : []} goSessions={() => setTab('sessions')} /></Panel>
+        <Panel id="approvals" tab={tab}><Approvals refreshTick={refreshTick} responses={[...registryResponses, ...(session.responseNeeded.needed ? [sessionResponse(session)] : [])]} goSessions={() => setTab('sessions')} /></Panel>
         <Panel id="explore" tab={tab}><Explore /></Panel>
         <Panel id="library" tab={tab}>
           <Library session={session} setComposer={setComposer} goSessions={() => setTab('sessions')} />
@@ -222,7 +241,7 @@ const SESSION_READY_TIMEOUT_S = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 150;
 })();
 
-async function waitForSessionReady(instanceId?: string, operationId?: string) {
+export async function waitForSessionReady(instanceId?: string, operationId?: string) {
   let last = '';
   let operationDetail = '';
   for (let i = 0; i < SESSION_READY_TIMEOUT_S; i += 1) {
@@ -238,10 +257,22 @@ async function waitForSessionReady(instanceId?: string, operationId?: string) {
       }
     }
     const inv = await api<{ instances: Instance[] }>('/api/inventory');
+    // Fast-fail: if the instance is visible but has settled into a terminal,
+    // non-running state (e.g. a container whose agent never enrolled → 'stopped'),
+    // its session will never come up. Abort instead of blocking the launch modal
+    // for the full readiness window. A short grace (>3s) avoids tripping on the
+    // transient 'provisioning'/'created' states a healthy instance passes through.
+    const TERMINAL = new Set(['stopped', 'failed', 'error', 'terminated', 'destroyed', 'exited', 'dead']);
+    const present = instanceId ? inv.instances.find((inst) => inst.id === instanceId) : null;
+    if (present && i > 3 && TERMINAL.has(String(present.state).toLowerCase())) {
+      throw new Error(
+        `Instance ${present.id} did not come online — it settled to '${present.state}' instead of running`
+        + (operationDetail ? ` (${operationDetail})` : '')
+        + '. Its agent likely failed to register; check the runtime and try again.',
+      );
+    }
     const candidates = inv.instances.filter((inst) => String(inst.state).toLowerCase() === 'running');
-    const selected = instanceId
-      ? candidates.find((inst) => inst.id === instanceId)
-      : candidates[0];
+    const selected = instanceId ? candidates.find((inst) => inst.id === instanceId) : null;
     if (selected) {
       const backend = selected.session_backends.find((b) => b.available !== false) ?? selected.session_backends[0];
       if (backend && backend.available !== false) return selected;
@@ -249,7 +280,7 @@ async function waitForSessionReady(instanceId?: string, operationId?: string) {
     } else {
       last = [
         operationDetail,
-        instanceId ? `instance ${instanceId} not visible in inventory yet` : 'no running instance visible in inventory yet',
+        instanceId ? `instance ${instanceId} not visible in inventory yet` : 'waiting for launch operation to report instance id',
       ].filter(Boolean).join('; ');
     }
     await sleep(1_000);

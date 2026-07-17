@@ -5,7 +5,7 @@ import type { Instance } from '../types';
 
 interface Inv { count: number; fetched_at: string; instances: Instance[] }
 
-export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession?: (instanceId?: string) => void; onLaunchInstance?: () => void }) {
+export function Inventory({ onStartSession, onLaunchInstance, refreshTick = 0, refreshMs = 5_000 }: { onStartSession?: (instanceId?: string) => void; onLaunchInstance?: () => void; refreshTick?: number; refreshMs?: number }) {
   const [data, setData] = useState<Inv | null>(null);
   const [err, setErr] = useState('');
   const [actionErr, setActionErr] = useState('');
@@ -14,13 +14,19 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
   const load = useCallback(() => {
     api<Inv>('/api/inventory').then((d) => { setData(d); setErr(''); }).catch((e) => setErr((e as Error).message));
   }, []);
-  useEffect(() => { load(); }, [load]);
+  // Poll (and react to the app-wide refreshTick) so instances launched after this
+  // tab first mounted appear without a manual reload — matches the other data tabs.
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, refreshMs);
+    return () => window.clearInterval(timer);
+  }, [load, refreshMs, refreshTick]);
 
-  const control = (path: string, method: string) =>
+  const control = (path: string, method: string, fallbackMessage = '') =>
     api<{ already_gone?: boolean; message?: string }>(path, { method })
       .then((result) => {
         setActionErr('');
-        setActionMsg(result.already_gone ? (result.message ?? 'Instance already removed; inventory refreshed.') : '');
+        setActionMsg(result.message ?? (result.already_gone ? 'Instance already removed; inventory refreshed.' : fallbackMessage));
         load();
       })
       .catch((e) => {
@@ -45,13 +51,13 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
       <div className="section-toolbar">
         <div>
           <h2>Agent instances</h2>
-          <p className="hint">{data.count} target(s) · {new Date(data.fetched_at).toLocaleTimeString()}</p>
+          <p className="hint">{data.count} {data.count === 1 ? 'target' : 'targets'} · {new Date(data.fetched_at).toLocaleTimeString()}</p>
         </div>
-        {onLaunchInstance && <button className="cta" onClick={onLaunchInstance}>＋ New instance + session</button>}
+        {onLaunchInstance && <button className="cta" onClick={onLaunchInstance}>New instance</button>}
       </div>
       {actionErr && <p className="err">Action failed: {actionErr}</p>}
       {actionMsg && <p className="hint" role="status">{actionMsg}</p>}
-      <table>
+      <table className="inventory-table">
         <caption>Available instance deployments</caption>
         <thead>
           <tr>
@@ -69,13 +75,15 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
               {(() => {
                 const sessionReady = i.session_backends?.some((b) => b.available);
                 const unavailableReason = i.session_backends?.find((b) => !b.available)?.reason;
+                const reconnectable = isReconnectable(i);
+                const health = instanceHealth(i);
                 return (
             <>
-              <td>
+              <td className="instance-cell">
                 <code title={i.id}>{i.launch_context?.name ?? fmtId(i.id)}</code>
                 {i.launch_context?.name && <div className="cell-note">{fmtId(i.id)}</div>}
               </td>
-              <td>
+              <td className="runtime-cell">
                 <span className={`badge isolation-${i.runtime_posture.isolation}`} title={i.runtime_posture.warning || i.runtime_posture.label}>
                   {i.runtime_posture.label}
                 </span>
@@ -92,12 +100,17 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
                 </span>
                 <div className="cell-note">{i.transport.mode}{i.transport.stale ? ' · stale' : ''}</div>
               </td>
-              <td>
+              <td className="daemon-cell">
                 <span className={`badge daemon-${i.host_daemon.status}`}>{i.host_daemon.status.replace('_', ' ')}</span>
                 {i.host_daemon.detail && <div className="cell-note">{i.host_daemon.detail}</div>}
                 {i.host_daemon.operator_command && <code title="Operator start command">{i.host_daemon.operator_command}</code>}
               </td>
-              <td><span className={`state ${i.state}`}><span className="dot" aria-hidden="true" />{i.state}</span></td>
+              <td>
+                <span className={`state ${health.kind === 'stale-agent' ? 'degraded' : i.state}`} title={health.detail}>
+                  <span className="dot" aria-hidden="true" />{health.label}
+                </span>
+                {health.detail && health.kind !== 'healthy' && <div className="cell-note">{health.detail}</div>}
+              </td>
               <td>{i.tenant}</td>
               <td className="manage-actions">
                 {i.state === 'running' && onStartSession && (
@@ -108,12 +121,21 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
                     title={!sessionReady ? unavailableReason : undefined}
                     onClick={() => onStartSession(i.id)}
                   >
-                    New Session
+                    Session
+                  </button>
+                )}{' '}
+                {reconnectable && (
+                  <button
+                    aria-label={`Reconnect agent for ${fmtId(i.id)}`}
+                    title={unavailableReason ?? 'Ask the running agent to re-register without restarting the instance.'}
+                    onClick={() => control(`/api/instances/${encodeURIComponent(i.id)}/reconnect`, 'POST', 'Reconnect requested; inventory will refresh shortly.')}
+                  >
+                    Reconnect
                   </button>
                 )}{' '}
                 {i.state === 'running'
-                  ? <button aria-label={`Stop instance ${fmtId(i.id)}`} onClick={() => control(`/api/instances/${encodeURIComponent(i.id)}/stop`, 'POST')}>Stop Instance</button>
-                  : <button aria-label={`Start instance ${fmtId(i.id)}`} onClick={() => control(`/api/instances/${encodeURIComponent(i.id)}/start`, 'POST')}>Start Instance</button>}{' '}
+                  ? <button aria-label={`Stop instance ${fmtId(i.id)}`} onClick={() => control(`/api/instances/${encodeURIComponent(i.id)}/stop`, 'POST')}>Stop</button>
+                  : <button aria-label={`Start instance ${fmtId(i.id)}`} onClick={() => control(`/api/instances/${encodeURIComponent(i.id)}/start`, 'POST')}>Start</button>}{' '}
                 <button
                   aria-label={`Destroy instance ${fmtId(i.id)}`}
                   title={i.state !== 'running' && i.runtime === 'docker' ? 'Stopped Docker row — Destroy removes the container directly (admin-v2 has no instance record).' : undefined}
@@ -131,4 +153,29 @@ export function Inventory({ onStartSession, onLaunchInstance }: { onStartSession
       </table>
     </>
   );
+}
+
+// VM runtimes included per #1778 — the bridge signals the in-guest agent via
+// qemu-guest-agent, the container/docker path via docker exec.
+const RECONNECTABLE_RUNTIMES = ['docker', 'container', 'vm', 'qemu', 'kvm'];
+
+function isReconnectable(i: Instance): boolean {
+  const runtime = String(i.runtime_posture?.kind ?? i.runtime).toLowerCase();
+  const running = String(i.state).toLowerCase() === 'running';
+  const agentMissing = i.agent_ready === false || i.session_backends?.some((b) => b.available === false);
+  return running && RECONNECTABLE_RUNTIMES.includes(runtime) && Boolean(agentMissing);
+}
+
+function instanceHealth(i: Instance): { kind: 'healthy' | 'stale-agent'; label: string; detail?: string } {
+  const running = String(i.state).toLowerCase() === 'running';
+  const unavailableReason = i.session_backends?.find((b) => b.available === false)?.reason;
+  const agentMissing = i.agent_ready === false || Boolean(unavailableReason);
+  if (running && agentMissing) {
+    return {
+      kind: 'stale-agent',
+      label: 'agent unreachable',
+      detail: unavailableReason ?? 'Runtime is still running, but the agent is not registered.',
+    };
+  }
+  return { kind: 'healthy', label: i.state };
 }

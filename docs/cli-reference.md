@@ -195,7 +195,7 @@ aiwg -update
 - Checks npm registry for newer version
 - Shows changelog highlights
 - Prompts for update confirmation
-- Runs `npm update -g aiwg`
+- Runs `npm install -g aiwg@latest`
 - Verifies successful update
 
 **Channel switching:**
@@ -373,8 +373,8 @@ aiwg use <framework|addon>
 - `--force` - Overwrite existing deployments
 - `--dry-run` - Preview without making changes
 - `--ci-hooks-enabled` - Also deploy CI workflow files to `.github/workflows/` and/or `.gitea/workflows/` (opt-in; detects forge from `.git/config`). Review deployed files before committing.
-- `--harness-agents <list>` - OpenHuman only: replace the default curated native `spawn_subagent` TOML agent set with a comma-separated list (for example `test-engineer,security-auditor`).
-- `--no-harness-agents` - OpenHuman only: skip native TOML harness agents and deploy only kernel skills/rules.
+- `--harness-agents <list>` - OpenHuman only: emit selected native `spawn_subagent` TOML agents with a comma-separated list (for example `test-engineer,security-auditor`). Without this flag, OpenHuman deploys kernel skills/rules only.
+- `--no-harness-agents` - OpenHuman only: explicitly skip native TOML harness agents and deploy only kernel skills/rules.
 - `--skip-commands-migration` - Skip deleting the legacy commands directory (warns about duplicate entries in the command palette)
 - `--profile <name>` - Select a topology profile for addons that declare multiple page templates (e.g., `llm-wiki` ships `book-companion | personal | research-deep-dive | business-team | generic`). Without the flag, an interactive prompt appears on TTY. The selection is written to `.aiwg/<namespace>/config.json` so subsequent skill invocations pick the right template.
 
@@ -461,7 +461,7 @@ aiwg use sdlc --ci-hooks-enabled --dry-run
 | OpenCode | `opencode` | `.opencode/agent/`, `.opencode/commands/`, `.opencode/skill/`, `.opencode/rule/` | — |
 | Hermes | `hermes` | `~/.hermes/skills/`, `AGENTS.md` (lean) | — |
 | OpenClaw | `openclaw` | `~/.openclaw/agents/`, `~/.openclaw/commands/`, `~/.openclaw/skills/`, `~/.openclaw/rules/`, `~/.openclaw/behaviors/` | ✓ |
-| OpenHuman | `openhuman` | `.agents/agents/`, `~/.openhuman/skills/`, `~/.openhuman/.aiwg/{skills,rules}/`, `AGENTS.md` | — |
+| OpenHuman | `openhuman` | `~/.openhuman/skills/`, `~/.openhuman/.aiwg/rules/`, optional `~/.openhuman/agents/aiwg_*.toml`, project `AGENTS.md` | — |
 | Local/Ollama | `local` | Same as `claude` (local model, Claude Code paths) | — |
 
 **Commands → Skills migration:**
@@ -473,6 +473,7 @@ On first run after the commands-to-skills migration, `aiwg use` detects an exist
 - **Codex**: Commands and skills deploy to `~` (user-level) for availability across all projects; the provider ID is `codex`, not `openai`
 - **Windsurf**: Agents aggregated into `AGENTS.md` at project root; no separate agent files
 - **Warp**: Agents and commands also aggregated into `WARP.md` for single-file context loading
+- **OpenHuman**: Kernel skills and rule bodies are user-global; the default deploy emits no markdown persona copies. Project context is rendered into `AGENTS.md`, and curated native TOML agents are opt-in with `--harness-agents`.
 - **Hermes**: Not a spawnable CLI — access via `ollama run hermes3` or MCP sidecar; deploy sets up skills and a lean AGENTS.md
 - **OpenClaw**: Only provider with behaviors support (`~/.openclaw/behaviors/`); all artifacts deploy to home directory
 - **Local/Ollama**: Uses Claude Code path layout; specify `--coding-model ollama/<model>` to route coding tasks to the local model
@@ -2387,6 +2388,7 @@ aiwg mission-control <subcommand> [options]
 |------------|-------------|
 | `start` | Start a new Mission Control session |
 | `dispatch <id> "<objective>"` | Add a background mission to session |
+| `run [<id>] [--accept-cost]` | Drain the queue — launch queued missions as ralph loops |
 | `status [<id>] [--json]` | View mission status dashboard |
 | `watch [<id>]` | Live monitor (streaming) |
 | `abort <session> <mission>` | Abort a specific mission |
@@ -2394,6 +2396,19 @@ aiwg mission-control <subcommand> [options]
 | `resume [<id>]` | Resume paused session |
 | `stop [<id>] [--drain]` | Shut down session |
 | `list [--json]` | List all sessions |
+
+**`mc dispatch` options** (the LFD ceilings mirror `aiwg ralph`; same names/units, #1585):
+
+- `--completion "<criteria>"` - Verifiable completion criteria (required for `mc run`)
+- `--priority <level>` - Priority hint (default: normal)
+- `--max-iterations <n>` - Ralph iteration cap when launched (default: 10)
+- `--max-total-tokens <n>` / `--max-output-tokens <n>` / `--max-tool-calls <n>` - Hard cumulative usage ceilings (when observable)
+- `--max-total-cost <usd>` - Hard cumulative spend ceiling (when observable)
+- `--max-wall-clock-minutes <m>` - Hard cumulative wall-clock ceiling (always observable)
+- `--exploration-quota <k>` - Structural variant after `k` flat cycles (off unless declared; no default `k`)
+- `--budget-stop-policy <p>` - `completion-wins` (default) | `budget-wins`
+
+> Invalid numeric budget values are a hard usage error — `mc dispatch` refuses rather than dispatching an unbounded mission (#1770). `--flag=value` syntax is accepted.
 
 **Examples:**
 
@@ -2404,6 +2419,10 @@ aiwg mc start --name "Construction Sprint 4"
 # Dispatch missions
 aiwg mc dispatch mc-abc123 "Fix auth service" --completion "tests pass" --priority high
 aiwg mc dispatch mc-abc123 "Add pagination" --completion "paginated responses"
+
+# Dispatch with LFD ceilings (wall-clock is the provider-independent hard stop)
+aiwg mc dispatch mc-abc123 "Refactor auth" --completion "tests pass" \
+  --max-wall-clock-minutes 30 --max-total-cost 5 --exploration-quota 3
 
 # Monitor
 aiwg mc status mc-abc123
@@ -2555,18 +2574,34 @@ aiwg ralph "<task-description>"
 **Core Options:**
 
 - `--completion "<criteria>"` - Success criteria (e.g., "npm test passes")
-- `--max-iterations <n>` - Maximum iterations (default: 10)
-- `--timeout <seconds>` - Per-iteration timeout (default: 300)
-- `--provider <name>` - CLI provider: `claude` (default), `codex`, `opencode`, `local`
-- `--budget <usd>` - Budget per iteration in USD (default: 2.0)
+- `--max-iterations <n>` - Maximum iterations (default: 5)
+- `--timeout <minutes>` - Per-iteration timeout in minutes (default: 60)
+- `--provider <name>` - CLI provider: `claude` (default), `codex`, `opencode`, `factory`
+- `--budget <usd>` - Budget per iteration in USD (default: 5.0)
 - `--gitea-issue` - Create/link Gitea issue for tracking
 - `--mcp-config <json>` - MCP server configuration JSON
+
+**LFD Loop Controls (#1585):**
+
+Hard cumulative ceilings that stop the loop and emit a best-output report.
+Invalid values or unknown flags cause `aiwg ralph` to refuse to launch (#1770).
+
+- `--max-total-tokens <n>` - Hard cumulative total-token ceiling (when the provider reports usage)
+- `--max-output-tokens <n>` - Hard cumulative output-token ceiling (when the provider reports usage)
+- `--max-tool-calls <n>` - Hard cumulative tool-call ceiling (when the provider reports usage)
+- `--max-total-cost <usd>` - Hard cumulative spend ceiling (when the provider reports cost)
+- `--max-wall-clock-minutes <m>` - Hard cumulative wall-clock ceiling (always observable; the provider-independent hard stop)
+- `--exploration-quota <k>` - Require a structural strategy variant after `k` flat (non-improving) cycles. **OFF unless declared** — there is no default `k`; each loop declares its own (#1770)
+- `--budget-stop-policy <p>` - `completion-wins` (default): a task completing on the ceiling-crossing iteration reports success with the crossing annotated; `budget-wins`: exhaustion always terminates as `budget_exhausted` (#1767)
+- `--allow-exhausted-resume` - Permit `--resume` of a loop whose declared ceilings are already exhausted (pair with raised `--max-*` limits) (#1765)
+
+> Token/spend ceilings are **unobservable** on providers that report no usage (a one-time warning is printed); use `--max-wall-clock-minutes` for a provider-independent hard stop (#1766). These flags are also accepted by `aiwg mc dispatch` and the MCP `ralph-dispatch` / `mission-dispatch` tools with the same names and units.
 
 **Research-Backed Options (REF-015, REF-021):**
 
 - `-m, --memory <n|preset>` - Memory capacity Ω: 1-10 or preset (simple, moderate, complex, maximum). Default: 3
 - `--cross-task` / `--no-cross-task` - Enable/disable cross-task learning (default: enabled)
-- `--no-analytics` - Disable iteration analytics
+- `--no-analytics` - Disable iteration analytics. **Note:** this also disables the LFD budget stops and exploration quota, which live in the analytics subsystem (#1766)
 - `--no-best-output` - Disable best output selection (use final iteration)
 - `--no-early-stopping` - Disable early stopping on high confidence
 
@@ -2775,9 +2810,15 @@ aiwg ralph-resume
 - Loads last saved state (including Epic #26 control layers)
 - Restores PID controller state
 - Reloads semantic memory context
+- **Restores the LFD analytics counters** — cumulative token/spend/wall-clock usage survives resume, so declared budget ceilings are re-enforced across a crash/restart (#1765)
 - Continues from last iteration
 - Applies same completion criteria
 - Respects remaining iteration budget
+
+**LFD resume semantics (#1765):**
+
+- Persisted budget/quota/policy config is preserved; only explicitly passed flags override it.
+- Resuming a loop whose declared ceilings are already exhausted is **refused** unless `--allow-exhausted-resume` is passed (pair with raised `--max-*` limits).
 
 ---
 
@@ -4240,6 +4281,72 @@ aiwg command-log --scope global --limit 50
 
 ---
 
+### skill-usage
+
+Report the optional local skill, agent, and command usage stream. This is off by
+default and records CLI-derived utilization such as `aiwg run skill <name>`,
+`aiwg run agent <name>`, `aiwg show skill|agent <name>`, `discover`, and
+top-level commands. It can also ingest a targeted Claude Code JSONL transcript
+when the operator points it at a specific file.
+
+```bash
+aiwg skill-usage [--json] [--scope project|global|all] [--limit N] [--suggest-for "query"]
+aiwg skill-usage ingest-transcript <path> --provider claude-code [--project-root <path>] [--dry-run] [--json]
+```
+
+**Enable logging:**
+
+```bash
+# Project-local store only
+aiwg config set --project telemetry.skill_usage.enabled true
+aiwg config set --project telemetry.skill_usage.scopes project
+
+# Project + operator-global stores
+aiwg config set --project telemetry.skill_usage.scopes project,global
+
+# One invocation or shell session override
+AIWG_SKILL_USAGE=project aiwg run skill issue-audit
+AIWG_SKILL_USAGE=global aiwg show agent security-auditor
+AIWG_SKILL_USAGE=both aiwg discover "issue triage"
+AIWG_SKILL_USAGE=off aiwg doctor
+```
+
+**Compatibility:** `telemetry.skill_usage.*` is the preferred switch. Existing
+`command_log.*` opt-ins also enable skill-usage events until the command-log
+compatibility path is retired.
+
+**Stores:**
+
+- Project: `.aiwg/telemetry/skill-usage.jsonl`
+- Global: `$XDG_STATE_HOME/aiwg/skill-usage.jsonl` or `~/.local/state/aiwg/skill-usage.jsonl`
+
+**Report model:** JSON output includes `summary`, `heatmap`, `cold_spots`, and
+`suggestions`. The heatmap buckets each artifact by frequency and recency.
+Cold spots are local bundled skills with no usage events. Suggestions are
+deterministic under-used skill matches for `--suggest-for`.
+
+**Privacy model:** events include artifact kind/id, action, timestamp, duration,
+outcome, AIWG version, scope, hashed cwd, and hashed project root plus
+project-relative cwd when available. Reports derive counts from those events
+and local skill metadata. Events do not store prompts, stdout/stderr, file
+contents, secrets, full raw argv, chat content, or absolute local paths.
+
+**Bounds:** stores rotate to `.1` when `telemetry.skill_usage.max_bytes`,
+`command_log.max_bytes`, or `AIWG_SKILL_USAGE_MAX_BYTES` is exceeded. The
+default bound is 1 MiB per store.
+
+**Examples:**
+
+```bash
+aiwg skill-usage
+aiwg skill-usage --json
+aiwg skill-usage --scope project --limit 50
+aiwg skill-usage --suggest-for "issue audit"
+aiwg skill-usage ingest-transcript ~/.claude/projects/example/session.jsonl --provider claude-code --project-root .
+```
+
+---
+
 ### memory
 
 Storage operations on the AIWG memory subsystem. Routes through `resolveStorage('memory')`. Used by `memory-ingest` / `memory-lint` / `memory-log-append` / `memory-query-capture` skills (#966).
@@ -4373,7 +4480,7 @@ aiwg ops <subcommand>
 | `--workspace <name>` | Workspace name (default: `default`) |
 | `--home <path>` | Parent directory for repos |
 | `--mode <mode>` | `single-repo` or `multi-repo` (default: `multi-repo`) |
-| `--ext <list>` | Comma-separated extensions: `sys,it,dev,stream` |
+| `--ext <list>` | Comma-separated extensions: `sys,it,dev,stream,repo-maintainer` |
 | `--prefix <name>` | Repo naming prefix (e.g., `myorg`) |
 | `--provider <name>` | Remote provider for auto-push (`github`, `gitea`, or URL) |
 | `--from <git-url>` | Clone the URL into the target repo instead of init (#936) |

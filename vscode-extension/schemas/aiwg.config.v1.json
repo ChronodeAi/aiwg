@@ -87,6 +87,28 @@
         }
       }
     },
+    "repo_maintainer": {
+      "type": "object",
+      "description": "Role-aware repository maintenance overrides. Forge permission detection is attempted first; these tiers pin or narrow behavior when detection is denied or policy requires a fixed posture (#1755).",
+      "additionalProperties": false,
+      "properties": {
+        "tiers": {
+          "type": "object",
+          "description": "Map remote URLs, owner/repo slugs, remote names, or 'local' to collaborator, maintainer, or admin.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["collaborator", "maintainer", "admin"]
+          },
+          "examples": [
+            {
+              "git@git.integrolabs.net:roctinam/aiwg.git": "maintainer",
+              "elder-plinius/T3MP3ST": "collaborator",
+              "local": "maintainer"
+            }
+          ]
+        }
+      }
+    },
     "delivery": {
       "type": "object",
       "description": "Repo control / delivery policy — how AIWG agents are expected to ship code (#995)",
@@ -286,6 +308,39 @@
           "minimum": 1024,
           "maximum": 104857600,
           "description": "Maximum bytes per JSONL store before rotation to .1. Default 1048576."
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "description": "Local-first telemetry settings. All telemetry is off by default.",
+      "additionalProperties": false,
+      "properties": {
+        "skill_usage": {
+          "type": "object",
+          "description": "Optional local-first skill, agent, and command usage tracking (#1649). Off by default.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable skill usage tracking for this project. Default false."
+            },
+            "scopes": {
+              "type": "array",
+              "description": "Stores to write. project = .aiwg/telemetry/skill-usage.jsonl; global = XDG state.",
+              "items": {
+                "type": "string",
+                "enum": ["project", "global"]
+              },
+              "uniqueItems": true
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1024,
+              "maximum": 104857600,
+              "description": "Maximum bytes per JSONL store before rotation to .1. Default 1048576."
+            }
+          }
         }
       }
     }

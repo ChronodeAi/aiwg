@@ -138,6 +138,416 @@ describe('UAT: Orchestrator — basic loop', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════
+// Suite 1b: LFD loop-control verification
+// ═════════════════════════════════════════════════════════════════════════
+
+describe('UAT: Orchestrator — LFD loop controls', () => {
+  const originalStubOutput = process.env.UAT_STUB_OUTPUT;
+
+  afterEach(() => {
+    if (originalStubOutput === undefined) {
+      delete process.env.UAT_STUB_OUTPUT;
+    } else {
+      process.env.UAT_STUB_OUTPUT = originalStubOutput;
+    }
+  });
+
+  it('stops on hard wall-clock budget exhaustion and writes auditable LFD artifacts (budget-wins policy)', async () => {
+    const orc = new Orchestrator(testDir);
+
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Budget-stop UAT',
+      completionCriteria: 'Stub succeeds, then hard budget check stops the loop',
+      maxIterations: 3,
+      enableAnalytics: true,
+      enableBestOutput: true,
+      // Explicit budget-wins: this test asserts the strict exhaustion-first
+      // artifacts. The default policy is completion-wins (#1767).
+      budgetStopPolicy: 'budget-wins',
+      budgetLimits: {
+        wall_clock_minutes: 0.000001,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('Budget exhausted: wall_clock_exhausted');
+    expect(result.iterations).toBe(1);
+    expect(result.budgetStopReport?.stop_reason).toBe('wall_clock_exhausted');
+    expect(result.budgetStopReport?.budgets.observed.wall_clock_minutes).toBeGreaterThan(0);
+
+    const stateDir = orc.stateManager.getStateDir();
+    const state = orc.stateManager.load();
+    expect(state.status).toBe('budget_exhausted');
+    expect(state.budgetStopReportPath).toBe(join(stateDir, 'budget-stop-report.json'));
+    expect(existsSync(join(stateDir, 'budget-stop-report.json'))).toBe(true);
+    expect(existsSync(join(stateDir, 'completion-report.md'))).toBe(true);
+    expect(existsSync(join(stateDir, 'iteration-analytics-report.md'))).toBe(true);
+
+    const budgetReport = JSON.parse(readFileSync(join(stateDir, 'budget-stop-report.json'), 'utf-8'));
+    expect(budgetReport.selected_iteration).toBe(1);
+    expect(budgetReport.hypothesis_outcomes).toHaveLength(1);
+    expect(budgetReport.next_recommended_action).toContain('Review best output');
+
+    const completionReport = readFileSync(join(stateDir, 'completion-report.md'), 'utf-8');
+    expect(completionReport).toContain('## LFD Controls');
+    expect(completionReport).toContain('Budget stop report:');
+    expect(completionReport).toContain('"stop_reason": "wall_clock_exhausted"');
+
+    const analyticsReport = readFileSync(join(stateDir, 'iteration-analytics-report.md'), 'utf-8');
+    expect(analyticsReport).toContain('Best Quality / 1K Tokens');
+    expect(analyticsReport).toContain('Best Quality / Minute');
+  });
+
+  it('reports success when the completing iteration crosses a ceiling (completion-wins default, #1767)', async () => {
+    const orc = new Orchestrator(testDir);
+
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Completion-wins UAT',
+      completionCriteria: 'Stub succeeds on the ceiling-crossing iteration',
+      maxIterations: 3,
+      enableAnalytics: true,
+      enableBestOutput: true,
+      budgetLimits: {
+        wall_clock_minutes: 0.000001,
+      },
+    });
+
+    // The task completed on the iteration that crossed the ceiling: success,
+    // with the crossing annotated — not a budget_exhausted failure.
+    expect(result.success).toBe(true);
+    expect(result.budgetCrossed).toBe('wall_clock_exhausted');
+    expect(result.reason).toContain('budget ceiling crossed');
+
+    const state = orc.stateManager.load();
+    expect(state.status).toBe('completed');
+    expect(state.budgetCrossedAtCompletion).toBe('wall_clock_exhausted');
+    // The budget-stop report is still written as an audit artifact
+    expect(existsSync(join(orc.stateManager.getStateDir(), 'budget-stop-report.json'))).toBe(true);
+  });
+
+  it('stops flat loops as plateau (stagnation), never success (#1767)', async () => {
+    process.env.UAT_STUB_OUTPUT = [
+      'Ralph iteration still incomplete.',
+      'modified: loop-control.md',
+      'Continue with accumulated context.',
+    ].join('\n');
+
+    const orc = new Orchestrator(testDir);
+
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Plateau UAT',
+      completionCriteria: 'Never met by stub',
+      maxIterations: 5,
+      enableAnalytics: true,
+      enableBestOutput: true,
+      enableEarlyStopping: true,
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toContain('Quality plateau');
+
+    const state = orc.stateManager.load();
+    expect(state.status).toBe('plateau');
+  });
+
+  it('defers plateau stop while a declared exploration quota requires a structural variant (#1767)', async () => {
+    process.env.UAT_STUB_OUTPUT = [
+      'Ralph iteration still incomplete.',
+      'modified: loop-control.md',
+      'Continue with accumulated context.',
+    ].join('\n');
+
+    const orc = new Orchestrator(testDir);
+
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Plateau-vs-quota UAT',
+      completionCriteria: 'Never met by stub',
+      maxIterations: 4,
+      enableAnalytics: true,
+      enableEarlyStopping: true,
+      explorationQuota: { enabled: true, k: 1 },
+    });
+
+    // The pending structural variant takes precedence over the plateau stop —
+    // the quota exists precisely to break plateaus, so the loop runs on.
+    expect(result.reason).toBe('Maximum iterations reached');
+    const state = orc.stateManager.load();
+    expect(state.status).not.toBe('plateau');
+    expect(state.lfdControls?.structuralVariantRequired).toBe(true);
+  });
+
+  it('records a real pre-change hypothesis and injects it into the prompt (#1769)', async () => {
+    process.env.UAT_STUB_OUTPUT = 'Ralph iteration still incomplete.';
+    const orc = new Orchestrator(testDir);
+
+    await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Hypothesis UAT',
+      completionCriteria: 'Never met by stub',
+      maxIterations: 2,
+      enableAnalytics: true,
+      // Intelligence layer on so StrategyPlanner produces the hypothesis fields
+      enableClaudeIntelligence: true,
+    });
+
+    const state = orc.stateManager.load();
+    const analytics = JSON.parse(
+      readFileSync(join(orc.stateManager.getStateDir(), 'analytics', `${state.loopId}.json`), 'utf-8'),
+    );
+    const exp = analytics.iterations[0].experiment;
+    expect(exp.recorded_before_change).toBe(true);
+    expect(typeof exp.hypothesis).toBe('string');
+    expect(exp.hypothesis.length).toBeGreaterThan(0);
+    expect(typeof exp.expected_failure_mode).toBe('string');
+    expect(typeof exp.distinguishing_diagnostic).toBe('string');
+
+    // The hypothesis directive is injected into the prompt (provider-agnostic)
+    const prompt1 = readFileSync(orc.stateManager.getPromptPath(1), 'utf-8');
+    expect(prompt1).toContain('LFD CONTROL — hypothesis before change');
+  });
+
+  it('injects a stall-rule directive after a non-improving cycle (#1768)', async () => {
+    process.env.UAT_STUB_OUTPUT = 'Ralph iteration still incomplete.';
+    const orc = new Orchestrator(testDir);
+
+    await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Stall-rule UAT',
+      completionCriteria: 'Never met by stub',
+      maxIterations: 3,
+      enableAnalytics: true,
+      enableClaudeIntelligence: true,
+    });
+
+    // Detecting non-improvement needs two recorded cycles, so the stall
+    // directive appears from iteration 3 onward (iteration 2's delta vs 1 was
+    // non-positive under the flat stub output).
+    const prompt3 = readFileSync(orc.stateManager.getPromptPath(3), 'utf-8');
+    expect(prompt3).toContain('LFD CONTROL — stall rule');
+    expect(prompt3).toContain('Do NOT repeat the previous adjustment');
+  });
+
+  it('requires a structural variant after the configured flat-cycle quota', async () => {
+    process.env.UAT_STUB_OUTPUT = [
+      'Ralph iteration still incomplete.',
+      'modified: loop-control.md',
+      'Continue with accumulated context.',
+    ].join('\n');
+
+    const orc = new Orchestrator(testDir);
+
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Exploration-quota UAT',
+      completionCriteria: 'Stay incomplete long enough to trigger structural variant control',
+      maxIterations: 3,
+      enableAnalytics: true,
+      explorationQuota: {
+        enabled: true,
+        k: 1,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('Maximum iterations reached');
+    expect(result.iterations).toBe(3);
+
+    const state = orc.stateManager.load();
+    expect(state.lfdControls).toMatchObject({
+      structuralVariantRequired: true,
+      flatCycleCount: 2,
+      explorationQuotaK: 1,
+    });
+
+    const prompt3 = readFileSync(orc.stateManager.getPromptPath(3), 'utf-8');
+    expect(prompt3).toContain('LFD CONTROL: The prior cycles are flat.');
+    expect(prompt3).toContain('This iteration must use a structural variant.');
+    // The hypothesis-before-change directive is now its own injected block (#1769)
+    expect(prompt3).toContain('LFD CONTROL — hypothesis before change');
+
+    const analytics = JSON.parse(readFileSync(join(orc.stateManager.getStateDir(), 'analytics', `${state.loopId}.json`), 'utf-8'));
+    expect(analytics.structural_variant_required).toBe(true);
+    expect(analytics.flat_cycle_count).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// Suite: Eval-harness + VOID (#1776)
+// ═════════════════════════════════════════════════════════════════════════
+
+describe('UAT: Orchestrator — eval-harness + VOID (#1776)', () => {
+  it('VOIDs an iteration on a lint violation and keeps holdout details private', async () => {
+    process.env.UAT_STUB_OUTPUT = 'Ralph iteration still incomplete.';
+    const orc = new Orchestrator(testDir);
+
+    // Real shell-command harness: lint exits 1 with a violation (→ VOID); score
+    // emits an aggregate that also tries to leak a holdout answer (must be
+    // stripped from optimizer feedback).
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Eval-harness VOID UAT',
+      completionCriteria: 'never met by stub',
+      maxIterations: 1,
+      enableAnalytics: true,
+      enableBestOutput: true,
+      executionMode: 'holdout-isolated',
+      evalHarness: {
+        lint: {
+          command: `node -e "console.log(JSON.stringify({violation:true,void_reason:'banned import'})); process.exit(1)"`,
+          void_on_violation: true,
+        },
+        score: {
+          command: `node -e "console.log(JSON.stringify({score:95,pass_count:19,total_count:20,holdout_answers:{1:'A'},oracle_traces:'CANARY-XYZ'}))"`,
+        },
+        diagnostics_policy: { private_human: '', optimizer_visible: 'aggregate_only' },
+      },
+    });
+
+    const state = orc.stateManager.load();
+    const analytics = JSON.parse(
+      readFileSync(join(orc.stateManager.getStateDir(), 'analytics', `${state.loopId}.json`), 'utf-8'),
+    );
+    const iter = analytics.iterations[0];
+
+    // Iteration is VOID; only VOID-safe aggregate feedback reached the record.
+    expect(iter.verification_status).toBe('void');
+    expect(iter.eval_harness_result.status).toBe('void');
+    expect(iter.eval_harness_result.leakage_audit.result).toBe('pass');
+    const feedbackStr = JSON.stringify(iter.eval_harness_result.optimizer_feedback);
+    expect(feedbackStr).not.toContain('CANARY-XYZ');
+    expect(feedbackStr).not.toContain('holdout_answers');
+    expect(analytics.void_iteration_count).toBe(1);
+    expect(result.loopId).toBeDefined();
+
+    // The eval-harness result artifact is written per iteration.
+    const iterDirs = join(orc.stateManager.getStateDir(), 'iterations');
+    const found = existsSync(iterDirs);
+    expect(found).toBe(true);
+  });
+
+  it('passes a clean iteration through the harness (no VOID)', async () => {
+    process.env.UAT_STUB_OUTPUT = 'Ralph iteration still incomplete.';
+    const orc = new Orchestrator(testDir);
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Eval-harness pass UAT',
+      completionCriteria: 'never met by stub',
+      maxIterations: 1,
+      enableAnalytics: true,
+      evalHarness: {
+        lint: { command: `node -e "console.log('{}')"`, void_on_violation: true },
+        score: { command: `node -e "console.log(JSON.stringify({score:100,pass_count:10,total_count:10}))"` },
+      },
+    });
+    const state = orc.stateManager.load();
+    const analytics = JSON.parse(
+      readFileSync(join(orc.stateManager.getStateDir(), 'analytics', `${state.loopId}.json`), 'utf-8'),
+    );
+    expect(analytics.iterations[0].eval_harness_result.status).toBe('pass');
+    expect(analytics.iterations[0].verification_status).toBe('passed');
+    expect(analytics.void_iteration_count).toBe(0);
+    expect(result.loopId).toBeDefined();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// Suite: Resume path carries the LFD control surface (#1765)
+// ═════════════════════════════════════════════════════════════════════════
+
+describe('UAT: Orchestrator — resume LFD controls (#1765)', () => {
+  let originalStubOutput: string | undefined;
+
+  beforeEach(() => {
+    originalStubOutput = process.env.UAT_STUB_OUTPUT;
+  });
+
+  afterEach(() => {
+    if (originalStubOutput === undefined) {
+      delete process.env.UAT_STUB_OUTPUT;
+    } else {
+      process.env.UAT_STUB_OUTPUT = originalStubOutput;
+    }
+  });
+
+  it('restores analytics counters on resume (controls active, history preserved)', async () => {
+    process.env.UAT_STUB_OUTPUT = 'Ralph iteration still incomplete.';
+
+    const orc = new Orchestrator(testDir);
+    const first = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Resume analytics UAT',
+      completionCriteria: 'Never met by stub',
+      maxIterations: 1,
+      enableAnalytics: true,
+    });
+    expect(first.iterations).toBe(1);
+
+    const stateDir = orc.stateManager.getStateDir();
+    const orc2 = new Orchestrator(testDir);
+    orc2.stateManager.setStateDir(stateDir);
+
+    const second = await orc2.resume({ maxIterations: 2 });
+
+    // Before #1765 iterationAnalytics stayed null on resume — every LFD
+    // control was silently dead on the recovery path.
+    expect(orc2.iterationAnalytics).not.toBeNull();
+    expect(second.iterations).toBe(2);
+    // 1 restored iteration + 1 new one: cumulative counters survived resume
+    expect(orc2.iterationAnalytics.iterations.length).toBe(2);
+    expect(orc2.iterationAnalytics.iterations[0].iteration_number).toBe(1);
+  });
+
+  it('refuses to resume when restored usage already exceeds an overridden ceiling', async () => {
+    process.env.UAT_STUB_OUTPUT = 'Ralph iteration still incomplete.';
+
+    const orc = new Orchestrator(testDir);
+    await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Resume ceiling UAT',
+      completionCriteria: 'Never met by stub',
+      maxIterations: 1,
+      enableAnalytics: true,
+    });
+
+    const orc2 = new Orchestrator(testDir);
+    orc2.stateManager.setStateDir(orc.stateManager.getStateDir());
+
+    await expect(
+      orc2.resume({
+        maxIterations: 3,
+        budgetLimits: { wall_clock_minutes: 0.0000001 },
+      })
+    ).rejects.toThrow(/already exceeds declared budget ceiling/);
+  });
+
+  it('refuses to resume a budget_exhausted loop without --allow-exhausted-resume', async () => {
+    const orc = new Orchestrator(testDir);
+    const result = await orc.execute({
+      ...BASE_CONFIG,
+      objective: 'Exhausted-resume UAT',
+      completionCriteria: 'Stub succeeds, then hard budget check stops the loop',
+      maxIterations: 3,
+      enableAnalytics: true,
+      enableBestOutput: true,
+      budgetStopPolicy: 'budget-wins',
+      budgetLimits: {
+        wall_clock_minutes: 0.000001,
+      },
+    });
+    expect(result.success).toBe(false);
+
+    const orc2 = new Orchestrator(testDir);
+    orc2.stateManager.setStateDir(orc.stateManager.getStateDir());
+
+    await expect(orc2.resume({})).rejects.toThrow(/budget_exhausted/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
 // Suite 2: Verbose mode
 // ═════════════════════════════════════════════════════════════════════════
 

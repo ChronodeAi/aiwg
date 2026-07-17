@@ -1,258 +1,153 @@
 # CI/CD Secrets Configuration
 
-**Version:** 1.1
-**Last Updated:** 2026-06-11
+**Version:** 3.0
+**Last Updated:** 2026-07-15
 **Target Audience:** Repository maintainers and administrators
 
-## Overview
+AIWG's Gitea CI/CD workflows use vault for repository-managed secrets. Gitea
+Actions stores only the vault bootstrap pair:
 
-This document describes the secrets required for CI/CD workflows in the AIWG repository. Secrets are used for authentication with package registries and external services.
+| Tracker secret | Purpose |
+|---|---|
+| `VAULT_CI_ROLE_ID` | AppRole role ID for the `ci-aiwg` reader. |
+| `VAULT_CI_SECRET_ID` | AppRole secret ID for the `ci-aiwg` reader. |
 
-## Required Secrets
+Do not recreate legacy Gitea secrets such as `NPM_TOKEN`, `GH_ACCESS_TOKEN`,
+`AIWG_IO_DISPATCH_TOKEN`, or `DOCSITE_DEPLOY_KEY`. Those values live in vault
+and are fetched at runtime with [`../../ci/vault-fetch.sh`](../../ci/vault-fetch.sh).
 
-### NPM_TOKEN
+`secrets.GITHUB_TOKEN` is not part of this migration. It is a per-run token
+issued by the CI system and is still used by PR-comment workflows.
 
-**Purpose:** Authenticate with Gitea's npm package registry for publishing.
+## Vault Fetch Specs
 
-**Required Scopes:**
-- `package:write` - Required to publish packages
-- `package:read` - Required to verify published packages
+| Workflow | Spec | Exported value |
+|---|---|---|
+| `.gitea/workflows/npm-publish.yml` | `ci/vault-fetch.npm-publish.spec` | `NODE_AUTH_TOKEN` |
+| `.gitea/workflows/gitea-release.yml` | `ci/vault-fetch.gitea-release.spec` | `GITEA_TOKEN` |
+| `.gitea/workflows/upload-release-sigs.yml` | `ci/vault-fetch.upload-release-sigs.spec` | `GITEA_TOKEN` |
+| `.gitea/workflows/github-mirror.yml` | `ci/vault-fetch.github-mirror.spec` | `GH_TOKEN` |
+| `.gitea/workflows/notify-site.yml` | `ci/vault-fetch.notify-site.spec` | `AIWG_IO_DISPATCH_TOKEN` |
+| `.gitea/workflows/docsite-deploy.yml` | `ci/vault-fetch.docsite-deploy.spec` | `DOCSITE_DEPLOY_KEY_FILE` |
 
-**Used In:**
-- `.gitea/workflows/npm-publish.yml` - Publishing to Gitea npm registry
-- Creating Gitea releases via API
+The specs contain only `*_VAULT_PATH` and `*_VAULT_FIELD` placeholders. Concrete
+vault paths, metadata paths, hostnames, and fields are stored as private Gitea
+variables or in the private operations catalog.
 
-### Setting Up NPM_TOKEN
-
-#### Step 1: Create a Gitea Access Token
-
-1. Log in to [git.integrolabs.net](https://git.integrolabs.net)
-2. Navigate to **Settings** → **Applications** → **Access Tokens**
-   - Direct URL: https://git.integrolabs.net/user/settings/applications
-3. Create a new token with:
-   - **Token Name:** `ci-npm-publish` (or descriptive name)
-   - **Select Scopes:**
-     - ✅ `write:package` (includes read:package)
-     - ✅ `read:repository` (for checkout operations)
-   - **Expiration:** Set according to your security policy (recommend 1 year max)
-4. Click **Generate Token**
-5. **IMPORTANT:** Copy the token immediately - it won't be shown again
-
-#### Step 2: Add Secret to Gitea Repository
-
-1. Navigate to the repository: https://git.integrolabs.net/roctinam/ai-writing-guide
-2. Go to **Settings** → **Actions** → **Secrets**
-3. Click **Add Secret**
-4. Configure:
-   - **Name:** `NPM_TOKEN`
-   - **Value:** Paste the token from Step 1
-5. Click **Add Secret**
-
-#### Step 3: Verify Configuration
-
-Trigger a manual workflow run to verify:
+Validate specs without reading live secrets:
 
 ```bash
-# Push a test tag (can be deleted after)
-git tag v9999.99.99-test
-git push origin v9999.99.99-test
-
-# Watch the workflow at:
-# https://git.integrolabs.net/roctinam/ai-writing-guide/actions
-
-# Clean up test tag
-git tag -d v9999.99.99-test
-git push origin :refs/tags/v9999.99.99-test
+for f in ci/vault-fetch.*.spec; do
+  bash ci/vault-fetch.sh --spec "$f" --dry-run
+done
 ```
 
-Or use the workflow dispatch with dry_run enabled.
+Run the local consistency gate:
 
-## Troubleshooting
-
-### Error: 401 Unauthorized
-
-```
-npm error code E401
-npm error 401 Unauthorized - PUT https://git.integrolabs.net/api/packages/roctinam/npm/aiwg
+```bash
+npm run lint:vault-migration
 ```
 
-**Causes:**
-1. **Token expired** - Create a new token and update the secret
-2. **Token missing** - Verify NPM_TOKEN secret exists in repository settings
-3. **Wrong scopes** - Token must have `write:package` scope
-4. **Token revoked** - Check if token still exists in user settings
+## Classification
 
-**Resolution:**
-1. Go to https://git.integrolabs.net/user/settings/applications
-2. Check if the token exists and hasn't expired
-3. If expired/missing, create a new token with `write:package` scope
-4. Update the repository secret with the new token
+| Name | Class | Destination |
+|---|---|---|
+| `VAULT_CI_ROLE_ID` | `BOOTSTRAP` | Gitea Actions secret |
+| `VAULT_CI_SECRET_ID` | `BOOTSTRAP` | Gitea Actions secret |
+| `GITHUB_TOKEN` | CI-issued token | No storage; issued per run |
+| `GT_NPM_TOKEN_VAULT_PATH`, `GT_NPM_TOKEN_VAULT_FIELD` | `ROUTE` | Gitea Actions variables |
+| `GT_RELEASE_TOKEN_VAULT_PATH`, `GT_RELEASE_TOKEN_VAULT_FIELD` | `ROUTE` | Gitea Actions variables |
+| `GH_MIRROR_TOKEN_VAULT_PATH`, `GH_MIRROR_TOKEN_VAULT_FIELD` | `ROUTE` | Gitea Actions variables |
+| `AIWG_IO_DISPATCH_TOKEN_VAULT_PATH`, `AIWG_IO_DISPATCH_TOKEN_VAULT_FIELD` | `ROUTE` | Gitea Actions variables |
+| `DOCSITE_DEPLOY_KEY_VAULT_PATH`, `DOCSITE_DEPLOY_KEY_VAULT_FIELD` | `ROUTE` | Gitea Actions variables |
+| `RELEASE_SIGNING_KEY_VAULT_PATH`, `RELEASE_SIGNING_KEY_VAULT_FIELD` | `ROUTE` | Gitea Actions variables |
+| `RELEASE_SIGNING_PASSPHRASE_VAULT_PATH`, `RELEASE_SIGNING_PASSPHRASE_VAULT_FIELD` | `ROUTE` | Gitea Actions variables |
+| `VAULT_ADDR` | `ROUTE` | Gitea Actions variable |
+| `DOCSITE_DEPLOY_HOST`, `DOCSITE_DEPLOY_PORT`, `DOCSITE_DEPLOY_USER`, `DOCSITE_DEPLOY_PATH` | `CONFIG` | Gitea Actions variables |
 
-### Error: 403 Forbidden
+The machine-readable variable manifest is
+[`../../ci/vault-migration-plan.json`](../../ci/vault-migration-plan.json).
 
-**Causes:**
-1. Token belongs to user without package write permissions
-2. Repository doesn't allow package publishing
+## Provisioning
 
-**Resolution:**
-1. Ensure token owner has write access to the repository
-2. Check organization/repository package settings
+Use the private operations catalog to create the scoped policy and AppRole. Keep
+the concrete policy file outside this repository, then pass it to:
 
-### Token Not Being Used
+```bash
+npm run provision:vault-approle -- --policy-file /path/to/private-policy.hcl
+VAULT_ADMIN_TOKEN=<admin-token> npm run provision:vault-approle -- \
+  --policy-file /path/to/private-policy.hcl \
+  --apply
+```
 
-If the workflow isn't picking up the secret:
+To induct or rotate values from an approved local medium, prepare one file per
+route ID:
 
-1. Verify secret name is exactly `NPM_TOKEN` (case-sensitive)
-2. Check workflow file references `${{ secrets.NPM_TOKEN }}`
-3. Ensure workflow has appropriate permissions in `permissions:` block
+```text
+gitea-npm-token.value
+gitea-release-token.value
+github-mirror-token.value
+aiwg-io-dispatch-token.value
+docsite-deploy-key.value
+release-signing-key.value
+release-signing-passphrase.value
+```
 
-## Docsite Deployment Secrets
+Preview the vault writes without printing paths:
 
-The `Docsite Deploy` workflow publishes the AIWG documentation tenant to
-`docs.aiwg.io` over SSH. It consumes these repository-level Gitea Actions
-secrets:
+```bash
+npm run provision:vault-migration -- \
+  --routing-env /path/to/private-routing.env \
+  --values-dir /path/to/approved-value-files
+```
 
-| Secret | Purpose |
-|---|---|
-| `DEPLOY_SSH_KEY` | Private SSH key for the docs host. |
-| `DEPLOY_HOST` | Docs host name. |
-| `DEPLOY_PORT` | SSH port. |
-| `DEPLOY_USER` | SSH user. |
-| `DEPLOY_PATH` | Root web path for the AIWG tenant on `docs.aiwg.io`. |
+Apply only after confirming the private routing env and value files:
+
+```bash
+npm run provision:vault-migration -- \
+  --routing-env /path/to/private-routing.env \
+  --values-dir /path/to/approved-value-files \
+  --apply
+```
+
+Validate and apply the Gitea handoff without printing values:
+
+```bash
+npm run configure:gitea-vault -- \
+  --bootstrap-env ~/.config/vault/handoff/aiwg-ci.env \
+  --vars-env /path/to/private-routing-and-deploy.env
+
+npm run configure:gitea-vault -- \
+  --bootstrap-env ~/.config/vault/handoff/aiwg-ci.env \
+  --vars-env /path/to/private-routing-and-deploy.env \
+  --apply
+```
+
+## Docsite Deployment Config
+
+The `Docsite Deploy` workflow publishes the AIWG documentation tenant over SSH.
+The private key is fetched from vault. Target connection details are Gitea
+Actions variables and should not be hardcoded in workflow files.
 
 `GT_ACCESS_TOKEN` is not used by AIWG's current docsite workflows. The publisher
 is installed from npm as `@pagenary/publisher`; do not add a clone token back to
 the docsite workflows unless the publisher source model changes again.
 
-### Shared `docs.aiwg.io` tenants
+## Troubleshooting
 
-`docs.aiwg.io` is shared with sibling documentation tenants. AIWG owns the root
-tenant at `DEPLOY_PATH`; `roctinam/agentic-sandbox` owns the
-`agentic-sandbox/` subtree and should deploy to:
+### Vault Bootstrap Missing
 
-```text
-${DEPLOY_PATH%/}/agentic-sandbox/
-```
+If `VAULT_CI_ROLE_ID` or `VAULT_CI_SECRET_ID` is absent, secret-bearing Gitea jobs
+skip instead of attempting a partial publish. Add or rotate the AppRole
+bootstrap pair in Gitea Actions secrets.
 
-AIWG's root deploy keeps `rsync --delete` enabled, but `docsite-deploy.yml`
-protects registered sibling tenants with rsync receiver-protect filters and a
-dry-run deletion check. Keep the protected-subpath list in
-`.gitea/workflows/docsite-deploy.yml` aligned with the tenant table in
-`.gitea/workflows/README.md`.
+### Fetch Fails with 403
 
-`roctinam/agentic-sandbox` deploys its own subtree from its own
-`docsite-deploy.yml`, which (as of 2026-06-12) consumes the publisher from npm
-via `npx @pagenary/publisher` — matching AIWG's #1484 migration. It therefore
-needs **only the shared `DEPLOY_*` set**, not `GT_ACCESS_TOKEN`.
+The `ci-aiwg` AppRole is missing the required path policy or is trying to read
+the wrong leaf. Compare the workflow spec placeholder names with the private
+vault routing env and policy.
 
-### Required secret set for a sibling tenant
+### Gitea Registry Publish Fails
 
-A sibling docs tenant (e.g. `agentic-sandbox`) needs exactly these five,
-identical in value to AIWG's (same docs host):
-
-| Secret | Notes |
-|---|---|
-| `DEPLOY_SSH_KEY` | Private SSH key for the docs host. |
-| `DEPLOY_HOST` | Docs host name. |
-| `DEPLOY_PORT` | SSH port. |
-| `DEPLOY_USER` | SSH user. |
-| `DEPLOY_PATH` | Root web path; the tenant rsyncs into `${DEPLOY_PATH}<subpath>/`. |
-
-### Current secret visibility snapshot
-
-As of 2026-06-12, Gitea Actions metadata shows:
-
-| Repository | Visible docsite deploy secrets |
-|---|---|
-| `roctinam/aiwg` | `DEPLOY_HOST`, `DEPLOY_PATH`, `DEPLOY_PORT`, `DEPLOY_SSH_KEY`, `DEPLOY_USER`, plus legacy `GT_ACCESS_TOKEN` |
-| `roctinam/agentic-sandbox` | none of the docsite deploy secrets (only `GH_MIRROR_TOKEN`, `REGISTRY_TOKEN`, `REGISTRY_USER`) |
-
-No organization-level `roctinam` Actions secret scope is visible through the
-Gitea API used by the automation agent. Because Gitea does not expose secret
-values after creation, automation can confirm names and scopes but cannot copy
-existing AIWG secret values into another repository. An authorized secret holder
-must either add the five `DEPLOY_*` secrets above to `roctinam/agentic-sandbox`
-or move the shared deploy secrets into an organization/team scope that includes
-both repositories. Until then, `agentic-sandbox`'s `docsite-deploy.yml` skips
-gracefully (warns, exits 0) — it never fails a release tag.
-
-## Security Best Practices
-
-### Token Management
-
-- **Rotation:** Rotate tokens annually or when team members leave
-- **Scope:** Use minimum required scopes (write:package, read:repository)
-- **Naming:** Use descriptive names like `ci-npm-publish-2026`
-- **Audit:** Periodically review active tokens
-
-### Secret Storage
-
-- Never commit tokens to the repository
-- Use repository/organization secrets, not environment variables in code
-- Don't echo or log token values in workflows
-
-### Workflow Security
-
-```yaml
-# Good: Token passed via secrets
-env:
-  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-# Bad: Token hardcoded or echoed
-run: echo ${{ secrets.NPM_TOKEN }}  # NEVER do this
-```
-
-## Workflow Architecture
-
-### npm-publish.yml Flow
-
-```
-[Tag Push v*] → [Checkout] → [Configure npm] → [Build] → [Publish to Gitea] → [Verify]
-                                   ↓
-                            Uses NPM_TOKEN for:
-                            - .npmrc authentication
-                            - npm publish command
-                            - Gitea release API
-```
-
-### Secret Usage in Workflow
-
-```yaml
-# .npmrc configuration (line 55-56)
-//git.integrolabs.net/api/packages/roctinam/npm/:_authToken=${{ secrets.NPM_TOKEN }}
-
-# Publish command (line 107-109)
-npm publish --registry=${{ env.GITEA_NPM_REGISTRY }}
-env:
-  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-# Release creation (line 137)
--H "Authorization: token ${{ secrets.NPM_TOKEN }}"
-```
-
-## Additional Secrets (Optional)
-
-### NPMJS_TOKEN (for public npm)
-
-If publishing to public npmjs.org:
-
-1. Create token at https://www.npmjs.com/settings/tokens
-2. Select "Automation" token type
-3. Add as secret named `NPMJS_TOKEN`
-4. Update workflow to use separate token for public registry
-
-### GITHUB_TOKEN (for GitHub mirror)
-
-For GitHub Actions (`.github/workflows/`):
-
-- Automatically provided by GitHub Actions
-- No manual configuration needed
-- Used for GitHub Releases and npm publish to GitHub Packages
-
-## References
-
-- [Gitea Package Registry Documentation](https://docs.gitea.com/usage/packages/npm)
-- [Gitea Actions Secrets](https://docs.gitea.com/usage/actions/secrets)
-- [npm Authentication](https://docs.npmjs.com/using-private-packages-in-a-ci-cd-workflow)
-- @.gitea/workflows/npm-publish.yml - Main publish workflow
-- @.claude/rules/token-security.md - Token security rules
+Check the private routing entry, token scope, and token freshness. The value
+must remain vault-only.
