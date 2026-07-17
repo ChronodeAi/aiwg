@@ -35,6 +35,13 @@ interface Mission {
   status: MissionStatus;
   loop: number;
   maxIterations: number;
+  maxTotalTokens?: number;
+  maxOutputTokens?: number;
+  maxToolCalls?: number;
+  maxTotalCost?: number;
+  maxWallClockMinutes?: number;
+  explorationQuota?: number;
+  budgetStopPolicy?: 'completion-wins' | 'budget-wins';
   priority: string;
   mode: MissionMode;
   targetAgent?: string;
@@ -119,13 +126,38 @@ async function findActiveSession(sessionIdArg?: string): Promise<Session | null>
 }
 
 function parseFlag(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
-  return args[idx + 1];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag) {
+      return i + 1 < args.length ? args[i + 1] : undefined;
+    }
+    // Support --flag=value — previously silently ignored, which for budget
+    // flags meant an unbounded loop the operator believed was capped (#1770)
+    if (args[i].startsWith(`${flag}=`)) {
+      return args[i].slice(flag.length + 1);
+    }
+  }
+  return undefined;
 }
 
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
+}
+
+/**
+ * Parse a numeric flag. A flag that is PRESENT but not a positive number is a
+ * usage error collected into `invalidSink` — silently dropping it used to
+ * dispatch missions with no ceiling while the operator believed one applied
+ * (#1770).
+ */
+function parseNumberFlag(args: string[], flag: string, invalidSink?: string[]): number | undefined {
+  const raw = parseFlag(args, flag);
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    invalidSink?.push(`${flag} (got '${raw}')`);
+    return undefined;
+  }
+  return value;
 }
 
 function wantsHelp(args: string[]): boolean {
@@ -157,6 +189,14 @@ Queue a mission onto a session. Does NOT execute — use 'aiwg mc run' to launch
   --completion "<criteria>"     Verifiable completion criteria (required for 'mc run')
   --priority <level>            Priority hint (default: normal)
   --max-iterations N            Ralph iteration cap when launched (default: 10)
+  --max-total-tokens N          Hard cumulative token ceiling when observable
+  --max-output-tokens N         Hard cumulative output-token ceiling
+  --max-tool-calls N            Hard cumulative tool-call ceiling
+  --max-total-cost USD          Hard cumulative provider-reported spend ceiling
+  --max-wall-clock-minutes N    Hard cumulative runtime ceiling
+  --exploration-quota K         Require structural variant after K flat cycles
+                                (off unless declared; no default K)
+  --budget-stop-policy P        completion-wins (default) | budget-wins
   --mode pty-orchestrator       PTY-orchestrator mode (requires --target-agent)
   --target-agent <id>           Required for --mode pty-orchestrator`,
 
@@ -276,7 +316,32 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
   const objective = positional.slice(1).join(' ') || parseFlag(ctx.args, '--objective');
   const completion = parseFlag(ctx.args, '--completion');
   const priority = parseFlag(ctx.args, '--priority') || 'normal';
-  const maxIterations = parseInt(parseFlag(ctx.args, '--max-iterations') || '10', 10);
+  const invalidFlags: string[] = [];
+  const maxIterationsRaw = parseFlag(ctx.args, '--max-iterations');
+  let maxIterations = 10;
+  if (maxIterationsRaw !== undefined) {
+    const parsedIterations = parseInt(maxIterationsRaw, 10);
+    if (!Number.isFinite(parsedIterations) || parsedIterations <= 0) {
+      invalidFlags.push(`--max-iterations (got '${maxIterationsRaw}')`);
+    } else {
+      maxIterations = parsedIterations;
+    }
+  }
+  const maxTotalTokens = parseNumberFlag(ctx.args, '--max-total-tokens', invalidFlags);
+  const maxOutputTokens = parseNumberFlag(ctx.args, '--max-output-tokens', invalidFlags);
+  const maxToolCalls = parseNumberFlag(ctx.args, '--max-tool-calls', invalidFlags);
+  const maxTotalCost = parseNumberFlag(ctx.args, '--max-total-cost', invalidFlags);
+  const maxWallClockMinutes = parseNumberFlag(ctx.args, '--max-wall-clock-minutes', invalidFlags);
+  const explorationQuota = parseNumberFlag(ctx.args, '--exploration-quota', invalidFlags);
+  const budgetStopPolicyRaw = parseFlag(ctx.args, '--budget-stop-policy');
+  let budgetStopPolicy: 'completion-wins' | 'budget-wins' | undefined;
+  if (budgetStopPolicyRaw !== undefined) {
+    if (budgetStopPolicyRaw === 'completion-wins' || budgetStopPolicyRaw === 'budget-wins') {
+      budgetStopPolicy = budgetStopPolicyRaw;
+    } else {
+      invalidFlags.push(`--budget-stop-policy (got '${budgetStopPolicyRaw}', expected completion-wins|budget-wins)`);
+    }
+  }
   const modeRaw = parseFlag(ctx.args, '--mode') || 'direct';
   const mode: MissionMode = modeRaw === 'pty-orchestrator' ? 'pty-orchestrator' : 'direct';
   const targetAgent = parseFlag(ctx.args, '--target-agent');
@@ -285,6 +350,11 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
     // #1438: keep this in sync with subcommandUsage.dispatch above so 'mc
     // dispatch' with bad args and 'mc dispatch --help' agree on flags.
     ui.error('Usage: aiwg mc dispatch <session-id> "<objective>" [--completion "<criteria>"] [--max-iterations N] [--priority <level>] [--mode pty-orchestrator] [--target-agent <agent-id>]');
+    return { exitCode: 1 };
+  }
+
+  if (invalidFlags.length > 0) {
+    ui.error(`Invalid numeric flag value(s): ${invalidFlags.join(', ')}. Budget/quota flags require positive numbers. Mission not dispatched.`);
     return { exitCode: 1 };
   }
 
@@ -331,6 +401,13 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
     status: 'queued',
     loop: 0,
     maxIterations,
+    maxTotalTokens,
+    maxOutputTokens,
+    maxToolCalls,
+    maxTotalCost,
+    maxWallClockMinutes,
+    explorationQuota,
+    budgetStopPolicy,
     priority,
     mode,
     targetAgent: targetAgent || undefined,
@@ -338,12 +415,38 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
 
   session.missions.push(mission);
   await writeSession(session);
-  await appendLog(session.id, { event: 'mission_dispatched', missionId: mission.id, objective, priority, mode, targetAgent });
+  await appendLog(session.id, {
+    event: 'mission_dispatched',
+    missionId: mission.id,
+    objective,
+    priority,
+    mode,
+    targetAgent,
+    lfdBudgets: {
+      maxTotalTokens,
+      maxOutputTokens,
+      maxToolCalls,
+      maxTotalCost,
+      maxWallClockMinutes,
+      explorationQuota,
+    },
+  });
 
   if (capWarning) ui.warn(capWarning);
   ui.success(`Dispatched mission ${mission.id}: ${objective}`);
   const modeLabel = mode === 'pty-orchestrator' ? ` | Mode: PTY orchestrator → ${targetAgent}` : '';
   ui.info(`Priority: ${priority} | Max iterations: ${maxIterations}${modeLabel}`);
+  const lfdLimits = [
+    maxTotalTokens ? `total tokens ${maxTotalTokens}` : null,
+    maxOutputTokens ? `output tokens ${maxOutputTokens}` : null,
+    maxToolCalls ? `tool calls ${maxToolCalls}` : null,
+    maxTotalCost ? `total cost $${maxTotalCost}` : null,
+    maxWallClockMinutes ? `wall clock ${maxWallClockMinutes}m` : null,
+    explorationQuota ? `exploration quota ${explorationQuota}` : null,
+  ].filter(Boolean);
+  if (lfdLimits.length > 0) {
+    ui.info(`LFD limits: ${lfdLimits.join(' | ')}`);
+  }
 
   // #1439: dispatch alone does NOT execute the mission. Surface the next step
   // so the user knows the queue won't drain on its own.
@@ -450,6 +553,13 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
         objective: mission.objective,
         completionCriteria: mission.completion,
         maxIterations: mission.maxIterations,
+        maxTotalTokens: mission.maxTotalTokens,
+        maxOutputTokens: mission.maxOutputTokens,
+        maxToolCalls: mission.maxToolCalls,
+        maxTotalCost: mission.maxTotalCost,
+        maxWallClockMinutes: mission.maxWallClockMinutes,
+        explorationQuota: mission.explorationQuota,
+        budgetStopPolicy: mission.budgetStopPolicy,
         // Defaults for cycle 1; advanced options can be added per-mission later.
         verbose: false,
       });
@@ -963,6 +1073,9 @@ function showMcHelp(): void {
     start                         Start a new Mission Control session
     dispatch <id> "<objective>"   Queue a mission on the session (does NOT execute)
                                   [--completion "<criteria>"] [--max-iterations N]
+                                  [--max-total-tokens N] [--max-output-tokens N]
+                                  [--max-tool-calls N] [--max-total-cost USD]
+                                  [--max-wall-clock-minutes N] [--exploration-quota N]
                                   [--mode pty-orchestrator] [--target-agent <id>]
     run <id> [--accept-cost]      Launch queued missions as ralph loops (#1439)
                                   Cost gate warns/refuses above ~$5 estimate
@@ -977,6 +1090,7 @@ function showMcHelp(): void {
   ${ui.bold('Examples:')}
     aiwg mc start --name "Sprint 4"
     aiwg mc dispatch mc-abc123 "Fix auth" --completion "tests pass"
+    aiwg mc dispatch mc-abc123 "Fix auth" --completion "tests pass" --max-total-tokens 5000 --exploration-quota 2
     aiwg mc dispatch mc-abc123 "Refactor users" --completion "npm test passes"
     aiwg mc run mc-abc123                     # launches queued missions
     aiwg mc status mc-abc123                  # syncs progress from ralph loops

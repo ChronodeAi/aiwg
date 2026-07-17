@@ -10,7 +10,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createExecutor } from '../../apps/cockpit/mock-executor/src/server.mjs';
-import { createBridge, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS } from '../../apps/cockpit/bridge/src/server.mjs';
+import { createBridge, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, fetchJsonFirst } from '../../apps/cockpit/bridge/src/server.mjs';
 
 let mock, bridge, base, token;
 const testMcSessionId = `mc-cockpit-test-${Date.now()}`;
@@ -106,15 +106,60 @@ describe('cockpit Bridge — control surface', () => {
     expect(run.running[0]).toHaveProperty('transport');
     const s = await (await f('/api/sessions?instance=550e8400-e29b-41d4-a716-446655440000')).json();
     expect(s.sessions.find((x) => x.id === 'demo-shell')?.attach_url).toMatch(/^ws:\/\/.*\/attach$/);
-    expect(s.sessions.find((x) => x.id === 'demo-shell')).toMatchObject({ mode: 'direct', backend: 'native', role_policy: 'observe-default' });
+    expect(s.sessions.find((x) => x.id === 'demo-shell')).toMatchObject({ session_class: 'direct', session_backend: 'native', role_policy: 'observe-default' });
+  });
+
+  it('proxies server-side PTY screen snapshots for background monitoring (#1742)', async () => {
+    const screen = await (await f('/api/instances/550e8400-e29b-41d4-a716-446655440000/sessions/demo-shell/screen')).json();
+    expect(screen).toMatchObject({
+      instance_id: '550e8400-e29b-41d4-a716-446655440000',
+      session_id: 'demo-shell',
+      snapshot_format: 'text/plain',
+    });
+    expect(screen.text).toContain('aiwg discover');
+    expect(screen.lines.some((line) => line.includes('flow-deploy-to-production'))).toBe(true);
   });
 
   it('creates sessions with sandbox-advertised direct or managed backend selection', async () => {
     const id = '550e8400-e29b-41d4-a716-446655440000';
     const created = await (await f(`/api/instances/${id}/sessions?mode=managed&backend=tmux`, { method: 'POST' })).json();
     expect(created.attach_url).toMatch(/^ws:\/\/.*\/attach$/);
+    expect(created.session_name).toMatch(/^cockpit-/);
+    // Multi-session per instance: a second create is a NEW session (unique
+    // per-request name), never a silent reuse of the first (#1749 follow-up to
+    // the #1738 dedupe — dedupe now applies within one request's candidates only).
+    const second = await (await f(`/api/instances/${id}/sessions?mode=managed&backend=tmux`, { method: 'POST' })).json();
+    expect(second.id).not.toBe(created.id);
+    expect(second.session_name).not.toBe(created.session_name);
     const s = await (await f(`/api/sessions?instance=${id}`)).json();
-    expect(s.sessions.find((x) => x.id === created.id)).toMatchObject({ mode: 'managed', backend: 'tmux' });
+    expect(s.sessions.find((x) => x.id === created.id)).toMatchObject({ session_class: 'managed', session_backend: 'tmux' });
+    expect(s.sessions.find((x) => x.id === second.id)).toBeTruthy();
+  });
+
+  it('does not fall through to another POST candidate after a timeout (#1738)', async () => {
+    let secondHit = false;
+    const upstream = http.createServer((req, res) => {
+      if (req.url === '/slow' && req.method === 'POST') return;
+      if (req.url === '/second' && req.method === 'POST') {
+        secondHit = true;
+        res.writeHead(201, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ created: true }));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+    });
+    await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+    try {
+      const root = `http://127.0.0.1:${upstream.address().port}`;
+      await expect(fetchJsonFirst([
+        { target: `${root}/slow`, method: 'POST' },
+        { target: `${root}/second`, method: 'POST' },
+      ], { timeoutMs: 5 })).rejects.toThrow(/timeout after 5ms/);
+      expect(secondHit).toBe(false);
+    } finally {
+      upstream.close();
+    }
   });
 
   it('rejects VM launch before provisioning when no SSH public key is configured', async () => {
@@ -341,8 +386,21 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
         // fallback construction — which must key the path by the instance id
         // (v2-host-1), NOT the resolved agent name (agent-v2-host-1) the
         // executor's pty-ws route would reject (#1671).
-        const one = { sessionId: 'sess-v2', seq: 2, members: 1, role_policy: 'observe-default' };
+        // v2 SessionEntry shape (v2026.7.2): membership/liveness objects. The Bridge
+        // consumes these directly — no flat-field translation (#1745).
+        const one = {
+          session_id: 'sess-v2',
+          session_name: 'terminal-v2',
+          session_backend: 'tmux',
+          session_class: 'managed',
+          role_policy: 'observe-default',
+          membership: { controllers: ['ctrl-1'], observers: ['obs-1', 'obs-2'], attachment_count: 3 },
+          liveness: { agent_connected: true, has_screen: true, replay_newest_seq: 2, max_client_lag: 0 },
+        };
         return send(200, { items: [one, { ...one }] });
+      }
+      if (url.pathname === '/api/v1/agents/agent-v2-host-1/sessions/sess-v2/screen' && req.method === 'GET') {
+        return send(200, { seq: 3, text: 'v2 session line\nNeed input? [y/N]\n', snapshot_format: 'text/plain' });
       }
       // A2A task surface the Bridge derives the running board + approval inbox from (#1639).
       if (url.pathname === '/agents/agent-v2-host-1/tasks' || url.pathname === '/api/v1/agents/agent-v2-host-1/tasks') {
@@ -409,10 +467,20 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
     // Executor returned sess-v2 twice; the Bridge dedups to a single row.
     expect(sessions.sessions).toHaveLength(1);
     expect(sessions.sessions[0]).toMatchObject({ id: 'sess-v2', instance_id: 'v2-host-1' });
+    // #1745: the v2 membership/liveness objects pass through the Bridge untouched —
+    // no flat-field translation — so the UI reads real controller/observer counts.
+    expect(sessions.sessions[0].membership).toEqual({ controllers: ['ctrl-1'], observers: ['obs-1', 'obs-2'], attachment_count: 3 });
+    expect(sessions.sessions[0].session_backend).toBe('tmux');
+    expect(sessions.sessions[0].session_class).toBe('managed');
     // #1671: the fallback-built attach_url keys the agent segment by the instance
     // id, never the resolved agent name (agent-v2-host-1), which the route rejects.
     expect(sessions.sessions[0].attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/agents\/v2-host-1\/sessions\/sess-v2\/attach$/);
     expect(sessions.sessions[0].attach_url).not.toContain('agent-v2-host-1');
+
+    const screen = await (await cf('/api/instances/v2-host-1/sessions/sess-v2/screen')).json();
+    expect(screen).toMatchObject({ instance_id: 'v2-host-1', session_id: 'sess-v2', seq: 3 });
+    expect(screen.text).toContain('Need input?');
+    expect(screen.source).toContain('/api/v1/agents/agent-v2-host-1/sessions/sess-v2/screen');
   });
 
   it('creates sessions through the formal agentic-sandbox v1 session API', async () => {
@@ -421,7 +489,47 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
       id: 'sess-created-v1',
       requested: { session_backend: 'tmux', session_class: 'managed', command: 'bash', working_dir: '/work' },
     });
+    // Deterministic prefix + per-request nonce (multi-session per instance).
+    expect(created.requested.session_name).toMatch(/^cockpit-v2-host-1-managed-tmux-[0-9a-f]{6}$/);
     expect(created.attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/agents\/v2-host-1\/sessions\/sess-created-v1\/attach$/);
+  });
+
+  it('caches agent-list resolution across session polls (#1747)', async () => {
+    let agentListCalls = 0;
+    const cacheUpstream = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://127.0.0.1');
+      const send = (status, body) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      if (url.pathname === '/health') return send(200, { status: 'ok' });
+      if (url.pathname === '/api/v1/agents') {
+        agentListCalls += 1;
+        return send(200, { agents: [{ id: 'cache-agent', instance_id: 'cache-inst', status: 'Ready' }] });
+      }
+      if (url.pathname === '/agents/cache-inst/sessions') return send(404, { error: 'instance_id_is_not_session_agent_id' });
+      if (url.pathname === '/agents/cache-inst/v1/sessions') return send(404, { error: 'instance_id_is_not_session_agent_id' });
+      if (url.pathname === '/api/v1/agents/cache-inst/sessions') return send(404, { error: 'instance_id_is_not_session_agent_id' });
+      if (url.pathname === '/api/v1/agents/cache-agent/sessions') {
+        return send(200, { sessions: [{ id: 'cached-sess', instance_id: 'cache-inst', pty_ws_url: 'wss://{host}/agents/cache-inst/sessions/cached-sess/attach' }] });
+      }
+      return send(404, { error: 'not_found', path: url.pathname });
+    });
+    let cacheBridge;
+    try {
+      await new Promise((r) => cacheUpstream.listen(0, '127.0.0.1', r));
+      cacheBridge = createBridge({ executorUrl: `http://127.0.0.1:${cacheUpstream.address().port}` });
+      await new Promise((r) => cacheBridge.listen(0, '127.0.0.1', r));
+      const cacheBase = `http://127.0.0.1:${cacheBridge.address().port}`;
+      const cacheFetch = (p) => fetch(cacheBase + p, { headers: { authorization: `Bearer ${cacheBridge.cockpitToken}` } });
+
+      expect((await (await cacheFetch('/api/sessions?instance=cache-inst')).json()).sessions[0]).toMatchObject({ id: 'cached-sess' });
+      expect((await (await cacheFetch('/api/sessions?instance=cache-inst')).json()).sessions[0]).toMatchObject({ id: 'cached-sess' });
+      expect(agentListCalls).toBe(1);
+    } finally {
+      cacheBridge?.close();
+      cacheUpstream.close();
+    }
   });
 
   it('falls back to v2 lifecycle routes for start, stop, and destroy', async () => {
