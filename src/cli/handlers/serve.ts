@@ -1509,8 +1509,9 @@ export async function startServer(opts: {
 
   // Session management proxy endpoints (#896)
   // Forwards to sandbox management HTTP API: GET/POST /api/v1/agents/:aid/sessions
-  // and DELETE /api/v1/sessions/:sid
-  // Will 502 gracefully until agentic-sandbox#140 lands these endpoints.
+  // and DELETE /api/v1/agents/:aid/sessions/:session
+  // Live since agentic-sandbox v2026.7.x (#140 sessions API, #611 host-runtime
+  // session listing); the 502 path is now only a genuine-unreachability fallback.
 
   app.get('/api/sandboxes/:id/agents/:aid/sessions', async (c: any) => {
     const sandbox = sandboxRegistry.get(c.req.param('id'));

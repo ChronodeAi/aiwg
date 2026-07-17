@@ -4,17 +4,34 @@ import { fmtId, capRef } from '../util';
 import { CapabilitySearch } from './CapabilitySearch';
 import type { Instance, SessionInfo, CapabilityResult } from '../types';
 import type { SessionApi } from '../useSession';
+import { markRegistrySessionViewed, sessionRegistryKeyFor, setRegistryActiveSession, upsertRegistrySessions, useSessionRegistry } from '../sessionRegistry';
+import { useSessionSnapshotMonitor } from '../sessionMonitor';
 
 export function Sessions({ session, composer, setComposer, onRequestStart, refreshMs = 5_000 }: { session: SessionApi; composer: string; setComposer: (v: string) => void; onRequestStart: (instanceId?: string) => void; refreshMs?: number }) {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [instId, setInstId] = useState('');
-  const [attachUrl, setAttachUrl] = useState('');
+  const [selectedSessionKey, setSelectedSessionKey] = useState('');
   const [backendKey, setBackendKey] = useState('');
   const [showPicker, setShowPicker] = useState(false);
   const [endingSession, setEndingSession] = useState('');
+  const [reconnectingInstance, setReconnectingInstance] = useState('');
   const [sessionErr, setSessionErr] = useState('');
+  const [attachedInstanceId, setAttachedInstanceId] = useState('');
+  const [attachedSessionId, setAttachedSessionId] = useState('');
+  const instIdRef = useRef('');
+  const attachedRef = useRef(false);
+  const attachedOwnerRef = useRef('');
+  const inventorySeqRef = useRef(0);
+  const sessionsSeqRef = useRef(0);
+  const missingAttachedPollsRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const sessionRegistry = useSessionRegistry();
+
+  useSessionSnapshotMonitor();
+
+  useEffect(() => { instIdRef.current = instId; }, [instId]);
+  useEffect(() => { attachedRef.current = session.state.attached; }, [session.state.attached]);
 
   const insertCap = (r: CapabilityResult) => {
     const sep = composer && !composer.endsWith(' ') ? ' ' : '';
@@ -23,66 +40,152 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
     inputRef.current?.focus();
   };
 
-  const refreshInventory = useCallback(() => {
-    return api<{ instances: Instance[] }>('/api/inventory')
-      .then((d) => {
-        const sessionable = dedupeInstances(d.instances).filter((i) => i.state === 'running' && i.session_backends?.some((b) => b.available));
-        setInstances(sessionable);
-        setInstId((currentId) => {
-          if (currentId && sessionable.some((i) => i.id === currentId)) return currentId;
-          return sessionable[0]?.id ?? '';
-        });
-        setBackendKey((currentBackend) => {
-          if (currentBackend && sessionable.some((i) => i.session_backends.some((b) => `${b.mode}:${b.backend}` === currentBackend && b.available))) return currentBackend;
-          const firstBackend = sessionable[0]?.session_backends.find((b) => b.available) ?? sessionable[0]?.session_backends[0];
-          return firstBackend ? `${firstBackend.mode}:${firstBackend.backend}` : '';
-        });
-      })
-      .catch(() => {});
+  const refreshInventory = useCallback(async () => {
+    const seq = inventorySeqRef.current + 1;
+    inventorySeqRef.current = seq;
+    const d = await api<{ instances: Instance[] }>('/api/inventory');
+    if (seq !== inventorySeqRef.current) return;
+    const sessionable = dedupeInstances(d.instances).filter((i) => i.state === 'running' && i.session_backends?.length);
+    setInstances(sessionable);
+    const currentId = instIdRef.current;
+    let nextId = sessionable[0]?.id ?? '';
+    if (currentId && sessionable.some((i) => i.id === currentId)) nextId = currentId;
+    else if (attachedRef.current && currentId) nextId = currentId;
+    instIdRef.current = nextId;
+    setInstId(nextId);
+    setBackendKey((currentBackend) => {
+      const selectedInstance = sessionable.find((i) => i.id === nextId) ?? sessionable[0];
+      if (currentBackend && selectedInstance?.session_backends.some((b) => `${b.mode}:${b.backend}` === currentBackend && b.available !== false)) return currentBackend;
+      if (attachedRef.current && currentBackend) return currentBackend;
+      const firstBackend = selectedInstance?.session_backends.find((b) => b.available !== false) ?? selectedInstance?.session_backends[0];
+      return firstBackend ? `${firstBackend.mode}:${firstBackend.backend}` : '';
+    });
   }, []);
 
   useEffect(() => {
-    refreshInventory();
-    const timer = window.setInterval(refreshInventory, refreshMs);
-    return () => window.clearInterval(timer);
-  }, [refreshInventory, refreshMs]);
+    attachedOwnerRef.current = attachedInstanceId || instanceIdFromAttachUrl(session.state.url);
+  }, [attachedInstanceId, session.state.url]);
 
-  const loadSessions = useCallback((id: string) => {
+  const loadSessions = useCallback(async (id: string) => {
     if (!id) return;
-    api<{ sessions: SessionInfo[] }>(`/api/sessions?instance=${encodeURIComponent(id)}`)
-      .then((d) => {
-        const nextSessions = d.sessions ?? [];
-        setSessions(nextSessions);
-        setSessionErr('');
-        setAttachUrl((currentUrl) => {
-          if (currentUrl && nextSessions.some((s) => s.attach_url === currentUrl)) return currentUrl;
-          return nextSessions[0]?.attach_url ?? '';
-        });
-      })
-      .catch((e) => { setSessions([]); setAttachUrl(''); setSessionErr((e as Error).message); });
+    const seq = sessionsSeqRef.current + 1;
+    sessionsSeqRef.current = seq;
+    const d = await api<{ sessions: SessionInfo[] }>(`/api/sessions?instance=${encodeURIComponent(id)}`);
+    if (seq !== sessionsSeqRef.current || id !== instIdRef.current) return;
+    const nextSessions = d.sessions ?? [];
+    upsertRegistrySessions(nextSessions);
+    setSessions(nextSessions);
+    setSessionErr('');
+    setSelectedSessionKey((currentKey) => {
+      if (currentKey && nextSessions.some((s) => sessionKey(s) === currentKey)) return currentKey;
+      if (attachedRef.current && attachedOwnerRef.current === id && currentKey) return currentKey;
+      return nextSessions[0] ? sessionKey(nextSessions[0]) : '';
+    });
   }, []);
-  // Reload the selected instance's sessions on selection change AND on an interval,
-  // so a session created elsewhere (the Start modal, the Running board, another
-  // operator) shows up in the nav without re-selecting the instance.
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | undefined;
+    let delay = refreshMs;
+    const schedule = (ms: number) => {
+      timer = window.setTimeout(tick, ms);
+    };
+    const tick = async () => {
+      if (cancelled) return;
+      if (endingSession) {
+        schedule(refreshMs);
+        return;
+      }
+      try {
+        const idBeforeInventory = instIdRef.current;
+        await refreshInventory();
+        if (idBeforeInventory && idBeforeInventory === instIdRef.current) await loadSessions(instIdRef.current);
+        delay = refreshMs;
+      } catch (e) {
+        if (!cancelled) setSessionErr((e as Error).message);
+        delay = Math.min(Math.max(refreshMs, delay * 2), 30_000);
+      }
+      if (!cancelled) schedule(delay);
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [endingSession, loadSessions, refreshInventory, refreshMs]);
+
   useEffect(() => {
     if (!instId) return;
-    loadSessions(instId);
-    const timer = window.setInterval(() => loadSessions(instId), refreshMs);
-    return () => window.clearInterval(timer);
-  }, [instId, loadSessions, refreshMs]);
+    // Clear the previous instance's rows immediately so a slow load never shows
+    // the wrong instance's sessions in the nav during the switch.
+    setSessions([]);
+    setSessionErr('');
+    loadSessions(instId).catch((e) => setSessionErr((e as Error).message));
+  }, [instId, loadSessions]);
 
-  const send = () => { if (session.sendInput(composer)) setComposer(''); };
   const attached = session.state.attached;
   const requestedReplayRole = session.state.role === 'controller' ? 'controller' : 'observer';
   const current = instances.find((i) => i.id === instId);
   const backends = current?.session_backends ?? [];
-  const selectedBackend = backends.find((b) => `${b.mode}:${b.backend}` === backendKey) ?? backends.find((b) => b.available) ?? backends[0];
-  const selectedSession = sessions.find((s) => s.attach_url === attachUrl);
+  const selectedBackend = backends.find((b) => `${b.mode}:${b.backend}` === backendKey) ?? backends.find((b) => b.available !== false) ?? backends[0];
+  const currentUnavailableReason = backends.find((b) => b.available === false)?.reason;
+  const currentReconnectable = current ? isReconnectable(current) : false;
+  const selectedSession = sessions.find((s) => sessionKey(s) === selectedSessionKey);
+  const attachedOwner = attachedInstanceId || instanceIdFromAttachUrl(session.state.url);
+  const attachedKey = attachedOwner && attachedSessionId ? `${attachedOwner}:${attachedSessionId}` : sessionKeyFromAttachUrl(session.state.url);
+  const activeTarget = session.state.target ?? (attachedOwner && attachedSessionId ? { instanceId: attachedOwner, sessionId: attachedSessionId } : null);
+  // Merge the currently-attached session into the nav even when the executor's
+  // session-list API omits it. Host-runtime PTY sessions are not returned by
+  // list_sessions (agentic-sandbox #500 follow-up), so a live, attached session
+  // would otherwise render as "No sessions yet". The synthetic row reuses the
+  // attach URL Cockpit already holds so selecting it re-attaches/replays.
+  const displaySessions: SessionInfo[] = (attached && attachedOwner === instId && attachedSessionId
+    && !sessions.some((s) => sessionKey(s) === attachedKey))
+    ? [...sessions, {
+        id: attachedSessionId,
+        instance_id: instId,
+        attach_url: session.state.url ?? '',
+        session_name: 'attached session',
+        session_backend: selectedBackend?.backend,
+        session_class: selectedBackend?.mode,
+      }]
+    : sessions;
+  const send = () => { if (session.sendInput(composer, activeTarget)) setComposer(''); };
+  const attachToSession = (s: SessionInfo, role: 'controller' | 'observer') => {
+    setAttachedInstanceId(s.instance_id || instId);
+    setAttachedSessionId(String(s.id));
+    setRegistryActiveSession(s.instance_id || instId, String(s.id));
+    session.attach(s.attach_url, false, role, { instanceId: s.instance_id || instId, sessionId: String(s.id) });
+  };
+  const replaySession = (s: SessionInfo, role: 'controller' | 'observer') => {
+    setAttachedInstanceId(s.instance_id || instId);
+    setAttachedSessionId(String(s.id));
+    setRegistryActiveSession(s.instance_id || instId, String(s.id));
+    session.replay(s.attach_url, role, { instanceId: s.instance_id || instId, sessionId: String(s.id) });
+  };
+  const detachSession = () => {
+    setAttachedInstanceId('');
+    setAttachedSessionId('');
+    setRegistryActiveSession(null, null);
+    session.detach();
+  };
+  useEffect(() => {
+    const selected = sessions.find((s) => sessionKey(s) === selectedSessionKey);
+    if (selected) markRegistrySessionViewed(selected.instance_id, String(selected.id));
+  }, [selectedSessionKey, sessions]);
   useEffect(() => {
     if (!session.state.url) return;
-    const sessionStillListed = sessions.some((s) => s.attach_url === session.state.url);
-    if (sessions.length && !sessionStillListed) session.detach();
-  }, [session.state.url, session.detach, sessions]);
+    if (!attachedOwner || attachedOwner !== instId) return;
+    const sessionStillListed = sessions.some((s) => sessionKey(s) === attachedKey);
+    if (sessionStillListed) {
+      missingAttachedPollsRef.current = 0;
+      return;
+    }
+    if (sessions.length) {
+      missingAttachedPollsRef.current += 1;
+      if (missingAttachedPollsRef.current >= 2) detachSession();
+    }
+  }, [attachedKey, attachedOwner, instId, session.state.url, sessions]);
   useEffect(() => {
     if (!current) return;
     const valid = current.session_backends.some((b) => `${b.mode}:${b.backend}` === backendKey);
@@ -103,12 +206,26 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
     setSessionErr('');
     try {
       await api(`/api/instances/${encodeURIComponent(current.id)}/sessions/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
-      if (session.state.url === s.attach_url) session.detach();
+      if (sessionKey(s) === attachedKey) detachSession();
       await loadSessions(current.id);
     } catch (e) {
       setSessionErr((e as Error).message);
     } finally {
       setEndingSession('');
+    }
+  };
+  const reconnectCurrent = async () => {
+    if (!current) return;
+    setReconnectingInstance(current.id);
+    setSessionErr('');
+    try {
+      await api(`/api/instances/${encodeURIComponent(current.id)}/reconnect`, { method: 'POST' });
+      await refreshInventory();
+      await loadSessions(current.id);
+    } catch (e) {
+      setSessionErr((e as Error).message);
+    } finally {
+      setReconnectingInstance('');
     }
   };
 
@@ -125,7 +242,7 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
             <h2>Instances</h2>
             <span className="hint">{instances.length}</span>
           </div>
-          {!instances.length && <p className="empty">No session-capable running instances.</p>}
+          {!instances.length && <p className="empty">No running instances with session metadata.</p>}
           <ul className="nav-list">
             {instances.map((i) => {
               const isSel = i.id === instId;
@@ -139,11 +256,17 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
                   </button>
                   {isSel && (
                     <div className="nav-sessions">
-                      {sessions.length === 0 && <p className="empty nav-empty">No sessions yet.</p>}
+                      {displaySessions.length === 0 && (
+                        <p className="empty nav-empty">
+                          {isReconnectable(i) ? 'Agent unreachable; reconnect to recover existing sessions.' : 'No sessions yet.'}
+                        </p>
+                      )}
                       <ul>
-                        {sessions.map((s) => {
-                          const selS = s.attach_url === attachUrl;
-                          const live = session.state.url === s.attach_url && attached;
+                        {displaySessions.map((s) => {
+                          const key = sessionKey(s);
+                          const selS = key === selectedSessionKey;
+                          const live = key === attachedKey && attached;
+                          const registryEntry = sessionRegistry.entries[sessionRegistryKeyFor(s)];
                           return (
                             <li key={s.id}>
                               <button
@@ -154,11 +277,11 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
                                 // Docker/tmux streams repaint and control is reasserted.
                                 onClick={() => {
                                   const role = session.state.role === 'controller' && selectedBackend?.drive !== false ? 'controller' : 'observer';
-                                  setAttachUrl(s.attach_url);
-                                  if (s.attach_url === session.state.url && attached) {
-                                    session.replay(s.attach_url, role);
+                                  setSelectedSessionKey(key);
+                                  if (key === attachedKey && attached) {
+                                    replaySession(s, role);
                                   } else {
-                                    session.attach(s.attach_url, false, role);
+                                    attachToSession(s, role);
                                   }
                                 }}
                                 title={s.id}
@@ -166,6 +289,8 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
                                 <span className="nav-session-name">{sessionLabel(s)}</span>
                                 <span className="nav-session-meta">{sessionMeta(s)}</span>
                                 {sessionHoldsController(s) && <span className="badge controller" title="A controller is connected">ctrl</span>}
+                                {registryEntry?.unread && <span className="badge unread" title="Unread output">unread</span>}
+                                {registryEntry?.responseNeeded.needed && <span className="badge response" title="Response needed">response</span>}
                                 {live && <span className="badge live-dot" title="Attached here">●</span>}
                               </button>
                               <button
@@ -181,7 +306,7 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
                           );
                         })}
                       </ul>
-                      <button className="cta-sm nav-new-session" disabled={backends.length > 0 && !selectedBackend?.available} onClick={() => onRequestStart(i.id)}>＋ New session</button>
+                      <button className="cta-sm nav-new-session" disabled={backends.length > 0 && selectedBackend?.available === false} onClick={() => onRequestStart(i.id)}>＋ New session</button>
                     </div>
                   )}
                 </li>
@@ -201,13 +326,18 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
               </>
             )}
             <span className="controls-active" title={selectedSession?.id}>{selectedSession ? sessionLabel(selectedSession) : '— no session selected —'}</span>
-            <button disabled={!attachUrl || (attached && session.state.role === 'observer')} onClick={() => session.attach(attachUrl, false, 'observer')}>Observe</button>
-            <button disabled={!attachUrl || selectedBackend?.drive === false || (attached && session.state.role === 'controller')} onClick={() => session.attach(attachUrl, false, 'controller')}>
+            <button disabled={!selectedSession || (attached && session.state.role === 'observer')} onClick={() => selectedSession && attachToSession(selectedSession, 'observer')}>Observe</button>
+            <button disabled={!selectedSession || selectedBackend?.drive === false || (attached && session.state.role === 'controller')} onClick={() => selectedSession && attachToSession(selectedSession, 'controller')}>
               {attached && session.state.role === 'observer' ? 'Take Control' : 'Drive'}
             </button>
             <button disabled={!attached || selectedBackend?.keyframe === false} onClick={session.requestKeyframe}>Keyframe</button>
-            <button disabled={!attached} onClick={() => session.replay(attachUrl, requestedReplayRole)}>Reattach + replay</button>
-            <button disabled={!attached} onClick={session.detach}>Detach</button>
+            <button disabled={!attached} onClick={() => selectedSession && replaySession(selectedSession, requestedReplayRole)}>Reattach + replay</button>
+            <button disabled={!attached} onClick={detachSession}>Detach</button>
+            {currentReconnectable && (
+              <button disabled={reconnectingInstance === current?.id} onClick={reconnectCurrent}>
+                {reconnectingInstance === current?.id ? 'Reconnecting…' : 'Reconnect'}
+              </button>
+            )}
             {session.state.role && <span className={`badge ${session.state.role}`}>{session.state.role}</span>}
           </div>
           {sessionErr && <p className="err">Session action failed: {sessionErr}</p>}
@@ -216,6 +346,7 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
               {current.runtime_posture.label} · {current.transport.label} ({current.transport.mode}) · attach starts as observe unless control is explicitly granted.
               {attached && session.state.role === 'observer' ? ' Click Take Control to re-attach with write access.' : ''}
               {selectedBackend && !selectedBackend.available ? ` ${selectedBackend.reason ?? 'Selected backend is unavailable.'}` : ''}
+              {currentReconnectable ? ` Agent is unreachable while the runtime is still running. ${currentUnavailableReason ?? 'Reconnect can re-register the agent without restarting the instance.'}` : ''}
             </p>
           )}
           <div className="terminal" ref={session.openTerminal} role="log" aria-label="Session output" />
@@ -245,15 +376,44 @@ export function Sessions({ session, composer, setComposer, onRequestStart, refre
 }
 
 function sessionLabel(s: SessionInfo): string {
-  return s.session_name ?? s.sessionName ?? fmtId(s.id);
+  return s.session_name ?? fmtId(s.id);
 }
 function sessionMeta(s: SessionInfo): string {
-  const backend = `${s.mode ?? s.session_class ?? 'managed'}/${s.backend ?? s.session_backend ?? 'tmux'}`;
-  const viewers = s.members ?? ((s.controllers ?? 0) + (s.observers ?? 0));
+  const backend = `${s.session_class ?? 'managed'}/${s.session_backend ?? 'tmux'}`;
+  // v2 membership is authoritative; omit the viewer fragment when the executor
+  // doesn't advertise membership rather than implying "0 viewers".
+  if (!s.membership) return backend;
+  const viewers = s.membership.attachment_count;
   return `${backend} · ${viewers} viewer${viewers === 1 ? '' : 's'}`;
 }
 function sessionHoldsController(s: SessionInfo): boolean {
-  return s.has_controller === true || (s.controllers ?? 0) > 0;
+  return (s.membership?.controllers.length ?? 0) > 0;
+}
+
+function sessionKey(s: SessionInfo): string {
+  return `${s.instance_id}:${s.id}`;
+}
+
+function sessionKeyFromAttachUrl(url: string | null): string {
+  const parts = sessionPartsFromAttachUrl(url);
+  return parts ? `${parts.instanceId}:${parts.sessionId}` : '';
+}
+
+function sessionPartsFromAttachUrl(url: string | null): { instanceId: string; sessionId: string } | null {
+  if (!url) return null;
+  const pattern = /\/agents\/([^/]+)\/sessions\/([^/]+)\/attach/;
+  try {
+    const parsed = new URL(url);
+    const match = parsed.pathname.match(pattern);
+    return match ? { instanceId: decodeURIComponent(match[1]), sessionId: decodeURIComponent(match[2]) } : null;
+  } catch {
+    const match = url.match(pattern);
+    return match ? { instanceId: decodeURIComponent(match[1]), sessionId: decodeURIComponent(match[2]) } : null;
+  }
+}
+
+function instanceIdFromAttachUrl(url: string | null): string {
+  return sessionPartsFromAttachUrl(url)?.instanceId ?? '';
 }
 
 function dedupeInstances(instances: Instance[]) {
@@ -263,4 +423,15 @@ function dedupeInstances(instances: Instance[]) {
     seen.add(instance.id);
     return true;
   });
+}
+
+// VM runtimes included per #1778 — the bridge signals the in-guest agent via
+// qemu-guest-agent, the container/docker path via docker exec.
+const RECONNECTABLE_RUNTIMES = ['docker', 'container', 'vm', 'qemu', 'kvm'];
+
+function isReconnectable(i: Instance): boolean {
+  const runtime = String(i.runtime_posture?.kind ?? i.runtime).toLowerCase();
+  const running = String(i.state).toLowerCase() === 'running';
+  const agentMissing = i.agent_ready === false || i.session_backends?.some((b) => b.available === false);
+  return running && RECONNECTABLE_RUNTIMES.includes(runtime) && Boolean(agentMissing);
 }

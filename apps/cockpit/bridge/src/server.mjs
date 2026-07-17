@@ -357,7 +357,23 @@ async function proxy(res, method, target) {
   return json(res, r.status, body);
 }
 
-async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0 } = {}) {
+const SAFE_FALLBACK_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function isAbortError(err) {
+  return err?.name === 'AbortError' || /aborted|abort/i.test(String(err?.message ?? err));
+}
+
+function isConnectionRefusedError(err) {
+  const text = [
+    err?.code,
+    err?.cause?.code,
+    err?.message,
+    err?.cause?.message,
+  ].filter(Boolean).join(' ');
+  return /ECONNREFUSED|connection refused/i.test(text);
+}
+
+export async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0 } = {}) {
   const failures = [];
   for (const candidate of candidates) {
     const target = typeof candidate === 'string' ? candidate : candidate.target;
@@ -370,7 +386,13 @@ async function fetchJsonFirst(candidates, { method = 'GET', headers, body: reque
     try {
       r = await fetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) });
     } catch (err) {
-      failures.push(`${target} -> ${String(err?.message ?? err)}`);
+      const failure = isAbortError(err) && timeoutMs > 0
+        ? `${target} -> timeout after ${timeoutMs}ms`
+        : `${target} -> ${String(err?.message ?? err)}`;
+      failures.push(failure);
+      const safeToTryNext = SAFE_FALLBACK_METHODS.has(String(requestMethod).toUpperCase())
+        || isConnectionRefusedError(err);
+      if (!safeToTryNext) throw new Error(failures.join('; '));
       continue;
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -580,6 +602,138 @@ async function destroyInstance(upstreamUrl, instanceId) {
   };
 }
 
+// #1778: VM-runtime counterpart of `docker exec <ctr> agent-reconnect`. Sandbox
+// VM images bake qemu-guest-agent ("essential for virsh exec") and agent-rs
+// handles SIGHUP as reconnect-in-place on every runtime, so delivering
+// `pkill -HUP -x agent-client` through the libvirt guest-agent channel makes
+// the agent re-register without touching the VM. Session survival is
+// version-conditional: agentic-sandbox 2026.7.8+ agents preserve all sessions
+// across reconnect; older agents preserve only detached-tmux sessions
+// (agentic-sandbox#634).
+async function signalVmAgentReconnect(domain) {
+  const execRaw = await spawnCollect('virsh', ['qemu-agent-command', domain, JSON.stringify({
+    execute: 'guest-exec',
+    arguments: { path: '/bin/sh', arg: ['-c', 'pkill -HUP -x agent-client'], 'capture-output': true },
+  })]);
+  const pid = JSON.parse(String(execRaw))?.return?.pid;
+  if (!Number.isInteger(pid)) throw new Error(`guest-exec returned no pid: ${String(execRaw).trim()}`);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const statusRaw = await spawnCollect('virsh', ['qemu-agent-command', domain, JSON.stringify({
+      execute: 'guest-exec-status',
+      arguments: { pid },
+    })]);
+    const status = JSON.parse(String(statusRaw))?.return;
+    if (status?.exited) return status.exitcode ?? 0;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  // The signal command was handed to the guest; slow exec-status reporting is
+  // not a delivery failure.
+  return 0;
+}
+
+const VM_RUNTIME_KINDS = ['vm', 'qemu', 'kvm'];
+
+async function reconnectInstance(upstreamUrl, instanceId) {
+  const inventory = await getInventory(upstreamUrl).catch(() => ({ instances: [] }));
+  const inst = inventory.instances.find((i) => String(i.id) === String(instanceId));
+  const runtime = String(inst?.runtime ?? inst?.runtime_posture?.kind ?? '').toLowerCase();
+  const dockerName = inst?.launch_context?.name;
+  const candidates = [
+    { target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`, method: 'POST' },
+    { target: `${upstreamUrl}/admin/instances/${encodeURIComponent(instanceId)}/reconnect`, method: 'POST' },
+    { target: `${upstreamUrl}/api/v1/instances/${encodeURIComponent(instanceId)}/reconnect`, method: 'POST' },
+  ];
+  try {
+    const result = await fetchJsonFirst(candidates, { timeoutMs: 5_000 });
+    if (result.status < 400) return result;
+  } catch {
+    // agentic-sandbox v2026.7.6 still exposes the container reconnect as an
+    // in-image helper, not an HTTP endpoint. Fall through to the local-dev path.
+  }
+
+  if (['docker', 'container'].includes(runtime) && dockerName) {
+    try {
+      const output = await spawnCollect('docker', ['exec', dockerName, 'agent-reconnect']);
+      return {
+        target: `docker exec ${dockerName} agent-reconnect`,
+        status: 202,
+        body: {
+          id: instanceId,
+          runtime,
+          docker_name: dockerName,
+          state: 'reconnecting',
+          message: `Reconnect requested for ${dockerName}; inventory will refresh as the agent re-registers.`,
+          output: String(output).trim(),
+          fallback: 'docker-agent-reconnect',
+        },
+      };
+    } catch (err) {
+      return {
+        target: `docker exec ${dockerName} agent-reconnect`,
+        status: 502,
+        body: {
+          error: 'reconnect_failed',
+          message: `Could not run agent-reconnect in ${dockerName}. Repull/rebuild the agent image if it predates agentic-sandbox v2026.7.5.`,
+          detail: String(err?.message ?? err),
+        },
+      };
+    }
+  }
+
+  if (VM_RUNTIME_KINDS.includes(runtime)) {
+    // For VM instances the agent_id doubles as the libvirt domain name
+    // (agentic-sandbox provision-vm.sh registers agent_id = $vm_name).
+    const domain = dockerName ?? inst?.name ?? String(instanceId);
+    const target = `virsh qemu-agent-command ${domain} guest-exec pkill -HUP -x agent-client`;
+    try {
+      const exitcode = await signalVmAgentReconnect(domain);
+      if (exitcode === 0) {
+        return {
+          target,
+          status: 202,
+          body: {
+            id: instanceId,
+            runtime,
+            vm_domain: domain,
+            state: 'reconnecting',
+            message: `Reconnect requested for VM ${domain}; inventory will refresh as the agent re-registers. Sessions survive reconnect on agentic-sandbox 2026.7.8+ agents; older agents preserve only detached tmux sessions (agentic-sandbox#634).`,
+            fallback: 'virsh-guest-agent-sighup',
+          },
+        };
+      }
+      return {
+        target,
+        status: 502,
+        body: {
+          error: 'reconnect_failed',
+          message: `No running agent-client process found inside VM ${domain}. Restart the agent service in the guest (systemctl restart agent-client) or reprovision the VM.`,
+          exitcode,
+        },
+      };
+    } catch (err) {
+      return {
+        target,
+        status: 502,
+        body: {
+          error: 'reconnect_failed',
+          message: `Could not signal agent-client in VM ${domain} via qemu-guest-agent. The bridge host needs virsh access to the libvirt domain and the guest-agent channel must be up (agentic-sandbox#633).`,
+          detail: String(err?.message ?? err),
+        },
+      };
+    }
+  }
+
+  return {
+    target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`,
+    status: 409,
+    body: {
+      error: 'reconnect_unavailable',
+      message: 'Reconnect is available for Docker/container instances (docker exec) and VM instances (qemu-guest-agent). For host-runtime agents, signal the agent directly: pkill -HUP -x agent-client.',
+      runtime: runtime || 'unknown',
+    },
+  };
+}
+
 function asArrayFromEnvelope(body, keys) {
   if (Array.isArray(body)) return body;
   if (!body || typeof body !== 'object') return [];
@@ -594,10 +748,22 @@ function asArrayFromEnvelope(body, keys) {
   return [];
 }
 
+const AGENT_ID_CACHE_TTL_MS = Number(process.env.AIWG_COCKPIT_AGENT_CACHE_TTL_MS ?? 5_000);
+const agentListCache = new Map();
+
+async function getAgentList(executorUrl) {
+  const cached = agentListCache.get(executorUrl);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.agents;
+  const { body } = await fetchJsonFirst([`${executorUrl}/api/v1/agents`]);
+  const agents = asArrayFromEnvelope(body, ['agents', 'items', 'data']);
+  agentListCache.set(executorUrl, { agents, expiresAt: now + AGENT_ID_CACHE_TTL_MS });
+  return agents;
+}
+
 async function resolveSessionAgentId(executorUrl, instanceId) {
   try {
-    const { body } = await fetchJsonFirst([`${executorUrl}/api/v1/agents`]);
-    const agents = asArrayFromEnvelope(body, ['agents', 'items', 'data']);
+    const agents = await getAgentList(executorUrl);
     const agent = agents.find((a) => String(a.instance_id ?? a.instanceId ?? '') === String(instanceId));
     return agent?.id ?? agent?.agent_id ?? agent?.agentId ?? instanceId;
   } catch {
@@ -769,23 +935,48 @@ function normalizeInstance(executorUrl, i) {
 function defaultSessionLaunch(instance) {
   const runtime = String(instance?.runtime_posture?.kind ?? instance?.runtime ?? '').toLowerCase();
   if (runtime === 'host') {
+    // Honor the executor-reported cwd — it is valid on the target host, including
+    // remote worker hosts whose filesystem does not mirror the Bridge machine.
+    // Fall back to the operator home only when the executor reports no cwd;
+    // hardcoding homedir() would resolve the Bridge's local home and break
+    // sessions on any host runtime that is not the Bridge machine itself.
     return {
       command: 'bash',
       args: ['-l'],
-      working_dir: instance?.launch_context?.cwd,
+      working_dir: instance?.launch_context?.cwd ?? homedir(),
     };
   }
   if (runtime === 'container' || runtime === 'docker' || runtime === 'vm' || runtime === 'qemu' || runtime === 'kvm') {
+    const home = runtime === 'container' || runtime === 'docker' ? '/root' : '/home/agent';
     return {
       command: '/bin/bash',
-      args: ['-lc', 'cd "${HOME:-/root}" && exec /bin/bash -l'],
-      working_dir: '/root',
+      args: ['-lc', `cd ${shellSingleQuote(home)} && exec /bin/bash -l`],
+      working_dir: home,
     };
   }
   return {
     command: 'bash',
     args: ['-l'],
   };
+}
+
+// Deterministic prefix + per-request nonce. The name is IDENTICAL across this
+// request's fallback candidates (so a timed-out-but-created session is
+// recoverable by name, and the executor's 409-by-name guard dedupes candidate
+// retries) but UNIQUE across requests — operators can hold multiple concurrent
+// sessions per (instance, mode, backend). A fully canonical name here silently
+// reused the first session on every subsequent "New session" click.
+function sessionNameFor(instanceId, { mode = 'managed', backend = 'tmux' } = {}) {
+  const slug = (value) => String(value || 'default')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36) || 'default';
+  return `cockpit-${slug(instanceId)}-${slug(mode)}-${slug(backend)}-${randomBytes(3).toString('hex')}`;
+}
+
+function shellSingleQuote(value) {
+  return `'${String(value).replaceAll("'", "'\"'\"'")}'`;
 }
 
 function runtimeExtensionFromCard(card) {
@@ -817,8 +1008,7 @@ async function enrichInstanceFromAgentCard(executorUrl, instance) {
 
 async function getRegisteredAgents(executorUrl) {
   try {
-    const { body } = await fetchJsonFirst([`${executorUrl}/api/v1/agents`]);
-    return asArrayFromEnvelope(body, ['agents', 'items', 'data']);
+    return await getAgentList(executorUrl);
   } catch {
     return [];
   }
@@ -1220,8 +1410,8 @@ async function getSessionEventRows(executorUrl, instances) {
         agent_id: session.agent_id,
         state: session.state ?? session.status ?? session.session_state ?? 'available',
         role_policy: session.role_policy,
-        backend: session.backend ?? session.session_backend,
-        mode: session.mode ?? session.session_class,
+        session_backend: session.session_backend,
+        session_class: session.session_class,
       });
     }
   }));
@@ -1248,7 +1438,7 @@ async function getEventSnapshot(executorUrl) {
     events.push({ id: `approval:${approval.id}`, type: 'hitl.approval', source: 'a2a', subject: approval.task_id ?? approval.id, state: approval.status, severity: approval.risk, ts, ref: { instance_id: approval.instance_id, approval_id: approval.id } });
   }
   for (const session of sessions ?? []) {
-    events.push({ id: `session:${session.instance_id}:${session.id}`, type: 'session.lifecycle', source: 'pty-session', subject: session.id, state: session.state, ts, ref: { instance_id: session.instance_id, session_id: session.id, agent_id: session.agent_id, backend: session.backend, mode: session.mode, role_policy: session.role_policy } });
+    events.push({ id: `session:${session.instance_id}:${session.id}`, type: 'session.lifecycle', source: 'pty-session', subject: session.id, state: session.state, ts, ref: { instance_id: session.instance_id, session_id: session.id, agent_id: session.agent_id, session_backend: session.session_backend, session_class: session.session_class, role_policy: session.role_policy } });
   }
   for (const mission of missions.missions ?? []) {
     events.push({ id: `mission:${mission.id}`, type: 'mission.lifecycle', source: mission.source ?? 'aiwg-mc', subject: mission.id, state: mission.status, ts, ref: { session_id: mission.session_id, mission_id: mission.id, ralph_loop_id: mission.ralph_loop_id } });
@@ -1322,6 +1512,50 @@ async function getSessions(executorUrl, instanceId) {
   ]));
   const sessions = asArrayFromEnvelope(body, ['sessions', 'items', 'data']);
   return normalizeSessionRows({ sessions, executorUrl, instanceId, sessionAgentId });
+}
+
+function normalizeScreenSnapshot(body, { instanceId, sessionId, source }) {
+  const text = String(body?.text ?? body?.snapshot ?? body?.screen ?? body?.content ?? '');
+  const rawLines = Array.isArray(body?.lines) ? body.lines : text.replace(/\r/g, '\n').split('\n');
+  return {
+    instance_id: instanceId,
+    session_id: sessionId,
+    text,
+    lines: rawLines.map((line) => String(line)).filter(Boolean).slice(-80),
+    seq: body?.seq ?? body?.sequence ?? body?.anchor_sequence ?? body?.anchorSequence ?? null,
+    fetched_at: new Date().toISOString(),
+    source,
+    snapshot_format: body?.snapshot_format ?? body?.snapshotFormat ?? body?.format ?? 'text/plain',
+  };
+}
+
+async function getSessionScreen(executorUrl, instanceId, sessionId) {
+  const sessionAgentId = await resolveSessionAgentId(executorUrl, instanceId);
+  const agentIds = unique([sessionAgentId, instanceId]);
+  const paths = agentIds.flatMap((agentId) => {
+    const encodedAgent = encodeURIComponent(agentId);
+    const encodedSession = encodeURIComponent(sessionId);
+    return [
+      `${executorUrl}/api/v1/agents/${encodedAgent}/sessions/${encodedSession}/screen`,
+      `${executorUrl}/api/v1/agents/${encodedAgent}/sessions/${encodedSession}/screen-state`,
+      `${executorUrl}/agents/${encodedAgent}/sessions/${encodedSession}/screen`,
+      `${executorUrl}/agents/${encodedAgent}/sessions/${encodedSession}/screen-state`,
+    ];
+  });
+  try {
+    const { body, target, status } = await fetchJsonFirst(paths);
+    return { status, body: normalizeScreenSnapshot(body, { instanceId, sessionId, source: target }) };
+  } catch (e) {
+    return {
+      status: 404,
+      body: {
+        error: 'session_screen_unavailable',
+        instance_id: instanceId,
+        session_id: sessionId,
+        detail: String(e?.message ?? e),
+      },
+    };
+  }
 }
 
 export function normalizeSessionRows({ sessions, executorUrl, instanceId, sessionAgentId = instanceId }) {
@@ -1454,6 +1688,20 @@ async function endSession(executorUrl, instanceId, sessionId) {
   };
 }
 
+async function findReusableSession(executorUrl, instanceId, sessionName) {
+  const sessions = (await getSessions(executorUrl, instanceId)).sessions;
+  return sessions.find((s) => String(s.session_name ?? s.sessionName ?? '') === String(sessionName));
+}
+
+function sessionResponseFromRow(row) {
+  return {
+    ...row,
+    id: row.id ?? row.session_id ?? row.sessionId,
+    attach_url: row.attach_url ?? row.attachUrl,
+    reused: true,
+  };
+}
+
 export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = ALLOW_MOCK_EXECUTOR, token } = {}) {
   const upstreamUrl = executorUrl;
   const TOKEN = token ?? randomBytes(24).toString('hex');
@@ -1576,6 +1824,10 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         const { status, body } = await endSession(upstreamUrl, decodeURIComponent(m[1]), decodeURIComponent(m[2]));
         return json(res, status, body);
       }
+      if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/sessions\/([^/]+)\/screen$/)) && req.method === 'GET') {
+        const { status, body } = await getSessionScreen(upstreamUrl, decodeURIComponent(m[1]), decodeURIComponent(m[2]));
+        return json(res, status, body);
+      }
       // registry-bound, data-driven core — live, no app restart (#1592)
       if (url.pathname === '/api/capabilities') {
         const q = (url.searchParams.get('q') || '').trim();
@@ -1664,6 +1916,7 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         if (backend) qs.set('backend', backend);
         if (loadout) qs.set('loadout', loadout);
         const sessionAgentId = await resolveSessionAgentId(upstreamUrl, id);
+        const sessionName = sessionNameFor(id, { mode: mode || 'managed', backend: backend || 'tmux' });
         let sessionLaunch = defaultSessionLaunch();
         try {
           const inventory = await getInventory(upstreamUrl);
@@ -1672,28 +1925,41 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
           // Session creation can still proceed without an explicit cwd; the
           // executor/agent will fall back to its own process cwd.
         }
+        // No pre-create reuse lookup: every create request gets its own uniquely
+        // named session (multi-session per instance is supported). Recovery by
+        // name below still catches a create that timed out after succeeding.
+        const sessionBody = JSON.stringify({
+          session_name: sessionName,
+          session_backend: backend || 'tmux',
+          session_class: mode || 'managed',
+          command: sessionLaunch.command,
+          args: sessionLaunch.args,
+          ...(sessionLaunch.working_dir ? { working_dir: sessionLaunch.working_dir } : {}),
+        });
         const candidates = unique([sessionAgentId, id]).flatMap((agentId) => [
           {
             target: `${upstreamUrl}/api/v1/agents/${encodeURIComponent(agentId)}/sessions`,
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              session_backend: backend || 'tmux',
-              session_class: mode || 'managed',
-              command: sessionLaunch.command,
-              args: sessionLaunch.args,
-              ...(sessionLaunch.working_dir ? { working_dir: sessionLaunch.working_dir } : {}),
-            }),
+            body: sessionBody,
           },
           {
             target: `${upstreamUrl}/agents/${encodeURIComponent(agentId)}/sessions?${qs.toString()}`,
             method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: sessionBody,
           },
         ]);
         let sessionCreate;
         try {
           sessionCreate = await fetchJsonFirst(candidates, { timeoutMs: 8000 });
         } catch (err) {
+          try {
+            const reusable = await findReusableSession(upstreamUrl, id, sessionName);
+            if (reusable) return json(res, 200, sessionResponseFromRow(reusable));
+          } catch {
+            // Preserve the original create failure; reuse is a recovery path only.
+          }
           return json(res, 409, {
             error: 'agent_not_registered',
             message: 'The instance is visible in inventory, but its agent has not registered yet; PTY sessions are not ready.',
@@ -1701,6 +1967,15 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
           });
         }
         const { status, body } = sessionCreate;
+        if (status < 200 || status >= 300) {
+          try {
+            const reusable = await findReusableSession(upstreamUrl, id, sessionName);
+            if (reusable) return json(res, 200, sessionResponseFromRow(reusable));
+          } catch {
+            // Return the upstream non-2xx response when no reusable session is visible.
+          }
+          return json(res, status, body);
+        }
         const wsBase = upstreamUrl.replace(/^http/i, 'ws');
         const sessionId = body.id ?? body.session_id ?? body.sessionId;
         if (status >= 200 && status < 300 && !sessionId && !body.attach_url && !body.attachUrl && !body.pty_ws_url && !body.ptyWsUrl) {
@@ -1716,8 +1991,8 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         }
         // Same as the list path (#1671): the attach segment must be the instance
         // id the executor's pty-ws route accepts, not the resolved agent name.
-        await appendAudit('session.start.requested', { instance_id: id, mode: mode || 'managed', backend: backend || 'tmux', loadout, status, session_id: sessionId });
-        return json(res, status, { ...body, id: sessionId, attach_url: attachUrl ?? `${wsBase}/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/attach` });
+        await appendAudit('session.start.requested', { instance_id: id, mode: mode || 'managed', backend: backend || 'tmux', loadout, status, session_id: sessionId, session_name: sessionName });
+        return json(res, status, { ...body, id: sessionId, session_name: body.session_name ?? body.sessionName ?? sessionName, attach_url: attachUrl ?? `${wsBase}/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/attach` });
       }
 
       // --- management surface (UC-012): lifecycle + task cancel ---
@@ -1728,6 +2003,11 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         ], { method: 'POST' }).catch((err) => ({ status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } }));
         await appendAudit('instance.lifecycle.requested', { instance_id: decodeURIComponent(m[1]), action: m[2], status: result.status, result: result.body });
         return json(res, result.status, result.body);
+      }
+      if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/reconnect$/)) && req.method === 'POST') {
+        const { status, body } = await reconnectInstance(upstreamUrl, decodeURIComponent(m[1]));
+        await appendAudit('instance.reconnect.requested', { instance_id: decodeURIComponent(m[1]), status, result: body });
+        return json(res, status, body);
       }
       if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)$/)) && req.method === 'DELETE') {
         const { status, body } = await destroyInstance(upstreamUrl, decodeURIComponent(m[1]));

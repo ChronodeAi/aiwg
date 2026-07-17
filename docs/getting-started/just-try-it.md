@@ -20,6 +20,16 @@ Open Claude Code in that directory:
 claude .
 ```
 
+That's it — `aiwg use` already wired AIWG into the project (it wrote `CLAUDE.md` + `AIWG.md`), so it loads as the AIWG orchestrator on start.
+
+If you pointed at an **existing project** (not an empty folder), run this once **inside the tool** first, so AIWG reconciles its context with what's already there:
+
+```
+/aiwg-regenerate
+```
+
+(No slash command? Ask it: "run aiwg-regenerate to wire AIWG into this project.")
+
 Now ask it anything about your project:
 
 ```
@@ -53,7 +63,7 @@ aiwg use sdlc
 claude .
 ```
 
-Then:
+Then (this is a brand-new folder, so nothing to reconcile — just ask):
 
 ```
 What would a senior engineer say about this code?
@@ -65,7 +75,9 @@ It will answer as one. That's what AIWG does.
 
 ## What you just installed
 
-`aiwg use sdlc` copied agent definitions, slash commands, and behavioral rules into `.claude/` in your project. Claude Code reads those automatically when it starts. You don't need to configure anything — it just works.
+`aiwg use sdlc` copied agent definitions, slash commands, skills, and behavioral rules into `.claude/` — and wrote `CLAUDE.md` + `AIWG.md`, the context that primes the AI as the AIWG orchestrator. Claude Code reads all of it automatically on start. On a fresh project it just works — no extra configuration.
+
+On an **existing project**, or to pull in the latest AIWG on a project you set up earlier, run `/aiwg-regenerate` inside the tool: it re-tailors that context to your actual codebase and preserves any edits you've made.
 
 ---
 

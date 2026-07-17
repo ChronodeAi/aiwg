@@ -15,8 +15,8 @@
  * @implements @.aiwg/requirements/design-ralph-external.md
  */
 
-import { resolve } from 'path';
-import { createWriteStream } from 'fs';
+import { resolve, join } from 'path';
+import { createWriteStream, existsSync, readFileSync } from 'fs';
 import { Orchestrator } from './orchestrator.mjs';
 import { StateManager } from './state-manager.mjs';
 import { isClaudeAvailable, getClaudeVersion } from './session-launcher.mjs';
@@ -47,6 +47,17 @@ function parseArgs(args) {
     // is ~$1.60 sonnet / ~$3.90 opus. $2.0 per-iter was smaller than the cache
     // creation itself, causing every mission to abort at iteration 1.
     budgetPerIteration: 5.0,
+    budgetLimits: {},
+    // Declared-K policy (#1770, operator decision 2026-07-11): the exploration
+    // quota is OFF unless a loop explicitly declares its K via
+    // --exploration-quota. There is no default K.
+    explorationQuota: { enabled: false },
+    // Stop-semantics policy (#1767): completion-wins (default) reports success
+    // when the completing iteration also crosses a budget ceiling;
+    // budget-wins keeps the strict exhaustion-terminates ordering.
+    budgetStopPolicy: 'completion-wins',
+    // Eval harness (LFD Track 3, #1776): opt-in via --eval-harness <path>.
+    evalHarness: null,
     timeoutMinutes: 60,
     mcpConfig: null,
     giteaIssue: false,
@@ -63,6 +74,21 @@ function parseArgs(args) {
     provider: 'claude',           // CLI provider (claude, codex, opencode, factory)
     verbose: false,               // Verbose per-iteration detail
     logFile: null,                // Optional log file path
+    allowExhaustedResume: false,  // Explicitly permit resuming a budget-exhausted loop (#1765)
+    // Flags the user actually typed — resume must only override persisted
+    // loop config for values that were explicitly provided (#1765)
+    _explicit: new Set(),
+  };
+
+  // A numeric flag that is present but not a positive number is a hard usage
+  // error — NaN limits used to be accepted and then silently never fire (#1770)
+  const positiveNumber = (flag, raw, { integer = false } = {}) => {
+    const value = integer ? parseInt(raw, 10) : parseFloat(raw);
+    if (!Number.isFinite(value) || value <= 0) {
+      console.error(`Error: ${flag} requires a positive number (got '${raw}')`);
+      process.exit(1);
+    }
+    return value;
   };
 
   let i = 0;
@@ -80,13 +106,47 @@ function parseArgs(args) {
     } else if (arg === '--completion' || arg === '-c') {
       options.completionCriteria = args[++i];
     } else if (arg === '--max-iterations') {
-      options.maxIterations = parseInt(args[++i], 10);
+      options.maxIterations = positiveNumber('--max-iterations', args[++i], { integer: true });
+      options._explicit.add('maxIterations');
     } else if (arg === '--model') {
       options.model = args[++i];
     } else if (arg === '--budget') {
-      options.budgetPerIteration = parseFloat(args[++i]);
+      options.budgetPerIteration = positiveNumber('--budget', args[++i]);
+      options._explicit.add('budgetPerIteration');
+    } else if (arg === '--allow-exhausted-resume') {
+      options.allowExhaustedResume = true;
+    } else if (arg === '--max-total-tokens') {
+      options.budgetLimits.total_tokens = positiveNumber('--max-total-tokens', args[++i], { integer: true });
+    } else if (arg === '--max-output-tokens') {
+      options.budgetLimits.output_tokens = positiveNumber('--max-output-tokens', args[++i], { integer: true });
+    } else if (arg === '--max-tool-calls') {
+      options.budgetLimits.tool_calls = positiveNumber('--max-tool-calls', args[++i], { integer: true });
+    } else if (arg === '--max-total-cost') {
+      options.budgetLimits.spend_usd = positiveNumber('--max-total-cost', args[++i]);
+    } else if (arg === '--max-wall-clock-minutes') {
+      options.budgetLimits.wall_clock_minutes = positiveNumber('--max-wall-clock-minutes', args[++i]);
+    } else if (arg === '--exploration-quota') {
+      options.explorationQuota = { enabled: true, k: positiveNumber('--exploration-quota', args[++i], { integer: true }) };
+      options._explicit.add('explorationQuota');
+    } else if (arg === '--budget-stop-policy') {
+      const policy = args[++i];
+      if (policy !== 'completion-wins' && policy !== 'budget-wins') {
+        console.error(`Error: --budget-stop-policy must be 'completion-wins' or 'budget-wins' (got '${policy}')`);
+        process.exit(1);
+      }
+      options.budgetStopPolicy = policy;
+      options._explicit.add('budgetStopPolicy');
+    } else if (arg === '--eval-harness') {
+      // Path to an EvalHarnessContract JSON (LFD Track 3, #1776).
+      const harnessPath = args[++i];
+      try {
+        options.evalHarness = JSON.parse(readFileSync(harnessPath, 'utf8'));
+      } catch (err) {
+        console.error(`Error: --eval-harness could not read/parse '${harnessPath}': ${err.message}`);
+        process.exit(1);
+      }
     } else if (arg === '--timeout') {
-      options.timeoutMinutes = parseInt(args[++i], 10);
+      options.timeoutMinutes = positiveNumber('--timeout', args[++i], { integer: true });
     } else if (arg === '--mcp-config') {
       options.mcpConfig = JSON.parse(args[++i]);
     } else if (arg === '--gitea-issue') {
@@ -192,6 +252,22 @@ OPTIONS:
                           Cache-creation cost alone is ~$1.60 sonnet, ~$3.90 opus
                           per fresh headless session — set higher for non-trivial
                           tasks or expect first-iteration budget aborts.
+  --max-total-tokens <n>  Hard cumulative token ceiling. Stops with best-output
+                          report when observable token use reaches the limit.
+  --max-output-tokens <n> Hard cumulative output-token ceiling when observable.
+  --max-tool-calls <n>    Hard cumulative tool-call ceiling.
+  --max-total-cost <usd>  Hard cumulative cost ceiling when provider reports cost.
+  --max-wall-clock-minutes <n>
+                          Hard cumulative session-runtime ceiling in minutes.
+  --exploration-quota <k> Require a structural strategy variant after k flat
+                          non-terminal cycles. OFF unless declared — there is
+                          no default k; each loop declares its own (#1770).
+  --eval-harness <path>   Path to an eval-harness contract JSON (score/lint/
+                          probe/status). Each iteration is scored by the
+                          harness; a lint violation VOIDs the iteration and only
+                          VOID-safe aggregate feedback reaches the agent. Under
+                          execution-mode holdout-isolated, holdout isolation is
+                          strict (#1776).
   --timeout <min>         Timeout per iteration in minutes (default: 60)
   --mcp-config <json>     MCP server configuration JSON
   --gitea-issue           Create/link Gitea issue for tracking
@@ -211,7 +287,12 @@ RESEARCH-BACKED OPTIONS (REF-015, REF-021):
   --log-file <path>       Write timestamped log to file (in addition to stdout)
 
 COMMANDS:
-  -r, --resume            Resume interrupted loop
+  -r, --resume            Resume interrupted loop. Persisted budget/quota config
+                          is preserved; only explicitly passed flags override it.
+                          Restored usage counters still count against ceilings.
+  --allow-exhausted-resume  Explicitly permit resuming a loop whose declared
+                          budget ceilings are already exhausted (pair with
+                          raised --max-* limits)
   -s, --status            Show current loop status
   --abort                 Abort current loop
   -h, --help              Show this help message
@@ -234,6 +315,123 @@ EXAMPLES:
 `);
 }
 
+function formatLimitUsage(observed, limit, formatter = value => String(value)) {
+  if (typeof observed !== 'number' || !Number.isFinite(observed)) {
+    return 'unknown';
+  }
+
+  if (typeof limit !== 'number' || !Number.isFinite(limit) || limit <= 0) {
+    return formatter(observed);
+  }
+
+  const percent = Math.min(999, (observed / limit) * 100);
+  return `${formatter(observed)} / ${formatter(limit)} (${percent.toFixed(1)}%)`;
+}
+
+function formatNumber(value, digits = 2) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value.toFixed(digits)
+    : 'N/A';
+}
+
+function formatTokenCount(value) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(value).toLocaleString()
+    : 'N/A';
+}
+
+function formatUsd(value) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `$${value.toFixed(4)}`
+    : 'N/A';
+}
+
+function loadStatusAnalytics(stateManager, loopId) {
+  const analyticsPath = join(stateManager.getStateDir(), 'analytics', `${loopId}.json`);
+
+  if (!existsSync(analyticsPath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(analyticsPath, 'utf8'));
+  } catch (error) {
+    return { error: error.message, path: analyticsPath };
+  }
+}
+
+function formatLfdStatus(state, analytics) {
+  const limits = state.config?.budgetLimits || {};
+  const limitEntries = Object.entries(limits)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '' && Number(value) > 0);
+
+  if (!analytics) {
+    const limitText = limitEntries.length > 0
+      ? limitEntries.map(([name, value]) => `${name}=${value}`).join(', ')
+      : 'none configured';
+    const controls = state.lfdControls
+      ? `\nStructural Variant: ${state.lfdControls.structuralVariantRequired ? 'required' : 'not required'} (${state.lfdControls.flatCycleCount || 0}/${state.lfdControls.explorationQuotaK || 'N/A'} flat cycles)`
+      : '';
+
+    return `LFD Controls:
+  Budget Limits: ${limitText}
+  Budget Usage:  No analytics recorded yet${controls}`;
+  }
+
+  if (analytics.error) {
+    return `LFD Controls:
+  Analytics:      unreadable (${analytics.path}: ${analytics.error})`;
+  }
+
+  const usage = analytics.budget_usage || {};
+  const exhausted = Array.isArray(analytics.budget_stop_report?.budgets?.exhausted)
+    ? analytics.budget_stop_report.budgets.exhausted
+    : [];
+  const bestByToken = (analytics.iterations || [])
+    .filter(it => typeof it.quality_per_1k_tokens === 'number' && Number.isFinite(it.quality_per_1k_tokens))
+    .reduce((best, curr) =>
+      !best || curr.quality_per_1k_tokens > best.quality_per_1k_tokens ? curr : best,
+    null);
+  const bestByMinute = (analytics.iterations || [])
+    .filter(it => typeof it.quality_per_minute === 'number' && Number.isFinite(it.quality_per_minute))
+    .reduce((best, curr) =>
+      !best || curr.quality_per_minute > best.quality_per_minute ? curr : best,
+    null);
+  const bestRandomLift = (analytics.iterations || [])
+    .filter(it => it.baseline_comparison && typeof it.baseline_comparison.quality_lift === 'number')
+    .reduce((best, curr) =>
+      !best || curr.baseline_comparison.quality_lift > best.baseline_comparison.quality_lift ? curr : best,
+    null);
+  const bestRandomTokenLift = (analytics.iterations || [])
+    .filter(it => it.baseline_comparison && typeof it.baseline_comparison.token_efficiency_lift === 'number')
+    .reduce((best, curr) =>
+      !best || curr.baseline_comparison.token_efficiency_lift > best.baseline_comparison.token_efficiency_lift ? curr : best,
+    null);
+  const bestRandomSpeedLift = (analytics.iterations || [])
+    .filter(it => it.baseline_comparison && typeof it.baseline_comparison.speed_efficiency_lift === 'number')
+    .reduce((best, curr) =>
+      !best || curr.baseline_comparison.speed_efficiency_lift > best.baseline_comparison.speed_efficiency_lift ? curr : best,
+    null);
+
+  const structuralVariant = analytics.structural_variant_required || state.lfdControls?.structuralVariantRequired;
+  const flatCycleCount = analytics.flat_cycle_count ?? state.lfdControls?.flatCycleCount ?? 0;
+  const quotaK = state.lfdControls?.explorationQuotaK || state.config?.explorationQuota?.k || 'N/A';
+
+  return `LFD Controls:
+  Total Tokens:   ${formatLimitUsage(usage.total_tokens, Number(limits.total_tokens), formatTokenCount)}
+  Output Tokens:  ${formatLimitUsage(usage.output_tokens, Number(limits.output_tokens), formatTokenCount)}
+  Tool Calls:     ${formatLimitUsage(usage.tool_calls, Number(limits.tool_calls), formatTokenCount)}
+  Spend:          ${formatLimitUsage(usage.spend_usd, Number(limits.spend_usd), formatUsd)}
+  Runtime:        ${formatLimitUsage(usage.wall_clock_minutes, Number(limits.wall_clock_minutes), value => `${formatNumber(value, 2)} min`)}
+  Budget Stop:    ${analytics.budget_exhausted ? 'exhausted' : 'not exhausted'}${exhausted.length ? ` (${exhausted.map(item => item.name).join(', ')})` : ''}
+  Best / 1K Tok:  ${bestByToken ? `iteration ${bestByToken.iteration_number} (${formatNumber(bestByToken.quality_per_1k_tokens)})` : 'N/A'}
+  Best / Minute:  ${bestByMinute ? `iteration ${bestByMinute.iteration_number} (${formatNumber(bestByMinute.quality_per_minute)})` : 'N/A'}
+  Random Lift:    ${bestRandomLift ? `iteration ${bestRandomLift.iteration_number} (+${formatNumber(bestRandomLift.baseline_comparison.quality_lift)})` : 'N/A'}
+  Random TokLift: ${bestRandomTokenLift ? `iteration ${bestRandomTokenLift.iteration_number} (+${formatNumber(bestRandomTokenLift.baseline_comparison.token_efficiency_lift)})` : 'N/A'}
+  Random SpdLift: ${bestRandomSpeedLift ? `iteration ${bestRandomSpeedLift.iteration_number} (+${formatNumber(bestRandomSpeedLift.baseline_comparison.speed_efficiency_lift)})` : 'N/A'}
+  Structural Var: ${structuralVariant ? 'required' : 'not required'} (${flatCycleCount}/${quotaK} flat cycles)`;
+}
+
 /**
  * Print status
  * @param {string} projectRoot
@@ -246,6 +444,8 @@ function printStatus(projectRoot) {
     console.log('No external Ralph loop found.');
     return;
   }
+
+  const analytics = loadStatusAnalytics(stateManager, state.loopId);
 
   console.log(`
 External Ralph Loop Status
@@ -260,6 +460,8 @@ Progress:       ${state.currentIteration}/${state.maxIterations} iterations
 Start Time:     ${state.startTime}
 Last Update:    ${state.lastUpdate}
 
+${formatLfdStatus(state, analytics)}
+
 Iterations:
 ${state.iterations.map((iter, idx) => {
     const status = iter.status || 'unknown';
@@ -270,6 +472,22 @@ ${state.iterations.map((iter, idx) => {
 Learnings:
 ${state.accumulatedLearnings ? state.accumulatedLearnings.slice(0, 500) + '...' : '  None yet'}
 `);
+}
+
+/**
+ * Read the reproducibility execution mode from .aiwg/execution-mode.json.
+ * Under `holdout-isolated` the eval harness enforces strict holdout isolation
+ * (#1776). Defaults to 'default' when unset/unreadable.
+ * @param {string} projectRoot
+ * @returns {string}
+ */
+function readExecutionMode(projectRoot) {
+  try {
+    const cfg = JSON.parse(readFileSync(join(projectRoot, '.aiwg', 'execution-mode.json'), 'utf8'));
+    return cfg.mode || 'default';
+  } catch {
+    return 'default';
+  }
 }
 
 /**
@@ -364,11 +582,28 @@ async function main() {
     let result;
 
     if (options.resume) {
-      // Resume existing loop
-      result = await orchestrator.resume({
-        maxIterations: options.maxIterations,
-        budgetPerIteration: options.budgetPerIteration,
-      });
+      // Resume existing loop. Only pass overrides the user explicitly typed —
+      // passing parse-time defaults here used to silently clobber the loop's
+      // persisted budget/quota configuration on every resume (#1765).
+      const resumeOverrides = {
+        allowExhaustedResume: options.allowExhaustedResume,
+      };
+      if (options._explicit.has('maxIterations')) {
+        resumeOverrides.maxIterations = options.maxIterations;
+      }
+      if (options._explicit.has('budgetPerIteration')) {
+        resumeOverrides.budgetPerIteration = options.budgetPerIteration;
+      }
+      if (Object.keys(options.budgetLimits).length > 0) {
+        resumeOverrides.budgetLimits = options.budgetLimits;
+      }
+      if (options._explicit.has('explorationQuota')) {
+        resumeOverrides.explorationQuota = options.explorationQuota;
+      }
+      if (options._explicit.has('budgetStopPolicy')) {
+        resumeOverrides.budgetStopPolicy = options.budgetStopPolicy;
+      }
+      result = await orchestrator.resume(resumeOverrides);
     } else {
       // Start new loop
       if (!options.objective) {
@@ -388,6 +623,11 @@ async function main() {
         model: options.model,
         budgetPerIteration: options.budgetPerIteration,
         timeoutMinutes: options.timeoutMinutes,
+        budgetLimits: options.budgetLimits,
+        explorationQuota: options.explorationQuota,
+        budgetStopPolicy: options.budgetStopPolicy,
+        evalHarness: options.evalHarness,
+        executionMode: readExecutionMode(projectRoot),
         mcpConfig: options.mcpConfig,
         giteaIntegration: options.giteaIssue ? { enabled: true } : null,
         provider: options.provider,
@@ -412,8 +652,14 @@ async function main() {
   }
 }
 
-// Run if executed directly
-main().catch(console.error);
+// Run main() only when executed directly (node index.mjs …), NOT when imported
+// as a module. Without this guard, importing index.mjs to reach its exports
+// (e.g. parseArgs in the buildArgs↔parseArgs contract test, #1774) would run
+// main(), fail the no-objective check, and process.exit(1) — killing the caller.
+const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (invokedDirectly) {
+  main().catch(console.error);
+}
 
 // Import process reliability modules
 import { ProcessMonitor } from './process-monitor.mjs';

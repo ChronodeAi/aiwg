@@ -146,6 +146,17 @@ export interface ResolvedRemotes {
   secondary: SecondaryRemote[];
 }
 
+export type RepoMaintainerTier = 'collaborator' | 'maintainer' | 'admin';
+
+/**
+ * Role-aware repository maintenance overrides. Keys may be remote URLs,
+ * owner/repo slugs, remote names, or `local`; values pin the effective tier
+ * when forge permission detection is unavailable or intentionally narrowed.
+ */
+export interface RepoMaintainerConfig {
+  tiers?: Record<string, RepoMaintainerTier>;
+}
+
 /**
  * Top-level shape of .aiwg/aiwg.config
  */
@@ -176,6 +187,13 @@ export interface AiwgConfig {
    * @implements #994
    */
   remotes?: RemotesConfig;
+
+  /**
+   * Role-aware repository maintenance configuration. Optional — when absent,
+   * repo-maintainer probes forge permissions and falls back to collaborator.
+   * @implements #1755
+   */
+  repo_maintainer?: RepoMaintainerConfig;
 
   /**
    * Repo control / delivery policy — how AIWG agents are expected to ship code.
@@ -223,6 +241,12 @@ export interface AiwgConfig {
   command_log?: CommandLogConfig;
 
   /**
+   * Local-first telemetry controls. Off by default.
+   * @implements #1649
+   */
+  telemetry?: TelemetryConfig;
+
+  /**
    * Project build policy. Large build workflows consult this before expensive
    * package installs, TypeScript compilation, or web bundle generation.
    * @implements #1692
@@ -241,6 +265,22 @@ export interface CommandLogConfig {
   /** Enable command logging for this project. Defaults to false. */
   enabled?: boolean;
   /** Stores to write. Project store is `.aiwg/telemetry/cli-commands.jsonl`; global is XDG state. */
+  scopes?: Array<'project' | 'global'>;
+  /** Maximum bytes per JSONL store before rotation to `.1`. */
+  max_bytes?: number;
+}
+
+/** Local-first telemetry settings (#1649). */
+export interface TelemetryConfig {
+  /** Skill/agent/command usage tracking. Defaults to disabled. */
+  skill_usage?: SkillUsageConfig;
+}
+
+/** Skill usage telemetry settings (#1649). */
+export interface SkillUsageConfig {
+  /** Enable skill usage tracking for this project. Defaults to false. */
+  enabled?: boolean;
+  /** Stores to write. Project store is `.aiwg/telemetry/skill-usage.jsonl`; global is XDG state. */
   scopes?: Array<'project' | 'global'>;
   /** Maximum bytes per JSONL store before rotation to `.1`. */
   max_bytes?: number;
@@ -329,6 +369,8 @@ export interface SigningConfig {
  */
 export interface DeliveryConfig {
   mode?: DeliveryMode;
+  /** Canonical issue storage mode (for example gitea-only, github-only, or local-only). */
+  issue_storage?: string;
   default_branch?: string;
   branch_naming?: BranchNaming;
   merge_style?: MergeStyle;
@@ -545,6 +587,8 @@ export interface IndexGraphDef {
   extensions?: string[];
   shared?: boolean;
   defaultBuild?: boolean;
+  buildTier?: 'lightweight' | 'standard' | 'heavy';
+  buildOrder?: number;
   nodeStrategy?: 'default' | 'filename-metadata';
   filenamePattern?: string;
   graphBackend?: 'json' | 'graphology' | 'sqlite';
@@ -567,6 +611,7 @@ export interface IndexMarkdownIndices {
 
 const GRAPH_BACKENDS = ['json', 'graphology', 'sqlite'];
 const NODE_STRATEGIES = ['default', 'filename-metadata'];
+const BUILD_TIERS = ['lightweight', 'standard', 'heavy'];
 
 /**
  * Validate an `index` config block, returning a list of human-readable error
@@ -639,6 +684,12 @@ export function validateIndexConfig(index: unknown): string[] {
     }
     if (def.graphBackend !== undefined && !GRAPH_BACKENDS.includes(def.graphBackend as string)) {
       errors.push(`${where}.graphBackend: must be one of ${GRAPH_BACKENDS.join(' | ')}`);
+    }
+    if (def.buildTier !== undefined && !BUILD_TIERS.includes(def.buildTier as string)) {
+      errors.push(`${where}.buildTier: must be one of ${BUILD_TIERS.join(' | ')}`);
+    }
+    if (def.buildOrder !== undefined && (typeof def.buildOrder !== 'number' || !Number.isFinite(def.buildOrder))) {
+      errors.push(`${where}.buildOrder: must be a finite number`);
     }
     if (def.nodeStrategy === 'filename-metadata') {
       if (typeof def.filenamePattern !== 'string' || def.filenamePattern.trim() === '') {

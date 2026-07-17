@@ -8,7 +8,7 @@ import http from 'node:http';
 import { buildAgentCard } from './agent-card.mjs';
 import { listInstances, getInstance, DEFAULT_INSTANCE, setInstanceState, destroyInstance, listApprovals, resolveApproval, costReport, listLoadouts } from './store.mjs';
 import { handleSend, handleGetTask, handleListTasks, handleCancel, handleRespond, handleSubscribe, runningTasks, seedRunningTasks } from './a2a.mjs';
-import { attachPtyWs, listSessions, seedDemoSessions, createSession } from './pty-ws.mjs';
+import { attachPtyWs, listSessions, seedDemoSessions, createSession, getSessionScreen } from './pty-ws.mjs';
 
 function json(res, status, body, extraHeaders = {}) {
   res.writeHead(status, { 'content-type': 'application/json', 'access-control-allow-origin': '*', ...extraHeaders });
@@ -23,7 +23,7 @@ function notFound(res, path) {
 }
 
 export function createExecutor() {
-  const server = http.createServer((req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
@@ -82,10 +82,20 @@ export function createExecutor() {
       }
       if (rest === 'messages:send' && req.method === 'POST') return handleSend(req, res, instanceId, inst);
       if (rest === 'sessions' && req.method === 'GET') return json(res, 200, { sessions: listSessions(instanceId) });
+      let sm;
+      if ((sm = rest.match(/^sessions\/([^/]+)\/screen(?:-state)?$/)) && req.method === 'GET') {
+        const screen = getSessionScreen(instanceId, decodeURIComponent(sm[1]));
+        return screen ? json(res, 200, screen) : json(res, 404, { error: 'session_screen_not_found', session_id: decodeURIComponent(sm[1]) });
+      }
       if (rest === 'sessions' && req.method === 'POST') {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const raw = Buffer.concat(chunks).toString('utf8');
+        const body = raw ? JSON.parse(raw) : {};
         return json(res, 201, createSession(instanceId, {
-          mode: url.searchParams.get('mode') || undefined,
-          backend: url.searchParams.get('backend') || undefined,
+          mode: body.session_class || url.searchParams.get('mode') || undefined,
+          backend: body.session_backend || url.searchParams.get('backend') || undefined,
+          sessionName: body.session_name || body.sessionName,
         }));
       }
       if (rest === 'tasks' && req.method === 'GET') return handleListTasks(req, res, instanceId);
