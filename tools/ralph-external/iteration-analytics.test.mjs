@@ -5,9 +5,12 @@
  */
 
 import { IterationAnalytics } from './iteration-analytics.mjs';
-import { existsSync, mkdirSync, rmSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, rmSync, readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import assert from 'assert';
+import Ajv from 'ajv';
+import yaml from 'js-yaml';
 
 const TEST_DIR = '.aiwg/ralph/analytics-test';
 
@@ -281,8 +284,58 @@ test('generateReport() produces markdown', () => {
   assert.ok(report.includes('test-loop-008'));
   assert.ok(report.includes('## Summary'));
   assert.ok(report.includes('## Iteration History'));
+  assert.ok(report.includes('Quality / 1K Tokens'));
+  assert.ok(report.includes('Quality / Minute'));
+  assert.ok(report.includes('Lift vs Random'));
   assert.ok(report.includes('## Quality Trajectory'));
   assert.ok(report.includes('## Recommendations'));
+});
+
+test('baseline comparison records lift over random walk', () => {
+  setup();
+  const analytics = new IterationAnalytics(
+    'test-loop-baseline',
+    'Test task',
+    { storagePath: TEST_DIR }
+  );
+
+  const record = analytics.recordIteration({
+    iteration_number: 1,
+    quality_score: 80,
+    tokens_used: 1000,
+    token_cost_usd: 0.01,
+    tool_calls: 2,
+    execution_time_ms: 60000,
+    verification_status: 'passed',
+    output_snapshot_path: '/path/1',
+    random_walk_baseline: {
+      quality_score: 50,
+      tokens_used: 2000,
+      tool_calls: 5,
+      execution_time_ms: 120000,
+      source: 'synthetic-fixture',
+    },
+  });
+
+  assert.strictEqual(record.baseline_comparison.baseline_type, 'random_walk');
+  assert.strictEqual(record.baseline_comparison.source, 'synthetic-fixture');
+  assert.strictEqual(record.baseline_comparison.quality_lift, 30);
+  assert.strictEqual(record.baseline_comparison.quality_lift_pct, 0.6);
+  assert.strictEqual(record.baseline_comparison.token_efficiency_lift, 55);
+  assert.strictEqual(record.baseline_comparison.speed_efficiency_lift, 55);
+  assert.strictEqual(record.baseline_comparison.tool_call_savings, 3);
+
+  const summary = analytics.generateSummary();
+  assert.strictEqual(summary.baseline_comparison.count, 1);
+  assert.strictEqual(summary.baseline_comparison.best_quality_lift, 30);
+
+  const report = analytics.generateReport();
+  assert.ok(report.includes('Best Lift Over Random Baseline'));
+  assert.ok(report.includes('Best Token-Efficiency Lift Over Random Baseline'));
+  assert.ok(report.includes('Best Speed-Efficiency Lift Over Random Baseline'));
+  assert.ok(report.includes('Token Lift vs Random'));
+  assert.ok(report.includes('Speed Lift vs Random'));
+  assert.ok(report.includes('| 1 | 80.0 | +0.0 | 1000 | 80.00 | 80.00 | 30.00 | 55.00 | 55.00 |'));
 });
 
 // Test: Export
@@ -577,6 +630,8 @@ try {
     assert.ok(report.includes('# Ralph Loop Analytics'));
     assert.ok(report.includes('test-loop-008'));
     assert.ok(report.includes('## Summary'));
+    assert.ok(report.includes('Quality / 1K Tokens'));
+    assert.ok(report.includes('Quality / Minute'));
   });
 
   test('export() creates both JSON and Markdown files', () => {
@@ -626,6 +681,321 @@ try {
 
     assert.strictEqual(loaded.loopId, 'test-loop-010');
     assert.strictEqual(loaded.iterations.length, 1);
+  });
+
+  test('checkBudgetLimits() detects hard total token exhaustion', () => {
+    setup();
+    const analytics = new IterationAnalytics(
+      'test-loop-011',
+      'Budgeted task',
+      {
+        storagePath: TEST_DIR,
+        budgetLimits: { total_tokens: 1500 },
+      }
+    );
+
+    analytics.recordIteration({
+      iteration_number: 1,
+      quality_score: 70,
+      tokens_used: 1000,
+      token_cost_usd: 0.01,
+      execution_time_ms: 5000,
+      verification_status: 'passed',
+      output_snapshot_path: '/path/1',
+    });
+    analytics.recordIteration({
+      iteration_number: 2,
+      quality_score: 80,
+      tokens_used: 600,
+      token_cost_usd: 0.01,
+      execution_time_ms: 5000,
+      verification_status: 'passed',
+      output_snapshot_path: '/path/2',
+    });
+
+    const decision = analytics.checkBudgetLimits();
+    assert.strictEqual(decision.exhausted, true);
+    assert.strictEqual(decision.trigger, 'total_tokens_exhausted');
+
+    const report = analytics.generateBudgetStopReport(decision.trigger);
+    assert.strictEqual(report.stop_reason, 'total_tokens_exhausted');
+    assert.strictEqual(report.selected_iteration, 2);
+    assert.strictEqual(report.budgets.observed.total_tokens, 1600);
+  });
+
+  test('checkBudgetLimits() uses schema stop reason names', () => {
+    setup();
+    const spendAnalytics = new IterationAnalytics(
+      'test-loop-011b',
+      'Spend task',
+      {
+        storagePath: TEST_DIR,
+        budgetLimits: { spend_usd: 0.01 },
+      }
+    );
+
+    spendAnalytics.recordIteration({
+      iteration_number: 1,
+      quality_score: 70,
+      tokens_used: 1000,
+      token_cost_usd: 0.02,
+      execution_time_ms: 5000,
+      verification_status: 'failed',
+      output_snapshot_path: '/path/1',
+    });
+
+    assert.strictEqual(spendAnalytics.checkBudgetLimits().trigger, 'spend_exhausted');
+
+    const timeAnalytics = new IterationAnalytics(
+      'test-loop-011c',
+      'Time task',
+      {
+        storagePath: TEST_DIR,
+        budgetLimits: { wall_clock_minutes: 0.01 },
+      }
+    );
+
+    timeAnalytics.recordIteration({
+      iteration_number: 1,
+      quality_score: 70,
+      tokens_used: 1000,
+      token_cost_usd: 0.01,
+      execution_time_ms: 1000,
+      verification_status: 'failed',
+      output_snapshot_path: '/path/1',
+    });
+
+    assert.strictEqual(timeAnalytics.checkBudgetLimits().trigger, 'wall_clock_exhausted');
+  });
+
+  test('checkExplorationQuota() requires structural variant after flat cycles', () => {
+    setup();
+    const analytics = new IterationAnalytics(
+      'test-loop-012',
+      'Flat task',
+      {
+        storagePath: TEST_DIR,
+        diminishingReturnsThreshold: 0.05,
+        explorationQuota: { enabled: true, k: 2 },
+      }
+    );
+
+    [70, 71, 71.5].forEach((score, index) => {
+      analytics.recordIteration({
+        iteration_number: index + 1,
+        quality_score: score,
+        tokens_used: 1000,
+        token_cost_usd: 0.01,
+        execution_time_ms: 5000,
+        verification_status: 'failed',
+        output_snapshot_path: `/path/${index + 1}`,
+        experiment: {
+          hypothesis: `hypothesis ${index + 1}`,
+          expected_failure_mode: 'same failure',
+          distinguishing_diagnostic: 'run verifier',
+        },
+      });
+    });
+
+    const decision = analytics.checkExplorationQuota();
+    assert.strictEqual(decision.required, true);
+    assert.strictEqual(decision.flat_cycle_count, 2);
+
+    const summary = analytics.generateSummary();
+    assert.strictEqual(summary.structural_variant_required, true);
+    assert.strictEqual(summary.flat_cycle_count, 2);
+  });
+
+  test('unknown token/spend usage is not conflated with zero — unobservable ceilings surface (#1766)', () => {
+    setup();
+    const analytics = new IterationAnalytics('unknown-usage', 'No-usage provider', {
+      storagePath: TEST_DIR,
+      budgetLimits: { total_tokens: 1000, spend_usd: 5, wall_clock_minutes: 10 },
+    });
+
+    // A provider that reports no token/cost usage: record null (unknown), not 0.
+    analytics.recordIteration({
+      iteration_number: 1,
+      quality_score: 40,
+      tokens_used: null,
+      input_tokens: null,
+      output_tokens: null,
+      tool_calls: 3,
+      token_cost_usd: null,
+      execution_time_ms: 30000,
+      verification_status: 'failed',
+      output_snapshot_path: '/path/1',
+    });
+
+    const observable = analytics.getObservableDimensions();
+    assert.strictEqual(observable.total_tokens, false);
+    assert.strictEqual(observable.spend_usd, false);
+    assert.strictEqual(observable.wall_clock_minutes, true);
+    assert.strictEqual(observable.tool_calls, true);
+
+    const decision = analytics.checkBudgetLimits();
+    // token/spend ceilings are unobservable (not silently "under budget");
+    // wall-clock is observable and not yet exhausted.
+    assert.ok(decision.unobservable_limits.includes('total_tokens'));
+    assert.ok(decision.unobservable_limits.includes('spend_usd'));
+    assert.strictEqual(decision.exhausted, false);
+  });
+
+  test('observed token usage still enforces the ceiling (#1766)', () => {
+    setup();
+    const analytics = new IterationAnalytics('observed-usage', 'Reporting provider', {
+      storagePath: TEST_DIR,
+      budgetLimits: { total_tokens: 1000 },
+    });
+    analytics.recordIteration({
+      iteration_number: 1,
+      quality_score: 40,
+      tokens_used: 1200,
+      input_tokens: 1000,
+      output_tokens: 200,
+      tool_calls: 1,
+      token_cost_usd: 0.5,
+      execution_time_ms: 5000,
+      verification_status: 'failed',
+      output_snapshot_path: '/path/1',
+    });
+    const decision = analytics.checkBudgetLimits();
+    assert.strictEqual(decision.exhausted, true);
+    assert.strictEqual(decision.trigger, 'total_tokens_exhausted');
+    assert.ok(!decision.unobservable_limits.includes('total_tokens'));
+  });
+
+  test('checkExplorationQuota() is OFF without a declared K — no default is substituted (#1770)', () => {
+    setup();
+
+    const recordFlat = (analytics) => {
+      [70, 70, 70, 70, 70].forEach((score, index) => {
+        analytics.recordIteration({
+          iteration_number: index + 1,
+          quality_score: score,
+          tokens_used: 1000,
+          token_cost_usd: 0.01,
+          execution_time_ms: 5000,
+          verification_status: 'failed',
+          output_snapshot_path: `/path/${index + 1}`,
+        });
+      });
+    };
+
+    // Default config: quota off entirely
+    const defaults = new IterationAnalytics('quota-default', 'Flat task', { storagePath: TEST_DIR });
+    recordFlat(defaults);
+    assert.strictEqual(defaults.checkExplorationQuota().required, false);
+
+    // enabled but no K declared: off, and k reported as null (not 3)
+    const noK = new IterationAnalytics('quota-no-k', 'Flat task', {
+      storagePath: TEST_DIR,
+      explorationQuota: { enabled: true },
+    });
+    recordFlat(noK);
+    const noKDecision = noK.checkExplorationQuota();
+    assert.strictEqual(noKDecision.required, false);
+    assert.strictEqual(noKDecision.k, null);
+
+    // k: 0 means off — must never coerce to a default K
+    const zeroK = new IterationAnalytics('quota-zero-k', 'Flat task', {
+      storagePath: TEST_DIR,
+      explorationQuota: { enabled: true, k: 0 },
+    });
+    recordFlat(zeroK);
+    const zeroKDecision = zeroK.checkExplorationQuota();
+    assert.strictEqual(zeroKDecision.required, false);
+    assert.strictEqual(zeroKDecision.k, null);
+  });
+
+  test('generateSummary + generateBudgetStopReport validate against the output schema (#1771)', () => {
+    setup();
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const schemaPath = join(
+      __dirname,
+      '../../agentic/code/addons/agent-loop/schemas/iteration-analytics-output.yaml',
+    );
+    const schema = yaml.load(readFileSync(schemaPath, 'utf-8'));
+    // Drop the draft-2020-12 $schema URL — this Ajv build doesn't register that
+    // meta-schema, and the constructs used here are draft-07 compatible.
+    delete schema.$schema;
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validate = ajv.compile(schema);
+
+    const analytics = new IterationAnalytics('schema-loop', 'Schema validation task', {
+      storagePath: TEST_DIR,
+      budgetLimits: { total_tokens: 1000 },
+      explorationQuota: { enabled: true, k: 2 },
+    });
+
+    // Iteration with observed usage
+    analytics.recordIteration({
+      iteration_number: 1,
+      quality_score: 40,
+      tokens_used: 500,
+      input_tokens: 400,
+      output_tokens: 100,
+      tool_calls: 2,
+      token_cost_usd: 0.1,
+      execution_time_ms: 5000,
+      verification_status: 'failed',
+      output_snapshot_path: '/p/1',
+      experiment: {
+        hypothesis: 'h',
+        expected_failure_mode: 'e',
+        distinguishing_diagnostic: 'd',
+        adjustment_key: 'pivot:',
+        recorded_before_change: true,
+        result: 'failed',
+        probe_or_generalization_signal: 'iteration-analysis',
+      },
+    });
+    // Iteration with UNKNOWN usage (null token/cost) — must still validate (#1766)
+    analytics.recordIteration({
+      iteration_number: 2,
+      quality_score: 55,
+      tokens_used: null,
+      input_tokens: null,
+      output_tokens: null,
+      tool_calls: 1,
+      token_cost_usd: null,
+      execution_time_ms: 4000,
+      verification_status: 'failed',
+      output_snapshot_path: '/p/2',
+    });
+    // VOID iteration with an eval-harness result — the new eval fields must
+    // validate against the extended output schema (#1776)
+    analytics.recordIteration({
+      iteration_number: 3,
+      quality_score: 88,
+      tokens_used: 700,
+      tool_calls: 2,
+      token_cost_usd: 0.2,
+      execution_time_ms: 3000,
+      verification_status: 'void',
+      output_snapshot_path: '/p/3',
+      eval_human_override: false,
+      eval_harness_result: {
+        status: 'void',
+        optimizer_feedback: { score: 88, pass_count: 8, total_count: 10, status: 'void', void_reason: 'lint violation' },
+        private_diagnostics_ref: '/p/3/eval-harness-private.json',
+        leakage_audit: { checked: true, result: 'pass' },
+        human_override: false,
+        _forbidden_fields_seen: ['holdout_answers'],
+      },
+    });
+
+    const summary = analytics.generateSummary();
+    const summaryValid = validate(summary);
+    assert.ok(summaryValid, `Summary failed schema: ${JSON.stringify(validate.errors, null, 2)}`);
+
+    // BudgetStopReport is embedded under $defs — get its validator from the
+    // already-compiled root schema by its $id + JSON-pointer fragment (avoids
+    // recompiling the same $id, which Ajv rejects).
+    const report = analytics.generateBudgetStopReport('total_tokens_exhausted');
+    const validateReport = ajv.getSchema(`${schema.$id}#/$defs/BudgetStopReport`);
+    const reportValid = validateReport(report);
+    assert.ok(reportValid, `BudgetStopReport failed schema: ${JSON.stringify(validateReport.errors, null, 2)}`);
   });
 
   console.log('\n=== All Tests Passed ===\n');

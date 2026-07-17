@@ -2,8 +2,16 @@
 #
 # When a version tag is pushed, trigger a deploy of the aiwg.io marketing site
 # so it picks up the latest release info (changelog, version refs).
+#
+# Required tracker secrets: VAULT_CI_ROLE_ID, VAULT_CI_SECRET_ID.
+# vault fetch spec: ci/vault-fetch.notify-site.spec -> AIWG_IO_DISPATCH_TOKEN.
 
 name: Notify aiwg.io
+
+env:
+  VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+  AIWG_IO_DISPATCH_TOKEN_VAULT_PATH: ${{ vars.AIWG_IO_DISPATCH_TOKEN_VAULT_PATH }}
+  AIWG_IO_DISPATCH_TOKEN_VAULT_FIELD: ${{ vars.AIWG_IO_DISPATCH_TOKEN_VAULT_FIELD }}
 
 on:
   push:
@@ -17,6 +25,7 @@ concurrency:
 jobs:
   trigger-deploy:
     name: Trigger aiwg.io deploy
+    if: ${{ secrets.VAULT_CI_ROLE_ID != '' && secrets.VAULT_CI_SECRET_ID != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -24,9 +33,22 @@ jobs:
         shell: bash
 
     steps:
+      - name: Checkout AIWG
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - name: Install vault fetch dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends curl jq
+
+      - name: Fetch aiwg.io dispatch token from vault
+        env:
+          VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
+          VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
+        run: bash ci/vault-fetch.sh --spec ci/vault-fetch.notify-site.spec
+
       - name: Dispatch aiwg.io deploy
         env:
-          AIWG_IO_DISPATCH_TOKEN: ${{ secrets.AIWG_IO_DISPATCH_TOKEN }}
           REF_NAME: ${{ gitea.ref_name }}
         run: |
           set -euo pipefail

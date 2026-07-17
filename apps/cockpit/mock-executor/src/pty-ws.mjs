@@ -62,35 +62,62 @@ function buildKeyframe(s) {
 
 const b64 = (str) => Buffer.from(str, 'utf8').toString('base64');
 
-/** List sessions (optionally scoped to one instance) for the Cockpit session picker. */
+/** List sessions (optionally scoped to one instance) for the Cockpit session picker.
+ * Emits the agentic-sandbox v2 SessionEntry shape (membership/liveness objects) so the
+ * whole stack exercises the same contract as a real v2026.7.2+ executor. */
 export function listSessions(instanceId) {
   return [...sessions.values()]
     .filter((s) => !instanceId || s.instanceId === instanceId)
-    .map((s) => ({
-      id: s.id,
-      instance_id: s.instanceId,
-      seq: s.seq,
-      members: s.members.length,
-      has_controller: s.hasController,
-      controllers: s.members.filter((m) => m.role === 'controller').length,
-      observers: s.members.filter((m) => m.role === 'observer').length,
-      mode: s.mode ?? 'direct',
-      backend: s.backend ?? 'native',
-      role_policy: 'observe-default',
-      replay: true,
-      keyframe: true,
-    }));
+    .map((s) => {
+      const controllers = s.members.filter((m) => m.role === 'controller').map((m) => m.clientId);
+      const observers = s.members.filter((m) => m.role === 'observer').map((m) => m.clientId);
+      const hasScreen = s.frames.length > 0;
+      return {
+        session_id: s.id,
+        id: s.id,
+        instance_id: s.instanceId,
+        session_name: s.sessionName,
+        session_type: 'interactive',
+        session_class: s.mode ?? 'direct',
+        session_backend: s.backend ?? 'native',
+        has_screen: hasScreen,
+        role_policy: 'observe-default',
+        default_role: 'observer',
+        membership: { controllers, observers, attachment_count: s.members.length },
+        liveness: { agent_connected: true, has_screen: hasScreen, replay_newest_seq: s.seq, max_client_lag: 0 },
+        pty_ws_url: `ws://{host}/agents/${s.instanceId}/sessions/${s.id}/attach`,
+      };
+    });
+}
+
+export function getSessionScreen(instanceId, sessionId) {
+  const s = sessions.get(sessionId);
+  if (!s || (instanceId && s.instanceId !== instanceId)) return null;
+  const text = s.frames.map((frame) => Buffer.from(frame.payload?.data ?? '', 'base64').toString('utf8')).join('');
+  return {
+    session_id: s.id,
+    instance_id: s.instanceId,
+    seq: s.seq,
+    text,
+    lines: text.replace(/\r/g, '\n').split('\n').filter(Boolean).slice(-80),
+    snapshot_format: 'text/plain',
+  };
 }
 
 /** Create a fresh session on an instance (the "Start a session" primary verb). */
-export function createSession(instanceId, { mode = 'direct', backend = 'native' } = {}) {
+export function createSession(instanceId, { mode = 'direct', backend = 'native', sessionName } = {}) {
+  const existing = sessionName
+    ? [...sessions.values()].find((s) => s.instanceId === instanceId && s.sessionName === sessionName)
+    : null;
+  if (existing) return { id: existing.id, session_name: existing.sessionName, instance_id: instanceId };
   const id = `sess-${randomUUID().slice(0, 8)}`;
   const session = sessionOf(id, instanceId);
   session.mode = mode;
   session.backend = backend;
+  session.sessionName = sessionName;
   const seq = ++session.seq;
   session.frames.push({ op: 'output', seq, payload: { stream: 'stdout', data: b64(`$ cockpit session ${id} ready on ${mode}/${backend}\r\n`) } });
-  return { id, instance_id: instanceId };
+  return { id, session_name: sessionName, instance_id: instanceId };
 }
 
 /** Seed one demo pty session with a short transcript so observe/replay show content immediately. */
