@@ -66,6 +66,10 @@ import { homedir } from 'os';
  * @property {string} stdoutBuffer - Last portion of stdout
  * @property {number} [toolCallCount] - Number of tool calls detected
  * @property {number} [errorCount] - Number of errors detected
+ * @property {number} [totalTokens] - Total token usage detected from stream events
+ * @property {number} [inputTokens] - Input token usage detected from stream events
+ * @property {number} [outputTokens] - Output token usage detected from stream events
+ * @property {number} [costUsd] - Cost detected from stream events
  */
 
 /**
@@ -330,6 +334,15 @@ export class SessionLauncher extends EventEmitter {
         result.parsedEventsPath = eventsPath;
         result.toolCallCount = stats.toolCallCount;
         result.errorCount = stats.errorCount;
+        result.inputTokens = stats.inputTokens;
+        result.outputTokens = stats.outputTokens;
+        result.totalTokens = stats.totalTokens;
+        result.costUsd = stats.costUsd;
+        // Whether the provider actually reported token/cost usage this session.
+        // Distinguishes "observed 0" from "cannot observe" so token/spend
+        // ceilings aren't silently inert on providers that emit no usage (#1766).
+        result.tokenUsageObserved = stats.usageEvents > 0;
+        result.costObserved = stats.costUsd > 0 || (stats.usageEvents > 0 && stats.costFieldSeen === true);
       }
     } catch (err) {
       // Log but don't fail the session
@@ -408,6 +421,14 @@ export class SessionLauncher extends EventEmitter {
       errorCount: 0,
       completionCount: 0,
       totalEvents: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      totalTokens: 0,
+      costUsd: 0,
+      usageEvents: 0,
+      costFieldSeen: false,
     };
 
     try {
@@ -441,6 +462,20 @@ export class SessionLauncher extends EventEmitter {
             stats.errorCount++;
           } else if (eventType === 'completion') {
             stats.completionCount++;
+          }
+
+          const usage = this._extractUsageStats(event);
+          if (usage.hasCostField) {
+            stats.costFieldSeen = true;
+          }
+          if (usage.hasUsage) {
+            stats.inputTokens += usage.inputTokens;
+            stats.outputTokens += usage.outputTokens;
+            stats.cacheCreationInputTokens += usage.cacheCreationInputTokens;
+            stats.cacheReadInputTokens += usage.cacheReadInputTokens;
+            stats.totalTokens += usage.totalTokens;
+            stats.costUsd += usage.costUsd;
+            stats.usageEvents++;
           }
         } catch (parseErr) {
           // Skip malformed lines
@@ -544,6 +579,90 @@ export class SessionLauncher extends EventEmitter {
    */
   getElapsed() {
     return this.startTime ? Date.now() - this.startTime : null;
+  }
+
+  /**
+   * Extract token/cost usage from provider stream events.
+   *
+   * Providers differ here: Claude stream-json commonly reports usage on message
+   * or result events, while other providers may use camelCase or aggregate cost
+   * fields. This method intentionally reads only numeric fields and returns a
+   * zero-usage result when the event has no observable accounting data.
+   *
+   * @private
+   * @param {Object} event - Raw event object
+   * @returns {Object} Usage counters
+   */
+  _extractUsageStats(event) {
+    // Usage can live at event.usage (result events) OR event.message.usage
+    // (assistant events). Reading only the former lost all usage on timed-out
+    // sessions, whose terminal result event never arrives (#1766).
+    const usage =
+      (event?.usage && typeof event.usage === 'object' && event.usage) ||
+      (event?.message?.usage && typeof event.message.usage === 'object' && event.message.usage) ||
+      {};
+    const numberFrom = (...values) => {
+      for (const value of values) {
+        if (typeof value === 'number' && Number.isFinite(value)) return value;
+      }
+      return 0;
+    };
+
+    const inputTokens = numberFrom(
+      usage.input_tokens,
+      usage.inputTokens,
+      event.input_tokens,
+      event.inputTokens
+    );
+    const outputTokens = numberFrom(
+      usage.output_tokens,
+      usage.outputTokens,
+      event.output_tokens,
+      event.outputTokens
+    );
+    const cacheCreationInputTokens = numberFrom(
+      usage.cache_creation_input_tokens,
+      usage.cacheCreationInputTokens,
+      event.cache_creation_input_tokens,
+      event.cacheCreationInputTokens
+    );
+    const cacheReadInputTokens = numberFrom(
+      usage.cache_read_input_tokens,
+      usage.cacheReadInputTokens,
+      event.cache_read_input_tokens,
+      event.cacheReadInputTokens
+    );
+    const explicitTotal = numberFrom(
+      usage.total_tokens,
+      usage.totalTokens,
+      event.total_tokens,
+      event.totalTokens
+    );
+    const totalTokens = explicitTotal ||
+      inputTokens + outputTokens + cacheCreationInputTokens + cacheReadInputTokens;
+    const costCandidates = [
+      event.cost_usd,
+      event.total_cost_usd,
+      event.costUsd,
+      event.totalCostUsd,
+      usage.cost_usd,
+      usage.costUsd,
+    ];
+    const hasCostField = costCandidates.some(
+      (v) => typeof v === 'number' && Number.isFinite(v)
+    );
+    const costUsd = numberFrom(...costCandidates);
+
+    return {
+      inputTokens,
+      outputTokens,
+      cacheCreationInputTokens,
+      cacheReadInputTokens,
+      totalTokens,
+      costUsd,
+      hasCostField,
+      hasUsage: totalTokens > 0 || costUsd > 0,
+    };
   }
 }
 

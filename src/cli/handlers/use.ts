@@ -78,7 +78,7 @@ import type { Platform } from '../../agents/types.js';
 /**
  * Valid framework identifiers
  */
-const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'knowledge-base', 'writing', 'general', 'all'] as const;
+const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'validation', 'knowledge-base', 'writing', 'general', 'all'] as const;
 type Framework = typeof VALID_FRAMEWORKS[number];
 
 /**
@@ -95,6 +95,7 @@ const MODE_MAP: Record<Framework, string> = {
   dfir: 'dfir',
   'security-engineering': 'security-engineering',
   ops: 'ops-complete',      // ops-complete manifest id is 'ops-complete' (modeAlias: ops)
+  validation: 'validation-complete',
   'knowledge-base': 'knowledge-base',
   writing: 'general',
   general: 'general',
@@ -116,6 +117,7 @@ const FRAMEWORK_DIR_MAP: Partial<Record<string, string>> = {
   dfir: 'forensics-complete',
   'security-engineering': 'security-engineering',
   ops: 'ops-complete',
+  validation: 'validation-complete',
   'knowledge-base': 'knowledge-base',
   // 'writing' and 'general' have no backing framework directory
   // 'all' falls back to sdlc for manifest/CI purposes
@@ -1172,7 +1174,7 @@ function hasFlag(args: string[], name: string): boolean {
 export function resolveOpenHumanHarnessAgentSelectors(args: string[]): string[] {
   if (args.includes('--no-harness-agents')) return [];
   if (hasFlag(args, '--harness-agents')) return parseOpenHumanHarnessAgentSelector(args);
-  return [...OPENHUMAN_DEFAULT_HARNESS_AGENTS];
+  return [];
 }
 
 function slugifyAgentName(value: string): string {
@@ -1566,7 +1568,7 @@ export class UseHandler implements CommandHandler {
           : '';
         return {
           exitCode: 1,
-          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, research, forensics, dfir, security-engineering, ops, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
+          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
         };
       }
       const installedNames = Object.keys(config.installed);

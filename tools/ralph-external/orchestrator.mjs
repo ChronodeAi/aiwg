@@ -20,7 +20,7 @@
  */
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { StateManager } from './state-manager.mjs';
 import { SessionLauncher } from './session-launcher.mjs';
 import { OutputAnalyzer } from './output-analyzer.mjs';
@@ -33,6 +33,7 @@ import { BestOutputTracker } from './best-output-tracker.mjs';
 import { MemoryManager } from './memory-manager.mjs';
 import { EarlyStopping } from './early-stopping.mjs';
 import { IterationAnalytics } from './iteration-analytics.mjs';
+import { EvalHarness, statusToVerification } from './eval-harness.mjs';
 import { CrossTaskLearner } from './cross-task-learner.mjs';
 // Multi-loop coordination (REF-086, REF-088)
 import { ExternalMultiLoopStateManager } from './external-multi-loop-state-manager.mjs';
@@ -74,6 +75,8 @@ import { createProvider, ensureProvidersRegistered } from './lib/provider-adapte
  * @property {number} [maxIterations=5] - Maximum external iterations
  * @property {string} [model='opus'] - Claude model
  * @property {number} [budgetPerIteration=2.0] - Budget per iteration USD
+ * @property {Object} [budgetLimits] - Hard cumulative LFD budget ceilings
+ * @property {Object} [explorationQuota] - Flat-cycle structural-variation control
  * @property {number} [timeoutMinutes=60] - Timeout per iteration
  * @property {Object} [mcpConfig] - MCP server configuration
  * @property {string} [workingDir] - Working directory
@@ -125,6 +128,7 @@ export class Orchestrator {
     this.memoryManager = null;
     this.earlyStopping = null;
     this.iterationAnalytics = null;
+    this.evalHarness = null;
     this.crossTaskLearner = null;
     this.crossTaskLearnings = null;
 
@@ -213,6 +217,8 @@ export class Orchestrator {
           maxIterations: config.maxIterations || 5,
           model: config.model || 'opus',
           budgetPerIteration: config.budgetPerIteration || 2.0,
+          budgetLimits: config.budgetLimits || {},
+          explorationQuota: config.explorationQuota || { enabled: false },
           timeoutMinutes: config.timeoutMinutes || 60,
           mcpConfig: config.mcpConfig,
           workingDir: config.workingDir || this.projectRoot,
@@ -240,8 +246,14 @@ export class Orchestrator {
       objective: config.objective,
       completionCriteria: config.completionCriteria,
       maxIterations: config.maxIterations || 5,
+      provider: providerName,
       model: config.model || 'opus',
       budgetPerIteration: config.budgetPerIteration || 2.0,
+      budgetLimits: config.budgetLimits || {},
+      explorationQuota: config.explorationQuota || { enabled: false },
+      budgetStopPolicy: config.budgetStopPolicy || 'completion-wins',
+      evalHarness: config.evalHarness || null,
+      executionMode: config.executionMode || 'default',
       timeoutMinutes: config.timeoutMinutes || 60,
       mcpConfig: config.mcpConfig,
       workingDir: config.workingDir || this.projectRoot,
@@ -276,7 +288,39 @@ export class Orchestrator {
       console.log(`[External Ralph] Periodic checkpoints: ENABLED (${state.config.checkpointIntervalMinutes} min)`);
     }
 
-    // ========== INITIALIZE RESEARCH MODULES ==========
+    // ========== INITIALIZE RESEARCH + CONTROL MODULES ==========
+    this.initializeModules(state, providerName);
+
+    // ========== PROCESS MONITOR (Phase 4) ==========
+    this.processMonitor = new ProcessMonitor({
+      projectRoot: this.projectRoot,
+      heartbeatIntervalMs: 30000, // 30 seconds
+      staleThresholdMs: 120000, // 2 minutes
+    });
+
+    // Record initial heartbeat
+    this.processMonitor.recordHeartbeat(state.loopId, {
+      iteration: 0,
+      status: 'starting',
+    });
+    console.log('[External Ralph] Process monitoring: ENABLED');
+
+    return this.runLoop(state);
+  }
+
+  /**
+   * Initialize research, control, intelligence, memory, and overseer modules.
+   *
+   * Shared by execute() and resume() so resumed loops carry the same control
+   * surface — LFD budget stops, exploration quota, analytics, best-output
+   * selection, early stopping — as fresh loops. Before #1765 resume() skipped
+   * this entirely, silently disabling every LFD control on the recovery path.
+   *
+   * @param {Object} state - Loop state
+   * @param {string} providerName - Active provider name
+   * @param {{resume?: boolean}} [opts] - resume=true restores persisted analytics counters
+   */
+  initializeModules(state, providerName, { resume = false } = {}) {
     const stateDir = this.stateManager.getStateDir();
 
     // Best Output Tracker (REF-015 Self-Refine)
@@ -302,14 +346,55 @@ export class Orchestrator {
       console.log('[External Ralph] Early stopping: ENABLED');
     }
 
-    // Iteration Analytics
+    // Eval Harness (LFD Track 3, #1776) — opt-in. When a loop declares an
+    // eval-harness contract, each iteration is scored by the harness; a lint
+    // violation VOIDs the iteration and only VOID-safe aggregate feedback
+    // reaches the agent. Holdout isolation is strict under holdout-isolated mode.
+    if (state.config.evalHarness) {
+      this.evalHarness = new EvalHarness(state.config.evalHarness, {
+        workingDir: state.config.workingDir || this.projectRoot,
+        executionMode: state.config.executionMode || 'default',
+      });
+      console.log(`[External Ralph] Eval harness: ENABLED (execution-mode: ${state.config.executionMode || 'default'})`);
+    }
+
+    // Iteration Analytics — cumulative budget counters MUST survive resume,
+    // otherwise any crash/restart resets declared ceilings to zero (#1765).
     if (state.config.enableAnalytics) {
-      this.iterationAnalytics = new IterationAnalytics(
-        state.loopId,
-        config.objective,
-        { storagePath: join(stateDir, 'analytics') }
-      );
-      console.log('[External Ralph] Iteration analytics: ENABLED');
+      const analyticsDir = join(stateDir, 'analytics');
+      const analyticsFile = join(analyticsDir, `${state.loopId}.json`);
+      let restored = false;
+
+      if (resume && existsSync(analyticsFile)) {
+        try {
+          this.iterationAnalytics = IterationAnalytics.load(analyticsFile);
+          this.iterationAnalytics.config.storagePath = analyticsDir;
+          this.iterationAnalytics.config.budgetLimits = state.config.budgetLimits || {};
+          this.iterationAnalytics.config.explorationQuota =
+            state.config.explorationQuota || { enabled: false };
+          restored = true;
+          console.log(`[External Ralph] Iteration analytics: RESTORED (${this.iterationAnalytics.iterations.length} prior iterations)`);
+        } catch (error) {
+          console.warn(`[External Ralph] Analytics restore failed (${error.message}); starting fresh counters`);
+        }
+      }
+
+      if (!restored) {
+        this.iterationAnalytics = new IterationAnalytics(
+          state.loopId,
+          state.objective,
+          {
+            storagePath: analyticsDir,
+            budgetLimits: state.config.budgetLimits || {},
+            explorationQuota: state.config.explorationQuota || { enabled: false },
+          }
+        );
+        console.log('[External Ralph] Iteration analytics: ENABLED');
+      }
+
+      if (Object.keys(state.config.budgetLimits || {}).length > 0) {
+        console.log(`[External Ralph] LFD hard budgets: ${JSON.stringify(state.config.budgetLimits)}`);
+      }
     }
 
     // Cross-Task Learner
@@ -318,7 +403,7 @@ export class Orchestrator {
         memory_path: join(this.projectRoot, '.aiwg', 'ralph', 'memory'),
       });
       // Get relevant learnings before starting
-      this.crossTaskLearnings = this.crossTaskLearner.getRelevantLearnings(config.objective);
+      this.crossTaskLearnings = this.crossTaskLearner.getRelevantLearnings(state.objective);
       if (this.crossTaskLearnings.similar_tasks.length > 0) {
         console.log(`[External Ralph] Cross-task learning: Found ${this.crossTaskLearnings.similar_tasks.length} similar tasks`);
       } else {
@@ -420,27 +505,13 @@ export class Orchestrator {
 
       console.log('[External Ralph] Overseer monitoring: ENABLED (#25)');
     }
-
-    // ========== PROCESS MONITOR (Phase 4) ==========
-    this.processMonitor = new ProcessMonitor({
-      projectRoot: this.projectRoot,
-      heartbeatIntervalMs: 30000, // 30 seconds
-      staleThresholdMs: 120000, // 2 minutes
-    });
-
-    // Record initial heartbeat
-    this.processMonitor.recordHeartbeat(state.loopId, {
-      iteration: 0,
-      status: 'starting',
-    });
-    console.log('[External Ralph] Process monitoring: ENABLED');
-
-    return this.runLoop(state);
   }
 
   /**
    * Resume an interrupted loop
    * @param {Object} [overrides] - Configuration overrides
+   * @param {boolean} [overrides.allowExhaustedResume=false] - Explicitly permit
+   *   resuming a loop whose declared budget ceilings are already exhausted
    * @returns {Promise<OrchestratorResult>}
    */
   async resume(overrides = {}) {
@@ -449,8 +520,27 @@ export class Orchestrator {
       throw new Error('No external Ralph loop to resume');
     }
 
+    // A budget-exhausted loop must not silently regain a fresh budget (#1765)
+    if (state.status === 'budget_exhausted' && !overrides.allowExhaustedResume) {
+      throw new Error(
+        'Loop ended with status budget_exhausted; resuming would bypass its declared ceilings. ' +
+        'Raise the relevant --max-* limits and pass --allow-exhausted-resume to continue.'
+      );
+    }
+
     console.log(`[External Ralph] Resuming loop ${state.loopId}`);
     console.log(`[External Ralph] Current iteration: ${state.currentIteration}`);
+
+    // Re-establish the provider adapter — before #1765 resumed loops ran with
+    // no adapter wiring at all.
+    await ensureProvidersRegistered();
+    const providerName = state.config.provider || 'claude';
+    this.providerAdapter = createProvider(providerName);
+    this.sessionLauncher.setProviderAdapter(this.providerAdapter);
+    this.outputAnalyzer.setProviderAdapter(this.providerAdapter);
+    this.stateAssessor.setProviderAdapter(this.providerAdapter);
+    this._verbose = state.config.verbose || false;
+    console.log(`[External Ralph] Provider: ${providerName}`);
 
     // ========== CRASH RECOVERY (Phase 4) ==========
     const crashState = this.recoveryEngine.detectCrash();
@@ -482,6 +572,15 @@ export class Orchestrator {
     if (overrides.budgetPerIteration) {
       state.config.budgetPerIteration = overrides.budgetPerIteration;
     }
+    if (overrides.budgetLimits) {
+      state.config.budgetLimits = { ...(state.config.budgetLimits || {}), ...overrides.budgetLimits };
+    }
+    if (overrides.explorationQuota) {
+      state.config.explorationQuota = { ...(state.config.explorationQuota || {}), ...overrides.explorationQuota };
+    }
+    if (overrides.budgetStopPolicy) {
+      state.config.budgetStopPolicy = overrides.budgetStopPolicy;
+    }
 
     state.status = 'running';
     this.stateManager.save(state);
@@ -503,6 +602,25 @@ export class Orchestrator {
       iteration: state.currentIteration,
       status: 'resumed',
     });
+
+    // ========== INITIALIZE RESEARCH + CONTROL MODULES (#1765) ==========
+    this.initializeModules(state, providerName, { resume: true });
+
+    // Never continue when restored counters already exceed a declared ceiling
+    if (this.iterationAnalytics && !overrides.allowExhaustedResume) {
+      const budgetDecision = this.iterationAnalytics.checkBudgetLimits();
+      if (budgetDecision.exhausted) {
+        state.status = 'budget_exhausted';
+        this.stateManager.save(state);
+        const detail = budgetDecision.exhausted_limits
+          .map((l) => `${l.name} ${l.observed} >= ${l.limit}`)
+          .join(', ');
+        throw new Error(
+          `Cannot resume: restored usage already exceeds declared budget ceiling(s): ${detail}. ` +
+          'Raise the limit or pass --allow-exhausted-resume.'
+        );
+      }
+    }
 
     return this.runLoop(state);
   }
@@ -606,6 +724,20 @@ export class Orchestrator {
           strategy = this.strategyPlanner.plan(state.iterations || [], planMetrics);
           this.verboseLog('Strategy:', strategy);
         }
+
+        // Pre-change hypothesis-before-change (#1769): derived from the planner
+        // BEFORE the session runs. This is the record's pre-change experiment
+        // AND is injected into the prompt so the agent states/tests it before
+        // changing files. Falls back to a grounded default when planning is off.
+        const plannedExperiment = {
+          hypothesis: strategy?.hypothesis
+            || lastIteration?.analysis?.nextApproach
+            || 'Advance quality toward the completion criteria with the selected approach.',
+          expectedFailureMode: strategy?.expectedFailureMode
+            || 'Progress stalls with the same symptom as the prior cycle.',
+          diagnostic: strategy?.diagnostic
+            || `Re-run the completion check (${state.completionCriteria}); an unchanged result signals the approach is exhausted.`,
+        };
 
         // PID Controller: Compute control signals
         let controlSignals = null;
@@ -732,6 +864,53 @@ export class Orchestrator {
           }
         }
 
+        // ========== LFD PROMPT-INJECTED CONTROLS (all providers) ==========
+        // These directives are appended to the prompt, so they apply to every
+        // provider that accepts an injected prompt (all command-injection
+        // providers), not only Claude (#1768/#1769).
+        const lfdDirectives = [];
+
+        // Hypothesis-before-change (#1769): the agent must state/refine the
+        // pre-change experiment before touching files.
+        lfdDirectives.push(
+          '',
+          'LFD CONTROL — hypothesis before change: Before modifying any files, state:',
+          `  1. Hypothesis: ${plannedExperiment.hypothesis}`,
+          `  2. Expected failure mode: ${plannedExperiment.expectedFailureMode}`,
+          `  3. Distinguishing diagnostic: ${plannedExperiment.diagnostic}`,
+          'Refine these to fit what you actually observe, then act on them.',
+        );
+
+        // Stall rule (#1768): after a non-improving cycle, forbid repeating the
+        // previous tactic. Fires on a single non-improving cycle.
+        if (this.iterationAnalytics) {
+          const stall = this.iterationAnalytics.checkStallRule();
+          if (stall.active) {
+            state.stallRule = { forbiddenAdjustment: stall.forbiddenAdjustment, lastQualityDelta: stall.lastQualityDelta };
+            lfdDirectives.push(
+              '',
+              'LFD CONTROL — stall rule: The previous cycle did not improve quality.',
+              `Do NOT repeat the previous adjustment (${stall.forbiddenAdjustment}). Change the approach materially.`,
+            );
+          } else {
+            state.stallRule = null;
+          }
+        }
+
+        // Structural variant (exploration quota, #1585): stronger requirement
+        // after K consecutive flat cycles.
+        if (state.lfdControls?.structuralVariantRequired) {
+          lfdDirectives.push(
+            '',
+            'LFD CONTROL: The prior cycles are flat. This iteration must use a structural variant.',
+            `Do not repeat the same tactic. Required reason: ${state.lfdControls.reason}`,
+          );
+        }
+
+        if (lfdDirectives.length > 0) {
+          prompt += lfdDirectives.join('\n');
+        }
+
         // Save prompt for debugging
         const promptPath = this.stateManager.getPromptPath(state.currentIteration);
         mkdirSync(dirname(promptPath), { recursive: true });
@@ -759,6 +938,41 @@ export class Orchestrator {
         const startTime = Date.now();
         this.stateManager.setCurrentPid(null);
 
+        // Bound the session timeout by the remaining wall-clock budget (#1766 /
+        // audit M5): with a --max-wall-clock-minutes ceiling, a single session
+        // must not be allowed to overshoot it by up to a full --timeout.
+        // The first iteration always gets the full per-session timeout — one
+        // iteration is the minimum unit and the cumulative ceiling is enforced
+        // by the post-iteration budget check.
+        let sessionTimeoutMs = state.config.timeoutMinutes * 60 * 1000;
+        const wallClockLimit = Number(state.config.budgetLimits?.wall_clock_minutes);
+        const priorIterations = this.iterationAnalytics ? this.iterationAnalytics.iterations.length : 0;
+        if (priorIterations >= 1 && Number.isFinite(wallClockLimit) && wallClockLimit > 0) {
+          const usedMinutes = this.iterationAnalytics.getBudgetUsage().wall_clock_minutes;
+          const remainingMs = Math.max(0, (wallClockLimit - usedMinutes) * 60 * 1000);
+          sessionTimeoutMs = Math.min(sessionTimeoutMs, remainingMs);
+          if (sessionTimeoutMs <= 0) {
+            console.log('[External Ralph] Wall-clock budget already exhausted before session launch — stopping');
+            const budgetStopReport = this.iterationAnalytics.generateBudgetStopReport('wall_clock_exhausted');
+            const budgetStopPath = join(this.stateManager.getStateDir(), 'budget-stop-report.json');
+            writeFileSync(budgetStopPath, JSON.stringify(budgetStopReport, null, 2));
+            state.status = 'budget_exhausted';
+            state.budgetStopReport = budgetStopReport;
+            state.budgetStopReportPath = budgetStopPath;
+            this.stateManager.save(state);
+            await this.generateCompletionReport(state, 'budget_exhausted');
+            await this.recordTaskCompletion(state, 'partial');
+            await this.completeMultiLoop('budget_exhausted');
+            return {
+              success: false,
+              reason: 'Budget exhausted: wall_clock_exhausted',
+              iterations: state.currentIteration - 1,
+              loopId: state.loopId,
+              budgetStopReport,
+            };
+          }
+        }
+
         const sessionResult = await this.sessionLauncher.launch({
           prompt,
           sessionId: state.sessionId,
@@ -770,7 +984,7 @@ export class Orchestrator {
           stdoutPath: outputPaths.stdout,
           stderrPath: outputPaths.stderr,
           outputDir: iterationDir,
-          timeoutMs: state.config.timeoutMinutes * 60 * 1000,
+          timeoutMs: sessionTimeoutMs,
           verbose: state.config.verbose,
         });
 
@@ -937,6 +1151,10 @@ export class Orchestrator {
           transcriptPath: sessionResult.transcriptPath,
           parsedEventsPath: sessionResult.parsedEventsPath,
           toolCallCount: sessionResult.toolCallCount,
+          inputTokens: sessionResult.inputTokens,
+          outputTokens: sessionResult.outputTokens,
+          totalTokens: sessionResult.totalTokens,
+          costUsd: sessionResult.costUsd,
           errorCount: sessionResult.errorCount,
           // Epic #26 data
           assessment,
@@ -950,17 +1168,52 @@ export class Orchestrator {
 
         console.log(`[External Ralph] Analysis: completed=${analysis.completed}, success=${analysis.success}, progress=${analysis.completionPercentage}%`);
 
+        // ========== EVAL HARNESS (LFD Track 3, #1776) ==========
+        // Run the declared harness for this iteration BEFORE recording, so a
+        // VOID (e.g. lint violation) overrides the verification status and the
+        // iteration is fenced out of best-output selection. Only VOID-safe
+        // aggregate feedback is surfaced to the agent; detailed diagnostics are
+        // written to a private, non-optimizer-readable path.
+        let evalResult = null;
+        if (this.evalHarness) {
+          try {
+            evalResult = this.evalHarness.run({ iterationDir });
+            const resultPath = join(iterationDir, 'eval-harness-result.json');
+            writeFileSync(resultPath, JSON.stringify(evalResult, null, 2));
+            console.log(`[External Ralph] Eval harness: status=${evalResult.status}, leakage_audit=${evalResult.leakage_audit.result}`);
+          } catch (error) {
+            console.warn(`[External Ralph] Eval harness run failed: ${error.message}`);
+          }
+        }
+
         // ========== RECORD TO RESEARCH MODULES ==========
         const qualityScore = (analysis.completionPercentage || 0) / 100;
-        const verificationPassed = analysis.completed && analysis.success;
+        // The eval harness, when present, is authoritative for verification:
+        // a VOID/pass/fail from the harness overrides the analyzer's heuristic.
+        const analyzerPassed = analysis.completed && analysis.success;
+        const evalVerification = evalResult ? statusToVerification(evalResult.status) : null;
+        const verificationStatus = evalVerification || (analyzerPassed ? 'passed' : 'failed');
+        const verificationPassed = verificationStatus === 'passed';
+        const evalHumanOverride = evalResult?.human_override === true;
 
         // Best Output Tracker (REF-015)
         if (this.bestOutputTracker) {
           this.bestOutputTracker.recordIteration({
-            iteration: state.currentIteration,
+            iteration_number: state.currentIteration,
+            dimensions: {
+              validation: verificationPassed ? 1 : 0,
+              completeness: qualityScore,
+              correctness: analysis.success === false ? 0 : qualityScore,
+              readability: qualityScore,
+              efficiency: qualityScore,
+            },
             artifacts: analysis.artifactsModified || [],
-            qualityScore,
-            validationPassed: verificationPassed,
+            tokens_used: sessionResult.totalTokens || 0,
+            token_cost_usd: sessionResult.costUsd || 0,
+            execution_time_ms: duration,
+            verification_status: verificationStatus,
+            eval_human_override: evalHumanOverride,
+            reflections: analysis.learnings ? [analysis.learnings] : [],
           });
         }
 
@@ -974,26 +1227,104 @@ export class Orchestrator {
           });
         }
 
-        // Early Stopping
-        if (this.earlyStopping) {
-          this.earlyStopping.recordIterationResult({
-            iteration: state.currentIteration,
-            qualityScore,
-            verificationPassed,
-          });
-        }
-
         // Iteration Analytics
+        const taskComplete = analysis.completed && analysis.success;
+        let analyticsRecord = null;
         if (this.iterationAnalytics) {
-          this.iterationAnalytics.recordIteration({
+          // Unknown vs zero (#1766): when the provider reported no token/cost
+          // usage this iteration, record null (unknown) rather than 0 so a
+          // declared token/spend ceiling is treated as unobservable instead of
+          // silently never firing. tool_calls and wall-clock are always
+          // observable (counted/measured by the orchestrator).
+          const tokenUsageObserved = sessionResult.tokenUsageObserved === true;
+          const costObserved = sessionResult.costObserved === true;
+          analyticsRecord = this.iterationAnalytics.recordIteration({
             iteration_number: state.currentIteration,
             quality_score: qualityScore * 100,
-            tokens_used: sessionResult.toolCallCount || 0,
-            token_cost_usd: 0, // Would need actual cost tracking
+            tokens_used: tokenUsageObserved ? (sessionResult.totalTokens || 0) : null,
+            input_tokens: tokenUsageObserved ? (sessionResult.inputTokens || 0) : null,
+            output_tokens: tokenUsageObserved ? (sessionResult.outputTokens || 0) : null,
+            tool_calls: sessionResult.toolCallCount || 0,
+            token_cost_usd: costObserved ? (sessionResult.costUsd || 0) : null,
             execution_time_ms: duration,
-            verification_status: verificationPassed ? 'passed' : 'failed',
+            verification_status: verificationStatus,
+            eval_harness_result: evalResult,
+            eval_human_override: evalHumanOverride,
             output_snapshot_path: outputPaths.stdout,
             reflections: analysis.learnings ? [analysis.learnings] : [],
+            // Hypothesis-before-change (#1769): captured pre-session from the
+            // strategy planner (see planned* below), recorded here alongside
+            // the observed result. Falls back only if planning was unavailable.
+            experiment: {
+              hypothesis: plannedExperiment.hypothesis,
+              expected_failure_mode: plannedExperiment.expectedFailureMode,
+              distinguishing_diagnostic: plannedExperiment.diagnostic,
+              structural_variant: strategy?.approach || strategy?.name || null,
+              adjustment_key: strategy?.adjustmentKey || null,
+              recorded_before_change: true,
+              result: verificationPassed ? 'passed' : 'failed',
+              probe_or_generalization_signal: analysis.completed ? 'completion-criteria' : 'iteration-analysis',
+            },
+          });
+
+          const budgetDecision = this.iterationAnalytics.checkBudgetLimits();
+          if (budgetDecision.exhausted) {
+            const budgetStopReport = this.iterationAnalytics.generateBudgetStopReport(budgetDecision.trigger);
+            const budgetStopPath = join(this.stateManager.getStateDir(), 'budget-stop-report.json');
+            writeFileSync(budgetStopPath, JSON.stringify(budgetStopReport, null, 2));
+            state.budgetStopReport = budgetStopReport;
+            state.budgetStopReportPath = budgetStopPath;
+
+            // Stop-semantics policy (#1767, operator decision 2026-07-11):
+            // completion-wins (default) — a task that meets its completion
+            // criteria on the ceiling-crossing iteration reports SUCCESS with
+            // the crossing annotated; the budget stop exists to halt ongoing
+            // optimization, not to negate an achieved completion.
+            // budget-wins — the pre-#1767 ordering: exhaustion terminates the
+            // loop as budget_exhausted even on a completing iteration.
+            const budgetStopPolicy = state.config.budgetStopPolicy || 'completion-wins';
+            if (taskComplete && budgetStopPolicy === 'completion-wins') {
+              state.budgetCrossedAtCompletion = budgetDecision.trigger;
+              console.log(`[External Ralph] Budget ceiling crossed on the completing iteration (${budgetDecision.trigger}) — completion wins (policy: completion-wins)`);
+            } else {
+              const selection = await this.selectBestOutput(state);
+              state.status = 'budget_exhausted';
+              this.stateManager.save(state);
+              await this.generateCompletionReport(state, 'budget_exhausted');
+              await this.recordTaskCompletion(state, 'partial');
+              await this.completeMultiLoop('budget_exhausted');
+
+              return {
+                success: false,
+                reason: `Budget exhausted: ${budgetDecision.trigger}`,
+                iterations: state.currentIteration,
+                loopId: state.loopId,
+                selectedIteration: selection.bestIteration,
+                budgetStopReport,
+              };
+            }
+          }
+
+          const explorationDecision = this.iterationAnalytics.checkExplorationQuota();
+          state.lfdControls = {
+            structuralVariantRequired: explorationDecision.required,
+            flatCycleCount: explorationDecision.flat_cycle_count,
+            explorationQuotaK: explorationDecision.k,
+            reason: explorationDecision.required
+              ? `${explorationDecision.flat_cycle_count} flat cycles reached quota ${explorationDecision.k}`
+              : null,
+          };
+          this.stateManager.save(state);
+        }
+
+        // Early Stopping — fed AFTER analytics so it sees the CURRENT
+        // iteration's quality_delta, not the previous one (#1767 off-by-one)
+        if (this.earlyStopping) {
+          this.earlyStopping.recordIterationResult(state.currentIteration, {
+            quality_score: qualityScore * 100,
+            confidence: Math.max(0, Math.min(1, qualityScore)),
+            verification_status: verificationPassed ? 'passed' : 'failed',
+            quality_delta: analyticsRecord?.quality_delta || 0,
           });
         }
 
@@ -1016,38 +1347,72 @@ export class Orchestrator {
         }
 
         // ========== CHECK EARLY STOPPING ==========
-        if (this.earlyStopping && state.currentIteration >= 2) {
+        // Skipped when the task just completed — the completion path below is
+        // the correct exit for a completed task (#1767).
+        if (this.earlyStopping && state.currentIteration >= 2 && !taskComplete) {
           const earlyStopResult = this.earlyStopping.shouldStop();
           if (earlyStopResult.stop) {
-            console.log(`[External Ralph] Early stopping triggered: ${earlyStopResult.reason}`);
+            if (earlyStopResult.trigger === 'quality_plateau') {
+              // A quality plateau is STAGNATION, not success (#1767). It must
+              // never be recorded as a successful completion without
+              // verification. When a structural variant is pending from a
+              // declared exploration quota, the variant gets its chance first —
+              // the quota exists precisely to break plateaus.
+              if (state.lfdControls?.structuralVariantRequired) {
+                console.log('[External Ralph] Quality plateau detected, but a structural variant is pending — continuing (exploration quota takes precedence)');
+              } else {
+                console.log(`[External Ralph] Stopping on quality plateau: ${earlyStopResult.reason}`);
 
-            // Select best output before completing
-            const selectedIteration = this.selectBestOutput(state);
-            if (selectedIteration !== state.currentIteration) {
-              console.log(`[External Ralph] Selected iteration ${selectedIteration} as best output`);
+                const selection = await this.selectBestOutput(state);
+                if (selection.bestIteration !== state.currentIteration) {
+                  console.log(`[External Ralph] Selected iteration ${selection.bestIteration} as best output`);
+                }
+
+                state.status = 'plateau';
+                this.stateManager.save(state);
+                await this.generateCompletionReport(state, 'plateau');
+                await this.recordTaskCompletion(state, 'partial');
+                await this.completeMultiLoop('plateau');
+
+                return {
+                  success: false,
+                  reason: `Quality plateau (stagnation, not success): ${earlyStopResult.reason}`,
+                  iterations: state.currentIteration,
+                  loopId: state.loopId,
+                  selectedIteration: selection.bestIteration,
+                };
+              }
+            } else {
+              // Verified high-confidence stop — a legitimate success exit
+              console.log(`[External Ralph] Early stopping triggered: ${earlyStopResult.reason}`);
+
+              const selection = await this.selectBestOutput(state);
+              if (selection.bestIteration !== state.currentIteration) {
+                console.log(`[External Ralph] Selected iteration ${selection.bestIteration} as best output`);
+              }
+
+              state.status = 'completed';
+              this.stateManager.save(state);
+              await this.generateCompletionReport(state, 'early_stop');
+              await this.recordTaskCompletion(state, 'success');
+              await this.completeMultiLoop('completed');
+
+              return {
+                success: true,
+                reason: `Early stop: ${earlyStopResult.reason}`,
+                iterations: state.currentIteration,
+                loopId: state.loopId,
+              };
             }
-
-            state.status = 'completed';
-            this.stateManager.save(state);
-            await this.generateCompletionReport(state, 'early_stop');
-            await this.recordTaskCompletion(state, 'success');
-            await this.completeMultiLoop('completed');
-
-            return {
-              success: true,
-              reason: `Early stop: ${earlyStopResult.reason}`,
-              iterations: state.currentIteration,
-              loopId: state.loopId,
-            };
           }
         }
 
         // ========== CHECK COMPLETION ==========
-        if (analysis.completed && analysis.success) {
+        if (taskComplete) {
           // Select best output (may not be final iteration per REF-015)
-          const selectedIteration = this.selectBestOutput(state);
-          if (selectedIteration !== state.currentIteration) {
-            console.log(`[External Ralph] Selected iteration ${selectedIteration} as best output (not final)`);
+          const selection = await this.selectBestOutput(state);
+          if (selection.bestIteration !== state.currentIteration) {
+            console.log(`[External Ralph] Selected iteration ${selection.bestIteration} as best output (not final)`);
           }
 
           state.status = 'completed';
@@ -1058,10 +1423,13 @@ export class Orchestrator {
 
           return {
             success: true,
-            reason: 'Task completed successfully',
+            reason: state.budgetCrossedAtCompletion
+              ? `Task completed successfully (budget ceiling crossed on the completing iteration: ${state.budgetCrossedAtCompletion})`
+              : 'Task completed successfully',
             iterations: state.currentIteration,
             loopId: state.loopId,
-            selectedIteration,
+            selectedIteration: selection.bestIteration,
+            budgetCrossed: state.budgetCrossedAtCompletion || null,
           };
         }
 
@@ -1142,9 +1510,9 @@ export class Orchestrator {
     }
 
     // Select best output even on limit reached (REF-015)
-    const selectedIteration = this.selectBestOutput(state);
-    if (selectedIteration !== state.currentIteration) {
-      console.log(`[External Ralph] Selected iteration ${selectedIteration} as best output (limit reached)`);
+    const selection = await this.selectBestOutput(state);
+    if (selection.bestIteration !== state.currentIteration) {
+      console.log(`[External Ralph] Selected iteration ${selection.bestIteration} as best output (limit reached)`);
     }
 
     state.status = 'limit_reached';
@@ -1158,7 +1526,7 @@ export class Orchestrator {
       reason: 'Maximum iterations reached',
       iterations: state.currentIteration,
       loopId: state.loopId,
-      selectedIteration,
+      selectedIteration: selection.bestIteration,
     };
   }
 
@@ -1203,6 +1571,10 @@ ${iterations}
 ## Accumulated Learnings
 
 ${state.accumulatedLearnings || 'None recorded'}
+
+## LFD Controls
+
+${state.budgetStopReport ? `Budget stop report: ${state.budgetStopReportPath || 'embedded in state'}\n\n\`\`\`json\n${JSON.stringify(state.budgetStopReport, null, 2)}\n\`\`\`` : 'No hard budget stop recorded.'}
 
 ## Files Modified
 
@@ -1318,8 +1690,8 @@ ${state.filesModified.length > 0 ? state.filesModified.map(f => `- ${f}`).join('
     if (this.bestOutputTracker) {
       try {
         const bestOutput = this.bestOutputTracker.selectOutput();
-        if (bestOutput && bestOutput.iteration !== state.currentIteration) {
-          bestIteration = bestOutput.iteration;
+        if (bestOutput && bestOutput.selected_iteration !== state.currentIteration) {
+          bestIteration = bestOutput.selected_iteration;
           selectionSource = 'best-output-tracker';
           console.log(`[External Ralph] BestOutputTracker selected iteration ${bestIteration} (score: ${bestOutput.quality_score})`);
         }
@@ -1332,10 +1704,11 @@ ${state.filesModified.length > 0 ? state.filesModified.map(f => `- ${f}`).join('
     if (selectionSource === 'final' && this.iterationAnalytics) {
       try {
         const bestFromAnalytics = this.iterationAnalytics.selectBestIteration();
-        if (bestFromAnalytics && bestFromAnalytics.iteration_number !== state.currentIteration) {
-          bestIteration = bestFromAnalytics.iteration_number;
+        const selected = bestFromAnalytics?.selected || bestFromAnalytics;
+        if (selected && selected.iteration_number !== state.currentIteration) {
+          bestIteration = selected.iteration_number;
           selectionSource = 'iteration-analytics';
-          console.log(`[External Ralph] IterationAnalytics selected iteration ${bestIteration} (quality: ${bestFromAnalytics.quality_score})`);
+          console.log(`[External Ralph] IterationAnalytics selected iteration ${bestIteration} (quality: ${selected.quality_score})`);
         }
       } catch (error) {
         console.warn('[External Ralph] IterationAnalytics selection failed:', error.message);
@@ -1436,8 +1809,8 @@ ${state.filesModified.length > 0 ? state.filesModified.map(f => `- ${f}`).join('
     if (this.iterationAnalytics) {
       try {
         const report = this.iterationAnalytics.generateReport();
-        const reportPath = join(this.stateManager.getStateDir(), 'iteration-analytics-report.json');
-        writeFileSync(reportPath, JSON.stringify(report, null, 2));
+        const reportPath = join(this.stateManager.getStateDir(), 'iteration-analytics-report.md');
+        writeFileSync(reportPath, report);
         console.log(`[External Ralph] Analytics report saved to: ${reportPath}`);
 
         // Also export full analytics data
@@ -1483,6 +1856,11 @@ ${state.filesModified.length > 0 ? state.filesModified.map(f => `- ${f}`).join('
       // the new archive location so load() and getStateDir() remain valid.
       const archiveDir = join(this.projectRoot, '.aiwg', 'ralph-external', 'archive', this.registeredLoopId);
       this.stateManager.setStateDir(archiveDir);
+      const archivedState = this.stateManager.load();
+      if (archivedState?.budgetStopReportPath) {
+        archivedState.budgetStopReportPath = join(archiveDir, basename(archivedState.budgetStopReportPath));
+        this.stateManager.save(archivedState);
+      }
     } catch (error) {
       console.warn(`[External Ralph] Multi-loop completion failed: ${error.message}`);
     }
