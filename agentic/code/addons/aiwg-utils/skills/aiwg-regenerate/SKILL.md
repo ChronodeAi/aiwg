@@ -3,418 +3,76 @@ namespace: aiwg
 name: aiwg-regenerate
 platforms: [all]
 kernel: true
-description: Regenerate platform context file with preserved team directives
+description: Select and execute the canonical refresh, existing-project extraction, or legacy AIWG context regeneration branch
 script:
   entrypoint: run.sh
   runtime: bash
   cwd: project-root
-  argsHint: '[--provider <name>] [--dry-run] [--force] [--no-aiwg-md] [--no-agents-md]'
+  argsHint: '[--workspace|--existing-project|--full-inject] [--provider <name>] [--dry-run|--apply] [--force]'
 ---
 
-> **Deterministic execution (#1266)**: this skill has a `script:` entrypoint
-> that shells out to `aiwg regenerate "$@"`. Prefer
-> `aiwg run skill aiwg-regenerate -- <flags>` when a platform supports it.
-> The CLI owns the deterministic execution step: provider detection, file
-> writes, preservation logic, backups, and exit codes. The skill owns the
-> agentic layer around that step: intent alignment, output formatting,
-> workspace-state reconciliation, summary, next actions, gates, and recovery.
-> Do not reimplement regeneration manually or add redundant permission
-> prompts before calling the CLI for execution.
-
-# Regenerate Platform Context File
-
-Analyze current project state and regenerate the platform context file (CLAUDE.md, WARP.md, or AGENTS.md) while preserving team directives and organizational requirements.
-
-By default, uses the **hook file architecture**: generates `AIWG.md` (or provider equivalent) and adds a single directive to the context file. Use `--full-inject` for the legacy inline approach.
-
-## Parameters
-
-| Flag | Description |
-|------|-------------|
-| `--no-backup` | Skip creating backup file |
-| `--dry-run` | Preview changes without writing |
-| `--show-preserved` | List all detected preserved content and exit |
-| `--full` | Full regeneration, preserve nothing (destructive) |
-| `--full-inject` | Inject AIWG content directly into context file (legacy/compatibility mode) |
-| `--all` | Regenerate for ALL installed providers simultaneously |
-| `--migrate` | Migrate existing full-injection to hook file approach |
-
-## Platform Detection
-
-The CLI is the source of truth for provider selection. It resolves the target in this order:
-
-1. Explicit `--provider <name>` flag.
-2. Explicit provider environment, such as `AIWG_PROVIDER` or `CLAUDECODE_PROVIDER`.
-3. Active runtime environment markers, such as `CODEX_HOME` / `CODEX_SANDBOX`, Cursor, Warp, Copilot, OpenCode, Factory, Windsurf, OpenClaw, or Claude Code markers. Runtime markers win over unrelated API keys.
-4. Project configuration from `.aiwg/aiwg.config` when no active runtime is detected.
-5. `generic` when no provider can be inferred.
-
-Existing context files such as `CLAUDE.md` or `AGENTS.md` are not sufficient to override the active runtime. In mixed-provider workspaces, pass `--provider <name>` when you want a provider other than the current runtime.
-
-### `--all` Mode
-
-Regenerate all detected providers simultaneously:
-
-```
-Detected providers: claude, warp, cursor
-Regenerating all...
-  ✓ CLAUDE.md → AIWG.md (312 lines)
-  ✓ WARP.md → AIWG-warp.md (298 lines)
-  ✓ .cursorrules → AIWG-cursor.md (295 lines)
-Regenerated 3 providers.
-```
-
-For explicit platform targeting, use:
-- `/aiwg-regenerate-claude` → CLAUDE.md + AIWG.md
-- `/aiwg-regenerate-warp` → WARP.md + AIWG-warp.md
-- `/aiwg-regenerate-agents` → AGENTS.md + AIWG-agents.md
-- `/aiwg-regenerate-cursorrules` → .cursorrules + AIWG-cursor.md
-- `/aiwg-regenerate-windsurfrules` → .windsurfrules + AIWG-windsurf.md
-- `/aiwg-regenerate-copilot` → copilot-instructions.md + AIWG-copilot.md
-- `/aiwg-regenerate-factory` → AGENTS.md + AIWG-factory.md
-- `/aiwg-regenerate-opencode` → .opencode/context.md + AIWG-opencode.md
-- `/aiwg-regenerate-codex` → CODEX.md (full inject, no @-link support)
-
-## Execution Steps
-
-### Step 1: Detect Platform
-
-Determine which context file to regenerate based on platform detection.
-
-Report:
-```
-Platform detected: Claude Code
-Target file: CLAUDE.md
-```
-
-### Step 2: Create Backup
-
-Unless `--no-backup` flag is set:
-
-1. Generate timestamp: `YYYYMMDD-HHMMSS`
-2. Copy current file to `{filename}.backup-{timestamp}`
-3. Report backup location
-
-```
-Backup created: CLAUDE.md.backup-20251206-152233
-```
-
-### Step 3: Extract Preserved Content
-
-Parse existing file and extract content matching preservation patterns.
-
-**Preservation Patterns:**
-
-1. **Explicit Markers**
-   ```markdown
-   <!-- PRESERVE -->
-   Content here is always preserved
-   <!-- /PRESERVE -->
-
-   <!-- PRESERVE: Single line directive -->
-   ```
-
-2. **Section Headings** (case-insensitive)
-   - `## Team *` - Team rules/conventions
-   - `## Org *` / `## Organization *` - Org policies
-   - `## Definition of Done` - DoD criteria
-   - `## Code Quality *` - Quality standards
-   - `## Security Requirements` / `## Security Policy` - Security policies
-   - `## Convention*` - Conventions
-   - `## Rules` / `## Guidelines` - Rules
-   - `## Important *` / `## Critical *` - Important notes
-   - `## NFR*` / `## Non-Functional *` - NFRs
-   - `## *Standards` - Standards
-   - `## Project-Specific Notes` - User notes
-
-3. **Directive Lines** (within non-preserved sections)
-   - Lines starting with: "Do not", "Don't", "Never", "Always", "Must", "Required:", "Policy:", "Rule:"
-   - Lines containing: `<!-- PRESERVE:`
-
-**If `--show-preserved` flag:**
-Display all preserved content and exit without regenerating.
-
-```
-Preserved Content Analysis
-==========================
-
-## Sections (3 found):
-
-### Team Conventions (lines 45-62, 18 lines)
-  - Do not add claude code signature to commit messages
-  - All Python commands must run within venv
-  - Commits made without attribution
-  ... (15 more lines)
-
-### Definition of Done (lines 78-86, 9 lines)
-  - All tests passing
-  - Code reviewed
-  - Documentation updated
-  ... (6 more lines)
-
-### Security Requirements (lines 92-98, 7 lines)
-  - All API keys via environment variables
-  - No secrets in code
-  ... (5 more lines)
-
-## Inline Directives (2 found):
-
-  Line 34: <!-- PRESERVE: Use internal npm registry for @company/* -->
-  Line 112: Never deploy on Fridays without approval
-
-Total: 36 lines will be preserved
-```
-
-### Step 4: Analyze Project
-
-Scan project to extract regenerable content:
-
-**Package Detection:**
-```bash
-# Check for package files
-ls package.json pyproject.toml requirements.txt go.mod Cargo.toml pom.xml build.gradle composer.json Gemfile 2>/dev/null
-```
-
-**Extract from package.json:**
-- `name`, `description`, `version`
-- `scripts` → Development commands
-- `dependencies`, `devDependencies` → Tech stack
-
-**Extract from other sources:**
-- `Makefile` → Make targets
-- `README.md` → Project description (first paragraph)
-- Directory structure → Architecture overview
-
-**Detect Test Framework:**
-- `jest.config.*` → Jest
-- `vitest.config.*` → Vitest
-- `pytest.ini`, `conftest.py` → Pytest
-- `*_test.go` files → Go testing
-- `.rspec` → RSpec
-
-**Detect CI/CD:**
-- `.github/workflows/*.yml` → GitHub Actions
-- `.gitlab-ci.yml` → GitLab CI
-- `Jenkinsfile` → Jenkins
-- `.circleci/` → CircleCI
-
-Report:
-```
-Project Analysis
-================
-Languages: TypeScript, Python
-Package Manager: npm
-Build Commands: 12 scripts detected
-Test Framework: Vitest
-CI/CD: GitHub Actions (3 workflows)
-```
-
-### Step 5: Detect AIWG State
-
-Check installed AIWG frameworks:
-
-1. **Check Registry**
-   ```bash
-   # Project registry
-   cat .aiwg/frameworks/registry.json 2>/dev/null
-
-   # Global registry
-   cat ~/.local/share/ai-writing-guide/registry.json 2>/dev/null
-   ```
-
-2. **Scan Deployed Assets**
-   ```bash
-   # Count agents
-   ls .claude/agents/*.md 2>/dev/null | wc -l
-
-   # Count commands
-   ls .claude/commands/*.md 2>/dev/null | wc -l
-   ```
-
-3. **Identify Frameworks**
-   - Check for sdlc-complete markers
-   - Check for media-marketing-kit markers
-   - Check for addon presence
-
-Report:
-```
-AIWG State
-==========
-Frameworks:
-  - sdlc-complete v1.0.0 (54 agents, 42 commands)
-  - aiwg-utils v1.0.0 (1 agent, 4 commands)
-```
-
-### Step 6: Generate New Document
-
-**If `--dry-run` flag:**
-Display generated content without writing.
-
-**Structure:**
-
-```markdown
-# CLAUDE.md
-
-This file provides guidance to Claude Code when working with this codebase.
-
-## Repository Purpose
-
-{Generated from README.md first paragraph or package.json description}
-
-## Tech Stack
-
-{Generated list of detected languages, frameworks, runtimes}
-
-## Development Commands
-
-{Generated from package.json scripts, Makefile targets, etc.}
-
-## Testing
-
-{Generated from detected test framework}
-
-## Architecture
-
-{Generated from directory structure analysis}
-
-## Important Files
-
-{Key files identified during analysis}
-
----
-
-## Team Directives & Standards
-
-<!-- PRESERVED SECTION - Content maintained across regeneration -->
-
-{ALL PRESERVED CONTENT INSERTED HERE}
-
-<!-- /PRESERVED SECTION -->
-
----
-
-## AIWG Framework Integration
-
-{Generated from current AIWG installation state}
-
-### Installed Frameworks
-
-{List of installed frameworks with versions}
-
-### Available Agents
-
-{Summary of deployed agents}
-
-### Available Commands
-
-{Summary of deployed commands}
-
-### Orchestration
-
-{Core orchestrator role description}
-
----
-
-<!--
-  USER NOTES
-  Add team directives, conventions, or project-specific notes below.
-  Content in this file's preserved sections is maintained during regeneration.
-  Use <!-- PRESERVE --> markers for content that must be kept.
--->
-```
-
-### Step 7: Write File
-
-1. Write generated content to target file
-2. Report summary
-
-```
-Regeneration Complete
-=====================
-
-Backup: CLAUDE.md.backup-20251206-152233
-
-Preserved (36 lines):
-  - Team Conventions (18 lines)
-  - Definition of Done (9 lines)
-  - Security Requirements (7 lines)
-  - Inline directives (2)
-
-Regenerated:
-  - Repository Purpose
-  - Tech Stack (TypeScript, Python)
-  - Development Commands (12 scripts)
-  - Testing (Vitest)
-  - Architecture
-  - AIWG Integration (sdlc-complete, aiwg-utils)
-
-Output: CLAUDE.md (428 lines)
-```
-
-## Examples
+# Regenerate Context — Branch Selector
+
+The CLI is the deterministic source of truth for context regeneration. The
+selector is intentionally intelligent: an unqualified `aiwg-regenerate`
+invocation routes an established, not-yet-extracted repository through preview
+and transactional adoption; fresh or already-adopted projects route to the
+canonical refresh. Do not make users choose a branch unless they want to
+override that decision.
+
+Select and load exactly one linked branch before execution:
+
+- [Canonical workspace graph](../aiwg-regenerate-workspace/SKILL.md) — default
+  refresh for new and already-migrated projects.
+- [Existing-project extraction](../aiwg-regenerate-existing-project/SKILL.md) —
+  transactional adoption of stable project metadata and provider context into
+  the canonical graph; preview is the default and `--apply` is explicit.
+- [Legacy full injection](../aiwg-regenerate-legacy/SKILL.md) — compatibility
+  branch; embeds normalized AIWG context inside the provider startup file.
+
+## Commands
 
 ```bash
-# Standard regeneration with backup and preservation
-/aiwg-regenerate
+# Intelligent default (recommended user surface)
+aiwg run skill aiwg-regenerate
 
-# Preview what would be generated
-/aiwg-regenerate --dry-run
+# Canonical default
+aiwg regenerate --workspace [--provider <name>] [--dry-run] [--force]
 
-# See what content would be preserved
-/aiwg-regenerate --show-preserved
+# Existing-project transactional adoption
+aiwg regenerate --existing-project [--provider <name>] [--dry-run|--apply]
 
-# Full regeneration (loses all user content)
-/aiwg-regenerate --full
-
-# Regenerate without backup (use with caution)
-/aiwg-regenerate --no-backup
+# Legacy compatibility
+aiwg regenerate --full-inject [--provider <name>] [--dry-run]
 ```
 
-## Warning for --full Flag
+`--legacy` aliases `--full-inject`. The CLI rejects conflicting branches,
+unknown options, and missing provider values with usage status.
 
-If `--full` flag is used, display warning:
+`--existing-project` rejects `--force` and all `--no-*-md` partial-write flags.
+It refuses possible credentials and ambiguous directive conflicts, previews the
+exact extracted block and transaction targets, and prints the rollback command
+after apply.
 
-```
-WARNING: Full regeneration will discard ALL existing content.
+Explicit branch flags always win. Without one, the executable selector checks
+for stable project signals (`package.json`, common language manifests, or a
+README) and the project-extraction marker. A first-time established project is
+previewed and then applied; an already-extracted or fresh project uses
+`--workspace`. Passing only `--dry-run` keeps inferred adoption read-only.
 
-The following will be LOST:
-  - Team Conventions (18 lines)
-  - Definition of Done (9 lines)
-  - Security Requirements (7 lines)
-  - 2 inline directives
+Supported shared controls are `--dry-run`, `--provider <name>`, `--force`,
+`--no-aiwg-md`, `--no-agents-md`, and `--no-workspace-md`. The last option is
+implicit in legacy mode.
 
-This cannot be undone (backup will still be created).
+## Execution Contract
 
-Continue with full regeneration? [y/N]
-```
+1. For an established project, preview the selected branch first.
+2. Preserve operator-authored content outside managed regions.
+3. Never copy possible credentials into generated context.
+4. Execute with `aiwg run skill aiwg-regenerate -- <flags>` when the provider
+   supports executable skills, or run the equivalent `aiwg regenerate` command.
+5. Report the selected branch, provider, changed targets, backups, warnings,
+   validation result, and rollback path.
 
-## Interactive Mode
-
-When `--interactive` is specified, ask strategic questions before regenerating:
-
-1. Which provider to regenerate (if multiple detected)
-2. Whether to use hook file or full-inject approach
-3. Whether to preserve all detected team directives
-4. Whether to create a backup
-
-**Native UX tool preference**: For each question, use the platform's native interaction tool if available (e.g., `AskUserQuestion` in Claude Code). This provides a proper input UI rather than plain text output. If no native tool is available, fall back to formatted markdown with clear options. Ask one question per interaction turn.
-
-See `@$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/native-ux-tools.md` for the full pattern.
-
-## Error Handling
-
-| Condition | Action |
-|-----------|--------|
-| No existing file | Generate fresh document with empty preserved section |
-| File read error | Report error, abort |
-| Backup write fails | Abort with error (never overwrite without backup) |
-| AIWG not detected | Generate project-only content, warn user |
-| Parse error | Warn, offer `--full` as recovery option |
-
-## References
-
-- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/README.md — aiwg-utils addon overview
-- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/native-ux-tools.md — Platform detection and native UX tool usage
-- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/human-authorization.md — Confirmation before destructive --full regeneration
-- @$AIWG_ROOT/docs/cli-reference.md — CLI reference for aiwg sync command
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/README.md — SDLC framework context included in regenerated files
+Use `aiwg refresh` instead when frameworks, agents, skills, rules, commands, or
+provider deployments also need to be updated.

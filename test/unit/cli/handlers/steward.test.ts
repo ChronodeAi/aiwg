@@ -42,8 +42,8 @@ const sampleMatrix = {
       daemon_tier: 'pty-adapter',
       daemon_pty_adapter: true,
       artifact_paths: {},
-      native_features: { cron: true, mission_control: false, daemon: false },
-      emulation: { cron: 'native', mission_control: 'aiwg-mc', daemon: 'aiwg-daemon' },
+      native_features: { cron: true, mission_control: false, daemon: false, tasks: true },
+      emulation: { cron: 'native', mission_control: 'aiwg-mc', daemon: 'aiwg-daemon', tasks: 'native' },
       hook_wiring: { at_link_support: true, context_file: 'CLAUDE.md' },
       deploy_target: 'project',
       aggregated_output: false,
@@ -54,8 +54,8 @@ const sampleMatrix = {
       daemon_tier: 'native',
       daemon_pty_adapter: false,
       artifact_paths: {},
-      native_features: { cron: false, mission_control: false, daemon: true },
-      emulation: { cron: 'aiwg-schedule', mission_control: 'aiwg-mc', daemon: 'native' },
+      native_features: { cron: false, mission_control: false, daemon: true, tasks: false },
+      emulation: { cron: 'aiwg-schedule', mission_control: 'aiwg-mc', daemon: 'native', tasks: 'aiwg-mc' },
       hook_wiring: { at_link_support: false, context_file: 'AGENTS.md' },
       deploy_target: 'project',
       aggregated_output: false,
@@ -76,6 +76,7 @@ vi.mock('js-yaml', () => ({
 vi.mock('../../../../src/config/aiwg-config.js', () => ({
   getProjectDir: vi.fn((ctx: { cwd?: string }) => ctx.cwd || process.cwd()),
   readAiwgConfig: vi.fn().mockResolvedValue(null),
+  writeAiwgConfig: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { stewardHandler } from '../../../../src/cli/handlers/steward.js';
@@ -312,6 +313,105 @@ describe('steward find --capability', () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await stewardHandler.execute(makeCtx(['find']));
     expect(result.exitCode).toBe(2);
+    consoleSpy.mockRestore();
+  });
+});
+
+describe('steward models', () => {
+  it('routes to model policy and catalog commands', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await stewardHandler.execute(makeCtx(['models', '--complex']));
+    expect(result.exitCode).toBe(0);
+    const output = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+    expect(output).toContain('Model policy routing');
+    expect(output).toContain('aiwg models sources --json');
+    expect(output).toContain('aiwg models audit --provider P');
+    consoleSpy.mockRestore();
+  });
+
+  it('emits a capability-bound wrapper route envelope', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await stewardHandler.execute(makeCtx([
+      'models', '--route', '--provider', 'codex', '--complex',
+      '--capability-type', 'agent', '--capability', 'software-implementer',
+      '--assignment', 'Implement one bounded change.', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    const output = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+    const envelope = JSON.parse(output);
+    expect(envelope.wrapper).toBe('aiwg-model-coding-worker');
+    expect(envelope.capability).toMatchObject({
+      type: 'agent',
+      name: 'software-implementer',
+      source: { scope: 'packaged', provenance: 'corpus' },
+    });
+    expect(envelope.capability.id).toMatch(/^aiwg:agent:/);
+    expect(envelope.launch.mechanism).toBe('aiwg-mc');
+    consoleSpy.mockRestore();
+  });
+
+  it('rejects a capability that cannot be resolved at the requested type', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await stewardHandler.execute(makeCtx([
+      'models', '--route', '--provider', 'codex', '--complex',
+      '--capability-type', 'agent', '--capability', 'definitely-not-a-real-agent',
+      '--assignment', 'Implement one bounded change.', '--json',
+    ]));
+    expect(result.exitCode).toBe(2);
+    consoleSpy.mockRestore();
+  });
+
+  it.each([
+    ['--provider', [
+      'models', '--route', '--provider', '--capability-type', 'agent',
+      '--capability', 'software-implementer', '--assignment', 'Bounded work.', '--json',
+    ]],
+    ['--capability-type', [
+      'models', '--route', '--provider', 'codex', '--capability-type', '--capability',
+      'software-implementer', '--assignment', 'Bounded work.', '--json',
+    ]],
+    ['--capability', [
+      'models', '--route', '--provider', 'codex', '--capability-type', 'agent',
+      '--capability', '--assignment', 'Bounded work.', '--json',
+    ]],
+    ['--assignment', [
+      'models', '--route', '--provider', 'codex', '--capability-type', 'agent',
+      '--capability', 'software-implementer', '--assignment', '--json',
+    ]],
+  ] as const)('rejects %s when the next token is another option', async (_flag, args) => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const result = await stewardHandler.execute(makeCtx([...args]));
+
+    expect(result.exitCode).toBe(2);
+    expect(consoleSpy.mock.calls.map(call => String(call[0])).join('\n')).not.toContain('schemaVersion');
+    consoleSpy.mockRestore();
+  });
+
+  it.each([
+    ['--provider', [
+      'models', '--route', '--capability-type', 'agent', '--capability',
+      'software-implementer', '--assignment', 'Bounded work.', '--provider',
+    ]],
+    ['--capability-type', [
+      'models', '--route', '--provider', 'codex', '--capability',
+      'software-implementer', '--assignment', 'Bounded work.', '--capability-type',
+    ]],
+    ['--capability', [
+      'models', '--route', '--provider', 'codex', '--capability-type', 'agent',
+      '--assignment', 'Bounded work.', '--capability',
+    ]],
+    ['--assignment', [
+      'models', '--route', '--provider', 'codex', '--capability-type', 'agent',
+      '--capability', 'software-implementer', '--assignment',
+    ]],
+  ] as const)('rejects %s at end of input', async (_flag, args) => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const result = await stewardHandler.execute(makeCtx([...args]));
+
+    expect(result.exitCode).toBe(2);
+    expect(consoleSpy.mock.calls.map(call => String(call[0])).join('\n')).not.toContain('schemaVersion');
     consoleSpy.mockRestore();
   });
 });

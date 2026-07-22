@@ -27,6 +27,64 @@ import { formatDeployedWorkspaceSignalPlan, readWorkspaceSignalPlan } from "../w
 import * as path from "node:path";
 import * as fsSync from "node:fs";
 
+/** Generate or deploy the canonical project quickref. */
+export const quickrefHandler: CommandHandler = {
+  id: 'quickref',
+  name: 'Project Quickref',
+  description: 'Generate and deploy an always-visible project quickref',
+  category: 'project',
+  aliases: [],
+
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    const action = ctx.args.find(arg => !arg.startsWith('-')) ?? 'generate';
+    if (!ctx.args.includes('--project')) {
+      return { exitCode: 1, message: 'Error: project quickrefs require --project\n\nUsage: aiwg quickref generate|deploy --project [--provider <id>] [--dry-run]' };
+    }
+    if (!['generate', 'deploy'].includes(action)) {
+      return { exitCode: 1, message: `Error: unknown quickref action '${action}' (expected generate or deploy)` };
+    }
+
+    const {
+      generateProjectQuickref,
+      deployProjectQuickref,
+    } = await import('../../extensions/project-quickref.js');
+    try {
+      if (action === 'generate') {
+        const result = await generateProjectQuickref(ctx.cwd, { dryRun: ctx.dryRun });
+        const verb = ctx.dryRun ? 'Would generate' : result.changed ? 'Generated' : 'Unchanged';
+        console.log(`${verb} ${result.skillName}`);
+        console.log(`  Source: ${result.sourcePath}`);
+        console.log(`  Output: ${result.outputPath}`);
+        if (ctx.dryRun) {
+          console.log('\n--- preview ---\n');
+          console.log(result.content);
+        }
+        return { exitCode: 0 };
+      }
+
+      const providerIndex = ctx.args.indexOf('--provider');
+      const explicitProvider = providerIndex >= 0 ? ctx.args[providerIndex + 1] : undefined;
+      const { readAiwgConfig } = await import('../../config/aiwg-config.js');
+      const config = await readAiwgConfig(ctx.cwd);
+      const providers = explicitProvider ? [explicitProvider] : (config?.providers ?? []);
+      if (providers.length === 0) {
+        return { exitCode: 1, message: 'No providers configured. Pass --provider <id> or add providers to .aiwg/aiwg.config.' };
+      }
+      for (const provider of providers) {
+        const result = await deployProjectQuickref(ctx.cwd, provider, { dryRun: ctx.dryRun });
+        const verb = ctx.dryRun ? 'Would deploy' : result.changed ? 'Deployed' : 'Unchanged';
+        console.log(`${verb} ${result.skillName} -> ${result.provider}: ${result.targetPath}${result.emulated ? ' (emulated skill surface)' : ''}`);
+        for (const stale of result.pruned) {
+          console.log(`  ${ctx.dryRun ? 'Would prune' : 'Pruned'} stale managed quickref: ${stale}`);
+        }
+      }
+      return { exitCode: 0 };
+    } catch (error) {
+      return { exitCode: 1, message: `Project quickref failed: ${(error as Error).message}` };
+    }
+  },
+};
+
 /**
  * Provider artifact-path map for `aiwg list` provider detection (#1530).
  *
@@ -1076,6 +1134,18 @@ export const newProjectHandler: CommandHandler = {
       cwd: ctx.cwd,
     });
     if (result.exitCode === 0) {
+      // The real scaffolder always runs in an existing target directory. Keep
+      // mocked/script-runner-only calls side-effect free when their synthetic
+      // cwd does not exist.
+      const { access } = await import('node:fs/promises');
+      const { constants } = await import('node:fs');
+      try {
+        await access(ctx.cwd, constants.W_OK);
+        const { ensureWorkspaceContext } = await import('../../smiths/context-pipeline/workspace-context.js');
+        await ensureWorkspaceContext(ctx.cwd);
+      } catch (error) {
+        if (!['ENOENT', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      }
       const { formatStarNudge } = await import("../../community/links.js");
       const { markNudgeShown, shouldShowNudge } = await import("../../community/nudge-policy.js");
       if (shouldShowNudge('intake')) {
@@ -1267,7 +1337,7 @@ export const discoverHandler: CommandHandler = {
   id: "discover",
   name: "Discover",
   description:
-    "Find AIWG skills, agents, commands, and rules by capability — index-driven on-demand discovery",
+    "Find AIWG operational assets by capability — index-driven on-demand discovery",
   category: "index",
   aliases: [],
 
@@ -1289,15 +1359,14 @@ export const discoverHandler: CommandHandler = {
 /**
  * Features command handler — manage AIWG's optional runtime features (#1219).
  *
- * Subcommands: status / info / install / remove. Cycle 1 ships
- * status + info; install + remove arrive in Cycle 3 once install-mode
- * detection is designed.
+ * Subcommands: status / info / install / remove. Native feature installs use
+ * a user-owned package root with explicit package-level script approval.
  */
 export const featuresHandler: CommandHandler = {
   id: "features",
   name: "Features",
   description:
-    "List, inspect, and (eventually) install AIWG's optional runtime features",
+    "List, inspect, and install AIWG's optional runtime features",
   category: "maintenance",
   aliases: [],
 

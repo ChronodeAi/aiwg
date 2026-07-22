@@ -75,6 +75,31 @@ Complete reference for all `aiwg` CLI commands.
 
 ## Maintenance Commands
 
+### regenerate
+
+Refresh or adopt the project context graph without redeploying frameworks.
+
+```bash
+# Fresh or already-migrated project (default branch)
+aiwg regenerate --workspace [--provider <name>] [--dry-run] [--force]
+
+# Established project: preview is default, apply is explicit
+aiwg regenerate --existing-project [--provider <name>] [--dry-run|--apply]
+
+# Compatibility-only inline branch
+aiwg regenerate --full-inject [--provider <name>] [--dry-run]
+```
+
+`--existing-project` synthesizes an exact, bounded project snapshot, migrates
+provider-only roots to attributed linked files, and commits context outputs in
+one rollback-capable transaction. It refuses possible credentials, directive
+conflicts, `--force`, and partial `--no-*-md` writes. A successful apply prints
+`aiwg workspace-context rollback <transaction-id>`.
+
+`--legacy` aliases `--full-inject`. Omitting a branch selects `--workspace`.
+The CLI rejects unknown flags, missing values, and conflicting branches with
+usage status.
+
 ### help
 
 Display comprehensive CLI help information.
@@ -312,12 +337,16 @@ Provider capability awareness — answer "what does my provider support?" and "w
 ```bash
 aiwg steward capabilities [--provider <name>] [--feature <name>] [--all]
 aiwg steward find --capability <name>
+aiwg steward models --route --capability-type <agent|skill|rule|workflow> \
+  --capability <id> --assignment "<bounded work>" [--complex|--high-impact] \
+  [--provider <name>] [--allow-premium] [--json]
 ```
 
 **Subcommands:**
 
 - `capabilities` - Show provider/feature capability matrix entries
 - `find` - Routing advice for the current provider
+- `models --route` - Bind a selected capability and bounded assignment to the economy, standard, or premium wrapper selected by policy
 
 **Options:**
 
@@ -341,7 +370,18 @@ normalizes to the capability-matrix id `claude-code`; `openai` normalizes to
 aiwg steward capabilities --provider claude
 aiwg steward capabilities --feature cron
 aiwg steward find --capability cron
+aiwg steward models --route --provider codex --complex \
+  --capability-type agent --capability software-implementer \
+  --assignment "Implement and verify one bounded change" --json
 ```
+
+The route envelope reports the canonical tier/role, wrapper agent, provider-compiled
+model and enforcement outcome, native versus emulated launch mechanism, selected
+capability stable id and packaged source provenance, and wrapper prompt. The
+capability must resolve at the requested agent, skill, rule, or workflow type;
+missing, ambiguous, and type-mismatched values fail before an envelope is emitted.
+Premium routes remain confirmation-gated unless the
+invocation or project policy explicitly grants them with `--allow-premium`.
 
 ---
 
@@ -368,6 +408,15 @@ aiwg use <framework|addon>
 - `--coding-model <name>` - Override coding tier model (alias: `--coding`)
 - `--efficiency-model <name>` - Override efficiency tier model (alias: `--efficiency`)
 - `--save` - Save model overrides to project `models.json`
+
+For providers with a native agent directory, deployment validates the content of
+all three model worker wrappers: `aiwg-model-efficiency-worker`,
+`aiwg-model-coding-worker`, and `aiwg-model-reasoning-worker`. Validation rejects
+missing, empty, malformed, stale, or policy-mismatched artifacts; Codex pins are
+compared to the effective offline catalog and Claude aliases to their semantic
+role/tier contract. Agent-less providers
+are reported as inherited, global-only, informational, or unsupported rather than
+being falsely described as pinned.
 - `--save-user` - Save model overrides to `~/.config/aiwg/models.json`
 - `--no-utils` - Skip aiwg-utils addon installation (frameworks only)
 - `--force` - Overwrite existing deployments
@@ -3457,11 +3506,11 @@ Transform a high-level objective into a fully researched, SDLC-gated issue backl
 
 ## Discovery
 
-Top-level capability search across AIWG skills, agents, commands, and rules. **Reach for `aiwg discover` early and often** — it is the first-class operator surface for finding the right AIWG capability for a need, and the kernel skill set deliberately deploys only a small directory of quickrefs to your platform's flat skill listing. Everything else lives at `<provider-dir>/.aiwg/skills/` and is reachable only through this command.
+Top-level capability search across AIWG operational assets: skills, agents, commands, rules, flows, runbooks, templates, and behaviors. **Reach for `aiwg discover` early and often** — it is the first-class operator surface for finding the right AIWG capability for a need, and the kernel skill set deliberately deploys only a small directory of quickrefs to your platform's flat skill listing. Everything else lives at `<provider-dir>/.aiwg/skills/` and is reachable only through this command.
 
 ### discover
 
-Find AIWG skills, agents, commands, and rules by capability — index-driven on-demand discovery (#1212).
+Find AIWG operational assets by capability — index-driven on-demand discovery (#1212).
 
 ```bash
 aiwg discover "<phrase>" [options]
@@ -3470,7 +3519,7 @@ aiwg discover "<phrase>" [options]
 **Options:**
 
 - `--limit <N>` — Max ranked results (default: 5)
-- `--type <kinds>` — Comma-separated filter; defaults to `skill,agent,command,rule,flow`. Examples: `--type skill`, `--type skill,agent`
+- `--type <kinds>` — Comma-separated filter; defaults to `skill,agent,command,rule,flow,runbook,template,behavior`. Examples: `--type skill`, `--type runbook`, `--type skill,agent`
 - `--json` / `--format json` — Emit a stable JSON schema (`id`, `type`, `name`, `title`, `score`, `triggers`, `capability`, `kernel`, `provenance`) for programmatic agent consumption. Paths are intentionally omitted from discover output; use `aiwg show metadata <id>` when path/debug metadata is required.
 - `--format text` — Emit readable text output (default).
 - `--pretty` — Pretty-print JSON output with indentation (default for compatibility).
@@ -3489,6 +3538,7 @@ aiwg discover "<phrase>" [options]
 aiwg discover "create intake"                       # ranks intake-* skills + intake-coordinator agent
 aiwg discover "deploy production" --limit 3         # flow-deploy-to-production tops at score 0.51
 aiwg discover "audit security" --type skill         # narrow to skills only
+aiwg discover "rotate service certificates" --type runbook # procedural runbooks only
 aiwg discover "review code" --type agent --format json --compact # JSON for sub-agent consumption
 aiwg discover "static retrieval" --json                # legacy JSON alias
 ```
@@ -3501,12 +3551,12 @@ Readable format optimized for agent follow-up — names the stable id, type, sco
 Discovery results for "deploy production" (3 matches, 16ms):
 
 1. Flow Deploy To Production
-   type: skill  score: 0.51
-   id: aiwg:skill:6f1477d99813ca8d
+   type: flow  score: 0.51
+   id: aiwg:flow:6f1477d99813ca8d
    name: flow-deploy-to-production
    capability: Orchestrate production deployment with strategy selection, validation,
    trigger: "deploy production"
-   show: aiwg show skill aiwg:skill:6f1477d99813ca8d
+   show: aiwg show flow aiwg:flow:6f1477d99813ca8d
 
 Use `--format json` for machine-readable output. Use `aiwg show metadata <id>` for paths and full metadata.
 ```
@@ -3520,8 +3570,17 @@ Use `--format json` for machine-readable output. Use `aiwg show metadata <id>` f
 | Capability description | 2× | Frontmatter `description` (or first body paragraph fallback) |
 | Title | 3× | Boost for exact title match |
 | Tags | 2× | Per-tag |
+| Structured search terms | 1.5× | Process headings, step/capability identifiers, and verification/rollback language |
 | Summary | 1× | Body summary |
 | Path | 0.5× | Filename / path substring |
+
+YAML workflow-metalanguage resources remain `type: flow` and retain their exact
+declarative `kind` (for example, `FlowPlaybook` or `OpsInventory`). Markdown or
+YAML runbooks use the separate `type: runbook`; Markdown runbooks also retain
+their physical `sourceType` (`template` or `document`). Runbook extraction is
+section-aware and indexes procedure, verification, rollback, diagnosis,
+remediation, monitoring, and escalation language rather than flattening the
+file to its first paragraph.
 
 Multi-token queries require ≥50% token overlap to surface partial matches — gibberish queries return zero results rather than incidental hits.
 
@@ -3539,7 +3598,7 @@ aiwg index show <type> <name> [options]      # equivalent
 
 **Options:**
 
-- `--json` — For body lookup, emit `{ id, path, type, name, title, kernel, content }`. For `show metadata`, emit `{ id, backend, type, name, title, paths, provenance, metadata }`. Default body mode streams the file unmodified.
+- `--json` — For body lookup, emit `{ id, path, type, name, title, kernel, providerModels, content }`. For `show metadata`, emit `{ id, backend, type, name, title, paths, provenance, providerModels, metadata }`. `providerModels` lists the reasoning, coding, and efficiency model names plus their model-pinned worker wrapper for providers installed in `.aiwg/aiwg.config`. Default body mode streams the file unmodified.
 - `--first` — On ambiguity, pick the top match instead of erroring with the disambiguation list.
 - `--graph <name>` — Override the default graph (defaults to `framework` then `project`).
 - `--backend <fortemi-core|local>` — Lookup backend. Default is
@@ -3563,7 +3622,65 @@ aiwg show agent aiwg-steward                        # agent definition
 aiwg show command discover                          # CLI command spec
 aiwg show rule no-attribution                       # rule body
 aiwg show skill research-query --json
+aiwg show agent aiwg-model-coding-worker --json | jq '.providerModels'
 ```
+
+AIWG deploys three provider-native subagent wrappers:
+`aiwg-model-reasoning-worker`, `aiwg-model-coding-worker`, and
+`aiwg-model-efficiency-worker`. Their provider output pins the current catalog
+model for that role. Give a wrapper any bounded assignment; it discovers and
+loads the required AIWG agent, skill, rule, or workflow before executing it.
+Use the `providerModels` mapping rather than hard-coding model identifiers.
+
+### Provider inventory
+
+Provider configuration is not proof that a provider is installed. Use the
+runtime inventory before selecting a launcher or refreshing models:
+
+```bash
+aiwg runtime-info --providers
+aiwg runtime-info --providers --json
+```
+
+Each provider reports independent `configured`, `deployed`, `detected`,
+`available`, and `active` states. Evidence identifies project/user/runtime
+scope and the exact signal: configuration, deployment record, runtime
+environment, process ancestry, executable, or provider configuration file.
+An unavailable configured provider includes an actionable reason rather than
+being silently advertised as launchable.
+
+### Dynamic model sources
+
+```bash
+aiwg models sources --json
+aiwg models refresh --json
+aiwg models refresh --drift --json
+aiwg models refresh --url https://catalog.example/model-catalog.v1.json --json
+```
+
+`models sources` is offline: it reads a fresh user cache when present and
+otherwise returns the committed catalog. `models refresh` consults a public
+JSON feed only when `--url` or `AIWG_MODEL_CATALOG_URL` configures one, then
+runs supported native discovery only for
+providers marked available by the provider inventory. Codex uses the
+machine-readable app-server `model/list` protocol; Claude Code currently has
+no supported local model-list command, so its stable aliases or public/static
+catalog remain the fallback.
+
+The cache lives at `~/.cache/aiwg/model-catalog.v1.json` and expires after 24
+hours. Each result records source (`native`, `remote`, `cache`, or `static`),
+observation time, and account scope. Deployment never accesses the network: it
+uses a fresh cache or the committed catalog deterministically. Override the
+feed with `AIWG_MODEL_CATALOG_URL`. A hosted or nightly catalog is therefore
+optional, not a runtime dependency. Account-specific native results are marked
+`local-account` and are never represented as globally available.
+`--drift` compares resolved role mappings with the committed catalog and emits
+a reviewable, non-mutating provider/role before-and-after report.
+
+AIWG does not currently operate a built-in public feed. See
+[the feed decision record](architecture/adr-optional-model-catalog-feed.md)
+and the
+[provider discovery matrix](models/model-discovery-provider-decisions.md).
 
 **Errors:**
 
@@ -3962,9 +4079,18 @@ Build the semantic embedding index for a graph (so `--semantic`, `index similar`
 ```bash
 aiwg index embed --graph papers              # embed the papers graph's metadata (title + summary)
 aiwg index embed --graph papers --model Xenova/all-MiniLM-L6-v2   # explicit model
+aiwg index embed --graph papers --embed-body # embed title + summary + chunked source body
+aiwg index embed --graph papers --granularity body # explicit body-granularity form
 ```
 
 Embeddings are written to `<graph index dir>/embeddings/` (regenerable; gitignored with the rest of `.aiwg/.index/`). Re-run after `aiwg index build` to refresh.
+
+By default, AIWG embeds each node's title and summary. `--embed-body` (equivalent
+to `--granularity body`) strips source frontmatter, embeds bounded overlapping
+body chunks, and mean-pools them into one normalized vector per node. The
+manifest records the canonical granularity (`title-summary` or `body`), and
+local semantic-query and dedup-report output identify the granularity and model
+they loaded.
 
 ### index similar
 
@@ -3985,7 +4111,11 @@ aiwg index dedup-report --graph papers --threshold 0.85   # looser; more candida
 aiwg index dedup-report --graph papers --json
 ```
 
-Each pair lists both node ids + their titles, most-similar-first. Embeddings are over title + summary, so this catches title/abstract-level duplicates; lower the threshold to surface looser matches.
+Each pair lists both node ids + their titles, most-similar-first. With the
+default `title-summary` granularity this catches title/abstract-level
+duplicates; build the index with `--embed-body` to detect content-level
+duplicates whose summaries differ. Lower the threshold to surface looser
+matches.
 
 ---
 
@@ -4454,6 +4584,24 @@ aiwg research-store get sources/paper-123.md
 
 Manage AIWG ops ecosystem workspaces (sysops, devops, itops, streamops). See `agentic/code/frameworks/ops-complete/`.
 
+### repo-access
+
+Resolve members from the canonical `.aiwg/aiwg.config` `workspace` + `repos`
+manifest and apply deny-by-default operation authorization. Legacy YAML
+repo-access manifests remain a fallback.
+
+```bash
+aiwg repo-access list
+aiwg repo-access status
+aiwg repo-access explain --path <repo-or-file>
+aiwg repo-access check --path <repo-or-file> \
+  --action <read|write|commit|push|issue-comment|service-action|destructive>
+```
+
+`list` and `status` include the member config path, provider/domain, delivery
+mode, tracker route, and drift. `check` exits `0` for allow, `1` for deny, and
+`2` for invalid input/config.
+
 ### ops
 
 ```bash
@@ -4510,6 +4658,11 @@ aiwg ops list
 aiwg ops use client-acme
 aiwg ops push --workspace personal
 ```
+
+When the ops workspace home contains a canonical workspace config, `ops push`
+uses each member's configured primary remote/default branch and skips members
+that do not allow `push`. The ops registry remains a specialization and
+compatibility source, not a parallel authorization manifest.
 
 **`adopt` flags:**
 

@@ -6,11 +6,21 @@ description: Automatically detect and update linked issues based on commits, art
 commandHint:
   argumentHint: '[--commit <sha>] [--scan-recent <count>] [--artifact <path>] [--dry-run]'
   allowedTools: 'Bash(git *, gh *), Read, Glob, mcp__gitea__*'
-  model: sonnet
+  model: haiku
   category: project-management
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Issue Sync
+
+## Semantic Label Contract (#1789)
+
+Synchronize labels by stable semantic role, resolving provider-native strings
+from `.aiwg/aiwg.config` `issues.labels` on each side. Provider-specific Gitea,
+GitHub, and local names may differ while representing the same role. Preserve
+unmapped labels as unrelated data, report duplicate/conflicting/unavailable
+taxonomy entries, and never create or delete tracker labels implicitly.
 
 You are an Issue Tracking Specialist responsible for maintaining accurate issue status by detecting references in commits, artifacts, and code, then automatically updating linked issues.
 

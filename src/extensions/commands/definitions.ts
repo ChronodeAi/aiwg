@@ -174,16 +174,16 @@ export const refreshCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
-// #1266 — Regenerate cross-provider context files (AIWG.md + AGENTS.md) without
+// #1266/#1811 — Regenerate the canonical graph and provider adapters without
 // redeploying frameworks. Narrower than refresh; faster for context-drift fixes.
 export const regenerateCommand: Extension = {
   id: 'regenerate',
   type: 'skill',
   name: 'Regenerate Context Files',
-  description: 'Regenerate AIWG.md + AGENTS.md without redeploying frameworks (context-only)',
+  description: 'Regenerate or transactionally adopt WORKSPACE.md, AIWG.md, and provider adapters without redeploying frameworks',
   version: '1.0.0',
   capabilities: ['cli', 'regenerate', 'context', 'maintenance', 'self-maintenance'],
-  keywords: ['regenerate', 'context', 'aiwg.md', 'agents.md', 'redeploy-context'],
+  keywords: ['regenerate', 'context', 'workspace.md', 'aiwg.md', 'agents.md', 'existing-project', 'redeploy-context'],
   category: 'maintenance',
   platforms: {
     claude: 'full',
@@ -195,17 +195,46 @@ export const regenerateCommand: Extension = {
   },
   metadata: {
     type: 'skill',
-    triggerPhrases: ['regenerate context', 'rewrite AIWG.md', 'rewrite AGENTS.md', 'fix context files'],
+    triggerPhrases: ['regenerate context', 'extract existing project context', 'refresh WORKSPACE.md', 'rewrite AIWG.md', 'fix context files'],
     commandHint: {
       template: 'utility',
       allowedTools: ['Bash', 'Read', 'Write'],
-      argumentHint: '[--provider <name>] [--dry-run] [--force] [--no-aiwg-md] [--no-agents-md]',
+      argumentHint: '[--workspace|--existing-project|--full-inject] [--provider <name>] [--dry-run|--apply] [--force]',
       executionSteps: [
         'Detect active provider (or accept --provider override)',
+        'Select canonical refresh, transactional existing-project extraction, or legacy inline compatibility',
         'Discover deployed artifacts under provider paths',
-        'Regenerate AIWG.md from CLAUDE.md template (or stub if absent)',
-        'Regenerate AGENTS.md link-index sections',
+        'Refresh the managed WORKSPACE.md graph while preserving its operator region',
+        'Regenerate AIWG.md and minimal provider startup adapters',
         'Report which files were written, skipped, or backed up',
+      ],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const workspaceContextCommand: Extension = {
+  id: 'workspace-context',
+  type: 'skill',
+  name: 'Workspace Context',
+  description: 'Audit, migrate, diagnose, and roll back canonical WORKSPACE.md context',
+  version: '1.0.0',
+  capabilities: ['cli', 'context', 'audit', 'migration', 'rollback'],
+  keywords: ['workspace.md', 'context', 'migration', 'provider', 'doctor'],
+  category: 'maintenance',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['audit workspace context', 'migrate context to WORKSPACE.md', 'rollback context migration'],
+    commandHint: {
+      template: 'utility',
+      allowedTools: ['Read', 'Write', 'Bash'],
+      argumentHint: 'audit|migrate|rollback|doctor [--dry-run] [--apply] [--json]',
+      executionSteps: [
+        'Audit provider and nested context sources',
+        'Preview deterministic migration output',
+        'Apply only when explicitly requested and retain transaction preimages',
+        'Run context graph diagnostics or rollback a transaction',
       ],
     },
   } satisfies SkillMetadata,
@@ -251,6 +280,25 @@ export const useCommand: Extension = {
       ],
     },
   } satisfies SkillMetadata,
+};
+
+export const modelsCommand: Extension = {
+  id: 'models',
+  type: 'command',
+  name: 'Models',
+  description: 'Audit, resolve, validate, migrate, and safely update model policy',
+  version: '1.0.0',
+  capabilities: ['cli', 'models', 'audit', 'configuration'],
+  keywords: ['models', 'model policy', 'tier', 'audit', 'resolve', 'migrate'],
+  category: 'catalog',
+  platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<audit|list|resolve|set-default|set|validate|migrate> [options]',
+    allowedTools: ['Read', 'Write', 'Glob'],
+  } satisfies CommandMetadata,
 };
 
 export const cockpitCommand: Extension = {
@@ -366,6 +414,28 @@ export const newBundleCommand: Extension = {
     commandHint: {
       template: 'utility',
       argumentHint: '<name> [--type extension|addon|framework|plugin|provider] [--starter skill|rule|agent|minimal] [--description "..."]',
+      allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const quickrefCommand: Extension = {
+  id: 'quickref',
+  type: 'skill',
+  name: 'Project Quickref',
+  description: 'Generate and deploy an always-visible project quickref from .aiwg/quickref.json',
+  version: '1.0.0',
+  capabilities: ['cli', 'project-local', 'quickref', 'kernel'],
+  keywords: ['project', 'quickref', 'orientation', 'kernel', 'generate', 'deploy'],
+  category: 'project',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['generate project quickref', 'deploy project quickref'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'generate|deploy --project [--provider <id>] [--dry-run]',
       allowedTools: ['Read', 'Write', 'Bash'],
     },
   } satisfies SkillMetadata,
@@ -1211,7 +1281,7 @@ export const discoverCommand: Extension = {
   id: 'discover',
   type: 'skill',
   name: 'Discover',
-  description: 'Find AIWG skills, agents, commands, and rules by capability — index-driven on-demand discovery',
+  description: 'Find AIWG operational assets by capability — index-driven on-demand discovery',
   version: '1.0.0',
   capabilities: ['cli', 'discovery', 'search', 'capability', 'skills'],
   keywords: ['discover', 'find skill', 'capability', 'search skills', 'what skill does', 'skill for'],
@@ -2162,7 +2232,7 @@ export const repoAccessCommand: Extension = {
   id: 'repo-access',
   type: 'skill',
   name: 'Repo Access',
-  description: 'Validate repo access manifest authorization before reading, writing, committing, pushing, or commenting across repos',
+  description: 'Resolve workspace members and validate deny-by-default authorization before cross-repo operations',
   version: '1.0.0',
   capabilities: ['cli', 'policy', 'repo-access', 'authorization', 'preflight'],
   keywords: ['repo', 'access', 'manifest', 'authorization', 'permissions', 'preflight', 'handoff'],
@@ -2187,11 +2257,12 @@ export const repoAccessCommand: Extension = {
     commandHint: {
       template: 'utility',
       allowedTools: ['Bash', 'Read'],
-      argumentHint: 'list | explain --path <repo> | check --path <repo> --action <action>',
+      argumentHint: 'list | status | explain --path <repo> | check --path <repo> --action <action>',
       executionSteps: [
-        'Load .aiwg/ops/security/repo-access.manifest.yaml',
+        'Load .aiwg/aiwg.config workspace + repos, with legacy YAML fallback',
         'Resolve the requested repo/path against manifest entries',
-        'Return ALLOW/DENY with the matching repo entry and reason',
+        'Load the matched member config for delivery, remotes, actor, and signing',
+        'Return member status or ALLOW/DENY with the matching repo and reason',
       ],
     },
   } satisfies SkillMetadata,
@@ -3365,21 +3436,24 @@ export const rlmCacheCommand: Extension = {
  * - Agentic Tools (5): chunk, fanout, rlm-prep, rlm-search, rlm-status
  */
 export const commandDefinitions: Extension[] = [
-  // Maintenance (6)
+  // Maintenance (7)
   helpCommand,
   versionCommand,
   doctorCommand,
   updateCommand,
   refreshCommand,
   regenerateCommand,
+  workspaceContextCommand,
 
   // Framework (6)
   useCommand,
+  modelsCommand,
   cockpitCommand,
   listCommand,
   removeCommand,
   promoteCommand,
   newBundleCommand,
+  quickrefCommand,
   installCommand,
   packagesCommand,
   marketplaceCommand,

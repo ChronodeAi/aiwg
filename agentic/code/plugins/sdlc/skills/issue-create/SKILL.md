@@ -6,8 +6,10 @@ description: Create a new ticket/issue with configurable backend (Gitea, GitHub,
 commandHint:
   argumentHint: <title> [description] [--provider NAME --labels "label1,label2" --assignee USER --check-regression]
   allowedTools: Read, Write, Glob, Bash, mcp__gitea__create_issue
-  model: sonnet
+  model: haiku
   category: project-management
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -24,6 +26,15 @@ commandHint:
 
 
 # Issue Create
+
+## Semantic Label Contract (#1789)
+
+Resolve `.aiwg/aiwg.config` `remotes.issue_tracker` and `issues.labels` before
+translating any semantic label role into a tracker-native string. Validate the
+resolved label against the target tracker catalog. Preserve caller-supplied
+unrelated labels, report unavailable roles, and never provision a missing label
+implicitly. If `issues.labels` is absent, retain legacy behavior with an
+explicit fallback warning rather than silently guessing project semantics.
 
 ## Purpose
 

@@ -20,6 +20,10 @@ import {
   resolveRemoteProvider,
   resolveDelivery,
   resolveParallelism,
+  resolveIssueLabels,
+  validateExternalLinks,
+  validateIssueLabels,
+  validateWorkspaceConfig,
   getProviderParallelismDefaults,
   PROVIDER_PARALLELISM_DEFAULTS,
 } from '../../../src/config/aiwg-config.js';
@@ -147,6 +151,89 @@ describe('aiwg-config', () => {
 
       const read = await readAiwgConfig(tmpDir);
       expect(read!.scripts).toEqual({ deploy: 'aiwg use all', doctor: 'aiwg doctor' });
+    });
+
+    it('round-trips multiple validated external links', async () => {
+      const cfg = emptyConfig();
+      cfg.externalLinks = {
+        project_docs: {
+          label: 'Project documentation',
+          url: 'https://example.com/docs',
+          category: 'docs',
+        },
+        status_page: {
+          label: 'Service status',
+          url: 'https://status.example.com/',
+          audience: 'operators',
+        },
+      };
+      await writeAiwgConfig(tmpDir, cfg);
+
+      const read = await readAiwgConfig(tmpDir);
+      expect(read?.externalLinks).toEqual(cfg.externalLinks);
+    });
+
+    it('clearly rejects malformed external links while preserving unrelated fields on disk', async () => {
+      const dir = join(tmpDir, '.aiwg');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'aiwg.config'), JSON.stringify({
+        version: '1',
+        providers: ['codex'],
+        installed: {},
+        scripts: { verify: 'npm test' },
+        externalLinks: {
+          broken: { label: 'Broken', url: 'not a url' },
+        },
+      }));
+
+      await expect(readAiwgConfig(tmpDir)).rejects.toThrow(
+        'externalLinks.broken.url: must be a valid absolute URL',
+      );
+      expect(JSON.parse(readFileSync(join(dir, 'aiwg.config'), 'utf8')).scripts)
+        .toEqual({ verify: 'npm test' });
+    });
+  });
+
+  describe('validateExternalLinks', () => {
+    it('rejects missing fields, unsupported protocols, embedded credentials, and unstable keys', () => {
+      expect(validateExternalLinks({
+        'Bad.Key': { url: 'ftp://user:pass@example.com/file' },
+        missing_url: { label: 'Missing URL' },
+      })).toEqual(expect.arrayContaining([
+        expect.stringContaining('key must start with a lowercase letter'),
+        expect.stringContaining('.label: required'),
+        expect.stringContaining('protocol must be http or https'),
+        expect.stringContaining('embedded credentials are not allowed'),
+        expect.stringContaining('externalLinks.missing_url.url: required'),
+      ]));
+    });
+  });
+
+  describe('validateWorkspaceConfig', () => {
+    it('accepts mixed relative and absolute members with explicit capabilities', () => {
+      expect(validateWorkspaceConfig(
+        { name: 'home', root: '~/dev' },
+        [
+          { name: 'child', path: './child', allowed: ['read', 'write'] },
+          { name: 'external', path: '/srv/external', allowed: ['read'], provider: 'gitea' },
+        ],
+      )).toEqual([]);
+    });
+
+    it('rejects malformed authorization, duplicates, and ambiguous back-references', () => {
+      expect(validateWorkspaceConfig(
+        { name: 'home', member_of: '..' },
+        [
+          { name: 'same', path: '.', allowed: ['read', 'teleport'] },
+          { name: 'same', path: '.', allowed: [] },
+        ],
+      )).toEqual(expect.arrayContaining([
+        expect.stringContaining('must not also declare repos'),
+        expect.stringContaining("invalid operation 'teleport'"),
+        expect.stringContaining('duplicate member name'),
+        expect.stringContaining('duplicate member path'),
+        expect.stringContaining('must be a non-empty array'),
+      ]));
     });
   });
 
@@ -339,6 +426,7 @@ describe('aiwg-config', () => {
         issue_tracker: 'origin',
         ci: 'origin',
         tracker_actor: undefined,
+        transport: undefined,
         secondary: [],
       });
     });
@@ -349,6 +437,7 @@ describe('aiwg-config', () => {
       expect(r.issue_tracker).toBe('origin');
       expect(r.ci).toBe('origin');
       expect(r.tracker_actor).toBeUndefined();
+      expect(r.transport).toBeUndefined();
       expect(r.secondary).toEqual([]);
     });
 
@@ -382,6 +471,23 @@ describe('aiwg-config', () => {
         login: 'roctinam',
         via: 'tea',
         forbid_actors: ['roctibot'],
+      });
+    });
+
+    it('preserves primary remote transport identity metadata', () => {
+      const r = resolveRemotes({
+        transport: {
+          login: 'roctinam',
+          protocol: 'ssh',
+          helper: 'tools/git/push-origin-as-roctinam.sh',
+          key_fingerprint: 'SHA256:project-key',
+        },
+      });
+      expect(r.transport).toEqual({
+        login: 'roctinam',
+        protocol: 'ssh',
+        helper: 'tools/git/push-origin-as-roctinam.sh',
+        key_fingerprint: 'SHA256:project-key',
       });
     });
 
@@ -451,6 +557,7 @@ describe('aiwg-config', () => {
       expect(r.require_signed_commits).toBe(false);
       expect(r.committer).toBeUndefined();
       expect(r.signing).toBeUndefined();
+      expect(r.release_signing).toBeUndefined();
       expect(r.force_push_policy).toBe('never');
       expect(r.auto_close_issues).toBe(true);
       expect(r.issue_comment_on_cycle).toBe(true);
@@ -464,6 +571,7 @@ describe('aiwg-config', () => {
         require_signed_commits: true,
         committer: { name: 'AIWG Bot', email: 'aiwg@example.test' },
         signing: { format: 'openpgp', key: 'ABC123', enforce: 'commits' },
+        release_signing: { format: 'openpgp', key: 'DEF456', enforce: 'tags' },
         force_push_policy: 'own-branch-only',
       });
       expect(r.mode).toBe('direct');
@@ -472,6 +580,7 @@ describe('aiwg-config', () => {
       expect(r.require_signed_commits).toBe(true);
       expect(r.committer).toEqual({ name: 'AIWG Bot', email: 'aiwg@example.test' });
       expect(r.signing).toEqual({ format: 'openpgp', key: 'ABC123', enforce: 'commits' });
+      expect(r.release_signing).toEqual({ format: 'openpgp', key: 'DEF456', enforce: 'tags' });
       expect(r.force_push_policy).toBe('own-branch-only');
     });
 
@@ -537,6 +646,69 @@ describe('aiwg-config', () => {
       const read = await readAiwgConfig(tmpDir);
       expect(read?.remotes?.primary).toBe('origin');
       expect(read?.remotes?.secondary?.[0]?.name).toBe('github');
+    });
+  });
+
+  describe('issue label taxonomy (#1789)', () => {
+    const issues = {
+      labels: {
+        human_required: {
+          name: 'hitl',
+          provider_names: { github: 'human-required', local: 'needs-human' },
+          category: 'human-interaction' as const,
+          description: 'Work cannot continue until a human responds',
+          requires_human: true,
+          blocks_automation: true,
+          resume_when: 'requested human input is recorded',
+        },
+        feature: {
+          name: 'feature',
+          category: 'type' as const,
+          description: 'Feature work',
+          requires_human: false,
+          blocks_automation: false,
+        },
+      },
+    };
+
+    it('maps one semantic role to Gitea, GitHub, and local label strings', () => {
+      expect(resolveIssueLabels(issues, 'gitea').labels.human_required.resolved_name).toBe('hitl');
+      expect(resolveIssueLabels(issues, 'github').labels.human_required.resolved_name).toBe('human-required');
+      expect(resolveIssueLabels(issues, 'local').labels.human_required.resolved_name).toBe('needs-human');
+    });
+
+    it('warns clearly when existing projects use legacy fallback behavior', () => {
+      const result = resolveIssueLabels(undefined, 'gitea');
+      expect(result.labels).toEqual({});
+      expect(result.diagnostics).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'fallback', severity: 'warning' }),
+      ]));
+    });
+
+    it('reports missing, duplicate, conflicting, and unavailable labels without provisioning', () => {
+      const diagnostics = validateIssueLabels({
+        labels: {
+          blocked: {
+            name: 'workflow',
+            category: 'blocked-reason',
+            description: 'Blocked',
+            requires_human: false,
+            blocks_automation: true,
+          },
+          duplicate: {
+            name: 'workflow',
+            category: 'lifecycle',
+            description: 'Duplicate native name',
+            requires_human: false,
+            blocks_automation: false,
+            transition_to: 'missing-role',
+          },
+        },
+      }, { provider: 'gitea', availableLabels: ['other'] });
+
+      expect(diagnostics.map((item) => item.code)).toEqual(expect.arrayContaining([
+        'missing', 'duplicate', 'conflict', 'unavailable',
+      ]));
     });
   });
 
