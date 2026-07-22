@@ -42,6 +42,7 @@ import { getFrameworksForMode, normalizeDeploymentMode, skillMatchesProvider, is
 const CODEX_SKILLS_DIR = path.join(os.homedir(), '.codex', 'skills');
 const MAX_NAME_LENGTH = 100;
 const MAX_DESCRIPTION_LENGTH = 500;
+const LEGACY_RENAMED_SKILLS = new Set(['aiwg-mcp']);
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -91,6 +92,26 @@ function yamlDoubleQuoted(value) {
     .trim();
 }
 
+function resolveSkillModelPolicy(frontmatter) {
+  const block = frontmatter.match(/^commandHint:\s*\n((?:[ \t]+[^\n]*\n?)*)/m)?.[1] || '';
+  const hint = {};
+  for (const line of block.split('\n')) {
+    const match = line.trim().match(/^(model|modelRole|modelTier|modelEffort|modelRationale):\s*(.+)$/);
+    if (match) hint[match[1]] = stripWrappingQuotes(match[2]);
+  }
+  const legacy = String(hint.model || '').toLowerCase();
+  const role = hint.modelRole || (legacy === 'opus' ? 'reasoning'
+    : legacy === 'haiku' ? 'efficiency' : legacy ? 'coding' : null);
+  if (!role) return null;
+  return {
+    role,
+    tier: hint.modelTier || (role === 'reasoning' ? 'premium'
+      : role === 'efficiency' ? 'economy' : 'standard'),
+    effort: hint.modelEffort,
+    rationale: hint.modelRationale,
+  };
+}
+
 /**
  * Find skill directories containing SKILL.md
  */
@@ -132,7 +153,7 @@ function parseSkillContent(content, skillName) {
       }
     }
 
-    return { metadata, body };
+    return { metadata, body, modelPolicy: resolveSkillModelPolicy(frontmatter) };
   }
 
   // Fallback: Parse non-frontmatter format (# skill-name header)
@@ -211,7 +232,7 @@ function transformToCodexSkill(skillDir) {
     return null;
   }
 
-  const { metadata, body } = parsed;
+  const { metadata, body, modelPolicy } = parsed;
 
   // Validate and truncate
   const name = (metadata.name || path.basename(skillDir)).slice(0, MAX_NAME_LENGTH);
@@ -259,14 +280,17 @@ description: "${quotedDescription}"
 platforms: [codex]
 ---
 
-${body.trim()}
+${modelPolicy
+    ? `<!-- aiwg:model-policy role=${modelPolicy.role} tier=${modelPolicy.tier}${modelPolicy.effort ? ` effort=${modelPolicy.effort}` : ''} outcome=unsupported${modelPolicy.rationale ? ` rationale=${yamlDoubleQuoted(modelPolicy.rationale)}` : ''} -->\n\n`
+    : ''}${body.trim()}
 `;
 
   return {
     name,
     description,
     content: codexContent,
-    sourcePath: skillPath
+    sourcePath: skillPath,
+    modelPolicy,
   };
 }
 
@@ -289,6 +313,11 @@ function deploySkill(skill, targetDir, opts) {
 
   if (dryRun) {
     console.log(`  [dry-run] deploy: ${skill.name}`);
+    if (skill.modelPolicy) {
+      console.log(
+        `    model policy: unsupported (${skill.modelPolicy.role}/${skill.modelPolicy.tier}); no native field emitted`
+      );
+    }
     return { action: 'deploy', reason: 'dry-run' };
   }
 
@@ -452,7 +481,10 @@ function getSkillDirectories(srcRoot, mode) {
       const name = entry.name;
       if (desiredNames.has(name)) continue;
 
-      let isAiwgManaged = allManagedNames.has(name);
+      // Known renamed AIWG skills may predate both the current source name and
+      // the .aiwg-managed marker. Treat only the exact historical names as
+      // managed so malformed legacy frontmatter cannot survive an upgrade.
+      let isAiwgManaged = allManagedNames.has(name) || LEGACY_RENAMED_SKILLS.has(name);
       if (!isAiwgManaged) {
         // Check for the .aiwg-managed marker file (preferred — survives
         // frontmatter transforms) or fall back to namespace check.

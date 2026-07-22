@@ -62,7 +62,7 @@ export async function main(args: string[]): Promise<void> {
       break;
 
     case 'validate':
-      await handleValidate(config);
+      await handleValidate(config, subArgs);
       break;
 
     case 'reset':
@@ -168,7 +168,10 @@ const ENUM_RULES: Record<string, readonly string[]> = {
   'delivery.force_push_policy': ['never', 'own-branch-only', 'allowed'],
   'delivery.signing.format': ['openpgp', 'ssh', 'x509'],
   'delivery.signing.enforce': ['commits', 'tags', 'all'],
+  'delivery.release_signing.format': ['openpgp', 'ssh', 'x509'],
+  'delivery.release_signing.enforce': ['commits', 'tags', 'all'],
   'remotes.tracker_actor.via': ['tea', 'gh', 'mcp', 'api'],
+  'remotes.transport.protocol': ['ssh', 'https'],
   'repo_maintainer.tiers.local': ['collaborator', 'maintainer', 'admin'],
 };
 
@@ -222,7 +225,13 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
 }
 
 async function projectConfigSet(key: string, raw: string, args: string[]): Promise<void> {
-  const { readAiwgConfig, writeAiwgConfig, getProjectDir, emptyConfig } = await import('./aiwg-config.js');
+  const {
+    readAiwgConfig,
+    writeAiwgConfig,
+    getProjectDir,
+    emptyConfig,
+    validateExternalLinks,
+  } = await import('./aiwg-config.js');
   const projectDir = getProjectDir(undefined, args);
 
   // Validate enum fields before writing
@@ -238,6 +247,18 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
+  if (/^externalLinks\.[^.]+$/.test(key)) {
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw new AiwgError({
+        code: 'ERR_INVALID_VALUE',
+        message: `${key} must be a JSON object containing label and url`,
+        hint: `Try: aiwg config set --project ${key} '{"label":"Project docs","url":"https://example.com/docs"}'`,
+        exitCode: EXIT_CODES.USAGE,
+      });
+    }
+  }
   if (BOOLEAN_FIELDS.has(key)) {
     if (raw === 'true') value = true;
     else if (raw === 'false') value = false;
@@ -288,6 +309,15 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
   // base shape when no config file exists yet (e.g. brand-new project).
   const cfg = (await readAiwgConfig(projectDir)) ?? emptyConfig();
   setDottedPath(cfg as unknown as Record<string, unknown>, key, value);
+  const externalLinkErrors = validateExternalLinks(cfg.externalLinks);
+  if (externalLinkErrors.length > 0) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_VALUE',
+      message: `Invalid external link configuration: ${externalLinkErrors.join('; ')}`,
+      hint: 'Each link needs a stable key, non-empty label, and absolute HTTP(S) URL without embedded credentials.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
   await writeAiwgConfig(projectDir, cfg);
   console.log(`Set --project ${key} = ${raw}`);
 }
@@ -334,7 +364,11 @@ async function handleList(config: UserConfig): Promise<void> {
   }
 }
 
-async function handleValidate(config: UserConfig): Promise<void> {
+async function handleValidate(config: UserConfig, args: string[]): Promise<void> {
+  if (args.includes('--project')) {
+    await handleProjectValidate(args);
+    return;
+  }
   const issues = await config.validate();
 
   console.log(`Config directory: ${config.getPath()}\n`);
@@ -361,6 +395,85 @@ async function handleValidate(config: UserConfig): Promise<void> {
       code: 'ERR_CONFIG_VALIDATION',
       message: `Config validation failed with ${errors.length} error(s)`,
       hint: 'Fix the errors listed above, or run: aiwg config edit',
+      exitCode: EXIT_CODES.CONFIG,
+    });
+  }
+}
+
+async function handleProjectValidate(args: string[]): Promise<void> {
+  const {
+    getProjectDir,
+    readAiwgConfig,
+    resolveIssueLabels,
+    validateExternalLinks,
+    validateIndexConfig,
+    validateIssueLabels,
+  } = await import('./aiwg-config.js');
+  const projectDir = getProjectDir(undefined, args);
+  const cfg = await readAiwgConfig(projectDir);
+  if (!cfg) {
+    throw new AiwgError({
+      code: 'ERR_NO_PROJECT_CONFIG',
+      message: 'No .aiwg/aiwg.config in this project.',
+      hint: 'Run `aiwg init`, then configure project policy.',
+      exitCode: EXIT_CODES.CONFIG,
+    });
+  }
+
+  const providerIndex = args.indexOf('--provider');
+  const providerArg = providerIndex >= 0 ? args[providerIndex + 1] : undefined;
+  const allowedProviders = ['gitea', 'github', 'local'] as const;
+  if (providerArg && !allowedProviders.includes(providerArg as typeof allowedProviders[number])) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_VALUE',
+      message: `Unsupported issue label provider '${providerArg}'.`,
+      hint: 'Use --provider gitea, --provider github, or --provider local.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  const provider = providerArg as typeof allowedProviders[number] | undefined;
+  const availableLabels: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === '--available-label' && args[i + 1]) availableLabels.push(args[++i]);
+  }
+
+  const indexErrors = validateIndexConfig(cfg.index).map((message) => ({
+    severity: 'error' as const,
+    code: 'index',
+    message,
+  }));
+  const externalLinkErrors = validateExternalLinks(cfg.externalLinks).map((message) => ({
+    severity: 'error' as const,
+    code: 'external-links',
+    message,
+  }));
+  const labelDiagnostics = provider
+    ? validateIssueLabels(cfg.issues, {
+        provider,
+        ...(availableLabels.length ? { availableLabels } : {}),
+      })
+    : cfg.issues?.labels
+      ? validateIssueLabels(cfg.issues)
+      : resolveIssueLabels(undefined, 'local').diagnostics;
+  const diagnostics = [...indexErrors, ...externalLinkErrors, ...labelDiagnostics];
+
+  console.log(`Project config: ${projectDir}/.aiwg/aiwg.config\n`);
+  if (diagnostics.length === 0) {
+    console.log('✓ Project config valid');
+    return;
+  }
+  for (const diagnostic of diagnostics) {
+    const icon = diagnostic.severity === 'error' ? '✗' : '!';
+    console.log(`  ${icon} [${diagnostic.code}] ${diagnostic.message}`);
+  }
+  const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning');
+  console.log(`\n${errors.length} error(s), ${warnings.length} warning(s)`);
+  if (errors.length) {
+    throw new AiwgError({
+      code: 'ERR_CONFIG_VALIDATION',
+      message: `Project config validation failed with ${errors.length} error(s)`,
+      hint: 'Fix the reported taxonomy or index configuration. Missing tracker labels must be provisioned explicitly.',
       exitCode: EXIT_CODES.CONFIG,
     });
   }
@@ -553,6 +666,7 @@ For project-level config: aiwg config show --project [--json]
       providers: cfg.providers,
       installed: cfg.installed,
       scripts: cfg.scripts,
+      externalLinks: cfg.externalLinks ?? {},
       remotes: remotesView,
     }, null, 2));
     return;
@@ -571,6 +685,18 @@ For project-level config: aiwg config show --project [--json]
     for (const [name, entry] of installed) {
       const providers = Object.keys(entry.deployedTo).join(', ') || '(no targets)';
       console.log(`  - ${name} v${entry.version} → ${providers}`);
+    }
+  }
+  console.log('');
+  console.log('External links:');
+  const externalLinks = Object.entries(cfg.externalLinks ?? {});
+  if (externalLinks.length === 0) {
+    console.log('  (none)');
+  } else {
+    for (const [key, link] of externalLinks) {
+      const metadata = [link.category, link.audience].filter(Boolean).join(', ');
+      console.log(`  - ${key}: ${link.label} — ${link.url}${metadata ? ` [${metadata}]` : ''}`);
+      if (link.description) console.log(`    ${link.description}`);
     }
   }
   console.log('');
@@ -621,7 +747,9 @@ Subcommands:
   set --project <key> <value>     Write a project config value (validates enums)
   list                Show all user config
   show --project      Show resolved project config (.aiwg/aiwg.config)
-  validate            Validate all config files
+  validate            Validate user config files
+  validate --project  Validate .aiwg/aiwg.config taxonomy/index semantics
+    [--provider gitea|github|local] [--available-label NAME ...]
   reset [<key>]       Reset key or all config to defaults
   path                Print config directory path
   edit                Open config in $EDITOR

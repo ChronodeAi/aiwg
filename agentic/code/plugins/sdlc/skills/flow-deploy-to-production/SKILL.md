@@ -9,6 +9,9 @@ commandHint:
   model: opus
   category: sdlc-orchestration
   orchestration: true
+  modelRole: reasoning
+  modelTier: premium
+  modelRationale: Production release and rollback decisions have high operational impact.
 ---
 
 > **Declarative Flow (#1539):** This flow's orchestration is now also expressed as a
@@ -29,7 +32,7 @@ When the user requests this flow (via natural language or explicit command):
 1. **Interpret the request** and confirm understanding
 2. **Read this template** as your orchestration guide
 3. **Extract agent assignments** and workflow steps
-4. **Launch agents via Task tool** in correct sequence
+4. **Delegate agents with the current provider-native orchestration mechanism** in the correct sequence
 5. **Synthesize results** and finalize artifacts
 6. **Report completion** with summary
 
