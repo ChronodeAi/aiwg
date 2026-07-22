@@ -10,6 +10,8 @@
 
 import realFs from 'fs';
 import path from 'path';
+import os from 'os';
+import { classifyModelRole } from './model-role.mjs';
 import { createHash } from 'crypto';
 import { createRequire } from 'module';
 import { execSync as nodeExecSync } from 'child_process';
@@ -257,9 +259,9 @@ export function loadModelConfig(srcRoot) {
       efficiency: { model: 'haiku' }
     },
     factory: {
-      reasoning: { model: 'claude-opus-4-6' },
-      coding: { model: 'claude-sonnet-4-6' },
-      efficiency: { model: 'claude-haiku-4-5-20251001' }
+      reasoning: { model: 'heavy' },
+      coding: { model: 'medium' },
+      efficiency: { model: 'light' }
     },
     shorthand: {
       'opus': 'claude-opus-4-6',
@@ -278,6 +280,34 @@ export function loadModelConfig(srcRoot) {
       'inherit': 'inherit'
     }
   };
+}
+
+/**
+ * Load a fresh dynamically-discovered model catalog when available, otherwise
+ * use the committed catalog supplied by the caller. Refresh is performed by
+ * `aiwg models refresh`; deployment itself never performs network access.
+ */
+export function loadRuntimeModelCatalog(staticCatalog, options = {}) {
+  if (process.env.VITEST && !options.cacheFile && !options.homeDir) return staticCatalog;
+  const homeDir = options.homeDir || os.homedir();
+  const cacheFile = options.cacheFile || path.join(homeDir, '.cache', 'aiwg', 'model-catalog.v1.json');
+  const ttlMs = options.ttlMs ?? 24 * 60 * 60 * 1000;
+  try {
+    const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    const fetchedAt = Date.parse(cached?.discovery?.fetchedAt || '');
+    const age = Date.now() - fetchedAt;
+    if (
+      cached?.providers &&
+      Number.isFinite(age) &&
+      age >= 0 &&
+      age <= ttlMs
+    ) {
+      return cached;
+    }
+  } catch {
+    // Missing, stale, or malformed cache: deterministic static fallback.
+  }
+  return staticCatalog;
 }
 
 // ============================================================================
@@ -1704,15 +1734,6 @@ export function createAgentsMdFromTemplate(target, srcRoot, templateSubpath, dry
 // ============================================================================
 
 /**
- * Role mapping from model shorthand to role name
- */
-const MODEL_TO_ROLE = {
-  'opus': 'reasoning',
-  'sonnet': 'coding',
-  'haiku': 'efficiency'
-};
-
-/**
  * Check if an agent should be deployed based on filter options
  * @param {string} agentPath - Path to agent file
  * @param {object} metadata - Parsed frontmatter metadata
@@ -1727,8 +1748,7 @@ export function shouldDeployAgent(agentPath, metadata, opts) {
 
   // Filter by role (model tier)
   if (filterRole) {
-    const model = (metadata.model || 'sonnet').toLowerCase();
-    const role = MODEL_TO_ROLE[model] || 'coding';
+    const role = classifyModelRole(metadata.model, { defaultRole: 'coding' });
     if (role !== filterRole.toLowerCase()) {
       return false;
     }

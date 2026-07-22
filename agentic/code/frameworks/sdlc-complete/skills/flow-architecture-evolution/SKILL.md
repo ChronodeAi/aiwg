@@ -6,9 +6,11 @@ description: Orchestrate architecture evolution workflow with ADR management, ar
 commandHint:
   argumentHint: '[trigger-event] [project-directory] [--guidance "text"] [--interactive]'
   allowedTools: 'Task, Read, Write, Glob, TodoWrite'
-  model: opus
+  model: sonnet
   category: sdlc-orchestration
   orchestration: true
+  modelRole: coding
+  modelTier: standard
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -47,7 +49,7 @@ When the user requests this flow (via natural language or explicit command):
 1. **Interpret the request** and identify the architecture change trigger
 2. **Read this template** as your orchestration guide
 3. **Extract agent assignments** and workflow steps
-4. **Launch agents via Task tool** in correct sequence
+4. **Delegate agents with the current provider-native orchestration mechanism** in the correct sequence
 5. **Synthesize results** and finalize artifacts
 6. **Report completion** with evolution summary
 

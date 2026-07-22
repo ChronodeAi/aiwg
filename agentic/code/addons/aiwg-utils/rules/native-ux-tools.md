@@ -5,7 +5,7 @@ enforcement: high
 # Native UX Tools for Interactive Questions
 
 **Enforcement Level**: HIGH
-**Scope**: All agents and commands with interactive modes
+**Scope**: All agents, skills, and legacy command bridges with interactive modes
 **Issue**: #448; #1668 (Codex mechanism + mode-gating)
 
 ## Overview
@@ -116,9 +116,9 @@ Plain text question buried in conversation — no visual distinction, easy to mi
 
 ## Applying This Rule
 
-### In Command Definitions
+### In Skill Definitions and Legacy Command Bridges
 
-Commands with `--interactive` flags should include this guidance:
+Skills or legacy command bridges with `--interactive` flags should include this guidance:
 
 ```markdown
 ## Interactive Mode

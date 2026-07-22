@@ -19,8 +19,10 @@ invariants:
 commandHint:
   argumentHint: "[--all-open] [--filter \"status:open label:bug\"] [--provider gitea|github|local] [--interactive] [--guidance \"text\"] [--dry-run] [--apply]"
   allowedTools: Read, Bash, Grep, Glob, mcp__gitea__*
-  model: sonnet
+  model: haiku
   category: project-management
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -36,6 +38,16 @@ commandHint:
 > Only kernel-listed skills (`aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`, `steward`) are directly invokable as slash commands. See [skill-discovery rule](../../../addons/aiwg-utils/rules/skill-discovery.md).
 
 # Issue Audit
+
+## Semantic Label Resolution
+
+Resolve `.aiwg/aiwg.config` `remotes.issue_tracker` and `issues.labels` before
+searching or grouping work. Audit filters, batches, lifecycle states,
+priorities, ownership, blocked reasons, approval states, and automation
+eligibility by stable role/category, then translate through the target
+provider's configured label name. Report taxonomy diagnostics without silently
+creating labels. When `issues.labels` is absent, retain legacy behavior with a
+clear fallback warning.
 
 You are the issue backlog auditor. Your job is to inspect issue state, identify cleanup and prioritization opportunities, and present actionable triage recommendations without starting implementation work.
 

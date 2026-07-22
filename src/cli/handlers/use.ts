@@ -65,15 +65,15 @@ import {
 // execute() per framework/provider) don't re-emit the warning each pass.
 // Reset is not needed: a single CLI process is one user invocation.
 let projectIsolationChecked = false;
-// Context-pipeline: emits AIWG.md + AGENTS.md as the last step of `aiwg use`
+// Context-pipeline: emits WORKSPACE.md + AIWG.md + provider adapters last.
 // for non-Claude providers per ADR-1 (.aiwg/architecture/adr-agents-md-aggregation.md).
 // Distinct from agentsmith (which creates subagent personas).
 import {
   generate as generateContextFiles,
   discoverDeployedArtifacts,
-  shouldEmitContextFiles,
 } from '../../smiths/context-pipeline/index.js';
 import type { Platform } from '../../agents/types.js';
+import { verifyModelWrapperDeployment } from '../../models/wrapper-deployment.js';
 
 /**
  * Valid framework identifiers
@@ -101,6 +101,101 @@ const MODE_MAP: Record<Framework, string> = {
   general: 'general',
   all: 'all',
 };
+
+const MODEL_DEPLOY_VALUE_FLAGS = new Set([
+  '--model', '--reasoning-model', '--coding-model', '--efficiency-model',
+  '--model-tier', '--filter', '--filter-role',
+]);
+const MODEL_OVERRIDE_VALUE_FLAGS = new Set([
+  '--model', '--reasoning-model', '--coding-model', '--efficiency-model', '--model-tier',
+]);
+const MODEL_DEPLOY_BOOLEAN_FLAGS = new Set(['--save', '--save-user']);
+export function collectUseModelDeployArgs(args: string[]): string[] {
+  const forwarded: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (MODEL_DEPLOY_BOOLEAN_FLAGS.has(args[i])) forwarded.push(args[i]);
+    else if (MODEL_DEPLOY_VALUE_FLAGS.has(args[i]) && args[i + 1]) {
+      forwarded.push(args[i], args[++i]);
+    }
+  }
+  return forwarded;
+}
+
+export function collectModelOverrideDeployArgs(args: string[]): string[] {
+  const forwarded: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (MODEL_OVERRIDE_VALUE_FLAGS.has(args[i]) && args[i + 1]) {
+      forwarded.push(args[i], args[++i]);
+    }
+  }
+  return forwarded;
+}
+
+type WrapperRole = 'reasoning' | 'coding' | 'efficiency';
+type DeployModelsConfig = Record<string, any>;
+
+async function loadDeployModelsConfig(frameworkRoot: string): Promise<DeployModelsConfig> {
+  const candidates = [
+    path.join(process.cwd(), 'models.json'),
+    path.join(os.homedir(), '.config', 'aiwg', 'models.json'),
+    path.join(frameworkRoot, 'agentic/code/frameworks/sdlc-complete/config/models.json'),
+  ];
+  for (const file of candidates) {
+    try { return JSON.parse(await fs.readFile(file, 'utf8')) as DeployModelsConfig; }
+    catch { /* try the next deployment-precedence location */ }
+  }
+  return {
+    shorthand: {
+      opus: 'claude-opus-4-6',
+      sonnet: 'claude-sonnet-4-6',
+      haiku: 'claude-haiku-4-5-20251001',
+      inherit: 'inherit',
+    },
+    claude_shorthand: { opus: 'opus', sonnet: 'sonnet', haiku: 'haiku', inherit: 'inherit' },
+  };
+}
+
+function deployArgValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
+
+function resolveDeployModelAlias(
+  value: string,
+  provider: string,
+  role: WrapperRole,
+  config: DeployModelsConfig,
+): string {
+  const clean = value.toLowerCase().replace(/['"]/g, '');
+  const shorthand = config[`${provider}_shorthand`] ?? config.shorthand ?? {};
+  if (typeof shorthand[clean] === 'string') return shorthand[clean];
+  const tierModel = config[provider]?.[role]?.model;
+  if (clean === role && typeof tierModel === 'string') return tierModel;
+  return value;
+}
+
+export function resolveUseWrapperModelExpectations(options: {
+  provider: string;
+  modelDeployArgs: string[];
+  catalogModels: Record<WrapperRole, string>;
+  modelsConfig: DeployModelsConfig;
+}): Record<WrapperRole, string> {
+  const roles: WrapperRole[] = ['reasoning', 'coding', 'efficiency'];
+  let blanket = deployArgValue(options.modelDeployArgs, '--model');
+  const tier = deployArgValue(options.modelDeployArgs, '--model-tier');
+  if (tier) {
+    const tierRole: WrapperRole | null = tier === 'economy' ? 'efficiency'
+      : tier === 'standard' ? 'coding'
+        : tier === 'premium' || tier === 'max-quality' ? 'reasoning' : null;
+    if (tierRole) blanket = options.catalogModels[tierRole];
+  }
+  return Object.fromEntries(roles.map(role => {
+    const override = deployArgValue(options.modelDeployArgs, `--${role}-model`) ?? blanket;
+    return [role, override
+      ? resolveDeployModelAlias(override, options.provider, role, options.modelsConfig)
+      : options.catalogModels[role]];
+  })) as Record<WrapperRole, string>;
+}
 
 /**
  * Framework name to actual directory name under agentic/code/frameworks/.
@@ -280,6 +375,59 @@ function shouldMirrorKernelCommandSkill(skillName: string): boolean {
 
 function resolveProviderPath(target: string, providerPath: string): string {
   return path.isAbsolute(providerPath) ? providerPath : path.join(target, providerPath);
+}
+
+async function validateDeployedModelWrappers(options: {
+  provider: string;
+  target: string;
+  frameworkRoot: string;
+  modelDeployArgs: string[];
+  filtered: boolean;
+  verbose: boolean;
+}): Promise<HandlerResult | null> {
+  const paths = getProviderPaths(options.provider);
+  const agentsPath = paths.agents ? resolveProviderPath(options.target, paths.agents) : null;
+  const { collectProviderInventory } = await import('../../providers/provider-inventory.js');
+  const { resolveDynamicModelCatalog } = await import('../../models/model-discovery.js');
+  const catalog = await resolveDynamicModelCatalog({
+    aiwgRoot: options.frameworkRoot,
+    inventory: await collectProviderInventory(options.target, { detectProcess: false }),
+    allowNetwork: false,
+  });
+  const catalogEntries = catalog.providers[options.provider]?.roles as
+    | Record<WrapperRole, { id: string }>
+    | undefined;
+  const catalogModels = catalogEntries
+    ? Object.fromEntries(Object.entries(catalogEntries).map(([role, entry]) => [role, entry.id])) as Record<WrapperRole, string>
+    : undefined;
+  const expectedModels = catalogModels
+    ? resolveUseWrapperModelExpectations({
+      provider: options.provider,
+      modelDeployArgs: collectModelOverrideDeployArgs(options.modelDeployArgs),
+      catalogModels,
+      modelsConfig: await loadDeployModelsConfig(options.frameworkRoot),
+    })
+    : undefined;
+  const wrappers = await verifyModelWrapperDeployment(agentsPath, {
+    provider: options.provider,
+    ...(expectedModels ? {
+      models: expectedModels,
+    } : {}),
+  });
+  if (wrappers.supported && !wrappers.valid) {
+    const details = [
+      ...(wrappers.missing.length > 0 ? [`missing ${wrappers.missing.join(', ')}`] : []),
+      ...wrappers.mismatches.map(item => `${item.wrapper}.${item.field}: ${item.reason}`),
+    ];
+    const message = `Model wrapper deployment invalid for ${options.provider}: ${details.join('; ')}`;
+    if (!options.filtered) return { exitCode: 1, message };
+    ui.warn(`${message} (filtered deployment)`);
+  } else if (options.verbose && wrappers.supported) {
+    ui.dim(`  Model wrappers verified: ${wrappers.found.join(', ')}`);
+  } else if (options.verbose) {
+    ui.dim(`  Model wrappers: ${options.provider} has no provider-native agent directory; model policy remains ${options.provider === 'hermes' || options.provider === 'openhuman' ? 'inherited/global' : 'informational'}.`);
+  }
+  return null;
 }
 
 /**
@@ -753,8 +901,9 @@ async function deployOneProjectLocalBundle(opts: {
   verbose: boolean;
   quiet: boolean;
   force?: boolean;
+  modelArgs: string[];
 }): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number } }> {
-  const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force } = opts;
+  const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force, modelArgs } = opts;
 
   const runner = createScriptRunner(frameworkRoot);
   const args: string[] = [
@@ -771,6 +920,7 @@ async function deployOneProjectLocalBundle(opts: {
     // never reach <provider>/.aiwg/skills/, leaving them invisible to
     // both the platform and the index.
     '--copy-all',
+    ...modelArgs,
   ];
   if (dryRun) args.push('--dry-run');
   if (verbose) args.push('--verbose');
@@ -819,12 +969,16 @@ async function deployProjectLocalBundles(opts: {
   dryRun: boolean;
   verbose: boolean;
   quiet: boolean;
+  modelArgs?: string[];
   /** When set, restrict to the bundle whose id matches. */
   onlyBundleId?: string;
   /** Bypass sidecar skip-on-match for project-local bundles. */
   force?: boolean;
 }): Promise<{ deployed: number; failed: number; bundles: ProjectLocalBundle[] }> {
-  const { ctx, frameworkRoot, projectDir, provider, target, dryRun, verbose, quiet, onlyBundleId, force } = opts;
+  const {
+    ctx, frameworkRoot, projectDir, provider, target, dryRun, verbose, quiet,
+    onlyBundleId, force, modelArgs = [],
+  } = opts;
 
   const discovery = await discoverProjectLocalBundles(projectDir);
 
@@ -837,6 +991,19 @@ async function deployProjectLocalBundles(opts: {
     : discovery.bundles.filter(b => b.type !== 'provider');
 
   if (targetBundles.length === 0) {
+    if (!onlyBundleId) {
+      const { loadProjectQuickref, deployProjectQuickref } = await import('../../extensions/project-quickref.js');
+      const quickref = await loadProjectQuickref(projectDir);
+      if (quickref.exists) {
+        try {
+          await deployProjectQuickref(projectDir, provider, { dryRun });
+          if (verbose || dryRun) ui.dim(`  + project quickref -> ${provider}`);
+        } catch (error) {
+          ui.warn(`Project quickref deployment failed: ${(error as Error).message}`);
+          return { deployed: 0, failed: 1, bundles: [] };
+        }
+      }
+    }
     return { deployed: 0, failed: 0, bundles: [] };
   }
 
@@ -893,7 +1060,7 @@ async function deployProjectLocalBundles(opts: {
     }
 
     const result = await deployOneProjectLocalBundle({
-      bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force,
+      bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force, modelArgs,
     });
 
     if (result.exitCode !== 0) {
@@ -953,6 +1120,23 @@ async function deployProjectLocalBundles(opts: {
         // Non-fatal: deploy already succeeded
         ui.warn(`Project-local registry update failed for '${bundle.id}': ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+  }
+
+  // A committed `.aiwg/quickref.json` is the canonical orientation source.
+  // Refresh its provider kernel copy whenever project-local bundles deploy so
+  // `aiwg use <bundle>` keeps the always-visible surface in sync.
+  const { loadProjectQuickref, deployProjectQuickref } = await import('../../extensions/project-quickref.js');
+  const quickref = await loadProjectQuickref(projectDir);
+  if (quickref.exists) {
+    try {
+      const quickrefResult = await deployProjectQuickref(projectDir, provider, { dryRun });
+      if (verbose || dryRun) {
+        ui.dim(`  + project quickref -> ${quickrefResult.provider}${quickrefResult.emulated ? ' (emulated)' : ''}`);
+      }
+    } catch (error) {
+      failed++;
+      ui.warn(`Project quickref deployment failed: ${(error as Error).message}`);
     }
   }
 
@@ -1019,7 +1203,7 @@ export const OPENHUMAN_DEFAULT_HARNESS_AGENTS = [
 ] as const;
 
 interface OpenHumanHarnessProfile {
-  modelHint: 'agentic' | 'coding' | 'reasoning';
+  modelHint: 'agentic' | 'coding' | 'reasoning' | 'efficiency';
   temperature: number;
   maxIterations: number;
   iterationPolicy: 'strict' | 'extended';
@@ -1043,6 +1227,15 @@ const OPENHUMAN_DEFAULT_HARNESS_PROFILE: OpenHumanHarnessProfile = {
 };
 
 const OPENHUMAN_HARNESS_PROFILES: Record<string, Partial<OpenHumanHarnessProfile>> = {
+  'aiwg-model-reasoning-worker': {
+    modelHint: 'reasoning',
+  },
+  'aiwg-model-coding-worker': {
+    modelHint: 'coding',
+  },
+  'aiwg-model-efficiency-worker': {
+    modelHint: 'efficiency',
+  },
   'architecture-designer': {
     modelHint: 'reasoning',
     maxIterations: 14,
@@ -1319,6 +1512,7 @@ async function writeManagedFile(filePath: string, content: string, dryRun: boole
 async function readSourceAgent(frameworkRoot: string, slug: string): Promise<ParsedAgentMarkdown> {
   const candidates = [
     path.join(frameworkRoot, 'agentic/code/frameworks/sdlc-complete/agents', `${slug}.md`),
+    path.join(frameworkRoot, 'agentic/code/addons/aiwg-utils/agents', `${slug}.md`),
     path.join(frameworkRoot, 'agentic/code/agents/personas', `${slug}.md`),
   ];
   for (const candidate of candidates) {
@@ -1413,6 +1607,7 @@ async function deploySourceDirectory(opts: {
   force: boolean;
   copyAll: boolean;
   quiet: boolean;
+  modelArgs: string[];
 }): Promise<HandlerResult> {
   const args = [
     '--source', opts.source,
@@ -1421,6 +1616,7 @@ async function deploySourceDirectory(opts: {
     '--deploy-rules',
     '--provider', opts.provider,
     '--target', opts.target,
+    ...opts.modelArgs,
   ];
   if (opts.dryRun) args.push('--dry-run');
   if (opts.verbose) args.push('--verbose');
@@ -1472,6 +1668,7 @@ export class UseHandler implements CommandHandler {
       framework = 'all';
       remainingArgs = ctx.args;
     }
+    const modelDeployArgs = collectUseModelDeployArgs(remainingArgs);
     if (framework === 'cockpit') {
       return installCockpit(ctx, remainingArgs);
     }
@@ -1643,6 +1840,7 @@ export class UseHandler implements CommandHandler {
             force,
             copyAll,
             quiet,
+            modelArgs: modelDeployArgs,
           });
           if (result.exitCode !== 0) return result;
         }
@@ -1659,6 +1857,7 @@ export class UseHandler implements CommandHandler {
             force,
             copyAll,
             quiet,
+            modelArgs: modelDeployArgs,
           });
           if (result.exitCode !== 0) return result;
         }
@@ -1675,6 +1874,7 @@ export class UseHandler implements CommandHandler {
             force,
             copyAll,
             quiet,
+            modelArgs: modelDeployArgs,
           });
           if (result.exitCode !== 0) return result;
         }
@@ -1690,6 +1890,7 @@ export class UseHandler implements CommandHandler {
             verbose,
             quiet: !verbose && !dryRun,
             force,
+            modelArgs: modelDeployArgs,
           });
           if (plResult.failed > 0) {
             ui.warn(`${plResult.failed} project-local bundle(s) failed to deploy`);
@@ -1779,6 +1980,7 @@ export class UseHandler implements CommandHandler {
             dryRun: dryRunSingle, verbose: verboseSingle, quiet: !verboseSingle && !dryRunSingle,
             onlyBundleId: framework,
             force: forceSingle,
+            modelArgs: modelDeployArgs,
           });
           totalDeployed += r.deployed;
           totalFailed += r.failed;
@@ -1811,6 +2013,7 @@ export class UseHandler implements CommandHandler {
 
       const runner = createScriptRunner(ctx.frameworkRoot);
       const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
+      addonBaseArgs.push(...modelDeployArgs);
       if (provider) addonBaseArgs.push('--provider', provider);
       if (target) addonBaseArgs.push('--target', target);
       // Forward --copy-all (#1219) so addon-only deploys also honor it.
@@ -1957,6 +2160,18 @@ export class UseHandler implements CommandHandler {
         }
       } catch {
         // Profile selection is optional — don't fail deployment
+      }
+
+      if (framework === 'aiwg-utils' && !remainingArgs.includes('--dry-run')) {
+        const wrapperValidation = await validateDeployedModelWrappers({
+          provider: normalizeProviderDefinitionId(provider) ?? provider,
+          target,
+          frameworkRoot,
+          modelDeployArgs,
+          filtered: remainingArgs.includes('--filter') || remainingArgs.includes('--filter-role'),
+          verbose: remainingArgs.includes('--verbose') || remainingArgs.includes('-v'),
+        });
+        if (wrapperValidation) return wrapperValidation;
       }
 
       ui.blank();
@@ -2153,6 +2368,7 @@ export class UseHandler implements CommandHandler {
 
     // Build common args for addon deployments (inherit provider and target)
     const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
+    addonBaseArgs.push(...modelDeployArgs);
     if (provider) addonBaseArgs.push('--provider', provider);
     if (target) addonBaseArgs.push('--target', target);
     if (verbose) addonBaseArgs.push('--verbose');
@@ -2216,6 +2432,7 @@ export class UseHandler implements CommandHandler {
         verbose,
         quiet,
         force,
+        modelArgs: modelDeployArgs,
       });
       if (plResult.deployed > 0 && quiet) {
         ui.dim(`  + ${plResult.deployed} project-local bundle(s)`);
@@ -2226,6 +2443,17 @@ export class UseHandler implements CommandHandler {
     }
 
     const paths = getProviderPaths(provider);
+    if (!dryRun && !skipUtils) {
+      const wrapperValidation = await validateDeployedModelWrappers({
+        provider,
+        target,
+        frameworkRoot,
+        modelDeployArgs,
+        filtered: remainingArgs.includes('--filter') || remainingArgs.includes('--filter-role'),
+        verbose,
+      });
+      if (wrapperValidation) return wrapperValidation;
+    }
     const targetSkillsDir = resolveProviderPath(target, paths.skills);
     const targetCommandsDir = paths.commands ? resolveProviderPath(target, paths.commands) : '';
     const kernelSkillsPath = getProviderKernelSkillsPath(provider);
@@ -2358,7 +2586,7 @@ export class UseHandler implements CommandHandler {
         // style message and capture the noisy stat lines.
         ui.blank();
         ui.info('Building capability index…');
-        ui.dim('  Indexing skills, agents, commands, and rules for agent-side lookup.');
+        ui.dim('  Indexing operational assets for agent-side lookup.');
 
         const indexStart = Date.now();
         // Capture buildIndex's own console.log noise unless verbose
@@ -2598,14 +2826,15 @@ export class UseHandler implements CommandHandler {
     // Context-pipeline emission (ADR-1 §0 + §0.5 + §7).
     //
     // For AGENTS.md providers (codex/copilot/cursor/windsurf/hermes/warp/factory/
-    // opencode), emit AIWG.md + AGENTS.md at project root as the last filesystem
+    // opencode), emit WORKSPACE.md + AIWG.md + provider adapters as the last filesystem
     // step before activity-log close. The generator-runs-after-deploy invariant
     // (ADR-1 §7) means the link index can only cite files we observe on disk:
     // failed deploys produce shorter indexes, never broken links.
     //
     // Operators opt out via --no-context-files / --no-aiwg-md / --no-agents-md.
-    if (!dryRun && shouldEmitContextFiles(provider as Platform)) {
+    if (!dryRun) {
       const skipContext = remainingArgs.includes('--no-context-files');
+      const skipWorkspaceMd = skipContext || remainingArgs.includes('--no-workspace-md');
       const skipAiwgMd = skipContext || remainingArgs.includes('--no-aiwg-md');
       const skipAgentsMd = skipContext || remainingArgs.includes('--no-agents-md');
       const forceContext = remainingArgs.includes('--force-context-files');
@@ -2625,8 +2854,12 @@ export class UseHandler implements CommandHandler {
           sections,
           detectExistingFiles: true,
           force: forceContext,
-          skip: { aiwgMd: skipAiwgMd, agentsMd: skipAgentsMd },
+          skip: { workspaceMd: skipWorkspaceMd, aiwgMd: skipAiwgMd, agentsMd: skipAgentsMd },
         });
+
+        if (verbose && ctxResult.workspaceMdPath) {
+          ui.dim(`  ${ctxResult.workspaceMdAction === 'created' ? 'Created' : 'Refreshed'} WORKSPACE.md`);
+        }
 
         if (verbose && ctxResult.agentsMdPath) {
           ui.dim(`  Wrote AGENTS.md (${ctxResult.agentsMdBytes} bytes)`);
@@ -2644,7 +2877,7 @@ export class UseHandler implements CommandHandler {
             ctxResult.claudeMdHookAction === 'inserted' ? 'Inserted hook into' :
             ctxResult.claudeMdHookAction === 'updated' ? 'Updated hook in' :
             'Touched';
-          ui.dim(`  ${verb} CLAUDE.md (@AIWG.md block)`);
+          ui.dim(`  ${verb} CLAUDE.md (@WORKSPACE.md then @AIWG.md block)`);
         }
         for (const w of ctxResult.warnings) {
           // #1579: loud warnings (non-managed twin/bridge left untouched) are

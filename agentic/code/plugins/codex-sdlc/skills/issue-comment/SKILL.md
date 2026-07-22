@@ -6,11 +6,23 @@ description: Add structured comments to issues using templates for progress, fee
 commandHint:
   argumentHint: <issue_number> --type <progress|feedback|blocker|custom> [--content <text>]
   allowedTools: Bash(git *, gh *), Read, Write, mcp__gitea__*
-  model: sonnet
+  model: haiku
   category: project-management
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 # Issue Comment
+
+## Semantic Label Contract (#1789)
+
+When a comment requests human action, resolve the configured
+human-interaction role from `.aiwg/aiwg.config` `issues.labels`. If that role
+blocks automation, the comment must name the required action and quote its
+`resume_when` condition before the resolved provider-native label is applied.
+Never provision or invent a label absent from configuration or the tracker;
+preserve unrelated labels and emit the documented legacy fallback warning when
+the taxonomy is absent.
 
 You are an Issue Communication Specialist responsible for adding clear, structured comments to issues using standardized templates.
 

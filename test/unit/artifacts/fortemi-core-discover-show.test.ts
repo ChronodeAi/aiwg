@@ -16,6 +16,7 @@ import {
   getFortemiCoreSyncStatus,
   syncFortemiCoreIndex,
 } from "../../../src/artifacts/fortemi-core-sync.js";
+import { loadFortemiCoreMetadataEntries } from "../../../src/artifacts/fortemi-core-query-adapter.js";
 import type {
   ArtifactIndex,
   DependencyGraph,
@@ -394,6 +395,142 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
       expect(text).not.toContain(frameworkSkill.path);
     } finally {
       cwdSpy.mockRestore();
+    }
+  });
+
+  it("discovers and shows operational behavior, template, flow, and runbook assets from Fortemi Core", async () => {
+    const behavior = entry({
+      path: ".aiwg/addons/fleet/behaviors/quiet-bot/BEHAVIOR.md",
+      type: "behavior",
+      title: "Quiet Bot",
+      name: "quiet-bot",
+      tags: ["chat", "fleet"],
+      summary: "Mention-only group chat behavior for budget-sensitive bot fleets.",
+      triggers: ["quiet bot", "mention only bot"],
+      capability: "Respond only when mentioned in shared bot channels.",
+    });
+    const template = entry({
+      path: ".aiwg/templates/codex/config.toml.aiwg-template",
+      type: "template",
+      title: "Codex Config Template",
+      name: "config.toml",
+      tags: ["codex", "template"],
+      summary: "Codex config toml provider template for agent runtime setup.",
+      triggers: ["codex config toml"],
+      capability: "Seed Codex runtime config from a project template.",
+    });
+    const flow = entry({
+      path: ".aiwg/flows/flow-release.playbook.yaml",
+      type: "flow",
+      title: "Release Flow",
+      name: "flow-release",
+      tags: ["release"],
+      summary: "Run the release gate sequence and publish artifacts.",
+      triggers: ["release flow"],
+      capability: "Coordinate release verification and publishing.",
+    });
+    const runbook = entry({
+      path: ".aiwg/runbooks/certificate-rotation.md",
+      type: "runbook",
+      kind: "Runbook",
+      sourceType: "template",
+      title: "Certificate Rotation Runbook",
+      name: "certificate-rotation",
+      tags: ["pki", "operations"],
+      summary: "Rotate expiring service certificates without interrupting clients.",
+      capability: "Rotate and verify service certificates with a tested rollback.",
+      searchTerms: ["issue replacement certificate", "verify served serial", "restore prior certificate"],
+    });
+    writeProjectGraph(tmp, [behavior, template, flow, runbook], undefined, "project");
+    syncFortemiCoreIndex(tmp, {
+      graph: "project",
+      generatedAt: "2026-01-05T00:00:00.000Z",
+    });
+
+    await discoverCapability(tmp, {
+      phrase: "quiet bot mention only",
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const broad = readConsoleJson();
+    consoleSpy.mockClear();
+    const behaviorHit = broad.results.find((result: any) => result.type === "behavior");
+    expect(behaviorHit?.name).toBe("quiet-bot");
+
+    await discoverCapability(tmp, {
+      phrase: "codex config toml",
+      typeFilter: ["template"],
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const focused = readConsoleJson();
+    consoleSpy.mockClear();
+    expect(focused.results[0].type).toBe("template");
+    expect(focused.results[0].name).toBe("config.toml");
+
+    await discoverCapability(tmp, {
+      phrase: "restore prior certificate",
+      typeFilter: ["runbook"],
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const runbookFocused = readConsoleJson();
+    consoleSpy.mockClear();
+    expect(runbookFocused.results[0].type).toBe("runbook");
+    expect(runbookFocused.results[0].name).toBe("certificate-rotation");
+    const roundTrippedRunbook = loadFortemiCoreMetadataEntries(tmp, "project").entries
+      .find((item) => item.type === "runbook");
+    expect(roundTrippedRunbook).toMatchObject({
+      kind: "Runbook",
+      sourceType: "template",
+      searchTerms: expect.arrayContaining(["restore prior certificate"]),
+    });
+
+    await discoverCapability(tmp, {
+      phrase: "restore prior certificate",
+      graph: "project",
+      json: true,
+      limit: 5,
+      backend: "fortemi-core",
+    });
+    const broadRunbook = readConsoleJson();
+    consoleSpy.mockClear();
+    expect(broadRunbook.results.some((result: any) => result.type === "runbook")).toBe(true);
+
+    await discoverCapability(tmp, {
+      phrase: "quiet bot",
+      graph: "project",
+      limit: 1,
+      backend: "fortemi-core",
+      includePaths: false,
+    });
+    const text = consoleSpy.mock.calls.map((call) => call[0]).join("\n");
+    consoleSpy.mockClear();
+    expect(text).toContain("show: aiwg show behavior");
+
+    for (const [type, name, expected] of [
+      ["behavior", "quiet-bot", "Mention-only group chat behavior"],
+      ["template", "config.toml", "Codex config toml provider template"],
+      ["flow", "flow-release", "Run the release gate sequence"],
+      ["runbook", "certificate-rotation", "Rotate expiring service certificates"],
+    ] as const) {
+      await showArtifact(tmp, {
+        typeFilter: [type],
+        name,
+        json: true,
+        graph: "project",
+        backend: "fortemi-core",
+      });
+      const shown = readConsoleJson();
+      consoleSpy.mockClear();
+      expect(shown.type).toBe(type);
+      expect(shown.content).toContain(expected);
     }
   });
 
@@ -1033,12 +1170,14 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(discovered.query.backend).toBe("fortemi-core");
     expect(discovered.query.graph).toBe("capability-default");
     expect(discovered.query.types).toEqual(["rule"]);
-    expect(discovered.results).toHaveLength(1);
     expect(discovered.results[0]).toMatchObject({
       path: rule.path,
       type: "rule",
       name: "acme-review",
     });
+    expect(discovered.results).not.toContainEqual(
+      expect.objectContaining({ path: skill.path }),
+    );
     consoleSpy.mockClear();
 
     await queryIndex(

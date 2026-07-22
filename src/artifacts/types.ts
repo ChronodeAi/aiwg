@@ -10,6 +10,8 @@
  */
 
 import fs from 'fs';
+import os from 'node:os';
+import path from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 
 /**
@@ -21,6 +23,20 @@ export interface MetadataEntry {
 
   /** Artifact type (use-case, adr, test-plan, nfr, threat-model, etc.) */
   type: string;
+
+  /**
+   * Exact declarative/process kind when the source format defines one.
+   * Examples: `FlowPlaybook`, `OpsInventory`, and `Runbook`. This preserves
+   * distinctions that are intentionally coarser in the top-level `type`.
+   */
+  kind?: string;
+
+  /**
+   * Physical/original artifact classification when semantic classification
+   * changes the top-level type. A Markdown runbook under `templates/`, for
+   * example, has `type: runbook` and `sourceType: template`.
+   */
+  sourceType?: string;
 
   /** SDLC phase (requirements, architecture, testing, security, deployment, etc.) */
   phase: string;
@@ -75,6 +91,13 @@ export interface MetadataEntry {
   capability?: string;
 
   /**
+   * Compact, structure-aware language lookup terms. Process artifacts use
+   * this for headings, step/capability identifiers, validation language, and
+   * other signals that do not belong in a one-line summary.
+   */
+  searchTerms?: string[];
+
+  /**
    * `kernel: true` from frontmatter. Marks always-loaded skills the
    * deploy pipeline routes to the platform-native skills directory
    * (#1212). Surfaced in the index for `aiwg index discover` so the
@@ -122,11 +145,71 @@ export interface SkillScriptSpec {
 }
 
 /**
+ * Operational artifact kinds that belong on the broad capability-discovery
+ * surface. This is intentionally narrower than every indexed artifact type:
+ * `query` remains the general document/artifact search surface, while
+ * `discover` is for assets agents can act on or route to.
+ */
+export const OPERATIONAL_DISCOVERY_TYPES = [
+  'skill',
+  'agent',
+  'command',
+  'rule',
+  'flow',
+  'runbook',
+  'template',
+  'behavior',
+] as const;
+
+/**
+ * Operational artifact kinds that `aiwg show <type> <name>` can fetch. Hooks
+ * are operational but low-level, so they are showable and focus-searchable
+ * without being part of broad discovery defaults.
+ */
+export const OPERATIONAL_SHOW_TYPES = [
+  ...OPERATIONAL_DISCOVERY_TYPES,
+  'hook',
+] as const;
+
+export type OperationalDiscoveryType = typeof OPERATIONAL_DISCOVERY_TYPES[number];
+export type OperationalShowType = typeof OPERATIONAL_SHOW_TYPES[number];
+
+export function isOperationalShowType(value: string): value is OperationalShowType {
+  return (OPERATIONAL_SHOW_TYPES as readonly string[]).includes(value);
+}
+
+export const DEFAULT_INDEX_EXTENSIONS = ['.md', '.yaml', '.yml', '.json'] as const;
+
+/**
+ * Template assets are often provider-native files (`config.toml`,
+ * `AGENTS.md.aiwg-template`, GitHub workflow `.yml`, JSONC snippets, etc.).
+ * These extensions are only meaningful as operational templates when the file
+ * is under a `templates/` directory; type inference enforces that boundary.
+ */
+export const TEMPLATE_INDEX_EXTENSIONS = [
+  '.aiwg-template',
+  '.aiwg-base',
+  '.jsonc',
+  '.tmpl',
+  '.j2',
+  '.csv',
+  '.toml',
+] as const;
+
+export const FRAMEWORK_INDEX_EXTENSIONS = [
+  ...DEFAULT_INDEX_EXTENSIONS,
+  ...TEMPLATE_INDEX_EXTENSIONS,
+] as const;
+
+/**
  * The master artifact index stored at .aiwg/.index/metadata.json
  */
 export interface ArtifactIndex {
   /** Index format version */
   version: string;
+
+  /** Metadata extractor revision used to build the entries. */
+  extractorVersion?: string;
 
   /** ISO timestamp of last build */
   builtAt: string;
@@ -195,6 +278,9 @@ export interface DependencyGraph {
 export interface IndexStats {
   /** Index format version */
   version: string;
+
+  /** Metadata extractor revision used for the corresponding index. */
+  extractorVersion?: string;
 
   /** ISO timestamp of last build */
   builtAt: string;
@@ -290,6 +376,13 @@ export const INDEX_DIR = '.aiwg/.index';
  * Current index format version
  */
 export const INDEX_VERSION = '1.0.0';
+
+/**
+ * Metadata extraction revision. Unlike INDEX_VERSION, this can change without
+ * making the serialized index schema incompatible; a mismatch simply forces a
+ * one-time content re-extraction during the next incremental build.
+ */
+export const INDEX_EXTRACTOR_VERSION = '2026.07.21.1';
 
 /**
  * Built-in graph type identifiers
@@ -474,7 +567,7 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
       'agentic/code/behaviors',
       'docs',
     ],
-    extensions: ['.md', '.yaml', '.json'],
+    extensions: [...FRAMEWORK_INDEX_EXTENSIONS],
     shared: true,
     // Not built by `aiwg index build` (no flag) — that would write to
     // the shared XDG location from any project. Freshness is guaranteed
@@ -486,7 +579,12 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
   project: {
     type: 'project',
     scanDirs: ['.aiwg'],
-    extensions: ['.md', '.yaml', '.json'],
+    // Project-local bundles are byte-compatible pilots of upstream
+    // extensions/addons/frameworks/plugins. Scan the same provider-native
+    // template extensions as the framework graph so local assets do not
+    // disappear from discover/show merely because they have not been
+    // promoted upstream yet.
+    extensions: [...FRAMEWORK_INDEX_EXTENSIONS],
     shared: false,
     defaultBuild: true,
     buildTier: 'standard',
@@ -494,7 +592,7 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
   codebase: {
     type: 'codebase',
     scanDirs: ['src', 'test', 'tools'],
-    extensions: ['.ts', '.mts', '.js', '.mjs', '.json', '.yaml'],
+    extensions: ['.ts', '.mts', '.js', '.mjs', '.json', '.yaml', '.yml'],
     shared: false,
     defaultBuild: true,
     buildTier: 'heavy',
@@ -515,9 +613,10 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
       '~/.aiwg/commands',
       '~/.aiwg/rules',
       '~/.aiwg/flows',
+      '~/.aiwg/runbooks',
       '~/.aiwg/frameworks',
     ],
-    extensions: ['.md', '.yaml', '.json'],
+    extensions: [...DEFAULT_INDEX_EXTENSIONS],
     shared: true,
     defaultBuild: false,
     buildTier: 'standard',
@@ -582,7 +681,7 @@ function parseGraphDef(name: string, graphDef: Record<string, unknown>): GraphCo
   return {
     type: name,
     scanDirs: graphDef.scanDirs as string[],
-    extensions: Array.isArray(graphDef.extensions) ? graphDef.extensions as string[] : ['.md', '.yaml', '.json'],
+    extensions: Array.isArray(graphDef.extensions) ? graphDef.extensions as string[] : [...DEFAULT_INDEX_EXTENSIONS],
     shared: graphDef.shared === true,
     defaultBuild: graphDef.defaultBuild !== false,
     buildTier:
@@ -921,10 +1020,10 @@ export function getGraphIndexDir(cwd: string, graphType: GraphType): string {
   const config = GRAPH_CONFIGS[graphType];
   if (graphType === 'framework' || config?.shared) {
     // Shared across projects — XDG data directory
-    const xdgData = process.env.XDG_DATA_HOME ?? `${process.env.HOME}/.local/share`;
-    return `${xdgData}/aiwg/index/${graphType}`;
+    const xdgData = process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share');
+    return path.join(xdgData, 'aiwg', 'index', graphType);
   }
-  return `${cwd}/.aiwg/.index/${graphType}`;
+  return path.join(cwd, '.aiwg', '.index', graphType);
 }
 
 /**

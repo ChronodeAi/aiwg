@@ -19,6 +19,48 @@ aiwg index build --graph user
 aiwg index sync --graph user
 ```
 
+To convert an AIWG v2 index into a Knowledge Shard candidate, use:
+
+```bash
+aiwg index export --format fortemi-shard --graph project --out aiwg-project.shard
+```
+
+`fortemi-shard` always builds the v2 contract and passes it to the canonical
+`@fortemi/core/aiwg-index` converter. The shard uses deterministic note/link
+identities and preserves the complete v2 envelope and every source record in
+the canonical `ai_metadata.aiwg_fortemi_index` carrier. AIWG returns the
+converter's archive bytes unchanged: it does not repair component records or
+restamp the manifest. The `core-v1` output declares notes, tags, and links;
+SKOS, provenance, chunks, privacy fields, checksums, and other rich AIWG data
+remain intact inside the embedded source records.
+
+npm package `@fortemi/core@2026.7.11` is pinned exactly. Its signed-release source
+tag is `v2026.7.11`; the package-embedded contract receipt pins revision 19,
+schema 1.2.0, and the `core-v1` authority bytes. The immutable representative
+archive and machine-readable producer/consumer receipt live under
+`test/fixtures/fortemi-shard/`. Blocking CI verifies the locked npm integrity,
+archive digest and manifest, clean PGlite import/re-export, five rejection
+classes with zero mutation, and a clean Fortemi server import/re-export at the
+receipt's exact server commit. The server check consumes the archive unchanged.
+
+The representative v2 graph is deterministic. The committed `.shard` is the
+immutable evidence artifact identified by its receipt digest; canonical zero
+mtimes in both tar entries and the gzip header make independently regenerated
+converter output byte-identical. Semantic comparisons additionally operate on
+validated components and the embedded AIWG envelope.
+
+`full-v1` is reserved for lossless server/PGlite interchange over every
+component declared by that profile. `record-v1` is a RecordStore subset with an
+explicit loss/unsupported-field report. Neither name may be inferred merely
+from filenames in an archive.
+
+AIWG advertises only `core-v1` for this converter. Its profile inventory is
+notes, collections, tags, templates, and links. The representative AIWG graph
+materializes notes, tags, and links; collections and templates are recorded as
+absent in the source graph, not silently lost. AIWG chunks, provenance, SKOS,
+privacy, checksums, hierarchy, and relationship detail are reversibly carried
+inside `metadata.aiwg_fortemi_index` and checked after both consumer round trips.
+
 The sync command materializes:
 
 ```text
@@ -220,8 +262,11 @@ for fixture data after removing private names, addresses, tokens, account
 identifiers, and operational notes. Use `--privacy public` only for
 already-public source material.
 
-Fortemi React consumes the JSON locally; `aiwg index export` and
-`aiwg index sync` do not require a hosted backend.
+Fortemi React consumes `--format fortemi` JSON locally. The
+`--format fortemi-shard` archive is a conversion path toward profile-scoped
+portable transport. A hosted backend is not required to generate or consume
+the static index locally, but verified server-transport claims require the
+server import/re-export gate.
 
 For user/global capability sidecars under `~/.aiwg`, see
 [`docs/user-level-indices.md`](../user-level-indices.md).
@@ -232,26 +277,46 @@ The default backend is Fortemi Core. The legacy local backend must remain
 available until:
 
 - #1691 parity fixtures run green in CI;
-- the Fortemi 2026.7.1 package contract remains green against AIWG v2 export,
-  query, and relationship traversal fixtures;
+- the locked Fortemi 2026.7.11 package contract remains green against AIWG v2
+  export, query, and relationship traversal fixtures;
 - semantic/hybrid behavior keeps the static-cache CI fixture green, with any
   direct Fortemi package integration gated and skipped cleanly without
   credentials or optional dependencies;
 - fallback/rollback remains documented and tested through `--backend local`
   for the deprecation window.
 
-`@fortemi/core@2026.7.1` is the active released baseline for this migration.
-It includes `@fortemi/core/aiwg-index`, direct
+Knowledge Shard conversion has additional, independent gates:
+
+- AIWG CI pins published `@fortemi/core@2026.7.11`
+  and executes the real converter against the current AIWG v2 schema;
+- the output declares a supported server-owned profile and validates against a
+  revision-and-digest-pinned schema receipt;
+- a real Fortemi server imports and re-exports the fixture with no undeclared
+  loss for the selected profile.
+
+`@fortemi/core@2026.7.1` remains the historical static-index baseline for this
+migration. It includes `@fortemi/core/aiwg-index`, direct
 `aiwg.fortemi.index.export.v2` validation, v2 relationship fields, chunked
 index helpers, relationship traversal, static semantic/hybrid helpers, SKOS
 metadata fields, and provenance-event fields. AIWG tests direct v2 validation
 and query behavior against that contract when the package is installed. The
-proposed package-boundary workflow in
+archived package-boundary workflow proposal in
 `.aiwg/planning/fortemi-core-index-migration/fortemi-package-boundary-workflow-proposal.md`
-installs `@fortemi/core@2026.7.1` without changing the lockfile and sets
+installs `@fortemi/core@2026.7.7` without changing the lockfile and sets
 `AIWG_FORTEMI_CORE_PACKAGE_REQUIRED=1` so a reviewed CI copy would fail if
 `@fortemi/core/aiwg-index` is unavailable or rejects the direct v2 export.
+That proposal records the earlier static-index gate; the current shard gate
+instead uses the locked `@fortemi/core@2026.7.11` dependency and `npm ci`.
 
-The default static fixture path does not require a live service. Removing the
-legacy local backend remains gated by deprecation, fallback, and rollback
-evidence.
+For shard conversion, AIWG now pins `@fortemi/core@2026.7.11`. The immutable
+`core-v1` receipt records the registry integrity, Core authority and schema
+bundle digests, archive SHA-256, producer/consumer revisions, and capability
+loss report. Blocking CI verifies the actual published converter, a clean
+PGlite import/re-export, and a clean Fortemi server import/re-export.
+
+The default static-index fixture path still does not require a live service.
+The separate portable-shard conformance workflow starts an isolated Fortemi
+test database, applies the pinned server harness to an exact clean checkout,
+and proves clean import/re-export plus atomic rejection behavior. This evidence
+is limited to named profile `core-v1`; removing the legacy local backend remains
+gated by deprecation, fallback, and rollback evidence.

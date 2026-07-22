@@ -44,6 +44,24 @@ Agents and stewards setting up AIWG end-to-end should use the
 
 ## Installation Troubleshooting
 
+### Optional native features
+
+The base global install intentionally excludes native packages whose lifecycle
+scripts require explicit trust. Core deployment, discovery, and provider tooling
+work without them. Enable only the capability you need:
+
+```bash
+aiwg features install pty         # builds node-pty for local interactive terminals
+aiwg features install embeddings  # builds hnswlib-node for dense semantic search
+aiwg doctor                       # verifies the native entry points actually load
+```
+
+The feature installer writes a private manifest and lockfile under the AIWG user
+data directory and approves scripts only for that feature. Do not set a broad
+user-level npm `allow-scripts` policy. If an older install left native package
+files present but unbuilt, `aiwg doctor` reports the broken capability and the
+same scoped rebuild command.
+
 ### macOS npm `EACCES`
 
 If `npm install -g aiwg` fails with `EACCES` while writing to
@@ -499,8 +517,16 @@ aiwg use research          # Research workflow automation (8 agents, 8-stage pip
 aiwg use rlm               # RLM addon (recursive context decomposition)
 aiwg use all               # Everything
 
-# Existing projects: re-analyze and refresh the provider context bridge
-aiwg regenerate
+# Existing projects: preview, then transactionally extract the canonical graph
+aiwg regenerate --existing-project --dry-run
+aiwg regenerate --existing-project --apply
+aiwg workspace-context doctor
+
+# Fresh or already-migrated projects: ordinary canonical refresh
+aiwg regenerate --workspace
+
+# Legacy compatibility only: inline AIWG context in provider startup files
+aiwg regenerate --full-inject
 
 # Or scaffold a new project
 aiwg new my-project
