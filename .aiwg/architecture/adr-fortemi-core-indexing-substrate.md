@@ -82,6 +82,56 @@ selection. The current AIWG local index remains available through
 | Local issue provider/search                           | AIWG issue subsystem         | `aiwg issue list --search` stays on the local issue provider and local issue index. Exported `aiwg.issue` records do not alter issue CLI behavior without a later ADR.                                                        |
 | Browser/static consumption                            | Fortemi Core + Fortemi React | Static export/chunk manifests, browser/PGlite mode, and bridge-friendly query helpers are Fortemi-side contracts consumed by Fortemi React/Cockpit surfaces.                                                                 |
 
+## Three-Plane Integration Model
+
+AIWG integrates with Fortemi through three separate planes. Sharing a product
+name or record content does not make their contracts interchangeable.
+
+| Plane | Purpose | Authority | Current status |
+| --- | --- | --- | --- |
+| Static index | Local discovery, query, graph traversal, research selection, and packaged fallback | AIWG owns `aiwg.fortemi.index.export.v1/v2`; `@fortemi/core` consumes the pinned contract | Implemented and covered by local parity fixtures; direct released-package verification remains a release gate |
+| Portable shard conversion | Convert an AIWG v2 index into a profile-scoped Knowledge Shard | AIWG owns source-record meaning; `@fortemi/core` owns the converter; Fortemi server owns the shard schema/profile | Verified for named profile `core-v1` with locked `@fortemi/core@2026.7.11`, a revision-and-digest-pinned schema receipt, clean PGlite import/re-export, and clean Fortemi server import/re-export in blocking CI. This does not advertise `full-v1` or broader suite-matrix completion. |
+| Live MCP persistence | Route configured AIWG subsystems to a running Fortemi service | Fortemi MCP tool contract, consumed by AIWG's alpha storage adapter | Independent alpha adapter with no static-index or shard compatibility implication |
+
+The static index remains AIWG's rebuildable search cache. Shard conversion is
+an explicit export operation, not a background sync. Live MCP persistence is
+mutable service integration and does not validate either file format.
+
+The shard plane uses named profiles:
+
+- `full-v1` is lossless server/PGlite interchange for every component
+  declared by that profile.
+- `core-v1` is an explicitly reduced interoperable component set and is
+  the intended initial AIWG converter target.
+- `record-v1` is the Fortemi Core RecordStore subset and must report loss or
+  unsupported fields; it is never evidence of full parity.
+
+AIWG must preserve the complete v2 source record in the conversion mapping, but
+that reversibility claim applies to the AIWG mapping only. It does not prove
+that a destination accepted the shard or preserved server-native identities,
+relationships, attachments, nulls, tombstones, or timestamps.
+
+### Release Gates
+
+`--format fortemi-shard` is release-ready only when all of these pass:
+
+1. The AIWG v2 export validates against the AIWG-owned schema.
+2. AIWG source tests exercise the converter with deterministic fixtures.
+3. The actually published `@fortemi/core/aiwg-index` package exports the
+   converter and accepts the current AIWG v2 contract.
+4. The produced archive validates against a revision-and-digest-pinned receipt
+   of the server-owned shard schema and declares a supported profile.
+5. A real Fortemi server imports the archive before mutation, re-exports it,
+   and the declared-profile comparison reports no silent loss.
+
+The locked `2026.7.9` artifact and immutable AIWG receipt satisfy gates 3-5 for
+the declared `core-v1` profile. The receipt preserves the package integrity,
+Core authority and schema-bundle digests, archive SHA-256, producer and
+consumer commits, capability/loss report, and zero-mutation negative cases.
+Claims remain profile-scoped: this is verified `core-v1` interchange evidence,
+not `full-v1`, a general backup guarantee, or completion of Fortemi's broader
+cross-repository matrix.
+
 ## Canonical AIWG Record Domains
 
 #1686 must extend the current v1 export beyond `aiwg.artifact` and CRM records.
@@ -171,7 +221,7 @@ The Fortemi issues were readable on 2026-07-02 and showed closed tracker state.
 Closed state is not enough for AIWG adoption; #1686-#1691 must validate the
 actual package/API behavior against AIWG fixtures.
 
-`@fortemi/core@2026.7.1` was verified from npm on 2026-07-03. It publishes the
+`@fortemi/core@2026.7.7` was verified from npm on 2026-07-17. It publishes the
 `@fortemi/core/aiwg-index` subpath with direct
 `aiwg.fortemi.index.export.v2` validation, v2 record validation, static query,
 chunked index helpers, relationship traversal, static semantic/hybrid helpers,
@@ -188,13 +238,12 @@ SKOS metadata, provenance events, source origin/checksum, privacy locality, and
 downstream reverse edges). This is a legacy compatibility bridge, not the
 primary package boundary.
 
-Package-boundary evidence for `@fortemi/core@2026.7.1` is optional and separate
-from required CI until maintainers explicitly approve it. The proposed
-package-boundary workflow must remain label-gated, use the documented one-off
-`--min-release-age=0` override only for this freshly released package, disable
-lifecycle scripts with `--ignore-scripts`, avoid dependency manifest mutation,
-require `AIWG_FORTEMI_CORE_PACKAGE_REQUIRED=1`, and restore the locked
-dependency set with `npm ci` after local smoke validation.
+The historical optional package-boundary evidence used
+`@fortemi/core@2026.7.7`. AIWG now locks `@fortemi/core@2026.7.11` in
+`package.json` and `package-lock.json`; blocking shard conformance CI installs
+that exact package graph with `npm ci` and verifies the immutable receipt.
+Future package upgrades must regenerate and restamp the receipt and pass the
+same clean-checkout producer/consumer workflow.
 
 ## Migration Plan
 
@@ -248,9 +297,9 @@ pass:
 - #1687 sync/ingest tests pass without live Fortemi infrastructure.
 - #1688/#1689/#1690 parity tests pass for their public surfaces.
 - #1691 parity suite is green in CI.
-- Any optional package-boundary workflow for `@fortemi/core@2026.7.1` is
-  explicitly human-approved before installation, remains separate from required
-  CI, and follows the documented release-age override safeguards.
+- The locked `@fortemi/core` package, receipt integrity, named profile, schema
+  authority, clean PGlite round trip, and clean Fortemi server round trip pass
+  the blocking shard-conformance workflow.
 - `npm run build:cli`, `npm test`, `aiwg index build --all`,
   `aiwg index status --json`, and `aiwg doctor` pass on the migration branch.
 - Public command behavior changes must preserve `--backend local` through the

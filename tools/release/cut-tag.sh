@@ -53,7 +53,7 @@ set -euo pipefail
 # Release tags use the release-only identity; ordinary commits use the
 # maintainer commit key. Public keys for historical tags remain in the
 # repository keyring for verification.
-RELEASE_KEY_FINGERPRINT="${AIWG_RELEASE_KEY_FINGERPRINT:-FE9272F0BC5781E1DE77FAAA719AB63879E84CE8}"
+RELEASE_KEY_FINGERPRINT="${AIWG_RELEASE_KEY_FINGERPRINT:-401584AAA3376B898FB34427839584D0E25E5126}"
 
 # Source the key from the configured vault at cut time (default on). Set to 0 to sign with a
 # key already present in the local GPG keyring (fork/offline scenarios).
@@ -240,23 +240,19 @@ EOF
   gpg --batch --import "$GPG_SIGNING_KEY_FILE" >/dev/null 2>&1
   GPG_WRAPPER="$GNUPGHOME/git-gpg.sh"
   GPG_PROBE="$GNUPGHOME/signing-probe"
-  printf 'aiwg release signing probe\n' > "$GPG_PROBE"
-  if gpg --batch --yes --local-user "$RELEASE_KEY_FINGERPRINT" \
-       --detach-sign "$GPG_PROBE" >/dev/null 2>&1; then
-    rm -f "$GPG_PROBE.sig"
-    cat > "$GPG_WRAPPER" <<'WRAP'
-#!/usr/bin/env bash
-exec gpg "$@"
-WRAP
-  else
-    printf 'pinentry-mode loopback\n' > "$GNUPGHOME/gpg.conf"
-    cat > "$GPG_WRAPPER" <<WRAP
+  printf 'pinentry-mode loopback\n' > "$GNUPGHOME/gpg.conf"
+  cat > "$GPG_WRAPPER" <<WRAP
 #!/usr/bin/env bash
 exec gpg --batch --pinentry-mode loopback --passphrase-file "$GPG_PASSPHRASE_FILE" "\$@"
 WRAP
-  fi
-  rm -f "$GPG_PROBE"
   chmod 700 "$GPG_WRAPPER"
+  printf 'aiwg release signing probe\n' > "$GPG_PROBE"
+  if ! "$GPG_WRAPPER" --yes --local-user "$RELEASE_KEY_FINGERPRINT" \
+       --detach-sign "$GPG_PROBE" >/dev/null 2>&1; then
+    echo 'FAIL: release-signing probe failed with the vault-supplied passphrase.' >&2
+    exit 1
+  fi
+  rm -f "$GPG_PROBE" "$GPG_PROBE.sig"
   GIT_TAG_GPG_OPTS=(-c "gpg.program=$GPG_WRAPPER")
   echo "  [7b/12] Release-signing key sourced from vault (ephemeral keyring)"
 fi
@@ -327,11 +323,15 @@ echo "  [10/12] Signed tag '$TAG' created with release key"
 # ---------------------------------------------------------------------------
 # 11. Local verify (mirror of the CI gate logic)
 # ---------------------------------------------------------------------------
-if ! git tag -v "$TAG" >/dev/null 2>&1; then
+# Verification must use the same ephemeral release-key adapter as signing.
+# The repository-level gpg.program intentionally points at the distinct
+# commit-signing key, so plain `git tag -v` would invoke the wrong AppRole and
+# reject a tag that was correctly signed with the release key.
+if ! git "${GIT_TAG_GPG_OPTS[@]}" tag -v "$TAG" >/dev/null 2>&1; then
   cat <<EOF >&2
-FAIL: Local 'git tag -v $TAG' verification did not succeed.
-       This means even the local GPG can't verify what it just signed —
-       check that the release key is not expired or revoked.
+FAIL: Ephemeral release-key verification of '$TAG' did not succeed.
+       Check that the release key is not expired or revoked and that the
+       injected release-key route resolves to the expected fingerprint.
        Deleting the bad tag for cleanup:
 EOF
   git tag -d "$TAG" >/dev/null 2>&1 || true

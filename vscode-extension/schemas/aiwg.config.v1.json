@@ -52,6 +52,32 @@
         "type": "string"
       }
     },
+    "authorization": {
+      "$ref": "#/definitions/Authorization",
+      "description": "Versioned provider-neutral permission, role, assignment, scope, boundary, and provider mapping model. Deny by default."
+    },
+    "workspace": {
+      "$ref": "#/definitions/Workspace",
+      "description": "General multi-repository workspace metadata. Root manifests pair this with repos; external members may use member_of to discover their workspace."
+    },
+    "repos": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Workspace member repositories. Each member's own .aiwg/aiwg.config remains authoritative for remotes, delivery, tracker actor, and signing.",
+      "items": {
+        "$ref": "#/definitions/WorkspaceRepo"
+      }
+    },
+    "externalLinks": {
+      "type": "object",
+      "description": "Named public external resources exposed as project metadata. AIWG renders these links but does not fetch them or submit data.",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_-]*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/ExternalLink"
+      }
+    },
     "settings": {
       "type": "object",
       "description": "Framework-specific settings",
@@ -78,11 +104,29 @@
           "$ref": "#/definitions/TrackerActor",
           "description": "Forge account/tool that must author delivery writes such as issue comments, PRs, labels, and closures (#1601)."
         },
+        "transport": {
+          "$ref": "#/definitions/RemoteTransport",
+          "description": "Git transport identity and project-local helper for the primary remote."
+        },
         "secondary": {
           "type": "array",
           "description": "Mirrors, fork bases, and publishing targets",
           "items": {
             "$ref": "#/definitions/SecondaryRemote"
+          }
+        }
+      }
+    },
+    "issues": {
+      "type": "object",
+      "description": "Issue-tracker workflow semantics associated with remotes.issue_tracker (#1789). Ordinary issue processing validates but never implicitly provisions labels.",
+      "additionalProperties": false,
+      "properties": {
+        "labels": {
+          "type": "object",
+          "description": "Tracker labels keyed by stable semantic role.",
+          "additionalProperties": {
+            "$ref": "#/definitions/IssueLabelDefinition"
           }
         }
       }
@@ -161,6 +205,10 @@
         "signing": {
           "$ref": "#/definitions/SigningConfig",
           "description": "Signing metadata for delivery commits/tags (#1601)."
+        },
+        "release_signing": {
+          "$ref": "#/definitions/SigningConfig",
+          "description": "Distinct signing metadata for annotated release tags."
         },
         "force_push_policy": {
           "type": "string",
@@ -346,6 +394,283 @@
     }
   },
   "definitions": {
+    "Authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "default_effect", "resources", "permissions", "roles", "assignments"],
+      "properties": {
+        "version": { "const": "1" },
+        "default_effect": { "const": "deny" },
+        "resources": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "value"],
+            "properties": {
+              "type": { "type": "string" },
+              "value": { "type": "string" },
+              "provider": { "type": "string" },
+              "locator_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
+            }
+          }
+        },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["actions", "resource_types"],
+            "properties": {
+              "actions": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "resource_types": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "effect": { "type": "string", "enum": ["allow", "deny"] },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["permissions"],
+            "properties": {
+              "permissions": { "type": "array", "items": { "type": "string" } },
+              "inherits": { "type": "array", "items": { "type": "string" } },
+              "boundaries": { "type": "array", "items": { "type": "string" } },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "boundaries": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "permissions": { "type": "array", "items": { "type": "string" } },
+              "resources": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "assignments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "subjects", "roles", "scope"],
+            "properties": {
+              "id": { "type": "string" },
+              "subjects": {
+                "type": "array", "minItems": 1,
+                "items": {
+                  "type": "object", "additionalProperties": false, "required": ["kind", "id"],
+                  "properties": {
+                    "kind": { "type": "string", "enum": ["user", "group", "service", "workload"] },
+                    "id": { "type": "string" }
+                  }
+                }
+              },
+              "roles": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+              "scope": {
+                "type": "object", "additionalProperties": false, "required": ["resources"],
+                "properties": { "resources": { "type": "array", "minItems": 1, "items": { "type": "string" } } }
+              },
+              "conditions": { "type": "object" },
+              "expires_at": { "type": "string", "format": "date-time" },
+              "justification": { "type": "string" }
+            }
+          }
+        },
+        "provider_mappings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "aws_iam": { "$ref": "#/definitions/ProviderPermissionMappings" },
+            "entra_id": { "$ref": "#/definitions/ProviderPermissionMappings" },
+            "openbao": { "$ref": "#/definitions/ProviderPermissionMappings" }
+          }
+        }
+      }
+    },
+    "ProviderPermissionMappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stable_id"],
+        "properties": {
+          "stable_id": { "type": "string" },
+          "provider_id": { "type": "string" },
+          "principal": { "type": "string" },
+          "scope": { "type": "string" },
+          "actions": { "type": "array", "items": { "type": "string" } },
+          "resources": { "type": "array", "items": { "type": "string" } },
+          "conditions": { "type": "object" },
+          "token_ttl": { "type": "string" },
+          "token_max_ttl": { "type": "string" },
+          "secret_id_ttl": { "type": "string" },
+          "secret_id_num_uses": { "type": "integer", "minimum": 0 },
+          "locator_env": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" }
+        }
+      }
+    },
+    "Workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable workspace name. Required by runtime validation when repos is present."
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base directory for relative member paths. Relative values resolve from the repo containing this config; defaults to that repo."
+        },
+        "member_of": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional member-to-workspace back-reference. External repos can use this to discover workspace authorization when invoked directly; must not coexist with repos."
+        }
+      }
+    },
+    "WorkspaceRepo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path", "allowed"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique member name."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path relative to workspace.root, or an absolute system path."
+        },
+        "allowed": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Explicit member capabilities. Unlisted actions and unlisted paths are denied regardless of filesystem writability.",
+          "items": {
+            "type": "string",
+            "enum": ["read", "write", "commit", "push", "issue-comment", "service-action", "destructive"]
+          }
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["gitea", "github", "gitlab"],
+          "description": "Optional hint for self-hosted domains that cannot be classified from their remote URL. Detectable remotes take precedence."
+        },
+        "notes": {
+          "type": "string",
+          "description": "Human-readable member authorization note."
+        }
+      }
+    },
+    "ExternalLink": {
+      "type": "object",
+      "description": "A named public HTTP(S) resource. Credentials embedded in URLs are rejected by runtime validation.",
+      "additionalProperties": false,
+      "required": ["label", "url"],
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Human-readable link text."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "description": "Absolute public HTTP(S) URL without embedded credentials."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Optional explanation of when or why to use this resource."
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Optional project-defined grouping, such as security, status, or docs."
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Optional intended audience, such as contributors or maintainers."
+        }
+      }
+    },
+    "IssueLabelDefinition": {
+      "type": "object",
+      "description": "Provider-neutral workflow semantics for one tracker-native label.",
+      "additionalProperties": false,
+      "required": ["name", "category", "description", "requires_human", "blocks_automation"],
+      "allOf": [
+        {
+          "if": {
+            "properties": { "blocks_automation": { "const": true } },
+            "required": ["blocks_automation"]
+          },
+          "then": { "required": ["resume_when"] }
+        }
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Default tracker-native label name."
+        },
+        "provider_names": {
+          "type": "object",
+          "description": "Optional provider-specific strings that preserve this semantic role.",
+          "additionalProperties": false,
+          "properties": {
+            "gitea": { "type": "string", "minLength": 1 },
+            "github": { "type": "string", "minLength": 1 },
+            "local": { "type": "string", "minLength": 1 }
+          }
+        },
+        "category": {
+          "type": "string",
+          "enum": ["type", "area", "priority", "lifecycle", "blocked-reason", "review-approval", "ownership", "automation-eligibility", "human-interaction"],
+          "description": "Informative role family used for search, audit, batching, and work selection."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Purpose and application condition."
+        },
+        "requires_human": {
+          "type": "boolean",
+          "description": "Whether satisfying this state requires human action."
+        },
+        "blocks_automation": {
+          "type": "boolean",
+          "description": "Whether autonomous issue work must pause while this label applies."
+        },
+        "resume_when": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Condition that permits removal or transition of a transient label; required by runtime validation when blocks_automation is true."
+        },
+        "transition_to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional semantic role to apply after resume_when is satisfied."
+        }
+      }
+    },
     "TrackerActor": {
       "type": "object",
       "additionalProperties": false,
@@ -363,6 +688,29 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Forge logins that must not author delivery mutations."
+        }
+      }
+    },
+    "RemoteTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "login": {
+          "type": "string",
+          "description": "Forge login expected to authenticate git pushes."
+        },
+        "protocol": {
+          "type": "string",
+          "enum": ["ssh", "https"],
+          "description": "Transport used by the primary remote."
+        },
+        "helper": {
+          "type": "string",
+          "description": "Project-relative command used for authenticated push/check operations."
+        },
+        "key_fingerprint": {
+          "type": "string",
+          "description": "Public SSH key fingerprint expected by the helper."
         }
       }
     },

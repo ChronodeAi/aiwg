@@ -27,6 +27,7 @@ let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
 import path from 'path';
 import { tmpdir } from 'os';
+import { classifyModelRole, modelForRole } from './model-role.mjs';
 import {
   ensureDir,
   listMdFiles,
@@ -120,14 +121,11 @@ export function replaceModelFrontmatter(content, models) {
 
   if (modelMatch) {
     const orig = modelMatch[1].trim();
-    const clean = orig.replace(/['"]/g, '');
-    let role = 'coding';
-    if (/^opus$/i.test(clean)) role = 'reasoning';
-    else if (/^haiku$/i.test(clean)) role = 'efficiency';
+    const role = classifyModelRole(orig);
 
     if (role === 'reasoning') newModel = models.reasoning;
     else if (role === 'efficiency') newModel = models.efficiency;
-    else newModel = models.coding;
+    else if (role === 'coding') newModel = models.coding;
   }
 
   if (!newModel) return content;
@@ -142,10 +140,11 @@ export function replaceModelFrontmatter(content, models) {
 export function mapModel(shorthand, modelCfg, modelsConfig) {
   // If overrides specified, use them
   if (modelCfg.reasoningModel || modelCfg.codingModel || modelCfg.efficiencyModel) {
-    const clean = (shorthand || 'sonnet').toLowerCase().replace(/['"]/g, '');
-    if (/opus/i.test(clean)) return modelCfg.reasoningModel || 'opus';
-    if (/haiku/i.test(clean)) return modelCfg.efficiencyModel || 'haiku';
-    return modelCfg.codingModel || 'sonnet';
+    return modelForRole(shorthand, {
+      reasoning: modelCfg.reasoningModel || 'opus',
+      coding: modelCfg.codingModel || 'sonnet',
+      efficiency: modelCfg.efficiencyModel || 'haiku',
+    }, { defaultRole: 'coding' }) ?? shorthand;
   }
 
   // No transformation needed for Claude - keep shorthand
@@ -283,9 +282,51 @@ export function deploySkills(skillDirs, targetDir, opts) {
   // index-driven discovery. The deploySkillsWithKernelRouting helper
   // does the actual partition + cleanup.
   // does the same priority resolution centrally.
-  deploySkillsWithKernelRouting(skillDirs, standardDestDir, kernelDestDir, opts);
+  deploySkillsWithKernelRouting(skillDirs, standardDestDir, kernelDestDir, {
+    ...opts,
+    transformSkillMd: transformSkillModelPolicy,
+  });
   // Remove legacy bare-named skills superseded by their aiwg- prefixed replacements
   cleanupLegacyBuiltinCollisions(standardDestDir, opts);
+}
+
+function resolveSkillModelPolicy(commandHint = {}) {
+  const legacy = String(commandHint.model || '').trim().toLowerCase();
+  const legacyRole = legacy === 'opus' ? 'reasoning'
+    : legacy === 'haiku' ? 'efficiency'
+      : legacy ? 'coding' : null;
+  const role = commandHint.modelRole || legacyRole;
+  if (!role) return null;
+  return {
+    model: role === 'reasoning' ? 'opus' : role === 'efficiency' ? 'haiku' : 'sonnet',
+    effort: commandHint.modelEffort,
+  };
+}
+
+/** Compile portable commandHint policy to Claude's native skill fields. */
+export function transformSkillModelPolicy(content) {
+  const { frontmatter: rawFrontmatter } = parseFrontmatter(content);
+  if (!rawFrontmatter) return content;
+  const hintBlock = rawFrontmatter.match(/^commandHint:\s*\n((?:[ \t]+[^\n]*\n?)*)/m)?.[1] || '';
+  const commandHint = {};
+  for (const line of hintBlock.split('\n')) {
+    const match = line.trim().match(/^(model|modelRole|modelTier|modelEffort):\s*(.+)$/);
+    if (match) commandHint[match[1]] = match[2].trim().replace(/^['"]|['"]$/g, '');
+  }
+  const policy = resolveSkillModelPolicy(commandHint);
+  if (!policy) return content;
+  const match = content.match(/^([\s\S]*?---\n)([\s\S]*?)(\n---\n[\s\S]*)$/);
+  if (!match) return content;
+  let frontmatter = match[2]
+    .replace(/^model:\s*.*\n?/m, '')
+    .replace(/^effort:\s*.*\n?/m, '');
+  frontmatter += `\nmodel: ${policy.model}`;
+  if (policy.effort) {
+    const effort = policy.effort === 'medium' ? 2
+      : policy.effort === 'high' || policy.effort === 'xhigh' ? 3 : 1;
+    frontmatter += `\neffort: ${effort}`;
+  }
+  return `${match[1]}${frontmatter}${match[3]}`;
 }
 
 /**

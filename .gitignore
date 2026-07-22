@@ -47,6 +47,9 @@ test-*.temp
 test-output/
 test-results/
 
+# Generated local test execution evidence; plans, protocols, and fixtures stay tracked.
+.aiwg/testing/outputs/
+
 # Windows Zone.Identifier files (NTFS alternate data streams)
 *:Zone.Identifier
 
@@ -93,6 +96,7 @@ opencode.json
 .aiwg/working/
 .aiwg/.index/
 .aiwg/.storage-cache/
+.aiwg/context-migrations/
 .aiwg/security-engineering/reviews/disclosures/
 .aiwg/ralph/archive/
 .aiwg/ralph-external/loops/

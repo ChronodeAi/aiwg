@@ -66,6 +66,7 @@ import {
   removeHandler,
   promoteHandler,
   newBundleHandler,
+  quickrefHandler,
   newProjectHandler,
   installPluginHandler,
   uninstallPluginHandler,
@@ -103,6 +104,7 @@ import { bestPracticesAuditHandler } from './best-practices-audit.js';
 // (primary) and 'sync' (deprecated alias) to preserve backward compatibility.
 import { refreshHandler } from './refresh.js';
 import { regenerateHandler, regenerateHandlers } from './regenerate.js';
+import { workspaceContextHandler, workspaceContextHandlers } from './workspace-context.js';
 import { mcHandler, mcHandlers } from './mc.js';
 import { sdlcAccelerateHandler } from './sdlc-accelerate.js';
 import { teamHandler, teamHandlers } from './team.js';
@@ -126,6 +128,7 @@ import { issueHandler, issueAuditHandler } from './issues.js';
 import { cockpitHandler } from './cockpit.js';
 import { commandLogHandler } from './command-log.js';
 import { skillUsageHandler } from './skill-usage.js';
+import { modelsHandler } from './models.js';
 
 import type { CommandHandler } from './types.js';
 
@@ -138,6 +141,7 @@ export {
   updateHandler,
   refreshHandler,
   regenerateHandler,
+  workspaceContextHandler,
 
   // Framework management
   useHandler,
@@ -155,6 +159,7 @@ export {
 
   // Project
   newBundleHandler,
+  quickrefHandler,
   newProjectHandler,
 
   // Workspace
@@ -166,6 +171,7 @@ export {
   // Subcommands
   mcpHandler,
   catalogHandler,
+  modelsHandler,
   indexHandler,
   corpusHandler,
   discoverHandler,
@@ -280,6 +286,7 @@ export {
   teamHandlers,
   stewardHandlers,
   regenerateHandlers,
+  workspaceContextHandlers,
   daemonHandlers,
   sandboxHandlers,
   repoAccessHandlers,
@@ -298,6 +305,7 @@ export const allHandlers: CommandHandler[] = [
   updateHandler,
   refreshHandler,
   regenerateHandler,
+  workspaceContextHandler,
 
   // Framework management
   useHandler,
@@ -310,6 +318,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Project setup
   newBundleHandler,
+  quickrefHandler,
   newProjectHandler,
   initHandler,
   setupHandler,
@@ -323,6 +332,7 @@ export const allHandlers: CommandHandler[] = [
   // Subcommand handlers (MCP, catalog, index, skills)
   mcpHandler,
   catalogHandler,
+  modelsHandler,
   indexHandler,
   corpusHandler,
   discoverHandler,

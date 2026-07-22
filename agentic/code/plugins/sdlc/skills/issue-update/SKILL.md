@@ -6,8 +6,10 @@ description: Update existing ticket/issue with status changes, comments, or fiel
 commandHint:
   argumentHint: <ticket-id> [--status STATUS --comment "text" --assignee USER --labels "label1,label2" --priority LEVEL]
   allowedTools: Read, Write, Glob, Bash, mcp__gitea__edit_issue, mcp__gitea__create_issue_comment
-  model: sonnet
+  model: haiku
   category: project-management
+  modelRole: efficiency
+  modelTier: economy
 ---
 
 <!-- AIWG-SKILL-CALLOUT -->
@@ -24,6 +26,16 @@ commandHint:
 
 
 # Issue Update
+
+## Semantic Label Contract (#1789)
+
+Resolve label mutations through `.aiwg/aiwg.config` `issues.labels` for the
+provider selected by `remotes.issue_tracker`. Add a role only when its declared
+condition is true. When `resume_when` is satisfied, remove the transient role
+or replace it with `transition_to` in one read-modify-write operation that
+preserves unrelated labels. Never provision missing configured labels
+implicitly; report them as diagnostics. Warn explicitly before legacy name
+fallback.
 
 ## Purpose
 
