@@ -4,6 +4,23 @@
 
 AIWG uses a configurable model mapping system that allows users to specify which AI models to use for different agent roles without modifying deployment scripts or documentation.
 
+The current provider-aware contract separates three concerns:
+
+- canonical policy: `model-role`, `model-tier`, optional `model-effort`, and an
+  exceptional exact `model-override`;
+- provider capabilities:
+  `agentic/code/providers/model-capabilities.v1.json`; and
+- volatile exact identifiers:
+  `agentic/code/providers/model-catalog.v1.json`.
+
+Provider compilation reports one of `native`, `compiled`, `inherited`,
+`global-only`, `informational`, or `unsupported`. An unsupported field is
+omitted rather than copied into an artifact that ignores it.
+
+The versioned schemas are under `schemas/models/`. Project/user compatibility
+input still accepts `max-quality` for one migration window, but canonical
+policy uses `premium`.
+
 ## Configuration File Location
 
 Models are defined in `models.json` files with the following priority:
@@ -69,6 +86,73 @@ Models are defined in `models.json` files with the following priority:
 ```
 
 ## Model Roles
+
+AIWG classifies both the legacy aliases and pinned or provider-qualified
+Claude-family identifiers consistently:
+
+| Canonical family | Role | Recognized examples |
+|---|---|---|
+| Opus | reasoning | `opus`, `claude-opus-4-7`, `anthropic/claude-opus-4-6` |
+| Sonnet | coding | `sonnet`, `claude-sonnet-4-6`, `anthropic/claude-sonnet-4-6` |
+| Haiku | efficiency | `haiku`, `claude-haiku-4-5`, `anthropic/claude-haiku-4-5` |
+
+An explicit identifier outside a recognized family remains `unknown`. Role
+filters do not silently include it in the coding population, and provider
+transforms preserve it instead of rewriting it as a coding model. Omitted model
+metadata retains the legacy coding default during deployment.
+
+## Provider compilation examples
+
+Codex agents compile to standalone `.codex/agents/*.toml` files. Every file has
+the required `name`, `description`, and `developer_instructions` fields; native
+model controls use `model` and `model_reasoning_effort`. Codex skills have no
+documented per-skill model field, so AIWG reports that policy as `unsupported`
+and does not emit a pretend pin.
+
+Warp and Hermes can apply run-wide or global delegation policy but cannot
+enforce heterogeneous per-agent files. Their per-agent result is
+`global-only`. Windsurf currently has no supported portable child selector, so
+its per-agent result is `unsupported`.
+
+`aiwg doctor --provider <name>` reports canonical agent counts and the target
+surface separately. It does not describe skills as pinned when the provider
+cannot enforce skill-local model selection.
+
+## Model management CLI
+
+Use the typed `aiwg models` command family to inspect effective policy before
+changing canonical files:
+
+```bash
+aiwg models audit --provider codex --json
+aiwg models resolve --skill address-issues --provider claude
+aiwg models set --agent test-engineer --tier economy --dry-run --json
+aiwg models set --glob '*-reviewer' --tier standard
+aiwg models set-default economy --scope project
+aiwg models validate
+aiwg models migrate --all --dry-run
+```
+
+Selectors support exact agents/skills, globs, role, current tier, framework,
+provider compilation, and `--all`. Project configuration resolves under
+`--target/models.json`; user defaults resolve under
+`~/.config/aiwg/models.json`. Writes use
+same-directory temporary files and atomic rename, preserve unrelated JSON or
+frontmatter content, and validate the full requested change set before writing.
+
+Skill policy lives under `commandHint` as `modelRole`, `modelTier`, and optional
+`modelEffort`; premium policy also requires `modelRationale`. During migration,
+legacy `commandHint.model` remains readable:
+`opus` maps to reasoning/premium, `sonnet` to coding/standard, and `haiku` to
+efficiency/economy. Claude deployment compiles requested skill intent to its
+native turn-scoped fields. Other providers retain canonical intent but only
+report the capability outcome; they do not receive a fabricated native pin.
+
+Canonical agents use `model-role`, `model-tier`, and, for premium defaults,
+`model-rationale`. Economy is the corpus default. Premium is an allowlisted
+exception whose rationale names the quality or risk reason. The compatibility
+`model` aliases remain for one migration window and must not contain pinned
+provider IDs.
 
 ### Reasoning (opus)
 **Use for:** Complex analysis, critical decisions, strategic planning

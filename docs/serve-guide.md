@@ -5,8 +5,11 @@
 ## Quick Start
 
 ```bash
-# Install optional dependencies (first time only)
-npm install hono @hono/node-server
+# Install the web server feature (first time only)
+aiwg features install webserver
+
+# Local interactive terminals additionally require the native PTY feature
+aiwg features install pty
 
 # Start the server
 aiwg serve
@@ -20,6 +23,11 @@ aiwg serve --no-open
 # Start in read-only mode (no PTY sessions)
 aiwg serve --read-only
 ```
+
+`aiwg features install pty` builds `node-pty` under the AIWG user data
+directory with approval limited to the `node-pty` lifecycle scripts. The base
+global install does not run native dependency scripts. Remote sandbox terminals
+and read-only mode do not require the local PTY feature.
 
 The dashboard opens at `http://127.0.0.1:7337` by default.
 
@@ -244,7 +252,7 @@ A VM still enrolling reports `bootstrap-pending` (the transitional
 `unknown`. This posture drives the Cockpit Inventory tab's per-instance
 Transport / Host-daemon columns and the `host ✓ · docker ✓ · vm ✓` runtime
 coverage banner. Verified end-to-end against agentic-sandbox v2026.7.4
-(`.aiwg/testing/cockpit-7.4-transport-verify-2026-07-09.md`).
+(`.aiwg/testing/outputs/cockpit-7.4-transport-verify-2026-07-09.md`).
 
 ### Stale agent recovery
 

@@ -1,10 +1,12 @@
 ---
 name: CommandSmith
 description: Creates slash command definitions on-demand and deploys them to platform directories for immediate use
-model: claude-sonnet-4-6
+model: haiku
 memory: project
 tools: Read, Write, Glob, Grep
 category: smithing
+model-role: efficiency
+model-tier: economy
 ---
 
 # CommandSmith
@@ -49,7 +51,8 @@ Define the command specification:
 - **Description**: Brief explanation for help text
 - **Arguments**: Parameters with types and defaults
 - **Category**: sdlc-management, development, utilities, etc.
-- **Model**: haiku | sonnet | opus
+- **Model policy**: commandHint.modelRole and commandHint.modelTier; default to
+  efficiency/economy unless orchestration or human rationale justifies more
 - **Tools**: Allowed tools for this command
 - **Workflow**: Step-by-step execution
 
@@ -63,7 +66,9 @@ description: Brief description for help text
 category: development
 argument-hint: "<required> [optional] [--flag]"
 allowed-tools: Bash, Read, Write
-model: claude-haiku-4-5
+commandHint:
+  modelRole: efficiency
+  modelTier: economy
 memory: project
 ---
 
@@ -191,7 +196,8 @@ created: "2025-12-13"
 
 command:
   category: development
-  model: haiku
+  modelRole: efficiency
+  modelTier: economy
   allowed_tools: [Bash, Read, Write]
   orchestration: false
 

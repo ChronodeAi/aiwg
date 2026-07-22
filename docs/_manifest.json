@@ -65,6 +65,8 @@
     "models/gpt-optimization",
     "models/local-models",
     "models/hybrid-architectures",
+    "models/model-discovery-provider-decisions",
+    "architecture/adr-optional-model-catalog-feed",
     "prompting",
     "prompting/chain-of-thought",
     "prompting/context-optimization",
@@ -73,10 +75,13 @@
     "reference",
     "CLI_USAGE",
     "cli-reference",
+    "configuration/aiwg-config",
+    "security/repo-access-manifest",
     "fortemi-core-prebuilt-indices",
     "user-level-indices",
     "user-level-project-memory",
     "local-issues",
+    "issue-label-taxonomy",
     "ralph-guide",
     "simple-language-translations",
     "mention-utilities",
@@ -273,6 +278,7 @@
     "customization/README",
     "customization/project-local-quickstart",
     "customization/project-local-lifecycle",
+    "customization/project-quickrefs",
     "customization/project-local-troubleshooting",
     "customization/from-fork-to-project-local",
     "customization/extensions-vs-addons-vs-frameworks-vs-plugins",
@@ -680,6 +686,20 @@
       "parent": "models"
     },
     {
+      "id": "models/model-discovery-provider-decisions",
+      "title": "Provider Model Discovery",
+      "summary": "Native model-list interfaces, scopes, and unsupported-provider decisions",
+      "file": "models/model-discovery-provider-decisions.md",
+      "parent": "models"
+    },
+    {
+      "id": "architecture/adr-optional-model-catalog-feed",
+      "title": "Public Model Feed Decision",
+      "summary": "Why AIWG does not currently operate a hosted nightly model catalog",
+      "file": "architecture/adr-optional-model-catalog-feed.md",
+      "parent": "models"
+    },
+    {
       "id": "prompting",
       "title": "Prompting Techniques",
       "summary": "Advanced prompting strategies",
@@ -731,6 +751,13 @@
       "title": "Local Issues",
       "summary": "Project-local issue tracker under .aiwg/issues/",
       "file": "local-issues.md",
+      "parent": "reference"
+    },
+    {
+      "id": "issue-label-taxonomy",
+      "title": "Issue Label Taxonomy",
+      "summary": "Provider-neutral tracker label roles and workflow semantics",
+      "file": "issue-label-taxonomy.md",
       "parent": "reference"
     },
     {
@@ -794,6 +821,20 @@
       "title": "Model Configuration",
       "summary": "Configure AI model settings",
       "file": "configuration/model-configuration.md",
+      "parent": "reference"
+    },
+    {
+      "id": "configuration/aiwg-config",
+      "title": "AIWG Project Config",
+      "summary": "Project and multi-repository workspace configuration reference",
+      "file": "configuration/aiwg-config.md",
+      "parent": "reference"
+    },
+    {
+      "id": "security/repo-access-manifest",
+      "title": "Workspace Repository Access",
+      "summary": "Deny-by-default multi-repository authorization and member policy resolution",
+      "file": "security/repo-access-manifest.md",
       "parent": "reference"
     },
     {
@@ -2129,6 +2170,13 @@
       "title": "Project-Local Lifecycle",
       "summary": "Bundle lifecycle and graduation",
       "file": "customization/project-local-lifecycle.md",
+      "parent": "customization"
+    },
+    {
+      "id": "customization/project-quickrefs",
+      "title": "Project Quickrefs",
+      "summary": "Always-visible project orientation",
+      "file": "customization/project-quickrefs.md",
       "parent": "customization"
     },
     {

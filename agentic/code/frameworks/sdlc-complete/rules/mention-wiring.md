@@ -5,13 +5,13 @@ enforcement: medium
 # @-Mention Wiring Rules
 
 **Enforcement Level**: MEDIUM
-These rules apply when generating ANY artifact (documents, code, agents, commands, skills).
+These rules apply when generating ANY artifact (documents, code, agents, commands, skills, rules, templates).
 
 ## Wire-As-You-Go Pattern
 
 **All artifact generators MUST include @-mentions during creation, not as a separate step.**
 
-The specialized `/mention-wire` command exists for bulk cleanup and auditing - it should NOT be the primary method of wiring traceability.
+The specialized `mention-wire` skill exists for bulk cleanup and auditing - it should NOT be the primary method of wiring traceability.
 
 ## When to Add @-Mentions
 
@@ -62,9 +62,9 @@ When generating agent definitions, include References section:
 - @$AIWG_ROOT/agentic/code/.../skills/related-skill/SKILL.md - Related skill
 ```
 
-### Creating Commands/Skills
+### Creating Skills
 
-When generating commands or skills, include References section:
+When generating skills, include References section:
 
 ```markdown
 ## References
@@ -86,7 +86,7 @@ Use semantic tags to indicate relationship type:
 | `@source` | Source code for this test | `@source @$AIWG_ROOT/src/module.ts` |
 | `@depends` | Dependencies | `@depends @$AIWG_ROOT/src/utils/helper.ts` |
 | `@agent` | Related agent | `@agent @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/agents/test-engineer.md` |
-| `@command` | Related command | `@command @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/generate-tests/SKILL.md` |
+| `@skill` | Related skill | `@skill @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/generate-tests/SKILL.md` |
 
 ## Bidirectional Linking
 
@@ -115,9 +115,9 @@ Before completing any artifact generation:
 
 ## Bulk Operations
 
-Use `/mention-wire` for:
+Use `mention-wire` for:
 - Initial wiring of existing codebase
 - Periodic audits and gap filling
 - After major refactoring
 
-Do NOT rely on `/mention-wire` as the primary traceability mechanism.
+Do NOT rely on `mention-wire` as the primary traceability mechanism.

@@ -18,9 +18,9 @@ import type {
 
 const RUNTIME_TO_MODEL_TIER: Record<RuntimeModelTier, ModelTier | null> = {
   0: null,
-  1: 'standard',
-  2: 'premium',
-  3: 'max-quality',
+  1: 'economy',
+  2: 'standard',
+  3: 'premium',
 };
 
 function clampRuntimeTier(tier: RuntimeModelTier | undefined, fallback: RuntimeModelTier): RuntimeModelTier {
@@ -62,7 +62,7 @@ export function routeModelTier(request: ModelRouteRequest = {}): ModelRouteDecis
     rationale.push('no escalation signal present');
   }
 
-  const requiresConfirmation = tier === 3 || tier > maxAutoTier;
+  const requiresConfirmation = (tier === 3 && !request.premiumAuthorized) || tier > maxAutoTier;
   if (requiresConfirmation) {
     rationale.push(
       tier === 3

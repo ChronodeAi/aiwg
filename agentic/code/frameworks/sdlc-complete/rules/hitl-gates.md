@@ -55,6 +55,114 @@ Agents MUST NOT silently skip, abbreviate, or omit any SDLC artifact based on in
 
 All gates conform to `@$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/hitl-gate.yaml`. Integrates with flow commands (exit gates), agent loops (iteration-count checkpoint gates), and cost budgets (cost-threshold gates with `timeout_action: abort`). Notify via configured channels (cli, issue_comment, slack) with the gate name, action required, and timeout remaining.
 
+## Integration Patterns
+
+### With Flow Skills
+
+```yaml
+# In flow skill definition
+flow_phases:
+  - name: elaboration
+    exit_gate: GATE-E2C
+    gate_config:
+      mode: ALWAYS
+      notification:
+        channels: [cli, issue_comment]
+```
+
+### With Agent Loop
+
+```yaml
+# Al iteration checkpoint
+ralph_config:
+  iteration_gate:
+    trigger:
+      type: iteration_count
+      threshold: 10
+    behavior:
+      mode: CONDITIONAL
+      auto_approve_conditions:
+        - condition: "progress_rate > 0.1"
+          reason: "Making progress"
+```
+
+### With Cost Budgets
+
+```yaml
+# Budget checkpoint gate
+budget_gate:
+  trigger:
+    type: cost_threshold
+    threshold: 1000  # tokens
+  behavior:
+    mode: ALWAYS
+    timeout_action: abort
+```
+
+## Cost Savings Model
+
+Based on Agent Laboratory research:
+
+| Metric | Fully Autonomous | With HITL | Savings |
+|--------|------------------|-----------|---------|
+| Cost multiplier | 6.0x | 1.0x | 84% |
+| Error rate | 35% | 5% | 86% |
+| Revision cycles | 4.2 | 0.83 | 80% |
+
+## Notification Configuration
+
+Configure how humans are notified:
+
+```yaml
+notification:
+  channels:
+    - cli           # Show in terminal
+    - issue_comment # Post to issue
+    - slack         # Send Slack message (if configured)
+  urgency: high
+  message_template: |
+    **Gate Activated**: {{gate_name}}
+    **Action Required**: {{action_type}}
+    **Timeout**: {{timeout_remaining}}
+```
+
+## Artifact Omission Gate Template
+
+**REQUIRED**: Agents MUST NOT silently skip, abbreviate, or omit any SDLC artifact based on inferred project type, size, or complexity. Completeness is the default.
+
+When an agent determines an artifact is low-value for the project context, it MUST surface a HITL gate:
+
+```yaml
+artifact_omission_gate:
+  trigger:
+    type: agent_skip_request
+    artifact: "{{artifact_name}}"
+  behavior:
+    mode: ALWAYS
+    timeout_action: block
+  presentation:
+    summary_template: |
+      ## Artifact Omission Request
+
+      **Artifact**: {{artifact_name}}
+      **Phase**: {{current_phase}}
+      **Reason**: {{agent_rationale}}
+
+      The agent suggests this artifact may not be needed for this project.
+      However, completeness is the default — skipping requires your approval.
+
+    questions:
+      - id: "skip_approved"
+        question: "Skip generating {{artifact_name}}?"
+        options:
+          - "No — generate it (recommended)"
+          - "Yes — skip this artifact"
+          - "Generate abbreviated version"
+        required: true
+```
+
+**Rationale**: Implicit decisions to skip documentation based on project type inference produce inconsistent, incomplete artifact sets and erode trust. The human must explicitly opt out of any artifact.
+
 ## Checklist
 
 Gate type matches use case; mode appropriate for risk; timeout + timeout_action configured; cost tracking enabled; audit logging enabled; presentation aids the decision; auto-approve conditions justified (if CONDITIONAL).

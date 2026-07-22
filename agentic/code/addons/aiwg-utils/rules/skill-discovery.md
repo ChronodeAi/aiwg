@@ -11,7 +11,22 @@ enforcement: high
 
 ## Overview
 
-AIWG ships hundreds of skills/agents/commands/rules, but platforms cap how many they list. AIWG deploys two tiers: **kernel skills** (always loaded — ~10 quickrefs + core utilities) and **standard skills** (at `<provider-dir>/.aiwg/skills/`, *not* listed; reachable only through the artifact index). **Most AIWG skills are not in your context.** The discipline: **query the index before declining or improvising.**
+AIWG ships hundreds of skills, agents, rules, and provider compatibility surfaces across its installed frameworks. Agentic platforms (Claude Code, OpenClaw, Codex, Cursor, Factory, etc.) cap how many skills they will list in any given context — Claude Code at 25% of context window by default, OpenClaw at 150 hard, others on similar trajectories. To work within those caps, AIWG deploys two tiers:
+
+- **Kernel skills** at the platform-native skills directory (`.claude/skills/`, `.factory/skills/`, etc.) — always loaded. ~10 today: one quickref per installed framework + a small core utility set.
+- **Standard skills** at `<provider-dir>/.aiwg/skills/` — *not* listed by the platform. Reachable only through the AIWG artifact index.
+
+This means **most AIWG skills are not in your context**. You see the kernel set; the rest exists but is invisible until you query for it.
+
+## Problem Statement
+
+Without explicit framing, an agent operating in this layout will:
+- Look at its loaded skill set, see ~10 quickrefs, and conclude AIWG can't do something
+- Decline a user request that *would* be served by a skill the agent doesn't see
+- Re-derive a workflow from scratch when a curated skill already exists for it
+- Enumerate from memory and miss the bulk of the available surface
+
+The fix is a single discipline: **query the index before declining or improvising**.
 
 ## Mandatory Rules
 
@@ -33,6 +48,8 @@ Before saying "AIWG doesn't have a skill for that," you MUST run `aiwg discover 
 
 **FORBIDDEN**: "AIWG doesn't seem to have a deployment skill, let me write a custom script." **REQUIRED**: run `aiwg discover "deploy production"` → use `flow-deploy-to-production`.
 
+The index covers every deployed AIWG skill, agent, rule, and legacy command bridge — including the 90%+ that aren't loaded in your context. If `discover` returns ranked candidates, load and use the top match. If multiple are close, present the top-3 to the user.
+
 ### Rule 1.5: Discover BEFORE Filesystem Search (discover-first protocol)
 
 For any request mentioning **AIWG**, a framework name (sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator), or a capability keyword (skill, agent, rule, command, addon, workflow, flow, template), `aiwg discover` MUST be the first information-gathering call.
@@ -41,7 +58,69 @@ For any request mentioning **AIWG**, a framework name (sdlc, research, forensics
 
 **When subagent delegation is available** (Claude Code Task tool, Hermes `delegate_task`, etc.), prefer dispatching the `aiwg-finder` agent over inline discover+show — it runs the query in its own context and returns the body + capability summary (~200 parent tokens vs ~3–8k inline).
 
-You may skip the query when: the user named a specific skill/command; the need is clearly outside AIWG scope; you already queried this need this session; or the kernel quickref directly lists the skill. Otherwise, **discover first.**
+For any user request mentioning **AIWG**, framework names (**sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator, knowledge-base**), or capability keywords (**skill, agent, rule, command, addon, workflow, flow, template, or legacy command**), `aiwg discover` MUST be the first information-gathering tool call.
+
+Filesystem `Grep` / `Glob` / `Read` against any of the following directories is **FORBIDDEN** for AIWG-related lookups until `aiwg discover` has been consulted at least once in the current session:
+
+- `.claude/` (Claude Code)
+- `.codex/`, `~/.codex/` (OpenAI Codex)
+- `.github/agents/`, `.github/skills/`, `.github/instructions/`, `.github/prompts/` (Copilot)
+- `.cursor/` (Cursor)
+- `.warp/`, `WARP.md` (Warp)
+- `.windsurf/`, `AGENTS.md` (Windsurf)
+- `.factory/` (Factory)
+- `.opencode/` (OpenCode)
+- `.hermes.md`, `~/.hermes/skills/` (Hermes)
+- `~/.openclaw/` (OpenClaw)
+- `agentic/code/` (AIWG framework source, when working inside the AIWG repo itself)
+
+This rule exists because the failure mode it prevents is the most common one users report: an agent has fast filesystem tools and a literal-string hit on an AIWG keyword, so it short-circuits to grep and never realizes `aiwg discover` would have given a ranked, context-rich answer covering 10x more surface area.
+
+**FORBIDDEN — filesystem-first for AIWG-keyword query**:
+
+```
+User: "tell me about AIWG's RLM agent"
+Agent: *runs `grep -r "rlm" .factory/`*  ← FORBIDDEN as first move
+       *hits rlm-agent.md by literal string match*
+       *answers from that one file*
+       Skipped: 8 other RLM-related skills, rules, and templates that
+       `aiwg discover "rlm"` would have surfaced.
+```
+
+**REQUIRED — discover-first for AIWG-keyword query**:
+
+```
+User: "tell me about AIWG's RLM agent"
+Agent: *runs `aiwg discover "rlm agent"`*
+       *gets back rlm-agent (agent), rlm-context-management (rule),
+        rlm-quickref (skill), and 6 others ranked by relevance*
+       *picks the best match (or top-3) and uses `aiwg show <type> <name>`*
+       *answers from the ranked set, not from whatever grep hit first*
+```
+
+#### When subagent delegation is available, prefer `aiwg-finder`
+
+When the platform supports spawning subagents (Claude Code's Task tool, Hermes's `delegate_task`, etc.), dispatching to the `aiwg-finder` agent is preferred over self-service `aiwg discover` + `aiwg show` in the parent context. The finder agent:
+
+- Runs the discover query in its own context (parent context stays clean).
+- Returns the selected artifact body plus a one-paragraph capability summary.
+- Costs ~200 parent tokens vs. ~3,000-8,000 for the full discover+show transcript inline.
+
+Pattern (Claude Code, but symmetric on other subagent-capable platforms):
+
+```
+Task(subagent_type="aiwg-finder", prompt="find the skill or agent for: <user's intent>")
+```
+
+#### When you may skip the discover query (same as Rule 4 below — kept here for proximity)
+
+You may skip the index query when:
+- The user named a specific skill or legacy command alias (`flow-deploy-to-production`, `/flow-deploy-to-production`, `aiwg use sdlc`).
+- The capability is clearly outside AIWG's scope (general programming, weather, translation).
+- You've already queried for the same need within the current session.
+- The kernel quickref directly lists the skill the user needs.
+
+In every other case, **discover first**.
 
 ### Rule 2: Query the Index Before Improvising
 
@@ -53,7 +132,12 @@ Kernel quickrefs are orientation, not an exhaustive list. When a need isn't verb
 
 ### Rule 4: When to Skip the Query
 
-Skip only when: the user named a specific skill/command; the need is outside AIWG scope (weather, translation, unrelated general programming); you queried the same need this session; or the quickref directly lists it.
+You may proceed without querying the index when:
+
+- The user named a specific skill or legacy command alias (`flow-deploy-to-production`, `/flow-deploy-to-production`, `aiwg use sdlc`)
+- The capability is clearly outside AIWG's scope (e.g., "what's the weather", "translate to French", general programming questions unrelated to AIWG)
+- You queried for the same need within the current session and the result is in working memory
+- The kernel quickref directly lists the skill the user needs (in which case you've already done the lookup mentally)
 
 ### Rule 5: Discover → Show Is the Canonical Access Pattern
 
@@ -100,7 +184,23 @@ Universal across all AIWG providers — the `discover` subcommand works against 
 
 ## Checklist
 
-Before declining: did I `aiwg discover "<need>"` with the right `--type`, read the top result's capability (not just its name), report close matches, and confirm the need is genuinely out of scope? After a discover match: did I use `aiwg show` (not the filesystem) to fetch the body, including as the fallback when the Skill tool errors?
+Before declining a user request on the grounds that AIWG can't do it, verify:
+
+- [ ] Did I run `aiwg discover "<paraphrased need>"`?
+- [ ] Did I check the right `--type` filter (skill, agent, rule, or command only for legacy bridge lookup)?
+- [ ] Did I read the top result's `capability` description, not just its name?
+- [ ] If multiple results were close, did I report them to the user?
+- [ ] Have I confirmed the need is genuinely outside AIWG's scope?
+
+If any answer is "no" — query before answering.
+
+After `aiwg discover` returns a match, before reading anything from disk, verify:
+
+- [ ] Did I use `aiwg show <type> <name>` to fetch the body?
+- [ ] If the platform Skill tool errored, did I fall back to `aiwg show` (not `find` / `ls` / `Read`)?
+- [ ] If `aiwg show` is somehow unavailable, am I reading from `$AIWG_ROOT/agentic/code/...` (the canonical corpus), not from a `<provider>/skills/` deploy mirror?
+
+If any answer is "no" — you're navigating the filesystem when you should be using the CLI. Stop and run `aiwg show`.
 
 ## References
 
