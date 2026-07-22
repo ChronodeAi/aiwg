@@ -20,7 +20,7 @@
  *   `.agents/skills/` only and prune the stale legacy home dir on deploy.
  *
  * Special features:
- *   - Model replacement (opus/sonnet/haiku -> gpt-5.4/gpt-5.3-codex/gpt-5.1-codex-mini)
+ *   - Model replacement (opus/sonnet/haiku -> gpt-5.4/gpt-5.5/gpt-5.4-mini)
  *   - --as-agents-md aggregation option
  *   - Delegates commands to deploy-prompts-codex.mjs (deploys to ~/.codex/prompts/)
  *   - Delegates skills to deploy-skills-codex.mjs (deploys to .agents/skills/)
@@ -31,9 +31,12 @@ import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
+const staticModelCatalog = _require('../../../agentic/code/providers/model-catalog.v1.json');
 import path from 'path';
 import os from 'os';
 import { spawn } from 'child_process';
+import { load as loadYaml } from 'js-yaml';
+import { classifyModelRole, modelForRole } from './model-role.mjs';
 import {
   ensureDir,
   listMdFiles,
@@ -47,6 +50,7 @@ import {
   getAddonSkillDirs,
   getAddonRuleFiles,
   listSkillDirs,
+  loadRuntimeModelCatalog,
   deploySkillDir,
   deploySkillsWithKernelRouting,
   getFrameworksForMode,
@@ -57,8 +61,10 @@ import {
   collectFrameworkArtifacts,
   listOnDemandRuleFiles,
   writeOnDemandRuleIndex,
-  deploySoulCompanions
+  deploySoulCompanions,
+  parseFrontmatter
 } from './base.mjs';
+const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
 // ============================================================================
 // Provider Configuration
@@ -112,58 +118,73 @@ export const capabilities = {
  */
 export function mapModel(originalModel, modelCfg, modelsConfig) {
   const gptModels = {
-    'opus': 'gpt-5.4',
-    'sonnet': 'gpt-5.5',
-    'haiku': 'gpt-5.1-codex-mini'
+    'opus': modelCatalog.providers.codex.roles.reasoning.id,
+    'sonnet': modelCatalog.providers.codex.roles.coding.id,
+    'haiku': modelCatalog.providers.codex.roles.efficiency.id
   };
 
   // Handle override models first
   if (modelCfg.reasoningModel || modelCfg.codingModel || modelCfg.efficiencyModel) {
-    const clean = (originalModel || 'sonnet').toLowerCase().replace(/['"]/g, '');
-    if (/opus/i.test(clean)) return modelCfg.reasoningModel || gptModels.opus;
-    if (/haiku/i.test(clean)) return modelCfg.efficiencyModel || gptModels.haiku;
-    return modelCfg.codingModel || gptModels.sonnet;
+    const mapped = modelForRole(originalModel, {
+      reasoning: modelCfg.reasoningModel || gptModels.opus,
+      coding: modelCfg.codingModel || gptModels.sonnet,
+      efficiency: modelCfg.efficiencyModel || gptModels.haiku,
+    }, { defaultRole: 'coding' });
+    return mapped ?? originalModel;
   }
 
-  const clean = (originalModel || 'sonnet').toLowerCase().replace(/['"]/g, '');
+  return modelForRole(originalModel, {
+    reasoning: gptModels.opus,
+    coding: gptModels.sonnet,
+    efficiency: gptModels.haiku,
+  }, { defaultRole: 'coding' }) ?? originalModel;
+}
 
-  for (const [key, value] of Object.entries(gptModels)) {
-    if (clean.includes(key)) return value;
-  }
+function cleanYamlScalar(value) {
+  return String(value || '').trim().replace(/^['"]|['"]$/g, '');
+}
 
-  return gptModels.sonnet; // default
+function tomlString(value) {
+  return JSON.stringify(String(value));
 }
 
 /**
- * Replace model in frontmatter
+ * Render a standalone Codex custom-agent TOML file.
+ *
+ * Required fields follow the current Codex custom-agent contract:
+ * name, description, and developer_instructions. Model controls are native
+ * config.toml keys and inherit only when omitted.
+ *
+ * @implements #1802
  */
-function replaceModelFrontmatter(content, models) {
-  const fmStart = content.indexOf('---');
-  if (fmStart !== 0) return content;
-  const fmEnd = content.indexOf('\n---', 3);
-  if (fmEnd === -1) return content;
-
-  const header = content.slice(0, fmEnd + 4);
-  const body = content.slice(fmEnd + 4);
-
-  const modelMatch = header.match(/^model:\s*([^\n]+)$/m);
-  let newModel = null;
-
-  if (modelMatch) {
-    const orig = modelMatch[1].trim();
-    const clean = orig.replace(/['"]/g, '');
-    let role = 'coding';
-    if (/^opus$/i.test(clean)) role = 'reasoning';
-    else if (/^haiku$/i.test(clean)) role = 'efficiency';
-
-    if (role === 'reasoning') newModel = models.reasoning;
-    else if (role === 'efficiency') newModel = models.efficiency;
-    else newModel = models.coding;
+export function renderAgentToml(srcPath, content, models) {
+  const { frontmatter, body } = parseFrontmatter(content);
+  if (!frontmatter) {
+    throw new Error(`Codex agent ${srcPath} is missing YAML frontmatter`);
   }
+  const metadata = loadYaml(frontmatter) || {};
 
-  if (!newModel) return content;
-  const updatedHeader = header.replace(/^model:\s*[^\n]+$/m, `model: ${newModel}`);
-  return updatedHeader + body;
+  const name = cleanYamlScalar(metadata.name) || path.basename(srcPath, '.md');
+  const description = cleanYamlScalar(metadata.description);
+  const instructions = body.trim();
+  if (!description) throw new Error(`Codex agent ${srcPath} is missing description`);
+  if (!instructions) throw new Error(`Codex agent ${srcPath} has no developer instructions`);
+
+  const role = classifyModelRole(metadata.model, { defaultRole: 'coding' });
+  const model = role === 'unknown' ? cleanYamlScalar(metadata.model) : models[role];
+  const effortMatch = frontmatter.match(/^model-effort:\s*([^\n]+)$/m);
+  const effort = effortMatch
+    ? cleanYamlScalar(effortMatch[1])
+    : { reasoning: 'high', coding: 'medium', efficiency: 'low' }[role];
+
+  const lines = [
+    `name = ${tomlString(name)}`,
+    `description = ${tomlString(description)}`,
+    `developer_instructions = ${tomlString(instructions)}`,
+  ];
+  if (model) lines.push(`model = ${tomlString(model)}`);
+  if (effort) lines.push(`model_reasoning_effort = ${tomlString(effort)}`);
+  return `${lines.join('\n')}\n`;
 }
 
 // ============================================================================
@@ -175,21 +196,22 @@ function replaceModelFrontmatter(content, models) {
  */
 export function transformAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
+  const catalogModels = modelCatalog.providers.codex.roles;
 
   const models = {
-    reasoning: reasoningModel || 'gpt-5.4',
-    coding: codingModel || 'gpt-5.5',
-    efficiency: efficiencyModel || 'gpt-5.1-codex-mini'
+    reasoning: reasoningModel || catalogModels.reasoning.id,
+    coding: codingModel || catalogModels.coding.id,
+    efficiency: efficiencyModel || catalogModels.efficiency.id
   };
 
-  return replaceModelFrontmatter(content, models);
+  return renderAgentToml(srcPath, content, models);
 }
 
 /**
  * Transform command content for Codex
  */
 export function transformCommand(srcPath, content, opts) {
-  return transformAgent(srcPath, content, opts);
+  return content;
 }
 
 // ============================================================================
@@ -202,7 +224,11 @@ export function transformCommand(srcPath, content, opts) {
 export function deployAgents(agentFiles, targetDir, opts) {
   const destDir = path.join(targetDir, paths.agents);
   ensureDir(destDir, opts.dryRun);
-  return deployFiles(agentFiles, destDir, { ...opts, injectPlatform: true }, transformAgent);
+  return deployFiles(agentFiles, destDir, {
+    ...opts,
+    fileExtension: '.toml',
+    injectPlatform: false,
+  }, transformAgent);
 }
 
 /**
@@ -311,7 +337,15 @@ export function pruneLegacyCodexSkills(opts = {}, legacyDir = legacyHomeSkillsDi
   for (const ent of entries) {
     if (!ent.isDirectory()) continue;
     const skillDir = path.join(legacyDir, ent.name);
-    if (!fs.existsSync(path.join(skillDir, '.aiwg-managed'))) continue; // leave user skills alone
+    // `aiwg-mcp` was deployed before marker files existed and its malformed
+    // pre-fix SKILL.md is rejected by Codex before AIWG can self-heal. The
+    // exact retired name is safe to claim; all other unmarked skills remain
+    // user-owned.
+    const isKnownPreMarkerLegacySkill = ent.name === 'aiwg-mcp';
+    if (
+      !isKnownPreMarkerLegacySkill &&
+      !fs.existsSync(path.join(skillDir, '.aiwg-managed'))
+    ) continue; // leave user skills alone
     if (opts.dryRun) {
       console.log(`[dry-run] would prune legacy AIWG skill ${skillDir}`);
     } else {
@@ -339,7 +373,7 @@ export function deployRules(ruleFiles, targetDir, opts) {
   const destDir = path.join(targetDir, paths.rules);
   ensureDir(destDir, opts.dryRun);
   cleanupOldRuleFiles(destDir, opts);
-  return deployFiles(ruleFiles, destDir, opts, transformAgent);
+  return deployFiles(ruleFiles, destDir, opts, transformCommand);
 }
 
 /**

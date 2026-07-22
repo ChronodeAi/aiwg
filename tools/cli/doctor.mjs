@@ -43,6 +43,18 @@ const { checkGitignore } = await importImpl(
   import.meta.url,
   'config/gitignore.js'
 );
+const { auditLegacyPermissions } = await importImpl(
+  import.meta.url,
+  'policy/authorization.js'
+);
+const { readAiwgConfig } = await importImpl(
+  import.meta.url,
+  'config/aiwg-config.js'
+);
+const { collectPackagedAgentInventory, diagnoseOversizedAgent } = await importImpl(
+  import.meta.url,
+  'agents/packaged-agent-inventory.js'
+);
 
 // AIWG_ROOT: env override > channel-manager resolved path > legacy edge path
 // getFrameworkRoot() resolves correctly for npm global installs, edge, and dev channels.
@@ -705,6 +717,11 @@ async function runDoctor() {
     if (!providersToCheck.includes('claude')) providersToCheck.unshift('claude');
   }
 
+  // Compare deployed agent findings with the package that this Doctor process
+  // is actually running. Deployment size alone cannot establish an upstream
+  // package defect: a non-target provider may still contain older managed bytes.
+  const packagedAgentInventory = await collectPackagedAgentInventory(AIWG_ROOT);
+
   for (const provName of providersToCheck) {
     const provider = await loadProvider(provName);
     const label = PROVIDER_LABELS[provName] || provName;
@@ -721,7 +738,9 @@ async function runDoctor() {
         const stat = await fs.stat(agentsPath);
         if (stat.isDirectory()) {
           const files = await fs.readdir(agentsPath);
-          const agentCount = files.filter(f => f.endsWith('.md') || f.endsWith('.agent.md')).length;
+          const agentCount = files.filter(
+            f => f.endsWith('.md') || f.endsWith('.agent.md') || f.endsWith('.toml'),
+          ).length;
           check(`${label} Agents`, 'ok', `${agentCount} agents deployed (${agentsPathRel})`);
 
           // Agent-def size ceiling (#1587). A deployed agent definition is loaded
@@ -730,14 +749,25 @@ async function runDoctor() {
           // "Prompt is too long" at 0 tokens. Flag any def over the 16 KB ceiling.
           const AGENT_DEF_CEILING = 16 * 1024;
           const agentFiles = files.filter(
-            f => f.endsWith('.md') || f.endsWith('.agent.md') || f.endsWith('.soul.md'),
+            f => f.endsWith('.md') || f.endsWith('.agent.md')
+              || f.endsWith('.soul.md') || f.endsWith('.toml'),
           );
           const oversized = [];
           for (const f of agentFiles) {
             try {
               const fstat = await fs.stat(path.join(agentsPath, f));
               if (fstat.isFile() && fstat.size > AGENT_DEF_CEILING) {
-                oversized.push({ name: f, size: fstat.size });
+                const content = await fs.readFile(path.join(agentsPath, f), 'utf8');
+                oversized.push({
+                  name: f,
+                  size: fstat.size,
+                  diagnosis: diagnoseOversizedAgent(
+                    f,
+                    content,
+                    packagedAgentInventory,
+                    AGENT_DEF_CEILING,
+                  ),
+                });
               }
             } catch {
               /* unreadable file — skip */
@@ -749,10 +779,30 @@ async function runDoctor() {
               .slice(0, 3)
               .map(o => `${o.name} (${(o.size / 1024).toFixed(1)} KB)`)
               .join(', ');
+            const currentPackage = oversized.filter(o => o.diagnosis === 'current-package').length;
+            const staleDeployment = oversized.filter(o => o.diagnosis === 'stale-deployment').length;
+            const unmanagedLocal = oversized.filter(o => o.diagnosis === 'unmanaged-local').length;
+            const diagnoses = [];
+            if (currentPackage > 0) {
+              diagnoses.push(
+                `${currentPackage} also exceed the ceiling in current packaged sources (current upstream packaging issue; externalize examples to the catalog)`,
+              );
+            }
+            if (staleDeployment > 0) {
+              diagnoses.push(
+                `${staleDeployment} are stale managed deployment bytes while current packaged sources are within the ceiling (run aiwg refresh --provider ${provName})`,
+              );
+            }
+            if (unmanagedLocal > 0) {
+              diagnoses.push(
+                `${unmanagedLocal} are unmanaged or project-local and cannot be attributed to the current package`,
+              );
+            }
             check(
               `${label} Agent def sizes`,
               'warn',
-              `${oversized.length} agent def(s) over the 16 KB subagent-dispatch ceiling: ${worst}${oversized.length > 3 ? ', …' : ''}. Oversized defs can fail Task dispatch with "Prompt is too long". Externalize examples to the catalog (see few-shot-examples rule) and re-deploy.`,
+              `${oversized.length} agent def(s) over the 16 KB subagent-dispatch ceiling: ${worst}${oversized.length > 3 ? ', …' : ''}. ` +
+              `${diagnoses.join('; ')}. Oversized defs can fail Task dispatch with "Prompt is too long".`,
             );
           } else if (agentFiles.length > 0) {
             check(`${label} Agent def sizes`, 'ok', `All ${agentFiles.length} agent defs ≤ 16 KB`);
@@ -984,7 +1034,13 @@ async function runDoctor() {
         const versions = s.packages.map(p => `${p.name} ${p.version ?? '?'}`).join(', ');
         check(label, 'ok', `installed (${versions})`);
       } else {
-        check(label, 'info', `not installed — \`aiwg features install ${s.feature.name}\` to enable`);
+        const broken = s.packages.filter(p => p.installed && !p.loadable);
+        if (broken.length > 0) {
+          const detail = broken.map(p => `${p.name}: ${p.error || 'native entry point failed to load'}`).join('; ');
+          check(label, 'warn', `native build unavailable (${detail}) — run \`aiwg features install ${s.feature.name}\` to rebuild with scoped lifecycle-script approval`);
+        } else {
+          check(label, 'info', `not installed — \`aiwg features install ${s.feature.name}\` to enable`);
+        }
       }
     }
   } catch (err) {
@@ -1493,61 +1549,98 @@ async function runDoctor() {
     // Non-fatal — skip silently
   }
 
-  // 10b. Check deployed agent/skill frontmatter for unpinned model aliases (#1442).
-  // Bare aliases (`sonnet`, `opus`, `haiku`) inherit the parent session's
-  // variant. Under a 1M-context parent (`claude-opus-4-7[1m]`), subagent
-  // dispatch hits the usage-credit gate and fails. Pin specific variants.
+  // Permission normalization health (#1800). Errors fail closed in the
+  // evaluator; doctor makes legacy sources and remediation visible.
   try {
+    const permissionProjectDir = process.cwd();
+    const permissionConfig = await readAiwgConfig(permissionProjectDir);
+    if (permissionConfig) {
+      const diagnostics = await auditLegacyPermissions(permissionProjectDir, permissionConfig);
+      if (!diagnostics.length) {
+        check('Permissions', 'ok', 'normalized authorization model valid');
+      } else {
+        const errors = diagnostics.filter(item => item.severity === 'error');
+        const legacy = diagnostics.filter(item => item.code.startsWith('legacy-'));
+        const status = errors.length ? 'error' : 'warn';
+        check(
+          'Permissions',
+          status,
+          `${errors.length} error(s), ${legacy.length} legacy source(s) — run "aiwg steward permissions audit"`,
+        );
+      }
+    }
+  } catch (err) {
+    check('Permissions', 'error', `authorization audit failed: ${err.message}`);
+  }
+
+  // 10b. Provider-aware model-policy diagnostics (#1802/#1805).
+  // Report canonical intent separately from the target's enforceable surface;
+  // never claim skill pins on providers whose skill schema ignores them.
+  try {
+    const registryPath = path.join(
+      AIWG_ROOT,
+      'agentic',
+      'code',
+      'providers',
+      'model-capabilities.v1.json',
+    );
+    const registry = JSON.parse(await fs.readFile(registryPath, 'utf-8'));
     const PINNED_MAP = {
       sonnet: 'claude-sonnet-4-6',
       opus:   'claude-opus-4-7',
       haiku:  'claude-haiku-4-5',
     };
-    const scanDirs = [
-      '.claude/agents',
-      '.claude/skills',
-      '.claude/commands',
-    ];
-    const unpinned = [];
-    for (const rel of scanDirs) {
-      const dir = path.join(process.cwd(), rel);
-      let entries;
-      try {
-        entries = await fs.readdir(dir, { withFileTypes: true });
-      } catch {
-        continue;
-      }
+    for (const provName of providersToCheck) {
+      const capability = registry.providers?.[provName];
+      if (!capability) continue;
+      const provider = await loadProvider(provName);
+      const label = PROVIDER_LABELS[provName] || provName;
+      const dir = resolveProviderPath(provider?.paths?.agents);
+      const aliases = [];
+      let modeled = 0;
+      let total = 0;
+      let entries = [];
+      try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch { /* absent */ }
       for (const ent of entries) {
-        const target = ent.isDirectory()
-          ? path.join(dir, ent.name, 'SKILL.md')
-          : path.join(dir, ent.name);
-        if (!target.endsWith('.md')) continue;
-        let content;
+        if (!ent.isFile() || !/\.(?:md|toml)$/.test(ent.name)) continue;
+        total++;
+        const target = path.join(dir, ent.name);
+        let content = '';
         try {
           content = await fs.readFile(target, 'utf-8');
-        } catch {
-          continue;
-        }
+        } catch { continue; }
         const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
-        if (!fmMatch) continue;
-        const modelMatch = fmMatch[1].match(/^model:\s*(\S+)\s*$/m);
+        const modelMatch = ent.name.endsWith('.toml')
+          ? content.match(/^model\s*=\s*"([^"]+)"\s*$/m)
+          : fmMatch?.[1].match(/^model:\s*(\S+)\s*$/m);
         if (!modelMatch) continue;
+        modeled++;
         const value = modelMatch[1].trim();
         if (PINNED_MAP[value]) {
-          unpinned.push({ file: path.relative(process.cwd(), target), alias: value, pinned: PINNED_MAP[value] });
+          aliases.push({
+            file: path.relative(process.cwd(), target),
+            alias: value,
+            pinned: PINNED_MAP[value],
+          });
         }
       }
-    }
-    if (unpinned.length === 0) {
-      check('Model Pinning', 'ok', 'all deployed agents/skills pin specific model variants');
-    } else {
-      const sample = unpinned.slice(0, 3).map(u => `${u.file} (${u.alias}→${u.pinned})`).join('; ');
-      const more = unpinned.length > 3 ? ` …and ${unpinned.length - 3} more` : '';
-      check(
-        'Model Pinning',
-        'warn',
-        `${unpinned.length} file(s) use bare model alias — subagent dispatch from 1M-context parents may fail. Run "aiwg refresh" to redeploy pinned variants. Examples: ${sample}${more}. See aiwg #1442.`,
-      );
+      const skillSurface = capability.skill;
+      if (aliases.length > 0) {
+        const sample = aliases.slice(0, 3)
+          .map(item => `${item.file} (${item.alias}→${item.pinned})`).join('; ');
+        check(
+          `${label} Model Policy`,
+          'warn',
+          `${aliases.length} agent alias(es) need compilation; agent=${capability.agent}, skill=${skillSurface}. Examples: ${sample}`,
+        );
+      } else if (total > 0) {
+        const status = capability.agent === 'unsupported' ? 'warn' : 'ok';
+        check(
+          `${label} Model Policy`,
+          status,
+          `canonical=${total}, modeled=${modeled}, agent=${capability.agent}, skill=${skillSurface}; skill policy is not reported as pinned when ${skillSurface}`,
+        );
+      }
     }
   } catch {
     // Non-fatal — skip silently

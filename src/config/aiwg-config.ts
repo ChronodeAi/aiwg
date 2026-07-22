@@ -20,6 +20,10 @@ import {
   resolveProviderPathValue,
 } from '../providers/provider-definitions.js';
 import type { Platform } from '../agents/types.js';
+import {
+  validateAuthorization,
+  type AuthorizationConfig,
+} from '../policy/authorization.js';
 
 const CONFIG_FILENAME = 'aiwg.config';
 const AIWG_DIR = '.aiwg';
@@ -115,6 +119,18 @@ export interface TrackerActorConfig {
   forbid_actors?: string[];
 }
 
+/** Git transport identity and the project-local helper that enforces it. */
+export interface RemoteTransportConfig {
+  /** Forge login expected to authenticate git pushes. */
+  login?: string;
+  /** Transport used by the primary remote. */
+  protocol?: 'ssh' | 'https';
+  /** Project-relative command used for authenticated push/check operations. */
+  helper?: string;
+  /** Public SSH host/account key fingerprint expected by the helper. */
+  key_fingerprint?: string;
+}
+
 /**
  * Repo origin topology — declares which remote is primary (CI / issues / PRs)
  * and which are secondary (mirrors, publishing targets).
@@ -130,6 +146,8 @@ export interface RemotesConfig {
   ci?: string;
   /** Which forge account/tool performs delivery writes. */
   tracker_actor?: TrackerActorConfig;
+  /** Identity and helper used for git transport to the primary remote. */
+  transport?: RemoteTransportConfig;
   /** Mirrors, fork bases, publishing targets. */
   secondary?: SecondaryRemote[];
 }
@@ -143,6 +161,7 @@ export interface ResolvedRemotes {
   issue_tracker: string;
   ci: string;
   tracker_actor?: TrackerActorConfig;
+  transport?: RemoteTransportConfig;
   secondary: SecondaryRemote[];
 }
 
@@ -155,6 +174,122 @@ export type RepoMaintainerTier = 'collaborator' | 'maintainer' | 'admin';
  */
 export interface RepoMaintainerConfig {
   tiers?: Record<string, RepoMaintainerTier>;
+}
+
+export type IssueLabelCategory =
+  | 'type'
+  | 'area'
+  | 'priority'
+  | 'lifecycle'
+  | 'blocked-reason'
+  | 'review-approval'
+  | 'ownership'
+  | 'automation-eligibility'
+  | 'human-interaction';
+
+/** A stable semantic role mapped to a tracker-native label. */
+export interface IssueLabelDefinition {
+  /** Default tracker-native label name. */
+  name: string;
+  /** Optional provider-specific names for equivalent semantics. */
+  provider_names?: Partial<Record<'gitea' | 'github' | 'local', string>>;
+  /** Informative grouping used by search, audit, batching, and selection. */
+  category: IssueLabelCategory;
+  description: string;
+  requires_human: boolean;
+  blocks_automation: boolean;
+  /** Human-readable condition that removes or transitions this transient label. */
+  resume_when?: string;
+  /** Optional semantic role to apply after the resume condition is satisfied. */
+  transition_to?: string;
+}
+
+export interface IssuesConfig {
+  /** Label definitions keyed by stable, project-owned semantic roles. */
+  labels?: Record<string, IssueLabelDefinition>;
+}
+
+/**
+ * Operations that a workspace may authorize for one member repository.
+ * Filesystem/tool capability never implies authorization; unlisted members
+ * and actions are denied by the workspace resolver.
+ *
+ * @implements #1764
+ */
+export const WORKSPACE_REPO_ACTIONS = [
+  'read',
+  'write',
+  'commit',
+  'push',
+  'issue-comment',
+  'service-action',
+  'destructive',
+] as const;
+
+export type WorkspaceRepoAction = typeof WORKSPACE_REPO_ACTIONS[number];
+
+/** Root workspace metadata or an optional member-to-workspace back-reference. */
+export interface WorkspaceConfig {
+  /** Stable human-readable workspace name. Required on a root manifest. */
+  name?: string;
+  /**
+   * Base directory for relative member paths. Relative values are resolved
+   * from the repository containing this config; defaults to that repository.
+   */
+  root?: string;
+  /**
+   * Optional path from a member repo to its workspace root. This lets an
+   * absolute/external member discover workspace authorization when invoked
+   * directly. A member_of config must not also declare repos.
+   */
+  member_of?: string;
+}
+
+/** One member declared by a workspace root `.aiwg/aiwg.config`. */
+export interface WorkspaceRepoConfig {
+  name: string;
+  /** Relative to workspace.root (or the workspace repo) or an absolute path. */
+  path: string;
+  /** Explicit workspace capabilities. Missing actions are denied. */
+  allowed: WorkspaceRepoAction[];
+  /**
+   * Optional provider hint for self-hosted domains that cannot be identified
+   * from a remote URL alone. Detectable remotes always take precedence.
+   */
+  provider?: 'gitea' | 'github' | 'gitlab';
+  notes?: string;
+}
+
+export interface ResolvedIssueLabel extends IssueLabelDefinition {
+  role: string;
+  resolved_name: string;
+  provider: 'gitea' | 'github' | 'local';
+}
+
+export interface IssueLabelDiagnostic {
+  severity: 'warning' | 'error';
+  code: 'fallback' | 'missing' | 'duplicate' | 'conflict' | 'unavailable';
+  role?: string;
+  message: string;
+}
+
+/**
+ * A named public resource exposed as part of project operating context.
+ *
+ * External links are metadata only. AIWG renders and reports them but never
+ * fetches the URL or submits data to it.
+ */
+export interface ExternalLinkConfig {
+  /** Human-readable link text. */
+  label: string;
+  /** Absolute public HTTP(S) URL with no embedded credentials. */
+  url: string;
+  /** Optional explanation of when or why to use the resource. */
+  description?: string;
+  /** Optional project-defined grouping such as security, status, or docs. */
+  category?: string;
+  /** Optional intended audience such as contributors or maintainers. */
+  audience?: string;
 }
 
 /**
@@ -182,11 +317,43 @@ export interface AiwgConfig {
    */
   scripts: Record<string, string>;
 
+  /** Provider-neutral, deny-by-default permissions, roles, and assignments. */
+  authorization?: AuthorizationConfig;
+
+  /**
+   * General multi-repository workspace metadata. Root manifests pair this
+   * block with `repos`; external members may use `member_of` as a back-reference.
+   * @implements #1764
+   */
+  workspace?: WorkspaceConfig;
+
+  /**
+   * Workspace members. Each member keeps its own `.aiwg/aiwg.config`, which is
+   * authoritative for delivery, remotes, tracker actor, and signing.
+   * @implements #1764
+   */
+  repos?: WorkspaceRepoConfig[];
+
+  /**
+   * Named public resources that travel with the project configuration.
+   * Keys are stable identifiers; values are metadata only.
+   * @implements #1796
+   */
+  externalLinks?: Record<string, ExternalLinkConfig>;
+
   /**
    * Repo origin topology. Optional — when absent, agents treat `origin` as primary.
    * @implements #994
    */
   remotes?: RemotesConfig;
+
+  /**
+   * Issue workflow semantics associated with `remotes.issue_tracker`.
+   * Absent configurations retain legacy label behavior with an explicit
+   * fallback diagnostic.
+   * @implements #1789
+   */
+  issues?: IssuesConfig;
 
   /**
    * Role-aware repository maintenance configuration. Optional — when absent,
@@ -382,6 +549,8 @@ export interface DeliveryConfig {
   committer?: CommitterIdentity;
   /** Signing key/material metadata for delivery commits/tags. */
   signing?: SigningConfig;
+  /** Distinct signing metadata for annotated release tags. */
+  release_signing?: SigningConfig;
   force_push_policy?: ForcePushPolicy;
   /** Include "Closes #N" / "Fixes #N" in PR body when an issue is referenced. */
   auto_close_issues?: boolean;
@@ -403,6 +572,7 @@ export interface ResolvedDelivery {
   require_signed_commits: boolean;
   committer?: CommitterIdentity;
   signing?: SigningConfig;
+  release_signing?: SigningConfig;
   force_push_policy: ForcePushPolicy;
   auto_close_issues: boolean;
   issue_comment_on_cycle: boolean;
@@ -443,6 +613,7 @@ export function resolveDelivery(delivery: DeliveryConfig | undefined): ResolvedD
     require_signed_commits: delivery?.require_signed_commits ?? false,
     committer: delivery?.committer,
     signing: delivery?.signing,
+    release_signing: delivery?.release_signing,
     force_push_policy: delivery?.force_push_policy ?? 'never',
     auto_close_issues: delivery?.auto_close_issues ?? true,
     issue_comment_on_cycle: delivery?.issue_comment_on_cycle ?? true,
@@ -742,6 +913,154 @@ export function validateIndexConfig(index: unknown): string[] {
   return errors;
 }
 
+const EXTERNAL_LINK_KEY_PATTERN = /^[a-z][a-z0-9_-]*$/;
+
+/**
+ * Validate project-defined external links without performing network access.
+ */
+export function validateExternalLinks(externalLinks: unknown): string[] {
+  if (externalLinks === undefined || externalLinks === null) return [];
+  if (typeof externalLinks !== 'object' || Array.isArray(externalLinks)) {
+    return ['externalLinks: must be an object mapping stable identifiers to link definitions'];
+  }
+
+  const errors: string[] = [];
+  for (const [key, rawLink] of Object.entries(externalLinks as Record<string, unknown>)) {
+    const where = `externalLinks.${key}`;
+    if (!EXTERNAL_LINK_KEY_PATTERN.test(key)) {
+      errors.push(`${where}: key must start with a lowercase letter and contain only lowercase letters, numbers, underscores, or hyphens`);
+    }
+    if (!rawLink || typeof rawLink !== 'object' || Array.isArray(rawLink)) {
+      errors.push(`${where}: must be an object`);
+      continue;
+    }
+
+    const link = rawLink as Record<string, unknown>;
+    const allowedFields = new Set(['label', 'url', 'description', 'category', 'audience']);
+    for (const field of Object.keys(link)) {
+      if (!allowedFields.has(field)) {
+        errors.push(`${where}.${field}: unknown field`);
+      }
+    }
+
+    if (typeof link.label !== 'string' || link.label.trim() === '') {
+      errors.push(`${where}.label: required, must be a non-empty string`);
+    } else if (link.label.length > 200) {
+      errors.push(`${where}.label: must be at most 200 characters`);
+    }
+
+    if (typeof link.url !== 'string' || link.url.trim() === '') {
+      errors.push(`${where}.url: required, must be an absolute HTTP(S) URL`);
+    } else {
+      try {
+        const parsed = new URL(link.url);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+          errors.push(`${where}.url: protocol must be http or https`);
+        }
+        if (parsed.username || parsed.password) {
+          errors.push(`${where}.url: embedded credentials are not allowed`);
+        }
+      } catch {
+        errors.push(`${where}.url: must be a valid absolute URL`);
+      }
+    }
+
+    for (const field of ['description', 'category', 'audience'] as const) {
+      const value = link[field];
+      if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) {
+        errors.push(`${where}.${field}: must be a non-empty string when provided`);
+      } else if (typeof value === 'string' && value.length > 500) {
+        errors.push(`${where}.${field}: must be at most 500 characters`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Validate the general workspace-of-repositories blocks.
+ *
+ * This is intentionally runtime validation as well as schema documentation:
+ * CLI callers may not have editor/schema support, and authorization data must
+ * fail closed when malformed.
+ *
+ * @implements #1764
+ */
+export function validateWorkspaceConfig(
+  workspace: unknown,
+  repos: unknown,
+): string[] {
+  const errors: string[] = [];
+  if (workspace === undefined && repos === undefined) return errors;
+  if (!workspace || typeof workspace !== 'object' || Array.isArray(workspace)) {
+    return ['workspace: must be an object when workspace or repos is configured'];
+  }
+
+  const metadata = workspace as Record<string, unknown>;
+  for (const field of ['name', 'root', 'member_of'] as const) {
+    if (metadata[field] !== undefined && (
+      typeof metadata[field] !== 'string' || !(metadata[field] as string).trim()
+    )) {
+      errors.push(`workspace.${field}: must be a non-empty string`);
+    }
+  }
+
+  if (metadata.member_of !== undefined && repos !== undefined) {
+    errors.push('workspace.member_of: member back-references must not also declare repos');
+  }
+  if (repos === undefined) return errors;
+  if (typeof metadata.name !== 'string' || !metadata.name.trim()) {
+    errors.push('workspace.name: required when repos is configured');
+  }
+  if (!Array.isArray(repos) || repos.length === 0) {
+    errors.push('repos: must be a non-empty array');
+    return errors;
+  }
+
+  const names = new Set<string>();
+  const paths = new Set<string>();
+  const allowedActions = new Set<string>(WORKSPACE_REPO_ACTIONS);
+  repos.forEach((raw, index) => {
+    const where = `repos[${index}]`;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      errors.push(`${where}: must be an object`);
+      return;
+    }
+    const repo = raw as Record<string, unknown>;
+    if (typeof repo.name !== 'string' || !repo.name.trim()) {
+      errors.push(`${where}.name: required and must be a non-empty string`);
+    } else if (names.has(repo.name.trim())) {
+      errors.push(`${where}.name: duplicate member name '${repo.name.trim()}'`);
+    } else {
+      names.add(repo.name.trim());
+    }
+    if (typeof repo.path !== 'string' || !repo.path.trim()) {
+      errors.push(`${where}.path: required and must be a non-empty string`);
+    } else if (paths.has(repo.path.trim())) {
+      errors.push(`${where}.path: duplicate member path '${repo.path.trim()}'`);
+    } else {
+      paths.add(repo.path.trim());
+    }
+    if (!Array.isArray(repo.allowed) || repo.allowed.length === 0) {
+      errors.push(`${where}.allowed: must be a non-empty array`);
+    } else {
+      for (const action of repo.allowed) {
+        if (typeof action !== 'string' || !allowedActions.has(action)) {
+          errors.push(`${where}.allowed: invalid operation '${String(action)}'`);
+        }
+      }
+    }
+    if (repo.provider !== undefined && !['gitea', 'github', 'gitlab'].includes(String(repo.provider))) {
+      errors.push(`${where}.provider: must be gitea, github, or gitlab`);
+    }
+    if (repo.notes !== undefined && typeof repo.notes !== 'string') {
+      errors.push(`${where}.notes: must be a string`);
+    }
+  });
+  return errors;
+}
+
 /**
  * Read the `index` block, preferring `.aiwg/aiwg.config` (the consolidated
  * home, #1491) and falling back to the legacy `.aiwg/config.yaml` `index:`
@@ -827,8 +1146,142 @@ export function resolveRemotes(remotes: RemotesConfig | undefined): ResolvedRemo
     issue_tracker: remotes?.issue_tracker ?? primary,
     ci: remotes?.ci ?? primary,
     tracker_actor: remotes?.tracker_actor,
+    transport: remotes?.transport,
     secondary: remotes?.secondary ?? [],
   };
+}
+
+/**
+ * Resolve stable semantic label roles to provider-native label strings.
+ * The same role therefore drives Gitea, GitHub, and local issue-store flows.
+ */
+export function resolveIssueLabels(
+  issues: IssuesConfig | undefined,
+  provider: 'gitea' | 'github' | 'local',
+): { labels: Record<string, ResolvedIssueLabel>; diagnostics: IssueLabelDiagnostic[] } {
+  const diagnostics = validateIssueLabels(issues, { provider });
+  if (!issues?.labels) {
+    return {
+      labels: {},
+      diagnostics: [{
+        severity: 'warning',
+        code: 'fallback',
+        message: 'issues.labels is not configured; issue workflows retain legacy label-name behavior and must warn before guessing or provisioning labels.',
+      }],
+    };
+  }
+
+  const labels = Object.fromEntries(Object.entries(issues.labels).map(([role, definition]) => [
+    role,
+    {
+      ...definition,
+      role,
+      provider,
+      resolved_name: definition.provider_names?.[provider] ?? definition.name,
+    },
+  ]));
+  return { labels, diagnostics };
+}
+
+/**
+ * Validate taxonomy structure and, when supplied, tracker availability.
+ * This function is read-only: ordinary issue processing never provisions
+ * missing labels implicitly.
+ */
+export function validateIssueLabels(
+  issues: IssuesConfig | undefined,
+  options: {
+    provider?: 'gitea' | 'github' | 'local';
+    availableLabels?: Iterable<string>;
+  } = {},
+): IssueLabelDiagnostic[] {
+  if (!issues?.labels) return [];
+  const diagnostics: IssueLabelDiagnostic[] = [];
+  const seenNames = new Map<string, string>();
+  const roles = new Set(Object.keys(issues.labels));
+  const available = options.availableLabels ? new Set(options.availableLabels) : undefined;
+  const categories = new Set<IssueLabelCategory>([
+    'type', 'area', 'priority', 'lifecycle', 'blocked-reason',
+    'review-approval', 'ownership', 'automation-eligibility', 'human-interaction',
+  ]);
+
+  for (const [role, definition] of Object.entries(issues.labels)) {
+    const where = `issues.labels.${role}`;
+    if (!definition.name?.trim() || !definition.description?.trim() || !definition.category) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'missing',
+        role,
+        message: `${where} must define non-empty name, description, and category fields.`,
+      });
+      continue;
+    }
+    if (!categories.has(definition.category)) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'conflict',
+        role,
+        message: `${where}.category '${definition.category}' is not a supported semantic category.`,
+      });
+    }
+    if (typeof definition.requires_human !== 'boolean' || typeof definition.blocks_automation !== 'boolean') {
+      diagnostics.push({
+        severity: 'error',
+        code: 'missing',
+        role,
+        message: `${where} must explicitly define requires_human and blocks_automation booleans.`,
+      });
+    }
+    if (definition.blocks_automation && !definition.requires_human && !definition.resume_when) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'conflict',
+        role,
+        message: `${where} blocks automation but declares neither human action nor a resume condition.`,
+      });
+    }
+    if (definition.blocks_automation && !definition.resume_when?.trim()) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'missing',
+        role,
+        message: `${where}.resume_when is required when blocks_automation is true.`,
+      });
+    }
+    if (definition.transition_to && !roles.has(definition.transition_to)) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'conflict',
+        role,
+        message: `${where}.transition_to references unknown semantic role '${definition.transition_to}'.`,
+      });
+    }
+
+    const resolvedName = options.provider
+      ? definition.provider_names?.[options.provider] ?? definition.name
+      : definition.name;
+    const normalized = resolvedName.trim().toLocaleLowerCase();
+    const previousRole = seenNames.get(normalized);
+    if (previousRole) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'duplicate',
+        role,
+        message: `${where} resolves to '${resolvedName}', already used by role '${previousRole}'.`,
+      });
+    } else {
+      seenNames.set(normalized, role);
+    }
+    if (available && !available.has(resolvedName)) {
+      diagnostics.push({
+        severity: 'error',
+        code: 'unavailable',
+        role,
+        message: `${where} resolves to unavailable tracker label '${resolvedName}'; provision it explicitly before issue processing.`,
+      });
+    }
+  }
+  return diagnostics;
 }
 
 export const VALID_PROVIDERS = PROVIDER_IDS.filter((provider) => provider !== 'generic');
@@ -918,6 +1371,23 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   if (!parsed.providers) parsed.providers = ['claude'];
   if (!parsed.installed) parsed.installed = {};
   if (!parsed.scripts) parsed.scripts = {};
+
+  const externalLinkErrors = validateExternalLinks(parsed.externalLinks);
+  if (externalLinkErrors.length > 0) {
+    throw new Error(`Invalid .aiwg/aiwg.config:\n${externalLinkErrors.join('\n')}`);
+  }
+
+  const workspaceErrors = validateWorkspaceConfig(parsed.workspace, parsed.repos);
+  if (workspaceErrors.length > 0) {
+    throw new Error(`Invalid .aiwg/aiwg.config:\n${workspaceErrors.join('\n')}`);
+  }
+
+  const authorizationErrors = parsed.authorization
+    ? validateAuthorization(parsed.authorization).filter(item => item.severity === 'error')
+    : [];
+  if (authorizationErrors.length > 0) {
+    throw new Error(`Invalid .aiwg/aiwg.config:\n${authorizationErrors.map(item => item.message).join('\n')}`);
+  }
 
   return parsed;
 }

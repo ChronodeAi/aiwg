@@ -69,7 +69,10 @@
     "consortium-coordinator",
     "self-debug",
     "aiwg-steward",
-    "aiwg-finder"
+    "aiwg-finder",
+    "aiwg-model-reasoning-worker",
+    "aiwg-model-coding-worker",
+    "aiwg-model-efficiency-worker"
   ],
   "skills": [
     "project-awareness",
@@ -88,6 +91,9 @@
     "new-project",
     "aiwg-refresh",
     "aiwg-regenerate",
+    "aiwg-regenerate-workspace",
+    "aiwg-regenerate-existing-project",
+    "aiwg-regenerate-legacy",
     "aiwg-regenerate-claude",
     "aiwg-regenerate-warp",
     "aiwg-regenerate-factory",

@@ -13,16 +13,26 @@ import { minimatch } from 'minimatch';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { QueryParams, QueryResult, MetadataEntry, GraphType, ArtifactIndex } from './types.js';
-import { loadGlobalGraphConfigs } from './types.js';
+import {
+  OPERATIONAL_DISCOVERY_TYPES,
+  OPERATIONAL_SHOW_TYPES,
+  isOperationalShowType,
+  loadGlobalGraphConfigs,
+} from './types.js';
 import { loadMetadataIndex, loadGraphIndexFile } from './index-reader.js';
 import { bm25Rank, type FullTextDoc } from './fulltext.js';
 import { parseFrontmatter } from './index-builder.js';
-import { applyFacetFusion } from './discover-facets.js';
+import {
+  applyFacetFusion,
+  diagnoseFacetActivations,
+  type FacetScoreDiagnostic,
+} from './discover-facets.js';
 import {
   recordTypeForEntry,
   stableRecordId,
   type AiwgFortemiRecord,
 } from './browser-export.js';
+import { loadProviderModelMetadata } from '../models/provider-models.js';
 
 function normalizeIndexedPath(entryPath: string): string {
   return entryPath.replace(/\\/g, '/');
@@ -63,7 +73,7 @@ export interface QueryOptions {
 const DEFAULT_ARTIFACT_SEARCH_BACKEND: 'fortemi-core' = 'fortemi-core';
 
 const DISCOVER_TYPE_ORDER = new Map(
-  ['skill', 'agent', 'command', 'rule', 'flow', 'behavior', 'template', 'doc'].map((type, index) => [type, index]),
+  [...OPERATIONAL_DISCOVERY_TYPES, 'hook', 'doc'].map((type, index) => [type, index]),
 );
 
 function canonicalLocalityRank(entryPath: string): number {
@@ -112,8 +122,8 @@ function logicalDiscoverKey(entry: MetadataEntry): string {
   return `${entry.type}:${identity}`;
 }
 
-function dedupeDiscoverResults(results: QueryResult[]): QueryResult[] {
-  const bestByIdentity = new Map<string, QueryResult>();
+function dedupeDiscoverResults<T extends QueryResult>(results: T[]): T[] {
+  const bestByIdentity = new Map<string, T>();
   for (const result of results) {
     const key = logicalDiscoverKey(result.entry);
     const existing = bestByIdentity.get(key);
@@ -281,7 +291,33 @@ function nearNameMatch(query: string, name: string): boolean {
   });
 }
 
-function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: boolean } = {}): number {
+interface LexicalMatchDiagnostic {
+  field: 'name' | 'trigger' | 'capability' | 'title' | 'tag' | 'search_terms' | 'kind' | 'source_type' | 'summary' | 'path' | 'type';
+  match: 'exact' | 'near-name' | 'contained-phrase' | 'token-overlap';
+  value?: string;
+  contribution: number;
+  matched_tokens?: string[];
+  query_token_coverage?: number;
+}
+
+interface LexicalScoreDiagnostic {
+  content_tokens: string[];
+  raw_score: number;
+  score: number;
+  score_cap_applied: boolean;
+  matches: LexicalMatchDiagnostic[];
+}
+
+interface DetailedScore {
+  score: number;
+  diagnostic: LexicalScoreDiagnostic;
+}
+
+function scoreEntryDetailed(
+  entry: MetadataEntry,
+  text: string,
+  opts: { relaxOverlap?: boolean } = {},
+): DetailedScore {
   const tokens = tokenize(text);
   // Field substring matching uses the stopword-stripped CONTENT phrase, not the
   // raw query (#1581). Without this, a query that reduces to a single content
@@ -294,7 +330,29 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
   // Pure-stopword queries fall back to the raw text.
   const lower = tokens.length > 0 ? tokens.join(' ') : text.toLowerCase().trim();
   const rawLower = text.toLowerCase().trim();
+  const personaIdentitySuppressed = diagnoseFacetActivations(text).some(
+    (activation) =>
+      activation.facet === 'persona-identity' && activation.status === 'suppressed',
+  );
   let score = 0;
+  const matches: LexicalMatchDiagnostic[] = [];
+  const finish = (uncappedScore = score, cap = 1): DetailedScore => ({
+    score: Math.min(uncappedScore, cap),
+    diagnostic: {
+      content_tokens: tokens,
+      raw_score: uncappedScore,
+      score: Math.min(uncappedScore, cap),
+      score_cap_applied: uncappedScore > cap,
+      matches,
+    },
+  });
+  const addMatch = (
+    contribution: number,
+    match: Omit<LexicalMatchDiagnostic, 'contribution'>,
+  ): void => {
+    score += contribution;
+    matches.push({ ...match, contribution });
+  };
 
   // Exact-name floor (#1233) — if the query (normalized) exactly matches
   // the entry's canonical name, this is the artifact the user is asking
@@ -311,10 +369,26 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
     const queryNorm = normalizeName(text);
     const nameNorm = normalizeName(entry.name);
     if (queryNorm === nameNorm) {
-      return 1.001;
+      matches.push({
+        field: 'name',
+        match: 'exact',
+        value: entry.name,
+        contribution: 1.001,
+        matched_tokens: tokens,
+        query_token_coverage: 1,
+      });
+      return finish(1.001, 1.001);
     }
     if (nearNameMatch(text, entry.name)) {
-      return 0.951;
+      matches.push({
+        field: 'name',
+        match: 'near-name',
+        value: entry.name,
+        contribution: 0.951,
+        matched_tokens: tokens,
+        query_token_coverage: 1,
+      });
+      return finish(0.951);
     }
   }
 
@@ -326,6 +400,9 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
   const capabilityLower = entry.capability ? entry.capability.toLowerCase() : '';
   const tagsLower = entry.tags.map(t => t.toLowerCase());
   const triggersLower = (entry.triggers ?? []).map(trigger => trigger.toLowerCase());
+  const searchTermsLower = (entry.searchTerms ?? []).join(' ').toLowerCase();
+  const kindLower = entry.kind?.toLowerCase() ?? '';
+  const sourceTypeLower = entry.sourceType?.toLowerCase() ?? '';
 
   // For multi-token queries, require ≥50% token overlap to count
   // partial matches. This keeps gibberish queries (e.g.,
@@ -346,18 +423,64 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
   // phrase wins big; substring or token-overlap is still strong.
   if (triggersLower.length > 0) {
     for (const trigger of triggersLower) {
+      const triggerTokens = tokenize(trigger);
+      const matchedTokens = tokens.filter((token) => triggerTokens.includes(token));
+      const queryCoverage = tokens.length > 0 ? matchedTokens.length / tokens.length : 0;
       if (trigger === lower || trigger === rawLower) {
-        return 1.0008;
+        matches.push({
+          field: 'trigger',
+          match: 'exact',
+          value: trigger,
+          contribution: 1.0008,
+          matched_tokens: matchedTokens,
+          query_token_coverage: 1,
+        });
+        return finish(1.0008, 1.0008);
       } else if (
         trigger.includes(lower) ||
         lower.includes(trigger) ||
         trigger.includes(rawLower) ||
         rawLower.includes(trigger)
       ) {
-        score += 0.25 * 4;
+        const triggerInsideQuery = lower.includes(trigger) || rawLower.includes(trigger);
+        const containedCoverage = triggerInsideQuery
+          ? queryCoverage
+          : triggerTokens.length > 0
+            ? matchedTokens.length / triggerTokens.length
+            : 0;
+        // A complete multi-word trigger inside a noisier query is a strong
+        // metadata signal. The ambiguous one-word `persona` trigger is
+        // downweighted only when the facet classifier has identified buyer /
+        // audience marketing context; distinctive one-word triggers such as
+        // GRADE retain their established exact-trigger behavior (#1828).
+        const suppressedGenericPersona =
+          personaIdentitySuppressed &&
+          triggerTokens.length === 1 &&
+          triggerTokens[0] === 'persona' &&
+          tokens.length > 1;
+        const contribution = suppressedGenericPersona
+          ? 0.24 * queryCoverage
+          : triggerTokens.length > 1
+            ? Math.min(1, 0.75 + 0.25 * containedCoverage)
+            : 1;
+        addMatch(contribution, {
+          field: 'trigger',
+          match: 'contained-phrase',
+          value: trigger,
+          matched_tokens: matchedTokens,
+          query_token_coverage: queryCoverage,
+        });
       } else if (useMultiToken) {
-        const hits = tokens.filter(t => trigger.includes(t)).length;
-        if (overlapOK(hits)) score += 0.06 * 4 * (hits / tokens.length);
+        const hits = tokens.filter(t => trigger.includes(t));
+        if (overlapOK(hits.length)) {
+          addMatch(0.06 * 4 * (hits.length / tokens.length), {
+            field: 'trigger',
+            match: 'token-overlap',
+            value: trigger,
+            matched_tokens: hits,
+            query_token_coverage: hits.length / tokens.length,
+          });
+        }
       }
     }
   }
@@ -365,54 +488,133 @@ function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: b
   // Capability description (2x weight) — full phrase first, then tokens
   if (capabilityLower) {
     if (capabilityLower.includes(lower)) {
-      score += 0.2 * 2;
+      addMatch(0.2 * 2, {
+        field: 'capability',
+        match: 'contained-phrase',
+        value: entry.capability,
+      });
     } else if (useMultiToken) {
-      const hits = tokens.filter(t => capabilityLower.includes(t)).length;
-      if (overlapOK(hits)) score += 0.1 * 2 * (hits / tokens.length);
+      const hits = tokens.filter(t => capabilityLower.includes(t));
+      if (overlapOK(hits.length)) {
+        addMatch(0.1 * 2 * (hits.length / tokens.length), {
+          field: 'capability',
+          match: 'token-overlap',
+          value: entry.capability,
+          matched_tokens: hits,
+          query_token_coverage: hits.length / tokens.length,
+        });
+      }
     }
   }
 
   // Title (3x weight)
   if (titleLower.includes(lower)) {
-    score += 0.3 * 3;
-    if (titleLower === lower) score += 0.2;
+    addMatch(0.3 * 3, {
+      field: 'title',
+      match: titleLower === lower ? 'exact' : 'contained-phrase',
+      value: entry.title,
+    });
+    if (titleLower === lower) {
+      addMatch(0.2, { field: 'title', match: 'exact', value: entry.title });
+    }
   } else if (useMultiToken) {
-    const hits = tokens.filter(t => titleLower.includes(t)).length;
-    if (overlapOK(hits)) score += 0.08 * 3 * (hits / tokens.length);
+    const hits = tokens.filter(t => titleLower.includes(t));
+    if (overlapOK(hits.length)) {
+      addMatch(0.08 * 3 * (hits.length / tokens.length), {
+        field: 'title',
+        match: 'token-overlap',
+        value: entry.title,
+        matched_tokens: hits,
+        query_token_coverage: hits.length / tokens.length,
+      });
+    }
   }
 
   // Tags (2x weight)
   for (const tag of tagsLower) {
     if (tag.includes(lower)) {
-      score += 0.2 * 2;
+      addMatch(0.2 * 2, { field: 'tag', match: 'contained-phrase', value: tag });
     } else if (useMultiToken) {
-      const hits = tokens.filter(t => tag.includes(t)).length;
-      if (overlapOK(hits)) score += 0.05 * 2 * (hits / tokens.length);
+      const hits = tokens.filter(t => tag.includes(t));
+      if (overlapOK(hits.length)) {
+        addMatch(0.05 * 2 * (hits.length / tokens.length), {
+          field: 'tag',
+          match: 'token-overlap',
+          value: tag,
+          matched_tokens: hits,
+          query_token_coverage: hits.length / tokens.length,
+        });
+      }
     }
+  }
+
+  // Structure-aware language terms (1.5x weight). These are deliberately
+  // below declared triggers/capabilities but above generic body summaries.
+  if (searchTermsLower.includes(lower)) {
+    addMatch(0.18 * 1.5, { field: 'search_terms', match: 'contained-phrase' });
+  } else if (useMultiToken) {
+    const hits = tokens.filter(t => searchTermsLower.includes(t));
+    if (overlapOK(hits.length)) {
+      addMatch(0.06 * 1.5 * (hits.length / tokens.length), {
+        field: 'search_terms',
+        match: 'token-overlap',
+        matched_tokens: hits,
+        query_token_coverage: hits.length / tokens.length,
+      });
+    }
+  }
+
+  // Exact declarative kind and physical source classification are compact,
+  // useful routing signals (e.g. FlowPlaybook vs OpsInventory; runbook that
+  // originated under templates/).
+  if (kindLower.includes(lower)) {
+    addMatch(0.15, { field: 'kind', match: 'contained-phrase', value: entry.kind });
+  }
+  if (sourceTypeLower.includes(lower)) {
+    addMatch(0.08, { field: 'source_type', match: 'contained-phrase', value: entry.sourceType });
   }
 
   // Summary (1x weight)
   if (summaryLower.includes(lower)) {
-    score += 0.15;
+    addMatch(0.15, { field: 'summary', match: 'contained-phrase' });
   } else if (useMultiToken) {
-    const hits = tokens.filter(t => summaryLower.includes(t)).length;
-    if (overlapOK(hits)) score += 0.04 * (hits / tokens.length);
+    const hits = tokens.filter(t => summaryLower.includes(t));
+    if (overlapOK(hits.length)) {
+      addMatch(0.04 * (hits.length / tokens.length), {
+        field: 'summary',
+        match: 'token-overlap',
+        matched_tokens: hits,
+        query_token_coverage: hits.length / tokens.length,
+      });
+    }
   }
 
   // Path (0.5x weight)
   if (pathLower.includes(lower)) {
-    score += 0.1;
+    addMatch(0.1, { field: 'path', match: 'contained-phrase', value: entry.path });
   } else if (useMultiToken) {
-    const hits = tokens.filter(t => pathLower.includes(t)).length;
-    if (overlapOK(hits)) score += 0.03 * (hits / tokens.length);
+    const hits = tokens.filter(t => pathLower.includes(t));
+    if (overlapOK(hits.length)) {
+      addMatch(0.03 * (hits.length / tokens.length), {
+        field: 'path',
+        match: 'token-overlap',
+        value: entry.path,
+        matched_tokens: hits,
+        query_token_coverage: hits.length / tokens.length,
+      });
+    }
   }
 
   // Type (0.5x weight)
   if (typeLower.includes(lower)) {
-    score += 0.1;
+    addMatch(0.1, { field: 'type', match: 'contained-phrase', value: entry.type });
   }
 
-  return Math.min(score, 1.0);
+  return finish();
+}
+
+function scoreEntry(entry: MetadataEntry, text: string, opts: { relaxOverlap?: boolean } = {}): number {
+  return scoreEntryDetailed(entry, text, opts).score;
 }
 
 /**
@@ -620,8 +822,8 @@ export async function queryIndex(
 /**
  * Discovery query — capability search across AIWG artifact kinds.
  *
- * Tuned for "agent looking for the right skill / agent / command / rule"
- * use case. Defaults the type filter to AIWG artifact kinds, prefers the
+ * Tuned for "agent looking for the right operational asset" use case.
+ * Defaults the type filter to AIWG operational artifact kinds, prefers the
  * `framework` graph (where deployed source lives), and outputs in a
  * token-tight format that names the top trigger phrase responsible for
  * each match.
@@ -631,7 +833,7 @@ export async function queryIndex(
 export interface DiscoverParams {
   /** Search phrase (the user's capability description) */
   phrase: string;
-  /** Restrict to specific types — defaults to skill/agent/command/rule/flow */
+  /** Restrict to specific types — defaults to the operational discovery surface */
   typeFilter?: string[];
   /** Max results (default 10) */
   limit?: number;
@@ -651,12 +853,7 @@ export interface DiscoverParams {
   includePaths?: boolean;
 }
 
-// `flow` is included so discoverable YAML Flow documents (flow.aiwg.io/v1 /
-// workflow.aiwg.io/v1, classified by parseFlowDoc) rank alongside the
-// capability artifacts in a bare `aiwg discover` (#1540). Flows ARE agentic
-// capabilities — a "deploy to production" Flow should surface next to the
-// flow-deploy-to-production skill.
-const DEFAULT_DISCOVER_TYPES = ['skill', 'agent', 'command', 'rule', 'flow'];
+const DEFAULT_DISCOVER_TYPES = [...OPERATIONAL_DISCOVERY_TYPES];
 
 const DEFAULT_CAPABILITY_GRAPHS: GraphType[] = ['project', 'user', 'framework'];
 
@@ -711,7 +908,7 @@ function buildRunHint(entry: MetadataEntry): string {
 }
 
 function showHintForDiscoverResult(entry: MetadataEntry, id: string): string {
-  if (['skill', 'agent', 'command', 'rule'].includes(entry.type)) {
+  if (isOperationalShowType(entry.type)) {
     return `aiwg show ${entry.type} ${id}`;
   }
   return `aiwg show ${id}`;
@@ -843,9 +1040,9 @@ export async function discoverCapability(
       }
     }
     const includeUser = projectAllowsUserIndices(cwd);
-    // Project-local capability artifacts (skills/agents/commands/rules authored
-    // in this project). The DEFAULT_DISCOVER_TYPES filter keeps non-capability
-    // project artifacts (requirements, ADRs, …) out of results.
+    // Project-local operational artifacts authored in this project. The
+    // DEFAULT_DISCOVER_TYPES filter keeps non-capability project artifacts
+    // (requirements, ADRs, …) out of results.
     const projIdx = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'project');
     if (projIdx) entries.push(...Object.values(projIdx.entries).map((entry) => withIndexProvenance(entry, 'project')));
     if (includeUser) {
@@ -886,10 +1083,13 @@ export async function discoverCapability(
   // fusion below can inject/lift curated capabilities into the top-K before
   // truncation — a capability that the lexical pass ranked outside `limit`
   // (or missed entirely) still surfaces when the query activates its facet.
+  const lexicalDiagnostics = new Map<string, LexicalScoreDiagnostic>();
   const legacyStrictScored = candidates
     .map(entry => {
-      const legacyScore = scoreEntry(entry, params.phrase);
+      const detailed = scoreEntryDetailed(entry, params.phrase);
+      const legacyScore = detailed.score;
       const fortemiScore = fortemiCoreDiscoveryScores?.get(entry.path) ?? 0;
+      lexicalDiagnostics.set(entry.path, detailed.diagnostic);
       return {
         entry,
         score: legacyScore > 0 ? legacyScore : fortemiScore * 0.2,
@@ -929,7 +1129,11 @@ export async function discoverCapability(
     // is more honest than surfacing a 0.01 path match.
     const RELAXED_MIN_SCORE = 0.02;
     const relaxedFull = candidates
-      .map(entry => ({ entry, score: scoreEntry(entry, params.phrase, { relaxOverlap: true }) }))
+      .map(entry => {
+        const detailed = scoreEntryDetailed(entry, params.phrase, { relaxOverlap: true });
+        lexicalDiagnostics.set(entry.path, detailed.diagnostic);
+        return { entry, score: detailed.score };
+      })
       .filter(r => r.score >= RELAXED_MIN_SCORE)
       .sort(compareDiscoverResults);
     const relaxedScored = dedupeDiscoverResults(
@@ -978,6 +1182,46 @@ export async function discoverCapability(
     : null;
 
   const includePaths = params.includePaths ?? true;
+  const facetActivations = diagnoseFacetActivations(params.phrase);
+  const roundDiagnostic = (value: number): number => Math.round(value * 1_000_000) / 1_000_000;
+  const rankingDiagnostic = (
+    entry: MetadataEntry,
+    finalScore: number,
+    facetDiagnostics: FacetScoreDiagnostic[] | undefined,
+  ) => {
+    const lexical = lexicalDiagnostics.get(entry.path) ?? {
+      content_tokens: tokenize(params.phrase),
+      raw_score: 0,
+      score: 0,
+      score_cap_applied: false,
+      matches: [],
+    };
+    const scope = (entry as ProvenancedEntry).indexScope ?? 'unknown';
+    return {
+      lexical_score: roundDiagnostic(lexical.score),
+      lexical_raw_score: roundDiagnostic(lexical.raw_score),
+      final_score: roundDiagnostic(finalScore),
+      score_cap_applied: lexical.score_cap_applied,
+      matches: lexical.matches.map((match) => ({
+        ...match,
+        contribution: roundDiagnostic(match.contribution),
+        ...(match.query_token_coverage === undefined
+          ? {}
+          : { query_token_coverage: roundDiagnostic(match.query_token_coverage) }),
+      })),
+      facets: (facetDiagnostics ?? []).map((facet) => ({
+        ...facet,
+        activation_floor: roundDiagnostic(facet.activation_floor),
+        base_score: roundDiagnostic(facet.base_score),
+        rrf_tiebreak: roundDiagnostic(facet.rrf_tiebreak),
+      })),
+      tie_breakers: {
+        scope,
+        scope_rank: scopeRank(entry),
+        type_rank: DISCOVER_TYPE_ORDER.get(entry.type) ?? 99,
+      },
+    };
+  };
 
   if (params.json) {
     const jsonIndent = params.jsonPretty === false ? undefined : 2;
@@ -990,6 +1234,7 @@ export async function discoverCapability(
         name: r.entry.name,
         title: r.entry.title,
         score: Math.round(r.score * 100) / 100,
+        ranking: rankingDiagnostic(r.entry, r.score, r.facetDiagnostics),
         triggers: r.entry.triggers ?? [],
         capability: r.entry.capability ?? r.entry.summary,
         kernel: r.entry.kernel ?? false,
@@ -1009,6 +1254,11 @@ export async function discoverCapability(
       })),
       total: scored.length,
       query_time_ms: queryTimeMs,
+      diagnostics: {
+        content_tokens: tokenize(params.phrase),
+        facet_activations: facetActivations,
+        score_tie_break_order: ['score', 'scope', 'type', 'name', 'path'],
+      },
       ...(relaxed ? { relaxed_overlap: true } : {}),
       ...(emptyResultHint ? { hint: emptyResultHint } : {}),
     }, null, jsonIndent));
@@ -1024,8 +1274,15 @@ export async function discoverCapability(
   const relaxedNote = relaxed ? ' — relaxed match (verbose query)' : '';
   console.log(`Discovery results for "${params.phrase}" (${scored.length} matches, ${queryTimeMs}ms)${relaxedNote}:`);
   console.log('');
+  for (const diagnostic of facetActivations) {
+    if (diagnostic.status === 'suppressed' && diagnostic.reason) {
+      console.log(`Routing diagnostic: ${diagnostic.reason}.`);
+      console.log('');
+    }
+  }
   for (let i = 0; i < scored.length; i++) {
     const r = scored[i];
+    const ranking = rankingDiagnostic(r.entry, r.score, r.facetDiagnostics);
     const id = discoveryIdForEntry(r.entry);
     const score = r.score.toFixed(2);
     const flags = [
@@ -1033,9 +1290,14 @@ export async function discoverCapability(
       r.entry.script ? 'exec' : null,
     ].filter(Boolean).join(', ');
     const locator = includePaths ? resolvePath(r.entry) : id;
-    const topTrigger = r.entry.triggers && r.entry.triggers.length > 0
-      ? r.entry.triggers[0]
-      : '';
+    const topTriggerMatch = ranking.matches
+      .filter((match) => match.field === 'trigger')
+      .reduce<(typeof ranking.matches)[number] | undefined>(
+        (best, match) => !best || match.contribution > best.contribution ? match : best,
+        undefined,
+      );
+    const topTrigger = topTriggerMatch?.value ??
+      (r.entry.triggers && r.entry.triggers.length > 0 ? r.entry.triggers[0] : '');
     console.log(`${i + 1}. ${r.entry.title}`);
     console.log(`   type: ${r.entry.type}  score: ${score}${flags ? `  flags: ${flags}` : ''}`);
     console.log(`   ${includePaths ? 'path' : 'id'}: ${locator}`);
@@ -1048,6 +1310,15 @@ export async function discoverCapability(
     if (topTrigger) {
       console.log(`   trigger: "${topTrigger}"`);
     }
+    const triggerCoverage = topTriggerMatch?.query_token_coverage;
+    const rankingParts = [
+      `lexical ${ranking.lexical_score.toFixed(4)} -> final ${ranking.final_score.toFixed(4)}`,
+      triggerCoverage === undefined
+        ? null
+        : `trigger covers ${Math.round(triggerCoverage * 100)}% of query tokens`,
+      `scope ${ranking.tie_breakers.scope}`,
+    ].filter((part): part is string => Boolean(part));
+    console.log(`   ranking: ${rankingParts.join('; ')}`);
     if (r.entry.script) {
       console.log(`   run: ${buildRunHint(r.entry)}`);
     } else if (!includePaths) {
@@ -1061,7 +1332,7 @@ export async function discoverCapability(
 export interface ShowParams {
   /** Skill name (e.g. `intake-wizard`), title, or artifact path */
   name: string;
-  /** Restrict to specific types — defaults to skill/agent/command/rule/flow */
+  /** Restrict to specific types — defaults to showable operational types */
   typeFilter?: string[];
   /** Emit a JSON envelope (path + content) instead of raw file text */
   json?: boolean;
@@ -1145,7 +1416,11 @@ function findShowMatches(entries: MetadataEntry[], types: string[], needle: stri
       const dirStem = path.basename(path.dirname(normalizedPath));
       const basename = path.basename(normalizedPath);
       const fileStem = basename.replace(/\.[^.]+$/, '');
-      return (basename === 'SKILL.md' && dirStem === needle) || fileStem === needle || e.name === needle;
+      const slugLayoutMatch =
+        ((basename === 'SKILL.md' && e.type === 'skill') ||
+          (basename === 'BEHAVIOR.md' && e.type === 'behavior')) &&
+        dirStem === needle;
+      return slugLayoutMatch || fileStem === needle || e.name === needle;
     });
   }
   if (matches.length === 0) {
@@ -1206,7 +1481,7 @@ async function fortemiRecordForEntry(
  * Scan the AIWG_ROOT corpus for an artifact matching `name` (#1221).
  *
  * Walks the well-known artifact layouts under
- * `agentic/code/{frameworks,addons,extensions,plugins}/<bundle>/{skills,agents,commands,rules,templates}/`
+ * `agentic/code/{frameworks,addons,extensions,plugins}/<bundle>/{skills,agents,commands,rules,templates,behaviors,flows}/`
  * and returns the first match. Used as a fallback in `aiwg show` when an
  * artifact isn't in any built index — either because the workspace hasn't
  * been deployed to yet, or because the bundle hasn't been installed.
@@ -1243,6 +1518,9 @@ async function findCorpusArtifact(
     { sub: 'commands', type: 'command', layout: 'flat' },
     { sub: 'rules', type: 'rule', layout: 'flat' },
     { sub: 'templates', type: 'template', layout: 'flat' },
+    { sub: 'behaviors', type: 'behavior', layout: 'flat' },
+    { sub: 'flows', type: 'flow', layout: 'flat' },
+    { sub: 'runbooks', type: 'runbook', layout: 'flat' },
   ];
 
   for (const group of groups) {
@@ -1284,6 +1562,31 @@ async function findCorpusArtifact(
     );
     if (agentMatch) {
       return { path: agentMatch, type: 'agent', bundleKind: null, bundleId: null };
+    }
+  }
+
+  // Behaviors commonly use a slug layout: `behaviors/<name>/BEHAVIOR.md`.
+  if (typeFilter.length === 0 || typeFilter.includes('behavior')) {
+    for (const group of groups) {
+      let bundles: string[];
+      try {
+        bundles = (await fsp.readdir(group.dir, { withFileTypes: true }))
+          .filter(d => d.isDirectory())
+          .map(d => d.name);
+      } catch {
+        continue;
+      }
+      for (const bundle of bundles) {
+        const candidate = path.join(group.dir, bundle, 'behaviors', name, 'BEHAVIOR.md');
+        try {
+          const stat = await fsp.stat(candidate);
+          if (stat.isFile()) {
+            return { path: candidate, type: 'behavior', bundleKind: group.kind, bundleId: bundle };
+          }
+        } catch {
+          // not present — continue
+        }
+      }
     }
   }
 
@@ -1357,7 +1660,7 @@ export async function showArtifact(
   const { promises: fs } = await import('node:fs');
   const types = params.typeFilter && params.typeFilter.length > 0
     ? params.typeFilter
-    : DEFAULT_DISCOVER_TYPES;
+    : [...OPERATIONAL_SHOW_TYPES];
   const { entries, aiwgRoot } = await loadShowEntries(cwd, params);
 
   if (entries.length === 0 && params.backend !== 'fortemi-core') {
@@ -1467,6 +1770,7 @@ export async function showArtifact(
   }
 
   if (params.json) {
+    const providerModels = await loadProviderModelMetadata(cwd, aiwgRoot);
     console.log(JSON.stringify({
       id: discoveryIdForEntry(entry),
       path: filePath,
@@ -1484,6 +1788,7 @@ export async function showArtifact(
       ...(entry.script
         ? { executable: true, run_hint: buildRunHint(entry) }
         : {}),
+      ...(providerModels ? { providerModels } : {}),
       content,
     }, null, 2));
     return;
@@ -1508,7 +1813,7 @@ export async function showMetadata(
   loadGlobalGraphConfigs();
   const types = params.typeFilter && params.typeFilter.length > 0
     ? params.typeFilter
-    : DEFAULT_DISCOVER_TYPES;
+    : [...OPERATIONAL_SHOW_TYPES];
   const { entries, aiwgRoot } = await loadShowEntries(cwd, params);
 
   if (entries.length === 0 && params.backend !== 'fortemi-core') {
@@ -1575,6 +1880,7 @@ export async function showMetadata(
       scope: (entry as ProvenancedEntry).indexScope ?? null,
     },
     metadata: record ?? entry,
+    providerModels: await loadProviderModelMetadata(cwd, aiwgRoot),
   };
 
   if (params.json) {
@@ -1589,6 +1895,15 @@ export async function showMetadata(
   console.log(`  scope: ${payload.provenance.scope ?? 'unknown'}`);
   console.log(`  path: ${payload.paths.absolute}`);
   console.log(`  indexed_path: ${payload.paths.indexed}`);
+  if (payload.providerModels) {
+    console.log('  provider_models:');
+    for (const [provider, hints] of Object.entries(payload.providerModels.providers)) {
+      console.log(`    ${provider}:`);
+      for (const hint of hints) {
+        console.log(`      ${hint.role}: ${hint.model} (wrapper: ${hint.wrapper}, status: ${hint.status})`);
+      }
+    }
+  }
   console.log('');
   console.log(JSON.stringify(payload.metadata, null, 2));
 }

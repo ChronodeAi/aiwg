@@ -12,6 +12,10 @@ Starting in 2026.5.0, AIWG splits its skill surface into two tiers, with discove
 
 - **Kernel skills** — always-loaded into the platform's flat skill listing. ~21 skills total: 9 quickrefs (one per installed framework + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), and 10 self-maintenance ops.
 - **Standard skills** — the other ~460 skills. Stay at `$AIWG_ROOT` and are **not copied per-project** by default (#1217). Reachable via `aiwg discover` (find) and `aiwg show` (fetch).
+- **Project quickref** — an optional, generated kernel skill from committed
+  `.aiwg/quickref.json`. It makes a small set of repository-specific precedence
+  and retrieval hints visible without promoting every project skill into the
+  kernel. See [Project Quickrefs](customization/project-quickrefs.md).
 
 This document is the operator's guide to using the new model effectively, plus verification steps so you can confirm it's actually working.
 
@@ -21,11 +25,14 @@ This document is the operator's guide to using the new model effectively, plus v
 # Find what skill handles your need
 aiwg discover "<the user's need, paraphrased>" --limit 3
 
-# Fetch the full body of a specific skill / agent / command / rule
+# Fetch the full body of a specific operational asset
 aiwg show skill <name>
 aiwg show agent <name>
 aiwg show command <name>
 aiwg show rule <name>
+aiwg show flow <name>
+aiwg show template <name>
+aiwg show behavior <name>
 
 # Health check
 aiwg doctor
@@ -355,6 +362,30 @@ aiwg show skill intake-wizard --json | jq -r .path
 
 The `path` returned by show should match the `path` returned by discover — both anchored to `$AIWG_ROOT`.
 
+For machine consumers, `aiwg show ... --json` also reports
+`providerModels`. The mapping is limited to providers configured or deployed in
+the workspace and gives each reasoning/coding/efficiency model name together
+with its `aiwg-model-*-worker` wrapper. Orchestrators can therefore select a
+specific provider model without launching a probe session:
+
+```bash
+aiwg show skill intake-wizard --json |
+  jq '.providerModels.providers.codex'
+```
+
+The same output-file validation covers both deployment modes: with
+`--copy-all`, a standard skill such as `voice-apply` exists in the provider
+skill directory; without it, the file is absent locally, the kernel quickref
+contains the `discover`/`show` route, and `aiwg show` resolves the indexed
+canonical file under `$AIWG_ROOT`.
+
+Before using the mapping to launch a worker, check
+`aiwg runtime-info --providers --json`: configured state alone is not an
+installation signal. Model entries include their resolution source, and
+`aiwg models refresh` can update the local cache from provider-native
+enumeration or an optional public AIWG feed without making deployment
+network-dependent.
+
 ## The rule that enforces this: `skill-discovery` (HIGH)
 
 The aiwg-utils addon ships a HIGH-enforcement rule named `skill-discovery` that mandates the discovery query before declining a user request as "AIWG can't do that" or improvising a custom workflow. Full text: `agentic/code/addons/aiwg-utils/rules/skill-discovery.md`.
@@ -384,9 +415,10 @@ Don't translate to AIWG vocabulary first — discovery is tuned for natural-lang
 aiwg discover "review code"          --type agent     # who handles code review
 aiwg discover "deploy to production" --type skill     # the workflow
 aiwg discover "no unauthenticated"   --type rule      # which rule enforces it
+aiwg discover "rotate certificates"  --type runbook   # the operational procedure
 ```
 
-The default `--type` is `skill,agent,command,rule`. Narrowing helps when you specifically want one kind.
+The default `--type` is `skill,agent,command,rule,flow,runbook,template,behavior`. Narrowing helps when you specifically want one kind. Flow and runbook records also carry structure-aware terms: declarative kinds and step identifiers for YAML flows, and procedure/verification/rollback language for runbooks.
 
 ### JSON for sub-agent consumption
 

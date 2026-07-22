@@ -174,7 +174,7 @@ describe('project-local deploy integration (#1046)', () => {
     const result = runDeploy(env, 'codex');
     expect(result.status, result.stdout).toBe(0);
 
-    const agentFile = path.join(env.projectDir, '.codex', 'agents', 'pl-agent.md');
+    const agentFile = path.join(env.projectDir, '.codex', 'agents', 'pl-agent.toml');
     const ruleFile = path.join(env.projectDir, '.codex', 'rules', 'pl-rule.md');
     expect(existsSync(agentFile), `codex agent should exist at ${agentFile}`).toBe(true);
     expect(existsSync(ruleFile), `codex rule should exist at ${ruleFile}`).toBe(true);
@@ -271,6 +271,24 @@ describe('project-local deploy integration (#1046)', () => {
       path.join(env.projectDir, '.aiwg', 'aiwg.config'),
       JSON.stringify({ providers: ['claude'] }, null, 2),
     );
+    writeFileSync(
+      path.join(env.projectDir, '.aiwg', 'quickref.json'),
+      JSON.stringify({
+        version: '1',
+        project: {
+          id: 'integration-project',
+          name: 'Integration Project',
+          description: 'Project-specific integration test orientation.',
+        },
+        precedence: 'Use the project workflow before generic workflows.',
+        entries: [{
+          title: 'Issue workflow',
+          summary: 'Retrieve the project issue workflow before acting.',
+          discover: ['project issue workflow'],
+          show: [{ type: 'skill', name: 'demo-skill' }],
+        }],
+      }, null, 2),
+    );
 
     let result: { status: number; stdout: string };
     try {
@@ -319,5 +337,14 @@ describe('project-local deploy integration (#1046)', () => {
       'pl-rule.md',
     );
     expect(existsSync(projectLocalRule)).toBe(true);
+
+    const projectQuickref = path.join(
+      env.projectDir,
+      '.claude',
+      'skills',
+      'aiwg-project-integration-project-quickref',
+      'SKILL.md',
+    );
+    expect(existsSync(projectQuickref), 'aiwg use must refresh the project quickref kernel skill').toBe(true);
   });
 });
