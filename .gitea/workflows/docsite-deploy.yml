@@ -19,6 +19,8 @@ env:
   VAULT_ADDR: ${{ vars.VAULT_ADDR }}
   DOCSITE_DEPLOY_KEY_VAULT_PATH: ${{ vars.DOCSITE_DEPLOY_KEY_VAULT_PATH }}
   DOCSITE_DEPLOY_KEY_VAULT_FIELD: ${{ vars.DOCSITE_DEPLOY_KEY_VAULT_FIELD }}
+  CLOUDFLARE_API_TOKEN_VAULT_PATH: ${{ vars.CLOUDFLARE_API_TOKEN_VAULT_PATH }}
+  CLOUDFLARE_API_TOKEN_VAULT_FIELD: ${{ vars.CLOUDFLARE_API_TOKEN_VAULT_FIELD }}
 
 on:
   push:
@@ -126,7 +128,9 @@ jobs:
           echo "✓ Version substitution complete"
 
       - name: Build doc site
-        run: npx pagenary build:tenants aiwg-docs
+        run: |
+          npx pagenary build:tenants aiwg-docs
+          node tools/docs/write-blog-static-pages.mjs dist/aiwg-docs
 
       - name: Verify build output
         run: |
@@ -134,6 +138,7 @@ jobs:
           OUT="${{ gitea.workspace }}/dist/aiwg-docs"
           test -d "$OUT" || { echo "::error::Missing build output directory $OUT"; exit 1; }
           test -f "$OUT/index.html" || { echo "::error::Missing index.html"; exit 1; }
+          test -f "$OUT/blog/index.html" || { echo "::error::Missing blog/index.html"; exit 1; }
           test -d "$OUT/sections" || { echo "::error::Missing sections/ — refusing to deploy (would rsync --delete an incomplete site)"; exit 1; }
           echo "Build verification passed"
           ls -lah "$OUT/"
@@ -330,6 +335,40 @@ jobs:
                ls '${DEPLOY_ROOT}sections' | head -5"
           fi
           echo "Verify completed (mode: ${MODE})"
+
+      - name: Fetch Cloudflare purge token from vault
+        env:
+          VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
+          VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_ZONE_ID:-}" ] || \
+             [ -z "${CLOUDFLARE_API_TOKEN_VAULT_PATH:-}" ] || \
+             [ -z "${CLOUDFLARE_API_TOKEN_VAULT_FIELD:-}" ]; then
+            echo "Cloudflare token fetch skipped: zone id or vault route is not configured"
+            exit 0
+          fi
+          if ! bash ci/vault-fetch.sh --spec ci/vault-fetch.docsite-cloudflare.spec; then
+            echo "::warning::Cloudflare token fetch failed; cache purge will be skipped"
+            exit 0
+          fi
+
+      - name: Purge Cloudflare cache
+        env:
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_ZONE_ID:-}" ] || [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "Cloudflare purge skipped: CLOUDFLARE_ZONE_ID or Cloudflare API token is not configured"
+            exit 0
+          fi
+          curl --fail --show-error --silent \
+            -X POST "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}'
+          echo "Cloudflare cache purge requested"
 
       - name: Cleanup SSH key
         if: always()

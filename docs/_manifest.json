@@ -39,7 +39,10 @@
     "overview/what-is-aiwg",
     "overview/executive-brief",
     "getting-started/prerequisites",
+    "install",
     "security/supply-chain-hardening",
+    "install/web-backed-resources",
+    "install/non-interactive",
     "quickstart",
     "intake-guide",
     "regenerate-guide",
@@ -428,7 +431,8 @@
     "addons/prose-integration/integration-guide",
     "addons/rlm/agent-examples",
     "addons/rlm/agent-examples/rlm-agent-examples",
-    "frameworks/media-curator/type-flexible-curation"
+    "frameworks/media-curator/type-flexible-curation",
+    "blog/2026-07-aiwg-workflow-portability"
   ],
   "sections": [
     {
@@ -511,6 +515,27 @@
       "summary": "System requirements and setup",
       "file": "getting-started/prerequisites.md",
       "parent": "getting-started"
+    },
+    {
+      "id": "install",
+      "title": "Install",
+      "summary": "Installation and deployment modes",
+      "collapsed": true,
+      "parent": "getting-started"
+    },
+    {
+      "id": "install/web-backed-resources",
+      "title": "Web-Backed Resources",
+      "summary": "Planned release-host resource mode for AIWG bundles",
+      "file": "install/web-backed-resources.md",
+      "parent": "install"
+    },
+    {
+      "id": "install/non-interactive",
+      "title": "Non-Interactive Installation",
+      "summary": "Deploy AIWG frameworks from CI, cloud-init, and provisioning scripts",
+      "file": "install/non-interactive.md",
+      "parent": "install"
     },
     {
       "id": "security/supply-chain-hardening",
@@ -3220,6 +3245,15 @@
       "summary": "Media Curator treats audio, video, transcripts, image sets, documents, and mixed",
       "file": "frameworks/media-curator/type-flexible-curation.md",
       "parent": "frameworks/media-curator"
+    }
+  ],
+  "pages": [
+    {
+      "id": "blog/2026-07-aiwg-workflow-portability",
+      "title": "If your agent workflow only lives in chat, you do not have a workflow",
+      "summary": "A practical test for whether an agent workflow is portable: can the project carry the capability, can another operator discover it, and can a handoff survive without private prompt memory?",
+      "file": "blog/2026-07-aiwg-workflow-portability.md",
+      "parent": "blog"
     }
   ]
 }
