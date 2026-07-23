@@ -395,7 +395,7 @@ export const newBundleCommand: Extension = {
   id: 'new-bundle',
   type: 'skill',
   name: 'New Bundle',
-  description: 'Scaffold a project-local bundle under .aiwg/{type}/{name}/',
+  description: 'Scaffold a project-local bundle under the configured AIWG artifact root',
   version: '1.0.0',
   capabilities: ['cli', 'scaffolding', 'project-local'],
   keywords: ['new', 'bundle', 'scaffold', 'project-local', 'extension', 'addon', 'framework', 'plugin', 'provider'],
@@ -423,7 +423,7 @@ export const quickrefCommand: Extension = {
   id: 'quickref',
   type: 'skill',
   name: 'Project Quickref',
-  description: 'Generate and deploy an always-visible project quickref from .aiwg/quickref.json',
+  description: 'Generate and deploy an always-visible project quickref from the configured AIWG artifact root',
   version: '1.0.0',
   capabilities: ['cli', 'project-local', 'quickref', 'kernel'],
   keywords: ['project', 'quickref', 'orientation', 'kernel', 'generate', 'deploy'],
@@ -1212,6 +1212,34 @@ export const indexCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const artifactsCommand: Extension = {
+  id: 'artifacts',
+  type: 'skill',
+  name: 'Project Artifacts',
+  description: 'Move or inspect the configured project AIWG artifact root',
+  version: '1.0.0',
+  capabilities: ['cli', 'artifacts', 'relocation', 'configuration', 'index'],
+  keywords: ['artifacts', 'aiwg artifacts', 'move .aiwg', 'relocate .aiwg', 'rename .aiwg', 'artifact root', 'AIWG_ARTIFACTS_PATH'],
+  category: 'index',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['move .aiwg', 'relocate .aiwg', 'rename .aiwg', 'move aiwg artifacts', 'artifact root'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'move --to <path> [--from <path>] [--dry-run]',
+      allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
 // Research-corpus tools — radar/freshness subsystem (#1498)
 export const corpusCommand: Extension = {
   id: 'corpus',
@@ -1306,7 +1334,7 @@ export const discoverCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '"<phrase>" [--limit N] [--type skill,agent,...] [--json]',
+      argumentHint: '"<phrase>" [--limit N] [--type skill,agent,...] [--json] [--resource-source local|web|auto] [--aiwg-version <exact-or-channel>] [--offline]',
       allowedTools: ['Read'],
     },
   } satisfies SkillMetadata,
@@ -1344,7 +1372,7 @@ export const showCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '<type> <name> [--json] [--first]   # type: skill | agent | command | rule',
+      argumentHint: '<type> <name> [--json] [--first] [--resource-source local|web|auto] [--aiwg-version <exact-or-channel>] [--offline]   # type: skill | agent | command | rule',
       allowedTools: ['Read'],
     },
   } satisfies SkillMetadata,
@@ -3551,8 +3579,9 @@ export const commandDefinitions: Extension[] = [
   // Research Validation (1)
   bestPracticesAuditCommand,
 
-  // Index + Discovery (3)
+  // Index + Discovery
   indexCommand,
+  artifactsCommand,
   corpusCommand,
   researchQueryCommand,
   discoverCommand,
