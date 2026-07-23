@@ -213,6 +213,43 @@ Switch back to stable (npm releases).
 aiwg --use-stable
 ```
 
+## Web-Backed Resources (Experimental Partial Implementation)
+
+AIWG ships an experimental partial implementation for web-backed resource
+resolution for `aiwg discover` and `aiwg show`.
+
+```bash
+aiwg discover "architecture evolution" --resource-source local --aiwg-version 2026.7.16
+aiwg discover "architecture evolution" --resource-source web --aiwg-version stable
+aiwg discover "architecture evolution" --resource-source auto --aiwg-version 2026.7.16
+aiwg discover "architecture evolution" --offline
+
+aiwg show skill architecture-evolution --resource-source web --aiwg-version 2026.7.16
+aiwg show framework sdlc --resource-source web --aiwg-version candidate --offline
+```
+
+This partial implementation is active only for `discover`/`show` and does not yet
+apply to `aiwg versions`, `aiwg use`, or `aiwg regenerate` rollout-wide web
+defaults. See
+[Web-Backed AIWG Resources](./install/web-backed-resources.md) for the planned
+operator contract and safety model.
+
+Maintainer checkouts can already relocate the project AIWG artifact directory
+with the project pointer file written by the CLI:
+
+```bash
+aiwg artifacts move --to ../aiwg-web-release-ops/corpus/.aiwg
+```
+
+The command moves the configured artifact root, writes `.aiwg-location`,
+updates `.gitignore` for the local pointer, rebuilds the project index, and
+syncs the Fortemi Core static cache. For one-off sessions,
+`AIWG_ARTIFACTS_PATH` can still point at an absolute, project-relative, or
+`~/`-relative artifact directory and takes precedence over `.aiwg-location`.
+
+For AIWG's own repository, this is the supported bridge to the private SDLC
+corpus. See [Private AIWG Corpus](./development/private-aiwg-corpus.md).
+
 ## Maintenance
 
 ### -version

@@ -7,9 +7,115 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Changed
+
+- **Dependency-safe Gitea mirror verification** — release verification now
+  clean-installs the full, lightweight CLI, and Cockpit tarballs resolved from
+  Gitea while leaving third-party dependency resolution on npmjs.org. Generated
+  Gitea release notes and operator documentation use the same tarball-URL
+  pattern because Gitea's bundled npm registry is a package store, not an
+  npmjs proxy.
+
+## [2026.7.18] - 2026-07-23 - "Web-first CLI and packaged Cockpit"
+
+### Changed
+
+- **Zero-configuration lightweight CLI** — installed `@aiwg/cli` binaries and
+  its exported CLI API now select the signed `stable` web resource channel for
+  `discover` and `show` when no source flags are supplied. The full `aiwg`
+  package retains its legacy local-corpus default, and explicit
+  `--resource-source` / `--aiwg-version` choices continue to override either
+  package default.
+- **Bounded cold web fetches** — the total signed release-resource request
+  timeout is 60 seconds, accommodating first-run manifest and Fortemi index
+  downloads while retaining a finite failure bound.
+
+### Fixed
+
+- **Self-contained Cockpit package** — `@aiwg/cockpit` now builds and includes
+  its production React UI during `prepack` from an isolated temporary workspace,
+  clears inherited npm dry-run and publish-registry settings before installing
+  public build dependencies, atomically stages the result under a cross-process
+  lock, includes its MIT license, starts correctly through npm's global binary
+  symlink, and handles a missing optional `agentic-mgmt` executor without
+  crashing.
+- **Complete lightweight CLI package metadata** — `@aiwg/cli` now includes the
+  repository MIT license and its README documents the no-flag web workflow.
+- **Installed-package regressions** — package tests exercise configuration-free
+  CLI binary/API web discovery and lookup, legacy full-package local behavior,
+  Cockpit symlink launch and compiled UI serving, missing-executor startup, and
+  package allowlists.
+
+## [2026.7.17] - 2026-07-22 - "Portable resources and lightweight CLI"
+
+### Added
+
+- **Relocatable project artifact root** — the CLI now honors `.aiwg-location`
+  and `AIWG_ARTIFACTS_PATH` across project indexing, project-local bundles,
+  quickrefs, workspace context wiring, local issue state, memory/knowledge
+  stores, serve identity config, and related runtime state. `aiwg artifacts
+  move --to <path>` moves or renames the artifact root, writes the pointer,
+  updates local ignore rules, and reindexes.
+- **Project-local bundle search paths** — `projectLocal.searchPaths` in
+  `aiwg.config` and `AIWG_PROJECT_LOCAL_PATHS` let operators add custom addon,
+  extension, framework, plugin, and provider roots without moving the main
+  project corpus.
+- **Experimental web-backed `discover`/`show` slice**
+  ([#1848](https://github.com/jmagly/aiwg/pull/1848),
+  [#1849](https://github.com/jmagly/aiwg/pull/1849),
+  [#1850](https://github.com/jmagly/aiwg/pull/1850),
+  [#1853](https://github.com/jmagly/aiwg/pull/1853)) —
+  `aiwg discover` and `aiwg show` now support `--resource-source` (`local|web|auto`),
+  exact-or-channel `--aiwg-version`, and `--offline`; web mode uses signed
+  release manifests plus `@fortemi/core` query against the v2 export, while `show`
+  caches verified resource bodies for warm offline reads.
+- **Supported installed-package API and conformance gate** (#1853) — package
+  consumers can import the CLI router and signed resource helpers from `aiwg`
+  or `aiwg/resources`. The packed-install regression exercises that public API,
+  the real installed CLI, legacy configuration, local packaged resources,
+  signed web search/show, and warm offline cache behavior.
+- **No-project global bootstrap** (#1872) —
+  `aiwg use <framework> --provider <name> --global` installs framework and
+  kernel assets into verified provider user paths while generating only
+  lightweight context/bootstrap files in the current project. The existing
+  `--scope user` behavior remains an additive project-plus-user mirror.
+- **CalVer-locked lightweight CLI package** (#1847) — `@aiwg/cli` now packages
+  the compiled CLI/API runtime without the bundled corpus, documentation,
+  templates, or precomputed local indices. Its version and runtime dependency
+  set must exactly match the main `aiwg` package, and both npm registries build,
+  publish, and verify it alongside the full and Cockpit distributions.
+
+### Changed
+
+- **Full-package size ceiling** — raised the compressed `aiwg` package budget
+  from 22,000 KB to 23,000 KB for the signed web-resource runtime, portability
+  support, and precomputed release-discovery assets added in this release. The
+  separate file-count, unpacked-size, and Fortemi index budgets remain in place.
+
+### Fixed
+
+- **Concurrent package index generation** — Fortemi prebuilt builds now use a
+  cross-process lock and publish complete generations through a staged swap,
+  preventing concurrent npm packaging from capturing a missing or partial
+  framework index.
+
 ## [2026.7.16] - 2026-07-21 - "Workspace context and provider orchestration"
 
 ### Added
+
+- **Live-state provenance for operational memory** (#1827) — Fortemi v2
+  records can preserve allowlisted tracker/repository observations, classify
+  them as fresh, historical, superseded, contradicted, or needs-source, expose
+  currentness and live-recheck requirements in query output, and carry the
+  contract losslessly through portable Knowledge Shards without serializing
+  credentials or URL query material.
+- **Cockpit daily Linux operator gate** (#1842) — a single fail-closed command
+  now composes protected-executor host/container UAT, explicit authorization
+  failures, managed-PTY working-directory and scratch-mutation proof, transient
+  and restart recovery, previous-stable/candidate upgrade and rollback hooks,
+  scoped cleanup, immutable version evidence, and secret-scanned deterministic
+  JSON/Markdown reports. Executor credential-file paths are also removed from
+  Bridge error responses. VM and Apple remain visible non-blocking preview tiers.
 
 - **Existing-project context extraction** (#1830) —
   `aiwg regenerate --existing-project` previews or atomically applies a bounded,
@@ -59,6 +165,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   import/re-export with zero undeclared loss.
 
 ### Fixed
+
+- **Cockpit protected-executor authentication** (#1841) — the Bridge now reads
+  a mode-restricted token file for centralized authenticated REST/A2A calls,
+  preserves upstream 401/403 failures, reloads rotations without restart, and
+  proxies PTY WebSocket upgrades so long-lived executor credentials never enter
+  browser state or attach URLs.
+- **Cockpit transient auto-recovery** (#1763) — the global status now shows
+  `Reconnecting…` during Bridge/executor or SSE gaps, retains explicitly marked
+  last-known counts, retries with bounded backoff, and refreshes all mounted
+  live-data views when the connection returns without a page reload.
 
 - **Release config schema parity** — release steps may now use a
   channel-dependent command without also declaring an unused plain `run`
