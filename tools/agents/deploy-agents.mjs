@@ -339,6 +339,7 @@ function mirrorSkillsAsCommands(provider, target, srcRoot, opts) {
  */
 function pruneStaleAiwgArtifacts(provider, target, srcRoot, opts, explicitSource) {
   if (opts.skillsOnly) return; // skills run their own prune in the provider
+  if (opts.preserveExisting) return; // additive bundle deploy
 
   const aiwgRoot = resolveAiwgRoot(srcRoot);
   if (!aiwgRoot) return; // no AIWG tree → bundle/standalone deploy; never prune
@@ -412,7 +413,8 @@ function parseArgs() {
     quiet: false,           // Suppress all non-error output (for embedding in use.ts)
     asPlugin: false,        // Generate .factory-plugin/ bundle (Factory provider only)
     deployBehaviors: false, // Deploy behaviors in addition to agents
-    skipCommandsMigration: false  // Skip commands → skills migration (warns about duplicates)
+    skipCommandsMigration: false, // Skip commands → skills migration (warns about duplicates)
+    preserveExisting: false,  // Additive deploy: do not prune sibling artifacts
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -445,6 +447,7 @@ function parseArgs() {
     else if (a === '--quiet' || a === '-q') cfg.quiet = true;
     else if (a === '--as-plugin') cfg.asPlugin = true;
     else if (a === '--skip-commands-migration') cfg.skipCommandsMigration = true;
+    else if (a === '--preserve-existing') cfg.preserveExisting = true;
     else if (a === '--copy-all' || a === '--copy-standard-skills') cfg.copyStandardSkills = true;
     else if (a === '--help' || a === '-h') {
       printHelp();
@@ -487,6 +490,7 @@ Options:
   --as-agents-md               Aggregate to single AGENTS.md (Codex)
   --create-agents-md           Create/update AGENTS.md template
   --skip-commands-migration    Skip deleting the commands directory before skills deployment
+  --preserve-existing          Deploy additively without pruning sibling AIWG artifacts
   --copy-all                   Copy ALL skills per-project (legacy mirror at <provider>/.aiwg/skills/).
                                Default is kernel-only + index-driven discovery for the rest (#1217).
                                Use this for sandboxed runtimes / air-gapped corpora where
@@ -890,6 +894,7 @@ export async function main() {
     asPlugin: cfg.asPlugin,
     deployBehaviors: cfg.deployBehaviors,
     skipCommandsMigration: cfg.skipCommandsMigration,
+    preserveExisting: cfg.preserveExisting,
     // #1217 / #1219: --copy-all flag forces legacy per-project mirror
     // for the standard tier. Default is no-copy + index-driven discovery.
     // Replaces the legacy AIWG_COPY_STANDARD_SKILLS env var (removed rc.30).

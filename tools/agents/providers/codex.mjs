@@ -34,6 +34,7 @@ try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs;
 const staticModelCatalog = _require('../../../agentic/code/providers/model-catalog.v1.json');
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { load as loadYaml } from 'js-yaml';
 import { classifyModelRole, modelForRole } from './model-role.mjs';
@@ -62,9 +63,15 @@ import {
   listOnDemandRuleFiles,
   writeOnDemandRuleIndex,
   deploySoulCompanions,
-  parseFrontmatter
+  parseFrontmatter,
+  resolveAiwgRoot
 } from './base.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
+const providerAiwgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+function deploymentToolRoot(srcRoot) {
+  return resolveAiwgRoot(srcRoot) || providerAiwgRoot;
+}
 
 // ============================================================================
 // Provider Configuration
@@ -239,7 +246,12 @@ export function deployAgents(agentFiles, targetDir, opts) {
  * script use its default home directory location.
  */
 export async function deployCommands(targetDir, srcRoot, opts) {
-  const scriptPath = path.join(srcRoot, 'tools', 'commands', 'deploy-prompts-codex.mjs');
+  const scriptPath = path.join(
+    deploymentToolRoot(srcRoot),
+    'tools',
+    'commands',
+    'deploy-prompts-codex.mjs',
+  );
 
   if (!fs.existsSync(scriptPath)) {
     console.warn(`Codex prompts deployment script not found at ${scriptPath}`);
@@ -274,7 +286,12 @@ export async function deployCommands(targetDir, srcRoot, opts) {
  * Deploy skills via external script
  */
 export async function deploySkills(targetDir, srcRoot, opts) {
-  const scriptPath = path.join(srcRoot, 'tools', 'skills', 'deploy-skills-codex.mjs');
+  const scriptPath = path.join(
+    deploymentToolRoot(srcRoot),
+    'tools',
+    'skills',
+    'deploy-skills-codex.mjs',
+  );
 
   if (!fs.existsSync(scriptPath)) {
     console.warn(`Codex skills deployment script not found at ${scriptPath}`);
@@ -297,6 +314,7 @@ export async function deploySkills(targetDir, srcRoot, opts) {
     if (opts.force) args.push('--force');
     if (opts.mode) args.push('--mode', opts.mode);
     if (opts.copyStandardSkills === true) args.push('--copy-all');
+    if (opts.preserveExisting === true) args.push('--preserve-existing');
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
@@ -314,7 +332,7 @@ export async function deploySkills(targetDir, srcRoot, opts) {
   // Self-heal: prune AIWG-managed skill dirs left behind in the legacy
   // ~/.codex/skills/ home location by pre-fix versions, so codex-rs stops
   // listing each skill twice.
-  pruneLegacyCodexSkills(opts);
+  if (!opts.preserveExisting) pruneLegacyCodexSkills(opts);
 }
 
 /**
