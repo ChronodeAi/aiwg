@@ -53,6 +53,7 @@ function parseArgs() {
     dryRun: false,
     force: false,
     copyStandardSkills: false,
+    preserveExisting: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -62,6 +63,7 @@ function parseArgs() {
     else if (a === '--mode' && args[i + 1]) cfg.mode = String(args[++i]).toLowerCase();
     else if (a === '--dry-run') cfg.dryRun = true;
     else if (a === '--force') cfg.force = true;
+    else if (a === '--preserve-existing') cfg.preserveExisting = true;
     else if (a === '--copy-all' || a === '--copy-standard-skills') cfg.copyStandardSkills = true;
   }
 
@@ -340,6 +342,12 @@ function deploySkill(skill, targetDir, opts) {
 function getSkillDirectories(srcRoot, mode) {
   const dirs = [];
 
+  // Direct addon or project-local bundle source.
+  const directSkillsDir = path.join(srcRoot, 'skills');
+  if (fs.existsSync(directSkillsDir)) {
+    dirs.push({ dir: directSkillsDir, label: path.basename(srcRoot) });
+  }
+
   // Addon skills
   if (mode === 'addons' || mode === 'all') {
     const addonsRoot = path.join(srcRoot, 'agentic', 'code', 'addons');
@@ -474,7 +482,7 @@ function getSkillDirectories(srcRoot, mode) {
   // touch directories whose SKILL.md lacks AIWG provenance — those are
   // user-authored or third-party skills sitting alongside.
   let totalPruned = 0;
-  if (fs.existsSync(target)) {
+  if (!cfg.preserveExisting && fs.existsSync(target)) {
     const targetEntries = fs.readdirSync(target, { withFileTypes: true });
     for (const entry of targetEntries) {
       if (!entry.isDirectory()) continue;

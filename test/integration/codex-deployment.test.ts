@@ -219,6 +219,36 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
   });
 
   describe('Skills Deployment', () => {
+    it('deploys a directly selected addon skill through the Codex provider', async () => {
+      const addonRoot = path.join(
+        REPO_ROOT,
+        'agentic',
+        'code',
+        'addons',
+        'coding-memory',
+      );
+
+      runScript('tools/agents/deploy-agents.mjs', [
+        '--source', addonRoot,
+        '--provider', 'codex',
+        '--deploy-skills',
+        '--target', TEST_PROJECT_DIR,
+      ]);
+
+      const skill = await fs.readFile(
+        path.join(
+          TEST_PROJECT_DIR,
+          '.agents',
+          'skills',
+          'coding-memory-audit',
+          'SKILL.md',
+        ),
+        'utf-8',
+      );
+      expect(skill).toContain('name: "coding-memory-audit"');
+      expect(skill).toContain('role=reasoning tier=premium');
+    });
+
     it('deploys skills to ~/.codex/skills/', async () => {
       const output = runScript('tools/skills/deploy-skills-codex.mjs', [
         '--target', path.join(TEST_CODEX_DIR, 'skills')
@@ -272,6 +302,29 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
       expect(canonical).toMatch(/name: "aiwg-mcp-server"/);
       expect(canonical).toMatch(/description: ".+"/);
       expect(output).toContain('1 pruned');
+    });
+
+    it('preserves sibling AIWG skills during an additive bundle deploy', async () => {
+      const skillsDir = path.join(TEST_CODEX_DIR, 'skills');
+      const siblingDir = path.join(skillsDir, 'existing-aiwg-skill');
+      await fs.mkdir(siblingDir, { recursive: true });
+      await fs.writeFile(
+        path.join(siblingDir, 'SKILL.md'),
+        '---\nnamespace: aiwg\nname: existing-aiwg-skill\ndescription: Existing managed skill\n---\n'
+      );
+      await fs.writeFile(path.join(siblingDir, '.aiwg-managed'), 'aiwg\n');
+
+      runScript('tools/skills/deploy-skills-codex.mjs', [
+        '--source', path.join(REPO_ROOT, 'agentic/code/addons/coding-memory'),
+        '--target', skillsDir,
+        '--copy-all',
+        '--preserve-existing'
+      ]);
+
+      await expect(fs.access(siblingDir)).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(skillsDir, 'coding-memory-audit', 'SKILL.md'))
+      ).resolves.toBeUndefined();
     });
 
     it('ships only described aiwg-mcp-server skills in source and plugin inventories', async () => {

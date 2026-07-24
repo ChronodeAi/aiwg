@@ -202,6 +202,39 @@ describe('doctor: deployed skill budget warning', () => {
     expect(content).not.toContain("above Claude Code's default listing budget");
     expect(content).toContain('Refs #1609');
   });
+
+  it('honors the project Codex skill-listing character cap', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain('resolveCodexListingBudget');
+    expect(content).toContain('config?.codex?.skillListingCharCap');
+    expect(content).toContain('CODEX_DEFAULT_LISTING_CHAR_CAP = 8000');
+    expect(content).toContain('Codex caps this project listing at ${budget.toLocaleString()} chars');
+  });
+});
+
+describe('doctor: coding-memory addon', () => {
+  it('checks the complete provider-neutral addon package', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain("id: 'coding-memory'");
+    expect(content).toContain('behaviors/coding-memory-lifecycle/BEHAVIOR.md');
+    expect(content).toContain('skills/coding-memory-audit/SKILL.md');
+    expect(content).toContain('rules/coding-memory-evidence.md');
+  });
+
+  it('validates project identity, strict privacy, runtimes, index health, and duplicate skills', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain('checkCodingMemoryRuntime');
+    expect(content).toContain("privacy !== 'strict'");
+    expect(content).toContain("capture !== 'balanced'");
+    expect(content).toContain('externalProcessing !== false');
+    expect(content).toContain('Agentmemory project_id does not match Git remote');
+    expect(content).toContain("['cli', '--json', 'index_status'");
+    expect(content).toContain('requires codebase-memory-mcp >= 0.9.1');
+    expect(content).toContain('manual Agentmemory skill copies overlap the Codex plugin');
+  });
 });
 
 describe('doctor: optional native feature builds', () => {

@@ -1070,6 +1070,7 @@ export function computeAllKernelNames(srcRoot) {
  * @returns {number} count of pruned entries
  */
 export function pruneStaleAiwgSkills(kernelDestDir, desiredKernelNames, opts = {}) {
+  if (opts.preserveExisting) return 0;
   if (!kernelDestDir || !fs.existsSync(kernelDestDir)) return 0;
   // No global desired set — skip pruning rather than delete everything (#123).
   if (desiredKernelNames == null) return 0;
@@ -1253,6 +1254,7 @@ export function resolveAiwgRoot(srcRoot) {
 export function pruneStaleAiwgFiles(destDir, desiredStems, opts = {}) {
   const { dryRun = false, verbose = false } = opts;
   const removed = [];
+  if (opts.preserveExisting) return removed;
   if (!destDir || !fs.existsSync(destDir)) return removed;
 
   const desired = desiredStems instanceof Set ? desiredStems : new Set(desiredStems);

@@ -1,0 +1,91 @@
+{
+  "id": "coding-memory",
+  "type": "addon",
+  "name": "Coding Memory",
+  "version": "0.1.0",
+  "description": "Provider-neutral, project-scoped coding memory lifecycle with evidence-gated recall, capture, promotion, and commit provenance.",
+  "core": false,
+  "autoInstall": false,
+  "author": "ChronodeAi",
+  "license": "MIT",
+  "repository": "https://github.com/ChronodeAi/aiwg",
+  "keywords": [
+    "memory",
+    "agentmemory",
+    "codebase-memory",
+    "provenance",
+    "coding",
+    "privacy"
+  ],
+  "entry": {
+    "behaviors": "behaviors/",
+    "skills": "skills/",
+    "rules": "rules/"
+  },
+  "behaviors": [
+    "coding-memory-lifecycle"
+  ],
+  "skills": [
+    "coding-memory-audit"
+  ],
+  "rules": [
+    "coding-memory-evidence"
+  ],
+  "dependencies": {
+    "required": [
+      "aiwg-utils"
+    ],
+    "optional": [
+      "ring-governance",
+      "semantic-memory"
+    ]
+  },
+  "configuration": {
+    "defaults": {
+      "projectScopeRequired": true,
+      "captureProfile": "balanced",
+      "privacy": "strict",
+      "externalProcessing": false,
+      "contextTokenBudget": 2000,
+      "maximumRecallResults": 5,
+      "nativeMemorySync": false
+    }
+  },
+  "providers": {
+    "claude-code": {
+      "supported": true,
+      "native_skills": true
+    },
+    "codex": {
+      "supported": true,
+      "native_skills": true
+    },
+    "cursor": {
+      "supported": "fallback-rule"
+    },
+    "factory": {
+      "supported": "fallback-rule"
+    },
+    "opencode": {
+      "supported": "fallback-rule"
+    },
+    "hermes": {
+      "supported": "fallback-rule"
+    },
+    "warp": {
+      "supported": "fallback-rule"
+    },
+    "copilot": {
+      "supported": "fallback-rule"
+    },
+    "windsurf": {
+      "supported": "fallback-rule"
+    },
+    "openhuman": {
+      "supported": "fallback-rule"
+    },
+    "openclaw": {
+      "supported": "fallback-rule"
+    }
+  }
+}
