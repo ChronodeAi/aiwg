@@ -25,7 +25,8 @@ const BIN = path.join(REPO_ROOT, 'bin/aiwg.mjs');
 
 function runAiwg(
   args: string[],
-  cwd: string = os.tmpdir()
+  cwd: string = os.tmpdir(),
+  extraEnv: NodeJS.ProcessEnv = {},
 ): { stdout: string; stderr: string; exitCode: number } {
   if (args.includes('use') && !args.includes('--copy-all') && !args.includes('--dry-run')) {
     args = [...args, '--copy-all'];
@@ -34,7 +35,7 @@ function runAiwg(
     cwd,
     encoding: 'utf-8',
     timeout: 60_000,
-    env: { ...process.env },
+    env: { ...process.env, ...extraEnv },
   });
   return {
     stdout: result.stdout ?? '',
@@ -105,6 +106,28 @@ describe('aiwg use — disallow list', () => {
     const result = runAiwg(['use', 'auto-memory', '--dry-run']);
     // dry-run exit code 0 means the addon was recognised and would be deployed
     expect(result.exitCode).toBe(0);
+  });
+
+  it('single-addon dry-run does not write provider files', async () => {
+    const projectDir = await makeProject();
+    try {
+      const result = runAiwg([
+        'use',
+        'auto-memory',
+        '--provider',
+        'claude',
+        '--target',
+        projectDir,
+        '--dry-run',
+        '--verbose',
+      ], projectDir, { HOME: projectDir });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toMatch(/would prune|pruned stale/i);
+      expect(existsSync(path.join(projectDir, '.claude'))).toBe(false);
+      expect(existsSync(path.join(projectDir, '.agents'))).toBe(false);
+    } finally {
+      await cleanProject(projectDir);
+    }
   });
 });
 

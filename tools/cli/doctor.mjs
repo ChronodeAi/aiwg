@@ -10,6 +10,7 @@ import os from 'os';
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { execFileSync, execSync } from 'child_process';
+import { createHash } from 'crypto';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
 import { scanStartupContext } from '../lint/claude-context-inventory.mjs';
@@ -125,7 +126,8 @@ function parseDoctorArgs(argv) {
 //   claude   — `skillListingBudgetFraction` × context window (default 1%
 //              × 200k = 2000 tokens). User override read from
 //              ~/.claude/settings.json.
-//   codex    — fixed 8000-char cap built into Codex itself.
+//   codex    — fixed 8000-char default, with a project override at
+//              .aiwg/aiwg.config codex.skillListingCharCap.
 //   others   — skip (no documented budget).
 //
 // Token estimation: ~4 chars/token is the standard rough heuristic. Each
@@ -134,8 +136,34 @@ function parseDoctorArgs(argv) {
 
 const CLAUDE_DEFAULT_BUDGET_FRACTION = 0.01;
 const CLAUDE_DEFAULT_CONTEXT_WINDOW = 200_000;
-const CODEX_LISTING_CHAR_CAP = 8000;
+const CODEX_DEFAULT_LISTING_CHAR_CAP = 8000;
 const CHARS_PER_TOKEN = 4;
+
+async function resolveCodexListingBudget() {
+  try {
+    const config = await readAiwgConfig(process.cwd());
+    const raw = config?.codex?.skillListingCharCap;
+    const parsed = typeof raw === 'number'
+      ? raw
+      : typeof raw === 'string'
+        ? Number.parseInt(raw, 10)
+        : Number.NaN;
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      return {
+        charCap: parsed,
+        source: '.aiwg/aiwg.config codex.skillListingCharCap',
+        configured: true,
+      };
+    }
+  } catch {
+    // Malformed project config is reported by the dedicated config checks.
+  }
+  return {
+    charCap: CODEX_DEFAULT_LISTING_CHAR_CAP,
+    source: `${CODEX_DEFAULT_LISTING_CHAR_CAP.toLocaleString()}-char built-in default`,
+    configured: false,
+  };
+}
 
 async function readClaudeBudgetOverride() {
   const candidates = [
@@ -301,12 +329,15 @@ async function checkTotalDeployedSkillBudgetForProvider(provName, label, provide
         `${stats.count} deployed skills estimate ${stats.totalTokens.toLocaleString()} tokens, within Claude Code's configured listing budget (${budgetTokens.toLocaleString()} tokens at ${(fraction * 100).toFixed(2)}%).`,
       );
     }
-  } else if (provName === 'codex' && stats.totalChars > CODEX_LISTING_CHAR_CAP) {
-    check(
-      `${label} Deployed Skill Count`,
-      'warn',
-      `${stats.count} deployed skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's default listing cap (${CODEX_LISTING_CHAR_CAP.toLocaleString()} chars). Run \`aiwg use all\` for workspace-aware filtering or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
-    );
+  } else if (provName === 'codex') {
+    const { charCap, configured } = await resolveCodexListingBudget();
+    if (stats.totalChars > charCap) {
+      check(
+        `${label} Deployed Skill Count`,
+        'warn',
+        `${stats.count} deployed skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's ${configured ? 'configured' : 'default'} listing cap (${charCap.toLocaleString()} chars). Run \`aiwg use all\` for workspace-aware filtering or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
+      );
+    }
   }
 }
 
@@ -351,13 +382,15 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
       recommendations.push('see docs/skills-budget-guide.md for full options');
     }
   } else if (provName === 'codex') {
-    budget = CODEX_LISTING_CHAR_CAP;
+    const codexBudget = await resolveCodexListingBudget();
+    budget = codexBudget.charCap;
     budgetUnit = 'chars';
     usage = stats.totalChars;
     usageUnit = 'chars';
-    budgetSource = `${CODEX_LISTING_CHAR_CAP.toLocaleString()}-char built-in cap`;
+    usingOverride = codexBudget.configured;
+    budgetSource = codexBudget.source;
     if (usage > budget) {
-      recommendations.push('Codex caps the listing at 8 000 chars — trim skill descriptions or remove unused frameworks');
+      recommendations.push(`Codex caps this project listing at ${budget.toLocaleString()} chars — trim skill descriptions or remove unused frameworks`);
       recommendations.push('see docs/skills-budget-guide.md');
     }
   } else {
@@ -488,6 +521,271 @@ async function fileExists(filePath) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function probeLocalCommand(command, args, cwd = process.cwd(), timeout = 8000) {
+  try {
+    const stdout = execFileSync(command, args, {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout,
+    });
+    return { ok: true, stdout: stdout || '' };
+  } catch (err) {
+    const stderr = typeof err?.stderr === 'string' ? err.stderr.trim() : '';
+    const stdout = typeof err?.stdout === 'string' ? err.stdout.trim() : '';
+    return {
+      ok: false,
+      detail: stderr || stdout || err?.code || err?.message || 'command failed',
+    };
+  }
+}
+
+function parseConfigScalar(content, key) {
+  const match = new RegExp(`^\\s*${key}\\s*[:=]\\s*([^#\\r\\n]+)`, 'm').exec(content);
+  if (!match) return null;
+  return match[1].trim().replace(/^['"]|['"]$/g, '');
+}
+
+function parseConfigBoolean(content, key) {
+  const value = parseConfigScalar(content, key)?.toLowerCase();
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+}
+
+function normalizeCredentialFreeRemote(remote) {
+  let value = String(remote || '').trim();
+  if (!value) return null;
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(.+)$/.exec(value);
+  if (scp && !value.includes('://')) value = `ssh://${scp[1]}/${scp[2]}`;
+  try {
+    const parsed = new URL(value);
+    if (!parsed.hostname || parsed.protocol === 'file:') return null;
+    const remotePath = decodeURIComponent(parsed.pathname)
+      .replace(/^\/+|\/+$/g, '')
+      .replace(/\.git$/i, '');
+    const segments = remotePath.split('/').filter(Boolean);
+    if (segments.length < 2) return null;
+    return `${parsed.hostname.toLowerCase()}/${segments.map(segment => segment.toLowerCase()).join('/')}`;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveCodingMemoryProjectRoot() {
+  try {
+    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: process.cwd(),
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000,
+    }).trim();
+    return await fs.realpath(root);
+  } catch {
+    try {
+      return await fs.realpath(process.cwd());
+    } catch {
+      return path.resolve(process.cwd());
+    }
+  }
+}
+
+function resolveConfiguredPath(raw, projectRoot) {
+  if (!raw) return null;
+  const expanded = raw === '~'
+    ? os.homedir()
+    : raw.startsWith('~/')
+      ? path.join(os.homedir(), raw.slice(2))
+      : raw;
+  return path.isAbsolute(expanded) ? expanded : path.join(projectRoot, expanded);
+}
+
+async function firstExistingPath(candidates) {
+  for (const candidate of candidates.filter(Boolean)) {
+    if (await fileExists(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function checkCodingMemoryRuntime() {
+  const projectRoot = await resolveCodingMemoryProjectRoot();
+  const projectHash = createHash('sha256').update(projectRoot).digest('hex').slice(0, 24);
+  const agentmemoryConfigPath = await firstExistingPath([
+    resolveConfiguredPath(process.env.AGENTMEMORY_PROJECT_CONFIG, projectRoot),
+    path.join(projectRoot, '.agentmemory', 'project.yaml'),
+    path.join(os.homedir(), '.agentmemory', 'projects', `${projectHash}.yaml`),
+  ]);
+  const codebaseConfigPath = await firstExistingPath([
+    resolveConfiguredPath(process.env.CODEBASE_MEMORY_PROJECT_CONFIG, projectRoot),
+    path.join(projectRoot, '.codebase-memory', 'config.toml'),
+    path.join(os.homedir(), '.codebase-memory', 'projects', `${projectHash}.toml`),
+  ]);
+
+  let aiwgConfig = null;
+  try {
+    aiwgConfig = await readAiwgConfig(projectRoot);
+  } catch {
+    // The dedicated project-config check reports malformed AIWG configuration.
+  }
+  const addonConfigured = Boolean(aiwgConfig?.installed?.['coding-memory']);
+  if (!addonConfigured && !agentmemoryConfigPath && !codebaseConfigPath) return;
+
+  if (!agentmemoryConfigPath) {
+    check('Coding Memory: Agentmemory Config', 'error', 'active coding-memory project has no repository or user-local Agentmemory project configuration');
+  }
+  if (!codebaseConfigPath) {
+    check('Coding Memory: Codebase Config', 'error', 'active coding-memory project has no repository or user-local Codebase Memory project configuration');
+  }
+
+  let agentmemoryId = null;
+  if (agentmemoryConfigPath) {
+    try {
+      const content = await fs.readFile(agentmemoryConfigPath, 'utf-8');
+      agentmemoryId = parseConfigScalar(content, 'project_id');
+      const privacy = parseConfigScalar(content, 'privacy');
+      const capture = parseConfigScalar(content, 'capture_profile');
+      const externalProcessing = parseConfigBoolean(content, 'external_processing');
+      const failures = [];
+      if (!agentmemoryId) failures.push('project_id missing');
+      if (privacy !== 'strict') failures.push(`privacy=${privacy || 'missing'} (expected strict)`);
+      if (capture !== 'balanced') failures.push(`capture_profile=${capture || 'missing'} (expected balanced)`);
+      if (externalProcessing !== false) failures.push(`external_processing=${externalProcessing ?? 'missing'} (expected false)`);
+      check(
+        'Coding Memory: Agentmemory Config',
+        failures.length ? 'error' : 'ok',
+        failures.length
+          ? `${failures.join('; ')} in ${agentmemoryConfigPath}`
+          : `strict balanced project configuration at ${agentmemoryConfigPath}`,
+      );
+    } catch (err) {
+      check('Coding Memory: Agentmemory Config', 'error', `cannot read ${agentmemoryConfigPath}: ${err?.message ?? err}`);
+    }
+  }
+
+  let codebaseId = null;
+  if (codebaseConfigPath) {
+    try {
+      const content = await fs.readFile(codebaseConfigPath, 'utf-8');
+      codebaseId = parseConfigScalar(content, 'project_id');
+      const schema = parseConfigScalar(content, 'schema_version');
+      const failures = [];
+      if (schema !== '1') failures.push(`schema_version=${schema || 'missing'} (expected 1)`);
+      if (!codebaseId) failures.push('project_id missing');
+      check(
+        'Coding Memory: Codebase Config',
+        failures.length ? 'error' : 'ok',
+        failures.length
+          ? `${failures.join('; ')} in ${codebaseConfigPath}`
+          : `canonical project configuration at ${codebaseConfigPath}`,
+      );
+    } catch (err) {
+      check('Coding Memory: Codebase Config', 'error', `cannot read ${codebaseConfigPath}: ${err?.message ?? err}`);
+    }
+  }
+
+  let expectedProjectId = null;
+  try {
+    const remote = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      cwd: projectRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000,
+    }).trim();
+    expectedProjectId = normalizeCredentialFreeRemote(remote);
+  } catch {
+    // A canonical path hash is valid when no remote exists.
+  }
+  const identityFailures = [];
+  if (agentmemoryId && codebaseId && agentmemoryId !== codebaseId) {
+    identityFailures.push(`Agentmemory '${agentmemoryId}' does not match Codebase Memory '${codebaseId}'`);
+  }
+  if (expectedProjectId && agentmemoryId && agentmemoryId !== expectedProjectId) {
+    identityFailures.push(`Agentmemory project_id does not match Git remote '${expectedProjectId}'`);
+  }
+  if (expectedProjectId && codebaseId && codebaseId !== expectedProjectId) {
+    identityFailures.push(`Codebase Memory project_id does not match Git remote '${expectedProjectId}'`);
+  }
+  if (agentmemoryId || codebaseId) {
+    check(
+      'Coding Memory: Project Identity',
+      identityFailures.length ? 'error' : 'ok',
+      identityFailures.length
+        ? identityFailures.join('; ')
+        : `shared canonical project ID ${agentmemoryId || codebaseId}`,
+    );
+  }
+
+  const agentmemoryStatus = probeLocalCommand('agentmemory', ['status'], projectRoot, 12000);
+  check(
+    'Coding Memory: Agentmemory Runtime',
+    agentmemoryStatus.ok ? 'ok' : 'error',
+    agentmemoryStatus.ok ? 'agentmemory status succeeded' : `agentmemory status failed: ${agentmemoryStatus.detail}`,
+  );
+
+  const codebaseVersion = probeLocalCommand('codebase-memory-mcp', ['--version'], projectRoot);
+  const versionMatch = codebaseVersion.ok
+    ? /\b(?:codebase-memory-mcp\s+)?(?:v)?(\d+)\.(\d+)\.(\d+)\b/.exec(codebaseVersion.stdout)
+    : null;
+  const versionAtLeast091 = versionMatch
+    ? Number(versionMatch[1]) > 0 ||
+      (Number(versionMatch[1]) === 0 && (
+        Number(versionMatch[2]) > 9 ||
+        (Number(versionMatch[2]) === 9 && Number(versionMatch[3]) >= 1)
+      ))
+    : false;
+  check(
+    'Coding Memory: Codebase Runtime',
+    codebaseVersion.ok && versionAtLeast091 ? 'ok' : 'error',
+    codebaseVersion.ok
+      ? versionAtLeast091
+        ? codebaseVersion.stdout.trim()
+        : `requires codebase-memory-mcp >= 0.9.1; found ${codebaseVersion.stdout.trim() || 'unknown'}`
+      : `codebase-memory-mcp --version failed: ${codebaseVersion.detail}`,
+  );
+
+  if (codebaseVersion.ok && versionAtLeast091 && codebaseId) {
+    const storageProject = codebaseId.replace(/\//g, '-').replace(/-+/g, '-');
+    const indexStatus = probeLocalCommand(
+      'codebase-memory-mcp',
+      ['cli', '--json', 'index_status', `project=${storageProject}`],
+      projectRoot,
+      12000,
+    );
+    const ready = indexStatus.ok && indexStatus.stdout.includes('ready');
+    check(
+      'Coding Memory: Codebase Index',
+      ready ? 'ok' : 'error',
+      ready
+        ? `${storageProject} index is ready`
+        : indexStatus.ok
+          ? `${storageProject} index is not ready`
+          : `index_status failed: ${indexStatus.detail}`,
+    );
+  }
+
+  const manualAgentmemorySkills = [
+    'agentmemory-agents',
+    'agentmemory-architecture',
+    'agentmemory-config',
+    'agentmemory-hooks',
+    'agentmemory-mcp-tools',
+    'agentmemory-rest-api',
+  ];
+  const manualCount = (
+    await Promise.all(
+      manualAgentmemorySkills.map(skill => fileExists(path.join(os.homedir(), '.agents', 'skills', skill, 'SKILL.md'))),
+    )
+  ).filter(Boolean).length;
+  const pluginCache = path.join(os.homedir(), '.codex', 'plugins', 'cache', 'agentmemory', 'agentmemory');
+  if (manualCount > 0 && await fileExists(pluginCache)) {
+    check(
+      'Coding Memory: Agentmemory Skills',
+      'warn',
+      `${manualCount} manual Agentmemory skill copies overlap the Codex plugin; validate native invocation, then remove only the manual copies`,
+    );
   }
 }
 
@@ -1223,6 +1521,8 @@ async function runDoctor() {
       artifacts: [] },
     { id: 'ring', label: 'Ring Methodology', manifest: 'agentic/code/addons/ring-methodology/manifest.json',
       artifacts: [] },
+    { id: 'coding-memory', label: 'Coding Memory Addon', manifest: 'agentic/code/addons/coding-memory/manifest.json',
+      artifacts: ['behaviors/coding-memory-lifecycle/BEHAVIOR.md', 'skills/coding-memory-audit/SKILL.md', 'rules/coding-memory-evidence.md'] },
   ];
 
   for (const addon of addonChecks) {
@@ -1250,6 +1550,10 @@ async function runDoctor() {
     }
     // Skip silently if not installed — addons are optional
   }
+
+  // 9a. Validate the live coding-memory stack only for projects that opt in
+  // through the addon registry or either project configuration surface.
+  await checkCodingMemoryRuntime();
 
   // 9b. Upstream addon manifest sweep (#1088)
   // Every directory under agentic/code/addons/ must declare itself via
