@@ -1,0 +1,1679 @@
+import {
+  existsSync, mkdirSync, realpathSync, statSync,
+} from 'node:fs';
+import {
+  dirname, isAbsolute, resolve,
+} from 'node:path';
+import {
+  CLAUDE_ADAPTER_VERSION,
+  ClaudeSessionAdapter,
+  CODEX_ADAPTER_VERSION,
+  CodexSessionAdapter,
+  COPILOT_ADAPTER_VERSION,
+  CopilotSessionAdapter,
+  CURSOR_ADAPTER_VERSION,
+  CursorSessionAdapter,
+  FACTORY_ADAPTER_VERSION,
+  FactorySessionAdapter,
+  HERMES_ADAPTER_VERSION,
+  HermesSessionAdapter,
+  OPENCODE_ADAPTER_VERSION,
+  OpenCodeSessionAdapter,
+  OPENCLAW_ADAPTER_VERSION,
+  OpenClawSessionAdapter,
+  OPENHUMAN_ADAPTER_VERSION,
+  OpenHumanSessionAdapter,
+  WARP_ADAPTER_VERSION,
+  WarpSessionAdapter,
+  DEVIN_DESKTOP_ADAPTER_VERSION,
+  DevinDesktopSessionAdapter,
+  CandidateExtractionService,
+  GENERIC_ADAPTER_VERSION,
+  GenericSessionInterchangeAdapter,
+  IncrementalSessionImporter,
+  ImportLeaseContentionError,
+  FilesystemMemoryDestination,
+  FilesystemPromotionDispositionCoordinator,
+  MemoryPromotionGateway,
+  SESSION_CONTRACT_VERSION,
+  SESSION_PROVIDER_IDS,
+  SessionContractError,
+  SessionRepository,
+  SessionSourceSchema,
+  StructuralCandidateExtractor,
+  resolveMemoryConsumerManifest,
+  assertSessionProviderId,
+  acquireImportLease,
+  defaultDiscoveryManifestPath,
+  discoverWorkspaceHistories,
+  deriveSessionTimeline,
+  importDiscoveryManifest,
+  previewDiscoveryImport,
+  publicDiscoveryManifest,
+  readDiscoveryManifest,
+  redactSourceLocator,
+  sha256,
+  parseTimelineGap,
+  writeDiscoveryManifest,
+  type SessionProviderId,
+  type SessionAuthorizationContext,
+  type SessionAnalyticsCategory,
+  type SessionAnalyticsFact,
+  type SessionAnalyticsQuery,
+  type SessionAnalyticsStatus,
+  type SessionSourceAdapter,
+  type SelectedSource,
+} from '../../sessions/index.js';
+import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
+
+const JSON_CONTRACT_VERSION = '1.0.0';
+const EXIT = {
+  ok: 0, usage: 2, unsupported: 3, unavailable: 4, contract: 5, storage: 6,
+  locked: 7, coverage: 8,
+} as const;
+
+interface Envelope {
+  contractVersion: typeof JSON_CONTRACT_VERSION;
+  command: string;
+  status: 'ok' | 'error' | 'preview';
+  data: unknown;
+  error: { code: string; message: string; details?: unknown } | null;
+}
+
+const HELP = `Usage: aiwg sessions <command> [options]
+
+Commands:
+  sources                         Show all canonical provider dispositions
+  discover --workspace <path>     Inventory authorized workspace histories
+  import-discovered --workspace <path>  Import the exact saved manifest
+  import <file> --source-id <id>  Import a supported provider JSONL source
+  list [--limit N] [--cursor N]   List normalized sessions
+  timeline [--gap 30m]            Report chronological activity segments
+  show <session-id>               Show a session with events and tags
+  search <query> --workspace <id> Search authorized normalized content
+  extract [session-id] --workspace <id> Extract structural candidates
+  candidates [--state <state>]    List the candidate review queue
+  review <id> <version> <state>   Record an explicit review transition
+  promote <id> <version>          Preview promotion; use --confirm to write
+  tag <session-id> <tag>          Add a catalog tag
+  relocate <source-id> <file>     Update AIWG source-location metadata
+  reindex                         Rebuild catalog indexes
+  delete <session-id>             Preview deletion; use --confirm to tombstone
+  restore <session-id>            Restore a reversible catalog tombstone
+  purge <session-id>              Preview terminal AIWG-copy purge
+  audit --workspace <id>          Read content-free mutation events
+  analytics <view> --workspace <id>  Summary, tool-calls, escalations, or HITL
+  forensics <view> --workspace <id>  Authorized timeline, indicators, or evidence
+  doctor                          Check catalog availability and integrity
+
+Options:
+  --json          Emit the versioned JSON contract
+  --dry-run       Preview a mutation without changing state
+  --db <path>     Override .aiwg/sessions/catalog.sqlite
+  --manifest <path>  Override the discovery manifest path
+  --provider-home <path>  Override the provider home root (testing/portable homes)
+  --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
+  --confirm, --yes  Confirm a persistent discovered batch import
+  --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
+  --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
+  --min-coverage <0..1>  Fail list/report commands below a coverage ratio
+  --provider <id> Filter list or select an import adapter
+  --consumer <id> Select a named memory consumer for promotion
+  --workspace <id>, --tag <tag>, --limit <n>, --cursor <n>
+  --page-size <n>  Extraction scan page size (default 250, maximum 500)
+  --max-documents <n>  Explicit extraction safety limit; returns a partial receipt`;
+
+export const sessionsHandler: CommandHandler = {
+  id: 'sessions',
+  name: 'Sessions',
+  description: 'Manage the normalized session catalog (the singular `session` command remains the launcher)',
+  category: 'project',
+  aliases: [],
+
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    const json = ctx.args.includes('--json');
+    let parsed: ParsedArgs;
+    try {
+      parsed = parseArgs(ctx.args);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      const output = envelope('sessions', 'error', null, normalized.error);
+      if (json) emit(output);
+      else console.error(`${normalized.error.code}: ${normalized.error.message}`);
+      return { exitCode: normalized.exitCode, message: normalized.error.message };
+    }
+    if (!parsed.command || parsed.flags.has('--help') || parsed.flags.has('-h')) {
+      if (json) emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
+      else console.log(HELP);
+      return { exitCode: parsed.command ? EXIT.ok : EXIT.usage };
+    }
+    try {
+      const result = await executeCommand(ctx, parsed);
+      if (json) emit(result.envelope);
+      else printHuman(result.envelope);
+      return { exitCode: result.exitCode };
+    } catch (error) {
+      const normalized = normalizeError(error);
+      const output = envelope(`sessions.${parsed.command}`, 'error', null, normalized.error);
+      if (json) emit(output);
+      else console.error(`${normalized.error.code}: ${normalized.error.message}`);
+      return { exitCode: normalized.exitCode, message: normalized.error.message };
+    }
+  },
+};
+
+interface ParsedArgs {
+  command?: string;
+  positionals: string[];
+  flags: Set<string>;
+  values: Map<string, string>;
+}
+
+async function executeCommand(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const command = args.command!;
+  if (command === 'sources') {
+    const reports = [...SESSION_PROVIDER_IDS].sort().map(providerDisposition);
+    return ok(command, { providers: reports, count: reports.length });
+  }
+  if (command === 'import') return importSource(ctx, args);
+  if (command === 'discover') return discoverWorkspace(ctx, args);
+  if (command === 'import-discovered') return importDiscovered(ctx, args);
+
+  const repository = openRepository(ctx, args);
+  try {
+    switch (command) {
+      case 'list': {
+        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
+        const limit = boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit');
+        const cursor = args.values.get('--cursor');
+        const providerInput = args.values.get('--provider');
+        const provider = providerInput ? assertSessionProviderId(providerInput) : undefined;
+        const result = repository.listSessions({
+          provider,
+          workspaceId,
+          tag: args.values.get('--tag'),
+          limit,
+          cursor,
+        });
+        const coverage = repository.getCoverage(workspaceId);
+        const response = {
+          items: result.items,
+          page: {
+            limit,
+            cursor: cursor ?? null,
+            nextCursor: result.nextCursor,
+            snapshotRowid: result.snapshotRowid,
+            total: result.total,
+          },
+          coverage,
+        };
+        const minimum = args.values.has('--min-coverage')
+          ? boundedNumber(args.values.get('--min-coverage'), 0, 0, 1, '--min-coverage')
+          : null;
+        if (minimum !== null
+          && (coverage.coverageRatio === null || coverage.coverageRatio < minimum)) {
+          return {
+            envelope: envelope(
+              `sessions.${command}`,
+              'error',
+              response,
+              {
+                code: 'COVERAGE_BELOW_THRESHOLD',
+                message: `session coverage is below the requested threshold ${minimum}`,
+                details: coverage,
+              },
+            ),
+            exitCode: EXIT.coverage,
+          };
+        }
+        return ok(command, response);
+      }
+      case 'timeline': {
+        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
+        const gapMs = timelineGap(args.values.get('--gap'));
+        const items = deriveSessionTimeline(repository.listTimelineInputs(workspaceId), gapMs);
+        const coverage = repository.getCoverage(workspaceId);
+        const response = {
+          schemaVersion: '1.0.0',
+          workspaceId,
+          gapMs,
+          items,
+          count: items.length,
+          coverage,
+        };
+        const minimum = args.values.has('--min-coverage')
+          ? boundedNumber(args.values.get('--min-coverage'), 0, 0, 1, '--min-coverage')
+          : null;
+        if (minimum !== null
+          && (coverage.coverageRatio === null || coverage.coverageRatio < minimum)) {
+          return {
+            envelope: envelope(
+              `sessions.${command}`,
+              'error',
+              response,
+              {
+                code: 'COVERAGE_BELOW_THRESHOLD',
+                message: `session coverage is below the requested threshold ${minimum}`,
+                details: coverage,
+              },
+            ),
+            exitCode: EXIT.coverage,
+          };
+        }
+        return ok(command, response);
+      }
+      case 'show': {
+        const id = requiredPositional(args, 0, 'session-id');
+        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
+        const session = repository.getSession(id, workspaceId);
+        if (!session) throw new CliError('SESSION_NOT_FOUND', `session not found: ${id}`, EXIT.unavailable);
+        return ok(command, {
+          session,
+          tags: repository.listTags(id, workspaceId),
+          events: repository.listEvents(id, workspaceId),
+        });
+      }
+      case 'search': {
+        const query = requiredPositional(args, 0, 'query');
+        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
+        const providerInput = args.values.get('--provider');
+        const provider = providerInput ? assertSessionProviderId(providerInput) : undefined;
+        const result = repository.search({
+          query,
+          workspaceId,
+          providers: provider ? [provider] : undefined,
+          dateFrom: args.values.get('--date-from'),
+          dateTo: args.values.get('--date-to'),
+          participant: args.values.get('--participant'),
+          model: args.values.get('--model'),
+          role: args.values.get('--role'),
+          tool: args.values.get('--tool'),
+          tag: args.values.get('--tag'),
+          entity: args.values.get('--entity'),
+          sensitivity: args.values.get('--sensitivity'),
+          extractionState: args.values.get('--extraction-state'),
+          controlEvents: controlEventMode(args.values.get('--control-events')),
+          limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
+          cursor: args.values.get('--cursor'),
+        });
+        return ok(command, {
+          items: result.items,
+          page: { limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
+            nextCursor: result.nextCursor },
+        });
+      }
+      case 'analytics': {
+        const view = requiredPositional(args, 0, 'analytics view');
+        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
+        const query = analyticsQuery(args, workspaceId);
+        if (view === 'summary') {
+          return ok(command, {
+            view,
+            summary: repository.analyticsSummary(query),
+          });
+        }
+        const categories = analyticsCategories(view);
+        const items = repository.listAnalyticsFacts({ ...query, categories });
+        return ok(command, {
+          analyticsVersion: '1.0.0',
+          view,
+          items,
+          count: items.length,
+          groupBy: analyticsGrouping(items, args.values.get('--group-by')),
+        });
+      }
+      case 'forensics': {
+        if (!args.flags.has('--authorize-forensics')) {
+          throw new CliError(
+            'OPERATION_NOT_AUTHORIZED',
+            'forensic extraction requires --authorize-forensics for this invocation',
+            EXIT.usage,
+          );
+        }
+        const view = requiredPositional(args, 0, 'forensics view');
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const query = analyticsQuery(args, workspaceId);
+        if (view === 'indicators') {
+          const items = repository.listAnalyticsFacts({
+            ...query,
+            categories: ['indicator'],
+          });
+          return ok(command, forensicOutput(view, items, args));
+        }
+        if (view === 'timeline') {
+          const target = requiredPositional(args, 1, 'session-id or query');
+          const direct = repository.getSession(target, workspaceId);
+          const sessionIds = direct
+            ? [target]
+            : [...new Set(repository.search({
+                query: target,
+                workspaceId,
+                limit: boundedInteger(args.values.get('--limit'), 50, 1, 500, '--limit'),
+              }).items.map((item) => item.sessionId))];
+          const items = sessionIds.flatMap((sessionId) =>
+            repository.listAnalyticsFacts({ ...query, sessionId }));
+          return ok(command, forensicOutput(view, items, args));
+        }
+        if (view === 'evidence') {
+          const id = requiredPositional(args, 1, 'event-id, fact-id, or candidate-id');
+          const evidence = repository.getAnalyticsEvidence(id, workspaceId);
+          if (evidence.fact && evidence.event) {
+            return ok(command, {
+              analyticsVersion: '1.0.0',
+              view,
+              fact: evidence.fact,
+              event: {
+                eventId: evidence.event.eventId,
+                sessionId: evidence.event.sessionId,
+                sourceId: evidence.event.sourceId,
+                importRunId: evidence.event.importRunId,
+                sequence: evidence.event.sequence,
+                kind: evidence.event.kind,
+                occurredAt: evidence.event.occurredAt,
+                sensitivity: evidence.event.sensitivity,
+                rawReference: evidence.event.rawReference,
+                digest: evidence.event.digest,
+              },
+            });
+          }
+          const candidate = repository.getCandidate(id, undefined, workspaceId);
+          if (!candidate) {
+            throw new CliError(
+              'EVIDENCE_NOT_FOUND',
+              `authorized analytics evidence not found: ${id}`,
+              EXIT.unavailable,
+            );
+          }
+          return ok(command, {
+            analyticsVersion: '1.0.0',
+            view,
+            candidate: {
+              candidateId: candidate.candidateId,
+              version: candidate.version,
+              type: candidate.type,
+              evidence: candidate.evidence.map(({ quote: _quote, ...citation }) => citation),
+              sensitivity: candidate.sensitivity,
+              security: candidate.security,
+              reviewState: candidate.reviewState,
+            },
+          });
+        }
+        throw new CliError(
+          'INVALID_ARGUMENT',
+          `unknown forensics view: ${view}`,
+          EXIT.usage,
+        );
+      }
+      case 'extract': {
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const sessionId = args.positionals[0];
+        const pageSize = boundedInteger(args.values.get('--page-size'), 250, 1, 500, '--page-size');
+        const maxDocuments = args.values.has('--max-documents')
+          ? boundedInteger(args.values.get('--max-documents'), pageSize, 1, 1_000_000, '--max-documents')
+          : null;
+        const documents = [];
+        let cursor: string | undefined;
+        let truncated = false;
+        do {
+          const remaining = maxDocuments === null
+            ? pageSize
+            : Math.min(pageSize, maxDocuments - documents.length);
+          if (remaining <= 0) {
+            truncated = true;
+            break;
+          }
+          const page = repository.authorizedSearchDocumentPage({
+            workspaceId,
+            sessionIds: sessionId ? [sessionId] : undefined,
+            limit: remaining,
+            cursor,
+          });
+          documents.push(...page.items);
+          cursor = page.nextCursor ?? undefined;
+          if (maxDocuments !== null && documents.length >= maxDocuments && cursor) {
+            truncated = true;
+            break;
+          }
+        } while (cursor);
+        if (sessionId && documents.length === 0) {
+          throw new CliError(
+            'SESSION_NOT_FOUND',
+            `no authorized evidence found for session: ${sessionId}`,
+            EXIT.unavailable,
+          );
+        }
+        const dryRun = isDryRun(ctx, args);
+        const service = new CandidateExtractionService(dryRun
+          ? { saveCandidates: (candidates) => [...candidates] }
+          : repository);
+        const items = await service.extract({
+          documents,
+          extractor: new StructuralCandidateExtractor(),
+          policy: {
+            version: args.values.get('--policy-version') ?? '1.0.0',
+            projectScope: workspaceId,
+            temporalScope: 'source-event',
+            minimumConfidence: boundedNumber(
+              args.values.get('--min-confidence'),
+              0.5,
+              0,
+              1,
+              '--min-confidence',
+            ),
+          },
+        });
+        const scan = {
+          complete: !truncated,
+          documentsScanned: documents.length,
+          pageSize,
+          nextCursor: truncated ? cursor ?? null : null,
+          limit: maxDocuments,
+        };
+        return dryRun
+          ? preview(command, { items, count: items.length, durableMemoryWrites: 0, scan })
+          : ok(command, { items, count: items.length, durableMemoryWrites: 0, scan });
+      }
+      case 'candidates': {
+        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
+        const state = candidateState(args.values.get('--state'));
+        return ok(command, {
+          items: repository.listCandidates(state, workspaceId),
+        });
+      }
+      case 'review': {
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const candidateId = requiredPositional(args, 0, 'candidate-id');
+        const version = boundedInteger(
+          requiredPositional(args, 1, 'version'),
+          1,
+          1,
+          Number.MAX_SAFE_INTEGER,
+          'version',
+        );
+        const toState = candidateState(requiredPositional(args, 2, 'state'));
+        if (!toState) throw new CliError('INVALID_ARGUMENT', 'review state is required', EXIT.usage);
+        if (isDryRun(ctx, args)) {
+          return preview(command, {
+            candidateId, version, toState,
+            reviewer: requiredValue(args, '--reviewer'),
+            reason: requiredValue(args, '--reason'),
+            securityAcknowledged: args.flags.has('--acknowledge-security-risk'),
+          });
+        }
+        return ok(command, repository.reviewCandidate({
+          candidateId,
+          version,
+          toState,
+          reviewer: requiredValue(args, '--reviewer'),
+          reason: requiredValue(args, '--reason'),
+          securityAcknowledged: args.flags.has('--acknowledge-security-risk'),
+          workspaceId,
+        }));
+      }
+      case 'promote': {
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const candidateId = requiredPositional(args, 0, 'candidate-id');
+        const version = boundedInteger(
+          requiredPositional(args, 1, 'version'),
+          1,
+          1,
+          Number.MAX_SAFE_INTEGER,
+          'version',
+        );
+        const consumer = requiredValue(args, '--consumer');
+        const destination = new FilesystemMemoryDestination({
+          projectRoot: ctx.cwd,
+          consumer,
+          manifestPath: resolveMemoryConsumerManifest(ctx.cwd, consumer),
+        });
+        const scopedPromotionStore = {
+          getCandidate: (id: string, candidateVersion?: number) =>
+            repository.getCandidate(id, candidateVersion, workspaceId),
+          getPromotionReceipt: (id: string, candidateVersion: number, namedConsumer: string) =>
+            repository.getCandidate(id, candidateVersion, workspaceId)
+              ? repository.getPromotionReceipt(id, candidateVersion, namedConsumer)
+              : null,
+          recordPromotion: (receipt: Parameters<typeof repository.recordPromotion>[0]) => {
+            if (!repository.getCandidate(receipt.candidateId, receipt.candidateVersion, workspaceId)) {
+              throw new SessionContractError(
+                'OPERATION_NOT_AUTHORIZED',
+                'candidate version is not available in the authorized workspace',
+              );
+            }
+            return repository.recordPromotion(receipt);
+          },
+        };
+        const gateway = new MemoryPromotionGateway(scopedPromotionStore);
+        const promotionPreview = gateway.preview({ candidateId, version, destination });
+        if (!args.flags.has('--confirm') || isDryRun(ctx, args)) {
+          return preview(command, promotionPreview);
+        }
+        const receipt = await gateway.promote({
+          candidateId,
+          version,
+          destination,
+          reviewer: requiredValue(args, '--reviewer'),
+          operationId: promotionPreview.operationId,
+        });
+        return ok(command, { preview: promotionPreview, receipt });
+      }
+      case 'tag': {
+        const id = requiredPositional(args, 0, 'session-id');
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const tag = requiredPositional(args, 1, 'tag');
+        if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(tag)) {
+          throw new CliError('INVALID_TAG', 'tag must be 1-64 safe identifier characters', EXIT.usage);
+        }
+        if (isDryRun(ctx, args)) return preview(command, { sessionId: id, tag, wouldAdd: true });
+        if (!repository.tagSession(id, tag, workspaceId)) {
+          if (!repository.getSession(id, workspaceId)) {
+            throw new CliError('SESSION_NOT_FOUND', `session not found: ${id}`, EXIT.unavailable);
+          }
+        }
+        return ok(command, { sessionId: id, tag, tags: repository.listTags(id, workspaceId) });
+      }
+      case 'relocate': {
+        const sourceId = requiredPositional(args, 0, 'source-id');
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const locator = requiredPositional(args, 1, 'file');
+        if (!repository.getSource(sourceId, workspaceId)) {
+          throw new CliError('SOURCE_NOT_FOUND', `source not found: ${sourceId}`, EXIT.unavailable);
+        }
+        const redactedLocator = redactSourceLocator(locator);
+        if (isDryRun(ctx, args)) return preview(command, { sourceId, redactedLocator });
+        repository.relocateSource(sourceId, redactedLocator, workspaceId);
+        return ok(command, { sourceId, redactedLocator });
+      }
+      case 'reindex': {
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        if (isDryRun(ctx, args)) return preview(command, { operation: 'reindex' });
+        repository.reindex(workspaceId);
+        return ok(command, { operation: 'reindex' });
+      }
+      case 'audit': {
+        const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
+        const limit = boundedInteger(args.values.get('--limit'), 100, 1, 500, '--limit');
+        const cursor = args.values.get('--cursor');
+        if (args.flags.has('--otel')) {
+          return ok(command, repository.exportMutationEventsOtel({
+            workspaceId,
+            limit,
+            cursor,
+          }));
+        }
+        const page = repository.listMutationEvents({ workspaceId, limit, cursor });
+        return ok(command, {
+          items: page.items,
+          page: { limit, nextCursor: page.nextCursor },
+        });
+      }
+      case 'delete': {
+        const id = requiredPositional(args, 0, 'session-id');
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const counts = repository.deletionPreview(id, workspaceId);
+        if (counts.sessions === 0) {
+          throw new CliError('SESSION_NOT_FOUND', `session not found: ${id}`, EXIT.unavailable);
+        }
+        if (!args.flags.has('--confirm') || isDryRun(ctx, args)) {
+          return preview(command, {
+            sessionId: id, counts, providerLogsModified: false,
+            confirmationRequired: true,
+          });
+        }
+        repository.tombstoneSession(id, workspaceId);
+        return ok(command, {
+          sessionId: id, counts, providerLogsModified: false, outcome: 'tombstoned',
+        });
+      }
+      case 'restore': {
+        const id = requiredPositional(args, 0, 'session-id');
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        if (isDryRun(ctx, args)) return preview(command, { sessionId: id, wouldRestore: true });
+        if (!repository.restoreSession(id, workspaceId)) {
+          throw new CliError('SESSION_NOT_FOUND', `tombstoned session not found: ${id}`, EXIT.unavailable);
+        }
+        return ok(command, { sessionId: id, outcome: 'restored', providerLogsModified: false });
+      }
+      case 'purge': {
+        const id = requiredPositional(args, 0, 'session-id');
+        const { workspaceId } = authorizationContext(ctx, args, command);
+        const completed = repository.getCompletedPurge(id, workspaceId);
+        if (completed) {
+          return ok(command, {
+            receipt: completed,
+            dependentDecisions: repository.listPromotionDependencyDecisions(completed.operationId),
+            duplicate: true,
+            providerLogsModified: false,
+          });
+        }
+        const purgePreview = repository.previewPurge(id, workspaceId);
+        const requestedAction = args.values.get('--dependent-action');
+        const action = purgePreview.promotedDependents.length > 0 && requestedAction
+          ? dependentAction(requestedAction)
+          : 'origin_unavailable';
+        const basis = purgePreview.promotedDependents.length > 0
+          ? (args.values.get('--basis') ?? 'not-yet-confirmed')
+          : (args.values.get('--basis') ?? 'no-promoted-dependents');
+        const decisions = purgePreview.promotedDependents.map((item) => ({
+          dependentId: item.dependentId,
+          action,
+          basis,
+        }));
+        const dispositionCoordinator = new FilesystemPromotionDispositionCoordinator({
+          projectRoot: ctx.cwd,
+          allowedRoots: ['.aiwg'],
+        });
+        if (!args.flags.has('--confirm') || isDryRun(ctx, args)) {
+          return preview(command, {
+            ...purgePreview,
+            artifactEffects: requestedAction
+              ? dispositionCoordinator.preview(purgePreview, decisions)
+              : purgePreview.promotedDependents.map((item) => ({
+                  dependentId: item.dependentId,
+                  destinationRef: item.destinationRef,
+                  allowedActions: [
+                    'origin_unavailable', 'retain', 'revoke',
+                    'supersede', 'delete', 'abort',
+                  ],
+                  confirmationRequired: true,
+                })),
+            providerLogsModified: false,
+          });
+        }
+        if (purgePreview.promotedDependents.length > 0) {
+          dependentAction(requiredValue(args, '--dependent-action'));
+          requiredValue(args, '--basis');
+        }
+        const disposition = dispositionCoordinator.apply(purgePreview, decisions);
+        const receipt = repository.purgeSession({
+          preview: purgePreview,
+          actorClass: requiredValue(args, '--actor-class'),
+          reasonCode: requiredValue(args, '--reason-code'),
+          decisions,
+        });
+        dispositionCoordinator.catalogCommitted(receipt.operationId);
+        return ok(command, {
+          receipt,
+          artifactDisposition: disposition,
+          dependentDecisions: repository.listPromotionDependencyDecisions(receipt.operationId),
+          providerLogsModified: false,
+        });
+      }
+      case 'doctor':
+        return ok(command, {
+          database: redactSourceLocator(databasePath(ctx, args)),
+          health: repository.doctor(),
+          jsonContractVersion: JSON_CONTRACT_VERSION,
+        });
+      default:
+        throw new CliError('UNKNOWN_COMMAND', `unknown sessions command: ${command}`, EXIT.usage);
+    }
+  } finally {
+    repository.close();
+  }
+}
+
+async function importSource(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const input = resolve(ctx.cwd, requiredPositional(args, 0, 'file'));
+  const providerInput = args.values.get('--provider') ?? 'generic';
+  const provider = assertSessionProviderId(providerInput);
+  if (provider !== 'generic' && provider !== 'claude' && provider !== 'codex'
+    && provider !== 'copilot' && provider !== 'cursor' && provider !== 'factory'
+    && provider !== 'hermes' && provider !== 'opencode' && provider !== 'openclaw'
+    && provider !== 'openhuman' && provider !== 'warp' && provider !== 'devin-desktop') {
+    throw new CliError('UNSUPPORTED_OPERATION', `session import is not implemented for ${provider}`, EXIT.unsupported);
+  }
+  const sourceId = requiredValue(args, '--source-id');
+  const workspaceId = args.values.has('--workspace')
+    ? normalizeWorkspaceId(ctx.cwd, args.values.get('--workspace')!)
+    : 'default';
+  const isClaude = provider === 'claude';
+  const isCodex = provider === 'codex';
+  const isCopilot = provider === 'copilot';
+  const isCursor = provider === 'cursor';
+  const isFactory = provider === 'factory';
+  const isHermes = provider === 'hermes';
+  const isOpenCode = provider === 'opencode';
+  const isOpenClaw = provider === 'openclaw';
+  const isOpenHuman = provider === 'openhuman';
+  const isWarp = provider === 'warp';
+  const isDevinDesktop = provider === 'devin-desktop';
+  const adapter: SessionSourceAdapter = isClaude
+    ? new ClaudeSessionAdapter()
+    : isCodex
+      ? new CodexSessionAdapter()
+      : isCopilot
+        ? new CopilotSessionAdapter()
+        : isCursor
+          ? new CursorSessionAdapter()
+          : isFactory
+            ? new FactorySessionAdapter()
+            : isHermes
+              ? new HermesSessionAdapter()
+              : isOpenCode
+                ? new OpenCodeSessionAdapter()
+                : isOpenClaw
+                  ? new OpenClawSessionAdapter()
+                  : isOpenHuman
+                    ? new OpenHumanSessionAdapter()
+                    : isWarp
+                      ? new WarpSessionAdapter()
+                      : isDevinDesktop
+                        ? new DevinDesktopSessionAdapter()
+                        : new GenericSessionInterchangeAdapter();
+  const locatorClass = isClaude
+    ? (input.endsWith('.hooks.jsonl') ? 'claude-hook-jsonl' : 'claude-transcript-jsonl')
+    : isCodex
+      ? (input.endsWith('.app-server.jsonl') ? 'codex-app-server-jsonl' : 'codex-rollout-jsonl')
+      : isCopilot
+        ? 'copilot-chat-json-export'
+        : isCursor
+          ? cursorLocatorClass(input)
+          : isFactory
+            ? 'factory-droid-jsonl'
+            : isHermes
+              ? 'hermes-export-jsonl'
+              : isOpenCode
+                ? 'opencode-export-json'
+                : isOpenClaw
+                  ? 'openclaw-consistent-snapshot-jsonl'
+                  : isOpenHuman
+                    ? 'openhuman-enriched-jsonl'
+                    : isWarp
+                      ? 'warp-markdown-export'
+                      : isDevinDesktop
+                        ? 'devin-desktop-cascade-hook-jsonl'
+                        : 'manual-export';
+  const selectedSource: SelectedSource = {
+    provider, locator: input, locatorClass, sourceId,
+    authorizedScope: { workspaceId, allowedRoots: [dirname(input)] },
+  };
+  const probe = await adapter.inspect(selectedSource);
+  const source = SessionSourceSchema.parse({
+    contractVersion: SESSION_CONTRACT_VERSION, sourceId, provider,
+    providerProfile: isClaude
+      ? 'documented-local-jsonl'
+      : isCodex
+        ? 'app-server-v2-rollout-fallback'
+        : isCopilot
+          ? 'vscode-chat-json-export'
+          : isCursor
+            ? cursorProviderProfile(locatorClass)
+            : isFactory
+              ? 'documented-project-jsonl'
+              : isHermes
+                ? 'native-schema-23-export'
+                : isOpenCode
+                  ? 'sanitized-json-export'
+                  : isOpenClaw
+                    ? 'schema-16-event-v3-consistent-snapshot'
+                    : isOpenHuman
+                      ? 'schema-1-session-raw-enriched'
+                      : isWarp
+                        ? 'manual-lossy-markdown-export'
+                        : isDevinDesktop
+                          ? 'opt-in-cascade-transcript-hook'
+                          : 'manual-interchange',
+    locatorClass, redactedLocator: redactSourceLocator(input),
+    adapterVersion: isClaude
+      ? CLAUDE_ADAPTER_VERSION
+      : isCodex
+        ? CODEX_ADAPTER_VERSION
+        : isCopilot
+          ? COPILOT_ADAPTER_VERSION
+          : isCursor
+            ? CURSOR_ADAPTER_VERSION
+            : isFactory
+              ? FACTORY_ADAPTER_VERSION
+              : isHermes
+                ? HERMES_ADAPTER_VERSION
+                : isOpenCode
+                  ? OPENCODE_ADAPTER_VERSION
+                  : isOpenClaw
+                    ? OPENCLAW_ADAPTER_VERSION
+                    : isOpenHuman
+                      ? OPENHUMAN_ADAPTER_VERSION
+                      : isWarp
+                        ? WARP_ADAPTER_VERSION
+                        : isDevinDesktop
+                          ? DEVIN_DESKTOP_ADAPTER_VERSION
+                          : GENERIC_ADAPTER_VERSION,
+    sourceSchemaVersion: probe.sourceSchemaVersion,
+    disposition: isWarp
+      ? 'manual-only'
+      : isClaude || isCodex || isCopilot || isCursor || isFactory || isHermes
+        || isOpenCode || isOpenClaw || isOpenHuman || isDevinDesktop
+        ? 'implemented' : 'manual-only',
+    operationalState: probe.operationalState,
+    consistency: probe.consistency, authorizedAt: new Date().toISOString(),
+    extensions: isClaude
+      ? { 'native.claude': {} }
+      : isCodex
+        ? { 'native.codex': {} }
+        : isCopilot
+          ? { 'native.copilot': {} }
+          : isCursor
+            ? { 'native.cursor': {} }
+            : isFactory
+              ? { 'native.factory': {} }
+              : isHermes
+                ? { 'native.hermes': {} }
+                : isOpenCode
+                  ? { 'native.opencode': {} }
+                  : isOpenClaw
+                    ? { 'native.openclaw': {} }
+                    : isOpenHuman
+                      ? { 'native.openhuman': {} }
+                      : isWarp
+                        ? { 'native.warp': {} }
+                        : isDevinDesktop
+                          ? { 'native.devin-desktop': {
+                              product: 'Devin Desktop',
+                              compatibilityProviderId: 'windsurf',
+                            } }
+                          : { 'native.generic': {} },
+  });
+  if (isDryRun(ctx, args)) {
+    return preview('import', { source, wouldInspect: true, wouldPersist: false });
+  }
+  const lease = await acquireImportLease(
+    databasePath(ctx, args),
+    sha256(['single-source-import', sourceId, workspaceId].join('\0')),
+    {
+      waitMs: boundedInteger(
+        args.values.get('--lock-wait-ms'),
+        5_000,
+        0,
+        300_000,
+        '--lock-wait-ms',
+      ),
+    },
+  );
+  try {
+    const repository = openRepository(ctx, args);
+    try {
+      const receipts = await new IncrementalSessionImporter(repository).import({
+        source, selectedSource, adapter, workspaceId, policyVersion: '1.0.0',
+        inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
+      });
+      return ok('import', {
+        sourceId,
+        receipts,
+        totals: {
+          sessionsInserted: receipts.reduce((sum, item) => sum + item.sessionsInserted, 0),
+          eventsInserted: receipts.reduce((sum, item) => sum + item.eventsInserted, 0),
+        },
+      });
+    } finally {
+      repository.close();
+    }
+  } finally {
+    await lease.release();
+  }
+}
+
+async function discoverWorkspace(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
+  const manifest = await discoverWorkspaceHistories({
+    workspace,
+    providerHome: args.values.has('--provider-home')
+      ? resolve(ctx.cwd, args.values.get('--provider-home')!)
+      : undefined,
+    codexRoot: args.values.has('--codex-root')
+      ? resolve(ctx.cwd, args.values.get('--codex-root')!)
+      : undefined,
+  });
+  const manifestPath = resolve(
+    ctx.cwd,
+    args.values.get('--manifest') ?? defaultDiscoveryManifestPath(manifest.workspacePath),
+  );
+  const data = {
+    manifest: publicDiscoveryManifest(manifest),
+    manifestPath: redactSourceLocator(manifestPath),
+    exactManifestRequiredForImport: true,
+  };
+  if (isDryRun(ctx, args)) {
+    return preview('discover', { ...data, wouldPersistManifest: false });
+  }
+  await writeDiscoveryManifest(manifestPath, manifest);
+  return ok('discover', { ...data, manifestPersisted: true });
+}
+
+async function importDiscovered(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const workspace = resolve(ctx.cwd, requiredValue(args, '--workspace'));
+  const canonicalWorkspace = realpathSync(workspace);
+  const manifestPath = resolve(
+    ctx.cwd,
+    args.values.get('--manifest') ?? defaultDiscoveryManifestPath(canonicalWorkspace),
+  );
+  const manifest = await readDiscoveryManifest(manifestPath);
+  if (manifest.workspaceId !== canonicalWorkspace) {
+    throw new CliError(
+      'MANIFEST_WORKSPACE_MISMATCH',
+      'discovery manifest does not belong to the explicitly authorized workspace',
+      EXIT.contract,
+    );
+  }
+  const confirmed = args.flags.has('--confirm') || args.flags.has('--yes');
+  if (isDryRun(ctx, args) || !confirmed) {
+    let existing = null;
+    try {
+      const repository = openRepository(ctx, args);
+      existing = repository.getBatchImportRunForManifest(
+        manifest.manifestId,
+        manifest.workspaceId,
+      );
+      repository.close();
+    } catch {
+      // A preview can still describe the exact manifest before a catalog exists.
+    }
+    return preview('import-discovered', {
+      manifest: publicDiscoveryManifest(manifest),
+      receipt: previewDiscoveryImport(manifest, existing),
+      confirmationRequired: !isDryRun(ctx, args),
+      wouldPersist: false,
+    });
+  }
+
+  const lease = await acquireImportLease(
+    databasePath(ctx, args),
+    sha256(['discovered-import', manifest.manifestId, manifest.workspaceId].join('\0')),
+    {
+      waitMs: boundedInteger(
+        args.values.get('--lock-wait-ms'),
+        5_000,
+        0,
+        300_000,
+        '--lock-wait-ms',
+      ),
+    },
+  );
+  try {
+    const repository = openRepository(ctx, args);
+    try {
+      const receipt = await importDiscoveryManifest({
+        manifest,
+        repository,
+        signal: ctx.signal,
+        inactivityThresholdMs: inactivityThreshold(args.values.get('--inactivity-threshold')),
+      });
+      return ok('import-discovered', {
+        manifestId: manifest.manifestId,
+        receipt,
+        resumable: receipt.run.status !== 'complete',
+      });
+    } finally {
+      repository.close();
+    }
+  } finally {
+    await lease.release();
+  }
+}
+
+function providerDisposition(provider: SessionProviderId): Record<string, unknown> {
+  if (provider === 'codex') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['api', 'jsonl'],
+      reasonCode: null,
+      remediation: 'Authorize an App Server export or Codex sessions root, then import an explicit JSONL source.',
+      evidence: {
+        adapterVersion: CODEX_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md',
+      },
+    };
+  }
+  if (provider === 'claude') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['jsonl', 'hook'],
+      reasonCode: null,
+      remediation: 'Authorize a Claude projects or hook root, then import an explicit JSONL file.',
+      evidence: {
+        adapterVersion: CLAUDE_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://code.claude.com/docs/en/sessions',
+      },
+    };
+  }
+  if (provider === 'copilot') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['manual-export'],
+      reasonCode: null,
+      remediation: 'Use Chat: Export Chat in VS Code, then import the explicitly selected JSON file.',
+      evidence: {
+        adapterVersion: COPILOT_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://code.visualstudio.com/docs/chat/chat-sessions#_export-a-chat-session-as-a-json-file',
+      },
+    };
+  }
+  if (provider === 'cursor') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['api', 'jsonl', 'manual-export'],
+      reasonCode: null,
+      remediation: 'Authorize a workspace agent-transcripts root, or import Cursor CLI/Cloud Agent exports explicitly.',
+      evidence: {
+        adapterVersion: CURSOR_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://docs.cursor.com/en/cli/reference/output-format',
+      },
+    };
+  }
+  if (provider === 'factory') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['jsonl', 'api'],
+      reasonCode: null,
+      remediation: 'Authorize a Factory projects root and import a Droid JSONL transcript; API and Exec require explicit negotiated transports.',
+      evidence: {
+        adapterVersion: FACTORY_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://docs.factory.ai/reference/hooks-reference',
+      },
+    };
+  }
+  if (provider === 'hermes') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['jsonl', 'api', 'sqlite-snapshot'],
+      reasonCode: null,
+      remediation: 'Use `hermes sessions export` or an explicitly verified sqlite3.backup() snapshot export.',
+      evidence: {
+        adapterVersion: HERMES_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://hermes-agent.nousresearch.com/docs/user-guide/sessions/',
+      },
+    };
+  }
+  if (provider === 'opencode') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['manual-export', 'api', 'jsonl'],
+      reasonCode: null,
+      remediation: 'Use `opencode export <sessionID>` or an explicitly authorized negotiated local API/SSE transport.',
+      evidence: {
+        adapterVersion: OPENCODE_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://opencode.ai/docs/cli/',
+      },
+    };
+  }
+  if (provider === 'openclaw') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['api', 'sqlite-snapshot', 'jsonl'],
+      reasonCode: null,
+      remediation: 'Use an authorized read-only Gateway transport or a schema-16/event-v3 sqlite3.backup() projection.',
+      evidence: {
+        adapterVersion: OPENCLAW_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://docs.openclaw.ai/reference/session-management-compaction',
+      },
+    };
+  }
+  if (provider === 'openhuman') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['jsonl'],
+      reasonCode: null,
+      remediation: 'Import an explicitly selected schema-1 session_raw JSONL file, optionally bundled with thread/turn enrichment.',
+      evidence: {
+        adapterVersion: OPENHUMAN_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://github.com/tinyhumansai/openhuman/releases',
+      },
+    };
+  }
+  if (provider === 'warp') {
+    return {
+      provider, disposition: 'manual-only', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['manual-export'],
+      reasonCode: 'LOSSY_MARKDOWN_ONLY',
+      remediation: 'Run `/export-to-file` in Warp and import the explicitly selected Markdown file.',
+      evidence: {
+        adapterVersion: WARP_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://docs.warp.dev/agent-platform/capabilities/slash-commands',
+      },
+    };
+  }
+  if (provider === 'devin-desktop') {
+    return {
+      provider,
+      product: 'Devin Desktop',
+      compatibilityAliases: ['windsurf'],
+      aliasDeprecatedAfter: '2027-07-27',
+      disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['hook', 'jsonl'],
+      reasonCode: null,
+      remediation: 'Enable Devin Desktop post_cascade_response_with_transcript, then explicitly select its JSONL output.',
+      evidence: {
+        adapterVersion: DEVIN_DESKTOP_ADAPTER_VERSION,
+        verifiedAt: '2026-07-27',
+        documentation: 'https://docs.devin.ai/desktop/cascade/hooks',
+      },
+    };
+  }
+  if (provider === 'generic') {
+    return {
+      provider, disposition: 'manual-only', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'], acquisitionModes: ['manual-export'],
+      reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
+      remediation: 'Pass a declared interchange file to `aiwg sessions import`.',
+      evidence: { adapterVersion: GENERIC_ADAPTER_VERSION, verifiedAt: '2026-07-26' },
+    };
+  }
+  return {
+    provider, disposition: 'unsupported', operationalState: 'unavailable',
+    supportedOperations: [], acquisitionModes: [],
+    reasonCode: 'ADAPTER_NOT_IMPLEMENTED',
+    remediation: 'Use the generic interchange until the provider adapter milestone is delivered.',
+    evidence: { adapterVersion: null, verifiedAt: '2026-07-26' },
+  };
+}
+
+function cursorLocatorClass(input: string): string {
+  if (input.endsWith('.md') || input.endsWith('.markdown')) return 'cursor-editor-markdown';
+  if (input.endsWith('.cloud.jsonl')) return 'cursor-cloud-events-jsonl';
+  if (input.split(/[\\/]+/).includes('agent-transcripts')) return 'cursor-agent-transcript-jsonl';
+  return 'cursor-cli-stream-json';
+}
+
+function cursorProviderProfile(locatorClass: string): string {
+  if (locatorClass === 'cursor-editor-markdown') return 'editor-markdown-lossy';
+  if (locatorClass === 'cursor-cloud-events-jsonl') return 'cloud-agents-api-v1';
+  if (locatorClass === 'cursor-agent-transcript-jsonl') return 'agent-transcript-jsonl';
+  return 'cli-stream-json';
+}
+
+function openRepository(ctx: HandlerContext, args: ParsedArgs): SessionRepository {
+  const path = databasePath(ctx, args);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    return new SessionRepository(path);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/SQLITE_BUSY|database is locked/i.test(message)) {
+      throw new CliError(
+        'IMPORT_LOCKED',
+        'the session catalog is busy; retry after the active writer finishes',
+        EXIT.locked,
+        { owner: null, waitedMs: 0 },
+      );
+    }
+    throw new CliError(
+      'CATALOG_UNAVAILABLE',
+      message,
+      EXIT.storage,
+    );
+  }
+}
+
+function databasePath(ctx: HandlerContext, args: ParsedArgs): string {
+  if (args.values.has('--db')) return resolve(ctx.cwd, args.values.get('--db')!);
+  return resolve(projectRootCandidate(ctx.cwd) ?? ctx.cwd, '.aiwg/sessions/catalog.sqlite');
+}
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const flags = new Set<string>();
+  const values = new Map<string, string>();
+  const positionals: string[] = [];
+  const valueFlags = new Set([
+    '--db', '--provider', '--workspace', '--tag', '--limit', '--cursor', '--source-id',
+    '--date-from', '--date-to', '--participant', '--model', '--role', '--tool',
+    '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
+    '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
+    '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
+    '--manifest', '--provider-home', '--codex-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--inactivity-threshold',
+    '--control-events',
+    '--session', '--status', '--actor', '--group-by',
+  ]);
+  let command: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (valueFlags.has(arg)) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith('--')) {
+        throw new CliError('MISSING_OPTION_VALUE', `missing value for ${arg}`, EXIT.usage);
+      }
+      values.set(arg, value);
+      index += 1;
+    } else if (arg.startsWith('-')) {
+      flags.add(arg);
+    } else if (!command) {
+      command = arg;
+    } else {
+      positionals.push(arg);
+    }
+  }
+  return { command, positionals, flags, values };
+}
+
+function requiredPositional(args: ParsedArgs, index: number, name: string): string {
+  const value = args.positionals[index];
+  if (!value) throw new CliError('MISSING_ARGUMENT', `missing required ${name}`, EXIT.usage);
+  return value;
+}
+
+function requiredValue(args: ParsedArgs, flag: string): string {
+  const value = args.values.get(flag);
+  if (!value) throw new CliError('MISSING_ARGUMENT', `missing required ${flag}`, EXIT.usage);
+  return value;
+}
+
+function authorizationContext(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  operation: string,
+): SessionAuthorizationContext {
+  return {
+    actorId: 'local-catalog-owner',
+    workspaceId: normalizeWorkspaceId(ctx.cwd, requiredValue(args, '--workspace')),
+    operation,
+    catalogScope: 'workspace',
+    mode: 'local-owner',
+  };
+}
+
+function readAuthorizationContext(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  operation: string,
+  repository: SessionRepository,
+): SessionAuthorizationContext {
+  const explicit = args.values.get('--workspace');
+  if (explicit) {
+    return {
+      actorId: 'local-catalog-owner',
+      workspaceId: normalizeWorkspaceId(ctx.cwd, explicit),
+      operation,
+      catalogScope: 'workspace',
+      mode: 'local-owner',
+    };
+  }
+  const project = projectRootCandidate(ctx.cwd);
+  if (project) {
+    return {
+      actorId: 'local-catalog-owner',
+      workspaceId: project,
+      operation,
+      catalogScope: 'workspace',
+      mode: 'local-owner',
+    };
+  }
+  const candidates = repository.listWorkspaceIds();
+  if (candidates.length === 1) {
+    return {
+      actorId: 'local-catalog-owner',
+      workspaceId: candidates[0],
+      operation,
+      catalogScope: 'workspace',
+      mode: 'local-owner',
+    };
+  }
+  if (candidates.length > 1) {
+    throw new CliError(
+      'WORKSPACE_AMBIGUOUS',
+      'current workspace cannot be inferred safely; pass --workspace explicitly',
+      EXIT.usage,
+      {
+        candidates,
+        example: `aiwg sessions ${operation} --workspace ${JSON.stringify(candidates[0])}`,
+      },
+    );
+  }
+  throw new CliError(
+    'WORKSPACE_REQUIRED',
+    'current workspace cannot be inferred; pass --workspace explicitly',
+    EXIT.usage,
+    {
+      candidates: [],
+      example: `aiwg sessions ${operation} --workspace <path-or-id>`,
+    },
+  );
+}
+
+function projectRootCandidate(start: string): string | null {
+  let current: string;
+  try {
+    const resolved = realpathSync(resolve(start));
+    current = statSync(resolved).isDirectory() ? resolved : dirname(resolved);
+  } catch {
+    current = resolve(start);
+  }
+  let gitRoot: string | null = null;
+  while (true) {
+    if (existsSync(resolve(current, '.aiwg', 'aiwg.config'))) return current;
+    if (!gitRoot && existsSync(resolve(current, '.git'))) gitRoot = current;
+    const parent = dirname(current);
+    if (parent === current) return gitRoot;
+    current = parent;
+  }
+}
+
+function normalizeWorkspaceId(cwd: string, value: string): string {
+  const pathLike = isAbsolute(value)
+    || value === '.'
+    || value === '..'
+    || value.startsWith('./')
+    || value.startsWith('../');
+  if (!pathLike) return value;
+  const candidate = resolve(cwd, value);
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return candidate;
+  }
+}
+
+function boundedInteger(
+  value: string | undefined, fallback: number, min: number, max: number, name: string,
+): number {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value)) throw new CliError('INVALID_ARGUMENT', `${name} must be an integer`, EXIT.usage);
+  const parsed = Number(value);
+  if (parsed < min || parsed > max) {
+    throw new CliError('INVALID_ARGUMENT', `${name} must be between ${min} and ${max}`, EXIT.usage);
+  }
+  return parsed;
+}
+
+function boundedNumber(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+  name: string,
+): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new CliError('INVALID_ARGUMENT', `${name} must be between ${min} and ${max}`, EXIT.usage);
+  }
+  return parsed;
+}
+
+function timelineGap(value: string | undefined): number {
+  try {
+    return parseTimelineGap(value);
+  } catch (error) {
+    throw new CliError(
+      'INVALID_ARGUMENT',
+      error instanceof Error ? error.message : 'invalid timeline gap',
+      EXIT.usage,
+    );
+  }
+}
+
+function inactivityThreshold(value: string | undefined): number {
+  try {
+    return parseTimelineGap(value ?? '24h');
+  } catch (error) {
+    throw new CliError(
+      'INVALID_ARGUMENT',
+      error instanceof Error ? error.message : 'invalid inactivity threshold',
+      EXIT.usage,
+    );
+  }
+}
+
+function controlEventMode(
+  value: string | undefined,
+): 'exclude' | 'include' | 'only' {
+  if (value === undefined) return 'exclude';
+  if (value === 'exclude' || value === 'include' || value === 'only') return value;
+  throw new CliError(
+    'INVALID_ARGUMENT',
+    '--control-events must be exclude, include, or only',
+    EXIT.usage,
+  );
+}
+
+type CandidateState = 'pending' | 'accepted' | 'rejected' | 'deferred' | 'promoted' | 'superseded';
+
+function candidateState(value: string | undefined): CandidateState | undefined {
+  if (value === undefined) return undefined;
+  const states = new Set<CandidateState>([
+    'pending', 'accepted', 'rejected', 'deferred', 'promoted', 'superseded',
+  ]);
+  if (!states.has(value as CandidateState)) {
+    throw new CliError('INVALID_ARGUMENT', `invalid candidate state: ${value}`, EXIT.usage);
+  }
+  return value as CandidateState;
+}
+
+function dependentAction(
+  value: string,
+): 'revoke' | 'supersede' | 'retain' | 'origin_unavailable' | 'delete' | 'abort' {
+  const actions = new Set([
+    'revoke', 'supersede', 'retain', 'origin_unavailable', 'delete', 'abort',
+  ]);
+  if (!actions.has(value)) {
+    throw new CliError('INVALID_ARGUMENT', `invalid dependent action: ${value}`, EXIT.usage);
+  }
+  return value as 'revoke' | 'supersede' | 'retain'
+    | 'origin_unavailable' | 'delete' | 'abort';
+}
+
+function analyticsQuery(args: ParsedArgs, workspaceId: string): SessionAnalyticsQuery {
+  const providerInput = args.values.get('--provider');
+  const statusInput = args.values.get('--status');
+  return {
+    workspaceId,
+    provider: providerInput ? assertSessionProviderId(providerInput) : undefined,
+    sessionId: args.values.get('--session'),
+    dateFrom: args.values.get('--date-from'),
+    dateTo: args.values.get('--date-to'),
+    tool: args.values.get('--tool'),
+    status: statusInput ? analyticsStatus(statusInput) : undefined,
+    actor: args.values.get('--actor') ?? args.values.get('--participant'),
+    tag: args.values.get('--tag'),
+    sensitivity: args.values.get('--sensitivity'),
+    extractionState: args.values.get('--extraction-state'),
+    limit: boundedInteger(args.values.get('--limit'), 500, 1, 5_000, '--limit'),
+  };
+}
+
+function analyticsStatus(value: string): SessionAnalyticsStatus {
+  const allowed = new Set<SessionAnalyticsStatus>([
+    'requested', 'running', 'succeeded', 'failed', 'granted', 'denied',
+    'timed-out', 'unsupported', 'provider-unknown', 'observed',
+  ]);
+  if (!allowed.has(value as SessionAnalyticsStatus)) {
+    throw new CliError('INVALID_ARGUMENT', `invalid analytics status: ${value}`, EXIT.usage);
+  }
+  return value as SessionAnalyticsStatus;
+}
+
+function analyticsCategories(view: string): SessionAnalyticsCategory[] {
+  if (view === 'tool-calls') return ['tool-call', 'tool-result'];
+  if (view === 'escalations') return ['escalation'];
+  if (view === 'hitl') return ['hitl'];
+  throw new CliError('INVALID_ARGUMENT', `unknown analytics view: ${view}`, EXIT.usage);
+}
+
+function analyticsGrouping(
+  items: SessionAnalyticsFact[],
+  groupBy: string | undefined,
+): Record<string, number> | null {
+  if (!groupBy) return null;
+  if (!['tool', 'session', 'provider'].includes(groupBy)) {
+    throw new CliError('INVALID_ARGUMENT', `invalid --group-by value: ${groupBy}`, EXIT.usage);
+  }
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const value = groupBy === 'tool'
+      ? item.toolName
+      : groupBy === 'session'
+        ? item.sessionId
+        : item.provider;
+    const key = typeof value === 'string' && value ? value : '<unknown>';
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return Object.fromEntries(
+    Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function forensicOutput(
+  view: string,
+  items: SessionAnalyticsFact[],
+  args: ParsedArgs,
+): Record<string, unknown> {
+  const output: Record<string, unknown> = {
+    analyticsVersion: '1.0.0',
+    view,
+    items,
+    count: items.length,
+    authorization: {
+      explicit: true,
+      providerLogsModified: false,
+      historicalContentExecuted: false,
+    },
+  };
+  if (args.flags.has('--markdown')) {
+    output.markdown = [
+      `# Session Forensics ${view}`,
+      '',
+      `Facts: ${items.length}`,
+      '',
+      '| Time | Provider | Session | Category | Status | Evidence |',
+      '|---|---|---|---|---|---|',
+      ...items.map((item) => {
+        const citation = item.sourceCitation as Record<string, unknown> | undefined;
+        return [
+          item.occurredAt ?? '<unknown>',
+          item.provider ?? '<unknown>',
+          item.sessionId ?? '<unknown>',
+          item.category ?? '<unknown>',
+          item.status ?? '<unknown>',
+          citation?.eventId ?? item.eventId ?? '<unknown>',
+        ].map((value) => String(value).replaceAll('|', '\\|')).join(' | ');
+      }).map((row) => `| ${row} |`),
+    ].join('\n');
+  }
+  return output;
+}
+
+function isDryRun(ctx: HandlerContext, args: ParsedArgs): boolean {
+  return Boolean(ctx.dryRun || args.flags.has('--dry-run'));
+}
+
+function ok(command: string, data: unknown): { envelope: Envelope; exitCode: number } {
+  return { envelope: envelope(`sessions.${command}`, 'ok', data, null), exitCode: EXIT.ok };
+}
+
+function preview(command: string, data: unknown): { envelope: Envelope; exitCode: number } {
+  return { envelope: envelope(`sessions.${command}`, 'preview', data, null), exitCode: EXIT.ok };
+}
+
+function envelope(
+  command: string, status: Envelope['status'], data: unknown, error: Envelope['error'],
+): Envelope {
+  return { contractVersion: JSON_CONTRACT_VERSION, command, status, data, error };
+}
+
+function emit(value: Envelope): void {
+  console.log(JSON.stringify(value, null, 2));
+}
+
+function printHuman(value: Envelope): void {
+  if (value.status === 'preview') console.log('Preview (no changes applied)');
+  if (value.command === 'sessions.forensics' && value.data
+    && typeof value.data === 'object' && 'markdown' in value.data
+    && typeof value.data.markdown === 'string') {
+    console.log(value.data.markdown);
+    return;
+  }
+  if (value.command === 'sessions.timeline' && value.data
+    && typeof value.data === 'object' && 'items' in value.data) {
+    const data = value.data as { items: Array<Record<string, unknown>>; coverage?: { status?: string } };
+    for (const item of data.items) {
+      console.log([
+        item.startAt ?? '<unknown-time>',
+        item.endAt ?? '<unknown-time>',
+        item.provider,
+        item.sessionId,
+        `segment=${item.segmentIndex}`,
+        `events=${item.eventCount}`,
+        `boundary=${item.boundaryBasis}`,
+        `confidence=${item.confidence}`,
+      ].join(' '));
+    }
+    console.log(`Coverage: ${data.coverage?.status ?? 'unknown'}`);
+    return;
+  }
+  console.log(JSON.stringify(value.data, null, 2));
+}
+
+class CliError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly exitCode: number,
+    readonly details?: unknown,
+  ) {
+    super(message);
+  }
+}
+
+function normalizeError(error: unknown): {
+  error: { code: string; message: string; details?: unknown };
+  exitCode: number;
+} {
+  if (error instanceof CliError) {
+    return {
+      error: { code: error.code, message: error.message, details: error.details },
+      exitCode: error.exitCode,
+    };
+  }
+  if (error instanceof SessionContractError) {
+    const exitCode = error.code === 'UNSUPPORTED_OPERATION' ? EXIT.unsupported : EXIT.contract;
+    return { error: { code: error.code, message: error.message }, exitCode };
+  }
+  if (error instanceof ImportLeaseContentionError) {
+    return {
+      error: {
+        code: error.code,
+        message: error.message,
+        details: {
+          owner: error.owner,
+          waitedMs: error.waitMs,
+        },
+      },
+      exitCode: EXIT.locked,
+    };
+  }
+  return {
+    error: { code: 'INTERNAL_ERROR', message: error instanceof Error ? error.message : String(error) },
+    exitCode: EXIT.storage,
+  };
+}

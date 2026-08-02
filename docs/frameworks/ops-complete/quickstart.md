@@ -1,5 +1,7 @@
 # ops-complete Quickstart
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed, `all` is deployed for your provider, and `aiwg-regenerate` has connected the agent to this project.
+
 Deploy the ops-complete framework and write your first validated runbook in about 10 minutes.
 
 ## Before You Start
@@ -17,7 +19,6 @@ aiwg use ops --ext sys              # Add per-host / fleet docs
 aiwg use ops --ext sys,it           # Add CMDB, asset management, DR
 aiwg use ops --ext sys,it,dev       # Add CI/CD, build automation
 aiwg use ops --ext sys,it,dev,stream  # Add streaming infrastructure
-aiwg use ops --ext repo-maintainer  # Add role-aware repo maintenance
 ```
 
 After installation, verify what was deployed:
@@ -36,7 +37,6 @@ You should see `ops-complete` (and any extensions) listed as installed framework
 | Asset inventory, DR runbooks, service deployments | `it` |
 | CI/CD pipelines, build scripts | `dev` |
 | Streaming services, transcoders | `stream` |
-| Issue triage, PR review, labels, closures, merges, releases by role with threat-assessed communications | `repo-maintainer` |
 
 Extensions are additive. The base `ops` framework is always required; extensions cannot run standalone.
 

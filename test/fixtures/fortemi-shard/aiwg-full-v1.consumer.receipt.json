@@ -1,0 +1,106 @@
+{
+  "schema_version": "aiwg.fortemi.full-v1-consumer-receipt.v1",
+  "consumer": {
+    "repository": "https://git.integrolabs.net/roctinam/aiwg.git",
+    "commit": "031102dc4dcc414c73e1d9141a5e75f4ad0e7df7",
+    "package": {
+      "name": "aiwg",
+      "version": "2026.7.25"
+    }
+  },
+  "converter": {
+    "repository": "https://git.integrolabs.net/Fortemi/fortemi-react.git",
+    "commit": "9f8fa2d4b9b5d864c2d0c4fd730958e2a964341d",
+    "tag": "v2026.7.15",
+    "entrypoint": "@fortemi/core/aiwg-index-shard",
+    "package": {
+      "name": "@fortemi/core",
+      "version": "2026.7.15",
+      "shasum": "77d49fdb9eb389388c864052f00b7323d39d8aa0",
+      "integrity": "sha512-49GThHQHzLFD2BbjgXB7AUznRrwtWo8MsH6IcFMhSmCKj/h+Q5j18EBpkwPHJfC5E7crp+rVzy/GcrT/PF1SXA=="
+    },
+    "release_signing_fingerprint": "26CB074F65E89E5F4DFD7C71F410C8C763C90CC9",
+    "upstream_producer_receipt": {
+      "path": "packages/core/src/__tests__/shard/fixtures/aiwg-full-v1/aiwg-full-v1.shard.receipt.json",
+      "sha256": "9b23aa6db841c76eb5898bbdc6c818cc5ac845d38b414de87acbde3466530a6c"
+    }
+  },
+  "authority": {
+    "repository": "https://git.integrolabs.net/Fortemi/fortemi.git",
+    "commit": "6343bd899958445bbc7e7e87b0dc92a8429d5a06",
+    "contract_revision": "20",
+    "contract_sha256": "5bf8d2fd8147d8df92599b1a3ce6b405ce022c83893f37547aefa7ca659f0783",
+    "schema_version": "2.0.0",
+    "schema_bundle_sha256": "66dee80876c73fdc8756541c72e96ae189c098113a831c849d619381c4121c02"
+  },
+  "source": {
+    "path": "test/fixtures/fortemi-shard/aiwg-full-v1-source.json",
+    "sha256": "4cb6d89768f0ec37851012e3df4aedf09622dce911d76233916f099e10d5cfde"
+  },
+  "archive": {
+    "path": "test/fixtures/fortemi-shard/aiwg-full-v1.shard",
+    "sha256": "df87edc5725e3f0c8d95d8d4328c64a263e9b021520a127d9df5b7301c2afee5",
+    "bytes": 3941,
+    "manifest": {
+      "format": "matric-shard",
+      "version": "2.0.0",
+      "profile": "full-v1",
+      "components": 33,
+      "manifest_sha256": "e39da33e8e735a4db1389a0f90d1ea3e77402da635a54f6689d54229ef78c2b1"
+    }
+  },
+  "conversion": {
+    "schema_version": "fortemi.aiwg-full-v1-conversion-receipt.v1",
+    "source_schema_version": "aiwg.fortemi.index.export.v2",
+    "contract_valid": true,
+    "lossless": true,
+    "losses": []
+  },
+  "consumers": {
+    "pglite": {
+      "package": {
+        "name": "@fortemi/core",
+        "version": "2026.7.15",
+        "integrity": "sha512-49GThHQHzLFD2BbjgXB7AUznRrwtWo8MsH6IcFMhSmCKj/h+Q5j18EBpkwPHJfC5E7crp+rVzy/GcrT/PF1SXA=="
+      },
+      "clean_destination": true,
+      "semantic_reexport": true,
+      "repeated_imports": 2,
+      "zero_mutation_on_failure": true,
+      "component_count": 33
+    },
+    "fortemi": {
+      "repository": "https://git.integrolabs.net/Fortemi/fortemi.git",
+      "commit": "2e812aa66ba108a824475a97b1ddba4d1412dec7",
+      "implementation_commit": "c93742d7c75b481621b821f4584304289eb364d5",
+      "fixture": {
+        "path": "tests/fixtures/shards/external/aiwg-2026.7.13/aiwg-full-v1.shard",
+        "sha256": "df87edc5725e3f0c8d95d8d4328c64a263e9b021520a127d9df5b7301c2afee5",
+        "bytes": 3941
+      },
+      "runtime_receipt": {
+        "path": "tests/fixtures/shards/external/schema-2-runtime.implementation-receipt.json",
+        "sha256": "29f5e7cca66aec38baba0d7e58da1f5f6cc8520995f290831bc949bde1de1647"
+      },
+      "clean_destination": true,
+      "semantic_reexport": true,
+      "repeated_imports": 2,
+      "zero_mutation_on_failure": true,
+      "presence_states": ["absent", "null", "empty", "value"],
+      "component_count": 33,
+      "count_field_count": 34
+    }
+  },
+  "advertisement": {
+    "advertised": true,
+    "default_profile": "full-v1",
+    "reason": "Exact 2.0.0/full-v1 PGlite and Fortemi receipts are delivered; Fortemi #1084/#1087 and React #381/#382 are closed."
+  },
+  "coordination": {
+    "aiwg_issue": "https://git.integrolabs.net/roctinam/aiwg/issues/1870",
+    "producer_issue": "https://git.integrolabs.net/Fortemi/fortemi-react/issues/381",
+    "advertisement_issue": "https://git.integrolabs.net/Fortemi/fortemi-react/issues/382",
+    "runtime_issue": "https://git.integrolabs.net/Fortemi/fortemi/issues/1087",
+    "destination_issue": "https://git.integrolabs.net/Fortemi/fortemi/issues/1084"
+  }
+}

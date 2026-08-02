@@ -19,6 +19,8 @@ env:
   VAULT_ADDR: ${{ vars.VAULT_ADDR }}
   DOCSITE_DEPLOY_KEY_VAULT_PATH: ${{ vars.DOCSITE_DEPLOY_KEY_VAULT_PATH }}
   DOCSITE_DEPLOY_KEY_VAULT_FIELD: ${{ vars.DOCSITE_DEPLOY_KEY_VAULT_FIELD }}
+  CLOUDFLARE_API_TOKEN_VAULT_PATH: ${{ vars.CLOUDFLARE_API_TOKEN_VAULT_PATH }}
+  CLOUDFLARE_API_TOKEN_VAULT_FIELD: ${{ vars.CLOUDFLARE_API_TOKEN_VAULT_FIELD }}
 
 on:
   push:
@@ -56,13 +58,12 @@ jobs:
     env:
       # docs.aiwg.io is now a shared static host. AIWG deploys still own the
       # root tenant, but must not delete tenant subtrees managed by sibling repos.
-      # The agentic-sandbox tenant is built+deployed by its own repo and served
-      # at the /agentic-sandbox/ subpath. pagenary 2026.6.3+ emits subpath-relative
-      # shell assets (./-relative + build-injected <base href>), so that sibling
-      # tenant resolves its own assets correctly under the subpath while AIWG owns
-      # the domain root — the rsync receiver-protect filter below preserves its
-      # subtree from this deploy's --delete.
-      PROTECTED_DOCS_SUBPATHS: agentic-sandbox
+      # Sibling tenants are built and deployed by their owning repositories.
+      # AIWG owns the domain root, while the rsync receiver-protect filters below
+      # preserve each explicitly registered subtree from this deploy's --delete.
+      # pagenary 2026.6.3+ emits subpath-relative shell assets (./-relative plus
+      # a build-injected <base href>) for tenants served below the docs domain.
+      PROTECTED_DOCS_SUBPATHS: agentic-sandbox payments.roko.network clowder.roko.network
 
     steps:
       - name: Checkout AIWG
@@ -86,7 +87,7 @@ jobs:
               {
                 "id": "aiwg-docs",
                 "enabled": true,
-                "source": { "type": "local", "path": "./docs" },
+                "source": { "type": "local", "path": "./dist/public-docs-source" },
                 "target": { "type": "local", "path": "./dist/aiwg-docs" },
                 "domains": ["docs.aiwg.io"],
                 "strictLinks": false
@@ -126,7 +127,12 @@ jobs:
           echo "✓ Version substitution complete"
 
       - name: Build doc site
-        run: npx pagenary build:tenants aiwg-docs
+        run: |
+          node tools/docs/build-public-source.mjs
+          node tools/docs/audit-audiences.mjs
+          node -e "const p=require('./dist/docs-audience-audit.json'); if(!p.totals.agentReferenceFiles) process.exit(1)"
+          npx pagenary build:tenants aiwg-docs
+          node tools/docs/write-blog-static-pages.mjs dist/aiwg-docs
 
       - name: Verify build output
         run: |
@@ -134,12 +140,22 @@ jobs:
           OUT="${{ gitea.workspace }}/dist/aiwg-docs"
           test -d "$OUT" || { echo "::error::Missing build output directory $OUT"; exit 1; }
           test -f "$OUT/index.html" || { echo "::error::Missing index.html"; exit 1; }
+          test -f "$OUT/blog/index.html" || { echo "::error::Missing blog/index.html"; exit 1; }
           test -d "$OUT/sections" || { echo "::error::Missing sections/ — refusing to deploy (would rsync --delete an incomplete site)"; exit 1; }
+          if find "$OUT" -type f \( -path '*/agents/*' -o -name 'agents--*.js' \) | grep -q .; then
+            echo "::error::agent-reference material leaked into docs.aiwg.io output"
+            exit 1
+          fi
           echo "Build verification passed"
           ls -lah "$OUT/"
 
       - name: Install SSH tools
-        run: apt-get update && apt-get install -y --no-install-recommends curl jq openssh-client rsync
+        run: |
+          # Some runner networks reject Debian's legacy HTTP mirror response
+          # with apt's NOSPLIT error. Use authenticated HTTPS transport.
+          sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources
+          apt-get update
+          apt-get install -y --no-install-recommends curl jq openssh-client rsync
 
       - name: Fetch docs deploy key from vault
         env:
@@ -330,6 +346,40 @@ jobs:
                ls '${DEPLOY_ROOT}sections' | head -5"
           fi
           echo "Verify completed (mode: ${MODE})"
+
+      - name: Fetch Cloudflare purge token from vault
+        env:
+          VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
+          VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_ZONE_ID:-}" ] || \
+             [ -z "${CLOUDFLARE_API_TOKEN_VAULT_PATH:-}" ] || \
+             [ -z "${CLOUDFLARE_API_TOKEN_VAULT_FIELD:-}" ]; then
+            echo "Cloudflare token fetch skipped: zone id or vault route is not configured"
+            exit 0
+          fi
+          if ! bash ci/vault-fetch.sh --spec ci/vault-fetch.docsite-cloudflare.spec; then
+            echo "::warning::Cloudflare token fetch failed; cache purge will be skipped"
+            exit 0
+          fi
+
+      - name: Purge Cloudflare cache
+        env:
+          CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_ZONE_ID:-}" ] || [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "Cloudflare purge skipped: CLOUDFLARE_ZONE_ID or Cloudflare API token is not configured"
+            exit 0
+          fi
+          curl --fail --show-error --silent \
+            -X POST "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}'
+          echo "Cloudflare cache purge requested"
 
       - name: Cleanup SSH key
         if: always()

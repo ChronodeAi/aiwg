@@ -6,10 +6,12 @@
 // Real Bridge grows: registry/discover/index binding, per-instance A2A, pty I/O,
 // per-launch token + OS-keychain (roctinam/aiwg#1595).
 import http from 'node:http';
+import https from 'node:https';
 import { spawn } from 'node:child_process';
 import { readFile, mkdir, writeFile, chmod, readdir, cp, rm, stat, appendFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename, extname, resolve, sep } from 'node:path';
@@ -26,6 +28,13 @@ const EXECUTOR_URL =
 const ALLOW_MOCK_EXECUTOR = process.env.AIWG_COCKPIT_ALLOW_MOCK_EXECUTOR === '1';
 const AUTOSTART_EXECUTOR = process.env.AIWG_COCKPIT_AUTOSTART_EXECUTOR !== '0';
 const EXECUTOR_COMMAND = process.env.AIWG_COCKPIT_EXECUTOR_COMMAND ?? '';
+const EXECUTOR_TOKEN_FILE = process.env.AIWG_COCKPIT_EXECUTOR_TOKEN_FILE ?? '';
+const MCP_TOKEN_FILE = process.env.AIWG_COCKPIT_MCP_TOKEN_FILE ?? '';
+const LOCAL_DOCKER_FALLBACK = process.env.AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK === '1';
+const REQUIRE_SANDBOX_MTLS = process.env.AIWG_COCKPIT_REQUIRE_SANDBOX_MTLS === '1';
+export function localLibvirtFallbackAllowed(platform = process.platform, envValue = process.env.AIWG_COCKPIT_LOCAL_LIBVIRT_FALLBACK) {
+  return platform === 'linux' || envValue === '1';
+}
 const RUNTIME_DIR = join(homedir(), '.aiwg', 'cockpit', 'runtime');
 const auditDir = () => process.env.AIWG_COCKPIT_AUDIT_DIR || join(homedir(), '.aiwg', 'cockpit', 'audit');
 const auditLog = () => join(auditDir(), 'events.jsonl');
@@ -35,6 +44,45 @@ const WEB_DIST = fileURLToPath(new URL('../../web/dist', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.png': 'image/png', '.woff2': 'font/woff2', '.map': 'application/json' };
 const CAPABILITY_TYPES = new Set(['skill', 'agent', 'command', 'rule', 'flow']);
 const mcSessionsDir = () => join(process.cwd(), '.aiwg', 'ralph-external', 'mc', 'sessions');
+const executorRequestContext = new AsyncLocalStorage();
+
+function executorAuthError(code, message, cause) {
+  const err = new Error(message, cause ? { cause } : undefined);
+  err.code = code;
+  return err;
+}
+
+async function resolveExecutorBearer(tokenFile) {
+  if (!tokenFile) return '';
+  const path = expandHome(String(tokenFile));
+  let metadata;
+  try {
+    metadata = await stat(path);
+  } catch (cause) {
+    throw executorAuthError('executor_credential_unavailable', 'executor credential file is unavailable', cause);
+  }
+  if (!metadata.isFile()) {
+    throw executorAuthError('executor_credential_invalid', 'executor credential path is not a regular file');
+  }
+  if (process.platform !== 'win32' && (metadata.mode & 0o077) !== 0) {
+    throw executorAuthError('executor_credential_permissions', 'executor credential file must not be accessible by group or other users');
+  }
+  const token = String(await readFile(path, 'utf8')).trim();
+  if (!token || /[\r\n]/.test(token)) {
+    throw executorAuthError('executor_credential_invalid', 'executor credential file must contain exactly one non-empty bearer token');
+  }
+  return token;
+}
+
+async function executorFetch(target, init = {}) {
+  const context = executorRequestContext.getStore();
+  const headers = new Headers(init.headers);
+  if (context && new URL(target).origin === context.executorOrigin && !headers.has('authorization')) {
+    const token = await resolveExecutorBearer(context.executorTokenFile);
+    if (token) headers.set('authorization', `Bearer ${token}`);
+  }
+  return fetch(target, { ...init, headers });
+}
 
 /** Serve a static file from the built web app, sandboxed to WEB_DIST. Returns true if served. */
 async function serveDistFile(res, relPath) {
@@ -48,13 +96,29 @@ async function serveDistFile(res, relPath) {
 // First-party contribution manifests; AIWG-extension-sourced ones layer in via AIWG_COCKPIT_CONTRIB (#1591).
 const CONTRIB_DIRS = [fileURLToPath(new URL('../../contrib', import.meta.url)), ...(process.env.AIWG_COCKPIT_CONTRIB ? [process.env.AIWG_COCKPIT_CONTRIB] : [])];
 
-/** Constant-time bearer-token check (header or ?token=). */
-function authed(req, url, token) {
+function constantTimeEqual(presented, expected) {
+  if (presented.length !== expected.length) return false;
+  try { return timingSafeEqual(Buffer.from(presented), Buffer.from(expected)); } catch { return false; }
+}
+
+/** Constant-time bearer-token check. URL query credentials are never accepted. */
+function bearerAuthed(req, token) {
   const hdr = String(req.headers['authorization'] ?? '');
   const bearer = hdr.startsWith('Bearer ') ? hdr.slice(7) : '';
-  const presented = bearer || url.searchParams.get('token') || '';
-  if (presented.length !== token.length) return false;
-  try { return timingSafeEqual(Buffer.from(presented), Buffer.from(token)); } catch { return false; }
+  return constantTimeEqual(bearer, token);
+}
+
+function cookies(req) {
+  return Object.fromEntries(String(req.headers.cookie ?? '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const split = part.indexOf('=');
+      if (split < 0) return [part, ''];
+      try { return [part.slice(0, split), decodeURIComponent(part.slice(split + 1))]; }
+      catch { return [part.slice(0, split), '']; }
+    }));
 }
 
 function isLocalHostName(hostname) {
@@ -67,21 +131,21 @@ function validBrowserOrigin(req) {
   try {
     const o = new URL(String(origin));
     const host = new URL(`http://${req.headers.host ?? 'localhost'}`);
-    return ['http:', 'https:'].includes(o.protocol) &&
+    return o.protocol === host.protocol &&
       isLocalHostName(o.hostname) &&
       isLocalHostName(host.hostname) &&
-      (!o.port || !host.port || o.port === host.port);
+      o.hostname === host.hostname &&
+      o.port === host.port;
   } catch {
     return false;
   }
 }
 
-function validCsrf(req, token) {
+function validCsrf(req, auth) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method ?? 'GET')) return true;
-  if (!req.headers.origin) return true;
+  if (auth?.kind === 'bearer' && !req.headers.origin) return true;
   const csrf = String(req.headers['x-cockpit-csrf'] ?? '');
-  if (csrf.length !== token.length) return false;
-  try { return timingSafeEqual(Buffer.from(csrf), Buffer.from(token)); } catch { return false; }
+  return constantTimeEqual(csrf, auth?.csrf ?? '');
 }
 
 /** Persist the per-launch token for the desktop/VS Code shells to read (mode 600). */
@@ -352,8 +416,14 @@ async function readJsonBody(req) {
 
 /** Forward a control-plane call to the executor admin surface, relaying status + body. */
 async function proxy(res, method, target) {
-  const r = await fetch(target, { method });
+  const r = await executorFetch(target, { method });
   const body = await r.json().catch(() => ({}));
+  if (r.status === 401 || r.status === 403) {
+    const err = new Error(`executor ${r.status === 401 ? 'authentication' : 'authorization'} failed at ${new URL(target).pathname}`);
+    err.code = r.status === 401 ? 'executor_unauthenticated' : 'executor_forbidden';
+    err.upstreamStatus = r.status;
+    throw err;
+  }
   return json(res, r.status, body);
 }
 
@@ -373,6 +443,14 @@ function isConnectionRefusedError(err) {
   return /ECONNREFUSED|connection refused/i.test(text);
 }
 
+function rethrowExecutorSecurityError(err) {
+  if (
+    [401, 403].includes(Number(err?.upstreamStatus)) ||
+    String(err?.code ?? '').startsWith('executor_credential_') ||
+    String(err?.code ?? '').startsWith('executor_trust_')
+  ) throw err;
+}
+
 export async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0 } = {}) {
   const failures = [];
   for (const candidate of candidates) {
@@ -384,8 +462,9 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
     const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let r;
     try {
-      r = await fetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) });
+      r = await executorFetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) });
     } catch (err) {
+      if (String(err?.code ?? '').startsWith('executor_credential_')) throw err;
       const failure = isAbortError(err) && timeoutMs > 0
         ? `${target} -> timeout after ${timeoutMs}ms`
         : `${target} -> ${String(err?.message ?? err)}`;
@@ -398,6 +477,12 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
       if (timeout) clearTimeout(timeout);
     }
     const responseBody = await r.json().catch(() => ({}));
+    if (r.status === 401 || r.status === 403) {
+      const err = new Error(`executor ${r.status === 401 ? 'authentication' : 'authorization'} failed at ${new URL(target).pathname}`);
+      err.code = r.status === 401 ? 'executor_unauthenticated' : 'executor_forbidden';
+      err.upstreamStatus = r.status;
+      throw err;
+    }
     if (r.ok) return { target, status: r.status, body: responseBody };
     failures.push(`${target} -> ${r.status}`);
     if (r.status !== 404 && r.status !== 405) return { target, status: r.status, body: responseBody, failures };
@@ -435,7 +520,7 @@ async function assertRealExecutor(executorUrl, allowMockExecutor) {
 async function probeExecutor(executorUrl) {
   for (const path of ['/healthz/http', '/healthz', '/health']) {
     try {
-      const r = await fetch(`${executorUrl}${path}`, { signal: AbortSignal.timeout(1_500) });
+      const r = await executorFetch(`${executorUrl}${path}`, { signal: AbortSignal.timeout(1_500) });
       if (r.ok) return true;
     } catch {
       // Try the next health endpoint.
@@ -448,19 +533,143 @@ async function getExecutorCapabilities(executorUrl) {
   const candidates = ['/healthz/deep', '/healthz', '/health'].map((path) => `${executorUrl}${path}`);
   try {
     const { target, body } = await fetchJsonFirst(candidates);
+    const runtimeProviders = await fetchJsonFirst([
+      `${executorUrl}/api/v2/admin/runtime/providers`,
+      `${executorUrl}/api/v2/runtime/providers`,
+      `${executorUrl}/admin/runtime/providers`,
+      `${executorUrl}/runtime/providers`,
+    ])
+      .then((result) => result.body)
+      .catch(() => undefined);
     return {
       status: 'ok',
       source: new URL(target).pathname,
       host_runtime_enabled: body.host_runtime_enabled === true || body.hostRuntimeEnabled === true,
+      runtime_providers: runtimeProviders && Array.isArray(runtimeProviders.providers) ? runtimeProviders : undefined,
       raw_status: body.status ?? body.state ?? 'unknown',
     };
   } catch (err) {
+    rethrowExecutorSecurityError(err);
     return {
       status: 'unreachable',
       source: null,
       host_runtime_enabled: false,
       error: String(err?.message ?? err),
     };
+  }
+}
+
+async function getMcpDiscovery(executorUrl) {
+  try {
+    const { target, body } = await fetchJsonFirst([
+      `${executorUrl}/api/v2/admin/mcp/discovery`,
+      `${executorUrl}/admin/mcp/discovery`,
+    ]);
+    return {
+      source: executorUrl,
+      discovery_path: new URL(target).pathname,
+      fetched_at: new Date().toISOString(),
+      ...normalizeMcpDiscovery(body, executorUrl),
+    };
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
+    return normalizeMcpDiscovery({
+      enabled: false,
+      status: 'disabled',
+      reason_code: 'mcp.discovery_unavailable',
+      error: String(err?.message ?? err),
+    }, executorUrl);
+  }
+}
+
+function normalizeMcpDiscovery(body, source) {
+  const endpoint = body?.endpoint && typeof body.endpoint === 'object' ? body.endpoint : {};
+  const auth = body?.auth && typeof body.auth === 'object' ? body.auth : {};
+  return {
+    source: source ?? body?.source,
+    enabled: body?.enabled === true,
+    status: body?.status ?? (body?.enabled === true ? 'enabled' : 'disabled'),
+    reason_code: body?.reason_code ?? body?.reasonCode ?? null,
+    error: body?.error,
+    endpoint: {
+      path: endpoint.path ?? '/mcp',
+      methods: Array.isArray(endpoint.methods) ? endpoint.methods : ['POST'],
+      transport: endpoint.transport ?? 'streamable-http',
+      stateless: endpoint.stateless !== false,
+      get_behavior: endpoint.get_behavior ?? endpoint.getBehavior ?? '405_method_not_allowed',
+      mcp_session_id: endpoint.mcp_session_id ?? endpoint.mcpSessionId ?? false,
+    },
+    protocol: body?.protocol ?? { latest: '2025-11-25', supported: [] },
+    auth: {
+      scheme: auth.scheme ?? 'bearer',
+      required: auth.required !== false,
+      principal_config: auth.principal_config ?? auth.principalConfig ?? 'mcp-principals.toml',
+      principals: Array.isArray(auth.principals) ? auth.principals.map((principal) => ({
+        client_id: principal.client_id ?? principal.clientId ?? '',
+        scopes: Array.isArray(principal.scopes) ? principal.scopes : [],
+      })).filter((principal) => principal.client_id) : [],
+      scopes: Array.isArray(auth.scopes) ? auth.scopes : [],
+    },
+    capabilities: body?.capabilities ?? {},
+    tools: Array.isArray(body?.tools) ? body.tools : [],
+    resources: Array.isArray(body?.resources) ? body.resources : [],
+    resource_templates: Array.isArray(body?.resource_templates)
+      ? body.resource_templates
+      : Array.isArray(body?.resourceTemplates) ? body.resourceTemplates : [],
+    errors: Array.isArray(body?.errors) ? body.errors : [],
+    notes: Array.isArray(body?.notes) ? body.notes : [],
+  };
+}
+
+async function proxyMcpRequest(req, res, executorUrl, mcpTokenFile) {
+  if (!mcpTokenFile) {
+    await appendAudit('sandbox.mcp.proxy', {
+      result: 'blocked',
+      reason: 'mcp_token_file_unconfigured',
+    });
+    return json(res, 503, {
+      error: 'mcp_token_file_unconfigured',
+      message: 'Bridge MCP proxy requires AIWG_COCKPIT_MCP_TOKEN_FILE.',
+    });
+  }
+  const parsed = await readJsonBody(req);
+  if (parsed.error) return json(res, 400, { error: parsed.error });
+  const body = parsed.body || {};
+  const rpcMethod = typeof body.method === 'string' ? body.method : 'unknown';
+  const target = `${executorUrl}/mcp`;
+  let status = 502;
+  try {
+    const token = await resolveExecutorBearer(mcpTokenFile);
+    const headers = {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    };
+    const protocolVersion = req.headers['mcp-protocol-version'];
+    if (typeof protocolVersion === 'string' && protocolVersion.trim()) {
+      headers['mcp-protocol-version'] = protocolVersion.trim();
+    }
+    const response = await fetch(target, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    status = response.status;
+    const responseBody = await response.json().catch(() => ({}));
+    await appendAudit('sandbox.mcp.proxy', {
+      result: response.ok ? 'ok' : 'error',
+      method: rpcMethod,
+      status,
+    });
+    return json(res, status, responseBody);
+  } catch (err) {
+    await appendAudit('sandbox.mcp.proxy', {
+      result: 'error',
+      method: rpcMethod,
+      status,
+      error: String(err?.code ?? err?.message ?? err),
+    });
+    throw err;
   }
 }
 
@@ -477,19 +686,27 @@ function defaultExecutorCommand() {
   return [];
 }
 
-async function ensureExecutor(executorUrl) {
-  if (!AUTOSTART_EXECUTOR || await probeExecutor(executorUrl)) return;
-  const cmd = defaultExecutorCommand();
+export async function ensureExecutor(
+  executorUrl,
+  { command, probe = probeExecutor, autostart = AUTOSTART_EXECUTOR } = {},
+) {
+  if (!autostart || await probe(executorUrl)) return;
+  const cmd = command ?? defaultExecutorCommand();
   if (!cmd.length) return;
   const child = spawn(cmd[0], cmd.slice(1), {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env },
   });
+  const started = await new Promise((resolve) => {
+    child.once('spawn', () => resolve(true));
+    child.once('error', () => resolve(false));
+  });
+  if (!started) return;
   child.unref();
   for (let i = 0; i < 30; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500));
-    if (await probeExecutor(executorUrl)) return;
+    if (await probe(executorUrl)) return;
   }
 }
 
@@ -498,6 +715,10 @@ async function proxyFirst(res, candidates, options) {
     const { status, body } = await fetchJsonFirst(candidates, options);
     return json(res, status, body);
   } catch (err) {
+    if ([401, 403].includes(Number(err?.upstreamStatus))) {
+      return json(res, Number(err.upstreamStatus), { error: err.code, message: String(err.message) });
+    }
+    if (String(err?.code ?? '').startsWith('executor_credential_')) throw err;
     const message = String(err?.message ?? err);
     const notFound = / -> 404(?:;|$)/.test(message);
     const methodNotAllowed = / -> 405(?:;|$)/.test(message);
@@ -508,8 +729,114 @@ async function proxyFirst(res, candidates, options) {
   }
 }
 
+function normalizedInstanceName(value, fallback = 'cockpit-fast-start') {
+  const cleaned = String(value || fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+$/g, '')
+    .slice(0, 63);
+  const prefixed = /^[a-z]/.test(cleaned) ? cleaned : `a-${cleaned.replace(/^-+/, '')}`;
+  return prefixed && prefixed.length >= 2 ? prefixed.slice(0, 63) : fallback;
+}
+
+function instanceVmName(instance, instanceId) {
+  return instance?.launch_context?.name
+    ?? instance?.launchContext?.name
+    ?? instance?.name
+    ?? instance?.id
+    ?? instanceId;
+}
+
+function defaultAssetRef(instanceId, action) {
+  return `${normalizedInstanceName(instanceId, 'cockpit-vm')}-${action}-${Date.now().toString(36)}`.slice(0, 96);
+}
+
+function upstreamBridgeError(err) {
+  rethrowExecutorSecurityError(err);
+  return { status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } };
+}
+
+async function providerFastStartAction(upstreamUrl, instanceId, action, body = {}) {
+  let inventory;
+  try { inventory = await getInventory(upstreamUrl); }
+  catch (err) { rethrowExecutorSecurityError(err); inventory = { instances: [] }; }
+  const inst = inventory.instances.find((i) => String(i.id) === String(instanceId));
+  if (!inst) return { status: 404, body: { error: 'instance_not_found', instance_id: instanceId } };
+  const runtime = String(inst.runtime_posture?.kind ?? inst.runtime ?? '').toLowerCase();
+  if (!['vm', 'qemu', 'kvm'].includes(runtime)) {
+    return { status: 422, body: { error: 'unsupported_runtime', message: 'fast-start actions are valid only for VM instances' } };
+  }
+  const provider = String(inst.provider ?? '').trim();
+  if (!provider) return { status: 422, body: { error: 'provider_required', message: 'executor inventory did not report an effective VM provider' } };
+
+  const vmName = instanceVmName(inst, instanceId);
+  const rawAsset = body.asset_ref ?? body.assetRef ?? body.snapshot_id ?? body.snapshotId ?? body.checkpoint_id ?? body.checkpointId ?? body.pool;
+  const assetRef = String(rawAsset ?? '').trim();
+  const restoreMode = String(body.restore_mode ?? body.restoreMode ?? 'ondemand').trim() || 'ondemand';
+  const childName = normalizedInstanceName(
+    body.name ?? body.child_name ?? body.childName,
+    `${normalizedInstanceName(vmName, 'cockpit-vm')}-${action === 'warm-pool' ? 'warm' : action}`,
+  );
+
+  if (action === 'snapshot' || action === 'checkpoint') {
+    const newAssetRef = assetRef || defaultAssetRef(vmName, provider === 'libvirt' ? 'checkpoint' : 'snapshot');
+    if (provider === 'cloud-hypervisor') {
+      return fetchJsonFirst([{
+        target: `${upstreamUrl}/api/v2/admin/cloud-hypervisor/snapshots`,
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          vm: vmName,
+          snapshot_id: newAssetRef,
+          pre_enrollment: body.pre_enrollment ?? body.preEnrollment ?? true,
+        }),
+      }]).catch(upstreamBridgeError);
+    }
+    if (provider === 'libvirt') {
+      return fetchJsonFirst([{
+        target: `${upstreamUrl}/api/v2/admin/libvirt/checkpoints`,
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          vm: vmName,
+          checkpoint_id: newAssetRef,
+          pre_enrollment: true,
+        }),
+      }]).catch(upstreamBridgeError);
+    }
+    return { status: 422, body: { error: 'unsupported_provider_action', provider, action } };
+  }
+
+  if (!assetRef) {
+    return { status: 400, body: { error: 'asset_ref_required', message: 'restore, fork, and warm-pool actions require an opaque asset_ref' } };
+  }
+  const mode = action === 'warm-pool' ? 'warm_pool' : action;
+  return fetchJsonFirst([{
+    target: `${upstreamUrl}/api/v2/admin/instances`,
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: childName,
+      runtime: 'qemu',
+      provider,
+      runtime_options: {
+        kind: 'vm',
+        provider,
+        launch_strategy: {
+          mode,
+          prefer_fast_start: true,
+          asset_ref: assetRef,
+          ...(provider === 'cloud-hypervisor' ? { restore_mode: restoreMode } : {}),
+        },
+      },
+    }),
+  }]).catch(upstreamBridgeError);
+}
+
 async function destroyInstance(upstreamUrl, instanceId) {
-  const inventory = await getInventory(upstreamUrl).catch(() => ({ instances: [] }));
+  let inventory;
+  try { inventory = await getInventory(upstreamUrl); }
+  catch (err) { rethrowExecutorSecurityError(err); inventory = { instances: [] }; }
   const inst = inventory.instances.find((i) => String(i.id) === String(instanceId));
   const runtime = String(inst?.runtime ?? inst?.runtime_posture?.kind ?? '').toLowerCase();
   const dockerName = inst?.launch_context?.name;
@@ -522,7 +849,7 @@ async function destroyInstance(upstreamUrl, instanceId) {
   try {
     const result = await fetchJsonFirst(candidates);
     if (result.status < 400) {
-      if (['docker', 'container'].includes(runtime) && dockerName) {
+      if (LOCAL_DOCKER_FALLBACK && ['docker', 'container'].includes(runtime) && dockerName) {
         try {
           await spawnCollect('docker', ['rm', '-f', dockerName]);
           return {
@@ -540,6 +867,7 @@ async function destroyInstance(upstreamUrl, instanceId) {
       return result;
     }
   } catch (err) {
+    rethrowExecutorSecurityError(err);
     const message = String(err?.message ?? err);
     // A docker/container row with a resolvable name is still physically
     // removable even when admin-v2 has no instance record (404): fall through
@@ -571,6 +899,18 @@ async function destroyInstance(upstreamUrl, instanceId) {
       target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/destroy`,
       status: 404,
       body: { error: 'instance_not_destroyable', message: `No destroyable runtime record for ${instanceId}` },
+    };
+  }
+  if (!LOCAL_DOCKER_FALLBACK) {
+    return {
+      target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/destroy`,
+      status: 409,
+      body: {
+        error: 'local_docker_fallback_disabled',
+        message: 'Sandbox management did not accept this destroy request. Local docker rm fallback is disabled unless AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK=1 is set for local development.',
+        runtime,
+        docker_name: dockerName,
+      },
     };
   }
 
@@ -634,7 +974,9 @@ async function signalVmAgentReconnect(domain) {
 const VM_RUNTIME_KINDS = ['vm', 'qemu', 'kvm'];
 
 async function reconnectInstance(upstreamUrl, instanceId) {
-  const inventory = await getInventory(upstreamUrl).catch(() => ({ instances: [] }));
+  let inventory;
+  try { inventory = await getInventory(upstreamUrl); }
+  catch (err) { rethrowExecutorSecurityError(err); inventory = { instances: [] }; }
   const inst = inventory.instances.find((i) => String(i.id) === String(instanceId));
   const runtime = String(inst?.runtime ?? inst?.runtime_posture?.kind ?? '').toLowerCase();
   const dockerName = inst?.launch_context?.name;
@@ -646,12 +988,25 @@ async function reconnectInstance(upstreamUrl, instanceId) {
   try {
     const result = await fetchJsonFirst(candidates, { timeoutMs: 5_000 });
     if (result.status < 400) return result;
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     // agentic-sandbox v2026.7.6 still exposes the container reconnect as an
     // in-image helper, not an HTTP endpoint. Fall through to the local-dev path.
   }
 
   if (['docker', 'container'].includes(runtime) && dockerName) {
+    if (!LOCAL_DOCKER_FALLBACK) {
+      return {
+        target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`,
+        status: 409,
+        body: {
+          error: 'local_docker_fallback_disabled',
+          message: 'Sandbox management did not accept this reconnect request. Local docker exec fallback is disabled unless AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK=1 is set for local development.',
+          runtime,
+          docker_name: dockerName,
+        },
+      };
+    }
     try {
       const output = await spawnCollect('docker', ['exec', dockerName, 'agent-reconnect']);
       return {
@@ -681,6 +1036,19 @@ async function reconnectInstance(upstreamUrl, instanceId) {
   }
 
   if (VM_RUNTIME_KINDS.includes(runtime)) {
+    if (!localLibvirtFallbackAllowed()) {
+      return {
+        target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`,
+        status: 409,
+        body: {
+          error: 'local_libvirt_fallback_disabled',
+          message: 'Sandbox management did not accept this reconnect request. Local virsh fallback is only automatic on Linux; set AIWG_COCKPIT_LOCAL_LIBVIRT_FALLBACK=1 for explicit local development on this host.',
+          runtime,
+          platform: process.platform,
+          arch: process.arch,
+        },
+      };
+    }
     // For VM instances the agent_id doubles as the libvirt domain name
     // (agentic-sandbox provision-vm.sh registers agent_id = $vm_name).
     const domain = dockerName ?? inst?.name ?? String(instanceId);
@@ -766,7 +1134,8 @@ async function resolveSessionAgentId(executorUrl, instanceId) {
     const agents = await getAgentList(executorUrl);
     const agent = agents.find((a) => String(a.instance_id ?? a.instanceId ?? '') === String(instanceId));
     return agent?.id ?? agent?.agent_id ?? agent?.agentId ?? instanceId;
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     return instanceId;
   }
 }
@@ -854,6 +1223,109 @@ function normalizeTransport(posture) {
   };
 }
 
+function safeRef(value) {
+  const ref = typeof value === 'string' ? value.trim() : '';
+  if (!ref) return undefined;
+  if (/-----BEGIN|PRIVATE KEY|TOKEN|SECRET|PASSWORD|[\r\n]/i.test(ref)) return '[redacted]';
+  return ref.slice(0, 160);
+}
+
+function normalizeBootstrapTrustReadiness(body, executorUrl, { available = true } = {}) {
+  const ca = body?.ca_provider && typeof body.ca_provider === 'object' ? body.ca_provider : {};
+  const bootstrap = body?.bootstrap && typeof body.bootstrap === 'object' ? body.bootstrap : {};
+  const status = String(body?.status ?? (available ? 'unknown' : 'disabled')).toLowerCase();
+  const normalizedStatus = ['secure', 'degraded', 'disabled'].includes(status)
+    ? status
+    : (ca.configured === true || ca.available === true ? 'degraded' : 'disabled');
+  const trustFresh = ca.trust_bundle_fresh ?? ca.trustBundleFresh ?? ca.fresh;
+  const tokenStoreConfigured = bootstrap.token_store_configured ?? bootstrap.tokenStoreConfigured;
+  const caConfigured = ca.configured ?? ca.available;
+  const missing = [];
+  if (caConfigured === false) missing.push('ca_provider');
+  if (tokenStoreConfigured === false) missing.push('bootstrap_token_store');
+  if (trustFresh === false) missing.push('fresh_trust_bundle');
+  const plaintextDev = new URL(executorUrl).protocol === 'http:' && isLocalHostName(new URL(executorUrl).hostname);
+  const recovery = normalizedStatus === 'secure'
+    ? 'Sandbox CA and bootstrap trust are ready.'
+    : normalizedStatus === 'degraded'
+      ? 'Refresh sandbox CA/bootstrap readiness, rotate stale trust material, then reload Cockpit.'
+      : plaintextDev
+        ? 'Plaintext local development mode only; enable sandbox mTLS before using remote or shared executors.'
+        : 'Configure sandbox CA provider and client trust refs before connecting Cockpit.';
+  return {
+    status: normalizedStatus,
+    mode: normalizedStatus === 'secure' ? 'mtls' : (plaintextDev ? 'plaintext-dev' : 'disabled'),
+    label: normalizedStatus === 'secure'
+      ? 'Sandbox mTLS ready'
+      : normalizedStatus === 'degraded'
+        ? 'Sandbox trust degraded'
+        : (plaintextDev ? 'Plaintext dev mode' : 'Sandbox trust disabled'),
+    source: body?.source ?? '/api/v2/admin/bootstrap/readiness',
+    ca_provider_ref: safeRef(ca.provider_ref ?? ca.providerRef ?? ca.provider ?? ca.id ?? ca.name),
+    trust_bundle_ref: safeRef(ca.trust_bundle_ref ?? ca.trustBundleRef ?? ca.bundle_ref ?? ca.bundleRef),
+    client_identity_ref: safeRef(ca.client_identity_ref ?? ca.clientIdentityRef ?? ca.identity_ref ?? ca.identityRef),
+    rotation_state: safeRef(ca.rotation_state ?? ca.rotationState ?? ca.state),
+    expires_at: safeRef(ca.expires_at ?? ca.expiresAt ?? ca.not_after ?? ca.notAfter),
+    trust_bundle_fresh: trustFresh === undefined ? undefined : Boolean(trustFresh),
+    token_store_configured: tokenStoreConfigured === undefined ? undefined : Boolean(tokenStoreConfigured),
+    missing_required_material: missing,
+    recovery,
+  };
+}
+
+function assertRequiredBootstrapTrust(posture) {
+  if (posture.status === 'secure' && posture.missing_required_material.length === 0) return;
+  const err = executorAuthError(
+    'executor_trust_required',
+    `sandbox mTLS is required but bootstrap trust is ${posture.status}: ${posture.recovery}`,
+  );
+  err.upstreamStatus = 503;
+  err.recovery = posture.recovery;
+  throw err;
+}
+
+async function getBootstrapTrustPosture(executorUrl, { requireSandboxMtls = false } = {}) {
+  try {
+    const { target, body } = await fetchJsonFirst([
+      `${executorUrl}/api/v2/admin/bootstrap/readiness`,
+      `${executorUrl}/admin/bootstrap/readiness`,
+    ]);
+    const posture = normalizeBootstrapTrustReadiness({ ...body, source: new URL(target).pathname }, executorUrl);
+    if (requireSandboxMtls) assertRequiredBootstrapTrust(posture);
+    return posture;
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
+    const posture = normalizeBootstrapTrustReadiness({
+      status: 'disabled',
+      source: '/api/v2/admin/bootstrap/readiness',
+      ca_provider: { configured: false },
+      bootstrap: { token_store_configured: false },
+    }, executorUrl, { available: false });
+    if (requireSandboxMtls) assertRequiredBootstrapTrust(posture);
+    return posture;
+  }
+}
+
+function normalizeStoragePosture(posture) {
+  const raw = posture && typeof posture === 'object' ? posture : {};
+  return {
+    persistent: Boolean(raw.persistent ?? raw.persists ?? raw.persistence === 'persistent'),
+    delete_on_destroy: Boolean(raw.delete_on_destroy ?? raw.deleteOnDestroy),
+    scope: raw.scope ?? raw.storage_scope ?? raw.storageScope,
+    reason: raw.reason ?? raw.detail,
+  };
+}
+
+function normalizeLifecycle(lifecycle) {
+  const raw = lifecycle && typeof lifecycle === 'object' ? lifecycle : {};
+  return {
+    destroy: raw.destroy ?? raw.delete ?? raw.remove,
+    reconnect: raw.reconnect,
+    start: raw.start,
+    stop: raw.stop,
+  };
+}
+
 function normalizeSessionBackends(backends, runtimeKind, state = 'unknown', agentReady = false) {
   const list = Array.isArray(backends) ? backends : [];
   if (!list.length && runtimeKind === 'host') {
@@ -905,6 +1377,10 @@ function normalizeInstance(executorUrl, i) {
   return {
     id,
     runtime,
+    provider: i.provider ?? i.runtime_provider ?? i.runtimeProvider ?? i.runtime?.provider,
+    capabilities: Array.isArray(i.capabilities) ? i.capabilities : i.runtime?.capabilities,
+    capability_constraints: i.capability_constraints ?? i.capabilityConstraints ?? i.runtime?.capability_constraints ?? i.runtime?.capabilityConstraints,
+    gpu: i.gpu ?? i.gpu_posture ?? i.gpuPosture ?? i.runtime?.gpu,
     loadout,
     state: i.state ?? i.status ?? 'unknown',
     tenant: i.tenant_id ?? i.tenant ?? i.tenantId ?? 'default',
@@ -926,6 +1402,8 @@ function normalizeInstance(executorUrl, i) {
       image_ref: i.image_ref ?? i.imageRef ?? i.runtime_extension?.image_ref ?? i.runtimeExtension?.imageRef,
       source: i.runtime_extension ? 'agent-card runtime extension' : i.launch_context?.source ?? i.launchContext?.source,
     },
+    storage: normalizeStoragePosture(i.storage ?? i.storage_posture ?? i.storagePosture ?? i.lifecycle?.storage),
+    lifecycle: normalizeLifecycle(i.lifecycle ?? i.lifecycle_support ?? i.lifecycleSupport),
     agent_ready: agentReady,
     registered_agent_id: i.registered_agent_id ?? i.registeredAgentId,
     session_backends: normalizeSessionBackends(i.session_backends ?? i.sessionBackends ?? i.session_host?.backends ?? i.sessionHost?.backends ?? i.capabilities?.session_backends ?? i.capabilities?.sessionBackends, runtimePosture.kind, i.state ?? i.status, agentReady),
@@ -947,7 +1425,11 @@ function defaultSessionLaunch(instance) {
     };
   }
   if (runtime === 'container' || runtime === 'docker' || runtime === 'vm' || runtime === 'qemu' || runtime === 'kvm') {
-    const home = runtime === 'container' || runtime === 'docker' ? '/root' : '/home/agent';
+    // Prefer the executor-reported target-local cwd. Current agentic-sandbox
+    // container and VM contracts report `/home/agent`; retain that value as a
+    // compatibility fallback for older inventory responses. `/root` is not
+    // readable by the mandatory uid 10001 container identity.
+    const home = instance?.launch_context?.cwd ?? '/home/agent';
     return {
       command: '/bin/bash',
       args: ['-lc', `cd ${shellSingleQuote(home)} && exec /bin/bash -l`],
@@ -1001,7 +1483,8 @@ async function enrichInstanceFromAgentCard(executorUrl, instance) {
       loadout: instance.loadout ?? runtimeExtension.loadout,
       image_ref: instance.image_ref ?? runtimeExtension.image_ref,
     };
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     return instance;
   }
 }
@@ -1009,7 +1492,8 @@ async function enrichInstanceFromAgentCard(executorUrl, instance) {
 async function getRegisteredAgents(executorUrl) {
   try {
     return await getAgentList(executorUrl);
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     return [];
   }
 }
@@ -1073,7 +1557,8 @@ async function getAgentBackedHostInventory(executorUrl, degradedDetail) {
 }
 
 /** Normalize the executor's admin inventory into the Bridge's UI shape. */
-async function getInventory(executorUrl) {
+async function getInventory(executorUrl, { requireSandboxMtls = false } = {}) {
+  const bootstrapTrust = await getBootstrapTrustPosture(executorUrl, { requireSandboxMtls });
   const { target, status, body } = await fetchJsonFirst([
     `${executorUrl}/admin/instances`,
     `${executorUrl}/api/v2/admin/instances`,
@@ -1095,6 +1580,7 @@ async function getInventory(executorUrl) {
         count: 0,
         degraded_admin_inventory: detail,
         admin_error: body,
+        bootstrap_trust: bootstrapTrust,
         instances: [],
       };
     }
@@ -1109,6 +1595,8 @@ async function getInventory(executorUrl) {
     admin_path: new URL(target).pathname,
     fetched_at: new Date().toISOString(),
     count: normalized.length,
+    bootstrap_trust: bootstrapTrust,
+    degraded_providers: body?.degraded_providers,
     instances: normalized,
   };
 }
@@ -1159,6 +1647,8 @@ async function getLoadouts(executorUrl) {
       label: l.label ?? l.display_name ?? l.displayName ?? id,
       description: l.description ?? l.summary,
       runtimes: l.runtimes ?? l.runtime_kinds ?? l.supported_runtimes,
+      runtime_options: l.runtime_options ?? l.runtimeOptions,
+      compatibility: l.compatibility,
     };
   }).filter((l) => l.id);
   return { source: executorUrl, loadouts_path: new URL(target).pathname, count: loadouts.length, loadouts };
@@ -1170,7 +1660,7 @@ async function getRunning(executorUrl) {
   await Promise.all(
     instances.filter((i) => i.state === 'running').map(async (inst) => {
       let tasks;
-      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch { return; }
+      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch (err) { rethrowExecutorSecurityError(err); return; }
       for (const t of tasks) {
         const state = taskState(t);
         if (!ACTIVE_TASK_STATES.has(state)) continue;
@@ -1250,7 +1740,7 @@ async function getApprovals(executorUrl, status) {
   await Promise.all(
     instances.filter((i) => i.state === 'running').map(async (inst) => {
       let tasks;
-      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch { return; }
+      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch (err) { rethrowExecutorSecurityError(err); return; }
       for (const t of tasks) {
         const approval = approvalFromTask(inst, t);
         if (!approval) continue;
@@ -1402,7 +1892,7 @@ async function getSessionEventRows(executorUrl, instances) {
   const rows = [];
   await Promise.all((instances ?? []).map(async (inst) => {
     let sessions;
-    try { sessions = (await getSessions(executorUrl, inst.id)).sessions; } catch { return; }
+    try { sessions = (await getSessions(executorUrl, inst.id)).sessions; } catch (err) { rethrowExecutorSecurityError(err); return; }
     for (const session of sessions) {
       rows.push({
         id: session.id,
@@ -1492,16 +1982,13 @@ async function respondApproval(executorUrl, approvalId, decision) {
     const { status, body } = await fetchJsonFirst(candidates);
     return { status, body };
   } catch (e) {
+    rethrowExecutorSecurityError(e);
     return { status: 409, body: { error: 'approval_response_failed', detail: String(e?.message ?? e) } };
   }
 }
 
-/**
- * Sessions for one instance, each with a direct attach_url. Control plane (this
- * list) goes through the Bridge; the data plane (the pty stream) connects direct
- * to the executor — masking differs per WS direction, so the Bridge issues the
- * URL rather than proxying frames.
- */
+/** Sessions for one instance. Executor attach targets are normalized here and
+ * replaced with Bridge-owned proxy URLs at the request boundary. */
 async function getSessions(executorUrl, instanceId) {
   const sessionAgentId = await resolveSessionAgentId(executorUrl, instanceId);
   const agentIds = unique([instanceId, sessionAgentId]);
@@ -1546,6 +2033,7 @@ async function getSessionScreen(executorUrl, instanceId, sessionId) {
     const { body, target, status } = await fetchJsonFirst(paths);
     return { status, body: normalizeScreenSnapshot(body, { instanceId, sessionId, source: target }) };
   } catch (e) {
+    rethrowExecutorSecurityError(e);
     return {
       status: 404,
       body: {
@@ -1663,7 +2151,8 @@ async function endSession(executorUrl, instanceId, sessionId) {
   let sessions = [];
   try {
     sessions = (await getSessions(executorUrl, instanceId)).sessions;
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     // Fall back to using the supplied id directly; older executors may not list
     // before delete, and delete should remain useful during recovery cleanup.
   }
@@ -1702,29 +2191,206 @@ function sessionResponseFromRow(row) {
   };
 }
 
-export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = ALLOW_MOCK_EXECUTOR, token } = {}) {
+function websocketCockpitToken(req) {
+  const protocols = String(req.headers['sec-websocket-protocol'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const encoded = protocols.find((value) => value.startsWith('cockpit.'))?.slice('cockpit.'.length) ?? '';
+  try { return Buffer.from(encoded, 'base64url').toString('utf8'); } catch { return ''; }
+}
+
+function websocketAuthed(req, expected) {
+  const presented = websocketCockpitToken(req);
+  if (presented.length !== expected.length) return false;
+  try { return timingSafeEqual(Buffer.from(presented), Buffer.from(expected)); } catch { return false; }
+}
+
+function writeUpgradeHead(socket, response) {
+  socket.write(`HTTP/1.1 ${response.statusCode} ${response.statusMessage ?? 'Switching Protocols'}\r\n`);
+  for (let index = 0; index < response.rawHeaders.length; index += 2) {
+    socket.write(`${response.rawHeaders[index]}: ${response.rawHeaders[index + 1]}\r\n`);
+  }
+  socket.write('\r\n');
+}
+
+async function proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile }) {
+  const token = await resolveExecutorBearer(executorTokenFile);
+  const requestedProtocols = String(req.headers['sec-websocket-protocol'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value && !value.startsWith('cockpit.'));
+  const headers = {
+    connection: 'Upgrade',
+    upgrade: 'websocket',
+    host: target.host,
+    'sec-websocket-key': req.headers['sec-websocket-key'],
+    'sec-websocket-version': req.headers['sec-websocket-version'],
+    ...(req.headers['sec-websocket-extensions'] ? { 'sec-websocket-extensions': req.headers['sec-websocket-extensions'] } : {}),
+    ...(requestedProtocols.length ? { 'sec-websocket-protocol': requestedProtocols.join(', ') } : {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
+  const transport = target.protocol === 'wss:' ? https : http;
+  const requestTarget = new URL(target);
+  requestTarget.protocol = target.protocol === 'wss:' ? 'https:' : 'http:';
+  const upstreamRequest = transport.request(requestTarget, { method: 'GET', headers });
+  upstreamRequest.on('upgrade', (response, upstreamSocket, upstreamHead) => {
+    writeUpgradeHead(socket, response);
+    if (head.length) upstreamSocket.write(head);
+    if (upstreamHead.length) socket.write(upstreamHead);
+    socket.pipe(upstreamSocket);
+    upstreamSocket.pipe(socket);
+    const closeBoth = () => {
+      if (!socket.destroyed) socket.destroy();
+      if (!upstreamSocket.destroyed) upstreamSocket.destroy();
+    };
+    socket.on('error', closeBoth);
+    upstreamSocket.on('error', closeBoth);
+  });
+  upstreamRequest.on('response', (response) => {
+    socket.write(`HTTP/1.1 ${response.statusCode ?? 502} ${response.statusMessage ?? 'Upstream Error'}\r\nConnection: close\r\n\r\n`);
+    socket.destroy();
+    response.resume();
+  });
+  upstreamRequest.on('error', () => {
+    if (!socket.destroyed) socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+  });
+  upstreamRequest.end();
+}
+
+export function createBridge({
+  executorUrl = EXECUTOR_URL,
+  allowMockExecutor = ALLOW_MOCK_EXECUTOR,
+  token,
+  executorTokenFile = EXECUTOR_TOKEN_FILE,
+  requireSandboxMtls = REQUIRE_SANDBOX_MTLS,
+  bootstrapTtlMs = 60_000,
+  sessionTtlMs = 12 * 60 * 60 * 1000,
+} = {}) {
   const upstreamUrl = executorUrl;
   const TOKEN = token ?? randomBytes(24).toString('hex');
-  const server = http.createServer(async (req, res) => {
+  const bootstrapNonces = new Map();
+  const browserSessions = new Map();
+  const digest = (value) => createHash('sha256').update(String(value)).digest('base64url');
+  const issueBootstrapNonce = (audience = 'browser') => {
+    if (!['browser', 'tauri', 'vscode'].includes(audience)) {
+      throw executorAuthError('invalid_bootstrap_audience', 'bootstrap audience must be browser, tauri, or vscode');
+    }
+    const nonce = randomBytes(24).toString('base64url');
+    bootstrapNonces.set(digest(nonce), { audience, expiresAt: Date.now() + bootstrapTtlMs });
+    return nonce;
+  };
+  const consumeBootstrapNonce = (nonce, audience) => {
+    const key = digest(nonce);
+    const pending = bootstrapNonces.get(key);
+    bootstrapNonces.delete(key);
+    return Boolean(
+      pending &&
+      pending.expiresAt >= Date.now() &&
+      pending.audience === audience &&
+      ['browser', 'tauri', 'vscode'].includes(audience),
+    );
+  };
+  const sessionAuth = (req) => {
+    const id = cookies(req).cockpit_session ?? '';
+    const session = browserSessions.get(digest(id));
+    if (!session) return null;
+    if (session.expiresAt < Date.now()) {
+      browserSessions.delete(digest(id));
+      return null;
+    }
+    return { kind: 'session', csrf: session.csrf };
+  };
+  const requestAuth = (req) => bearerAuthed(req, TOKEN)
+    ? { kind: 'bearer', csrf: TOKEN }
+    : sessionAuth(req);
+  const executorOrigin = new URL(upstreamUrl).origin;
+  const executorAddress = new URL(upstreamUrl);
+  const attachTargets = new Map();
+  const issueAttachUrl = (req, value) => {
+    const target = new URL(String(value));
+    const sameHost = target.hostname === executorAddress.hostname ||
+      (isLocalHostName(target.hostname) && isLocalHostName(executorAddress.hostname));
+    if (!['ws:', 'wss:'].includes(target.protocol) || !sameHost || !/^\/agents\/[^/]+\/sessions\/[^/]+\/attach$/.test(target.pathname)) {
+      throw executorAuthError('executor_attach_target_refused', 'executor returned an attach URL outside the allowed PTY endpoint');
+    }
+    const id = randomBytes(18).toString('base64url');
+    attachTargets.set(id, target);
+    if (attachTargets.size > 1024) attachTargets.delete(attachTargets.keys().next().value);
+    const wsProtocol = req.socket.encrypted ? 'wss:' : 'ws:';
+    return `${wsProtocol}//${req.headers.host}/api/pty${target.pathname}/${id}`;
+  };
+  const handleRequest = async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     try {
       // unauthenticated liveness probe (no /api/ prefix) — for the shell to wait on
       if (url.pathname === '/healthz') return json(res, 200, { status: 'ok' });
+      if (url.pathname === '/bootstrap/nonce' && req.method === 'POST') {
+        if (!validBrowserOrigin(req) || !bearerAuthed(req, TOKEN)) {
+          return json(res, 401, { error: 'unauthorized' });
+        }
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const payload = JSON.stringify({
+            nonce: issueBootstrapNonce(String(parsed.body.audience ?? 'browser')),
+            expires_in_ms: bootstrapTtlMs,
+          });
+          res.writeHead(201, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+            'content-length': Buffer.byteLength(payload),
+          });
+          return res.end(payload);
+        } catch (err) {
+          return json(res, 400, { error: err.code ?? 'invalid_bootstrap_audience' });
+        }
+      }
+      if (url.pathname === '/bootstrap/session' && req.method === 'POST') {
+        if (!validBrowserOrigin(req)) return json(res, 403, { error: 'forbidden_origin' });
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const nonce = String(parsed.body.nonce ?? '');
+        const audience = String(parsed.body.audience ?? '');
+        if (!nonce || !consumeBootstrapNonce(nonce, audience)) {
+          return json(res, 401, { error: 'bootstrap_invalid_or_expired' });
+        }
+        const id = randomBytes(32).toString('base64url');
+        const csrf = randomBytes(24).toString('base64url');
+        browserSessions.set(digest(id), { csrf, audience, expiresAt: Date.now() + sessionTtlMs });
+        res.writeHead(201, {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+          'set-cookie': `cockpit_session=${encodeURIComponent(id)}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.ceil(sessionTtlMs / 1000)}`,
+        });
+        return res.end(JSON.stringify({ csrf, expires_in_ms: sessionTtlMs }));
+      }
+      if (url.pathname === '/bootstrap/session' && req.method === 'GET') {
+        const auth = sessionAuth(req);
+        if (!auth) return json(res, 401, { error: 'unauthorized' });
+        res.setHeader('cache-control', 'no-store');
+        return json(res, 200, { csrf: auth.csrf });
+      }
       if (url.pathname.startsWith('/api/') && !validBrowserOrigin(req)) {
         return json(res, 403, { error: 'forbidden_origin' });
       }
-      // gate the control surface: per-launch bearer token on every /api/ call
-      if (url.pathname.startsWith('/api/') && !authed(req, url, TOKEN)) {
+      // Gate the control surface with either an explicit bearer for non-browser
+      // clients or the HttpOnly session established by a one-time bootstrap.
+      const auth = url.pathname.startsWith('/api/') ? requestAuth(req) : null;
+      if (url.pathname.startsWith('/api/') && !auth) {
         return json(res, 401, { error: 'unauthorized', detail: 'missing or invalid cockpit token' });
       }
-      if (url.pathname.startsWith('/api/') && !validCsrf(req, TOKEN)) {
+      if (url.pathname.startsWith('/api/') && !validCsrf(req, auth)) {
         return json(res, 403, { error: 'csrf_required' });
       }
       if (url.pathname.startsWith('/api/')) {
         try {
           await assertRealExecutor(upstreamUrl, allowMockExecutor);
+          if (requireSandboxMtls) {
+            await getBootstrapTrustPosture(upstreamUrl, { requireSandboxMtls: true });
+          }
         } catch (err) {
-          return json(res, 502, { error: err.code ?? 'executor_refused', message: String(err?.message ?? err) });
+          return json(res, Number(err?.upstreamStatus) || 502, { error: err.code ?? 'executor_refused', message: String(err?.message ?? err), recovery: err?.recovery });
         }
       }
       if (url.pathname === '/api/events' && req.method === 'GET') {
@@ -1742,8 +2408,13 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         req.on('close', () => clearInterval(timer));
         return;
       }
-      if (url.pathname === '/api/inventory') return json(res, 200, await getInventory(upstreamUrl));
+      if (url.pathname === '/api/inventory') return json(res, 200, await getInventory(upstreamUrl, { requireSandboxMtls }));
       if (url.pathname === '/api/executor/capabilities') return json(res, 200, await getExecutorCapabilities(upstreamUrl));
+      if (url.pathname === '/api/bootstrap/readiness' && req.method === 'GET') {
+        return json(res, 200, await getBootstrapTrustPosture(upstreamUrl, { requireSandboxMtls }));
+      }
+      if (url.pathname === '/api/mcp/discovery' && req.method === 'GET') return json(res, 200, await getMcpDiscovery(upstreamUrl));
+      if (url.pathname === '/api/mcp' && req.method === 'POST') return proxyMcpRequest(req, res, upstreamUrl, MCP_TOKEN_FILE);
       if (url.pathname === '/api/running') return json(res, 200, await getRunning(upstreamUrl));
       if (url.pathname === '/api/missions') return json(res, 200, await getMissions(upstreamUrl));
       if (url.pathname === '/api/events/snapshot') return json(res, 200, await getEventSnapshot(upstreamUrl));
@@ -1818,7 +2489,12 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
       if (url.pathname === '/api/sessions') {
         const inst = url.searchParams.get('instance');
         if (!inst) return json(res, 400, { error: 'instance_required' });
-        return json(res, 200, await getSessions(upstreamUrl, inst));
+        const result = await getSessions(upstreamUrl, inst);
+        result.sessions = result.sessions.map((session) => ({
+          ...session,
+          attach_url: issueAttachUrl(req, session.attach_url),
+        }));
+        return json(res, 200, result);
       }
       if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/sessions\/([^/]+)$/)) && req.method === 'DELETE') {
         const { status, body } = await endSession(upstreamUrl, decodeURIComponent(m[1]), decodeURIComponent(m[2]));
@@ -1992,10 +2668,39 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         // Same as the list path (#1671): the attach segment must be the instance
         // id the executor's pty-ws route accepts, not the resolved agent name.
         await appendAudit('session.start.requested', { instance_id: id, mode: mode || 'managed', backend: backend || 'tmux', loadout, status, session_id: sessionId, session_name: sessionName });
-        return json(res, status, { ...body, id: sessionId, session_name: body.session_name ?? body.sessionName ?? sessionName, attach_url: attachUrl ?? `${wsBase}/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/attach` });
+        const executorAttachUrl = attachUrl ?? `${wsBase}/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/attach`;
+        return json(res, status, {
+          ...body,
+          id: sessionId,
+          session_name: body.session_name ?? body.sessionName ?? sessionName,
+          attach_url: issueAttachUrl(req, executorAttachUrl),
+        });
       }
 
       // --- management surface (UC-012): lifecycle + task cancel ---
+      if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/(snapshot|checkpoint|restore|fork|warm-pool)$/)) && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const instanceId = decodeURIComponent(m[1]);
+        const action = m[2];
+        const body = parsed.body || {};
+        const before = await appendAudit('instance.fast_start.requested', {
+          instance_id: instanceId,
+          action,
+          asset_ref: body.asset_ref ?? body.assetRef ?? body.snapshot_id ?? body.snapshotId ?? body.checkpoint_id ?? body.checkpointId ?? body.pool,
+          name: body.name ?? body.child_name ?? body.childName,
+        });
+        const result = await providerFastStartAction(upstreamUrl, instanceId, action, body);
+        await appendAudit('instance.fast_start.accepted', {
+          request_ts: before.ts,
+          instance_id: instanceId,
+          action,
+          status: result.status,
+          operation_id: result.body?.id ?? result.body?.operation?.id,
+          result: result.body,
+        });
+        return json(res, result.status, result.body);
+      }
       if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/(start|stop)$/)) && req.method === 'POST') {
         const result = await fetchJsonFirst([
           `${upstreamUrl}/admin/instances/${encodeURIComponent(m[1])}/${m[2]}`,
@@ -2032,18 +2737,25 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
       if (url.pathname === '/api/cost' && req.method === 'GET')
         return proxy(res, 'GET', `${upstreamUrl}/admin/cost`);
 
-      if (url.pathname === '/api/health') return json(res, 200, { status: 'ok', executor_url: upstreamUrl, mock_executor_allowed: allowMockExecutor });
+      if (url.pathname === '/api/health') return json(res, 200, {
+        status: 'ok',
+        executor_url: upstreamUrl,
+        mock_executor_allowed: allowMockExecutor,
+        executor_auth_configured: Boolean(executorTokenFile),
+      });
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const distIndex = join(WEB_DIST, 'index.html');
         const src = existsSync(distIndex) ? distIndex : join(__dir, 'public', 'index.html');
         const raw = await readFile(src, 'utf8');
-        // Inject the per-launch token so the same-origin app can call the gated API.
-        const html = raw.replace('</head>', `<script>window.__COCKPIT_TOKEN__=${JSON.stringify(TOKEN)}</script>\n</head>`);
-        // never cache the shell — it must always reference the latest hashed bundle
+        // The app exchanges a one-time nonce from the URL fragment for an
+        // HttpOnly session. No reusable credential is injected into HTML.
+        const html = raw;
+        // Never cache the shell or bootstrap-bearing navigation.
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
-          'cache-control': 'no-cache',
-          'set-cookie': `cockpit_csrf=${TOKEN}; Path=/; SameSite=Strict`,
+          'cache-control': 'no-store',
+          'content-security-policy': `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://${req.headers.host} wss://${req.headers.host}; frame-ancestors 'self' vscode-webview: tauri:`,
+          'referrer-policy': 'no-referrer',
         });
         return res.end(html);
       }
@@ -2053,10 +2765,41 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
       }
       json(res, 404, { error: 'not_found', path: url.pathname });
     } catch (err) {
-      json(res, 502, { error: 'bridge_upstream_error', message: String(err?.message ?? err) });
+      const status = Number(err?.upstreamStatus) || 502;
+      json(res, status, { error: err?.code ?? 'bridge_upstream_error', message: String(err?.message ?? err) });
     }
-  });
+  };
+  const server = http.createServer((req, res) => executorRequestContext.run(
+    { executorOrigin, executorTokenFile },
+    () => handleRequest(req, res),
+  ));
+  server.on('upgrade', (req, socket, head) => executorRequestContext.run(
+    { executorOrigin, executorTokenFile },
+    async () => {
+      try {
+        const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+        const match = url.pathname.match(/^\/api\/pty\/agents\/[^/]+\/sessions\/[^/]+\/attach\/([^/]+)$/);
+        if (!match || !validBrowserOrigin(req)) {
+          socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        if (!websocketAuthed(req, TOKEN) && !sessionAuth(req)) {
+          socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        const target = attachTargets.get(match[1]);
+        if (!target || url.pathname !== `/api/pty${target.pathname}/${match[1]}`) {
+          socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        await proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile });
+      } catch {
+        if (!socket.destroyed) socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+      }
+    },
+  ));
   server.cockpitToken = TOKEN; // exposed for shells/tests
+  server.issueBootstrapNonce = issueBootstrapNonce;
   return server;
 }
 
@@ -2066,6 +2809,20 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
 // refuse to silently start on a reserved port.
 export const EXECUTOR_RESERVED_PORTS = [8120, 8121, 8122];
 export const DEFAULT_BRIDGE_PORT = 8140;
+
+/**
+ * npm exposes package binaries through symlinks. Node preserves that symlink
+ * in process.argv[1] while import.meta.url names the real module, so comparing
+ * the two strings makes an installed `aiwg-cockpit` silently skip startup.
+ */
+export function isDirectExecution(metaUrl = import.meta.url, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(argv1);
+  } catch {
+    return fileURLToPath(metaUrl) === resolve(argv1);
+  }
+}
 
 /** Resolve the Bridge listen port from the environment with a sane, off-range
  *  default. Throws on an invalid port or a collision with the executor range. */
@@ -2085,15 +2842,17 @@ export function resolveBridgePort(env = process.env) {
   return port;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectExecution()) {
   const port = resolveBridgePort();
   await ensureExecutor(EXECUTOR_URL);
   const server = createBridge();
   server.listen(port, '127.0.0.1', async () => {
     try {
       const file = await writeRuntimeToken({ token: server.cockpitToken, port, pid: process.pid });
+      const browserNonce = server.issueBootstrapNonce('browser');
       console.log(`[cockpit-bridge] http://127.0.0.1:${port}  (executor ${EXECUTOR_URL})`);
-      console.log(`  token written ${file} (mode 600) — open the URL in a browser or attach a shell`);
+      console.log(`  runtime handshake ${file} (mode 600)`);
+      console.log(`  browser bootstrap http://127.0.0.1:${port}/#bootstrap=${browserNonce}&audience=browser (one-time, 60s)`);
     } catch (err) {
       console.error(`[cockpit-bridge] failed to persist runtime token: ${String(err?.message ?? err)}`);
       server.close(() => process.exit(1));

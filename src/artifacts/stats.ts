@@ -11,7 +11,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { GraphType, IndexStats } from './types.js';
-import { GRAPH_CONFIGS, loadUserGraphConfigs } from './types.js';
+import { GRAPH_CONFIGS, loadUserGraphConfigs, resolveGraphScanDir } from './types.js';
 import { loadIndexStats, loadGraphIndexFile } from './index-reader.js';
 
 export interface StatsOptions {
@@ -25,8 +25,8 @@ export interface StatsOptions {
 function countArtifactFiles(cwd: string, graphType?: GraphType): number {
   const config = graphType ? GRAPH_CONFIGS[graphType] : undefined;
   const scanDirs = config
-    ? config.scanDirs.map(d => path.join(cwd, d))
-    : [path.join(cwd, '.aiwg')];
+    ? config.scanDirs.map(d => resolveGraphScanDir(cwd, d))
+    : [resolveGraphScanDir(cwd, '.aiwg')];
   const extensions = config?.extensions ?? ['.md', '.yaml', '.json'];
 
   let count = 0;
@@ -180,6 +180,14 @@ async function renderStats(
   // Dependency graph
   console.log('Dependency Graph:');
   console.log(`  Total edges:        ${stats.graphMetrics.totalEdges}`);
+  if (stats.graphMetrics.canonicalEdges !== undefined) {
+    console.log(`  Canonical edges:    ${stats.graphMetrics.canonicalEdges}`);
+    console.log(`  Outgoing declares:  ${stats.graphMetrics.outgoingDeclarations}`);
+    console.log(`  Incoming declares:  ${stats.graphMetrics.incomingDeclarations}`);
+    console.log(`  Adjacency entries:  ${stats.graphMetrics.adjacencyEntries}`);
+    console.log(`  Unmirrored outgoing:${String(stats.graphMetrics.unmirroredOutgoing).padStart(3)}`);
+    console.log(`  Unmirrored incoming:${String(stats.graphMetrics.unmirroredIncoming).padStart(3)}`);
+  }
   console.log(`  Orphaned artifacts: ${stats.graphMetrics.orphanedArtifacts}`);
   if (stats.graphMetrics.mostReferenced) {
     console.log(`  Most referenced:    ${stats.graphMetrics.mostReferenced.path} (${stats.graphMetrics.mostReferenced.count} dependents)`);

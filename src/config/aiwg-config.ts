@@ -16,6 +16,7 @@ import type { ProjectLocalType } from '../extensions/manifest.js';
 import { normalizeNamedCaptures } from '../artifacts/index-builder.js';
 import {
   getProviderDefinition,
+  getProviderKernelSkillPath,
   PROVIDER_IDS,
   resolveProviderPathValue,
 } from '../providers/provider-definitions.js';
@@ -24,9 +25,27 @@ import {
   validateAuthorization,
   type AuthorizationConfig,
 } from '../policy/authorization.js';
+import { projectAiwgPath, resolveProjectAiwgDir } from './project-artifacts.js';
+import {
+  defaultThreatAssessmentConfig,
+  validateThreatAssessmentConfig,
+  type SecurityConfig,
+} from '../security/threat-assessment-config.js';
+
+export type {
+  SecurityConfig,
+  ThreatAction,
+  ThreatAssessmentConfig,
+  ThreatAssessmentMode,
+  ThreatPolicyStatement,
+  ThreatProfileConfig,
+  ThreatRulePackConfig,
+  ThreatSeverity,
+  ThreatSurface,
+  ThreatSurfaceConfig,
+} from '../security/threat-assessment-config.js';
 
 const CONFIG_FILENAME = 'aiwg.config';
-const AIWG_DIR = '.aiwg';
 
 /**
  * Artifact counts for one provider deployment
@@ -292,6 +311,18 @@ export interface ExternalLinkConfig {
   audience?: string;
 }
 
+/** Project-local bundle discovery configuration. */
+export interface ProjectLocalConfig {
+  /**
+   * Additional roots to scan for project-local bundle directories.
+   *
+   * Each root may be absolute, project-relative, or `~/`-relative and should
+   * contain any of: extensions/, addons/, frameworks/, plugins/, providers/.
+   * The configured project AIWG artifact root is always scanned first.
+   */
+  searchPaths?: string[];
+}
+
 /**
  * Top-level shape of .aiwg/aiwg.config
  */
@@ -320,6 +351,9 @@ export interface AiwgConfig {
   /** Provider-neutral, deny-by-default permissions, roles, and assignments. */
   authorization?: AuthorizationConfig;
 
+  /** Deterministic, project-owned security policy including forge-content assessment. */
+  security?: SecurityConfig;
+
   /**
    * General multi-repository workspace metadata. Root manifests pair this
    * block with `repos`; external members may use `member_of` as a back-reference.
@@ -340,6 +374,12 @@ export interface AiwgConfig {
    * @implements #1796
    */
   externalLinks?: Record<string, ExternalLinkConfig>;
+
+  /**
+   * Project-local bundle discovery settings. Optional — when absent, AIWG only
+   * scans the configured project artifact root.
+   */
+  projectLocal?: ProjectLocalConfig;
 
   /**
    * Repo origin topology. Optional — when absent, agents treat `origin` as primary.
@@ -1077,8 +1117,8 @@ export async function readIndexConfig(
   if (cfg?.index && typeof cfg.index === 'object') {
     return { index: cfg.index, source: 'aiwg.config' };
   }
-  // Fallback: legacy .aiwg/config.yaml (deprecated).
-  const yamlPath = resolve(projectDir, AIWG_DIR, 'config.yaml');
+  // Fallback: legacy config.yaml in the resolved AIWG artifact directory (deprecated).
+  const yamlPath = projectAiwgPath(projectDir, 'config.yaml');
   try {
     await access(yamlPath);
     const { load: loadYaml } = await import('js-yaml');
@@ -1306,6 +1346,9 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
     providers,
     installed: {},
     scripts: {},
+    security: {
+      threatAssessment: defaultThreatAssessmentConfig(),
+    },
     delivery: {
       mode: 'pr-required',
       default_branch: 'main',
@@ -1326,10 +1369,13 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
 }
 
 /**
- * Resolve path to .aiwg/aiwg.config for a project directory
+ * Resolve path to the project-level AIWG config.
+ *
+ * Defaults to `<project>/.aiwg/aiwg.config`; honors `AIWG_ARTIFACTS_PATH` so
+ * projects can rename or relocate the AIWG artifact directory.
  */
 export function getConfigPath(projectDir: string): string {
-  return resolve(projectDir, AIWG_DIR, CONFIG_FILENAME);
+  return projectAiwgPath(projectDir, CONFIG_FILENAME);
 }
 
 /**
@@ -1389,14 +1435,23 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     throw new Error(`Invalid .aiwg/aiwg.config:\n${authorizationErrors.map(item => item.message).join('\n')}`);
   }
 
+  const threatAssessmentErrors = validateThreatAssessmentConfig(parsed.security?.threatAssessment);
+  if (threatAssessmentErrors.length > 0) {
+    throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
+  }
+
   return parsed;
 }
 
 /**
- * Write .aiwg/aiwg.config, creating .aiwg/ if needed.
+ * Write aiwg.config, creating the resolved AIWG artifact directory if needed.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
-  const dir = resolve(projectDir, AIWG_DIR);
+  const threatAssessmentErrors = validateThreatAssessmentConfig(config.security?.threatAssessment);
+  if (threatAssessmentErrors.length > 0) {
+    throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
+  }
+  const dir = resolveProjectAiwgDir(projectDir);
   await mkdir(dir, { recursive: true });
   const filePath = join(dir, CONFIG_FILENAME);
   // Atomic write: emit to a temp sibling, fsync-ish via rename. Prevents a
@@ -1541,12 +1596,13 @@ export async function hashManifest(manifestPath: string): Promise<string | undef
 function getProviderDeployDirs(
   provider: string,
   projectDir: string,
-): { agents: string; skills: string; commands: string; rules: string } | null {
+): { agents: string; skills: string; kernelSkills: string; commands: string; rules: string } | null {
   const artifacts = getProviderDefinition(provider)?.paths.artifacts;
   if (!artifacts) return null;
   return {
     agents: resolveProviderPathValue(artifacts.agents, projectDir),
     skills: resolveProviderPathValue(artifacts.skills, projectDir),
+    kernelSkills: resolveProviderPathValue(getProviderKernelSkillPath(provider), projectDir),
     commands: resolveProviderPathValue(artifacts.commands, projectDir),
     rules: resolveProviderPathValue(artifacts.rules, projectDir),
   };
@@ -1597,7 +1653,11 @@ export async function populateDeployedTo(
     const counts: DeployedArtifactCounts = {
       agents:   await countDeployedInDir(projectDir, dirs.agents,   'md'),
       commands: await countDeployedInDir(projectDir, dirs.commands, 'md'),
-      skills:   await countDeployedInDir(projectDir, dirs.skills,   'dirs'),
+      skills:
+        (await countDeployedInDir(projectDir, dirs.skills, 'dirs')) +
+        (dirs.kernelSkills && dirs.kernelSkills !== dirs.skills
+          ? await countDeployedInDir(projectDir, dirs.kernelSkills, 'dirs')
+          : 0),
       rules:    await countDeployedInDir(projectDir, dirs.rules,    'md'),
     };
 

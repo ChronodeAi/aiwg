@@ -1,5 +1,7 @@
 # Setting Up a Team
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed, `all` is deployed for your provider, and `aiwg-regenerate` has connected the agent to this project.
+
 Different people on your team use different AI tools. One person uses Claude Code, another uses Cursor, another uses GitHub Copilot. Without AIWG, they all have different agents, different rules, different commands — and no shared context.
 
 AIWG deploys the same framework to every platform so the whole team works from the same foundation.
@@ -8,7 +10,9 @@ AIWG deploys the same framework to every platform so the whole team works from t
 
 ## How it works
 
-You run `aiwg use sdlc` once from the project root. AIWG writes the framework into platform-specific directories for every installed provider:
+You run `aiwg use all --provider <provider>` from the project root for each
+provider the team uses. AIWG writes the complete system into platform-specific
+directories:
 
 ```
 .claude/agents/          ← Claude Code picks this up
@@ -27,14 +31,13 @@ Every teammate gets the same agents, the same rules, the same commands — regar
 npm install -g aiwg
 cd /path/to/your/project
 
-# Deploy to all platforms at once
-aiwg use all
-
-# Or deploy to specific platforms
-aiwg use sdlc                          # Claude Code (default)
-aiwg use sdlc --provider cursor        # Cursor
-aiwg use sdlc --provider copilot       # GitHub Copilot
-aiwg use sdlc --provider warp          # Warp Terminal
+# Deploy the complete system to each provider
+aiwg use all --provider claude
+aiwg use all --provider cursor
+aiwg use all --provider copilot
+aiwg use all --provider warp
+aiwg index build --all
+aiwg regenerate --provider claude
 ```
 
 Then commit the results:
@@ -138,7 +141,7 @@ You can run AIWG audits as part of CI — security gates, test coverage checks, 
   run: npx aiwg security-gate
 ```
 
-See the [security gate reference](../cli-reference.md#security-gate) for configuration.
+See the [security gate reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md#security-gate) for configuration.
 
 ---
 

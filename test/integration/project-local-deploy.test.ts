@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { mkdtempSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -20,6 +20,12 @@ import { execFileSync } from 'child_process';
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const DEPLOY_SCRIPT = path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs');
+const ARTIFACT_ENV_KEYS = [
+  'AIWG_ARTIFACTS_PATH',
+  'AIWG_PROJECT_ARTIFACTS_PATH',
+  'AIWG_PROJECT_AIWG_DIR',
+  'AIWG_PROJECT_LOCAL_PATHS',
+] as const;
 
 interface Env {
   projectDir: string;
@@ -87,7 +93,7 @@ function runDeploy(env: Env, provider: string, extra: string[] = []): { stdout: 
   try {
     const stdout = execFileSync(process.execPath, args, {
       cwd: REPO_ROOT,
-      env: { ...process.env, HOME: env.homeDir, USERPROFILE: env.homeDir },
+      env: projectLocalTestEnv(env),
       encoding: 'utf-8',
       timeout: 120_000,
     });
@@ -95,6 +101,12 @@ function runDeploy(env: Env, provider: string, extra: string[] = []): { stdout: 
   } catch (e: any) {
     return { stdout: (e.stdout || '') + (e.stderr || ''), status: e.status ?? 1 };
   }
+}
+
+function projectLocalTestEnv(env: Env): NodeJS.ProcessEnv {
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, HOME: env.homeDir, USERPROFILE: env.homeDir };
+  for (const key of ARTIFACT_ENV_KEYS) delete childEnv[key];
+  return childEnv;
 }
 
 function cleanup(env: Env): void {
@@ -175,8 +187,10 @@ describe('project-local deploy integration (#1046)', () => {
     expect(result.status, result.stdout).toBe(0);
 
     const agentFile = path.join(env.projectDir, '.codex', 'agents', 'pl-agent.toml');
+    const skillFile = path.join(env.projectDir, '.agents', 'skills', 'demo-skill', 'SKILL.md');
     const ruleFile = path.join(env.projectDir, '.codex', 'rules', 'pl-rule.md');
     expect(existsSync(agentFile), `codex agent should exist at ${agentFile}`).toBe(true);
+    expect(existsSync(skillFile), `codex skill should exist at ${skillFile}`).toBe(true);
     expect(existsSync(ruleFile), `codex rule should exist at ${ruleFile}`).toBe(true);
   });
 
@@ -211,7 +225,7 @@ describe('project-local deploy integration (#1046)', () => {
       // AIWG_ROOT unset + --source under the project's .aiwg/ tree means
       // computeAllKernelNames walks up from the bundle path, finds no
       // agentic/code/{frameworks,addons}, and returns null → prune skipped.
-      const cleanEnv: NodeJS.ProcessEnv = { ...process.env, HOME: env.homeDir, USERPROFILE: env.homeDir };
+      const cleanEnv = projectLocalTestEnv(env);
       delete cleanEnv.AIWG_ROOT;
       out = execFileSync(process.execPath, args, {
         cwd: REPO_ROOT,
@@ -298,10 +312,8 @@ describe('project-local deploy integration (#1046)', () => {
         {
           cwd: env.projectDir,
           env: {
-            ...process.env,
+            ...projectLocalTestEnv(env),
             AIWG_ROOT: REPO_ROOT,
-            HOME: env.homeDir,
-            USERPROFILE: env.homeDir,
           },
           encoding: 'utf-8',
           timeout: 180_000,
@@ -346,5 +358,45 @@ describe('project-local deploy integration (#1046)', () => {
       'SKILL.md',
     );
     expect(existsSync(projectQuickref), 'aiwg use must refresh the project quickref kernel skill').toBe(true);
+  });
+
+  it('PL-CODEX (#766): aiwg use deploys project-local addon skills to .agents/skills and records deployed counts', () => {
+    const aiwgBin = path.join(REPO_ROOT, 'bin/aiwg.mjs');
+
+    writeFileSync(
+      path.join(env.projectDir, '.aiwg', 'aiwg.config'),
+      JSON.stringify({ providers: ['codex'] }, null, 2),
+    );
+
+    let result: { status: number; stdout: string };
+    try {
+      const stdout = execFileSync(
+        process.execPath,
+        [aiwgBin, 'use', 'pl-test', '--provider', 'codex', '--quiet'],
+        {
+          cwd: env.projectDir,
+          env: {
+            ...projectLocalTestEnv(env),
+            AIWG_ROOT: REPO_ROOT,
+          },
+          encoding: 'utf-8',
+          timeout: 180_000,
+        },
+      );
+      result = { status: 0, stdout };
+    } catch (e: any) {
+      result = { status: e.status ?? 1, stdout: (e.stdout || '') + (e.stderr || '') };
+    }
+
+    expect(result.status, `aiwg use stdout:\n${result.stdout}`).toBe(0);
+
+    const codexSkill = path.join(env.projectDir, '.agents', 'skills', 'demo-skill', 'SKILL.md');
+    expect(existsSync(codexSkill), `project-local Codex skill must deploy to ${codexSkill}`).toBe(true);
+
+    const legacyStandardSkill = path.join(env.projectDir, '.codex', '.aiwg', 'skills', 'demo-skill', 'SKILL.md');
+    expect(existsSync(legacyStandardSkill), 'Codex project-local skill should use the native .agents/skills discovery path').toBe(false);
+
+    const config = JSON.parse(readFileSync(path.join(env.projectDir, '.aiwg', 'aiwg.config'), 'utf-8'));
+    expect(config.installed?.['pl-test']?.deployedTo?.codex?.skills).toBe(1);
   });
 });

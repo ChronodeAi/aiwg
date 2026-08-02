@@ -47,6 +47,9 @@ Deploying to `.agents/skills/` is the most portable option if you need a single 
   skills to `~/.agents/skills/`. The legacy `~/.codex/skills/` home dir is no
   longer written; AIWG-managed dirs left there by pre-fix versions are pruned
   on every codex skill deploy.
+- Project-local addon skills deployed via `aiwg use <addon> --provider codex`
+  also land in `.agents/skills/`; `.codex/.aiwg/skills/` remains the indexed
+  artifact tier, not the Codex native runtime discovery path.
 - **Duplicate-listing regression (fixed):** #766's first fix *added* the
   `.agents/skills/` write but never *removed* the legacy `~/.codex/skills/`
   write. codex-rs scans both, so every kernel skill appeared twice in the
@@ -155,6 +158,11 @@ Deploying to `.agents/skills/` is the most portable option if you need a single 
 - Source repo: https://github.com/NousResearch/hermes-agent (full Python)
 - Discovery: `rglob("SKILL.md")` — unlimited recursion confirmed
 - NOT MCP-only for skills; file-based discovery is the primary mechanism
+- Managed Agent Skills imports deployed with `aiwg skills deploy <name>
+  --target hermes` land at `~/.hermes/skills/<name>` as strict Agent Skills
+  bundles with AIWG ownership sidecars. This is separate from `aiwg use
+  --provider hermes`, which deploys framework/kernel skills and provider bridge
+  files.
 
 ---
 
@@ -173,7 +181,7 @@ Not all providers have a native plugin marketplace. The table below distinguishe
 | **Warp Terminal** | File-deploy adapter | `aiwg use sdlc --provider warp` |
 | **Windsurf** | File-deploy adapter | `aiwg use sdlc --provider windsurf` |
 | **OpenClaw** | File-deploy adapter | `aiwg use sdlc --provider openclaw` |
-| **Hermes** | File-deploy adapter | `aiwg use sdlc --provider hermes` |
+| **Hermes** | File-deploy adapter; managed Agent Skills target | `aiwg use sdlc --provider hermes`; `aiwg skills deploy <name> --target hermes` |
 
 **Marketplace vs. file-deploy distinction:**
 
@@ -216,4 +224,4 @@ Not all providers have a native plugin marketplace. The table below distinguishe
 
 ---
 
-*Last verified: 2026-04-06. Re-verify before implementing path changes — source repos move fast.*
+*Last verified: 2026-07-28. Re-verify before implementing path changes — source repos move fast.*

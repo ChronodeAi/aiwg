@@ -1,5 +1,7 @@
 # macOS Install Guide
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed, `all` is deployed for your provider, and `aiwg-regenerate` has connected the agent to this project.
+
 Use this guide when installing AIWG on a Mac, especially if `npm install -g aiwg`
 fails with `EACCES` under `/usr/local/lib/node_modules`.
 
@@ -131,7 +133,10 @@ Deploy AIWG from the project root:
 
 ```bash
 cd /path/to/your/project
-aiwg use sdlc
+aiwg use all --provider <provider>
+aiwg index build --all
+aiwg regenerate --provider <provider>
+aiwg status --probe --json
 aiwg doctor
 ```
 
