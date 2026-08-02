@@ -24,6 +24,7 @@ import {
   PHASE_DIRECTORIES,
   GRAPH_CONFIGS,
   TEMPLATE_INDEX_EXTENSIONS,
+  resolveGraphScanDir,
   loadUserGraphConfigs,
   loadGlobalGraphConfigs,
 } from './types.js';
@@ -31,6 +32,12 @@ import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from '
 import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
 import { loadManifest, writeManifest, statMatches, makeEntry, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
 import { workspaceLinkedFiles } from '../smiths/context-pipeline/workspace-context.js';
+import { normalizeOperationalState } from './operational-state.js';
+import {
+  DEFAULT_PROJECT_AIWG_DIR,
+  resolveProjectAiwgDir,
+} from '../config/project-artifacts.js';
+import { normalizeStateTransferProjection } from './state-transfer.js';
 
 export interface BuildOptions {
   force?: boolean;
@@ -41,23 +48,43 @@ export interface BuildOptions {
   explicit?: boolean; // true when graph was requested via --graph flag; false for auto-selected defaultBuild graphs
 }
 
-function expandScanDir(cwd: string, scanDir: string): string {
-  if (scanDir === '~') return process.env.HOME ?? scanDir;
-  if (scanDir.startsWith('~/')) {
-    return path.join(process.env.HOME ?? '', scanDir.slice(2));
-  }
-  if (path.isAbsolute(scanDir)) return scanDir;
-  return path.join(cwd, scanDir);
+function pathContains(parent: string, child: string): boolean {
+  const relative = path.relative(parent, child);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
-function indexPathFor(cwd: string, fullPath: string): string {
+function toPosixPath(value: string): string {
+  return value.split(path.sep).join('/');
+}
+
+function indexPathFor(cwd: string, fullPath: string, graph?: GraphType): string {
+  if (!graph || graph === 'project') {
+    const artifactRoot = resolveProjectAiwgDir(cwd);
+    if (pathContains(artifactRoot, fullPath)) {
+      const relative = toPosixPath(path.relative(artifactRoot, fullPath));
+      return relative ? `${DEFAULT_PROJECT_AIWG_DIR}/${relative}` : DEFAULT_PROJECT_AIWG_DIR;
+    }
+  }
   const rel = path.relative(cwd, fullPath);
-  if (!rel.startsWith('..') && !path.isAbsolute(rel)) return rel;
+  if (!rel.startsWith('..') && !path.isAbsolute(rel)) return toPosixPath(rel);
   return fullPath;
 }
 
-function absoluteEntryPath(cwd: string, entryPath: string): string {
+function absoluteEntryPath(cwd: string, entryPath: string, graph?: GraphType): string {
+  if ((!graph || graph === 'project') && entryPath.startsWith(`${DEFAULT_PROJECT_AIWG_DIR}/`)) {
+    return path.join(resolveProjectAiwgDir(cwd), entryPath.slice(DEFAULT_PROJECT_AIWG_DIR.length + 1));
+  }
   return path.isAbsolute(entryPath) ? entryPath : path.join(cwd, entryPath);
+}
+
+function loadIndexFromDir<T>(indexDir: string, filename: string): T | null {
+  const filePath = path.join(indexDir, filename);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -135,6 +162,41 @@ function extractSummary(data: Record<string, unknown>, body: string): string {
   return lines.slice(0, 5).join(' ').slice(0, 500).trim();
 }
 
+interface SchemaDocMetadata {
+  title?: string;
+  name?: string;
+  capability?: string;
+  searchTerms: string[];
+}
+
+function parseSchemaDoc(content: string, relativePath: string): SchemaDocMetadata | null {
+  if (!/\.(json|ya?ml)$/i.test(relativePath)) return null;
+  let parsed: unknown;
+  try {
+    parsed = /\.json$/i.test(relativePath) ? JSON.parse(content) : loadYaml(content);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const schema = parsed as Record<string, unknown>;
+  const title = typeof schema.title === 'string' && schema.title.trim()
+    ? schema.title.trim()
+    : undefined;
+  const id = typeof schema.$id === 'string' && schema.$id.trim()
+    ? schema.$id.trim()
+    : undefined;
+  const description = typeof schema.description === 'string' && schema.description.trim()
+    ? schema.description.trim().slice(0, 240)
+    : undefined;
+  const filename = path.basename(relativePath, path.extname(relativePath)).replace(/\.schema$/i, '');
+  return {
+    title: title ?? filename,
+    name: filename,
+    capability: description ?? (id ? `Schema definition for ${title ?? filename}` : undefined),
+    searchTerms: [id, title, filename, 'schema'].filter((term): term is string => Boolean(term)),
+  };
+}
+
 /**
  * Determine SDLC phase from file path
  */
@@ -153,8 +215,6 @@ function inferPhase(filePath: string): string {
  * always lands as `type: 'skill'` regardless of frontmatter.
  */
 function inferType(data: Record<string, unknown>, filePath: string): string {
-  if (typeof data.type === 'string') return data.type;
-
   // Normalize separators so matchers are cross-platform.
   const normalized = filePath.replace(/\\/g, '/');
   const basename = path.basename(filePath, path.extname(filePath)).toLowerCase();
@@ -183,7 +243,8 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
   const skipBasenames = new Set(['readme', 'rules-index', 'index']);
   const isMarkdown = /\.md$/i.test(filePath);
   const isTemplateAsset = TEMPLATE_INDEX_EXTENSIONS.some(ext => normalized.endsWith(ext));
-  if (!skipBasenames.has(basename) && (isMarkdown || isTemplateAsset)) {
+  const isSchemaAsset = /\.(json|ya?ml|md)$/i.test(filePath);
+  if (!skipBasenames.has(basename) && (isMarkdown || isTemplateAsset || isSchemaAsset)) {
     // Look at directory segments only (exclude the file itself).
     for (let i = segments.length - 2; i >= 0; i--) {
       const seg = segments[i];
@@ -214,6 +275,9 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
           if (basename === 'rules-index' || basename === 'index') break;
           if (isMarkdown) return 'rule';
           break;
+        case 'schemas':
+          if (isSchemaAsset) return 'schema';
+          break;
         case 'templates':
           return 'template';
         case 'behaviors':
@@ -225,6 +289,8 @@ function inferType(data: Record<string, unknown>, filePath: string): string {
       }
     }
   }
+
+  if (typeof data.type === 'string') return data.type;
 
   // Legacy SDLC artifact heuristics (existing behavior preserved).
   if (basename.startsWith('uc-') || basename.includes('use-case')) return 'use-case';
@@ -339,10 +405,10 @@ export function parseRunbookDoc(
 /**
  * Extract trigger phrases from a SKILL.md / agent body.
  *
- * Skills declare alternate activation phrases under a `## Triggers`
- * heading; the body typically lists them as bullet points. This
- * function pulls each bullet's leading phrase (the part before any
- * `→` arrow or em-dash explanation), lowercased and trimmed.
+ * Skills declare alternate activation phrases in `triggers`, `aliases`,
+ * `deprecated_names`, or under a `## Triggers` heading. This function pulls
+ * those names plus each bullet's leading phrase (the part before any `→`
+ * arrow or em-dash explanation), lowercased and trimmed.
  *
  * Returns an empty array when no `## Triggers` section is found —
  * non-skill artifacts get `triggers: undefined` after this is wired.
@@ -352,15 +418,17 @@ export function parseRunbookDoc(
 export function extractTriggers(body: string, frontmatter?: Record<string, unknown>): string[] {
   const phrases: string[] = [];
 
-  const declaredTriggers = Array.isArray(frontmatter?.triggers)
-    ? frontmatter.triggers
-    : [];
-  for (const trigger of declaredTriggers) {
-    if (typeof trigger !== 'string') continue;
-    const phrase = trigger.trim().toLowerCase();
-    if (phrase.length === 0) continue;
-    if (phrase.length > 200) continue;
-    phrases.push(phrase);
+  for (const field of ['triggers', 'aliases', 'deprecated_names']) {
+    const declaredValues = Array.isArray(frontmatter?.[field])
+      ? frontmatter[field]
+      : [];
+    for (const value of declaredValues) {
+      if (typeof value !== 'string') continue;
+      const phrase = value.trim().toLowerCase();
+      if (phrase.length === 0) continue;
+      if (phrase.length > 200) continue;
+      phrases.push(phrase);
+    }
   }
 
   // Find a triggers heading (case-insensitive). Accepted variants:
@@ -726,11 +794,11 @@ export async function buildIndex(
     scanDirs = [path.join(cwd, scope)];
     fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   } else if (graphConfig) {
-    scanDirs = graphConfig.scanDirs.map(d => expandScanDir(cwd, d));
+    scanDirs = graphConfig.scanDirs.map(d => resolveGraphScanDir(cwd, d));
     fileExtensions = graphConfig.extensions;
   } else {
     // Default: scan .aiwg/ (backward compatible)
-    scanDirs = [path.join(cwd, '.aiwg')];
+    scanDirs = [resolveProjectAiwgDir(cwd)];
     fileExtensions = [...DEFAULT_INDEX_EXTENSIONS];
   }
 
@@ -760,7 +828,7 @@ export async function buildIndex(
   } else if (graph) {
     indexOutputDir = resolveIndexDir(cwd, graph);
   } else {
-    indexOutputDir = path.join(cwd, INDEX_DIR);
+    indexOutputDir = resolveIndexDir(cwd);
   }
   fs.mkdirSync(indexOutputDir, { recursive: true });
   // effectiveOutputCwd is used for backward-compat loadMetadataIndex calls
@@ -781,7 +849,11 @@ export async function buildIndex(
   }
 
   // Load existing index for incremental updates
-  const existingIndex = force ? null : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
+  const existingIndex = force
+    ? null
+    : outputDir
+      ? loadIndexFromDir<ArtifactIndex>(indexOutputDir, 'metadata.json')
+      : loadGraphIndexFile<ArtifactIndex>(effectiveOutputCwd, 'metadata.json', graph);
   const canReuseExisting = existingIndex?.version === INDEX_VERSION
     && existingIndex.extractorVersion === INDEX_EXTRACTOR_VERSION;
   const existingEntries = canReuseExisting ? existingIndex.entries : {};
@@ -830,7 +902,7 @@ export async function buildIndex(
   const useFilenameMetadata = graphConfig?.nodeStrategy === 'filename-metadata';
 
   for (const fullPath of files) {
-    const relativePath = indexPathFor(cwd, fullPath);
+    const relativePath = indexPathFor(cwd, fullPath, graph);
 
     let entry: MetadataEntry;
 
@@ -908,11 +980,12 @@ export async function buildIndex(
       const inferredType = inferType(data, relativePath);
       const physicalType = inferType({ ...data, type: undefined }, relativePath);
       const runbook = flow ? null : parseRunbookDoc(data, body, relativePath);
-      const title = flow?.name ?? extractTitle(data, body);
+      const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
+      const title = flow?.name ?? schemaDoc?.title ?? extractTitle(data, body);
       const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
       const type = flow?.type ?? (runbook ? 'runbook' : inferredType);
       const tags = flow ? flow.tags : (Array.isArray(data.tags) ? data.tags.map(String) : []);
-      const summary = flow?.description ?? runbook?.capability ?? extractSummary(data, body);
+      const summary = flow?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
       const dependencies = extractMentions(content);
 
       // Discovery metadata (#1214, #1540, #1792) — meaningful for operational
@@ -924,18 +997,20 @@ export async function buildIndex(
       // Declarative processes have no trigger phrases — they rely on their
       // capability and structure-aware search terms.
       const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
-      const capability = flow?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
+      const capability = flow?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
       const kind = flow?.kind ?? runbook?.kind;
       const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
-      const searchTerms = flow?.searchTerms ?? runbook?.searchTerms;
+      const searchTerms = flow?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
       const kernel =
         data.kernel === true || data.kernel === 'true' ? true : undefined;
       // Script entrypoint metadata is meaningful for skills only (#1227).
       const script = type === 'skill' ? extractSkillScript(data) : undefined;
+      const operationalState = normalizeOperationalState(data.operational_state);
+      const stateTransfer = normalizeStateTransferProjection(data.state_transfer);
       // Canonical short name (#1233) — used by the scorer to floor exact-name
       // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
       // remain searchable even when the rendered title strips the hyphen.
-      const name = flow ? flow.name : (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
+      const name = flow ? flow.name : schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
 
       entry = {
         path: relativePath,
@@ -957,6 +1032,8 @@ export async function buildIndex(
         ...(searchTerms && searchTerms.length > 0 ? { searchTerms } : {}),
         ...(kernel ? { kernel } : {}),
         ...(script ? { script } : {}),
+        ...(operationalState ? { operationalState } : {}),
+        ...(stateTransfer ? { stateTransfer } : {}),
       };
     }
 
@@ -1014,11 +1091,18 @@ export async function buildIndex(
   }
 
   // Run citation sidecar edge extraction if configured
+  let citationMetrics: {
+    canonicalEdges: number;
+    outgoingDeclarations: number;
+    incomingDeclarations: number;
+    unmirroredOutgoing: number;
+    unmirroredIncoming: number;
+  } | null = null;
   if (graphConfig?.edgeExtraction?.parser === 'citation-sidecar') {
     // Build REF-XXX → path map from all entries with ref frontmatter
     const entryFrontmatter = new Map<string, Record<string, unknown>>();
     for (const entryPath of Object.keys(entries)) {
-      const fullPath = absoluteEntryPath(cwd, entryPath);
+      const fullPath = absoluteEntryPath(cwd, entryPath, graph);
       if (fs.existsSync(fullPath)) {
         const content = fs.readFileSync(fullPath, 'utf-8');
         const { data } = parseFrontmatter(content);
@@ -1029,13 +1113,26 @@ export async function buildIndex(
 
     // Parse each entry as a citation sidecar and extract edges
     let citationEdgeCount = 0;
+    let outgoingDeclarations = 0;
+    let incomingDeclarations = 0;
+    const canonicalOutgoing = new Set<string>();
+    const declaredIncoming = new Set<string>();
     for (const entryPath of Object.keys(entries)) {
-      const fullPath = absoluteEntryPath(cwd, entryPath);
+      const fullPath = absoluteEntryPath(cwd, entryPath, graph);
       if (!fs.existsSync(fullPath)) continue;
 
       const content = fs.readFileSync(fullPath, 'utf-8');
       const result = parseCitationSidecar(content);
       if (!result) continue;
+
+      outgoingDeclarations += result.cites.length;
+      incomingDeclarations += result.citedBy.length;
+      for (const targetRef of result.cites) {
+        canonicalOutgoing.add(`${result.ref}\0${targetRef}`);
+      }
+      for (const sourceRef of result.citedBy) {
+        declaredIncoming.add(`${sourceRef}\0${result.ref}`);
+      }
 
       const edges = citationResultToEdges(result, refToPath);
 
@@ -1065,6 +1162,16 @@ export async function buildIndex(
         citationEdgeCount++;
       }
     }
+
+    citationMetrics = {
+      canonicalEdges: canonicalOutgoing.size,
+      outgoingDeclarations,
+      incomingDeclarations,
+      unmirroredOutgoing: [...canonicalOutgoing]
+        .filter(edge => !declaredIncoming.has(edge)).length,
+      unmirroredIncoming: [...declaredIncoming]
+        .filter(edge => !canonicalOutgoing.has(edge)).length,
+    };
 
     if (verbose && citationEdgeCount > 0) {
       console.log(`  citation edges: ${citationEdgeCount}`);
@@ -1105,9 +1212,13 @@ export async function buildIndex(
   writeManifest(indexOutputDir, nextManifest);
 
   // Write stats
-  const totalEdges = Object.values(depGraph).reduce(
+  const downstreamEdges = Object.values(depGraph).reduce(
     (sum, node) => sum + node.downstream.length, 0
   );
+  const adjacencyEntries = Object.values(depGraph).reduce(
+    (sum, node) => sum + node.upstream.length + node.downstream.length, 0
+  );
+  const totalEdges = citationMetrics?.canonicalEdges ?? downstreamEdges;
   const orphaned = Object.entries(depGraph).filter(
     ([, node]) => node.upstream.length === 0 && node.downstream.length === 0
   ).length;
@@ -1138,6 +1249,14 @@ export async function buildIndex(
     tagDistribution: tagDist,
     graphMetrics: {
       totalEdges,
+      ...(citationMetrics ? {
+        canonicalEdges: citationMetrics.canonicalEdges,
+        outgoingDeclarations: citationMetrics.outgoingDeclarations,
+        incomingDeclarations: citationMetrics.incomingDeclarations,
+        adjacencyEntries,
+        unmirroredOutgoing: citationMetrics.unmirroredOutgoing,
+        unmirroredIncoming: citationMetrics.unmirroredIncoming,
+      } : {}),
       orphanedArtifacts: orphaned,
       mostReferenced,
     },

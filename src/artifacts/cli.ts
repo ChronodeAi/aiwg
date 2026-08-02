@@ -18,6 +18,9 @@
  */
 
 import type { GraphType } from './types.js';
+import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   GRAPH_CONFIGS,
   OPERATIONAL_DISCOVERY_TYPES,
@@ -28,6 +31,44 @@ import {
   orderedGraphEntries,
 } from './types.js';
 import { SUPPORTED_VIEWS } from './corpus-views/renderers.js';
+import {
+  parseResourceSelector,
+  readVerifiedRegularFile,
+  type ResourceSource,
+  type WebReleaseOptions,
+} from '../resources/web-release.js';
+import { findPackageRoot } from '../cli/find-package-root.js';
+
+const MAX_RESOURCE_TRUST_ROOT_BYTES = 64 * 1024;
+
+function webReleaseOptionsFromEnvironment(): Omit<WebReleaseOptions, 'selector' | 'offline'> {
+  const baseUrl = process.env.AIWG_RESOURCE_BASE_URL;
+  const cacheRoot = process.env.AIWG_RESOURCE_CACHE_ROOT;
+  const trustRootFile = process.env.AIWG_RESOURCE_TRUST_ROOT_FILE;
+  let publicKeyPem: Buffer | undefined;
+
+  if (trustRootFile !== undefined) {
+    if (trustRootFile.trim().length === 0) {
+      throw new Error('AIWG_RESOURCE_TRUST_ROOT_FILE must name a non-empty public PEM file');
+    }
+    publicKeyPem = readVerifiedRegularFile(path.resolve(trustRootFile), {
+      label: 'AIWG_RESOURCE_TRUST_ROOT_FILE public PEM',
+      maxBytes: MAX_RESOURCE_TRUST_ROOT_BYTES,
+    });
+    if (publicKeyPem.toString('utf8').trim().length === 0) {
+      throw new Error('AIWG_RESOURCE_TRUST_ROOT_FILE public PEM is empty');
+    }
+  }
+
+  return {
+    ...(baseUrl === undefined ? {} : { baseUrl }),
+    ...(cacheRoot === undefined ? {} : { cacheRoot }),
+    ...(publicKeyPem === undefined ? {} : { publicKeyPem }),
+    ...(process.env.AIWG_RESOURCE_ALLOW_INSECURE_LOOPBACK_HTTP === '1'
+      ? { allowInsecureLoopbackHttp: true }
+      : {}),
+  };
+}
 
 /** Parse --graph flag from args, returns undefined for "all graphs" */
 function parseGraphFlag(args: string[]): GraphType | undefined {
@@ -60,6 +101,64 @@ function parseBackendFlag(args: string[]): 'local' | 'fortemi-core' | undefined 
 
 function parseSearchBackendFlag(args: string[]): 'local' | 'fortemi-core' {
   return parseBackendFlag(args) ?? 'fortemi-core';
+}
+
+/**
+ * The full `aiwg` package owns a local corpus, while `@aiwg/cli` intentionally
+ * ships only executable code and embedded runtime metadata. Select web
+ * resources automatically for the lightweight distribution so a normal
+ * `aiwg discover` / `aiwg show` invocation works immediately after install.
+ *
+ * Resolve from this module rather than process.argv so the exported API gets
+ * the same package-aware default as the npm binary.
+ */
+function defaultResourceSource(): ResourceSource {
+  const packageRoot = findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
+  if (!packageRoot) return 'local';
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+    return manifest.name === '@aiwg/cli' ? 'web' : 'local';
+  } catch {
+    return 'local';
+  }
+}
+
+function parseResourceSourceFlag(args: string[]): ResourceSource {
+  const indices = args
+    .map((arg, index) => arg === '--resource-source' ? index : -1)
+    .filter((index) => index >= 0);
+  if (indices.length > 1) {
+    console.error('Error: --resource-source may be specified only once');
+    process.exit(1);
+  }
+  if (indices.length === 0) return defaultResourceSource();
+  const value = args[indices[0] + 1];
+  if (value === 'local' || value === 'web' || value === 'auto') return value;
+  console.error('Error: --resource-source must be local, web, or auto');
+  process.exit(1);
+}
+
+function parseAiwgVersionFlag(args: string[]): string | undefined {
+  const indices = args
+    .map((arg, index) => arg === '--aiwg-version' ? index : -1)
+    .filter((index) => index >= 0);
+  if (indices.length > 1) {
+    console.error('Error: --aiwg-version may be specified only once');
+    process.exit(1);
+  }
+  if (indices.length === 0) return undefined;
+  const value = args[indices[0] + 1];
+  if (!value || value.startsWith('--')) {
+    console.error('Error: --aiwg-version requires an exact calendar-semver version, SemVer range, sha256 digest, or channel name');
+    process.exit(1);
+  }
+  try {
+    parseResourceSelector(value);
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+  return value;
 }
 
 function firstPositionalArg(args: string[], valueFlags: string[]): string | undefined {
@@ -194,6 +293,10 @@ export async function main(args: string[]): Promise<void> {
       await handleDedup(subcommandArgs);
       break;
 
+    case 'eval-discovery':
+      await handleEvalDiscovery(subcommandArgs);
+      break;
+
     case 'watch':
       await handleWatch(subcommandArgs);
       break;
@@ -225,7 +328,7 @@ export async function main(args: string[]): Promise<void> {
 
     default:
       console.error(`Error: Unknown index subcommand '${subcommand}'`);
-      console.log('Available: build, query, discover, show, export, sync, migrate-legacy, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, watch');
+      console.log('Available: build, query, discover, show, export, sync, migrate-legacy, deps, stats, status, list, neighbors, set, embed, similar, dedup-report, eval-discovery, watch');
       process.exit(1);
   }
 }
@@ -249,6 +352,7 @@ function printIndexUsage(): void {
   console.log('  embed      Build the semantic embedding index for a graph (opt-in deps)');
   console.log('  similar    Semantic neighbors of a node (requires embed)');
   console.log('  dedup-report  Near-duplicate node pairs above a similarity threshold');
+  console.log('  eval-discovery  Benchmark operational capability discovery relevance');
   console.log('  watch      Start a filesystem watcher for automatic incremental index updates');
   console.log('');
   console.log('Options:');
@@ -275,8 +379,58 @@ function printIndexUsage(): void {
   console.log('  aiwg index deps .aiwg/requirements/UC-001.md');
   console.log('  aiwg index stats --json');
   console.log('  aiwg index stats --graph project');
+  console.log('  aiwg index eval-discovery --queries test/fixtures/artifacts/discovery-relevance.jsonl --backend local --strategy lexical');
   console.log('  aiwg index neighbors --graph citation-network --node REF-008 --direction in --edge-type cites');
   console.log('  aiwg index set --graph citation-network --op intersection --node-a REF-008 --node-b REF-016 --direction in');
+}
+
+async function handleEvalDiscovery(args: string[]): Promise<void> {
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: aiwg index eval-discovery --queries <jsonl> --backend <local|fortemi-core> --strategy <lexical|dense|hybrid-rrf|rerank|chunk-multivector> [options]');
+    console.log('');
+    console.log('Options:');
+    console.log('  --queries <path>   Versioned relevance JSONL fixture (required)');
+    console.log('  --backend <name>   local or fortemi-core (required)');
+    console.log('  --strategy <name>  lexical, dense, hybrid-rrf, rerank, or chunk-multivector');
+    console.log('  --out <path>       Write the JSON report to a file');
+    console.log('  --json             Emit JSON instead of the readable summary');
+    return;
+  }
+  const queries = parseFlagValue(args, '--queries', 'Error: --queries requires a JSONL path');
+  if (!queries) {
+    console.error('Error: --queries is required');
+    process.exit(1);
+  }
+  const backend = parseFlagValue(args, '--backend', 'Error: --backend requires local or fortemi-core');
+  if (backend !== 'local' && backend !== 'fortemi-core') {
+    console.error('Error: --backend must be local or fortemi-core');
+    process.exit(1);
+  }
+  const strategy = parseFlagValue(args, '--strategy', 'Error: --strategy requires a value') ?? 'lexical';
+  const { DISCOVERY_EVAL_STRATEGIES, evaluateDiscovery, formatDiscoveryEvalSummary } = await import('./discovery-eval.js');
+  if (!(DISCOVERY_EVAL_STRATEGIES as readonly string[]).includes(strategy)) {
+    console.error(`Error: --strategy must be ${DISCOVERY_EVAL_STRATEGIES.join(', ')}`);
+    process.exit(1);
+  }
+  try {
+    const report = await evaluateDiscovery({
+      cwd: process.cwd(),
+      fixturePath: path.resolve(queries),
+      backend,
+      strategy: strategy as import('./discovery-eval.js').DiscoveryEvalStrategy,
+    });
+    const serialized = `${JSON.stringify(report, null, 2)}\n`;
+    const out = parseFlagValue(args, '--out', 'Error: --out requires a path');
+    if (out) {
+      const fs = await import('node:fs');
+      fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
+      fs.writeFileSync(path.resolve(out), serialized);
+    }
+    console.log(args.includes('--json') ? serialized.trimEnd() : formatDiscoveryEvalSummary(report));
+  } catch (error) {
+    console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
 }
 
 /**
@@ -911,12 +1065,19 @@ async function handleExport(args: string[]): Promise<void> {
     console.log('  --out <path>           Write JSON or .shard output to a file');
     console.log('  --repo <name>          Source repository label (default: cwd basename)');
     console.log('  --privacy <level>      private, sanitized, or public (default: private)');
-    console.log('  --schema-version <v>   Export contract version: v1 or v2 (default: v1)');
+    console.log('  --schema-version <v>   Browser: v1|v2; shard: 2.0.0|1.2.0');
+    console.log('  --profile <name>       Shard profile: full-v1 (default) or core-v1');
+    console.log('  --fail-on-loss         Reject a full-v1 conversion that reports any loss');
+    console.log('  --dry-run              Build and report without writing the shard');
+    console.log('  --force                Replace an existing output path');
+    console.log('  --migrate-from <path>  Diagnose a source-less legacy shard (dry-run only)');
+    console.log('  --json                 Emit the machine-readable conversion report');
     console.log('  --generated-at <iso>   Override generated timestamp for deterministic fixtures');
     console.log('');
     console.log('Examples:');
     console.log('  aiwg index export --format fortemi --graph project --out aiwg-fortemi-index.json');
-    console.log('  aiwg index export --format fortemi-shard --graph project --out aiwg-index.shard');
+    console.log('  aiwg index export --format fortemi-shard --graph project --schema-version 2.0.0 --profile full-v1 --fail-on-loss --out aiwg-index.shard');
+    console.log('  aiwg index export --format fortemi-shard --migrate-from legacy.shard --dry-run --json');
     console.log('  aiwg index export --format fortemi --privacy sanitized --generated-at 2026-01-01T00:00:00.000Z');
     return;
   }
@@ -936,30 +1097,71 @@ async function handleExport(args: string[]): Promise<void> {
     process.exit(1);
   }
   const generatedAt = parseFlagValue(args, '--generated-at', 'Error: --generated-at requires an ISO timestamp value');
-  const schemaVersion = parseFlagValue(args, '--schema-version', 'Error: --schema-version must be v1 or v2');
-  if (schemaVersion && !['v1', 'v2'].includes(schemaVersion)) {
-    console.error('Error: --schema-version must be v1 or v2');
+  const schemaVersion = parseFlagValue(args, '--schema-version', 'Error: --schema-version requires a value');
+  const profile = parseFlagValue(args, '--profile', 'Error: --profile requires a value');
+  const migrateFrom = parseFlagValue(args, '--migrate-from', 'Error: --migrate-from requires a shard path');
+  const dryRun = args.includes('--dry-run');
+  const json = args.includes('--json');
+  if (format === 'fortemi' && schemaVersion && !['v1', 'v2'].includes(schemaVersion)) {
+    console.error('Error: browser export --schema-version must be v1 or v2');
     process.exit(1);
   }
-  if (format === 'fortemi-shard' && schemaVersion && schemaVersion !== 'v2') {
-    console.error('Error: --format fortemi-shard requires --schema-version v2');
+  if (format === 'fortemi-shard' && schemaVersion && !['1.2.0', '2.0.0'].includes(schemaVersion)) {
+    console.error('Error: shard --schema-version must be 2.0.0 or 1.2.0');
     process.exit(1);
   }
-  if (format === 'fortemi-shard' && !out) {
+  if (format === 'fortemi-shard' && profile && !['full-v1', 'core-v1'].includes(profile)) {
+    console.error('Error: shard --profile must be full-v1 or core-v1');
+    process.exit(1);
+  }
+  if (format === 'fortemi-shard' && !out && !migrateFrom) {
     console.error('Error: --format fortemi-shard requires --out <path>');
     process.exit(1);
   }
 
   try {
     if (format === 'fortemi-shard') {
-      const { writeAiwgFortemiKnowledgeShard } = await import('./fortemi-shard-export.js');
+      const {
+        diagnoseAiwgFortemiShardMigration,
+        writeAiwgFortemiKnowledgeShard,
+      } = await import('./fortemi-shard-export.js');
+      if (migrateFrom) {
+        if (!dryRun) {
+          throw new Error(
+            '--migrate-from is diagnostic-only and requires --dry-run; '
+            + 'source-less core-v1 artifacts cannot be promoted losslessly.',
+          );
+        }
+        const diagnosis = diagnoseAiwgFortemiShardMigration(process.cwd(), migrateFrom);
+        if (json) console.log(JSON.stringify(diagnosis, null, 2));
+        else {
+          console.log(`Migration supported: no`);
+          console.log(`Diagnostic: ${diagnosis.diagnostic}`);
+          console.log(`Action: ${diagnosis.action}`);
+        }
+        return;
+      }
       const result = await writeAiwgFortemiKnowledgeShard(process.cwd(), out!, {
         graph,
         repo,
         privacy: privacy as 'private' | 'sanitized' | 'public' | undefined,
         generatedAt,
+        schemaVersion: schemaVersion as '1.2.0' | '2.0.0' | undefined,
+        profile: profile as 'core-v1' | 'full-v1' | undefined,
+        failOnLoss: args.includes('--fail-on-loss'),
+        dryRun,
+        overwrite: args.includes('--force'),
       });
-      console.log(`Exported ${result.items} AIWG records to ${result.outPath} (${result.bytes} bytes)`);
+      if (json) console.log(JSON.stringify(result, null, 2));
+      else {
+        const action = result.written ? 'Exported' : 'Would export';
+        console.log(
+          `${action} ${result.items} AIWG records as `
+          + `${result.conversion.schemaVersion}/${result.conversion.profile} `
+          + `to ${result.outPath} (${result.bytes} bytes; `
+          + `${result.conversion.losses.length} losses)`,
+        );
+      }
       return;
     }
     const { buildAiwgFortemiIndexExport, writeAiwgFortemiIndexExport } = await import('./browser-export.js');
@@ -1406,7 +1608,7 @@ async function handleDiscover(args: string[]): Promise<void> {
     console.error('Error: aiwg index discover requires a search phrase');
     console.log('');
     console.log(
-      'Usage: aiwg index discover "<phrase>" [--type <kinds>] [--limit N] [--json|--format json|text] [--pretty|--compact] [--graph <name>] [--backend local|fortemi-core]',
+      'Usage: aiwg index discover "<phrase>" [--type <kinds>] [--limit N] [--json|--format json|text] [--pretty|--compact] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
     );
     console.log('');
     console.log('Examples:');
@@ -1414,6 +1616,7 @@ async function handleDiscover(args: string[]): Promise<void> {
     console.log('  aiwg index discover "deploy production" --limit 5');
     console.log(`  aiwg index discover "audit security" --type ${OPERATIONAL_DISCOVERY_TYPES.join(',')}`);
     console.log('  aiwg index discover "intake" --format json --pretty');
+    console.log('  aiwg discover "intake" --resource-source web --aiwg-version stable');
     process.exit(1);
   }
 
@@ -1438,6 +1641,12 @@ async function handleDiscover(args: string[]): Promise<void> {
 
   const graph = parseGraphFlag(flags);
   const backend = parseSearchBackendFlag(flags);
+  const resourceSource = parseResourceSourceFlag(flags);
+  const aiwgVersion = parseAiwgVersionFlag(flags);
+  const offline = flags.includes('--offline');
+  const webReleaseOptions = resourceSource === 'local'
+    ? undefined
+    : webReleaseOptionsFromEnvironment();
 
   await discoverCapability(cwd, {
     phrase,
@@ -1447,6 +1656,10 @@ async function handleDiscover(args: string[]): Promise<void> {
     jsonPretty,
     graph,
     backend,
+    resourceSource,
+    aiwgVersion,
+    offline,
+    webReleaseOptions,
     includePaths: false,
   });
 }
@@ -1479,8 +1692,8 @@ async function handleShow(args: string[]): Promise<void> {
 
   const HELP_TEXT = [
     '',
-    'Usage: aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]',
-    '       aiwg show metadata <id-or-name-or-path> [--json] [--first] [--graph <name>] [--backend local|fortemi-core]',
+    'Usage: aiwg show <type> <name> [--json] [--first] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
+    '       aiwg show metadata <id-or-name-or-path> [--json] [--first] [--graph <name>] [--backend local|fortemi-core] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
     '       aiwg index show <type> <name> ...',
     '',
     `Types: ${OPERATIONAL_SHOW_TYPES.join(' | ')}`,
@@ -1494,6 +1707,7 @@ async function handleShow(args: string[]): Promise<void> {
     '  aiwg show metadata aiwg:skill:4840fa441622f676 --json',
     '  aiwg show agent aiwg-steward',
     '  aiwg show command discover',
+    '  aiwg show skill intake-wizard --resource-source web --aiwg-version stable',
     '',
     'Tip: use `aiwg discover "<phrase>" --json` first to find the stable id.',
   ].join('\n');
@@ -1553,6 +1767,12 @@ async function handleShow(args: string[]): Promise<void> {
 
   const graph = parseGraphFlag(flags);
   const backend = parseSearchBackendFlag(flags);
+  const resourceSource = parseResourceSourceFlag(flags);
+  const aiwgVersion = parseAiwgVersionFlag(flags);
+  const offline = flags.includes('--offline');
+  const webReleaseOptions = resourceSource === 'local'
+    ? undefined
+    : webReleaseOptionsFromEnvironment();
 
   const params = {
     name,
@@ -1561,6 +1781,10 @@ async function handleShow(args: string[]): Promise<void> {
     first,
     graph,
     backend,
+    resourceSource,
+    aiwgVersion,
+    offline,
+    webReleaseOptions,
   };
 
   if (metadataMode) await showMetadata(cwd, params);

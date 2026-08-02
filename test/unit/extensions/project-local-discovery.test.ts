@@ -8,10 +8,21 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync, symlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { PROJECT_AIWG_LOCATION_FILE, projectAiwgPath } from '../../../src/config/project-artifacts.js';
 import {
   discoverProjectLocalBundles,
   loadAndValidateManifest,
 } from '../../../src/extensions/project-local-discovery.js';
+import { PROJECT_LOCAL_SEARCH_PATHS_ENV } from '../../../src/extensions/project-local-paths.js';
+
+const ARTIFACT_ENV_KEYS = [
+  'AIWG_ARTIFACTS_PATH',
+  'AIWG_PROJECT_ARTIFACTS_PATH',
+  'AIWG_PROJECT_AIWG_DIR',
+  PROJECT_LOCAL_SEARCH_PATHS_ENV,
+] as const;
+
+let originalEnv: Partial<Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined>> = {};
 
 function makeTmpDir(): string {
   const dir = join(tmpdir(), `aiwg-pl-discovery-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
@@ -25,7 +36,16 @@ function writeBundle(
   name: string,
   manifest: Record<string, unknown>
 ): void {
-  const bundleDir = join(projectDir, '.aiwg', type, name);
+  writeBundleAtRoot(join(projectDir, '.aiwg'), type, name, manifest);
+}
+
+function writeBundleAtRoot(
+  rootDir: string,
+  type: 'extensions' | 'addons' | 'frameworks' | 'plugins' | 'providers',
+  name: string,
+  manifest: Record<string, unknown>
+): void {
+  const bundleDir = join(rootDir, type, name);
   mkdirSync(bundleDir, { recursive: true });
   writeFileSync(join(bundleDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 }
@@ -50,10 +70,20 @@ describe('project-local-discovery', () => {
   let tmpDir: string;
 
   beforeEach(() => {
+    originalEnv = {};
+    for (const key of ARTIFACT_ENV_KEYS) {
+      originalEnv[key] = process.env[key];
+      delete process.env[key];
+    }
     tmpDir = makeTmpDir();
   });
 
   afterEach(() => {
+    for (const key of ARTIFACT_ENV_KEYS) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -97,11 +127,100 @@ describe('project-local-discovery', () => {
       expect(result.isEmpty).toBe(false);
     });
 
+    it('discovers bundles from a relocated artifact root pointer', async () => {
+      const relocatedRoot = join(tmpDir, 'private-artifacts', 'renamed-aiwg');
+      writeFileSync(join(tmpDir, PROJECT_AIWG_LOCATION_FILE), 'private-artifacts/renamed-aiwg\n', 'utf-8');
+      writeBundleAtRoot(relocatedRoot, 'addons', 'foo', validManifest());
+
+      const result = await discoverProjectLocalBundles(tmpDir);
+
+      expect(result.errors).toEqual([]);
+      expect(result.bundles).toHaveLength(1);
+      expect(result.bundles[0].bundlePath).toBe(join(relocatedRoot, 'addons', 'foo'));
+      expect(result.bundles[0].localPath).toBe('.aiwg/addons/foo/');
+      expect(result.bundles[0].manifestPath).toBe('.aiwg/addons/foo/manifest.json');
+    });
+
+    it('discovers additional bundle roots from aiwg.config projectLocal.searchPaths', async () => {
+      const teamRoot = join(tmpDir, 'team-bundles');
+      mkdirSync(join(tmpDir, '.aiwg'), { recursive: true });
+      writeFileSync(
+        projectAiwgPath(tmpDir, 'aiwg.config'),
+        JSON.stringify({
+          version: '1',
+          providers: ['claude'],
+          installed: {},
+          scripts: {},
+          projectLocal: { searchPaths: ['team-bundles'] },
+        }, null, 2),
+      );
+      writeBundleAtRoot(teamRoot, 'extensions', 'team-flow', validManifest({
+        id: 'team-flow',
+        type: 'extension',
+        addonConfig: undefined,
+      }));
+
+      const result = await discoverProjectLocalBundles(tmpDir);
+
+      expect(result.errors).toEqual([]);
+      expect(result.bundles.map(bundle => bundle.id)).toEqual(['team-flow']);
+      expect(result.bundles[0].localPath).toBe('team-bundles/extensions/team-flow/');
+    });
+
+    it('reads projectLocal.searchPaths from a relocated artifact root config', async () => {
+      const relocatedRoot = join(tmpDir, 'private-artifacts', 'renamed-aiwg');
+      const teamRoot = join(tmpDir, 'team-bundles');
+      writeFileSync(join(tmpDir, PROJECT_AIWG_LOCATION_FILE), 'private-artifacts/renamed-aiwg\n', 'utf-8');
+      mkdirSync(relocatedRoot, { recursive: true });
+      writeFileSync(
+        projectAiwgPath(tmpDir, 'aiwg.config'),
+        JSON.stringify({
+          version: '1',
+          providers: ['claude'],
+          installed: {},
+          scripts: {},
+          projectLocal: { searchPaths: ['team-bundles'] },
+        }, null, 2),
+      );
+      writeBundleAtRoot(teamRoot, 'frameworks', 'team-framework', validManifest({
+        id: 'team-framework',
+        type: 'framework',
+        addonConfig: undefined,
+        frameworkConfig: { path: 'framework/' },
+      }));
+
+      const result = await discoverProjectLocalBundles(tmpDir);
+
+      expect(result.errors).toEqual([]);
+      expect(result.bundles.map(bundle => `${bundle.type}:${bundle.id}`)).toEqual(['framework:team-framework']);
+      expect(result.bundles[0].manifestPath).toBe('team-bundles/frameworks/team-framework/manifest.json');
+    });
+
+    it('discovers additional bundle roots from AIWG_PROJECT_LOCAL_PATHS', async () => {
+      const envRoot = join(tmpDir, 'env-bundles');
+      process.env[PROJECT_LOCAL_SEARCH_PATHS_ENV] = envRoot;
+      writeBundleAtRoot(envRoot, 'providers', 'env-provider', validManifest({
+        id: 'env-provider',
+        type: 'provider',
+        addonConfig: undefined,
+        providerConfig: { extends: 'claude' },
+      }));
+
+      const result = await discoverProjectLocalBundles(tmpDir);
+
+      expect(result.errors).toEqual([]);
+      expect(result.bundles.map(bundle => `${bundle.type}:${bundle.id}`)).toEqual(['provider:env-provider']);
+      expect(result.bundles[0].localPath).toBe('env-bundles/providers/env-provider/');
+    });
+
     it('discovers bundles across all project-local type directories', async () => {
       writeBundle(tmpDir, 'extensions', 'a', validManifest({ id: 'a', type: 'extension', addonConfig: undefined }));
       writeBundle(tmpDir, 'addons', 'b', validManifest({ id: 'b' }));
       writeBundle(tmpDir, 'frameworks', 'c', validManifest({ id: 'c', type: 'framework', addonConfig: undefined, frameworkConfig: { path: 'src/' } }));
       writeBundle(tmpDir, 'plugins', 'd', validManifest({ id: 'd', type: 'plugin', addonConfig: undefined, pluginConfig: { payloadType: 'addon', payloadPath: 'payload/' } }));
+      const pluginPayload = join(tmpDir, '.aiwg', 'plugins', 'd', 'payload');
+      mkdirSync(pluginPayload, { recursive: true });
+      writeFileSync(join(pluginPayload, 'manifest.json'), JSON.stringify(validManifest({ id: 'd-payload' }), null, 2));
       writeBundle(tmpDir, 'providers', 'e', validManifest({ id: 'e', type: 'provider', addonConfig: undefined, providerConfig: { extends: 'claude' } }));
 
       const result = await discoverProjectLocalBundles(tmpDir);
@@ -129,6 +248,79 @@ describe('project-local-discovery', () => {
       expect(result.errors).toEqual([]);
       expect(result.bundles).toHaveLength(1);
       expect(result.bundles[0].manifest.providerConfig?.capabilities?.nativeFeatures?.cron).toBe(true);
+    });
+  });
+
+  describe('plugin payload resolution (#1868)', () => {
+    function writePlugin(payloadType: 'addon' | 'extension' | 'framework' = 'addon'): string {
+      writeBundle(tmpDir, 'plugins', 'wrapped', validManifest({
+        id: 'wrapped',
+        type: 'plugin',
+        addonConfig: undefined,
+        pluginConfig: { payloadType, payloadPath: 'payload/' },
+      }));
+      const payloadDir = join(tmpDir, '.aiwg', 'plugins', 'wrapped', 'payload');
+      mkdirSync(payloadDir, { recursive: true });
+      const configKey = `${payloadType}Config`;
+      writeFileSync(join(payloadDir, 'manifest.json'), JSON.stringify(validManifest({
+        id: 'wrapped-payload',
+        type: payloadType,
+        addonConfig: undefined,
+        [configKey]: payloadType === 'extension' ? undefined : {},
+      }), null, 2));
+      return payloadDir;
+    }
+
+    it.each(['addon', 'extension', 'framework'] as const)(
+      'returns a validated %s payload as the artifact source',
+      async (payloadType) => {
+      const payloadDir = writePlugin(payloadType);
+      mkdirSync(join(payloadDir, 'skills', 'wrapped-skill'), { recursive: true });
+      writeFileSync(join(payloadDir, 'skills', 'wrapped-skill', 'SKILL.md'), '# Wrapped');
+
+      const result = await discoverProjectLocalBundles(tmpDir);
+
+      expect(result.errors).toEqual([]);
+      expect(result.bundles).toHaveLength(1);
+      expect(result.bundles[0].bundlePath).toBe(join(tmpDir, '.aiwg', 'plugins', 'wrapped'));
+      expect(result.bundles[0].artifactPath).toBe(payloadDir);
+      },
+    );
+
+    it('rejects a payload manifest whose type disagrees with payloadType', async () => {
+      const payloadDir = writePlugin('addon');
+      const payloadManifest = validManifest({
+        id: 'wrapped-payload',
+        type: 'extension',
+        addonConfig: undefined,
+      });
+      writeFileSync(join(payloadDir, 'manifest.json'), JSON.stringify(payloadManifest, null, 2));
+
+      const result = await discoverProjectLocalBundles(tmpDir);
+
+      expect(result.bundles).toEqual([]);
+      expect(result.errors.some(error =>
+        error.field === 'type' && error.hint?.includes('payloadType')
+      )).toBe(true);
+    });
+
+    it('rejects a symlinked payload directory', async () => {
+      writeBundle(tmpDir, 'plugins', 'wrapped', validManifest({
+        id: 'wrapped',
+        type: 'plugin',
+        addonConfig: undefined,
+        pluginConfig: { payloadType: 'addon', payloadPath: 'payload/' },
+      }));
+      const external = join(tmpDir, 'external-payload');
+      mkdirSync(external, { recursive: true });
+      symlinkSync(external, join(tmpDir, '.aiwg', 'plugins', 'wrapped', 'payload'));
+
+      const result = await discoverProjectLocalBundles(tmpDir);
+
+      expect(result.bundles).toEqual([]);
+      expect(result.errors.some(error =>
+        error.field === 'pluginConfig.payloadPath' && error.actual === 'symlink'
+      )).toBe(true);
     });
   });
 

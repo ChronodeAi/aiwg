@@ -9,9 +9,11 @@ Find the scenario that matches where you are right now.
 | I want to... | Guide |
 |---|---|
 | Get one useful AIWG result before learning the whole system | [Start Here](start-here.md) |
+| Install AIWG and correctly connect it to my provider | [Install, Connect, and Verify](install-connect-verify.md) |
+| Install Node.js/npm without version or permission conflicts | [Install Node.js and npm Safely](install-node.md) |
 | Have an agent or steward install AIWG from zero to running | [Agentic Install Runbook](../agentic-install-runbook.md) |
 | Install AIWG on macOS or fix npm `EACCES` | [macOS Install Guide](macos-install.md) |
-| Walk through provider, project, framework, deployment, and verification choices | [Start Here: guided wizard](start-here.md#minimal-command-path) |
+| Walk through provider, project, deployment, and verification choices | [Start Here: guided recovery](start-here.md#guided-recovery-escape-hatch) |
 | Ask AIWG which path to use first | [Ask The Steward To Route You](first-success-ask-steward.md) |
 | Choose the right AI tool/provider handoff | [Provider Handoff](provider-handoff.md) |
 | Recover after running AIWG in the wrong folder | [Scope And Recovery](scope-and-recovery.md) |
@@ -23,6 +25,7 @@ Find the scenario that matches where you are right now.
 | Run a security or code quality audit | [Audit Existing Code](audit-existing-code.md) |
 | Set up my whole team, not just myself | [Team Setup](team-setup.md) |
 | Work in the background while I do other things | [Daemon and Automation](daemon-and-automation.md) |
+| Import and review AI session history across providers | [Import AI Session History](session-history.md) |
 | Harden an npm project after a supply-chain incident | [npm Supply-Chain Hardening](../security/supply-chain-hardening.md) |
 
 ---
@@ -56,7 +59,9 @@ Find the scenario that matches where you are right now.
 
 Read the one-paragraph version of each below, then click the one that sounds right.
 
-**Start Here** — You are new to AIWG and want one useful result. Tell the agent what you are trying to do, run `aiwg wizard` when you're ready for guided deployment, then ask the agent to verify the workspace is engaged.
+**Start Here** — You are new to AIWG and want one useful result. Tell the agent
+what you are trying to do, review its proposed path, approve material changes,
+and ask it to verify that the workspace is engaged.
 
 **Agentic Install Runbook** — You want one canonical setup document an agent can
 follow from prerequisites through deployment, verification, provider handoff,
@@ -72,7 +77,9 @@ and common repair paths.
 
 **Existing Project** — You already have a codebase. Maybe you wrote it yourself, maybe you inherited it. You want an AI assistant that actually understands what the code does, follows your conventions, and picks up where things left off.
 
-**Just Try It** — You want to skip setup and see something happen. Run one command, ask the AI a question about your code, get a useful answer. No intake forms, no configuration. Figure out the rest later.
+**Just Try It** — You want to skip setup and see something happen. Ask the
+agent a question about your code and request one useful, verified answer. No
+AIWG vocabulary is required.
 
 **Beginner Language Map** — You know what you want, but not the AIWG vocabulary. Describe the goal in ordinary language; the agent translates it into AIWG-native capabilities and recommends one focused next action.
 

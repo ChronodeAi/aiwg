@@ -18,9 +18,9 @@ operator / CLI:  aiwg cockpit
 │  · user asset library: clone/import/delete (never writes      │
 │    AIWG install files)                                        │
 │  · audit log: ~/.aiwg/cockpit/audit/events.jsonl (redacted)   │
-│  · serves the built React app (token-injected)                │
+│  · serves the React app (one-time nonce → HttpOnly session)   │
 └──────────────────────────────────────────────────────────────┘
-       │ proxies / sources               ▲ loads /?token=…
+       │ proxies / sources               ▲ loads /#bootstrap=…
        ▼                                 │
   agentic-sandbox executor        ┌──────┴──────┬───────────────┐
   (8120 gRPC / 8121 WS /          browser    VS Code webview  Tauri window
@@ -31,18 +31,19 @@ operator / CLI:  aiwg cockpit
 ## Control plane vs data plane
 
 - **Control plane** — lifecycle, approvals, session create/list, index,
-  library, audit — goes through the gated Bridge (`/api/*`, Bearer token +
-  CSRF; see [Trust & Security](./trust-and-security.md)).
-- **Data plane** — the live pty byte stream — connects the browser **directly
-  to the executor** over WebSocket, using the `attach_url` the Bridge issues
-  with each session row. The Bridge serves no WebSocket endpoint of its own;
-  its live-update channel to the UI is Server-Sent Events (`/api/events`,
-  a `cockpit.refresh` event plus heartbeat).
+  library, audit — goes through the gated Bridge (`/api/*`, HttpOnly session +
+  session-bound CSRF; native automation may use Bearer; see
+  [Trust & Security](./trust-and-security.md)).
+- **Data plane** — the live pty byte stream — connects the browser to a
+  Bridge-owned WebSocket endpoint. The browser presents its same-origin
+  HttpOnly session; the Bridge adds the protected executor identity and proxies
+  the upstream upgrade. Its live-update channel is credential-free in the URL:
+  `EventSource('/api/events')` carries the same session cookie.
 
-The attach URL preserves whatever the executor advertises (`attach_url` /
-`pty_ws_url`, with `{host}` substitution and `http→ws` scheme mapping) and
-falls back to `{ws-base}/agents/{instance-id}/sessions/{session-id}/attach`.
-The path segment is the **instance id**, not the resolved agent name.
+The Bridge validates whatever the executor advertises (`attach_url` /
+`pty_ws_url`, with `{host}` substitution and `http→ws` scheme mapping), stores
+the allowed target in memory, and returns an opaque local proxy URL. The
+upstream path segment remains the **instance id**, not the resolved agent name.
 
 ## Component map
 
@@ -53,7 +54,7 @@ All components live under `apps/cockpit/` — a private npm workspace root
 |---|---|
 | `bridge/` | The control-plane server and static host. Single-file Node HTTP server (`createBridge()` factory + CLI entry), env-configured, no framework dependencies |
 | `web/` | React 19 + Vite + TypeScript SPA — the 11 operator surfaces ([Surfaces](./surfaces.md)); xterm.js terminals |
-| `shell-core/` | The cross-shell handshake contract: runtime-file reading, token resolution, OS-keychain backends |
+| `shell-core/` | The cross-shell handshake contract: runtime credential resolution and one-time browser-bootstrap issuance |
 | `vscode/` | VS Code extension (webview shell over the same Bridge) |
 | `desktop/` | Tauri v2 native shell over the same Bridge |
 | `mock-executor/` | Wire-faithful agentic-sandbox stand-in — **automated-test-only**, refused for human launches ([Development](./development.md#the-mock-boundary)) |

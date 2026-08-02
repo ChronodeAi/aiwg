@@ -13,6 +13,16 @@ import { createHash } from 'crypto';
 import { buildProjectLocalDoctorSection } from '../../../src/extensions/project-local-doctor.js';
 import { deployProjectQuickref } from '../../../src/extensions/project-quickref.js';
 import type { AiwgConfig } from '../../../src/config/aiwg-config.js';
+import { PROJECT_LOCAL_SEARCH_PATHS_ENV } from '../../../src/extensions/project-local-paths.js';
+
+const ARTIFACT_ENV_KEYS = [
+  'AIWG_ARTIFACTS_PATH',
+  'AIWG_PROJECT_ARTIFACTS_PATH',
+  'AIWG_PROJECT_AIWG_DIR',
+  PROJECT_LOCAL_SEARCH_PATHS_ENV,
+] as const;
+
+let originalEnv: Partial<Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined>> = {};
 
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'aiwg-pld-'));
@@ -77,19 +87,23 @@ function writeQuickref(projectDir: string): void {
   }, null, 2));
 }
 
-function makeConfig(bundleId: string, hashes: Record<string, string>): AiwgConfig {
+function makeConfig(
+  bundleId: string,
+  hashes: Record<string, string>,
+  provider = 'claude',
+): AiwgConfig {
   return {
-    version: '1', providers: ['claude'],
+    version: '1', providers: [provider],
     installed: {
       [bundleId]: {
         version: '1.0.0',
         source: 'project-local',
         installedAt: new Date().toISOString(),
-        deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
+        deployedTo: { [provider]: { agents: 0, commands: 0, skills: 0, rules: 1 } },
         localPath: `.aiwg/extensions/${bundleId}/`,
         localType: 'extension',
         manifestVersion: '1',
-        artifactHashes: hashes,
+        artifactHashes: { [provider]: hashes },
       },
     },
     scripts: {},
@@ -101,10 +115,20 @@ describe('project-local-doctor (DC-1)', () => {
   let frameworkRoot: string;
 
   beforeEach(() => {
+    originalEnv = {};
+    for (const key of ARTIFACT_ENV_KEYS) {
+      originalEnv[key] = process.env[key];
+      delete process.env[key];
+    }
     projectDir = tmp();
     frameworkRoot = tmp();
   });
   afterEach(() => {
+    for (const key of ARTIFACT_ENV_KEYS) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     rmSync(projectDir, { recursive: true, force: true });
     rmSync(frameworkRoot, { recursive: true, force: true });
   });
@@ -243,6 +267,20 @@ describe('project-local-doctor (DC-1)', () => {
     });
     expect(r.driftCount).toBe(1);
     expect(r.hasFailures).toBe(true);
+  });
+
+  it('detects drift through provider-translated artifact paths', async () => {
+    writeBundle(projectDir, 'foo');
+    mkdirSync(join(projectDir, '.cursor', 'rules'), { recursive: true });
+    writeFileSync(join(projectDir, '.cursor', 'rules', 'r1.mdc'), 'mutated cursor rule');
+    const config = makeConfig('foo', { 'rules/r1.md': sha256('rule body') }, 'cursor');
+
+    const r = await buildProjectLocalDoctorSection({
+      projectDir, frameworkRoot, config,
+    });
+
+    expect(r.driftCount).toBe(1);
+    expect(r.output).toContain('foo :: rules/r1.md @ cursor');
   });
 
   it('quiet mode suppresses informational subsections but keeps failures', async () => {

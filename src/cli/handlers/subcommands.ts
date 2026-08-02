@@ -477,7 +477,7 @@ function formatProjectLocalOnly(
 
   if (total === 0 && result.errors.length === 0) {
     output += '\nNo project-local bundles found.\n';
-    output += '\nTip: place a manifest.json under .aiwg/{extensions,addons,frameworks,plugins,providers}/<name>/ to author a project-local artifact.\n';
+    output += '\nTip: place a manifest.json under the configured AIWG artifact root at {extensions,addons,frameworks,plugins,providers}/<name>/ to author a project-local artifact.\n';
     return { exitCode: 0, message: output };
   }
 
@@ -963,8 +963,8 @@ export const promoteHandler: CommandHandler = {
 };
 
 /**
- * New bundle handler — scaffolds a project-local bundle under
- * `.aiwg/{type}/{name}/` with a valid manifest, starter artifact, and a
+ * New bundle handler — scaffolds a project-local bundle under the configured
+ * AIWG artifact root with a valid manifest, starter artifact, and a
  * README that includes the identical-form portability reminder.
  *
  * Usage:
@@ -978,7 +978,7 @@ export const promoteHandler: CommandHandler = {
 export const newBundleHandler: CommandHandler = {
   id: 'new-bundle',
   name: 'New Bundle',
-  description: 'Scaffold a project-local bundle under .aiwg/{type}/{name}/',
+  description: 'Scaffold a project-local bundle under the configured AIWG artifact root',
   category: 'scaffolding',
   aliases: ['new-extension', 'new-addon', 'new-framework', 'new-plugin', 'new-provider'],
 
@@ -1240,10 +1240,47 @@ export const packagePluginHandler: CommandHandler = {
   aliases: ["-package-plugin", "--package-plugin"],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes("--help") || ctx.args.includes("-h")) {
+      return {
+        exitCode: 0,
+        message: [
+          "aiwg package-plugin — package a project-local or built-in marketplace wrapper",
+          "",
+          "Usage:",
+          "  aiwg package-plugin <name> [--source <path>] [--output <path>] [--provider <name>] [--clean] [--dry-run]",
+          "  aiwg package-plugin --plugin <name> [options]  # compatibility form",
+          "",
+          "Options:",
+          "  --source <path>    explicit project-local wrapper source (must stay inside the project)",
+          "  --output <path>    standalone archive output (default: dist/plugins)",
+          "  --provider <name>  claude, codex, or all for standalone wrappers; built-ins retain all formats",
+          "  --clean            clean generated plugin output before packaging",
+          "  --dry-run, -n      preview without writing",
+          "  --help, -h         show this help",
+          "",
+          "Project-local wrappers are discovered under .aiwg/plugins and packaged as deterministic archives.",
+        ].join("\n"),
+      };
+    }
+
+    const hasExplicitPlugin = ctx.args.includes("--plugin") || ctx.args.includes("-p");
+    const positional = ctx.args[0] && !ctx.args[0].startsWith("-")
+      ? ctx.args[0]
+      : undefined;
+    if (!hasExplicitPlugin && !positional) {
+      return {
+        exitCode: 1,
+        message: "Error: plugin name is required.\n\nRun `aiwg package-plugin --help` for usage.",
+      };
+    }
+    const normalizedArgs = hasExplicitPlugin
+      ? ctx.args
+      : ["--plugin", positional as string, ...ctx.args.slice(1)];
+
     const frameworkRoot = await getFrameworkRoot();
     const runner = createScriptRunner(frameworkRoot);
 
-    return runner.run("tools/plugin/package-plugins.mjs", ctx.args, {
+    return runner.run("tools/plugin/package-plugins.mjs", normalizedArgs, {
       cwd: ctx.cwd,
     });
   },
@@ -1262,6 +1299,24 @@ export const packageAllPluginsHandler: CommandHandler = {
   aliases: ["-package-all-plugins", "--package-all-plugins"],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes("--help") || ctx.args.includes("-h")) {
+      return {
+        exitCode: 0,
+        message: [
+          "aiwg package-all-plugins — package every built-in marketplace wrapper",
+          "",
+          "Usage:",
+          "  aiwg package-all-plugins [--provider <name>] [--clean] [--dry-run]",
+          "",
+          "Options:",
+          "  --provider <name>  claude, codex, cursor, factory, openclaw, or all",
+          "  --clean            clean generated plugin output before packaging",
+          "  --dry-run, -n      preview without writing",
+          "  --help, -h         show this help",
+        ].join("\n"),
+      };
+    }
+
     const frameworkRoot = await getFrameworkRoot();
     const runner = createScriptRunner(frameworkRoot);
 
@@ -1332,6 +1387,7 @@ export const corpusHandler: CommandHandler = {
  * with the project's general-purpose artifact graph indices.
  *
  *   aiwg discover "<phrase>" [--limit N] [--type skill,agent,...] [--json]
+ *     [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]
  */
 export const discoverHandler: CommandHandler = {
   id: "discover",
@@ -1390,6 +1446,7 @@ export const featuresHandler: CommandHandler = {
  * so consumers don't need to navigate AIWG's storage paths themselves.
  *
  *   aiwg show <name> [--type skill,agent,...] [--json] [--first]
+ *     [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]
  */
 export const showHandler: CommandHandler = {
   id: "show",
