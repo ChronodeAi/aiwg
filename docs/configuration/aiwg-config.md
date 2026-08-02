@@ -16,11 +16,13 @@ recognized by the loader.
 The config lives at:
 
 ```text
-<project-root>/.aiwg/aiwg.config
+<project-artifact-root>/aiwg.config
 ```
 
-It is JSON-formatted (despite the missing `.json` extension). The loader resolves the
-path via `getConfigPath(projectDir)` and reads it through `readAiwgConfig(projectDir)`,
+It is JSON-formatted (despite the missing `.json` extension). The project artifact
+root defaults to `<project-root>/.aiwg`, but can be moved or renamed with
+`.aiwg-location` or `AIWG_ARTIFACTS_PATH`. The loader resolves the path via
+`getConfigPath(projectDir)` and reads it through `readAiwgConfig(projectDir)`,
 which returns `null` if the file does not exist.
 
 The active project directory is resolved with this precedence:
@@ -41,15 +43,51 @@ Writes are atomic: the loader writes to a randomly-suffixed temp sibling, then
 | `providers`     | `string[]`                       | yes      | AI provider toolchains this project targets. `aiwg use <framework>` with no `--provider` deploys to all of these. Defaults to `["claude"]` if absent. |
 | `installed`     | `Record<string, InstalledEntry>` | yes      | Frameworks and addons currently deployed, keyed by the name passed to `aiwg use`. Defaults to `{}`.                                                   |
 | `scripts`       | `Record<string, string>`         | yes      | User-defined scripts, run via `aiwg run <name>`. Executed with `sh -c "<command>"` (or `cmd /c` on Windows). Defaults to `{}`.                        |
+| `security`      | `SecurityConfig`                 | optional | Project-owned deterministic security policy. See [Threat Assessment](#threat-assessment).                                                         |
 | `workspace`     | `WorkspaceConfig`                | optional | General workspace metadata or an external-member back-reference. See [Workspace Repositories](#workspace-repositories).                               |
 | `repos`         | `WorkspaceRepoConfig[]`          | optional | Canonical member list and per-member allowed operations. Requires `workspace.name`.                                                                   |
 | `externalLinks` | `Record<string, ExternalLink>`   | optional | Named public resources that travel with the project and appear in provider-facing context. See [External Links](#external-links).                     |
+| `projectLocal`  | `ProjectLocalConfig`             | optional | Additional roots for project-local bundles. See [Project Local Block](#project-local-block).                                                         |
 | `remotes`       | `RemotesConfig`                  | optional | Repo origin topology. When absent, agents treat `origin` as primary. See [Remotes Block](#remotes-block).                                             |
 | `delivery`      | `DeliveryConfig`                 | optional | Repo control / delivery policy. When absent, runtime defaults apply. See [Delivery Block](#delivery-block).                                           |
 | `build`         | `BuildConfig`                    | optional | Project build policy, including large-build host resource preflight. See [Build Block](#build-block).                                                 |
 
 Valid `providers` values: `claude`, `factory`, `codex`, `opencode`, `copilot`, `cursor`,
 `warp`, `windsurf`, `hermes`, `openclaw`.
+
+## Threat Assessment
+
+`security.threatAssessment` selects the deterministic policy used for issues,
+pull requests/reviews, release notes, handoffs, and outbound maintainer
+comments. It supports `off`, `audit`, and `enforce`, built-in or project
+profiles, per-surface selection, profile inheritance, validated project rule
+packs, thresholds, and narrow conditional statements.
+
+Missing configuration resolves to `balanced`/`enforce`; invalid configuration
+is rejected rather than silently weakening policy. Each workspace member owns
+its own trust posture and does not inherit this block from a workspace parent.
+
+See [Threat-assessment policy](../security/threat-assessment-policy.md) for the
+schema, precedence model, examples, CLI operations, migration behavior, and
+provider/platform safety boundary.
+
+## Project Local Block
+
+`projectLocal.searchPaths` lets operators add extra bundle roots for custom
+addons, extensions, frameworks, plugins, and providers:
+
+```json
+{
+  "projectLocal": {
+    "searchPaths": ["../team-aiwg-bundles", "~/aiwg-private-bundles"]
+  }
+}
+```
+
+Each root should contain the same child directories as the normal artifact root:
+`addons/`, `extensions/`, `frameworks/`, `plugins/`, and/or `providers/`. AIWG
+always scans the configured project artifact root first, then these paths, then
+the optional `AIWG_PROJECT_LOCAL_PATHS` environment override.
 
 ## Workspace Repositories
 

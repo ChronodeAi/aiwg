@@ -13,8 +13,7 @@
  * @implements #1037
  */
 
-import { resolve } from 'path';
-import { homedir } from 'os';
+import { join } from 'path';
 import { discoverProjectLocalBundles } from './project-local-discovery.js';
 import { buildUpstreamRegistry } from './upstream-registry.js';
 import { resolveShadows } from './shadow-resolver.js';
@@ -22,7 +21,10 @@ import { checkBundleManifestIgnored } from './project-local-gitignore.js';
 import { sha256OfFileRawAndNormalized } from './managed-marker.js';
 import type { ProjectLocalType } from './manifest.js';
 import type { AiwgConfig } from '../config/aiwg-config.js';
+import { projectAiwgPath } from '../config/project-artifacts.js';
+import { projectRelativePathIfInside } from './project-local-paths.js';
 import { auditProjectQuickref } from './project-quickref.js';
+import { candidateDeployedPaths } from './project-local-remove.js';
 
 export interface DoctorSectionResult {
   /** Pre-formatted multi-line section (empty string when no project-local content). */
@@ -51,8 +53,8 @@ interface BuildOptions {
  * null on read errors (e.g., file missing — caller treats as
  * deploy-not-present).
  *
- * Source files are recorded via the same normalization in
- * `hashBundleArtifacts()`, so the equivalence relation is symmetric.
+ * Deploy-time hashes use the same managed-marker normalization, so the
+ * equivalence relation is symmetric while still reflecting provider output.
  *
  * @implements #1086
  */
@@ -74,24 +76,6 @@ const TYPE_DIR: Record<ProjectLocalType, string> = {
   provider: 'providers',
 };
 
-// Per PUW-026 (#1127): home-deploying providers get absolute prefixes so
-// `resolve(projectDir, prefix)` correctly produces the home-rooted path
-// (resolve treats absolute paths as authoritative). Previously these were
-// `null`, which silently skipped lifecycle operations against home-deployed
-// project-local bundles.
-const PROVIDER_PREFIX: Record<string, string | null> = {
-  claude: '.claude',
-  cursor: '.cursor',
-  factory: '.factory',
-  opencode: '.opencode',
-  windsurf: '.windsurf',
-  warp: '.warp',
-  codex: '.codex',
-  copilot: '.github',
-  openclaw: resolve(homedir(), '.openclaw'),
-  hermes: resolve(homedir(), '.hermes'),
-};
-
 export async function buildProjectLocalDoctorSection(
   opts: BuildOptions,
 ): Promise<DoctorSectionResult> {
@@ -101,9 +85,12 @@ export async function buildProjectLocalDoctorSection(
   const quickrefAudit = await auditProjectQuickref(projectDir, config?.providers ?? []);
   const quickrefErrors = [...quickrefAudit.errors];
   if (quickrefAudit.exists) {
-    const ignored = await checkBundleManifestIgnored(projectDir, '.aiwg/quickref.json');
-    if (ignored === true) {
-      quickrefErrors.push('.aiwg/quickref.json is ignored by git; canonical project quickref source must be committed');
+    const quickrefRelPath = projectRelativePathIfInside(projectDir, projectAiwgPath(projectDir, 'quickref.json'));
+    const ignored = quickrefRelPath
+      ? await checkBundleManifestIgnored(projectDir, quickrefRelPath)
+      : null;
+    if (ignored === true && quickrefRelPath) {
+      quickrefErrors.push(`${quickrefRelPath} is ignored by git; canonical project quickref source must be committed`);
     }
   }
 
@@ -204,16 +191,18 @@ export async function buildProjectLocalDoctorSection(
         continue;
       }
       for (const provider of Object.keys(entry.deployedTo)) {
-        const prefix = PROVIDER_PREFIX[provider];
-        if (!prefix) continue;
         const providerHashes = hashes[provider];
         if (!providerHashes) {
           unhashedSeen = true;
           continue;
         }
         for (const [sourceRel, expectedHash] of Object.entries(providerHashes)) {
-          const deployedAbs = resolve(projectDir, `${prefix}/${sourceRel}`);
-          const actualHash = await hashDeployed(deployedAbs);
+          const candidates = candidateDeployedPaths(projectDir, provider, sourceRel);
+          let actualHash: Awaited<ReturnType<typeof hashDeployed>> = null;
+          for (const deployedAbs of candidates) {
+            actualHash = await hashDeployed(deployedAbs);
+            if (actualHash !== null) break;
+          }
           if (actualHash === null) {
             // Missing — not drift, deploy is just absent
             continue;
@@ -274,8 +263,11 @@ export async function buildProjectLocalDoctorSection(
   if (discovery.bundles.length > 0) {
     const ignored: string[] = [];
     for (const b of discovery.bundles) {
-      const isIgnored = await checkBundleManifestIgnored(projectDir, b.manifestPath);
-      if (isIgnored === true) ignored.push(`${b.type}/${b.id} (${b.manifestPath})`);
+      const manifestRelPath = projectRelativePathIfInside(projectDir, join(b.bundlePath, 'manifest.json'));
+      const isIgnored = manifestRelPath
+        ? await checkBundleManifestIgnored(projectDir, manifestRelPath)
+        : null;
+      if (isIgnored === true) ignored.push(`${b.type}/${b.id} (${manifestRelPath})`);
     }
     gitignoredCount = ignored.length;
     if (ignored.length > 0) {

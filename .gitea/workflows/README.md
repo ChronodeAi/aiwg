@@ -79,6 +79,7 @@ dispatch, and deploy-key material lives in vault and is fetched at runtime by
 | `GH_ACCESS_TOKEN` | `GH_MIRROR_TOKEN_VAULT_PATH`, `GH_MIRROR_TOKEN_VAULT_FIELD` |
 | `AIWG_IO_DISPATCH_TOKEN` | `AIWG_IO_DISPATCH_TOKEN_VAULT_PATH`, `AIWG_IO_DISPATCH_TOKEN_VAULT_FIELD` |
 | `DOCSITE_DEPLOY_KEY` | `DOCSITE_DEPLOY_KEY_VAULT_PATH`, `DOCSITE_DEPLOY_KEY_VAULT_FIELD` |
+| `CLOUDFLARE_API_TOKEN` | `CLOUDFLARE_API_TOKEN_VAULT_PATH`, `CLOUDFLARE_API_TOKEN_VAULT_FIELD` |
 
 Docsite deploy coordinates are Gitea Actions variables. `secrets.GITHUB_TOKEN`
 is CI-issued per run and is not stored or migrated.
@@ -90,17 +91,19 @@ Rotation is documented in
 
 The docs site is a shared static host. The AIWG repository owns the root tenant;
 sibling repositories may publish isolated subtrees under that same host. The
-first registered sibling tenant is:
+registered sibling tenants are:
 
 | Tenant | Owning repo | Public route | Deploy target |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `agentic-sandbox` | `roctinam/agentic-sandbox` | public subpath | configured sibling deploy path |
+| `payments.roko.network` | `roko/payments` | public hostname | configured sibling deploy path |
+| `clowder.roko.network` | `roko/catbot-token` | public hostname | configured sibling deploy path |
 
 AIWG's `docsite-deploy.yml` still runs `rsync --delete` for the root tenant, so
-it must explicitly protect sibling tenant subtrees. The workflow defines
-`PROTECTED_DOCS_SUBPATHS=agentic-sandbox`, converts each entry into an rsync
-receiver-protect filter (`P /<subpath>/***`), runs a dry-run sync first, and
-fails before mutation if the plan would delete a protected subtree.
+it must explicitly protect sibling tenant subtrees. The workflow converts each
+entry in `PROTECTED_DOCS_SUBPATHS` into an rsync receiver-protect filter
+(`P /<subpath>/***`), runs a dry-run sync first, and fails before mutation if
+the plan would delete a protected subtree.
 
 When adding another shared docs tenant:
 

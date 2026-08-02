@@ -301,6 +301,25 @@ export const modelsCommand: Extension = {
   } satisfies CommandMetadata,
 };
 
+export const jobCommand: Extension = {
+  id: 'job',
+  type: 'command',
+  name: 'External Job',
+  description: 'Validate, render, or run one externally triggered provider job',
+  version: '1.0.0',
+  capabilities: ['cli', 'jobs', 'external-trigger', 'orchestration'],
+  keywords: ['job', 'cron', 'systemd', 'gitea actions', 'codex exec', 'single shot'],
+  category: 'orchestration',
+  platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'orchestration',
+    argumentHint: '<validate|render-cron|run> <flow> [--format cron|systemd|gitea-actions] [--once]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
 export const cockpitCommand: Extension = {
   id: 'cockpit',
   type: 'command',
@@ -395,7 +414,7 @@ export const newBundleCommand: Extension = {
   id: 'new-bundle',
   type: 'skill',
   name: 'New Bundle',
-  description: 'Scaffold a project-local bundle under .aiwg/{type}/{name}/',
+  description: 'Scaffold a project-local bundle under the configured AIWG artifact root',
   version: '1.0.0',
   capabilities: ['cli', 'scaffolding', 'project-local'],
   keywords: ['new', 'bundle', 'scaffold', 'project-local', 'extension', 'addon', 'framework', 'plugin', 'provider'],
@@ -423,7 +442,7 @@ export const quickrefCommand: Extension = {
   id: 'quickref',
   type: 'skill',
   name: 'Project Quickref',
-  description: 'Generate and deploy an always-visible project quickref from .aiwg/quickref.json',
+  description: 'Generate and deploy an always-visible project quickref from the configured AIWG artifact root',
   version: '1.0.0',
   capabilities: ['cli', 'project-local', 'quickref', 'kernel'],
   keywords: ['project', 'quickref', 'orientation', 'kernel', 'generate', 'deploy'],
@@ -615,6 +634,105 @@ export const setupCommand: Extension = {
       template: 'utility',
       argumentHint: 'project [--yes] [--dry-run] [--target <dir>]',
       allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const setupGenerateCommand: Extension = {
+  id: 'setup-generate',
+  type: 'skill',
+  name: 'Setup Generate',
+  description: 'Generate starter setup.aiwg.io/v1 SetupManifest assets for agentic installer automation',
+  version: '1.0.0',
+  capabilities: ['cli', 'project', 'setup', 'setup-manifest', 'agentic-installer', 'generation', 'automation'],
+  keywords: ['setup-generate', 'setup generate', 'SetupManifest', 'setup.aiwg.io/v1', 'agentic-installer', 'manifest generation', 'starter manifest'],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'generate setup manifest',
+      'create setup.manifest.yaml',
+      'setup-generate',
+      'scaffold installer manifest',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[--output <path>] [--name <name>] [--type user|developer|ci] [--platform <os>] [--force] [--json]',
+      allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const setupValidateCommand: Extension = {
+  id: 'setup-validate',
+  type: 'skill',
+  name: 'Setup Validate',
+  description: 'Validate setup.aiwg.io/v1 SetupManifest files against the canonical schema and installer consistency checks',
+  version: '1.0.0',
+  capabilities: ['cli', 'project', 'setup', 'setup-manifest', 'agentic-installer', 'validation', 'schema'],
+  keywords: ['setup-validate', 'setup validate', 'SetupManifest', 'setup.aiwg.io/v1', 'agentic-installer', 'manifest validation', 'schema validation', 'installer consistency'],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'validate setup manifest',
+      'check setup.manifest.yaml',
+      'setup-validate',
+      'lint installer manifest',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[manifest-path] [--manifest <path>] [--strict] [--fix] [--json]',
+      allowedTools: ['Read', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const setupRunCommand: Extension = {
+  id: 'setup-run',
+  type: 'skill',
+  name: 'Setup Run',
+  description: 'Validate and execute setup.aiwg.io/v1 SetupManifest files with installer safety gates',
+  version: '1.0.0',
+  capabilities: ['cli', 'project', 'setup', 'setup-manifest', 'agentic-installer', 'installer', 'dry-run'],
+  keywords: ['setup-run', 'setup run', 'SetupManifest', 'setup.aiwg.io/v1', 'agentic-installer', 'installer runner', 'dry run', 'recovery', 'params'],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'run setup manifest',
+      'execute installer manifest',
+      'setup-run',
+      'run dev setup',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '[manifest-path] [--manifest <path>] [--dry-run] [--platform <os>] [--params-file <path>] [--param KEY=VALUE] [--step <id>] [--skip <ids>] [--yes]',
+      allowedTools: ['Read', 'Bash'],
     },
   } satisfies SkillMetadata,
 };
@@ -951,6 +1069,42 @@ export const sessionCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+// Session Catalog Command (#1903)
+
+export const sessionsCommand: Extension = {
+  id: 'sessions',
+  type: 'skill',
+  name: 'Sessions',
+  description: 'Manage the normalized session catalog, analytics, and authorized forensic evidence with versioned JSON',
+  version: '1.0.0',
+  capabilities: [
+    'cli', 'session-catalog', 'session-import', 'session-lifecycle',
+    'session-analytics', 'session-forensics', 'doctor',
+  ],
+  keywords: [
+    'sessions', 'catalog', 'import', 'source', 'tag', 'reindex', 'delete',
+    'analytics', 'forensics', 'timeline', 'indicators',
+  ],
+  category: 'project',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['list sessions', 'import sessions', 'session catalog', 'sessions doctor'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: '<sources|import|list|show|analytics|forensics|tag|relocate|reindex|delete|doctor> [--json] [--dry-run]',
+      allowedTools: ['Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
 // Sandbox Management Commands (#917)
 
 export const sandboxCommand: Extension = {
@@ -1212,6 +1366,34 @@ export const indexCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const artifactsCommand: Extension = {
+  id: 'artifacts',
+  type: 'skill',
+  name: 'Project Artifacts',
+  description: 'Move or inspect the configured project AIWG artifact root',
+  version: '1.0.0',
+  capabilities: ['cli', 'artifacts', 'relocation', 'configuration', 'index'],
+  keywords: ['artifacts', 'aiwg artifacts', 'move .aiwg', 'relocate .aiwg', 'rename .aiwg', 'artifact root', 'AIWG_ARTIFACTS_PATH'],
+  category: 'index',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: ['move .aiwg', 'relocate .aiwg', 'rename .aiwg', 'move aiwg artifacts', 'artifact root'],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'move --to <path> [--from <path>] [--dry-run]',
+      allowedTools: ['Read', 'Write', 'Bash'],
+    },
+  } satisfies SkillMetadata,
+};
+
 // Research-corpus tools — radar/freshness subsystem (#1498)
 export const corpusCommand: Extension = {
   id: 'corpus',
@@ -1306,7 +1488,7 @@ export const discoverCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '"<phrase>" [--limit N] [--type skill,agent,...] [--json]',
+      argumentHint: '"<phrase>" [--limit N] [--type skill,agent,...] [--json] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]',
       allowedTools: ['Read'],
     },
   } satisfies SkillMetadata,
@@ -1344,8 +1526,42 @@ export const showCommand: Extension = {
     ],
     commandHint: {
       template: 'utility',
-      argumentHint: '<type> <name> [--json] [--first]   # type: skill | agent | command | rule',
+      argumentHint: '<type> <name> [--json] [--first] [--resource-source local|web|auto] [--aiwg-version <version|range|digest|channel>] [--offline]   # type: skill | agent | command | rule',
       allowedTools: ['Read'],
+    },
+  } satisfies SkillMetadata,
+};
+
+export const versionsCommand: Extension = {
+  id: 'versions',
+  type: 'skill',
+  name: 'Resource Versions',
+  description: 'Browse and resolve signed AIWG web resource releases',
+  version: '1.0.0',
+  capabilities: ['cli', 'resources', 'versions', 'release', 'integrity', 'cache'],
+  keywords: ['versions', 'resource versions', 'aiwg version', 'release manifest', 'web resources', 'stable channel'],
+  category: 'index',
+  platforms: {
+    claude: 'full',
+    generic: 'full',
+  },
+  deployment: {
+    pathTemplate: '.{platform}/commands/{id}.md',
+    core: true,
+  },
+  metadata: {
+    type: 'skill',
+    triggerPhrases: [
+      'aiwg versions',
+      'resource versions',
+      'resolve aiwg version',
+      'show release manifest',
+      'list AIWG resource channels',
+    ],
+    commandHint: {
+      template: 'utility',
+      argumentHint: 'list|resolve|show [version|range|digest|channel] [--json] [--pretty] [--offline] [--channels stable,latest]',
+      allowedTools: ['Read', 'Bash'],
     },
   } satisfies SkillMetadata,
 };
@@ -3448,6 +3664,7 @@ export const commandDefinitions: Extension[] = [
   // Framework (6)
   useCommand,
   modelsCommand,
+  jobCommand,
   cockpitCommand,
   listCommand,
   removeCommand,
@@ -3462,6 +3679,9 @@ export const commandDefinitions: Extension[] = [
   newCommand,
   initCommand,
   setupCommand,
+  setupGenerateCommand,
+  setupValidateCommand,
+  setupRunCommand,
   issueCommand,
   issueAuditCommand,
   addressIssuesCommand,
@@ -3551,12 +3771,14 @@ export const commandDefinitions: Extension[] = [
   // Research Validation (1)
   bestPracticesAuditCommand,
 
-  // Index + Discovery (3)
+  // Index + Discovery
   indexCommand,
+  artifactsCommand,
   corpusCommand,
   researchQueryCommand,
   discoverCommand,
   showCommand,
+  versionsCommand,
 
   // Optional Features (1)
   featuresCommand,
@@ -3620,6 +3842,7 @@ export const commandDefinitions: Extension[] = [
 
   // Session (#884)
   sessionCommand,
+  sessionsCommand,
 ];
 
 // ============================================

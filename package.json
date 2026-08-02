@@ -1,31 +1,54 @@
 {
   "name": "aiwg",
-  "version": "2026.7.16",
+  "version": "2026.8.0",
   "description": "Deployment tool and support utility for AI context. Copies agents, skills, commands, rules, and behaviors into the paths each AI platform reads (Claude Code, Codex, Copilot, Cursor, Warp, OpenClaw, and 6 more) so one source of truth works across 10 platforms. Optional utilities for persistent artifact memory, background orchestration, autonomous loops, and artifact indexing.",
   "type": "module",
   "bin": {
     "aiwg": "bin/aiwg.mjs"
   },
   "man": "./man/aiwg.1",
-  "main": "src/cli/index.mjs",
+  "main": "./dist/src/api/index.js",
+  "types": "./dist/src/api/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/api/index.d.ts",
+      "import": "./dist/src/api/index.js",
+      "default": "./dist/src/api/index.js"
+    },
+    "./resources": {
+      "types": "./dist/src/resources/index.d.ts",
+      "import": "./dist/src/resources/index.js",
+      "default": "./dist/src/resources/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
     "docs:collect": "node tools/manifest/collect-component-docs.mjs",
+    "docs:public-source": "node tools/docs/build-public-source.mjs",
+    "docs:audience:audit": "node tools/docs/audit-audiences.mjs",
     "docs:collect:dry": "node tools/manifest/collect-component-docs.mjs --dry-run",
     "release:fortemi-index": "tsx tools/release/build-fortemi-core-indices.mjs",
     "prepack": "npm run release:fortemi-index",
     "test:release-discovery": "vitest run --config config/vitest.config.js test/integration/artifacts/discover-fortemi-corpus.test.ts",
-    "ci:fortemi-index": "npm run test:release-discovery && npm run lint:fortemi-prebuilt-package",
+    "security:threat-assess": "node tools/security/assess-forge-content.mjs",
+    "benchmark:threat-assessment": "node tools/security/evaluate-threat-policy.mjs",
+    "ci:fortemi-index": "npm run lint:discovery-coverage && npm run test:release-discovery && npm run lint:fortemi-prebuilt-package",
+    "smoke:web-resources:live": "node tools/release/web-resource-live-smoke.mjs",
     "validate-metadata": "aiwg validate-metadata",
     "package-plugins": "node tools/plugin/package-plugins.mjs --all",
     "package-plugins:clean": "node tools/plugin/package-plugins.mjs --all --clean",
+    "package:cli": "node tools/release/build-cli-package.mjs",
     "build": "node tools/scripts/resource-preflight.mjs --profile full && AIWG_BUILD_PREFLIGHT_DONE=1 npm run build:cli && npm --prefix apps/web ci && npm --prefix apps/web run build",
     "build:cli": "node tools/scripts/resource-preflight.mjs --profile cli && npm run check:versions && tsc && npm run build:copy-mjs",
     "build:copy-mjs": "node tools/scripts/copy-build-resources.mjs",
     "build:web": "node tools/scripts/resource-preflight.mjs --profile web && npm --prefix apps/web ci && npm --prefix apps/web run build",
     "test": "vitest run --config config/vitest.config.js",
+    "lint:session-fixtures": "node tools/ci/session-fixture-sanitize.mjs",
+    "test:sessions:sqlite": "npm run build:cli && node tools/ci/session-sqlite-gate.mjs",
+    "benchmark:sessions": "tsx tools/benchmarks/session-production.ts",
     "test:integration": "vitest run --config config/vitest.config.js test/integration/cli-startup.test.ts test/integration/cli-perf.test.ts",
     "test:perf": "vitest run --config config/vitest.config.js test/integration/cli-perf.test.ts",
     "test:ci": "vitest run --config config/vitest.config.js && vitest run --config config/vitest.uat.config.js",
@@ -55,6 +78,7 @@
     "uat:daemon:claude": "vitest run --config config/vitest.uat-daemon.config.js --reporter=verbose daemon-live-claude",
     "uat:cockpit-live": "vitest run --config config/vitest.uat-cockpit-live.config.js",
     "uat:cockpit-live:matrix": "AIWG_COCKPIT_LIVE_REQUIRED=1 AIWG_COCKPIT_LIVE_MATRIX_REQUIRED=1 vitest run --config config/vitest.uat-cockpit-live.config.js",
+    "uat:cockpit-daily": "node apps/cockpit/scripts/cockpit-daily-gate.mjs",
     "e2e:cockpit-dev": "node test/e2e/cockpit-dev-e2e.mjs",
     "cockpit:up": "bash apps/cockpit/scripts/cockpit-up.sh",
     "lint:schemas": "node tools/scripts/lint-schemas.mjs",
@@ -67,6 +91,7 @@
     "lint:agent-sizes": "node tools/lint/agent-def-sizes.mjs",
     "lint:claude-context": "node tools/lint/claude-context-inventory.mjs",
     "lint:generated-artifacts": "node tools/lint/tracked-generated-artifacts.mjs",
+    "lint:discovery-coverage": "node tools/manifest/check-discovery-coverage.mjs --report test-results/discovery-component-coverage.json",
     "lint:vault-migration": "node ci/verify-vault-migration.mjs",
     "provision:vault-migration": "node ci/provision-vault-migration.mjs",
     "provision:vault-approle": "node ci/provision-vault-approle.mjs",
@@ -83,6 +108,9 @@
     "dist/src/",
     "!dist/**/*.d.ts",
     "!dist/**/*.map",
+    "dist/src/api/index.d.ts",
+    "dist/src/resources/index.d.ts",
+    "dist/src/resources/web-release.d.ts",
     "tools/",
     "!tools/ci/",
     "!tools/contrib/",
@@ -97,7 +125,10 @@
     "!tools/lint/",
     "tools/lint/claude-context-inventory.mjs",
     "!tools/manifest/",
+    "tools/manifest/check-discovery-coverage.mjs",
     "!tools/release/",
+    "schemas/security/",
+    "vscode-extension/schemas/aiwg.config.v1.json",
     "agentic/",
     "!agentic/**/*.test.ts",
     "!agentic/**/package-lock.json",
@@ -109,6 +140,7 @@
     "man/",
     "apps/web/dist",
     "!apps/web/dist/**/*.map",
+    "setup.aiwg.yaml",
     "CLAUDE.md"
   ],
   "repository": {
@@ -276,23 +308,24 @@
     "auto-install-peers": true
   },
   "dependencies": {
-    "@fortemi/core": "2026.7.11",
-    "@modelcontextprotocol/sdk": "^1.24.0",
+    "@fortemi/core": "2026.7.15",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "chalk": "^4.1.2",
-    "chokidar": "^3.6.0",
+    "chokidar": "^4.0.3",
     "commander": "^12.1.0",
-    "glob": "^13.0.1",
+    "glob": "^13.0.6",
     "graceful-fs": "^4.2.11",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.3.0",
     "listr2": "^8.2.5",
     "ora": "^5.4.1",
-    "yaml": "^2.8.1",
+    "semver": "^7.8.5",
+    "yaml": "^2.9.0",
     "zod": "^3.25.0"
   },
   "optionalDependencies": {
-    "@hono/node-server": "^1.19.14",
-    "hono": "^4.12.18",
-    "ws": "^8.20.0"
+    "@hono/node-server": "2.0.11",
+    "hono": "^4.12.31",
+    "ws": "^8.21.1"
   },
   "peerDependencies": {
     "@xenova/transformers": "^2.17.2",

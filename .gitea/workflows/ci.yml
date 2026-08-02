@@ -19,7 +19,10 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    container: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2 (see ci/digests.txt)
+    # npm 10.8.2 in the Node 20 image cannot validate packages signed after
+    # npm's registry-key rotation. Keep the signature hard gate on the same
+    # digest-pinned npm 11 runtime used by the publication workflow.
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 15
 
     steps:
@@ -74,8 +77,9 @@ jobs:
 
       - name: Run Fortemi Core index release gate (#1696/#1697)
         # Builds the real framework corpus index, validates the checked-in
-        # discovery query matrix against local + Fortemi Core backends, and
-        # proves npm packaging includes the generated prebuilt index contract.
+        # component-to-driver coverage report and discovery query matrix
+        # against local + Fortemi Core backends, and proves npm packaging
+        # includes the generated prebuilt index contract.
         run: npm run ci:fortemi-index
 
       - name: Lint schemas
@@ -112,6 +116,39 @@ jobs:
         # `test:node` set is gated here. Deterministic, no network.
         run: npm run test:node
 
+      - name: Install SQLite test backend
+        # Keep native prebuild plumbing out of the default/package-lock install
+        # tree while making the optional production backend mandatory in CI.
+        # This exact-version follow-up must not re-resolve the already-locked
+        # graph through the seven-day age filter; match the publish gate.
+        run: npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0
+
+      - name: Sanitize session regression corpus
+        # Reject credential, personal-path, host-identity, and provenance drift
+        # before any fixture reaches the mandatory session test layers.
+        run: npm run lint:session-fixtures
+
+      - name: Run mandatory SQLite session suites
+        # Loads the native backend first, then emits and validates separate
+        # adapter and cross-provider reports with zero skipped tests.
+        run: npm run test:sessions:sqlite
+
+      - name: Run production-path session performance gates
+        # Preserves a machine-readable profile, raw samples, budgets, and gate
+        # outcomes at test-results/session-performance.json.
+        run: npm run benchmark:sessions
+
+      - name: Preserve session performance evidence
+        if: always()
+        # Gitea Actions does not implement the artifact-service v2 protocol
+        # required by upload-artifact v4. Keep this Gitea workflow on the
+        # final Node 20-compatible v3 release; GitHub workflows remain on v4.
+        uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20
+        with:
+          name: session-performance-${{ gitea.sha }}
+          path: test-results/session-performance.json
+          if-no-files-found: error
+
       - name: Run tests
         env:
           # CI runs in docker-in-docker on the Gitea runner — cold start is
@@ -137,7 +174,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    container: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2 (see ci/digests.txt)
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 10
     needs: [test]
 

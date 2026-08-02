@@ -1,5 +1,7 @@
 # Auditing Existing Code
 
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed, `all` is deployed for your provider, and `aiwg-regenerate` has connected the agent to this project.
+
 You have a codebase and you want to know what's wrong with it. Security issues, missing tests, dead code, dependency risks, quality problems — AIWG runs structured audits and produces findings you can act on.
 
 You don't need to set up a full project workflow. Just point AIWG at the code and ask.
@@ -11,11 +13,13 @@ You don't need to set up a full project workflow. Just point AIWG at the code an
 ```bash
 npm install -g aiwg
 cd /path/to/your/project
-aiwg use sdlc
-claude .
+aiwg use all --provider <provider>
+aiwg index build --all
+aiwg regenerate --provider <provider>
 ```
 
-Since this is an existing project, run this once in the tool so AIWG orients its context to your codebase (on a brand-new/empty folder it's optional — `aiwg use` already wired the context):
+Since this is an existing project, ask the agent to confirm the regenerated
+context before the audit:
 
 ```
 /aiwg-regenerate

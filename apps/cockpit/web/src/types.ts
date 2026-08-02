@@ -17,11 +17,125 @@ export interface TransportPosture {
   evidence?: string;
   stale?: boolean;
 }
+export interface BootstrapTrustPosture {
+  status: 'secure' | 'degraded' | 'disabled' | (string & {});
+  mode: 'mtls' | 'plaintext-dev' | 'disabled' | (string & {});
+  label: string;
+  source: string;
+  ca_provider_ref?: string;
+  trust_bundle_ref?: string;
+  client_identity_ref?: string;
+  rotation_state?: string;
+  expires_at?: string;
+  trust_bundle_fresh?: boolean;
+  token_store_configured?: boolean;
+  missing_required_material: string[];
+  recovery: string;
+}
 export interface LaunchContext { cwd?: string; loadout?: string; runtime_kind?: string; host?: string; selected_tier?: string; name?: string; image_ref?: string; source?: string }
 export interface SessionBackend { mode: 'direct' | 'managed'; backend: string; replay?: boolean; keyframe?: boolean; drive?: boolean; observe?: boolean; available?: boolean; reason?: string }
+export interface StoragePosture { persistent: boolean; delete_on_destroy: boolean; scope?: string; reason?: string }
+export interface LifecyclePosture { destroy?: unknown; reconnect?: unknown; start?: unknown; stop?: unknown }
+export type SandboxRuntimeKind = 'host' | 'container' | 'vm' | (string & {});
+export type SandboxRuntimeProvider = 'host' | 'docker' | 'libvirt' | 'cloud-hypervisor' | (string & {});
+export type SandboxRuntimeCapabilityId =
+  | 'instance.checkpoint'
+  | 'instance.snapshot'
+  | 'instance.restore'
+  | 'instance.fork'
+  | 'warm_pool.manage'
+  | 'device.vfio'
+  | (string & {});
+export interface RuntimeCapability {
+  id: SandboxRuntimeCapabilityId;
+  label?: string;
+  description?: string;
+}
+export interface RuntimeCapabilityConstraint {
+  capability: SandboxRuntimeCapabilityId;
+  excludes?: SandboxRuntimeCapabilityId[];
+  reason?: string;
+}
+export interface RuntimeGpuPosture {
+  available?: boolean;
+  assigned?: boolean;
+  devices?: string[];
+  reason?: string;
+  authorization?: 'allowed' | 'denied' | 'unknown' | (string & {});
+}
+export interface RuntimeKindDescriptor {
+  kind: SandboxRuntimeKind;
+  label?: string;
+  default_provider?: SandboxRuntimeProvider;
+  providers: SandboxRuntimeProvider[];
+}
+export interface RuntimeProviderDescriptor {
+  provider: SandboxRuntimeProvider;
+  kind: SandboxRuntimeKind;
+  label?: string;
+  default?: boolean;
+  platforms?: string[];
+  architectures?: string[];
+  engine?: string;
+  capabilities: RuntimeCapability[];
+  capability_constraints?: RuntimeCapabilityConstraint[];
+  posture?: {
+    host_platform?: string;
+    host_architecture?: string;
+    engine?: string;
+    available?: boolean;
+    reason?: string;
+  };
+}
+export interface RuntimeProvidersResponse {
+  default_provider?: SandboxRuntimeProvider;
+  kinds: RuntimeKindDescriptor[];
+  providers: RuntimeProviderDescriptor[];
+}
+export type RuntimeLaunchMode = 'cold' | 'restore' | 'fork' | 'warm_pool';
+export interface RuntimeLaunchStrategy {
+  mode: RuntimeLaunchMode;
+  prefer_fast_start?: boolean;
+  asset_ref?: string;
+  restore_mode?: 'ondemand' | 'copy';
+}
+export interface RuntimeOptions {
+  kind: SandboxRuntimeKind;
+  provider?: SandboxRuntimeProvider;
+  required_capabilities?: SandboxRuntimeCapabilityId[];
+  excluded_capabilities?: SandboxRuntimeCapabilityId[];
+  launch_strategy?: RuntimeLaunchStrategy;
+  constraints?: {
+    allow_vfio_fast_start?: boolean;
+    fallback_mode?: 'fail' | 'cold';
+  };
+}
+export interface LoadoutFastStartAsset {
+  id: string;
+  provider: SandboxRuntimeProvider;
+  kind: 'snapshot' | 'checkpoint' | 'fork_base' | 'warm_pool' | (string & {});
+  state: 'ready' | 'building' | 'degraded' | 'unavailable' | (string & {});
+  capabilities: SandboxRuntimeCapabilityId[];
+  reason?: string;
+}
+export interface ResolvedLoadoutCompatibility {
+  runtime_kind: SandboxRuntimeKind;
+  provider: SandboxRuntimeProvider;
+  eligible: boolean;
+  required_capabilities?: SandboxRuntimeCapabilityId[];
+  excluded_capabilities?: SandboxRuntimeCapabilityId[];
+  constraints?: RuntimeCapabilityConstraint[];
+  launch_strategy?: RuntimeLaunchStrategy;
+  fast_start_assets?: LoadoutFastStartAsset[];
+  reason?: string;
+}
 export interface Instance {
   id: string;
   runtime: string;
+  provider?: SandboxRuntimeProvider;
+  capabilities?: RuntimeCapability[];
+  capability_constraints?: RuntimeCapabilityConstraint[];
+  gpu?: RuntimeGpuPosture;
   loadout: string;
   state: string;
   tenant: string;
@@ -30,6 +144,8 @@ export interface Instance {
   host_daemon: HostDaemonStatus;
   transport: TransportPosture;
   launch_context: LaunchContext;
+  storage?: StoragePosture;
+  lifecycle?: LifecyclePosture;
   agent_ready?: boolean;
   registered_agent_id?: string;
   session_backends: SessionBackend[];
@@ -121,8 +237,58 @@ export interface EventsSnapshot {
 }
 export interface InstanceCost { instance_id: string; tenant: string; input_tokens: number; output_tokens: number; usd: number }
 export interface Cost { total: { input_tokens: number; output_tokens: number; usd: number }; per_instance: InstanceCost[] }
-export interface Loadout { id: string; label: string; description?: string; runtimes?: string[] }
-export interface ExecutorCapabilities { status: string; source?: string | null; host_runtime_enabled: boolean; raw_status?: string; error?: string }
+export interface Loadout {
+  id: string;
+  label: string;
+  description?: string;
+  runtimes?: string[];
+  runtime_options?: RuntimeOptions;
+  compatibility?: ResolvedLoadoutCompatibility[];
+}
+export interface ExecutorCapabilities {
+  status: string;
+  source?: string | null;
+  host_runtime_enabled: boolean;
+  runtime_providers?: RuntimeProvidersResponse;
+  raw_status?: string;
+  error?: string;
+}
+export interface McpPrincipalDiscovery {
+  client_id: string;
+  scopes: string[];
+}
+export interface McpEndpointDiscovery {
+  path: string;
+  methods: string[];
+  transport: string;
+  stateless: boolean;
+  get_behavior: string;
+  mcp_session_id: boolean;
+}
+export interface McpDiscovery {
+  source?: string;
+  discovery_path?: string;
+  fetched_at?: string;
+  enabled: boolean;
+  status: 'enabled' | 'disabled' | 'degraded' | string;
+  reason_code?: string | null;
+  error?: string;
+  endpoint: McpEndpointDiscovery;
+  protocol: { latest?: string; supported?: string[] };
+  auth: {
+    scheme: string;
+    required: boolean;
+    principal_config: string;
+    principals: McpPrincipalDiscovery[];
+    scopes: string[];
+  };
+  capabilities: Record<string, unknown>;
+  tools: Array<{ name: string; title?: string; description?: string } & Record<string, unknown>>;
+  resources: Array<{ uri: string; name?: string; mimeType?: string; description?: string }>;
+  resource_templates: Array<{ uriTemplate: string; name?: string; mimeType?: string; description?: string }>;
+  errors: Array<{ http_status: number; jsonrpc_code?: number; code: string; message: string }>;
+  notes: string[];
+}
 export interface CapabilityResult { path: string; type: string; title?: string; capability?: string; score?: number; name: string; triggers?: string[] }
 export interface ContribAction { id: string; title: string; icon?: string; group?: string; source: string; inject: { command: string; target?: string; needs_args?: boolean; args_hint?: string } }
 export interface ContribScreen { id: string; title: string; source: string; contribution: string }

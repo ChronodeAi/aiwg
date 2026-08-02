@@ -30,6 +30,8 @@
     "welcome",
     "getting-started",
     "getting-started/start-here",
+    "getting-started/install-node",
+    "getting-started/install-connect-verify",
     "agentic-install-runbook",
     "getting-started/language-map",
     "getting-started/first-success-ask-steward",
@@ -39,7 +41,10 @@
     "overview/what-is-aiwg",
     "overview/executive-brief",
     "getting-started/prerequisites",
+    "install",
     "security/supply-chain-hardening",
+    "install/web-backed-resources",
+    "install/non-interactive",
     "quickstart",
     "intake-guide",
     "regenerate-guide",
@@ -60,6 +65,7 @@
     "quickstart-sdlc",
     "quickstart-mmk",
     "guides",
+    "guides/external-trigger-jobs",
     "models",
     "models/claude-optimization",
     "models/gpt-optimization",
@@ -73,9 +79,12 @@
     "prompting/few-shot-learning",
     "prompting/role-based-prompting",
     "reference",
-    "CLI_USAGE",
-    "cli-reference",
+    "skills/agent-skills",
+    "skills/quality-rubric",
+    "architecture/adr-agent-skills-portability-contract",
+    "reports/agentskills-standard-audit-2026-07-25",
     "configuration/aiwg-config",
+    "security/threat-assessment-policy",
     "security/repo-access-manifest",
     "fortemi-core-prebuilt-indices",
     "user-level-indices",
@@ -103,6 +112,9 @@
     "extensions/creating-extensions",
     "extensions/extension-types",
     "development",
+    "architecture/documentation-information-architecture",
+    "development/documentation-audience-guide",
+    "development/documentation-migration-map",
     "development/devkit-overview",
     "development/addon-creation-guide",
     "development/extension-creation-guide",
@@ -278,6 +290,7 @@
     "customization/README",
     "customization/project-local-quickstart",
     "customization/project-local-lifecycle",
+    "customization/standalone-plugin-repository",
     "customization/project-quickrefs",
     "customization/project-local-troubleshooting",
     "customization/from-fork-to-project-local",
@@ -428,7 +441,12 @@
     "addons/prose-integration/integration-guide",
     "addons/rlm/agent-examples",
     "addons/rlm/agent-examples/rlm-agent-examples",
-    "frameworks/media-curator/type-flexible-curation"
+    "frameworks/media-curator/type-flexible-curation",
+    "blog/2026-07-aiwg-workflow-portability",
+    "addons/line-memory",
+    "addons/line-memory/overview",
+    "blog/2026-07-aiwg-discovery-first",
+    "frameworks/media-marketing-kit/design-operations-examples"
   ],
   "sections": [
     {
@@ -447,6 +465,20 @@
       "title": "Start Here",
       "summary": "Beginner path from plain-language goal to first useful AIWG result",
       "file": "getting-started/start-here.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "getting-started/install-node",
+      "title": "Install Node.js and npm Safely",
+      "summary": "Choose a safe Node.js/npm setup without version-manager conflicts",
+      "file": "getting-started/install-node.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "getting-started/install-connect-verify",
+      "title": "Install, Connect, and Verify AIWG",
+      "summary": "Canonical install, use all, regenerate, and verification path",
+      "file": "getting-started/install-connect-verify.md",
       "parent": "getting-started"
     },
     {
@@ -511,6 +543,27 @@
       "summary": "System requirements and setup",
       "file": "getting-started/prerequisites.md",
       "parent": "getting-started"
+    },
+    {
+      "id": "install",
+      "title": "Install",
+      "summary": "Installation and deployment modes",
+      "collapsed": true,
+      "parent": "getting-started"
+    },
+    {
+      "id": "install/web-backed-resources",
+      "title": "Web-Backed Resources",
+      "summary": "Planned release-host resource mode for AIWG bundles",
+      "file": "install/web-backed-resources.md",
+      "parent": "install"
+    },
+    {
+      "id": "install/non-interactive",
+      "title": "Non-Interactive Installation",
+      "summary": "Deploy AIWG frameworks from CI, cloud-init, and provisioning scripts",
+      "file": "install/non-interactive.md",
+      "parent": "install"
     },
     {
       "id": "security/supply-chain-hardening",
@@ -740,13 +793,6 @@
       "summary": "CLI commands, configuration, and API docs"
     },
     {
-      "id": "CLI_USAGE",
-      "title": "CLI Reference",
-      "summary": "Complete command line usage",
-      "file": "CLI_USAGE.md",
-      "parent": "reference"
-    },
-    {
       "id": "local-issues",
       "title": "Local Issues",
       "summary": "Project-local issue tracker under .aiwg/issues/",
@@ -761,10 +807,31 @@
       "parent": "reference"
     },
     {
-      "id": "cli-reference",
-      "title": "All Commands",
-      "summary": "Every aiwg command with examples",
-      "file": "cli-reference.md",
+      "id": "skills/agent-skills",
+      "title": "Agent Skills",
+      "summary": "Import, validate, trust, deploy, update, and remove portable Agent Skills",
+      "file": "skills/agent-skills.md",
+      "parent": "reference"
+    },
+    {
+      "id": "skills/quality-rubric",
+      "title": "SKILL.md Quality Rubric",
+      "summary": "Quality scoring and source conventions for SKILL.md",
+      "file": "skills/quality-rubric.md",
+      "parent": "reference"
+    },
+    {
+      "id": "architecture/adr-agent-skills-portability-contract",
+      "title": "Agent Skills Portability Contract",
+      "summary": "Architecture decision for portable metadata, sidecars, trust, and provider projection",
+      "file": "architecture/adr-agent-skills-portability-contract.md",
+      "parent": "reference"
+    },
+    {
+      "id": "reports/agentskills-standard-audit-2026-07-25",
+      "title": "Agent Skills Adoption Audit",
+      "summary": "Pinned upstream format audit and adoption evidence",
+      "file": "reports/agentskills-standard-audit-2026-07-25.md",
       "parent": "reference"
     },
     {
@@ -828,6 +895,13 @@
       "title": "AIWG Project Config",
       "summary": "Project and multi-repository workspace configuration reference",
       "file": "configuration/aiwg-config.md",
+      "parent": "reference"
+    },
+    {
+      "id": "security/threat-assessment-policy",
+      "title": "Threat-Assessment Policy",
+      "summary": "Configure deterministic threat assessment across forge and delivery surfaces",
+      "file": "security/threat-assessment-policy.md",
       "parent": "reference"
     },
     {
@@ -946,6 +1020,27 @@
       "summary": "Package reusable components",
       "collapsed": true,
       "parent": "customizing"
+    },
+    {
+      "id": "architecture/documentation-information-architecture",
+      "title": "Documentation Information Architecture",
+      "summary": "Audience, task type, ownership, and publication targets",
+      "file": "architecture/documentation-information-architecture.md",
+      "parent": "development"
+    },
+    {
+      "id": "development/documentation-audience-guide",
+      "title": "Documentation Audience Guide",
+      "summary": "Choose the audience and publication target for new documentation",
+      "file": "development/documentation-audience-guide.md",
+      "parent": "development"
+    },
+    {
+      "id": "development/documentation-migration-map",
+      "title": "Documentation Migration Map",
+      "summary": "Inventory and classification for conversational documentation",
+      "file": "development/documentation-migration-map.md",
+      "parent": "development"
     },
     {
       "id": "development/devkit-overview",
@@ -2173,6 +2268,13 @@
       "parent": "customization"
     },
     {
+      "id": "customization/standalone-plugin-repository",
+      "title": "Standalone Plugin Repository",
+      "summary": "Package community and team plugin wrappers",
+      "file": "customization/standalone-plugin-repository.md",
+      "parent": "customization"
+    },
+    {
       "id": "customization/project-quickrefs",
       "title": "Project Quickrefs",
       "summary": "Always-visible project orientation",
@@ -3220,6 +3322,43 @@
       "summary": "Media Curator treats audio, video, transcripts, image sets, documents, and mixed",
       "file": "frameworks/media-curator/type-flexible-curation.md",
       "parent": "frameworks/media-curator"
+    },
+    {
+      "id": "addons/line-memory",
+      "title": "Line Memory",
+      "summary": "",
+      "collapsed": true,
+      "parent": "addons"
+    },
+    {
+      "id": "addons/line-memory/overview",
+      "title": "Overview",
+      "summary": "title: Line Memory",
+      "file": "addons/line-memory/overview.md",
+      "parent": "addons/line-memory"
+    },
+    {
+      "id": "frameworks/media-marketing-kit/design-operations-examples",
+      "title": "Design Operations Examples",
+      "summary": "These examples use the same lifecycle—constraints, history, research, five comparable candidates, hu",
+      "file": "frameworks/media-marketing-kit/design-operations-examples.md",
+      "parent": "frameworks/media-marketing-kit"
+    }
+  ],
+  "pages": [
+    {
+      "id": "blog/2026-07-aiwg-workflow-portability",
+      "title": "If your agent workflow only lives in chat, you do not have a workflow",
+      "summary": "A practical test for whether an agent workflow is portable: can the project carry the capability, can another operator discover it, and can a handoff survive without private prompt memory?",
+      "file": "blog/2026-07-aiwg-workflow-portability.md",
+      "parent": "blog"
+    },
+    {
+      "id": "blog/2026-07-aiwg-discovery-first",
+      "title": "Your agent should search the toolbox before pretending it knows every tool",
+      "summary": "Discovery-first agent tooling turns a giant prompt menu into a debuggable routing layer: ask by intent, inspect the match, then run the right capability.",
+      "file": "blog/2026-07-aiwg-discovery-first.md",
+      "parent": "blog"
     }
   ]
 }

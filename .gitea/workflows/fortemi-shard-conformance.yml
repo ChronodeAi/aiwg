@@ -10,6 +10,7 @@ on:
       - 'test/unit/artifacts/fortemi-shard-export.test.ts'
       - 'test/fixtures/fortemi-shard/**'
       - 'schemas/artifacts/aiwg-fortemi-shard-receipt.v1.schema.json'
+      - 'schemas/artifacts/aiwg-fortemi-full-v1-consumer-receipt.v1.schema.json'
       - 'tools/ci/verify-aiwg-fortemi-shard-receipt.mjs'
       - '.gitea/workflows/fortemi-shard-conformance.yml'
   pull_request:
@@ -21,6 +22,7 @@ on:
       - 'test/unit/artifacts/fortemi-shard-export.test.ts'
       - 'test/fixtures/fortemi-shard/**'
       - 'schemas/artifacts/aiwg-fortemi-shard-receipt.v1.schema.json'
+      - 'schemas/artifacts/aiwg-fortemi-full-v1-consumer-receipt.v1.schema.json'
       - 'tools/ci/verify-aiwg-fortemi-shard-receipt.mjs'
       - '.gitea/workflows/fortemi-shard-conformance.yml'
 
@@ -30,7 +32,7 @@ concurrency:
 
 jobs:
   producer-consumer-receipt:
-    name: Published Core → PGlite → clean Fortemi
+    name: Published Core receipts → full-v1 clean PGlite and Fortemi
     runs-on: matric-builder
     timeout-minutes: 30
 
@@ -47,11 +49,17 @@ jobs:
           PRODUCER_COMMIT="$(node -p "require('./test/fixtures/fortemi-shard/aiwg-core-v1.receipt.json').producer.commit")"
           git fetch --quiet --no-tags --depth=1 origin "$PRODUCER_COMMIT"
           test "$(git rev-parse "$PRODUCER_COMMIT^{commit}")" = "$PRODUCER_COMMIT"
+          SOURCE_AUTHORITY_COMMIT="$(node -p "require('./test/fixtures/fortemi-shard/aiwg-core-v1.receipt.json').producer.source_contract.authority_commit")"
+          git fetch --quiet --no-tags --depth=1 origin "$SOURCE_AUTHORITY_COMMIT"
+          test "$(git rev-parse "$SOURCE_AUTHORITY_COMMIT^{commit}")" = "$SOURCE_AUTHORITY_COMMIT"
+          FULL_CONSUMER_COMMIT="$(node -p "require('./test/fixtures/fortemi-shard/aiwg-full-v1.consumer.receipt.json').consumer.commit")"
+          git fetch --quiet --no-tags --depth=1 origin "$FULL_CONSUMER_COMMIT"
+          test "$(git rev-parse "$FULL_CONSUMER_COMMIT^{commit}")" = "$FULL_CONSUMER_COMMIT"
 
       - name: Install locked published package graph
         run: npm ci
 
-      - name: Verify AIWG producer and PGlite consumer
+      - name: Verify AIWG core-v1 and full-v1 consumer receipts
         run: |
           npx vitest run test/unit/artifacts/fortemi-shard-export.test.ts
           node tools/ci/verify-aiwg-fortemi-shard-receipt.mjs
@@ -60,11 +68,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          FORTEMI_COMMIT="$(node -p "require('./test/fixtures/fortemi-shard/aiwg-core-v1.receipt.json').consumers.fortemi.commit")"
+          FORTEMI_COMMIT="$(node -p "require('./test/fixtures/fortemi-shard/aiwg-full-v1.consumer.receipt.json').consumers.fortemi.commit")"
           rm -rf /tmp/aiwg-fortemi-consumer
           git init -q /tmp/aiwg-fortemi-consumer
           git -C /tmp/aiwg-fortemi-consumer remote add origin https://git.integrolabs.net/Fortemi/fortemi.git
-          git -C /tmp/aiwg-fortemi-consumer fetch --quiet --no-tags --depth=1 origin "$FORTEMI_COMMIT"
+          git -C /tmp/aiwg-fortemi-consumer fetch --quiet --no-tags --depth=2 origin "$FORTEMI_COMMIT"
           git -C /tmp/aiwg-fortemi-consumer checkout --quiet --detach FETCH_HEAD
           test "$(git -C /tmp/aiwg-fortemi-consumer rev-parse HEAD)" = "$FORTEMI_COMMIT"
           test -z "$(git -C /tmp/aiwg-fortemi-consumer status --porcelain)"
@@ -82,6 +90,8 @@ jobs:
           DB_PASSWORD="aiwg-fortemi-${GITHUB_RUN_ID}-${DB_PORT}"
           DB_NAME=matric_test
           echo "DB_CONTAINER=${DB_CONTAINER}" >> "$GITHUB_ENV"
+          echo "DB_USER=${DB_USER}" >> "$GITHUB_ENV"
+          echo "DB_NAME=${DB_NAME}" >> "$GITHUB_ENV"
           echo "DATABASE_URL=postgres://${DB_USER}:${DB_PASSWORD}@localhost:${DB_PORT}/${DB_NAME}" >> "$GITHUB_ENV"
           docker run -d --name "$DB_CONTAINER" \
             -p "${DB_PORT}:5432" \
@@ -89,14 +99,29 @@ jobs:
             -e POSTGRES_PASSWORD="$DB_PASSWORD" \
             -e POSTGRES_DB="$DB_NAME" \
             aiwg-fortemi-testdb:local
+          # The image entrypoint starts a temporary Unix-socket server while it
+          # initializes extensions. Require the final TCP listener so tests
+          # cannot race the handoff between bootstrap and the production server.
           for attempt in {1..30}; do
-            if docker exec "$DB_CONTAINER" pg_isready -U "$DB_USER" >/dev/null 2>&1; then
+            if docker exec "$DB_CONTAINER" \
+              pg_isready -h localhost -p 5432 -U "$DB_USER" -d "$DB_NAME" \
+                >/dev/null 2>&1; then
               exit 0
             fi
             sleep 2
           done
           echo 'Fortemi test database did not become ready' >&2
           exit 1
+
+      - name: Migrate isolated Fortemi test database
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in /tmp/aiwg-fortemi-consumer/migrations/*.sql; do
+            docker exec -i "$DB_CONTAINER" \
+              psql -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 \
+                < "$migration"
+          done
 
       - name: Verify clean Fortemi import and semantic re-export
         run: node tools/ci/verify-aiwg-fortemi-shard-receipt.mjs --server-checkout /tmp/aiwg-fortemi-consumer

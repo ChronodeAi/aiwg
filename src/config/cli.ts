@@ -22,6 +22,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
+import { projectAiwgPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -173,6 +174,7 @@ const ENUM_RULES: Record<string, readonly string[]> = {
   'remotes.tracker_actor.via': ['tea', 'gh', 'mcp', 'api'],
   'remotes.transport.protocol': ['ssh', 'https'],
   'repo_maintainer.tiers.local': ['collaborator', 'maintainer', 'admin'],
+  'security.threatAssessment.mode': ['off', 'audit', 'enforce'],
 };
 
 const BOOLEAN_FIELDS = new Set([
@@ -208,7 +210,7 @@ async function projectConfigGet(key: string, args: string[]): Promise<void> {
   if (!cfg) {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
-      message: 'No .aiwg/aiwg.config in this project.',
+      message: 'No project AIWG config found at the resolved artifact root.',
       hint: 'Run `aiwg init`, then ask your AIWG agent to set up repo/tracker/delivery policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
@@ -247,14 +249,16 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
 
   // Coerce booleans for known boolean fields
   let value: unknown = raw;
-  if (/^externalLinks\.[^.]+$/.test(key)) {
+  if (/^externalLinks\.[^.]+$/.test(key) || key === 'security.threatAssessment') {
     try {
       value = JSON.parse(raw);
     } catch {
       throw new AiwgError({
         code: 'ERR_INVALID_VALUE',
-        message: `${key} must be a JSON object containing label and url`,
-        hint: `Try: aiwg config set --project ${key} '{"label":"Project docs","url":"https://example.com/docs"}'`,
+        message: `${key} must be a valid JSON object`,
+        hint: key === 'security.threatAssessment'
+          ? `Try: aiwg config set --project ${key} '{"schemaVersion":"1","mode":"audit","defaultProfile":"balanced"}'`
+          : `Try: aiwg config set --project ${key} '{"label":"Project docs","url":"https://example.com/docs"}'`,
         exitCode: EXIT_CODES.USAGE,
       });
     }
@@ -315,6 +319,16 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
       code: 'ERR_INVALID_VALUE',
       message: `Invalid external link configuration: ${externalLinkErrors.join('; ')}`,
       hint: 'Each link needs a stable key, non-empty label, and absolute HTTP(S) URL without embedded credentials.',
+      exitCode: EXIT_CODES.USAGE,
+    });
+  }
+  const { validateThreatAssessmentConfig } = await import('../security/threat-assessment-config.js');
+  const threatErrors = validateThreatAssessmentConfig(cfg.security?.threatAssessment);
+  if (threatErrors.length > 0) {
+    throw new AiwgError({
+      code: 'ERR_INVALID_VALUE',
+      message: `Invalid threat-assessment configuration: ${threatErrors.join('; ')}`,
+      hint: 'Use a built-in profile or correct the referenced profile, rule pack, threshold, or regex.',
       exitCode: EXIT_CODES.USAGE,
     });
   }
@@ -414,7 +428,7 @@ async function handleProjectValidate(args: string[]): Promise<void> {
   if (!cfg) {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
-      message: 'No .aiwg/aiwg.config in this project.',
+      message: 'No project AIWG config found at the resolved artifact root.',
       hint: 'Run `aiwg init`, then configure project policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
@@ -457,7 +471,8 @@ async function handleProjectValidate(args: string[]): Promise<void> {
       : resolveIssueLabels(undefined, 'local').diagnostics;
   const diagnostics = [...indexErrors, ...externalLinkErrors, ...labelDiagnostics];
 
-  console.log(`Project config: ${projectDir}/.aiwg/aiwg.config\n`);
+  console.log(`Project config: ${projectAiwgPath(projectDir, 'aiwg.config')}`);
+  console.log(`Artifact root:  ${resolveProjectAiwgDir(projectDir)}\n`);
   if (diagnostics.length === 0) {
     console.log('✓ Project config valid');
     return;
@@ -528,7 +543,7 @@ async function projectConfigReset(key: string | undefined, args: string[]): Prom
   if (!cfg) {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
-      message: 'No .aiwg/aiwg.config in this project.',
+      message: 'No project AIWG config found at the resolved artifact root.',
       hint: 'Run `aiwg init`, then ask your AIWG agent to establish project policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
@@ -629,7 +644,7 @@ For project-level config: aiwg config show --project [--json]
   if (!cfg) {
     throw new AiwgError({
       code: 'ERR_NO_PROJECT_CONFIG',
-      message: 'No .aiwg/aiwg.config in this project.',
+      message: 'No project AIWG config found at the resolved artifact root.',
       hint: 'Run `aiwg init`, then ask your AIWG agent to set up repo/tracker/delivery policy.',
       exitCode: EXIT_CODES.CONFIG,
     });
@@ -673,7 +688,8 @@ For project-level config: aiwg config show --project [--json]
   }
 
   // Human-readable view
-  console.log(`Project config: ${projectDir}/.aiwg/aiwg.config\n`);
+  console.log(`Project config: ${projectAiwgPath(projectDir, 'aiwg.config')}`);
+  console.log(`Artifact root:  ${resolveProjectAiwgDir(projectDir)}\n`);
   console.log(`Schema version: ${cfg.version}`);
   console.log(`Providers:      ${cfg.providers.join(', ') || '(none)'}`);
   console.log('');
@@ -742,13 +758,14 @@ function printUsage(): void {
 
 Subcommands:
   get <key>                       Read a user config value
-  get --project <key>             Read a project config value (.aiwg/aiwg.config)
+  get --project <key>             Read a project config value (default .aiwg/aiwg.config;
+                                  AIWG_ARTIFACTS_PATH may override the artifact root)
   set <key> <value>               Write a user config value
   set --project <key> <value>     Write a project config value (validates enums)
   list                Show all user config
-  show --project      Show resolved project config (.aiwg/aiwg.config)
+  show --project      Show resolved project config and artifact root
   validate            Validate user config files
-  validate --project  Validate .aiwg/aiwg.config taxonomy/index semantics
+  validate --project  Validate resolved project config taxonomy/index semantics
     [--provider gitea|github|local] [--available-label NAME ...]
   reset [<key>]       Reset key or all config to defaults
   path                Print config directory path
