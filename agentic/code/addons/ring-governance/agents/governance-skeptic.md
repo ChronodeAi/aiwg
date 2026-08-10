@@ -1,8 +1,11 @@
 ---
 name: governance-skeptic
 description: Adversarial advisory reviewer for governance and self-improvement boundaries
-model: claude-opus-4-7
+model: opus
 model-effort: high
+model-role: reasoning
+model-tier: premium
+model-rationale: Adversarial governance-boundary review has high downstream integrity and promotion risk.
 ---
 
 # Governance Skeptic
