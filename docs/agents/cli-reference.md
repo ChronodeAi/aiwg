@@ -29,6 +29,20 @@ Complete reference for all `aiwg` CLI commands.
 
 **Prerequisites:** Node.js ≥20.0.0 and `npm install -g aiwg`
 
+## Authentication
+
+```bash
+aiwg auth login [--device] [--device-label <label>]
+aiwg auth status [--json]
+aiwg auth logout [--all]
+```
+
+Authentication uses the native operating-system credential store. A mode-0600
+file fallback requires explicit `--store file --allow-file-store` opt-in. Exit
+codes are 0 success, 2 usage, 3 not authenticated, 4 denied/expired, 5
+credential-store failure, and 6 network/protocol failure. Status output never
+contains access or refresh tokens.
+
 **References:**
 
 - @src/extensions/commands/definitions.ts - Command extension definitions
@@ -789,7 +803,9 @@ remote Git repository into the local registry cache. Distinct from
 `install-plugin` (Claude Code plugin format).
 
 ```bash
-aiwg install <ref> [--deploy] [--provider <name>] [--target <dir>] [--refresh]
+aiwg install <ref> [--ref <tag-or-sha>] [--package <id>] [--verify]
+  [--deploy] [--provider <name>] [--target <dir>]
+  [--project-local|--global] [--refresh]
 ```
 
 **Arguments:**
@@ -802,6 +818,18 @@ aiwg install <ref> [--deploy] [--provider <name>] [--target <dir>] [--refresh]
 - `--provider <name>` - Target provider (claude, copilot, cursor, ...) — default `claude`
 - `--target <dir>` - Project directory to deploy into — default cwd
 - `--refresh` - Force re-pull even if package is already cached
+- `--ref <tag-or-sha>` - Resolve and lock this Git ref before deployment
+- `--package <id>` - Select a wrapper when the repository contains several
+- `--verify` - Require a trusted Ed25519 publisher signature
+- `--policy <name|path>` - Apply a named local trust policy or JSON policy
+- `--project-local` - Store registry, lock, receipts, and indices below the
+  target project's `.aiwg/` directory
+- `--global` - Store package state in the user AIWG directory (default)
+
+Mutable refs are resolved to immutable commits and cached by commit. Direct
+Git installs support root bundles and validated standalone
+`.aiwg/plugins/<id>` wrappers. Without `--verify`, an unsigned but digest-valid
+package is reported as `integrity-only`.
 
 **Capabilities:** cli, framework, install, git
 **Tools:** Read, Write, Bash
@@ -810,22 +838,43 @@ aiwg install <ref> [--deploy] [--provider <name>] [--target <dir>] [--refresh]
 
 ### marketplace
 
-Search and list packages across configured marketplace adapters (clawhub, openclaw, local).
+Exchange Git-native packages through direct remotes and independently signed
+catalogs. Catalog inclusion is an observation, not an AIWG endorsement.
 
 ```bash
+aiwg marketplace add <catalog-git-url> [--ref <tag-or-sha>]
 aiwg marketplace search <query> [--source <id>] [--json]
-aiwg marketplace list [--source <id>] [--json]
+aiwg marketplace info <package>
+aiwg marketplace install <git-url|package> [--ref <tag-or-sha>] [--verify]
+aiwg marketplace verify <package|lock-id> [--require-signature]
+aiwg marketplace export <package> --output <archive.json>
+aiwg marketplace import <archive.json> [--verify]
+aiwg marketplace publish <source> --key <pem> --publisher <id>
+aiwg marketplace remove <catalog-id>
+aiwg marketplace list [--json]
 ```
 
 **Subcommands:**
 
-- `search <query>` - Search marketplace catalogs for matching packages
-- `list` - List all packages from configured sources
+- `add` - Verify and register a signed Git catalog
+- `search` - Search source adapters and signed catalog observations
+- `info` - Show immutable lock, verification status, and catalog observations
+- `install` - Install direct Git or catalog coordinates through one lock path
+- `verify` - Verify cached bytes and evidence offline and emit a receipt
+- `export` / `import` - Move a complete package, receipts, and Fortemi shard
+  through an offline portable archive
+- `publish` - Create a signed provenance envelope, lock, receipt, and Fortemi
+  `2.0.0/full-v1` shard
+- `remove` - Remove catalog discovery state while retaining installed locks
+- `list` - List installed packages and verification status
 
 **Options:**
 
-- `--source <id>` - Limit to a specific source (clawhub, openclaw, local)
+- `--source <id>` - Limit search to an adapter or `catalog:<catalog-id>`
 - `--json` - Emit structured JSON for programmatic consumption
+- `--project-local` / `--global` - Select project or user state and indices
+- `--target <dir>` - Select the project for project-local state
+- `--policy <name|path>` - Select local signature/trust policy
 
 **Capabilities:** cli, marketplace, search, discovery
 **Tools:** Read
@@ -834,9 +883,15 @@ aiwg marketplace list [--source <id>] [--json]
 
 ```bash
 aiwg marketplace search auth
-aiwg marketplace search auth --source clawhub
+aiwg marketplace search auth --source catalog:community
+aiwg marketplace verify team/auth-tools --project-local
+aiwg marketplace export team/auth-tools --output auth-tools.aiwg.json
 aiwg marketplace list --json
 ```
+
+See [Git-Native Package Exchange](../providers/git-native-marketplace.md) for
+the envelope, lock, W3C PROV, trust, catalog, mirror, recovery, and key-rotation
+contracts.
 
 ---
 
@@ -1429,6 +1484,7 @@ Register an MCP server in the AIWG server registry (`~/.aiwg/mcp-servers.json`).
 
 ```bash
 aiwg mcp add <name> --url <url> [--type http|stdio|sse] [--description <text>]
+aiwg mcp add <name> --url <url> --header-env Authorization=ENV_VAR
 aiwg mcp add <name> --type stdio --command <cmd> [--args <a,b>] [--env KEY=VAL]
 ```
 
@@ -1444,6 +1500,9 @@ aiwg mcp add <name> --type stdio --command <cmd> [--args <a,b>] [--env KEY=VAL]
 - `--args <a,b>` - Comma-separated args for stdio command
 - `--env KEY=VAL` - Environment variable(s) for stdio servers
 - `--headers KEY=VAL` - HTTP headers for http/sse servers
+- `--header-env HEADER=ENV_VAR` - Resolve a remote HTTP/SSE header from an
+  environment variable at connection time. The registry stores only the
+  variable name. An `Authorization` reference is sent as a Bearer token.
 - `--description <text>` - Human-readable description
 
 **Example:**
@@ -1451,6 +1510,10 @@ aiwg mcp add <name> --type stdio --command <cmd> [--args <a,b>] [--env KEY=VAL]
 ```bash
 # HTTP server
 aiwg mcp add my-api --url http://localhost:3001 --description "Local API server"
+
+# Authenticated Enterprise server; no token is stored in the registry
+aiwg mcp add fortemi-enterprise --url https://memory.example.internal/mcp \
+  --header-env Authorization=AIWG_FORTEMI_TOKEN
 
 # stdio server
 aiwg mcp add git-server --type stdio --command npx --args @gitea/mcp-server
@@ -2083,23 +2146,22 @@ fail the file regardless of its quality score.
 
 ### Published plugins
 
-The AIWG marketplace publishes **13 plugins** at `.claude-plugin/marketplace.json`:
+The AIWG marketplace publishes **40 plugins**. The authoritative names,
+descriptions, versions, and sources live in `.claude-plugin/marketplace.json`.
+Local packages resolve from `./agentic/code/plugins/<name>`; `training` is the
+only externally sourced package.
 
-| Plugin                 | Source                                 | Description                                                     |
-| ---------------------- | -------------------------------------- | --------------------------------------------------------------- |
-| `sdlc`                 | `frameworks/sdlc-complete`             | Full SDLC framework with 93 specialized agents                  |
-| `marketing`            | `frameworks/media-marketing-kit`       | Marketing operations framework                                  |
-| `forensics`            | `frameworks/forensics-complete`        | Digital forensics & incident response (13 agents, 20 skills)    |
-| `security-engineering` | `frameworks/security-engineering`      | Applied security: crypto, chain-of-trust, factors, supply-chain |
-| `research`             | `frameworks/research-complete`         | Research workflow automation (8 agents, 39 skills)              |
-| `media-curator`        | `frameworks/media-curator`             | Media archive management (6 agents, 20 skills)                  |
-| `ops`                  | `frameworks/ops-complete`              | Operational infrastructure: incident, runbooks, troubleshooting |
-| `knowledge-base`       | `frameworks/knowledge-base`            | Knowledge base / wiki framework                                 |
-| `utils`                | `addons/aiwg-utils`                    | Core AIWG utilities                                             |
-| `voice`                | `addons/voice-framework`               | Voice profiles for consistent writing                           |
-| `writing`              | `addons/writing-quality`               | Writing quality and AI-pattern detection                        |
-| `training`             | `jmagly/aiwg-training` (separate repo) | Fine-tuning dataset curation                                    |
-| `hooks`                | `addons/aiwg-hooks`                    | Workflow tracing and session hooks                              |
+- Frameworks: `sdlc`, `marketing`, `forensics`, `security-engineering`,
+  `research`, `media-curator`, `ops`, `knowledge-base`, and `validation-complete`.
+- Agent runtime: `agent-loop`, `agent-persistence`, `guided-implementation`,
+  `context-curator`, `daemon`, `droid-bridge`, `prose-integration`, and `rlm`.
+- Memory and knowledge: `auto-memory`, `line-memory`, `compound-memory`,
+  `semantic-memory`, `llm-wiki`, and `doc-intelligence`.
+- Quality and delivery: `aiwg-evals`, `testing-quality`, `uat-mcp`,
+  `twelve-factor`, `agentic-installer`, `skill-factory`, `aiwg-dev`, and `nlp-prod`.
+- Writing and design: `voice`, `writing`, `verbalized-sampling`, `color-palette`,
+  `star-prompt`, and `training`.
+- Utilities and integration: `utils`, `hooks`, and `browser-control`.
 
 Install any of them with `/plugin install <name>@aiwg` after running `/plugin marketplace add jmagly/ai-writing-guide` once.
 
@@ -2108,12 +2170,20 @@ Install any of them with `/plugin install <name>@aiwg` after running `/plugin ma
 Install Claude Code plugin.
 
 ```bash
-aiwg install-plugin <name>
+aiwg install-plugin <name> [--source <local-path>] [--dry-run]
 ```
 
 **Arguments:**
 
 - `<name>` - Plugin name from marketplace
+- `--source <local-path>` - Compatibility input for legacy framework/add-on/extension manifests. Standalone plugin wrappers return an actionable migration to `aiwg install <path>` followed by `aiwg use <plugin-id>`.
+
+Git URLs and standalone local wrappers use the package workflow directly:
+
+```bash
+aiwg install <path-or-git-url> --dry-run
+aiwg use <plugin-id>
+```
 
 **Capabilities:** cli, plugin, install
 **Platform:** Claude Code only
@@ -3896,12 +3966,16 @@ Manage the configured project AIWG artifact root.
 
 ```bash
 aiwg artifacts move --to <path> [--from <path>] [--dry-run] [--no-reindex] [--no-sync]
+aiwg artifacts attach --to <existing-path> [--dry-run] [--no-reindex] [--no-sync]
 ```
 
 `move` relocates or renames the current artifact root, writes `.aiwg-location`
 in the project root, updates `.gitignore` so the pointer remains local,
 rebuilds the project index, and syncs the Fortemi Core cache. `--from` overrides
 the source root; otherwise AIWG resolves it the same way runtime config does.
+`attach` adopts an already populated artifact root without moving or
+overwriting the local or external tree; it validates that `aiwg.config` exists,
+writes the same pointer, and rebuilds the external index.
 `AIWG_ARTIFACTS_PATH` still has highest precedence for per-call overrides.
 
 **Capabilities:** cli, index, artifacts, search, dependencies
@@ -4410,6 +4484,7 @@ aiwg storage <subcommand>
 | `list-backends`       | Inventory of compiled-in adapters with READY/STUB status               |
 | `test <subsystem>`    | Round-trip write/read/list/delete probe through the configured backend |
 | `migrate <subsystem>` | Copy entries from one backend to another (#955)                        |
+| `import-corpus`       | Ingest local research text through an implemented storage backend (#1508) |
 
 **Examples:**
 
@@ -4422,6 +4497,15 @@ aiwg storage list-backends
 
 # Verify connectivity for the activity_log subsystem
 aiwg storage test activity_log
+
+# Preview local-workstation research ingest without connecting
+aiwg storage import-corpus --dry-run
+
+# Route through another implemented storage backend
+aiwg storage import-corpus --to obsidian:~/vault
+
+# Ingest through an authenticated Enterprise MCP registry entry
+aiwg storage import-corpus --server fortemi-enterprise
 
 # Migrate AIWG memory from local fs to an Obsidian vault
 aiwg storage migrate memory \

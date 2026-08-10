@@ -97,23 +97,30 @@ export interface InstalledEntry {
   manifestVersion?: string;
 
   /**
-   * Hashes of deployed artifacts at deploy time, keyed by provider then
-   * source-relative path (e.g., "codex" → "rules/my-rule.md").
-   *
-   * Because providers apply provider-specific transforms (model replacement,
-   * tool filtering, frontmatter rewriting) at deploy time, the hash of a
-   * source artifact differs from the hash of the deployed file. Recording
-   * per-provider deployed hashes lets `aiwg doctor --project-local` compare
-   * the live deployed file against the post-transform expected state, and
-   * lets `aiwg remove` detect pristine vs. mutated vs. replaced files per the
-   * design at @.aiwg/architecture/design-aiwg-remove-revert.md.
+   * Hashes of source artifacts at deploy time, keyed by source-relative path
+   * (e.g., "rules/my-rule.md", "skills/my-skill/SKILL.md"). Used by
+   * `aiwg remove` to detect pristine vs. mutated vs. replaced deployed
+   * files per the design at @.aiwg/architecture/design-aiwg-remove-revert.md.
    *
    * Optional — older entries without this field fall back to "always-prompt"
    * remove behavior until the next `aiwg use` re-records them.
    *
    * @implements #1037
    */
-  artifactHashes?: Record<string, Record<string, string>>;
+  artifactHashes?: Record<string, string>;
+
+  /**
+   * Hashes of the provider-transformed artifacts actually written by a
+   * project-local deployment. The outer key is the provider and the inner
+   * key uses the same source-relative artifact path as `artifactHashes`.
+   *
+   * Provider deployers may rewrite frontmatter or translate formats, so a
+   * source hash cannot reliably classify the deployed file. Older registry
+   * entries continue to use `artifactHashes` as a compatibility fallback.
+   *
+   * @implements #1998
+   */
+  deployedArtifactHashes?: Record<string, Record<string, string>>;
 }
 
 /**
@@ -1492,12 +1499,10 @@ export function updateInstalled(
     localType?: ProjectLocalType;
     /** Set when source === 'project-local'. */
     manifestVersion?: string;
-    /**
-     * Optional per-provider deployed-artifact hash map for project-local
-     * remove revert and doctor drift detection (#1037). Outer key is provider,
-     * inner key is source-relative path.
-     */
-    artifactHashes?: Record<string, Record<string, string>>;
+    /** Optional source-artifact hash map for project-local remove revert (#1037). */
+    artifactHashes?: Record<string, string>;
+    /** Provider-specific hashes captured from the deployed files (#1998). */
+    deployedArtifactHashes?: Record<string, string>;
   }
 ): AiwgConfig {
   // Project-local invariant: `source: 'project-local'` requires localPath + localType
@@ -1529,19 +1534,27 @@ export function updateInstalled(
     existing.localType = opts.localType;
     if (opts.manifestVersion) existing.manifestVersion = opts.manifestVersion;
     if (opts.artifactHashes) {
-      existing.artifactHashes = existing.artifactHashes ?? {};
-      // Legacy artifactHashes used to be a flat Record<sourceRel, hash>.
-      // The new shape is Record<provider, Record<sourceRel, hash>>. When a
-      // provider-scoped update arrives, drop any surviving flat keys (they
-      // contain '/' or end in '.md') so the registry stays clean and typed.
-      for (const key of Object.keys(existing.artifactHashes)) {
-        if (key.includes('/') || key.endsWith('.md')) {
-          delete existing.artifactHashes[key];
+      // Chronode forks written before #1998 stored post-transform hashes in
+      // `artifactHashes[provider]`. Migrate every provider map before replacing
+      // that legacy field with the canonical flat source inventory.
+      const legacy = existing.artifactHashes as unknown as Record<string, unknown> | undefined;
+      if (legacy) {
+        for (const [legacyProvider, value] of Object.entries(legacy)) {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+          const hashes = Object.fromEntries(
+            Object.entries(value as Record<string, unknown>)
+              .filter(([, hash]) => typeof hash === 'string'),
+          ) as Record<string, string>;
+          if (Object.keys(hashes).length === 0) continue;
+          existing.deployedArtifactHashes ??= {};
+          existing.deployedArtifactHashes[legacyProvider] ??= hashes;
         }
       }
-      for (const [p, hashes] of Object.entries(opts.artifactHashes)) {
-        existing.artifactHashes[p] = hashes;
-      }
+      existing.artifactHashes = opts.artifactHashes;
+    }
+    if (opts.deployedArtifactHashes) {
+      existing.deployedArtifactHashes ??= {};
+      existing.deployedArtifactHashes[provider] = opts.deployedArtifactHashes;
     }
   } else {
     // Clear stale project-local fields if a previously project-local entry is
@@ -1550,6 +1563,7 @@ export function updateInstalled(
     delete existing.localType;
     delete existing.manifestVersion;
     delete existing.artifactHashes;
+    delete existing.deployedArtifactHashes;
   }
 
   config.installed[name] = existing;
