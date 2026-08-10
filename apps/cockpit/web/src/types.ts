@@ -17,6 +17,19 @@ export interface TransportPosture {
   evidence?: string;
   stale?: boolean;
 }
+export interface ManagedDockerPosture {
+  transport_mode: string;
+  control_identity_present: boolean;
+  control_identity_range_valid: boolean;
+  workload_uid?: number;
+  workload_identity_separated: boolean;
+  boundary: string;
+  secure_default: boolean;
+  compatibility: boolean;
+  fallback_reason?: string;
+  requires_recreation: boolean;
+  source: string;
+}
 export interface BootstrapTrustPosture {
   status: 'secure' | 'degraded' | 'disabled' | (string & {});
   mode: 'mtls' | 'plaintext-dev' | 'disabled' | (string & {});
@@ -143,6 +156,7 @@ export interface Instance {
   runtime_posture: RuntimePosture;
   host_daemon: HostDaemonStatus;
   transport: TransportPosture;
+  managed_docker_posture?: ManagedDockerPosture;
   launch_context: LaunchContext;
   storage?: StoragePosture;
   lifecycle?: LifecyclePosture;
@@ -199,6 +213,22 @@ export interface MissionProjection {
   tenant?: string;
   risk?: string;
   terminal?: boolean;
+  parent_mission_id?: string;
+  workload_kind?: 'persistent-agent' | 'daemon' | 'scheduled-collector' | 'one-shot-command' | (string & {});
+  desired_state?: string;
+  target_id?: string;
+  executor_id?: string;
+  runtime_id?: string;
+  runtime_session_id?: string;
+  command_id?: string;
+  dispatch_id?: string;
+  revision?: number;
+  last_seen?: string;
+  health?: string;
+  backpressure?: { reason: string; retryable: boolean; retry_after?: string };
+  artifacts?: Array<{ kind: string; uri: string; sha256: string }>;
+  exit_classification?: string;
+  schedule?: string;
 }
 export interface MissionSession {
   id: string;
@@ -211,6 +241,8 @@ export interface MissionSession {
   audit_count: number;
   audit_tail: MissionAuditEvent[];
   missions: MissionProjection[];
+  parent_mission_id?: string;
+  inventory_revision?: number;
 }
 export interface MissionsResponse {
   source: string;
@@ -290,10 +322,10 @@ export interface McpDiscovery {
   notes: string[];
 }
 export interface CapabilityResult { path: string; type: string; title?: string; capability?: string; score?: number; name: string; triggers?: string[] }
-export interface ContribAction { id: string; title: string; icon?: string; group?: string; source: string; inject: { command: string; target?: string; needs_args?: boolean; args_hint?: string } }
-export interface ContribScreen { id: string; title: string; source: string; contribution: string }
+export interface ContribAction { id: string; title: string; icon?: string; group?: string; source: string; trust_tier?: 'first-party' | 'sandboxed-third-party'; inject: { command: string; target?: string; needs_args?: boolean; args_hint?: string } }
+export interface ContribScreen { id: string; title: string; source: string; contribution: string; trust_tier?: 'first-party' | 'sandboxed-third-party' }
 export interface ContribWorkflowStep { action: string; label?: string }
-export interface ContribWorkflow { id: string; title: string; description?: string; source: string; steps: ContribWorkflowStep[] }
+export interface ContribWorkflow { id: string; title: string; description?: string; source: string; trust_tier?: 'first-party' | 'sandboxed-third-party'; steps: ContribWorkflowStep[] }
 export interface ContributionsResponse { actions: ContribAction[]; screens: ContribScreen[]; workflows: ContribWorkflow[] }
 export interface IndexGraphStatus { name: string; origin: string; shared: boolean; defaultBuild: boolean; location: string; built: boolean; builtAt: string | null; ageHours: number | null; entries: number | null; missing: boolean }
 export interface IndexStatusResponse { graphs: IndexGraphStatus[]; orphanIndexDirs: string[]; warnings: unknown[]; summary: { total: number; built: number; missing: number; orphans: number; warnings: number } }

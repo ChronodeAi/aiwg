@@ -73,8 +73,18 @@ export interface WebReleaseOptions {
   cacheRoot?: string;
   publicKeyPem?: string | Buffer;
   fetcher?: ResourceFetcher;
+  /** Returns a bearer token at request time. Tokens never participate in URLs or cache keys. */
+  credentialProvider?: () => Promise<string | null>;
   /** Test/development escape hatch. HTTP remains restricted to loopback. */
   allowInsecureLoopbackHttp?: boolean;
+  /** Structured cache diagnostics; never includes URLs, headers, or credentials. */
+  onDiagnostic?: (diagnostic: WebReleaseDiagnostic) => void;
+}
+
+export interface WebReleaseDiagnostic {
+  resource: "channel" | "version-index";
+  outcome: "conditional-hit" | "revalidated" | "unconditional";
+  validator: "etag" | "last-modified" | "none";
 }
 
 export interface VerifiedReleaseDescriptor {
@@ -104,7 +114,7 @@ export interface VerifiedWebRelease {
 }
 
 export interface VerifiedRawResourceOptions
-  extends Pick<WebReleaseOptions, "baseUrl" | "fetcher" | "allowInsecureLoopbackHttp"> {
+  extends Pick<WebReleaseOptions, "baseUrl" | "fetcher" | "credentialProvider" | "allowInsecureLoopbackHttp"> {
   offline?: boolean;
 }
 
@@ -134,6 +144,19 @@ interface VersionIndexEntry {
 interface VersionIndex {
   schemaVersion: "aiwg.resource-version-index/v1";
   versions: VersionIndexEntry[];
+}
+
+interface MetadataValidator {
+  schemaVersion: "aiwg.http-validator/v1";
+  payloadSha256: string;
+  etag?: string;
+  lastModified?: string;
+}
+
+interface FetchedMetadata {
+  notModified: boolean;
+  bytes?: Buffer;
+  validator?: MetadataValidator;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -430,6 +453,7 @@ async function fetchBytes(
   url: string,
   label: string,
   maxBytes: number,
+  bearerToken?: string | null,
 ): Promise<Buffer> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error(`${label} has an invalid network size limit`);
   const controller = new AbortController();
@@ -447,7 +471,10 @@ async function fetchBytes(
     const response = await Promise.race([
       fetcher(url, {
         redirect: "error",
-        headers: { "accept-encoding": "identity" },
+        headers: {
+          "accept-encoding": "identity",
+          ...(bearerToken ? { authorization: `Bearer ${bearerToken}` } : {}),
+        },
         signal: controller.signal,
       }),
       timeoutFailure,
@@ -507,6 +534,68 @@ async function fetchBytes(
   } finally {
     clearTimeout(timeout!);
   }
+}
+
+function validatorFromResponse(response: ResourceFetchResponse, payloadSha256: string): MetadataValidator | undefined {
+  // Preserve the origin's ETag octets, including the W/ prefix for weak tags.
+  // HTTP validators only suppress transfer; Ed25519 and SHA-256 remain the
+  // authority for every cached representation accepted by this module.
+  const etag = response.headers.get("etag")?.trim();
+  const lastModified = response.headers.get("last-modified")?.trim();
+  if (!etag && !lastModified) return undefined;
+  return {
+    schemaVersion: "aiwg.http-validator/v1",
+    payloadSha256,
+    ...(etag ? { etag } : { lastModified: lastModified! }),
+  };
+}
+
+function readMetadataValidator(pathname: string, payloadSha256: string): MetadataValidator | undefined {
+  if (!fs.existsSync(pathname)) return undefined;
+  const value = parseJson(readVerifiedRegularFile(pathname, {
+    label: "cached HTTP metadata validator",
+    maxBytes: MAX_COMPLETION_MARKER_BYTES,
+  }), "cached HTTP metadata validator");
+  if (!isRecord(value) || value.schemaVersion !== "aiwg.http-validator/v1" || value.payloadSha256 !== payloadSha256) {
+    throw new Error("cached HTTP metadata validator does not match the verified signed payload");
+  }
+  const etag = typeof value.etag === "string" && value.etag.trim() ? value.etag.trim() : undefined;
+  const lastModified = typeof value.lastModified === "string" && value.lastModified.trim() ? value.lastModified.trim() : undefined;
+  if (!etag && !lastModified) throw new Error("cached HTTP metadata validator is empty");
+  return { schemaVersion: "aiwg.http-validator/v1", payloadSha256, ...(etag ? { etag } : { lastModified }) };
+}
+
+async function fetchMetadata(
+  fetcher: ResourceFetcher,
+  url: string,
+  label: string,
+  maxBytes: number,
+  cachedValidator?: MetadataValidator,
+): Promise<FetchedMetadata> {
+  const headers: Record<string, string> = { "accept-encoding": "identity" };
+  if (cachedValidator?.etag) headers["if-none-match"] = cachedValidator.etag;
+  else if (cachedValidator?.lastModified) headers["if-modified-since"] = cachedValidator.lastModified;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RESOURCE_FETCH_TIMEOUT_MS);
+  let response: ResourceFetchResponse;
+  try {
+    response = await fetcher(url, { redirect: "error", headers, signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`${label} request timed out after ${RESOURCE_FETCH_TIMEOUT_MS}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (response.status === 304) {
+    if (!cachedValidator) throw new Error(`${label} returned 304 without a verified cached representation`);
+    return {
+      notModified: true,
+      validator: validatorFromResponse(response, cachedValidator.payloadSha256) ?? cachedValidator,
+    };
+  }
+  if (!response.ok) throw new Error(`${label} fetch failed (${response.status}): ${url}`);
+  const bytes = await fetchBytes(async () => response, url, label, maxBytes);
+  return { notModified: false, bytes, validator: validatorFromResponse(response, sha256(bytes)) };
 }
 
 function verifyDescriptor(bytes: Uint8Array, descriptor: VerifiedReleaseDescriptor, label = descriptor.path): void {
@@ -755,12 +844,13 @@ function readCachedChannel(
   cacheRoot: string,
   channel: string,
   publicKeyPem: string | Buffer,
-): { manifest: ChannelManifest; bytes: Buffer; signatureBytes: Buffer; digest: string } | null {
+): { manifest: ChannelManifest; bytes: Buffer; signatureBytes: Buffer; digest: string; validator?: MetadataValidator } | null {
   const valid: Array<{
     manifest: ChannelManifest;
     bytes: Buffer;
     signatureBytes: Buffer;
     digest: string;
+    validator?: MetadataValidator;
   }> = [];
   let corrupt = false;
   for (const candidate of cachedChannelCandidates(cacheRoot, channel)) {
@@ -781,7 +871,9 @@ function readCachedChannel(
       if (candidate.name !== `${manifest.sequence}-${digest}`) {
         throw new Error(`cached channel ${channel} generation name does not match its signed metadata`);
       }
-      valid.push({ manifest, bytes, signatureBytes, digest });
+      let validator: MetadataValidator | undefined;
+      try { validator = readMetadataValidator(path.join(dir, "http-validator.json"), digest); } catch { validator = undefined; }
+      valid.push({ manifest, bytes, signatureBytes, digest, validator });
     } catch {
       corrupt = true;
     }
@@ -809,7 +901,7 @@ function versionIndexCacheDir(cacheRoot: string): string {
 function readCachedVersionIndex(
   cacheRoot: string,
   publicKeyPem: string | Buffer,
-): VersionIndex | null {
+): { index: VersionIndex; bytes: Buffer; signatureBytes: Buffer; digest: string; validator?: MetadataValidator } | null {
   const dir = versionIndexCacheDir(cacheRoot);
   if (!fs.existsSync(dir)) return null;
   assertCacheDirectory(dir, "cached resource version index directory");
@@ -821,11 +913,19 @@ function readCachedVersionIndex(
     label: "cached resource version index signature",
     maxBytes: MAX_SIGNATURE_BYTES,
   });
-  verifySignedResourceBytes(bytes, signatureBytes, publicKeyPem, "cached resource version index");
-  return validateVersionIndex(parseJson(bytes, "cached resource version index"));
+  const digest = verifySignedResourceBytes(bytes, signatureBytes, publicKeyPem, "cached resource version index");
+  return {
+    index: validateVersionIndex(parseJson(bytes, "cached resource version index")),
+    bytes,
+    signatureBytes,
+    digest,
+    validator: (() => {
+      try { return readMetadataValidator(path.join(dir, "http-validator.json"), digest); } catch { return undefined; }
+    })(),
+  };
 }
 
-function cacheVersionIndex(cacheRoot: string, bytes: Uint8Array, signatureBytes: Uint8Array): void {
+function cacheVersionIndex(cacheRoot: string, bytes: Uint8Array, signatureBytes: Uint8Array, validator?: MetadataValidator): void {
   const target = versionIndexCacheDir(cacheRoot);
   const stagingRoot = path.join(cacheRoot, ".staging", "versions");
   fs.mkdirSync(stagingRoot, { recursive: true });
@@ -833,6 +933,7 @@ function cacheVersionIndex(cacheRoot: string, bytes: Uint8Array, signatureBytes:
   try {
     fs.writeFileSync(path.join(stage, "versions.json"), bytes, { flag: "wx" });
     fs.writeFileSync(path.join(stage, "versions.sig"), signatureBytes, { flag: "wx" });
+    if (validator) fs.writeFileSync(path.join(stage, "http-validator.json"), `${JSON.stringify(validator)}\n`, { flag: "wx" });
     if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
     installGeneration(stage, target);
   } catch (error) {
@@ -846,12 +947,22 @@ async function fetchAndCacheVersionIndex(
   fetcher: ResourceFetcher,
   cacheRoot: string,
   publicKeyPem: string | Buffer,
+  diagnostic?: WebReleaseOptions["onDiagnostic"],
 ): Promise<VersionIndex> {
-  const indexBytes = await fetchBytes(fetcher, resourceUrl(base, "resources/versions.json"), "resource version index", MAX_VERSION_INDEX_BYTES);
+  let cached: ReturnType<typeof readCachedVersionIndex> = null;
+  try { cached = readCachedVersionIndex(cacheRoot, publicKeyPem); } catch { cached = null; }
+  const fetched = await fetchMetadata(fetcher, resourceUrl(base, "resources/versions.json"), "resource version index", MAX_VERSION_INDEX_BYTES, cached?.validator);
+  if (fetched.notModified) {
+    cacheVersionIndex(cacheRoot, cached!.bytes, cached!.signatureBytes, fetched.validator);
+    diagnostic?.({ resource: "version-index", outcome: "conditional-hit", validator: cached!.validator!.etag ? "etag" : "last-modified" });
+    return cached!.index;
+  }
+  const indexBytes = fetched.bytes!;
   const signatureBytes = await fetchBytes(fetcher, resourceUrl(base, "resources/versions.sig"), "resource version index signature", MAX_SIGNATURE_BYTES);
   verifySignedResourceBytes(indexBytes, signatureBytes, publicKeyPem, "resource version index");
   const index = validateVersionIndex(parseJson(indexBytes, "resource version index"));
-  cacheVersionIndex(cacheRoot, indexBytes, signatureBytes);
+  cacheVersionIndex(cacheRoot, indexBytes, signatureBytes, fetched.validator);
+  diagnostic?.({ resource: "version-index", outcome: cached?.validator ? "revalidated" : "unconditional", validator: fetched.validator?.etag ? "etag" : fetched.validator?.lastModified ? "last-modified" : "none" });
   return index;
 }
 
@@ -861,10 +972,11 @@ async function resolveVersionIndex(
   cacheRoot: string,
   publicKeyPem: string | Buffer,
   offline?: boolean,
+  diagnostic?: WebReleaseOptions["onDiagnostic"],
 ): Promise<VersionIndex> {
   if (offline) {
     const cached = readCachedVersionIndex(cacheRoot, publicKeyPem);
-    if (cached) return cached;
+    if (cached) return cached.index;
     const versions = cachedReleaseVersions(cacheRoot).flatMap((version) =>
       cachedDigests(cacheRoot, version).map((digest) => ({
         version,
@@ -877,10 +989,11 @@ async function resolveVersionIndex(
   }
   if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
   try {
-    return await fetchAndCacheVersionIndex(base, fetcher, cacheRoot, publicKeyPem);
+    return await fetchAndCacheVersionIndex(base, fetcher, cacheRoot, publicKeyPem, diagnostic);
   } catch (error) {
+    if (error instanceof Error && /fetch failed \((?:401|403|429|5\d\d)\)/.test(error.message)) throw error;
     const cached = readCachedVersionIndex(cacheRoot, publicKeyPem);
-    if (cached) return cached;
+    if (cached) return cached.index;
     throw error;
   }
 }
@@ -952,6 +1065,7 @@ function cacheChannel(
   bytes: Uint8Array,
   signatureBytes: Uint8Array,
   digest: string,
+  validator?: MetadataValidator,
 ): void {
   const root = channelGenerationRoot(cacheRoot, manifest.channel);
   const stagingRoot = path.join(cacheRoot, ".staging", "channels");
@@ -960,6 +1074,7 @@ function cacheChannel(
   try {
     fs.writeFileSync(path.join(stage, "channel.json"), bytes, { flag: "wx" });
     fs.writeFileSync(path.join(stage, "channel.sig"), signatureBytes, { flag: "wx" });
+    if (validator) fs.writeFileSync(path.join(stage, "http-validator.json"), `${JSON.stringify(validator)}\n`, { flag: "wx" });
     const target = path.join(root, `${manifest.sequence}-${digest}`);
     if (fs.existsSync(target)) {
       let matches = false;
@@ -973,7 +1088,11 @@ function cacheChannel(
           readVerifiedRegularFile(path.join(target, "channel.sig"), {
             label: `cached channel ${manifest.channel} signature`,
             maxBytes: MAX_SIGNATURE_BYTES,
-          }).equals(Buffer.from(signatureBytes));
+          }).equals(Buffer.from(signatureBytes)) &&
+          (validator
+            ? readMetadataValidator(path.join(target, "http-validator.json"), digest)?.etag === validator.etag &&
+              readMetadataValidator(path.join(target, "http-validator.json"), digest)?.lastModified === validator.lastModified
+            : !fs.existsSync(path.join(target, "http-validator.json")));
       } catch {
         matches = false;
       }
@@ -1125,17 +1244,32 @@ export async function resolveWebRelease(options: WebReleaseOptions = {}): Promis
   const base = normalizeBaseUrl(options.baseUrl ?? DEFAULT_RESOURCE_BASE_URL, options.allowInsecureLoopbackHttp === true);
   // Validate injected trust material before reading cache or making requests.
   loadTrustRoot(publicKeyPem);
+  const bearerToken = options.offline ? null : await options.credentialProvider?.() ?? null;
+  const authorize: ResourceFetcher = async (input, init = {}) => {
+    const headers = { ...(init.headers || {}), ...(bearerToken ? { authorization: `Bearer ${bearerToken}` } : {}) };
+    return (options.fetcher ?? (globalThis.fetch as unknown as ResourceFetcher))(input, { ...init, headers });
+  };
 
   if (selector.kind === "exact") {
     if (options.offline) return resolveOfflineExact(cacheRoot, selector, selector.value, publicKeyPem, base);
-    const fetcher = options.fetcher ?? (globalThis.fetch as unknown as ResourceFetcher);
+    const fetcher = authorize;
     if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
     return fetchAndCacheRelease(base, fetcher, cacheRoot, selector, selector.value, publicKeyPem);
   }
 
   if (selector.kind === "range" || selector.kind === "digest") {
-    const fetcher = options.fetcher ?? (globalThis.fetch as unknown as ResourceFetcher);
-    const index = await resolveVersionIndex(base, fetcher, cacheRoot, publicKeyPem, options.offline);
+    if (!options.offline && selector.kind === "digest") {
+      for (const version of cachedReleaseVersions(cacheRoot)) {
+        if (!cachedDigests(cacheRoot, version).includes(selector.digest)) continue;
+        try {
+          return verifyCachedGeneration(cacheRoot, version, selector.digest, selector, publicKeyPem, base, selector.digest);
+        } catch {
+          // A corrupt immutable generation cannot bypass signed index resolution.
+        }
+      }
+    }
+    const fetcher = authorize;
+    const index = await resolveVersionIndex(base, fetcher, cacheRoot, publicKeyPem, options.offline, options.onDiagnostic);
     const selected = selectVersionFromIndex(index, selector);
     if (options.offline) {
       return resolveOfflineExact(
@@ -1173,14 +1307,24 @@ export async function resolveWebRelease(options: WebReleaseOptions = {}): Promis
     );
   }
 
-  const fetcher = options.fetcher ?? (globalThis.fetch as unknown as ResourceFetcher);
+  const fetcher = authorize;
   if (!fetcher) throw new Error("No fetch implementation is available for AIWG web resources");
   const channelPrefix = `resources/channels/${selector.value}`;
-  const channelBytes = await fetchBytes(fetcher, resourceUrl(base, `${channelPrefix}.json`), `channel ${selector.value}`, MAX_SIGNED_METADATA_BYTES);
+  let prior: ReturnType<typeof readCachedChannel> = null;
+  try { prior = readCachedChannel(cacheRoot, selector.value, publicKeyPem); } catch { prior = null; }
+  const fetched = await fetchMetadata(fetcher, resourceUrl(base, `${channelPrefix}.json`), `channel ${selector.value}`, MAX_SIGNED_METADATA_BYTES, prior?.validator);
+  if (fetched.notModified) {
+    cacheChannel(cacheRoot, prior!.manifest, prior!.bytes, prior!.signatureBytes, prior!.digest, fetched.validator);
+    options.onDiagnostic?.({ resource: "channel", outcome: "conditional-hit", validator: prior!.validator!.etag ? "etag" : "last-modified" });
+    return fetchAndCacheRelease(
+      base, fetcher, cacheRoot, selector, prior!.manifest.version, publicKeyPem,
+      prior!.manifest.releaseManifestSha256, prior!.manifest.sequence,
+    );
+  }
+  const channelBytes = fetched.bytes!;
   const channelSignatureBytes = await fetchBytes(fetcher, resourceUrl(base, `${channelPrefix}.sig`), `channel ${selector.value} signature`, MAX_SIGNATURE_BYTES);
   const channelDigest = verifySignedResourceBytes(channelBytes, channelSignatureBytes, publicKeyPem, `channel ${selector.value}`);
   const channel = validateChannelManifest(parseJson(channelBytes, `channel ${selector.value}`), selector.value);
-  const prior = readCachedChannel(cacheRoot, selector.value, publicKeyPem);
   if (prior && channel.sequence < prior.manifest.sequence) {
     throw new Error(`channel ${selector.value} sequence rollback detected (${channel.sequence} < ${prior.manifest.sequence})`);
   }
@@ -1206,7 +1350,8 @@ export async function resolveWebRelease(options: WebReleaseOptions = {}): Promis
     channel.releaseManifestSha256,
     channel.sequence,
   );
-  cacheChannel(cacheRoot, channel, channelBytes, channelSignatureBytes, channelDigest);
+  cacheChannel(cacheRoot, channel, channelBytes, channelSignatureBytes, channelDigest, fetched.validator);
+  options.onDiagnostic?.({ resource: "channel", outcome: prior?.validator ? "revalidated" : "unconditional", validator: fetched.validator?.etag ? "etag" : fetched.validator?.lastModified ? "last-modified" : "none" });
   return release;
 }
 
@@ -1250,6 +1395,7 @@ export async function fetchVerifiedRawResource(
     resourceUrl(base, `resources/${release.version}/${resourcePath}`),
     `raw resource ${resourcePath}`,
     Math.min(descriptor.size, MAX_RAW_RESOURCE_BYTES),
+    await options.credentialProvider?.() ?? null,
   );
   verifyDescriptor(bytes, descriptor);
   const stagingRoot = path.join(release.cacheDir, ".raw-staging");

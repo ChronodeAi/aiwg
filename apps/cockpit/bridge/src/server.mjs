@@ -8,7 +8,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { spawn } from 'node:child_process';
-import { readFile, mkdir, writeFile, chmod, readdir, cp, rm, stat, appendFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rename, chmod, readdir, cp, rm, stat, appendFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename, extname, resolve, sep } from 'node:path';
 import { storeCockpitToken } from '../../shell-core/keychain.mjs';
+import { assertActivityEvent } from './activity-contract.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 // Primary seam for roctinam/aiwg#1589: Cockpit talks to a real agentic-sandbox
@@ -42,7 +43,13 @@ const auditLog = () => join(auditDir(), 'events.jsonl');
 // legacy vanilla page so the Bridge works even before a web build.
 const WEB_DIST = fileURLToPath(new URL('../../web/dist', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.png': 'image/png', '.woff2': 'font/woff2', '.map': 'application/json' };
-const CAPABILITY_TYPES = new Set(['skill', 'agent', 'command', 'rule', 'flow']);
+// Discovery indexes more than the four executable provider artifacts. Keep the
+// Bridge filter aligned with the complete corpus so Explore does not hide
+// extension and documentation surfaces (#1592).
+const CAPABILITY_TYPES = new Set([
+  'skill', 'agent', 'command', 'rule', 'flow', 'behavior', 'hook', 'template',
+  'tool', 'addon', 'framework', 'extension', 'plugin', 'provider', 'document',
+]);
 const mcSessionsDir = () => join(process.cwd(), '.aiwg', 'ralph-external', 'mc', 'sessions');
 const executorRequestContext = new AsyncLocalStorage();
 
@@ -177,12 +184,87 @@ function spawnCollect(cmd, args) {
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
     p.once('error', reject);
-    p.once('close', (code) => (code === 0 ? resolve(out) : reject(new Error(err.trim() || `aiwg exit ${code}`))));
+    p.once('close', (code) => {
+      if (code === 0) return resolve(out);
+      const failure = new Error(err.trim() || `aiwg exit ${code}`);
+      failure.exitCode = code;
+      failure.stdout = out;
+      reject(failure);
+    });
   });
 }
 async function runAiwg(args) {
   try { return await spawnCollect('aiwg', args); }
   catch (e) { if (e && e.code === 'ENOENT') return spawnCollect(process.execPath, [REPO_BIN, ...args]); throw e; }
+}
+
+const MISSION_CONTROL_ID_RE = /^[a-zA-Z0-9._-]+$/;
+async function controlMission({ action, sessionId, missionId, expectedUpdatedAt, requestId }) {
+  if (!['pause', 'resume', 'cancel'].includes(action)) throw Object.assign(new Error('unsupported mission control action'), { status: 400 });
+  if (!MISSION_CONTROL_ID_RE.test(sessionId) || (missionId && !MISSION_CONTROL_ID_RE.test(missionId))) {
+    throw Object.assign(new Error('invalid Mission control identifier'), { status: 400 });
+  }
+  const args = ['mc', action, sessionId];
+  if (action === 'cancel') {
+    if (!missionId) throw Object.assign(new Error('mission id required'), { status: 400 });
+    args.push(missionId);
+  }
+  if (expectedUpdatedAt) args.push('--expected-updated-at', String(expectedUpdatedAt));
+  if (requestId) args.push('--request-id', String(requestId));
+  await appendAudit('mission.control.requested', {
+    action,
+    session_id: sessionId,
+    mission_id: missionId ?? null,
+    expected_updated_at: expectedUpdatedAt ?? null,
+    request_id: requestId ?? null,
+  });
+  try {
+    await runAiwg(args);
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    const status = error?.exitCode === 3 || /mission_conflict/.test(message) ? 409 : 422;
+    await appendAudit('mission.control.rejected', { action, session_id: sessionId, mission_id: missionId ?? null, request_id: requestId ?? null, status, reason: message });
+    throw Object.assign(new Error(message), { status });
+  }
+  await appendAudit('mission.control.completed', { action, session_id: sessionId, mission_id: missionId ?? null, request_id: requestId ?? null });
+  return { ok: true, action, session_id: sessionId, mission_id: missionId ?? null, request_id: requestId ?? null };
+}
+
+async function dispatchMission(body, upstreamUrl) {
+  const sessionId = String(body?.session_id ?? '');
+  const objective = String(body?.objective ?? '').trim();
+  const completion = String(body?.completion ?? '').trim();
+  const requestId = String(body?.request_id ?? randomBytes(16).toString('hex'));
+  if (!MISSION_CONTROL_ID_RE.test(sessionId)) throw Object.assign(new Error('invalid Mission control session id'), { status: 400 });
+  if (!objective || objective.length > 4096) throw Object.assign(new Error('objective is required and must be at most 4096 characters'), { status: 400 });
+  if (completion.length > 4096) throw Object.assign(new Error('completion must be at most 4096 characters'), { status: 400 });
+  if (!MISSION_CONTROL_ID_RE.test(requestId)) throw Object.assign(new Error('request_id must contain only letters, digits, dot, underscore, or hyphen'), { status: 400 });
+  const args = ['mc', 'dispatch', sessionId, objective, '--request-id', requestId];
+  if (completion) args.push('--completion', completion);
+  if (body?.priority) args.push('--priority', String(body.priority));
+  if (body?.expected_updated_at) args.push('--expected-updated-at', String(body.expected_updated_at));
+  if (body?.max_iterations !== undefined) {
+    const maxIterations = Number(body.max_iterations);
+    if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 10_000) {
+      throw Object.assign(new Error('max_iterations must be an integer from 1 to 10000'), { status: 400 });
+    }
+    args.push('--max-iterations', String(maxIterations));
+  }
+  await appendAudit('mission.dispatch.requested', { session_id: sessionId, request_id: requestId, objective_digest: `sha256:${createHash('sha256').update(objective).digest('hex')}` });
+  try {
+    await runAiwg(args);
+    if (body?.run === true) {
+      await runAiwg(['mc', 'run', sessionId, ...(body?.accept_cost === true ? ['--accept-cost'] : [])]);
+    }
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    const status = error?.exitCode === 3 || /mission_conflict/.test(message) ? 409 : 422;
+    await appendAudit('mission.dispatch.rejected', { session_id: sessionId, request_id: requestId, status, reason: message });
+    throw Object.assign(new Error(message), { status });
+  }
+  const missionId = `m-${createHash('sha256').update(requestId).digest('hex').slice(0, 16)}`;
+  await appendAudit('mission.dispatch.completed', { session_id: sessionId, mission_id: missionId, request_id: requestId, run: body?.run === true });
+  return { ok: true, session_id: sessionId, mission_id: missionId, request_id: requestId, projection: await getMissions(upstreamUrl) };
 }
 // --- user asset library (#1591/#1593): the operator's OWN copied/cloned/imported
 // assets, on disk under ~/.aiwg/cockpit/library. AIWG install files are NEVER written
@@ -256,23 +338,32 @@ function resolveCorpusPath(p) {
 // --- UI contribution model (#1591): declarative screens/actions/event-hooks ---
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 /** Validate one contribution manifest. Throws with a precise message on bad shape. */
-function validateContribution(m, where) {
+function validateContribution(m, where, { firstParty = false } = {}) {
   const fail = (msg) => { throw new Error(`${where}: ${msg}`); };
   if (!m || typeof m !== 'object') fail('manifest must be an object');
   if (!ID_RE.test(m.id || '')) fail('id must match [a-z0-9._-]{1,64}');
-  if (typeof m.version !== 'string') fail('version (string) required');
+  if (typeof m.version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(m.version)) fail('version must be semantic version syntax');
   const c = m.contributes || {};
+  const actionIds = new Set();
   for (const a of c.actions || []) {
     if (!ID_RE.test(a.id || '')) fail(`action.id invalid: ${a.id}`);
+    if (actionIds.has(a.id)) fail(`duplicate action.id: ${a.id}`);
+    actionIds.add(a.id);
     if (typeof a.title !== 'string') fail(`action ${a.id}: title required`);
     // An action INJECTS a command into an agentic session — it does NOT run the CLI.
     if (!a.inject || typeof a.inject.command !== 'string') fail(`action ${a.id}: inject.command (string) required`);
+    if (!/^\/[a-z0-9][a-z0-9._-]*(?:\s[^\r\n]*)?$/i.test(a.inject.command)) fail(`action ${a.id}: inject.command must be one slash command without newlines`);
     if (a.inject.target && !['focused', 'new'].includes(a.inject.target)) fail(`action ${a.id}: inject.target must be focused|new`);
   }
   for (const s of c.screens || []) {
     if (!ID_RE.test(s.id || '')) fail(`screen.id invalid: ${s.id}`);
     if (typeof s.title !== 'string') fail(`screen ${s.id}: title required`);
     if (typeof s.source !== 'string') fail(`screen ${s.id}: source required`);
+    if (firstParty) {
+      if (!s.source.startsWith('cockpit://')) fail(`screen ${s.id}: first-party source must use cockpit://`);
+    } else if (!s.source.startsWith(`sandbox://${m.id}/`)) {
+      fail(`screen ${s.id}: third-party source must use sandbox://${m.id}/`);
+    }
   }
   for (const w of c.workflows || []) {
     if (!ID_RE.test(w.id || '')) fail(`workflow.id invalid: ${w.id}`);
@@ -280,24 +371,39 @@ function validateContribution(m, where) {
     if (!Array.isArray(w.steps) || w.steps.length === 0) fail(`workflow ${w.id}: steps required`);
     for (const step of w.steps) {
       if (!step || typeof step !== 'object' || !ID_RE.test(step.action || '')) fail(`workflow ${w.id}: step.action invalid`);
+      if (!actionIds.has(step.action)) fail(`workflow ${w.id}: unknown action ${step.action}`);
     }
   }
-  for (const h of c.hooks || []) { if (typeof h.on !== 'string' || !ID_RE.test(h.action || '')) fail(`hook invalid: on=${h.on}`); }
+  for (const h of c.hooks || []) {
+    if (typeof h.on !== 'string' || !ID_RE.test(h.action || '') || !actionIds.has(h.action)) fail(`hook invalid: on=${h.on}`);
+  }
   return m;
 }
 /** Load + validate + merge all contribution manifests across the configured dirs. */
 async function loadContributions() {
   const sources = [], actions = [], screens = [], hooks = [], workflows = [];
-  for (const dir of CONTRIB_DIRS) {
+  const manifestIds = new Set();
+  const itemIds = new Set();
+  for (const [dirIndex, dir] of CONTRIB_DIRS.entries()) {
+    const trustTier = dirIndex === 0 ? 'first-party' : 'sandboxed-third-party';
     let entries = [];
     try { entries = (await readdir(dir)).filter((f) => f.endsWith('.json') && f !== 'contribution.schema.json'); } catch { continue; }
     for (const file of entries) {
-      const m = validateContribution(JSON.parse(await readFile(join(dir, file), 'utf8')), file);
-      sources.push({ id: m.id, version: m.version, title: m.title ?? m.id, file });
-      for (const a of m.contributes?.actions || []) actions.push({ ...a, source: m.id });
-      for (const s of m.contributes?.screens || []) screens.push({ ...s, contribution: m.id });
-      for (const h of m.contributes?.hooks || []) hooks.push({ ...h, source: m.id });
-      for (const w of m.contributes?.workflows || []) workflows.push({ ...w, source: m.id });
+      const m = validateContribution(JSON.parse(await readFile(join(dir, file), 'utf8')), file, { firstParty: dirIndex === 0 });
+      if (manifestIds.has(m.id)) throw new Error(`${file}: duplicate contribution id ${m.id}`);
+      manifestIds.add(m.id);
+      sources.push({ id: m.id, version: m.version, title: m.title ?? m.id, file, trust_tier: trustTier });
+      for (const [kind, rows] of Object.entries({ actions: m.contributes?.actions || [], screens: m.contributes?.screens || [], hooks: m.contributes?.hooks || [], workflows: m.contributes?.workflows || [] })) {
+        for (const row of rows) {
+          const globalId = `${kind}:${row.id ?? `${row.on}:${row.action}`}`;
+          if (itemIds.has(globalId)) throw new Error(`${file}: duplicate ${globalId}`);
+          itemIds.add(globalId);
+        }
+      }
+      for (const a of m.contributes?.actions || []) actions.push({ ...a, source: m.id, trust_tier: trustTier });
+      for (const s of m.contributes?.screens || []) screens.push({ ...s, contribution: m.id, trust_tier: trustTier });
+      for (const h of m.contributes?.hooks || []) hooks.push({ ...h, source: m.id, trust_tier: trustTier });
+      for (const w of m.contributes?.workflows || []) workflows.push({ ...w, source: m.id, trust_tier: trustTier });
     }
   }
   return { sources, actions, screens, hooks, workflows };
@@ -354,6 +460,42 @@ async function rebuildIndex(req) {
   const status = await getIndexStatus();
   await appendAudit('index.rebuild.completed', { request_ts: requested.ts, graph: body.graph ?? null, all: body.all === true, force: body.force === true });
   return { status: 200, body: { ok: true, command: `aiwg ${args.join(' ')}`, output, status } };
+}
+
+export async function createUserIndexGraph(body, projectRoot = process.cwd()) {
+  const name = safeIndexGraph(body?.name);
+  if (!name || ['project', 'codebase', 'framework'].includes(name)) {
+    throw new Error('name must be a non-built-in graph identifier');
+  }
+  const scanDirs = Array.isArray(body?.scanDirs) ? body.scanDirs.map((value) => String(value).trim()) : [];
+  if (!scanDirs.length || scanDirs.some((value) => !value || value.startsWith('/') || value.split(/[\\/]+/).includes('..'))) {
+    throw new Error('scanDirs must contain safe project-relative paths');
+  }
+  const extensions = Array.isArray(body?.extensions) && body.extensions.length
+    ? body.extensions.map((value) => String(value).trim())
+    : ['.md', '.yaml', '.json'];
+  if (extensions.some((value) => !/^\.[a-z0-9]+$/i.test(value))) {
+    throw new Error('extensions must use forms such as .md or .json');
+  }
+  const configDir = join(projectRoot, '.aiwg');
+  const configPath = join(configDir, 'aiwg.config');
+  await mkdir(configDir, { recursive: true, mode: 0o700 });
+  let config = {};
+  try { config = JSON.parse(await readFile(configPath, 'utf8')); }
+  catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  config.index = config.index && typeof config.index === 'object' ? config.index : {};
+  config.index.graphs = config.index.graphs && typeof config.index.graphs === 'object' ? config.index.graphs : {};
+  if (config.index.graphs[name]) throw new Error(`graph '${name}' already exists`);
+  config.index.graphs[name] = {
+    scanDirs,
+    extensions,
+    defaultBuild: body?.defaultBuild === true,
+    shared: body?.shared === true,
+  };
+  const temporary = `${configPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporary, configPath);
+  return { name, definition: config.index.graphs[name], config_path: configPath };
 }
 
 function json(res, status, body) {
@@ -1392,6 +1534,7 @@ function normalizeInstance(executorUrl, i) {
         ? { mode: i.transport, trust: i.transport_posture, source: 'agentic-sandbox admin-v2' }
         : i.transport ?? i.transport_posture ?? i.security_posture ?? i.security?.transport,
     ),
+    managed_docker_posture: normalizeManagedDockerPosture(i, runtimePosture.kind),
     launch_context: {
       cwd: i.launch_context?.cwd ?? i.launchContext?.cwd ?? i.cwd,
       loadout,
@@ -1408,6 +1551,151 @@ function normalizeInstance(executorUrl, i) {
     registered_agent_id: i.registered_agent_id ?? i.registeredAgentId,
     session_backends: normalizeSessionBackends(i.session_backends ?? i.sessionBackends ?? i.session_host?.backends ?? i.sessionHost?.backends ?? i.capabilities?.session_backends ?? i.capabilities?.sessionBackends, runtimePosture.kind, i.state ?? i.status, agentReady),
   };
+}
+
+const MANAGED_DOCKER_CONTROL_UID_MIN = 200_000;
+const MANAGED_DOCKER_CONTROL_UID_MAX = 799_999;
+const MANAGED_DOCKER_WORKLOAD_UID = 10_001;
+
+/** Project only executor-attested, client-safe managed-Docker identity evidence. */
+export function normalizeManagedDockerPosture(i, runtimeKind) {
+  if (!['docker', 'container'].includes(String(runtimeKind).toLowerCase())) return undefined;
+  const source = i.managed_docker_posture ?? i.managedDockerPosture ?? i.security_posture ?? i.securityPosture ?? i;
+  const rawTransport = source.transport_mode ?? source.transportMode
+    ?? (typeof source.transport === 'string' ? source.transport : source.transport?.mode)
+    ?? (typeof i.transport === 'string' ? i.transport : i.transport?.mode)
+    ?? 'unknown';
+  const transportMode = String(rawTransport).toLowerCase();
+  const rawControlUid = source.control_uid ?? source.controlUid;
+  const controlUid = Number.isInteger(Number(rawControlUid)) ? Number(rawControlUid) : undefined;
+  const rawWorkloadUid = source.workload_uid ?? source.workloadUid;
+  const workloadUid = Number.isInteger(Number(rawWorkloadUid)) ? Number(rawWorkloadUid) : undefined;
+  const boundary = String(source.workload_boundary ?? source.workloadBoundary ?? source.boundary ?? 'unknown').toLowerCase();
+  const reportedFallback = String(source.fallback_reason_code ?? source.fallbackReasonCode ?? source.fallback_reason ?? source.fallbackReason ?? '').toLowerCase();
+  const fallbackReason = transportMode === 'mtls-bootstrap' || reportedFallback === 'docker_desktop_peer_uid_unavailable'
+    ? 'Docker Desktop UDS bridge does not preserve peer UID'
+    : reportedFallback === 'identity_resolver_unavailable'
+      ? 'Managed UDS identity resolver unavailable'
+      : ['operator-configured', 'explicit', 'mtls'].includes(transportMode)
+        ? 'Operator-configured compatibility transport'
+        : undefined;
+  const controlIdentityPresent = controlUid !== undefined;
+  const controlIdentityRangeValid = controlIdentityPresent
+    && controlUid >= MANAGED_DOCKER_CONTROL_UID_MIN
+    && controlUid <= MANAGED_DOCKER_CONTROL_UID_MAX;
+  const workloadIdentitySeparated = boundary === 'separated' && workloadUid === MANAGED_DOCKER_WORKLOAD_UID;
+  const secureDefault = transportMode === 'uds' && controlIdentityRangeValid && workloadIdentitySeparated;
+  const compatibility = transportMode !== 'uds';
+  const requiresRecreation = !controlIdentityPresent || !workloadUid || boundary === 'unknown';
+  return {
+    transport_mode: transportMode,
+    control_identity_present: controlIdentityPresent,
+    control_identity_range_valid: controlIdentityRangeValid,
+    workload_uid: workloadUid,
+    workload_identity_separated: workloadIdentitySeparated,
+    boundary,
+    secure_default: secureDefault,
+    compatibility,
+    fallback_reason: fallbackReason ? String(fallbackReason).slice(0, 300) : undefined,
+    requires_recreation: requiresRecreation,
+    source: 'agentic-sandbox',
+  };
+}
+
+const ACTIVITY_SCOPE_HEADERS = {
+  tenant_id: 'x-agentic-tenant-id', host_id: 'x-agentic-host-id',
+  instance_id: 'x-agentic-instance-id', agent_id: 'x-agentic-agent-id',
+};
+const ACTIVITY_FILTERS = new Set(['event_name', 'collector', 'trust', 'plane', 'outcome', 'session_id', 'mission_id', 'task_id', 'tool_call_id', 'command_id', 'process_id', 'trace_id', 'since', 'until', 'limit']);
+
+export function activityRequest(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('activity request must be an object'), { code: 'activity_invalid_request' });
+  const headers = { 'accept': 'application/json' };
+  const scope = {};
+  for (const [key, header] of Object.entries(ACTIVITY_SCOPE_HEADERS)) {
+    const value = String(input[key] ?? '').trim();
+    if (!value || value.length > 255 || /[\r\n]/.test(value)) throw Object.assign(new Error(`missing or invalid ${key}`), { code: 'activity_scope_required' });
+    headers[header] = value;
+    scope[key] = value;
+  }
+  const filter = {};
+  for (const [key, value] of Object.entries(input.filter ?? {})) {
+    if (!ACTIVITY_FILTERS.has(key)) throw Object.assign(new Error(`unsupported activity filter: ${key}`), { code: 'activity_invalid_filter' });
+    if (key === 'limit') {
+      if (!Number.isInteger(value) || value < 1 || value > 1000) throw Object.assign(new Error('activity limit must be 1..1000'), { code: 'activity_invalid_filter' });
+      filter[key] = value;
+    } else if (typeof value === 'string' && value.trim() && value.length <= 255 && !/[\r\n]/.test(value)) filter[key] = value.trim();
+    else throw Object.assign(new Error(`invalid activity filter: ${key}`), { code: 'activity_invalid_filter' });
+  }
+  return { headers, scope, filter };
+}
+
+export function validateActivityEnvelope(body, expectedScope, { includeEvents = false, exportEnvelope = false } = {}) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('malformed activity envelope'), { code: 'activity_malformed_envelope' });
+  if (!exportEnvelope && body.schema_version !== 'activity.event/v1') throw Object.assign(new Error('unsupported activity schema'), { code: 'activity_malformed_envelope' });
+  const events = Array.isArray(body.events) ? body.events : [];
+  if (includeEvents && !Array.isArray(body.events)) throw Object.assign(new Error('activity envelope has no events array'), { code: 'activity_malformed_envelope' });
+  if (!exportEnvelope && (!Array.isArray(body.coverage) || !body.completeness || typeof body.completeness.complete !== 'boolean')) {
+    throw Object.assign(new Error('activity envelope has invalid coverage'), { code: 'activity_malformed_envelope' });
+  }
+  const nonnegativeInteger = (value) => Number.isInteger(value) && value >= 0;
+  const nonnegativeFinite = (value) => Number.isFinite(value) && value >= 0;
+  const validCompleteness = (value) => value
+    && typeof value.label === 'string'
+    && nonnegativeInteger(value.collector_count)
+    && nonnegativeInteger(value.sequence_gap_count)
+    && nonnegativeInteger(value.durable_loss_count)
+    && nonnegativeInteger(value.restart_count)
+    && nonnegativeInteger(value.dropped_event_count)
+    && nonnegativeInteger(value.stale_collector_count)
+    && Array.isArray(value.unsupported_event_classes)
+    && value.unsupported_event_classes.every((item) => typeof item === 'string')
+    && nonnegativeFinite(value.maximum_clock_error_ms);
+  if (!exportEnvelope && !validCompleteness(body.completeness)) {
+    throw Object.assign(new Error('activity envelope has malformed completeness summary'), { code: 'activity_malformed_envelope' });
+  }
+  if (!exportEnvelope && body.coverage.some((entry) => !entry || typeof entry.collector_id !== 'string' || !Array.isArray(entry.sequence_gaps) || !Array.isArray(entry.durable_loss_records) || !nonnegativeInteger(entry.restart_count) || !nonnegativeInteger(entry.dropped_event_count) || typeof entry.stale !== 'boolean' || !Array.isArray(entry.unsupported_event_classes) || !entry.unsupported_event_classes.every((item) => typeof item === 'string') || !nonnegativeFinite(entry.maximum_clock_error_ms))) {
+    throw Object.assign(new Error('activity envelope has malformed collector coverage'), { code: 'activity_malformed_envelope' });
+  }
+  for (const event of events) {
+    assertActivityEvent(event, expectedScope);
+  }
+  const manifest = body.manifest;
+  if (exportEnvelope && (!manifest
+    || typeof manifest.batch_id !== 'string' || !manifest.batch_id
+    || manifest.tenant_id !== expectedScope.tenant_id
+    || typeof manifest.collector_id !== 'string' || !manifest.collector_id
+    || !Number.isInteger(manifest.event_count) || manifest.event_count < 0
+    || !/^[0-9a-f]{64}$/.test(manifest.merkle_root ?? '')
+    || typeof manifest.key_id !== 'string' || !manifest.key_id
+    || typeof manifest.signature !== 'string' || !manifest.signature
+    || (manifest.previous_root !== null && manifest.previous_root !== undefined && !/^[0-9a-f]{64}$/.test(manifest.previous_root)))) {
+    throw Object.assign(new Error('signed activity export has no valid manifest'), { code: 'activity_malformed_export' });
+  }
+  return body;
+}
+
+async function activityProxy(executorUrl, kind, input) {
+  const request = activityRequest(input);
+  const isExport = kind === 'export';
+  const query = new URLSearchParams(Object.entries(request.filter).map(([key, value]) => [key, String(value)]));
+  const target = `${executorUrl}/api/v2/activity/${kind}${!isExport && query.size ? `?${query}` : ''}`;
+  const result = await fetchJsonFirst([{ target, method: isExport ? 'POST' : 'GET', headers: { ...request.headers, ...(isExport ? { 'content-type': 'application/json' } : {}) }, body: isExport ? JSON.stringify(request.filter) : undefined }]);
+  if (!result.status.toString().startsWith('2')) return result;
+  return { ...result, body: validateActivityEnvelope(result.body, request.scope, { includeEvents: kind === 'timeline' || isExport, exportEnvelope: isExport }) };
+}
+
+function managedDockerLaunchError(status, body) {
+  const detail = String(body?.message ?? body?.error?.message ?? body?.error ?? body?.failure?.message ?? '');
+  if (/refuses startup profiles that materialize raw credential refs/i.test(detail)) return {
+    status: status >= 400 ? status : 422,
+    body: {
+      error: 'managed_docker_raw_credentials_rejected',
+      message: 'Managed Docker does not accept startup profiles with raw credential references.',
+      recovery: 'Use the sandbox credential proxy or select a VM runtime. Cockpit will not downgrade the transport automatically.',
+    },
+  };
+  return { status, body };
 }
 
 function defaultSessionLaunch(instance) {
@@ -1876,8 +2164,12 @@ async function taskMissionSession(executorUrl) {
 
 async function getMissions(executorUrl) {
   const sessions = await readMcSessions();
-  const live = await taskMissionSession(executorUrl);
+  const [live, fleetSessions] = await Promise.all([
+    taskMissionSession(executorUrl),
+    fleetMissionSessions(executorUrl),
+  ]);
   if (live) sessions.unshift(live);
+  sessions.unshift(...fleetSessions);
   const missions = sessions.flatMap((s) => s.missions);
   return {
     source: 'aiwg-mc + agentic-sandbox',
@@ -1886,6 +2178,104 @@ async function getMissions(executorUrl) {
     sessions,
     missions,
   };
+}
+
+const FLEET_TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'timed-out']);
+
+function fleetParentState(records) {
+  const states = records.map((record) => record.status?.observed_state ?? 'unknown');
+  if (states.some((state) => state === 'operator-review-required' || state === 'unknown')) return 'operator-review-required';
+  if (records.some((record) => record.status?.backpressure?.reason === 'approval')) return 'awaiting-approval';
+  if (states.some((state) => state === 'failed' || state === 'timed-out')) return 'failed';
+  if (states.length > 0 && states.every((state) => FLEET_TERMINAL_STATES.has(state))) return 'completed';
+  return 'active';
+}
+
+function fleetMissionProjection(record, sessionId) {
+  const lineage = record.lineage ?? {};
+  const status = record.status ?? {};
+  const artifacts = Array.isArray(status.artifacts) ? status.artifacts : [];
+  return {
+    id: lineage.child_id,
+    session_id: sessionId,
+    source: 'agentic-sandbox-fleet',
+    title: `${record.kind ?? 'workload'} ${lineage.child_id ?? 'unknown'}`,
+    status: status.observed_state ?? 'unknown',
+    terminal: FLEET_TERMINAL_STATES.has(status.observed_state),
+    parent_mission_id: lineage.mission_id,
+    workload_kind: record.kind,
+    desired_state: record.spec?.desired_state,
+    target_id: lineage.target_id,
+    executor_id: lineage.executor_id,
+    runtime_id: lineage.runtime_id,
+    instance_id: lineage.runtime_id,
+    runtime_session_id: lineage.session_id,
+    task_id: lineage.task_id,
+    command_id: lineage.command_id,
+    dispatch_id: lineage.dispatch_id,
+    revision: status.revision,
+    last_seen: status.last_seen,
+    health: status.health,
+    backpressure: status.backpressure,
+    artifacts,
+    exit_classification: status.exit_classification,
+    error: status.error_code,
+    schedule: record.spec?.schedule,
+  };
+}
+
+async function fleetMissionSessions(executorUrl) {
+  let response;
+  try {
+    response = await fetchJsonFirst([`${executorUrl}/api/v2/fleet/workloads`]);
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
+    if (/\s->\s(?:404|405)(?:;|$)/.test(String(err?.message ?? err))) return [];
+    throw err;
+  }
+  if (response.status === 404 || response.status === 405) return [];
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Agentic Sandbox fleet inventory failed with HTTP ${response.status}`);
+  }
+  const snapshot = response.body?.inventory ?? response.body;
+  if (
+    snapshot?.document_type !== 'inventory'
+    || snapshot?.api_version !== 'agentic-orchestration/v1'
+    || !Array.isArray(snapshot?.records)
+  ) {
+    throw new Error('Agentic Sandbox returned an invalid fleet inventory envelope');
+  }
+  const records = snapshot.records;
+  const groups = new Map();
+  const childIds = new Set();
+  for (const record of records) {
+    const missionId = record?.lineage?.mission_id;
+    const childId = record?.lineage?.child_id;
+    if (!missionId || !childId || !record?.kind || !record?.status?.observed_state) {
+      throw new Error('Agentic Sandbox fleet inventory contains an invalid workload record');
+    }
+    if (childIds.has(childId)) throw new Error(`Agentic Sandbox fleet inventory repeats child '${childId}'`);
+    childIds.add(childId);
+    const group = groups.get(missionId) ?? [];
+    group.push(record);
+    groups.set(missionId, group);
+  }
+  return [...groups.entries()].map(([missionId, missionRecords]) => {
+    const sessionId = `fleet:${missionId}`;
+    const lastSeen = missionRecords.map((record) => record.status?.last_seen).filter(Boolean).sort().at(-1);
+    return {
+      id: sessionId,
+      parent_mission_id: missionId,
+      name: `Fleet mission ${missionId}`,
+      state: fleetParentState(missionRecords),
+      source: 'agentic-sandbox-fleet',
+      updated_at: lastSeen ?? snapshot.generated_at,
+      inventory_revision: snapshot.inventory_revision,
+      audit_count: 0,
+      audit_tail: [],
+      missions: missionRecords.map((record) => fleetMissionProjection(record, sessionId)),
+    };
+  });
 }
 
 async function getSessionEventRows(executorUrl, instances) {
@@ -2416,8 +2806,51 @@ export function createBridge({
       if (url.pathname === '/api/mcp/discovery' && req.method === 'GET') return json(res, 200, await getMcpDiscovery(upstreamUrl));
       if (url.pathname === '/api/mcp' && req.method === 'POST') return proxyMcpRequest(req, res, upstreamUrl, MCP_TOKEN_FILE);
       if (url.pathname === '/api/running') return json(res, 200, await getRunning(upstreamUrl));
-      if (url.pathname === '/api/missions') return json(res, 200, await getMissions(upstreamUrl));
+      if (url.pathname === '/api/missions' && req.method === 'GET') return json(res, 200, await getMissions(upstreamUrl));
+      if (url.pathname === '/api/missions' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        return json(res, 201, await dispatchMission(parsed.body, upstreamUrl));
+      }
       if (url.pathname === '/api/events/snapshot') return json(res, 200, await getEventSnapshot(upstreamUrl));
+      if (url.pathname === '/api/activity/coverage' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const result = await activityProxy(upstreamUrl, 'coverage', parsed.body);
+          await appendAudit('activity.coverage.queried', { scope: activityRequest(parsed.body).scope, complete: result.body?.completeness?.complete === true });
+          return json(res, result.status, result.body);
+        } catch (error) {
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+        }
+      }
+      if (url.pathname === '/api/activity/timeline' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const result = await activityProxy(upstreamUrl, 'timeline', parsed.body);
+          if (result.status < 200 || result.status >= 300) return json(res, result.status, result.body);
+          await appendAudit('activity.timeline.queried', { scope: activityRequest(parsed.body).scope, event_count: result.body.events.length, complete: result.body.completeness.complete });
+          return json(res, result.status, result.body);
+        } catch (error) {
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+        }
+      }
+      if (url.pathname === '/api/activity/export' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const result = await activityProxy(upstreamUrl, 'export', parsed.body);
+          if (result.status === 503) return json(res, 503, { error: 'activity_export_unavailable', message: 'The sandbox signing key is unavailable.' });
+          if (result.status < 200 || result.status >= 300) return json(res, result.status, result.body);
+          await appendAudit('activity.export.completed', { scope: activityRequest(parsed.body).scope, key_id: result.body.manifest.key_id, merkle_root: result.body.manifest.merkle_root, event_count: result.body.manifest.event_count });
+          res.setHeader('content-disposition', 'attachment; filename="activity-export.json"');
+          res.setHeader('cache-control', 'no-store');
+          return json(res, result.status, result.body);
+        } catch (error) {
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+        }
+      }
       if (url.pathname === '/api/loadouts') return json(res, 200, await getLoadouts(upstreamUrl));
       if (url.pathname === '/api/index/status' && req.method === 'GET') return json(res, 200, await getIndexStatus());
       if (url.pathname === '/api/index/query' && req.method === 'GET') {
@@ -2427,6 +2860,19 @@ export function createBridge({
       if (url.pathname === '/api/index/rebuild' && req.method === 'POST') {
         const result = await rebuildIndex(req);
         return json(res, result.status, result.body);
+      }
+      if (url.pathname === '/api/index/graphs' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const requested = await appendAudit('index.graph.create.requested', { graph: parsed.body?.name ?? null });
+        try {
+          const graph = await createUserIndexGraph(parsed.body);
+          await appendAudit('index.graph.create.completed', { request_ts: requested.ts, graph: graph.name });
+          return json(res, 201, { ok: true, graph });
+        } catch (error) {
+          await appendAudit('index.graph.create.rejected', { request_ts: requested.ts, reason: String(error?.message ?? error) });
+          return json(res, 400, { error: 'invalid_graph_definition', detail: String(error?.message ?? error) });
+        }
       }
       if (url.pathname === '/api/audit' && req.method === 'GET') {
         const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 50)));
@@ -2478,8 +2924,9 @@ export function createBridge({
             body: requestBody,
           },
         ]).catch((err) => ({ status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } }));
-        await appendAudit('instance.launch.result', { request_ts: before.ts, status: result.status, result: result.body });
-        return json(res, result.status, result.body);
+        const projected = managedDockerLaunchError(result.status, result.body);
+        await appendAudit('instance.launch.result', { request_ts: before.ts, status: projected.status, result: projected.body });
+        return json(res, projected.status, projected.body);
       }
       if ((m = url.pathname.match(/^\/api\/operations\/([^/]+)$/)) && req.method === 'GET') {
         return proxyFirst(res, [
@@ -2518,7 +2965,7 @@ export function createBridge({
         if (type && type !== 'all') {
           const types = type.split(',').map((t) => t.trim()).filter(Boolean);
           if (!types.length || types.some((t) => !CAPABILITY_TYPES.has(t))) {
-            return json(res, 400, { error: 'invalid_type', detail: 'type must be all, skill, agent, command, rule, flow, or a comma list of those kinds' });
+            return json(res, 400, { error: 'invalid_type', detail: `type must be all or a comma list of: ${[...CAPABILITY_TYPES].join(', ')}` });
           }
           args.push('--type', types.join(','));
         }
@@ -2719,6 +3166,29 @@ export function createBridge({
         await appendAudit('instance.destroy.requested', { instance_id: decodeURIComponent(m[1]), status, result: body });
         return json(res, status, body);
       }
+      if ((m = url.pathname.match(/^\/api\/missions\/([^/]+)\/(pause|resume)$/)) && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const result = await controlMission({
+          action: m[2],
+          sessionId: decodeURIComponent(m[1]),
+          expectedUpdatedAt: parsed.body?.expected_updated_at,
+          requestId: parsed.body?.request_id,
+        });
+        return json(res, 200, { ...result, projection: await getMissions(upstreamUrl) });
+      }
+      if ((m = url.pathname.match(/^\/api\/missions\/([^/]+)\/([^/]+)\/cancel$/)) && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const result = await controlMission({
+          action: 'cancel',
+          sessionId: decodeURIComponent(m[1]),
+          missionId: decodeURIComponent(m[2]),
+          expectedUpdatedAt: parsed.body?.expected_updated_at,
+          requestId: parsed.body?.request_id,
+        });
+        return json(res, 200, { ...result, projection: await getMissions(upstreamUrl) });
+      }
       if ((m = url.pathname.match(/^\/api\/tasks\/([^/]+)\/([^/]+)\/cancel$/)) && req.method === 'POST') {
         await appendAudit('task.cancel.requested', { instance_id: decodeURIComponent(m[1]), task_id: decodeURIComponent(m[2]) });
         return proxy(res, 'POST', `${upstreamUrl}/agents/${encodeURIComponent(m[1])}/tasks/${encodeURIComponent(m[2])}:cancel`);
@@ -2765,7 +3235,7 @@ export function createBridge({
       }
       json(res, 404, { error: 'not_found', path: url.pathname });
     } catch (err) {
-      const status = Number(err?.upstreamStatus) || 502;
+      const status = Number(err?.status) || Number(err?.upstreamStatus) || 502;
       json(res, status, { error: err?.code ?? 'bridge_upstream_error', message: String(err?.message ?? err) });
     }
   };

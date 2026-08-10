@@ -376,7 +376,7 @@ describe('aiwg-config', () => {
         expect(entry.manifestVersion).toBe('1');
       });
 
-      it('preserves provider-scoped artifact hashes and migrates legacy flat keys', () => {
+      it('writes split source/deployed hashes and migrates legacy provider maps', () => {
         const cfg = emptyConfig();
         cfg.installed['foo'] = {
           version: '0.9.0',
@@ -385,28 +385,29 @@ describe('aiwg-config', () => {
           deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
           localPath: '.aiwg/addons/foo/',
           localType: 'addon',
-          artifactHashes: { 'rules/legacy.md': 'legacy-source-hash' } as unknown as NonNullable<
+          artifactHashes: {
+            claude: { 'rules/claude.md': 'claude-deployed-hash' },
+            factory: { 'rules/factory.md': 'factory-deployed-hash' },
+          } as unknown as NonNullable<
             AiwgConfig['installed'][string]['artifactHashes']
           >,
         };
 
-        updateInstalled(cfg, 'foo', 'claude', { agents: 0, commands: 0, skills: 0, rules: 1 }, {
-          version: '1.0.0',
-          source: 'project-local',
-          localPath: '.aiwg/addons/foo/',
-          localType: 'addon',
-          artifactHashes: { claude: { 'rules/claude.md': 'claude-deployed-hash' } },
-        });
         const updated = updateInstalled(cfg, 'foo', 'cursor', { agents: 0, commands: 0, skills: 0, rules: 1 }, {
           version: '1.0.0',
           source: 'project-local',
           localPath: '.aiwg/addons/foo/',
           localType: 'addon',
-          artifactHashes: { cursor: { 'rules/cursor.md': 'cursor-deployed-hash' } },
+          artifactHashes: { 'rules/source.md': 'source-hash' },
+          deployedArtifactHashes: { 'rules/cursor.md': 'cursor-deployed-hash' },
         });
 
         expect(updated.installed['foo'].artifactHashes).toEqual({
+          'rules/source.md': 'source-hash',
+        });
+        expect(updated.installed['foo'].deployedArtifactHashes).toEqual({
           claude: { 'rules/claude.md': 'claude-deployed-hash' },
+          factory: { 'rules/factory.md': 'factory-deployed-hash' },
           cursor: { 'rules/cursor.md': 'cursor-deployed-hash' },
         });
       });
