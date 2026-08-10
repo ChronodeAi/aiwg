@@ -14,6 +14,7 @@
     "aiwg-model-reasoning-worker": "Cross-domain architecture and synthesis assignments have high downstream rework cost.",
     "cloud-architect": "Infrastructure topology decisions carry material reliability and security risk.",
     "forensics-orchestrator": "Evidence-preserving investigation plans require high-confidence sequencing.",
+    "governance-skeptic": "Adversarial governance-boundary review has high downstream integrity and promotion risk.",
     "incident-responder": "Active incident containment decisions can cause irreversible operational impact.",
     "legal-liaison": "Legal and regulatory interpretation has material compliance consequences.",
     "legal-reviewer": "Legal approval findings can block release and require high-confidence review.",
