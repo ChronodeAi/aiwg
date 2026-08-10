@@ -24,7 +24,7 @@ import type { AiwgConfig } from '../config/aiwg-config.js';
 import { projectAiwgPath } from '../config/project-artifacts.js';
 import { projectRelativePathIfInside } from './project-local-paths.js';
 import { auditProjectQuickref } from './project-quickref.js';
-import { candidateDeployedPaths } from './project-local-remove.js';
+import { artifactHashesForProvider, candidateDeployedPaths } from './project-local-remove.js';
 
 export interface DoctorSectionResult {
   /** Pre-formatted multi-line section (empty string when no project-local content). */
@@ -185,23 +185,21 @@ export async function buildProjectLocalDoctorSection(
     for (const bundle of discovery.bundles) {
       const entry = config.installed[bundle.id];
       if (!entry || entry.source !== 'project-local') continue;
-      const hashes = entry.artifactHashes;
-      if (!hashes) {
+      if (!entry.artifactHashes && !entry.deployedArtifactHashes) {
         unhashedSeen = true;
         continue;
       }
       for (const provider of Object.keys(entry.deployedTo)) {
-        const providerHashes = hashes[provider];
-        if (!providerHashes) {
+        const hashes = artifactHashesForProvider(entry, provider);
+        if (Object.keys(hashes).length === 0) {
           unhashedSeen = true;
           continue;
         }
-        for (const [sourceRel, expectedHash] of Object.entries(providerHashes)) {
-          const candidates = candidateDeployedPaths(projectDir, provider, sourceRel);
-          let actualHash: Awaited<ReturnType<typeof hashDeployed>> = null;
-          for (const deployedAbs of candidates) {
+        for (const [sourceRel, expectedHash] of Object.entries(hashes)) {
+          let actualHash: { raw: string; normalized: string } | null = null;
+          for (const deployedAbs of candidateDeployedPaths(projectDir, provider, sourceRel)) {
             actualHash = await hashDeployed(deployedAbs);
-            if (actualHash !== null) break;
+            if (actualHash) break;
           }
           if (actualHash === null) {
             // Missing — not drift, deploy is just absent

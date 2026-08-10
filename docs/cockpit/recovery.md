@@ -20,6 +20,14 @@ targets are deliberately excluded from the button (see
 A Reconnect never creates a replacement instance and never destroys the
 running runtime — it only attempts to restore the missing agent registration.
 
+Agentic Sandbox v2026.8.3 changes the managed Linux-container identity
+boundary to credential-free UDS control with a unique control UID and workload
+UID `10001`. Containers created by older releases must be reported as requiring
+recreation; reconnecting or restarting one does not establish the new boundary.
+Cockpit preserves the executor's legacy/recreation-required posture rather than
+silently labeling an existing container secure-default. See the
+[v2026.8.3 qualification](./qualifications/agentic-sandbox-v2026.8.3.md).
+
 ## What the Bridge tries, in order
 
 `POST /api/instances/:id/reconnect` walks executor-owned recovery first, then
@@ -129,3 +137,12 @@ and results (secrets redacted). See
 - [Sessions](./sessions.md) — backends and what "managed" buys you
 - upstream: roctinam/agentic-sandbox#633 (VM idle-drop root cause),
   roctinam/agentic-sandbox#634 (session survival across reconnect)
+## Managed-Docker identity upgrades
+
+An existing container without executor-reported control/workload identity
+evidence must be recreated. Reconnect and restart do not retrofit mounts,
+peer-credential mappings, UID separation, or cleared capability boundaries.
+Destroy the old managed container through the executor, then launch a new one.
+If a Docker startup profile is rejected for raw credential references, use the
+sandbox credential proxy or choose a VM runtime; Cockpit will not silently
+downgrade transport or materialize the credential in the container.

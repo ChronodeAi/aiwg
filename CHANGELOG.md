@@ -7,6 +7,223 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.8.7] - 2026-08-05 - "Audited activity fixtures"
+
+### Changed
+
+- **Claude plugin release metadata** - all 39 repository-hosted plugins and the
+  marketplace catalog advance to `2026.8.7`; the externally hosted `training`
+  plugin retains its independent `1.0.0` version.
+
+### Fixed
+
+- **npm publication boundary** - the intentional Activity v1 conformance
+  fixtures are now represented in the tarball top-level allowlist, allowing the
+  supply-chain audit to distinguish them from an injected package root.
+- **Packaging regression prevention** - a unit test now requires every positive
+  root in `package.json#files` to be declared in the audited tarball allowlist.
+
+## [2026.8.6] - 2026-08-04 - "Governed sandbox integration and external artifact roots"
+
+### Added
+
+- **External artifact-root attachment** - `aiwg artifacts attach --to <path>`
+  connects an existing AIWG artifact corpus without moving or overwriting either
+  tree, validates the target project, writes the location pointer, and refreshes
+  discovery metadata.
+- **Agentic Sandbox MCP operations** - Cockpit exposes the qualified nine-tool
+  fleet and activity surface with explicit authorization, completeness, and
+  fail-closed contract handling.
+- **Regression coverage for reorganized contracts** - exact mirrored Activity
+  v1 schemas, drift checks, external-root resolution, and the credential-free
+  Sandbox qualification prevent stale source locations and API assumptions from
+  silently returning.
+
+### Changed
+
+- **Claude plugin release metadata** - all 39 repository-hosted plugins and the
+  marketplace catalog advance to `2026.8.6`; the externally hosted `training`
+  plugin retains its independent `1.0.0` version.
+- **Sandbox compatibility evidence** - qualification is pinned to Agentic
+  Sandbox `v2026.8.3` and records unavailable runtime tiers as insufficient
+  evidence rather than a passing result.
+
+### Fixed
+
+- **Artifact discovery outside the repository** - workspace status, resource
+  preflight, indexing, and synchronization now consistently follow the
+  `.aiwg-location` contract after a corpus is attached.
+- **Activity schema drift** - the Cockpit and Sandbox boundary now uses exact,
+  mirrored schemas with a CI gate that detects upstream divergence.
+
+## [2026.8.5] - 2026-08-04 - "Observable sandbox operations and reliable plugin delivery"
+
+### Added
+
+- **Session analytics and forensic evidence indices** - session import and
+  reindex maintain versioned, content-free operational facts with stable source
+  citations. New `sessions analytics` and explicitly authorized
+  `sessions forensics` views provide filtered JSON and sanitized Markdown
+  timelines without executing or exporting historical provider payloads
+  (#1974).
+- **Reviewed line-memory promotion** - line-memory interoperates with reviewed
+  promotion workflows while preserving provenance and review boundaries.
+- **Marketing design operations** - theme selection, comparison, templates,
+  schemas, and a theme-manager workflow support repeatable cross-channel visual
+  design decisions.
+- **Governed Cockpit activity views** - coverage-first timeline and signed
+  export surfaces preserve sandbox completeness, authorization, and provenance
+  evidence while managed-Docker posture identifies instances that need secure
+  recreation (#2011, #2012).
+- **Web release revalidation contracts** - signed-resource metadata supports
+  payload-bound ETag and Last-Modified revalidation, verified-cache recovery,
+  structured diagnostics, and scoped CDN purge verification.
+
+### Changed
+
+- **Claude plugin release metadata** - all 39 repository-hosted plugins now
+  advance with the marketplace release version so Claude Code refreshes cached
+  payloads; the independently versioned training plugin remains external.
+
+### Fixed
+
+- **Standalone Claude plugin paths and discovery** - newly packaged plugin
+  payloads resolve their own assets through `CLAUDE_PLUGIN_ROOT`, all declared
+  skills use Claude-compatible `skills/<name>/SKILL.md` layouts, and manifests
+  match their bundled skill inventories.
+- **Line-memory context-pack concurrency** - reviewed batch touches again use
+  the project memory lock, preventing concurrent writers from losing facts.
+- **Cockpit activity error stability** - timeline and export preserve upstream
+  401/403 status instead of dereferencing success-only fields, and malformed
+  completeness envelopes now fail closed before reaching the UI.
+- **Documentation drift** - the plugin catalog, provider guidance, paid-resource
+  token names, HTTP cache behavior, theme-manager path, welcome instructions,
+  and threat-policy link now match shipped contracts.
+
+## [2026.8.4] - 2026-08-03 - "Governed missions and complete plugin delivery"
+
+### Added
+
+- **Complete Claude Code plugin catalog** - all 40 packaged frameworks and
+  addons are independently installable from the marketplace, with cached
+  bundles retaining their complete runtime-relative dependency trees.
+- **Provider-neutral corpus memory ingest** - `aiwg storage import-corpus`
+  previews and ingests local research text through the storage/MCP abstraction,
+  preserves Markdown metadata, and skips binary attachments safely. Fortemi
+  storage supports local stdio plus authenticated HTTPS/SSE Enterprise MCP
+  registry entries without persisting credential values (#1508).
+- **Shared-host mission admission** - mission workloads declare resource,
+  isolation, and policy requirements before dispatch, with deterministic
+  admission decisions and auditable denial evidence (#1566).
+- **Operator decision evidence** - approvals, denials, overrides, and expired
+  decisions use a canonical audit model with stable identities and sanitized
+  evidence projections (#1567).
+- **Durable mission controls** - pause, resume, cancel, retry, and recovery
+  controls survive conductor restarts and are projected into Cockpit alongside
+  approval and mission activity views (#1591, #1592, #1657).
+
+### Changed
+
+- **Fortemi research retrieval** - corpus snapshots and query results preserve
+  curated retrieval evidence across package boundaries instead of reducing it
+  to the core-only representation (#1690).
+
+### Fixed
+
+- **HITL approval interoperability** - drivers and consumers now use the
+  canonical approval contract, preserving decision identity and lifecycle
+  semantics across runtime boundaries (#1565).
+- **Annotated release tag verification** - GitHub mirroring compares the
+  peeled commit behind annotated tags, avoiding false mismatches against tag
+  object IDs.
+- **Claude trace hooks** - generated `SubagentStart` and `SubagentStop`
+  commands pass the required `start` and `stop` arguments and repair stale
+  registrations on refresh.
+
+## [2026.8.3] - 2026-08-03 - "Plugin lifecycle and release reliability"
+
+### Changed
+
+- **MCP server dependency compatibility** - MCP SDK 1.30.0 permits the fixed
+  Hono v2 server line, so the production graph deduplicates to
+  `@hono/node-server@2.0.11` and removes the Windows static-serving advisory
+  route tracked in #1973.
+
+### Fixed
+
+- **Project-local plugin removal** - removal and doctor checks compare deployed
+  files with provider-transformed hashes, preventing freshly deployed skills
+  from being reported as mutated while preserving later operator edits (#1998).
+- **Local plugin source handling** - `install-plugin --source` now preserves the
+  framework-root contract and provides supported migration guidance for
+  project-local plugin wrappers instead of crashing on a path-type error
+  (#1996).
+- **GitHub release mirroring** - stable releases wait for and verify the
+  operator-pushed signed annotated tag before release creation, eliminating the
+  tag-arrival race without synthesizing tags in CI (#1988).
+
+## [2026.8.2] - 2026-08-03 - "Git-native provenance exchange"
+
+### Added
+
+- **Git-native package exchange** - versioned closed envelopes bind package
+  identity to canonical Git remotes, immutable commits, tree/artifact digests,
+  W3C PROV, Ed25519 publisher trust, dependencies, licenses, optional SBOMs,
+  and lossless Fortemi `2.0.0/full-v1` evidence. Signed federated catalogs,
+  project/global indices, offline verification, portable export/import, and
+  operation receipts provide decentralized discovery without treating catalog
+  inclusion as endorsement (#2009).
+
+### Changed
+
+- **Remote package installation** - movable refs resolve to commit-keyed
+  detached caches before deployment, standalone `.aiwg/plugins/` wrappers are
+  discovered safely, and external payload deployment copies complete skills,
+  agents, and rules for the selected provider (#2009).
+
+## [2026.8.1] - 2026-08-02 - "Persistent memory and governed fleet operations"
+
+### Added
+
+- **Compound memory** - a provider-neutral addon now composes immutable raw
+  intake, linked llm-wiki knowledge, reviewed line-memory facts, bounded hybrid
+  context packs, registered outputs, governed canonical context, and auditable
+  review/maintenance cycles. Three-session conformance proves continuity,
+  provenance, hard context budgets, portable migration, and deterministic
+  fallback behavior (#1999-#2006).
+- **Sandbox fleet workloads and missions** - a neutral workload contract,
+  durable multi-target conductor, Cockpit projections, restart-safe identity,
+  bounded retries, and three-target recovery evidence support governed fleet
+  operations across sandbox runtimes (#1992-#1994).
+- **Paid-resource authentication** - `aiwg auth` adds OS-backed account
+  storage, exact-origin authorization, account/status/logout controls, and
+  signed-resource integration without exposing access material in URLs, cache
+  keys, or repository state (#1995).
+
+### Changed
+
+- **Codex deployment reliability** - component-scoped addon sweeps preserve
+  kernel skills, generated native skills include `agents/openai.yaml` metadata,
+  setup reports `$aiwg-regenerate`, and Codex provider trees are added to
+  `.gitignore` without changing already tracked files.
+- **Development-checkout notifier routing** - the launcher resolves logging and
+  update-notifier modules from the active package, and ignores cache notices
+  produced by a different installed version.
+
+### Fixed
+
+- **Lightweight external addon workflows** - `@aiwg/cli` now ships the runtime
+  needed to create deterministic standalone plugin archives and deploys valid
+  project-local wrappers for their declared providers. Installations can target
+  the current project or the global user scope, with the corresponding artifact
+  and Fortemi indices refreshed after deployment (#2007, #2008).
+- **Fleet admission and recovery** - inventory faults now fail closed, runtime
+  child identities survive dispatch and restart, and daemon health semantics
+  remain stable during fleet reconciliation.
+- **Provider documentation drift** - Codex skill paths, RLM verification,
+  regeneration syntax, addon catalog coverage, and Ops extension structure now
+  match the shipped runtime contracts.
+
 ## [2026.8.0] - 2026-08-01 - "Secure external jobs and operational intelligence"
 
 ### Added

@@ -7,13 +7,13 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { createExecutor } from '../../apps/cockpit/mock-executor/src/server.mjs';
-import { createBridge, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, ensureExecutor, fetchJsonFirst, isDirectExecution } from '../../apps/cockpit/bridge/src/server.mjs';
+import { activityRequest, createBridge, createUserIndexGraph, normalizeManagedDockerPosture, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, ensureExecutor, fetchJsonFirst, isDirectExecution, validateActivityEnvelope } from '../../apps/cockpit/bridge/src/server.mjs';
 
 let mock, bridge, base, token;
 const testMcSessionId = `mc-cockpit-test-${Date.now()}`;
@@ -63,6 +63,68 @@ afterAll(async () => {
 });
 
 describe('cockpit Bridge — control surface', () => {
+  it('requires exact activity scope and rejects restricted or cross-scope events', () => {
+    const request = activityRequest({ tenant_id: 't', host_id: 'h', instance_id: 'i', agent_id: 'a', filter: { limit: 50 } });
+    expect(request.headers).toMatchObject({ 'x-agentic-tenant-id': 't', 'x-agentic-host-id': 'h', 'x-agentic-instance-id': 'i', 'x-agentic-agent-id': 'a' });
+    expect(() => activityRequest({ tenant_id: 't', host_id: 'h', instance_id: 'i' })).toThrow(/agent_id/);
+    const base = {
+      schema_version: 'activity.event/v1', event_id: '018f54b0-7c01-7000-8000-000000000001', event_name: 'process.started', plane: 'runtime',
+      occurred_at: '2026-08-04T00:00:00Z', observed_at: '2026-08-04T00:00:00.001Z',
+      source: { collector: 'runtime', layer: 'host', runtime: 'docker', trust: 'observed' },
+      sensitivity: 'metadata', retention_class: 'security', integrity: { collector_sequence: 1 }, correlation: request.scope,
+    };
+    const completeness = { complete: true, label: 'complete', collector_count: 0, sequence_gap_count: 0, durable_loss_count: 0, restart_count: 0, dropped_event_count: 0, stale_collector_count: 0, unsupported_event_classes: [], maximum_clock_error_ms: 0 };
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [{ ...base, payload: { command: 'metadata-id' } }], coverage: [], completeness }, request.scope, { includeEvents: true })).not.toThrow();
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [{ ...base, correlation: { ...request.scope, agent_id: 'other' }, payload: {} }], coverage: [], completeness }, request.scope, { includeEvents: true })).toThrow(/scope mismatch/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [{ ...base, payload: { terminal_content: 'nope' } }], coverage: [], completeness }, request.scope, { includeEvents: true })).toThrow(/restricted/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [], coverage: [], completeness: { ...completeness, unsupported_event_classes: undefined } }, request.scope)).toThrow(/completeness summary/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [], coverage: [{ collector_id: 'runtime', sequence_gaps: [], durable_loss_records: [], stale: false }], completeness: { ...completeness, collector_count: 1 } }, request.scope)).toThrow(/collector coverage/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', additive_optional_field: { supported: true }, events: [{ ...base, payload: {} }], coverage: [], completeness }, request.scope, { includeEvents: true })).not.toThrow();
+    expect(() => validateActivityEnvelope({ events: [], manifest: { batch_id: 'b', tenant_id: 't', collector_id: 'runtime', event_count: 0, merkle_root: 'bad', previous_root: null, key_id: 'k', signature: 's' } }, request.scope, { exportEnvelope: true })).toThrow(/valid manifest/);
+  });
+
+  it('preserves upstream authorization failures for every activity route', async () => {
+    const upstream = http.createServer((req, res) => {
+      const status = req.url.includes('/timeline') ? 401 : 403;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: status === 401 ? 'unauthorized' : 'forbidden' }));
+    });
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const localBridge = createBridge({ executorUrl: `http://127.0.0.1:${upstream.address().port}`, allowMockExecutor: true });
+    await new Promise((resolve) => localBridge.listen(0, '127.0.0.1', resolve));
+    const localBase = `http://127.0.0.1:${localBridge.address().port}`;
+    const body = JSON.stringify({ tenant_id: 't', host_id: 'h', instance_id: 'i', agent_id: 'a' });
+    try {
+      for (const [route, status] of [['coverage', 403], ['timeline', 401], ['export', 403]]) {
+        const response = await fetch(`${localBase}/api/activity/${route}`, { method: 'POST', headers: { authorization: `Bearer ${localBridge.cockpitToken}`, 'content-type': 'application/json' }, body });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual(expect.objectContaining({ error: status === 401 ? 'executor_unauthenticated' : 'executor_forbidden' }));
+      }
+    } finally {
+      localBridge.close();
+      upstream.close();
+    }
+  });
+
+  it('projects managed Docker posture without exposing socket or bootstrap material', () => {
+    expect(normalizeManagedDockerPosture({ transport: 'uds', control_uid: 240404, workload_uid: 10001, workload_boundary: 'separated', socket_path: '/secret.sock' }, 'docker')).toEqual(expect.objectContaining({ secure_default: true, control_identity_range_valid: true, workload_identity_separated: true }));
+    expect(normalizeManagedDockerPosture({ transport: 'mtls-bootstrap', control_uid: 240405, workload_uid: 10001, workload_boundary: 'separated', bootstrap_token: 'secret' }, 'docker')).toEqual(expect.objectContaining({ secure_default: false, compatibility: true }));
+    expect(normalizeManagedDockerPosture({ transport: 'uds' }, 'docker')).toEqual(expect.objectContaining({ secure_default: false, requires_recreation: true }));
+    expect(normalizeManagedDockerPosture({ transport: 'uds', control_uid: 199999, workload_uid: 10001, workload_boundary: 'separated' }, 'docker')).toEqual(expect.objectContaining({ control_identity_range_valid: false }));
+  });
+  it('creates validated user-defined index graph configuration atomically', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-cockpit-index-'));
+    try {
+      const created = await createUserIndexGraph({ name: 'references', scanDirs: ['docs/references'], extensions: ['.md'] }, root);
+      expect(created).toMatchObject({ name: 'references', definition: { scanDirs: ['docs/references'], extensions: ['.md'] } });
+      const config = JSON.parse(await readFile(join(root, '.aiwg', 'aiwg.config'), 'utf8'));
+      expect(config.index.graphs.references.defaultBuild).toBe(false);
+      await expect(createUserIndexGraph({ name: '../escape', scanDirs: ['docs'] }, root)).rejects.toThrow(/graph must match/);
+      await expect(createUserIndexGraph({ name: 'bad-path', scanDirs: ['../outside'] }, root)).rejects.toThrow(/project-relative/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it('gates /api with the per-launch token; /healthz is open', async () => {
     expect((await fetch(`${base}/api/inventory`)).status).toBe(401);
     expect((await fetch(`${base}/api/inventory?token=${encodeURIComponent(token)}`)).status).toBe(401);
@@ -442,6 +504,18 @@ describe('cockpit Bridge — control surface', () => {
       source: 'aiwg-mc',
     });
     expect(missions.sessions.some((s) => s.id === 'executor-live')).toBe(true);
+    const fleetSession = missions.sessions.find((s) => s.parent_mission_id === 'mission-fleet-demo');
+    expect(fleetSession).toMatchObject({
+      id: 'fleet:mission-fleet-demo',
+      source: 'agentic-sandbox-fleet',
+      state: 'awaiting-approval',
+      inventory_revision: 12,
+    });
+    expect(fleetSession.missions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ workload_kind: 'persistent-agent', target_id: 'target-1', runtime_session_id: 'session-agent-1', status: 'retained', terminal: false }),
+      expect.objectContaining({ workload_kind: 'daemon', target_id: 'target-2', health: 'healthy', status: 'healthy', terminal: false }),
+      expect.objectContaining({ workload_kind: 'one-shot-command', target_id: 'target-3', command_id: 'command-1', status: 'blocked', backpressure: { reason: 'approval', retryable: false }, terminal: false }),
+    ]));
 
     const events = await (await f('/api/events/snapshot')).json();
     expect(events.source).toBe('cockpit.unified-event-model/v1');
@@ -900,6 +974,7 @@ describe('cockpit Bridge — executor without running/approvals admin surface (#
   // A2A tasks; when no task surface is available it returns empty 200s so Home
   // binds inventory and stays usable.
   let upstream, b, ubase, utoken;
+  let fleetMode = 'missing';
   beforeAll(async () => {
     upstream = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -914,6 +989,12 @@ describe('cockpit Bridge — executor without running/approvals admin surface (#
         }] } });
       }
       if (url.pathname === '/api/v1/agents') return send(200, { agents: [] });
+      if (url.pathname === '/api/v2/fleet/workloads' && fleetMode === 'error') {
+        return send(500, { error: 'fleet_unavailable' });
+      }
+      if (url.pathname === '/api/v2/fleet/workloads' && fleetMode === 'malformed') {
+        return send(200, { document_type: 'inventory', api_version: 'wrong/v1', records: [] });
+      }
       // No task surface on this executor — everything else 404s.
       return send(404, { error: 'not_found', path: url.pathname });
     });
@@ -939,6 +1020,22 @@ describe('cockpit Bridge — executor without running/approvals admin surface (#
     const approvals = await uf('/api/approvals?status=pending');
     expect(approvals.status).toBe(200);
     expect(await approvals.json()).toMatchObject({ approvals: [] });
+  });
+
+  it('keeps older no-fleet executors compatible but fails closed on fleet faults', async () => {
+    fleetMode = 'missing';
+    expect((await uf('/api/missions')).status).toBe(200);
+
+    fleetMode = 'error';
+    const failed = await uf('/api/missions');
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toMatchObject({ error: 'bridge_upstream_error' });
+
+    fleetMode = 'malformed';
+    const malformed = await uf('/api/missions');
+    expect(malformed.status).toBe(502);
+    expect((await malformed.json()).message).toMatch(/invalid fleet inventory envelope/);
+    fleetMode = 'missing';
   });
 });
 
