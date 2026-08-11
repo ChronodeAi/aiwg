@@ -289,6 +289,11 @@ function getCommandDirectories(srcRoot, mode) {
 
   // Collect skill names to detect command/skill collisions
   const skillNames = new Set();
+  // A project-local addon is passed directly as --source and keeps skills in
+  // <bundle>/skills rather than under agentic/code/addons. Include those
+  // names in the same precedence check used for repository addons.
+  const directSkillsDir = path.join(srcRoot, 'skills');
+  for (const d of listSkillDirs(directSkillsDir)) skillNames.add(path.basename(d));
   const addonSkills = getAddonSkillDirs(srcRoot);
   for (const d of addonSkills) skillNames.add(path.basename(d));
   const frameworkSkills = collectFrameworkArtifacts(srcRoot, mode, {

@@ -1,0 +1,25 @@
+# Tier-2 skills, exempt from the SIBLING_POINTERS rule only (see
+# bin/check-skill-contract.sh and CONTRIBUTING.md).
+#
+# A workflow orchestrator has no peer to point at. Still owes USE_WHEN_PREFIX
+# and DONE_WHEN. Adding a new orchestrator means deliberately adding a line
+# here — it is not a judgement call made by the script.
+#
+# Correction: all 11 workflow orchestrators are now on the stronger, full
+# exemption (all 3 rules) in bin/skill-contract-exempt-full.txt — none are
+# listed here anymore. A prior version of this comment claimed 3 of them
+# (assumptions, pm-review, coaching) already passed USE_WHEN_PREFIX and
+# DONE_WHEN and so didn't need the full exemption; that claim was never
+# verified against the actual registry and was wrong — all 3 fail both
+# rules today, same as the other 8. Moved to the full-exemption file for
+# the same reason as the original 8: they're the same genre, blocked by
+# the same mid-run-user-input conflict.
+#
+# The 16 pm-os-* / system-ops skills that used to be listed here (the "PM
+# OS System & Operations" category) earned real sibling pointers when the
+# skill-contract sweep (#114) rewrote them to the full pass-2 contract —
+# removed from this file in that same change, one skill (tidy-procedure)
+# retired outright and merged into pm-os-tidy.
+#
+# Currently empty — kept as the mechanism for any future SIBLING_POINTERS-
+# only exemption need, per the header above.

@@ -340,6 +340,15 @@ function deploySkill(skill, targetDir, opts) {
 function getSkillDirectories(srcRoot, mode) {
   const dirs = [];
 
+  // Project-local addons are passed directly as --source and expose their
+  // artifacts at <bundle>/skills. They do not carry a nested
+  // agentic/code/addons tree, so discover this source explicitly regardless
+  // of the repository-level deployment mode selected by the caller.
+  const directSkillsDir = path.join(srcRoot, 'skills');
+  if (fs.existsSync(directSkillsDir)) {
+    dirs.push({ dir: directSkillsDir, label: path.basename(srcRoot) });
+  }
+
   // Addon skills
   if (mode === 'addons' || mode === 'all') {
     const addonsRoot = path.join(srcRoot, 'agentic', 'code', 'addons');
@@ -375,6 +384,7 @@ function getSkillDirectories(srcRoot, mode) {
   const scriptDir = path.dirname(new URL(import.meta.url).pathname);
   const repoRoot = path.resolve(scriptDir, '..', '..');
   const srcRoot = source || repoRoot;
+  const isDirectBundleSource = fs.existsSync(path.join(srcRoot, 'skills'));
 
   console.log(`Deploying skills to Codex`);
   console.log(`  Source: ${srcRoot}`);
@@ -446,8 +456,6 @@ function getSkillDirectories(srcRoot, mode) {
       : found.filter(s => isKernelSkill(s));
     if (skills.length === 0) continue;
 
-    for (const s of skills) desiredNames.add(path.basename(s));
-
     console.log(`\n${label} (${skills.length} skills):`);
 
     for (const skillDir of skills) {
@@ -460,6 +468,10 @@ function getSkillDirectories(srcRoot, mode) {
         continue;
       }
 
+      // Codex uses the transformed frontmatter name as the destination
+      // directory. Track that actual name (not only the source basename) so
+      // cleanup never removes a just-deployed renamed skill.
+      desiredNames.add(skill.name);
       const result = deploySkill(skill, target, { force, dryRun });
       if (result.action === 'deploy') totalDeployed++;
       else totalSkipped++;
@@ -484,8 +496,17 @@ function getSkillDirectories(srcRoot, mode) {
       // Known renamed AIWG skills may predate both the current source name and
       // the .aiwg-managed marker. Treat only the exact historical names as
       // managed so malformed legacy frontmatter cannot survive an upgrade.
-      let isAiwgManaged = allManagedNames.has(name) || LEGACY_RENAMED_SKILLS.has(name);
-      if (!isAiwgManaged) {
+      // A direct project-local bundle may share this target with skills from
+      // many other AIWG addons. In that mode, ownership is bounded strictly
+      // to names declared by THIS bundle; a generic `.aiwg-managed` marker is
+      // not enough evidence that this invocation owns the directory. Full
+      // AIWG-root deploys retain the holistic cleanup behavior used for
+      // removed/renamed framework skills.
+      let isAiwgManaged = allManagedNames.has(name);
+      if (!isDirectBundleSource) {
+        isAiwgManaged = isAiwgManaged || LEGACY_RENAMED_SKILLS.has(name);
+      }
+      if (!isAiwgManaged && !isDirectBundleSource) {
         // Check for the .aiwg-managed marker file (preferred — survives
         // frontmatter transforms) or fall back to namespace check.
         const markerFile = path.join(target, name, '.aiwg-managed');

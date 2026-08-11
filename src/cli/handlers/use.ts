@@ -2011,29 +2011,39 @@ export class UseHandler implements CommandHandler {
       const targetIdx = remainingArgs.findIndex(a => a === '--target');
       const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
 
-      const runner = createScriptRunner(ctx.frameworkRoot);
-      const addonBaseArgs = ['--deploy-commands', '--deploy-skills', '--deploy-rules'];
-      addonBaseArgs.push(...modelDeployArgs);
-      if (provider) addonBaseArgs.push('--provider', provider);
-      if (target) addonBaseArgs.push('--target', target);
-      // Forward --copy-all (#1219) so addon-only deploys also honor it.
-      if (remainingArgs.includes('--copy-all') || remainingArgs.includes('--copy-standard-skills')) {
-        addonBaseArgs.push('--copy-all');
-      }
-
       const kind = isExtension ? 'extension' : 'addon';
       ui.blank();
       ui.header(`  Deploying ${framework} ${kind}...`);
       const addonSource = isExtension
         ? extensionPath(frameworkRoot, framework)
         : addonPath(frameworkRoot, framework);
-      const addonResult = await runner.run('tools/agents/deploy-agents.mjs', [
-        '--quiet', '--source', addonSource,
-        ...addonBaseArgs,
-      ], { capture: true });
+      const dryRun = remainingArgs.includes('--dry-run');
+      const verbose = remainingArgs.includes('--verbose') || remainingArgs.includes('-v');
+      const addonResult = await deploySourceDirectory({
+        ctx,
+        frameworkRoot: ctx.frameworkRoot,
+        source: addonSource,
+        provider,
+        target,
+        dryRun,
+        verbose,
+        force: remainingArgs.includes('--force'),
+        copyAll: remainingArgs.includes('--copy-all') || remainingArgs.includes('--copy-standard-skills'),
+        quiet: !verbose && !dryRun,
+        modelArgs: modelDeployArgs,
+      });
 
       if (addonResult.exitCode !== 0) {
         return addonResult;
+      }
+
+      // A direct addon/extension dry run ends with the provider preview. The
+      // remaining steps mutate the in-process extension registry and may write
+      // CLI command, hook, or topology-profile configuration into the target.
+      if (dryRun) {
+        ui.blank();
+        ui.success(`${framework} ${kind} dry run complete`);
+        return { exitCode: 0 };
       }
 
       // Register deployed extensions

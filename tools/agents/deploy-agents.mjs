@@ -728,6 +728,83 @@ function deepMerge(target, source) {
 // Commands → Skills Migration
 // ============================================================================
 
+const DIRECT_PROJECT_ADDON_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Conservatively identify a validated project-local addon bundle source.
+ *
+ * Project-local manifests are validated by the `aiwg use` handler before this
+ * deployer is spawned. Re-check the safety-critical discriminator here so a
+ * direct invocation cannot suppress the generic commands migration merely by
+ * placing a loose `manifest.json` next to arbitrary files. Legacy addons and
+ * full AIWG roots intentionally do not match this project-local shape.
+ */
+export function isDirectProjectLocalAddonSource(srcRoot) {
+  try {
+    const root = fs.realpathSync(srcRoot);
+    const manifestPath = path.join(root, 'manifest.json');
+    const manifestStat = fs.lstatSync(manifestPath);
+    if (manifestStat.isSymbolicLink() || !manifestStat.isFile()) return false;
+
+    const manifestRealPath = fs.realpathSync(manifestPath);
+    const manifestRelative = path.relative(root, manifestRealPath);
+    if (
+      manifestRelative === '..' ||
+      manifestRelative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(manifestRelative)
+    ) return false;
+
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) return false;
+    if (manifest.type !== 'addon' || manifest.manifestVersion !== '1') return false;
+    if (
+      typeof manifest.id !== 'string' ||
+      manifest.id.length > 64 ||
+      !DIRECT_PROJECT_ADDON_ID_RE.test(manifest.id)
+    ) return false;
+    if (typeof manifest.name !== 'string' || !manifest.name.trim()) return false;
+    if (typeof manifest.version !== 'string' || !/^\d+\.\d+\.\d+/.test(manifest.version)) return false;
+    if (typeof manifest.description !== 'string' || !manifest.description.trim()) return false;
+    if (!manifest.platforms || typeof manifest.platforms !== 'object' || Array.isArray(manifest.platforms)) return false;
+    if (!Array.isArray(manifest.keywords) || manifest.keywords.length === 0) return false;
+    if (!manifest.deployment || typeof manifest.deployment !== 'object' || Array.isArray(manifest.deployment)) return false;
+    if (
+      !manifest.addonConfig ||
+      typeof manifest.addonConfig !== 'object' ||
+      Array.isArray(manifest.addonConfig)
+    ) return false;
+    if (
+      manifest.frameworkConfig !== undefined ||
+      manifest.extensionConfig !== undefined ||
+      manifest.pluginConfig !== undefined ||
+      manifest.providerConfig !== undefined
+    ) return false;
+
+    // A direct bundle exposes provider artifacts at its root. Require a real,
+    // contained, non-symlink component directory rather than trusting the
+    // manifest discriminator alone.
+    const componentDirs = [
+      path.join(root, 'agents'),
+      path.join(root, 'commands'),
+      path.join(root, 'skills'),
+      path.join(root, 'rules'),
+      path.join(root, 'codex', 'agents'),
+    ];
+    return componentDirs.some((candidate) => {
+      if (!fs.existsSync(candidate)) return false;
+      const stat = fs.lstatSync(candidate);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+      const realCandidate = fs.realpathSync(candidate);
+      const relative = path.relative(root, realCandidate);
+      return relative !== '..' &&
+        !relative.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relative);
+    });
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Ask the user whether to delete the provider's commands directory before
  * deploying skills. Skipped automatically when not running in a TTY (CI/pipe)
@@ -899,24 +976,29 @@ export async function main() {
     deploySource: 'bundled',
   };
 
-  // Commands → Skills migration: prompt then delete the commands directory
-  // so stale command files don't create duplicates in the provider TUI.
-  if (!cfg.dryRun && !cfg.skipCommandsMigration) {
-    const doMigrate = await promptCommandsMigration(cfg, provider, cfg.target);
-    if (doMigrate) {
+  // Commands → Skills migration: prompt then delete the commands directory so
+  // stale command files don't create duplicates in the provider TUI. A direct
+  // project-local addon owns its command adapters as current artifacts; the
+  // generic migration and its manual-deletion warning do not apply there.
+  const directProjectLocalAddonSource = isDirectProjectLocalAddonSource(srcRoot);
+  if (!directProjectLocalAddonSource) {
+    if (!cfg.dryRun && !cfg.skipCommandsMigration) {
+      const doMigrate = await promptCommandsMigration(cfg, provider, cfg.target);
+      if (doMigrate) {
+        const commandsRelPath = provider.paths?.commands;
+        if (commandsRelPath) {
+          migrateCommandsDirectory(path.join(cfg.target, commandsRelPath), opts);
+        }
+      } else {
+        // User said no — flip the flag so the provider knows to emit the duplicate warning
+        opts.skipCommandsMigration = true;
+      }
+    } else if (cfg.skipCommandsMigration) {
+      // Flag was passed explicitly — emit the duplicate warning now via a dry migration call
       const commandsRelPath = provider.paths?.commands;
-      if (commandsRelPath) {
+      if (commandsRelPath && !provider.capabilities?.homeDirectoryDeploy) {
         migrateCommandsDirectory(path.join(cfg.target, commandsRelPath), opts);
       }
-    } else {
-      // User said no — flip the flag so the provider knows to emit the duplicate warning
-      opts.skipCommandsMigration = true;
-    }
-  } else if (cfg.skipCommandsMigration) {
-    // Flag was passed explicitly — emit the duplicate warning now via a dry migration call
-    const commandsRelPath = provider.paths?.commands;
-    if (commandsRelPath && !provider.capabilities?.homeDirectoryDeploy) {
-      migrateCommandsDirectory(path.join(cfg.target, commandsRelPath), opts);
     }
   }
 
