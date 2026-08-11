@@ -144,6 +144,13 @@ describe('activity-log auto-append hook (#978)', () => {
       expect(existsSync(logPath)).toBe(false);
     });
 
+    it('skips activity logging for an exact --dry-run flag', async () => {
+      await activityLogPostCommandHook.execute(
+        makeCtx('use', ['pm-os', '--provider', 'codex', '--dry-run'], { exitCode: 0 })
+      );
+      expect(existsSync(logPath)).toBe(false);
+    });
+
     it('appends when exitCode is undefined (defensive default)', async () => {
       await activityLogPostCommandHook.execute(makeCtx('use', ['sdlc']));
       expect(existsSync(logPath)).toBe(true);

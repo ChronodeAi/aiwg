@@ -1,0 +1,29 @@
+{
+  "name": "pm-os",
+  "version": "2.6.0",
+  "description": "Product Manager's AI Operating System — one plugin, one namespace. 15 system skills (/pm-os:start, :pm-help, :pm-status, :upgrade, :tidy, :project, :capture-memory, :daily-drip, :import-ai-memory, :framework, :skill, :skill-browser, :feedback, :testimonial, :agent-builder), 11 sequenced workflow skills (/pm-os:strategy, :opportunity, :assumptions, :research, :decisions, :stakeholder, :meeting, :pm-review, :coaching, :measure, :prd), 204 reusable PM skills with canonical short names, 12 sub-agents (pm-workflows router, knowledge-librarian, context-manager, 7 cross-functional review personas, 2 PRD-specific reviewers), and 3 hooks (2 SessionStart: tidy-reminder, drip-reminder; 1 PreToolUse: save-guard). Skills, not commands — per Anthropic's plugin guidance.",
+  "author": {
+    "name": "prodmgmt.world",
+    "url": "https://prodmgmt.world"
+  },
+  "homepage": "https://prodmgmt.world",
+  "repository": "https://github.com/gnurio/pm-os",
+  "license": "Proprietary",
+  "keywords": [
+    "pm-os",
+    "product-management",
+    "strategy",
+    "research",
+    "decisions",
+    "stakeholders",
+    "opportunity-mapping",
+    "assumption-mapping",
+    "review",
+    "coaching",
+    "measurement",
+    "memory",
+    "tidy",
+    "drip"
+  ],
+  "mcpServers": {}
+}

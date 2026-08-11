@@ -89,6 +89,13 @@ export const activityLogPostCommandHook: HookHandler = {
       return { action: 'continue' };
     }
 
+    // Dry-run commands must be side-effect free. In particular, do not let
+    // this post-command hook create or mutate .aiwg/activity.log after the
+    // primary command deliberately avoided writes.
+    if (ctx.args.includes('--dry-run')) {
+      return { action: 'continue' };
+    }
+
     // Skip if the command failed (post-command runs even on failure for
     // some hook flows; we never want to log a failure as a successful op)
     const exitCode = ctx.data?.['exitCode'];

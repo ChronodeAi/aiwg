@@ -1,0 +1,6 @@
+# Burn-down baseline for the skill quality pass 2 contract.
+# CI fails if any measured count exceeds its baseline. Counts may only go down.
+# Regenerate after landing a cluster: bash bin/check-skill-contract.sh --update
+USE_WHEN_PREFIX=0
+SIBLING_POINTERS=0
+DONE_WHEN=0
