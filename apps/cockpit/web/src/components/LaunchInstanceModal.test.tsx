@@ -18,9 +18,102 @@ const HOST_INSTANCE = {
 
 const LOADOUTS = [
   { id: 'host-tools', label: 'host-tools', description: 'Host tools', runtimes: ['host'] },
-  { id: 'full-suite', label: 'full-suite', description: 'All providers', runtimes: ['docker', 'container', 'qemu', 'vm'] },
+  {
+    id: 'full-suite',
+    label: 'full-suite',
+    description: 'All providers',
+    runtimes: ['docker', 'container', 'qemu', 'vm'],
+    compatibility: [{ runtime_kind: 'vm', provider: 'cloud-hypervisor', eligible: true }],
+  },
+  {
+    id: 'gpu-vfio',
+    label: 'GPU Workstation',
+    description: 'GPU-backed VM',
+    runtimes: ['qemu', 'vm'],
+    runtime_options: {
+      kind: 'vm',
+      provider: 'cloud-hypervisor',
+      required_capabilities: ['device.vfio'],
+      excluded_capabilities: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+      launch_strategy: { mode: 'cold' },
+      constraints: { allow_vfio_fast_start: false, fallback_mode: 'fail' },
+    },
+    compatibility: [{
+      runtime_kind: 'vm',
+      provider: 'cloud-hypervisor',
+      eligible: true,
+      required_capabilities: ['device.vfio'],
+      excluded_capabilities: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+      constraints: [{
+        capability: 'device.vfio',
+        excludes: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+        reason: 'VFIO-backed VMs cannot safely reuse memory state.',
+      }],
+    }],
+  },
+  {
+    id: 'active-host-gpu',
+    label: 'Active Host GPU',
+    description: 'Rejected GPU assignment',
+    runtimes: ['qemu', 'vm'],
+    runtime_options: {
+      kind: 'vm',
+      provider: 'cloud-hypervisor',
+      required_capabilities: ['device.vfio'],
+      launch_strategy: { mode: 'cold' },
+    },
+    compatibility: [{
+      runtime_kind: 'vm',
+      provider: 'cloud-hypervisor',
+      eligible: false,
+      required_capabilities: ['device.vfio'],
+      reason: 'GPU 0000:41:00.0 is active on the host',
+    }],
+  },
   { id: 'agentic-dev', label: 'agentic-dev', description: 'Developer tools', runtimes: ['docker', 'container'] },
 ];
+
+const VM_PROVIDER_CAPS = {
+  status: 'ok',
+  source: '/healthz/deep',
+  host_runtime_enabled: true,
+  runtime_providers: {
+    default_provider: 'cloud-hypervisor',
+    kinds: [{ kind: 'vm', label: 'VM', default_provider: 'cloud-hypervisor', providers: ['cloud-hypervisor'] }],
+    providers: [{
+      provider: 'cloud-hypervisor',
+      kind: 'vm',
+      label: 'Cloud Hypervisor',
+      default: true,
+      capabilities: [
+        { id: 'instance.snapshot', label: 'Snapshot' },
+        { id: 'instance.restore', label: 'Restore' },
+        { id: 'instance.fork', label: 'Fork' },
+        { id: 'warm_pool.manage', label: 'Warm pools' },
+        { id: 'device.vfio', label: 'VFIO device passthrough' },
+      ],
+      capability_constraints: [{
+        capability: 'device.vfio',
+        excludes: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+        reason: 'VFIO-backed VMs cannot safely reuse memory state.',
+      }],
+    }],
+  },
+};
+
+const VM_PROVIDER_CAPS_NO_GPU = {
+  ...VM_PROVIDER_CAPS,
+  runtime_providers: {
+    ...VM_PROVIDER_CAPS.runtime_providers,
+    providers: [{
+      provider: 'cloud-hypervisor',
+      kind: 'vm',
+      label: 'Cloud Hypervisor',
+      default: true,
+      capabilities: [{ id: 'instance.restore', label: 'Restore' }],
+    }],
+  },
+};
 
 function mockFetch({
   instances = [HOST_INSTANCE],
@@ -42,10 +135,27 @@ function mockFetch({
   }) as unknown as typeof fetch;
 }
 
-beforeEach(() => { (window as unknown as { __COCKPIT_TOKEN__: string }).__COCKPIT_TOKEN__ = 't'; });
+beforeEach(() => {});
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('LaunchInstanceModal', () => {
+  it('shows stable credential-proxy-or-VM guidance for rejected Docker profiles', async () => {
+    const defaultFetch = mockFetch();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/instances') && init?.method === 'POST') return new Response(JSON.stringify({
+        error: 'managed_docker_raw_credentials_rejected',
+        message: 'Managed Docker does not accept startup profiles with raw credential references.',
+        recovery: 'Use the sandbox credential proxy or select a VM runtime. Cockpit will not downgrade the transport automatically.',
+      }), { status: 422, headers: { 'content-type': 'application/json' } });
+      return defaultFetch(input, init);
+    }) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    render(<LaunchInstanceModal open onClose={() => {}} onLaunched={() => {}} />);
+    fireEvent.change(await screen.findByLabelText('Runtime'), { target: { value: 'docker' } });
+    fireEvent.click(screen.getByRole('button', { name: /create \+ start session/i }));
+    expect(await screen.findByText(/use the sandbox credential proxy or select a VM runtime/i)).toBeTruthy();
+  });
   it('uses an existing host target when one is already registered', async () => {
     globalThis.fetch = mockFetch();
     const onLaunched = vi.fn();
@@ -142,5 +252,62 @@ describe('LaunchInstanceModal', () => {
       agentshare: true,
       ssh_key: '~/.ssh/agentic_ed25519.pub',
     });
+  });
+
+  it('shows GPU unavailable when provider discovery does not advertise VFIO', async () => {
+    globalThis.fetch = mockFetch({ executorCaps: VM_PROVIDER_CAPS_NO_GPU });
+    render(<LaunchInstanceModal open onClose={() => {}} onLaunched={() => {}} />);
+
+    fireEvent.change(await screen.findByLabelText('Runtime'), { target: { value: 'qemu' } });
+
+    expect(await screen.findByText('GPU passthrough unavailable')).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: /request gpu passthrough/i }) as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('rejects a GPU loadout when compatibility reports the host device is active', async () => {
+    globalThis.fetch = mockFetch({ executorCaps: VM_PROVIDER_CAPS });
+    render(<LaunchInstanceModal open onClose={() => {}} onLaunched={() => {}} />);
+
+    fireEvent.change(await screen.findByLabelText('Runtime'), { target: { value: 'qemu' } });
+    fireEvent.change(await screen.findByLabelText('Instance loadout'), { target: { value: 'active-host-gpu' } });
+
+    expect(await screen.findByText('GPU 0000:41:00.0 is active on the host')).toBeTruthy();
+    expect((screen.getByRole('button', { name: /create \+ start session/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('sends cold VFIO runtime_options for an eligible GPU loadout', async () => {
+    globalThis.fetch = mockFetch({ executorCaps: VM_PROVIDER_CAPS, createdInstanceId: 'vm-gpu-1' });
+    const onLaunched = vi.fn();
+    render(<LaunchInstanceModal open onClose={() => {}} onLaunched={onLaunched} />);
+
+    fireEvent.change(await screen.findByLabelText('Runtime'), { target: { value: 'qemu' } });
+    fireEvent.change(await screen.findByLabelText('Instance loadout'), { target: { value: 'gpu-vfio' } });
+    fireEvent.click(screen.getByRole('button', { name: /create \+ start session/i }));
+
+    await waitFor(() => expect(onLaunched).toHaveBeenCalledWith('vm-gpu-1', true, undefined));
+    const postCall = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .find((call) => String(call[0]).includes('/api/instances') && call[1]?.method === 'POST');
+    expect(JSON.parse(String(postCall?.[1]?.body))).toMatchObject({
+      runtime: 'qemu',
+      provider: 'cloud-hypervisor',
+      runtime_options: {
+        kind: 'vm',
+        provider: 'cloud-hypervisor',
+        required_capabilities: ['device.vfio'],
+        excluded_capabilities: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+        launch_strategy: { mode: 'cold' },
+        constraints: { allow_vfio_fast_start: false, fallback_mode: 'fail' },
+      },
+    });
+  });
+
+  it('surfaces VFIO fast-start incompatibility before launch', async () => {
+    globalThis.fetch = mockFetch({ executorCaps: VM_PROVIDER_CAPS });
+    render(<LaunchInstanceModal open onClose={() => {}} onLaunched={() => {}} />);
+
+    fireEvent.change(await screen.findByLabelText('Runtime'), { target: { value: 'qemu' } });
+    fireEvent.change(await screen.findByLabelText('Instance loadout'), { target: { value: 'gpu-vfio' } });
+
+    expect(await screen.findByText(/Disabled: instance.snapshot, instance.restore, instance.fork, warm_pool.manage/i)).toBeTruthy();
   });
 });

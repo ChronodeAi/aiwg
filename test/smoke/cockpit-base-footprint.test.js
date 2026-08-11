@@ -48,6 +48,9 @@ describe('cockpit base-npm footprint guard (#1593)', () => {
     expect(cockpit.publishConfig?.access).toBe('public');
     expect(cockpit.files).toContain('bridge/');
     expect(cockpit.files).toContain('web/dist/');
+    expect(cockpit.files).toContain('LICENSE');
+    expect(cockpit.scripts?.['build:web:release']).toBe('node scripts/build-web-release.mjs');
+    expect(cockpit.scripts?.prepack).toBe('npm run build:web:release');
   });
 
   it('the cockpit tarball dry-run names @aiwg/cockpit and excludes node_modules', () => {
@@ -56,7 +59,15 @@ describe('cockpit base-npm footprint guard (#1593)', () => {
     const out = execFileSync('npm', ['pack', '--dry-run', '--json'], {
       encoding: 'utf8',
       cwd: new URL('../../apps/cockpit', import.meta.url),
-      env: { ...process.env, npm_config_cache: npmCache },
+      env: {
+        ...process.env,
+        npm_config_cache: npmCache,
+        // Publish workflows point the outer npm process at a private
+        // non-proxying registry. The release builder must still install its
+        // public build dependencies from npmjs.org.
+        npm_config_registry: 'https://registry.invalid.example/',
+        npm_config_replace_registry_host: 'always',
+      },
       maxBuffer: 64 * 1024 * 1024,
     });
     const pack = parseNpmPackJson(out)[0];
@@ -65,5 +76,8 @@ describe('cockpit base-npm footprint guard (#1593)', () => {
     expect(pack?.name).toBe('@aiwg/cockpit');
     expect(files.some((f) => f.startsWith('node_modules/')), 'cockpit tarball must not contain node_modules').toBe(false);
     expect(files).toContain('bridge/src/server.mjs');
+    expect(files).toContain('LICENSE');
+    expect(files).toContain('web/dist/index.html');
+    expect(files.some((f) => /^web\/dist\/assets\/.+\.js$/.test(f)), 'cockpit tarball must contain the compiled web bundle').toBe(true);
   }, 120000);
 });

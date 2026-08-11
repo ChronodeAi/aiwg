@@ -19,10 +19,15 @@ import { createScriptRunner } from './script-runner.js';
 import { getFrameworkRoot, getVersionInfo } from '../../channel/manager.mjs';
 import { getRegistry } from '../../extensions/registry.js';
 import { registerDeployedExtensions } from '../../extensions/deployment-registration.js';
-import { registerCliCommands, registerHooks } from '../cli-extension-loader.js';
+import {
+  loadCliCommandsContribution,
+  registerCliCommands,
+  registerHooks,
+} from '../cli-extension-loader.js';
 import { translateSkillsToCommands, providerNeedsCommands } from '../../plugin/skill-command-translator.js';
 import * as ui from '../ui.js';
 import { readAiwgConfig, writeAiwgConfig, updateInstalled, hashManifest, emptyConfig, getProjectDir } from '../../config/aiwg-config.js';
+import { appendGitignore } from '../../config/gitignore.js';
 import { getLogger } from '../log.js';
 import { installCockpit } from './cockpit.js';
 import { initHandler } from './init.js';
@@ -35,6 +40,7 @@ import {
   discoverProjectLocalBundles,
   type ProjectLocalBundle,
 } from '../../extensions/project-local-discovery.js';
+import { PROJECT_LOCAL_TYPE_TO_DIR } from '../../extensions/project-local-paths.js';
 import { buildUpstreamRegistry } from '../../extensions/upstream-registry.js';
 import {
   resolveShadows,
@@ -44,9 +50,17 @@ import {
   appendProjectLocalActivity,
   emitDiscoverEventsDeduped,
 } from '../../extensions/project-local-activity.js';
-import { hashDeployedArtifactsForProvider } from '../../extensions/project-local-remove.js';
+import {
+  hashBundleArtifacts,
+  hashDeployedBundleArtifacts,
+} from '../../extensions/project-local-remove.js';
 import { installAiwgHooks } from '../../extensions/claude-hooks-installer.js';
-import { detectScope, mirrorToUserScope, rejectOpenClawProjectScope } from '../scope-resolver.js';
+import {
+  detectScope,
+  mirrorToUserScope,
+  rejectOpenClawProjectScope,
+  USER_SCOPE_PATHS,
+} from '../scope-resolver.js';
 import { maybeWarnProjectIsolation } from '../project-isolation/index.js';
 import {
   formatWorkspaceSignalPlan,
@@ -322,6 +336,99 @@ export function addonPath(frameworkRoot: string, name: string): string {
   return path.join(frameworkRoot, 'agentic/code/addons', folderName);
 }
 
+/**
+ * Resolve a selected addon's required addon dependencies in deterministic
+ * dependency-first order. Optional dependencies remain descriptive and are
+ * never activated implicitly.
+ */
+export async function resolveRequiredAddonActivationOrder(
+  frameworkRoot: string,
+  selectedAddon: string,
+): Promise<string[]> {
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const order: string[] = [];
+
+  const visit = async (requestedName: string, ancestry: string[]): Promise<void> => {
+    const name = resolveAddonFolderName(requestedName);
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) {
+      throw new Error(`Invalid required addon identifier '${requestedName}'`);
+    }
+    if (visited.has(name)) return;
+    if (visiting.has(name)) {
+      throw new Error(`Required addon dependency cycle: ${[...ancestry, name].join(' -> ')}`);
+    }
+    const source = addonPath(frameworkRoot, name);
+    let manifest: { id?: unknown; dependencies?: { required?: unknown } };
+    try {
+      manifest = JSON.parse(await fs.readFile(path.join(source, 'manifest.json'), 'utf8'));
+    } catch (error) {
+      throw new Error(
+        `Cannot load required addon '${name}': ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if (manifest.id !== name) {
+      throw new Error(`Required addon manifest identity mismatch: expected '${name}'`);
+    }
+    const required = manifest.dependencies?.required ?? [];
+    if (!Array.isArray(required) || required.some(item => typeof item !== 'string')) {
+      throw new Error(`Addon '${name}' has an invalid dependencies.required declaration`);
+    }
+
+    visiting.add(name);
+    for (const dependency of [...required].sort()) {
+      const dependencyName = resolveAddonFolderName(dependency as string);
+      if (!await isValidAddon(frameworkRoot, dependencyName)) {
+        throw new Error(`Addon '${name}' requires unavailable addon '${dependencyName}'`);
+      }
+      await visit(dependencyName, [...ancestry, name]);
+    }
+    visiting.delete(name);
+    visited.add(name);
+    order.push(name);
+  };
+
+  await visit(selectedAddon, []);
+  return order;
+}
+
+async function registerSourceCliCommands(opts: {
+  source: string;
+  target: string;
+  provider: string;
+  dryRun: boolean;
+  fallbackDescription: string;
+}): Promise<number> {
+  const contribution = await loadCliCommandsContribution(opts.source);
+  if (!contribution) return 0;
+
+  const { manifest, commandsSource } = contribution;
+  const count = Object.keys(manifest.subcommands).length;
+  if (opts.dryRun) {
+    ui.dim(`  [dry-run] Would register CLI namespace '${manifest.namespace}' (${count} subcommands)`);
+    return count;
+  }
+
+  await registerCliCommands(
+    opts.target,
+    manifest.namespace,
+    manifest.description || opts.fallbackDescription,
+    commandsSource,
+    manifest.subcommands,
+  );
+  ui.success(`CLI namespace '${manifest.namespace}' registered (${count} subcommands)`);
+
+  if (opts.provider === 'claude') {
+    const registeredHooks = await registerHooks(
+      opts.target,
+      manifest.namespace,
+      manifest.subcommands,
+    );
+    for (const hook of registeredHooks) ui.success(`Hook registered: ${hook}`);
+  }
+  return count;
+}
+
 function getProviderPaths(provider: string): ProviderArtifactPathStrings {
   const paths = getProviderArtifactPathStrings(provider) ?? getProviderArtifactPathStrings('claude');
   if (!paths) throw new Error(`Missing provider paths for ${provider}`);
@@ -330,6 +437,30 @@ function getProviderPaths(provider: string): ProviderArtifactPathStrings {
 
 function getProviderKernelSkillsPath(provider: string): string {
   return getProviderKernelSkillPath(provider) || getProviderKernelSkillPath('claude');
+}
+
+const PROVIDER_GENERATED_GITIGNORE_PATTERNS: Record<string, string[]> = {
+  codex: ['.codex/', '.agents/'],
+};
+
+async function ensureProviderGeneratedDirsIgnored(
+  projectRoot: string,
+  provider: string,
+  opts: { dryRun: boolean; verbose: boolean },
+): Promise<void> {
+  if (opts.dryRun) return;
+
+  const patterns = PROVIDER_GENERATED_GITIGNORE_PATTERNS[provider];
+  if (!patterns || patterns.length === 0) return;
+
+  try {
+    const result = await appendGitignore(projectRoot, patterns);
+    if (opts.verbose && result.added.length > 0) {
+      ui.dim(`  Gitignore: added ${result.added.join(', ')}`);
+    }
+  } catch (error) {
+    ui.warn(`Failed to update .gitignore for generated ${provider} artifacts: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 const MIRRORED_STANDARD_COMMAND_SKILLS = new Set([
@@ -536,7 +667,7 @@ function agenticNextSteps(openStep: string): string[] {
   return [
     openStep,
     'Ask the steward:  "Check that AIWG is installed correctly and tell me what I can do here."',
-    'Regenerate:       Use aiwg-regenerate in-session when context files need rebuilding.',
+    'Regenerate:       Invoke {{aiwg-regenerate}} in-session when context files need rebuilding.',
     'Install runbook:  docs/agentic-install-runbook.md',
     'Diagnostics:      aiwg doctor',
   ];
@@ -579,7 +710,11 @@ const NEXT_STEPS: Record<string, string[]> = {
 
 export function nextStepsFor(framework: Framework, provider: string = 'claude'): string[] {
   const providerKey = `${provider}/${framework}`;
-  return NEXT_STEPS[providerKey] ?? NEXT_STEPS[framework] ?? NEXT_STEPS.sdlc;
+  const regenerateInvocation = provider === 'codex' || provider === 'openai'
+    ? '$aiwg-regenerate'
+    : '/aiwg-regenerate';
+  const steps = NEXT_STEPS[providerKey] ?? NEXT_STEPS[framework] ?? NEXT_STEPS.sdlc;
+  return steps.map((step) => step.replace('{{aiwg-regenerate}}', regenerateInvocation));
 }
 
 function printNextSteps(framework: Framework, provider: string = 'claude'): void {
@@ -605,8 +740,8 @@ const SESSION_RELOAD_NOTICE: Record<string, { action: string; rationale: string;
     rationale: 'Claude Code reads .claude/agents/ at session start. A running session retains its old registry until reloaded.',
   },
   codex: {
-    action: 'Restart your Codex session to pick up newly deployed agents and home-dir skills.',
-    rationale: 'Codex caches its agent and skill registry per session. ~/.codex/skills/ and .codex/agents/ are scanned on startup.',
+    action: 'Restart/open Codex in this target workspace so it picks up newly deployed agents and .agents/skills entries.',
+    rationale: 'Codex caches its agent and skill registry per session. Project .agents/skills/ and .codex/agents/ are scanned from the Codex working directory up to the repo root on startup.',
   },
   copilot: {
     action: 'Reload the VS Code window (`Developer: Reload Window`) so Copilot picks up the new .github/agents/ entries.',
@@ -662,7 +797,8 @@ function printSessionReloadNotice(provider: string): void {
  */
 async function countDeployedArtifacts(
   target: string,
-  paths: { agents: string; skills: string; commands: string; rules: string; behaviors: string }
+  paths: { agents: string; skills: string; commands: string; rules: string; behaviors: string },
+  provider?: string
 ): Promise<{ agents: number; commands: number; skills: number; rules: number; behaviors: number }> {
   const countMd = async (dir: string): Promise<number> => {
     if (!dir) return 0;
@@ -714,13 +850,11 @@ async function countDeployedArtifacts(
     }
   };
   // Kernel skills deploy to the platform-native skills dir (always-loaded
-  // set) while standard skills sequester under <provider>/.aiwg/skills (the
-  // index-driven discovery tier). Both contribute to the deployed surface,
-  // so both must be counted (#1228). Derive the kernel path by stripping
-  // the `.aiwg/` segment from the standard path.
-  const kernelSkillsPath = paths.skills
-    ? paths.skills.replace(/(^|\/)\.aiwg\/skills?$/, '$1skills')
-    : '';
+  // set) while standard skills may sequester under <provider>/.aiwg/skills.
+  // Count the provider-declared kernel path directly; deriving it by stripping
+  // `.aiwg/` from the standard path produced `.codex/skills` instead of
+  // Codex's native `.agents/skills` path (#766).
+  const kernelSkillsPath = provider ? getProviderKernelSkillsPath(provider) : '';
   return {
     agents: await countMd(paths.agents),
     commands: await countMd(paths.commands),
@@ -884,6 +1018,130 @@ async function countBundleSourceArtifacts(
   };
 }
 
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveDeployPath(target: string, deployPath: string): string {
+  return path.isAbsolute(deployPath) ? deployPath : path.join(target, deployPath);
+}
+
+async function listBundleMdStems(bundlePath: string, subdir: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(path.join(bundlePath, subdir));
+    return entries
+      .filter(entry => entry.endsWith('.md'))
+      .map(entry => path.basename(entry, '.md'));
+  } catch {
+    return [];
+  }
+}
+
+async function countDeployedBundleFiles(
+  bundlePath: string,
+  subdir: string,
+  target: string,
+  deployPath: string,
+  extensions: string[],
+): Promise<number> {
+  if (!deployPath) return 0;
+  const stems = await listBundleMdStems(bundlePath, subdir);
+  if (stems.length === 0) return 0;
+  const destDir = resolveDeployPath(target, deployPath);
+  let count = 0;
+  for (const stem of stems) {
+    for (const ext of extensions) {
+      if (await fileExists(path.join(destDir, `${stem}${ext}`))) {
+        count++;
+        break;
+      }
+    }
+  }
+  return count;
+}
+
+async function listBundleSkillNameCandidates(bundlePath: string): Promise<string[][]> {
+  const skillsRoot = path.join(bundlePath, 'skills');
+  try {
+    const entries = await fs.readdir(skillsRoot, { withFileTypes: true });
+    const candidates: string[][] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const sourceName = entry.name;
+      const skillMd = path.join(skillsRoot, sourceName, 'SKILL.md');
+      let deployedName = sourceName;
+      try {
+        const content = await fs.readFile(skillMd, 'utf-8');
+        const match = content.match(/^---\s*\n([\s\S]*?)\n---/);
+        if (match) {
+          const parsed = YAML.parse(match[1]);
+          if (typeof parsed?.name === 'string' && parsed.name.trim()) {
+            deployedName = parsed.name.trim();
+          }
+        }
+      } catch {
+        // Missing or invalid frontmatter still leaves the source dir name as
+        // the best deployed-name approximation for providers that copy dirs.
+      }
+      candidates.push([...new Set([deployedName, sourceName])]);
+    }
+    return candidates;
+  } catch {
+    return [];
+  }
+}
+
+async function countDeployedBundleSkills(
+  bundlePath: string,
+  target: string,
+  provider: string,
+  paths: ProviderArtifactPathStrings,
+): Promise<number> {
+  const skillCandidates = await listBundleSkillNameCandidates(bundlePath);
+  if (skillCandidates.length === 0) return 0;
+  const candidateDirs = [
+    paths.skills,
+    getProviderKernelSkillsPath(provider),
+  ]
+    .filter(Boolean)
+    .map(dir => resolveDeployPath(target, dir));
+  const uniqueCandidateDirs = [...new Set(candidateDirs)];
+
+  let count = 0;
+  for (const names of skillCandidates) {
+    let found = false;
+    for (const dir of uniqueCandidateDirs) {
+      for (const name of names) {
+        if (!(await fileExists(path.join(dir, name, 'SKILL.md')))) continue;
+        count++;
+        found = true;
+        break;
+      }
+      if (found) break;
+    }
+  }
+  return count;
+}
+
+async function countBundleDeployedArtifacts(
+  bundlePath: string,
+  target: string,
+  provider: string,
+): Promise<{ agents: number; commands: number; skills: number; rules: number }> {
+  const paths = getProviderPaths(provider);
+  return {
+    agents: await countDeployedBundleFiles(bundlePath, 'agents', target, paths.agents, ['.md', '.toml']),
+    commands: await countDeployedBundleFiles(bundlePath, 'commands', target, paths.commands, ['.md']),
+    skills: await countDeployedBundleSkills(bundlePath, target, provider, paths),
+    rules: await countDeployedBundleFiles(bundlePath, 'rules', target, paths.rules, ['.md', '.mdc']),
+  };
+}
+
 /**
  * Deploy a single project-local bundle to one provider via deploy-agents.mjs.
  * Runs the same script and flags used for upstream addons, with the bundle
@@ -904,49 +1162,89 @@ async function deployOneProjectLocalBundle(opts: {
   modelArgs: string[];
 }): Promise<{ exitCode: number; counts: { agents: number; commands: number; skills: number; rules: number } }> {
   const { bundle, ctx, frameworkRoot, provider, target, dryRun, verbose, quiet, force, modelArgs } = opts;
+  const sourceCounts = await countBundleSourceArtifacts(bundle.artifactPath);
+  const artifactTotal = sourceCounts.agents + sourceCounts.commands + sourceCounts.skills + sourceCounts.rules;
+  let cliCommandCount = 0;
+  try {
+    const contribution = await loadCliCommandsContribution(bundle.artifactPath);
+    cliCommandCount = contribution ? Object.keys(contribution.manifest.subcommands).length : 0;
+  } catch (error) {
+    ui.warn(`Invalid CLI contribution for project-local '${bundle.id}': ${(error as Error).message}`);
+    return { exitCode: 1, counts: sourceCounts };
+  }
+  if (verbose || dryRun) {
+    ui.dim(
+      `  Artifacts: agents=${sourceCounts.agents} commands=${sourceCounts.commands} skills=${sourceCounts.skills} rules=${sourceCounts.rules} cli=${cliCommandCount}`,
+    );
+  }
+  if (artifactTotal === 0 && cliCommandCount === 0) {
+    ui.warn(
+      `Project-local ${bundle.type} '${bundle.id}' has no deployable agents, commands, skills, rules, or CLI commands at ${bundle.artifactPath}`,
+    );
+    return { exitCode: 1, counts: sourceCounts };
+  }
 
-  const runner = createScriptRunner(frameworkRoot);
-  const args: string[] = [
-    '--source', bundle.bundlePath,
-    '--deploy-commands', '--deploy-skills', '--deploy-rules',
-    '--provider', provider,
-    '--target', target,
-    // Project-local skills MUST land in the per-project skills tier
-    // (#1228 follow-up). Default deploy mode after #1217 is no-copy +
-    // index-driven discovery, but that model assumes upstream skills at
-    // $AIWG_ROOT — project-local bundles live under the project's .aiwg/
-    // tree and aren't reachable via `aiwg discover` of the framework
-    // graph. Without --copy-all, the bundle's rules deploy but its skills
-    // never reach <provider>/.aiwg/skills/, leaving them invisible to
-    // both the platform and the index.
-    '--copy-all',
-    ...modelArgs,
-  ];
-  if (dryRun) args.push('--dry-run');
-  if (verbose) args.push('--verbose');
-  if (force) args.push('--force');
-  if (quiet && !verbose) args.push('--quiet');
-  // Project-local bundles are addon-shaped — never trigger the legacy commands
-  // migration prompt (which is only relevant for full-framework deploys).
-  args.push('--skip-commands-migration');
+  let exitCode = 0;
+  if (artifactTotal > 0) {
+    const runner = createScriptRunner(frameworkRoot);
+    const args: string[] = [
+      '--source', bundle.artifactPath,
+      '--deploy-commands', '--deploy-skills', '--deploy-rules',
+      '--provider', provider,
+      '--target', target,
+      // Project-local skills MUST land in the per-project skills tier
+      // (#1228 follow-up). Default deploy mode after #1217 is no-copy +
+      // index-driven discovery, but that model assumes upstream skills at
+      // $AIWG_ROOT — project-local bundles live under the project's .aiwg/
+      // tree and aren't reachable via `aiwg discover` of the framework
+      // graph. Without --copy-all, the bundle's rules deploy but its skills
+      // never reach <provider>/.aiwg/skills/, leaving them invisible to
+      // both the platform and the index.
+      '--copy-all',
+      ...modelArgs,
+    ];
+    if (dryRun) args.push('--dry-run');
+    if (verbose) args.push('--verbose');
+    if (force) args.push('--force');
+    if (quiet && !verbose) args.push('--quiet');
+    // Project-local bundles are addon-shaped — never trigger the legacy commands
+    // migration prompt (which is only relevant for full-framework deploys).
+    args.push('--skip-commands-migration');
 
-  const captureOpts = quiet && !verbose ? { capture: true } : {};
-  // Inject AIWG_ROOT so the deploy subprocess can resolve the upstream AIWG
-  // install root. The bundle's `--source` is its project-local path, so
-  // `computeAllKernelNames`/`computeAllArtifactBasenames` (which walk up from
-  // srcRoot looking for agentic/code/{frameworks,addons}) would otherwise fail
-  // and prune the provider's kernel skill directory with an empty desired set
-  // (#123). `frameworkRoot` is the AIWG install root that owns these trees.
-  const result = await runner.run('tools/agents/deploy-agents.mjs', args, {
-    ...captureOpts,
-    env: { AIWG_ROOT: frameworkRoot },
-  });
+    const captureOpts = quiet && !verbose ? { capture: true } : {};
+    // Inject AIWG_ROOT so the deploy subprocess can resolve the upstream AIWG
+    // install root. The bundle's `--source` is its project-local path, so
+    // `computeAllKernelNames`/`computeAllArtifactBasenames` (which walk up from
+    // srcRoot looking for agentic/code/{frameworks,addons}) would otherwise fail
+    // and prune the provider's kernel skill directory with an empty desired set
+    // (#123). `frameworkRoot` is the AIWG install root that owns these trees.
+    const result = await runner.run('tools/agents/deploy-agents.mjs', args, {
+      ...captureOpts,
+      env: { AIWG_ROOT: frameworkRoot },
+    });
+    exitCode = result.exitCode;
+  }
 
-  // Approximate counts from the bundle's source dirs (deploy-agents.mjs is
-  // idempotent and copies file-for-file from these dirs)
-  const counts = await countBundleSourceArtifacts(bundle.bundlePath);
+  if (exitCode === 0 && cliCommandCount > 0) {
+    try {
+      await registerSourceCliCommands({
+        source: bundle.artifactPath,
+        target,
+        provider,
+        dryRun,
+        fallbackDescription: `${bundle.id} project-local commands`,
+      });
+    } catch (error) {
+      ui.warn(`Failed to register CLI commands for project-local '${bundle.id}': ${(error as Error).message}`);
+      exitCode = 1;
+    }
+  }
+
+  const counts = exitCode === 0 && !dryRun
+    ? await countBundleDeployedArtifacts(bundle.artifactPath, target, provider)
+    : sourceCounts;
   void ctx;
-  return { exitCode: result.exitCode, counts };
+  return { exitCode, counts };
 }
 
 /**
@@ -1057,6 +1355,10 @@ async function deployProjectLocalBundles(opts: {
     if (verbose || dryRun) {
       const action = dryRun ? '[dry-run] Would deploy' : 'Deploying';
       console.log(`${action} project-local ${bundle.type} '${bundle.id}' from ${bundle.localPath} → ${provider}`);
+      if (bundle.artifactPath !== bundle.bundlePath) {
+        const payloadDisplay = path.relative(projectDir, bundle.artifactPath) || '.';
+        ui.dim(`  Resolved plugin payload: ${payloadDisplay}`);
+      }
     }
 
     const result = await deployOneProjectLocalBundle({
@@ -1097,15 +1399,14 @@ async function deployProjectLocalBundles(opts: {
         // Hash the bundle's manifest.json for stale detection
         const manifestAbsPath = path.join(bundle.bundlePath, 'manifest.json');
         const mHash = await hashManifest(manifestAbsPath);
-        // #1037 — record per-provider deployed artifact hashes so
-        // `aiwg remove` and `aiwg doctor --project-local` can compare
-        // against the post-transform file that actually exists on disk.
-        const perProviderHashes = await hashDeployedArtifactsForProvider(
-          bundle.bundlePath,
-          provider,
+        // #1037 — record per-artifact source hashes so `aiwg remove` can
+        // detect pristine vs mutated vs replaced deployed files.
+        const artifactHashes = await hashBundleArtifacts(bundle.artifactPath);
+        const deployedArtifactHashes = await hashDeployedBundleArtifacts(
           projectDir,
+          provider,
+          artifactHashes,
         );
-        const artifactHashes = { [provider]: perProviderHashes };
         const updated = updateInstalled(config, bundle.id, provider, result.counts, {
           version: bundle.manifest.version,
           source: 'project-local',
@@ -1114,6 +1415,7 @@ async function deployProjectLocalBundles(opts: {
           localType: bundle.type,
           manifestVersion: bundle.manifest.manifestVersion,
           artifactHashes,
+          deployedArtifactHashes,
         });
         await writeAiwgConfig(projectDir, updated);
       } catch (err) {
@@ -1596,6 +1898,69 @@ function removeFirstPositional(args: string[]): string[] {
   return result;
 }
 
+function removeGlobalBootstrapFlags(args: string[]): string[] {
+  const result: string[] = [];
+  const valueFlags = new Set(['--provider', '--platform', '--providers', '--scope', '--target', '--prefix']);
+  const booleanFlags = new Set([
+    '--global', '--user', '--ci-hooks-enabled', '--no-project-local',
+    '--no-context-files', '--no-hooks', '--no-workspace-signals',
+  ]);
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (valueFlags.has(arg)) {
+      i += 1;
+      continue;
+    }
+    if (booleanFlags.has(arg)) continue;
+    result.push(arg);
+  }
+  return result;
+}
+
+function configuredGlobalProviders(
+  args: string[],
+  config: Awaited<ReturnType<typeof readAiwgConfig>>,
+): string[] {
+  const providerIdx = args.findIndex((arg) => arg === '--provider' || arg === '--platform');
+  if (providerIdx >= 0 && args[providerIdx + 1]) return [args[providerIdx + 1]];
+  const providersIdx = args.indexOf('--providers');
+  if (providersIdx >= 0 && args[providersIdx + 1]) {
+    const value = args[providersIdx + 1];
+    return value === 'default'
+      ? ['claude']
+      : [...new Set(value.split(',').map((provider) => provider.trim()).filter(Boolean))];
+  }
+  return config?.providers?.length ? [...new Set(config.providers)] : ['claude'];
+}
+
+async function generateGlobalProjectContext(opts: {
+  provider: string;
+  projectPath: string;
+  args: string[];
+}): Promise<void> {
+  const userPaths = USER_SCOPE_PATHS[opts.provider];
+  if (!userPaths) return;
+  const skipContext = opts.args.includes('--no-context-files');
+  const sections = await discoverDeployedArtifacts(opts.projectPath, {
+    agents: userPaths.agents,
+    rules: userPaths.rules,
+    skills: userPaths.skills,
+    behaviors: userPaths.behaviors,
+  });
+  await generateContextFiles({
+    provider: opts.provider as Platform,
+    projectPath: opts.projectPath,
+    sections,
+    detectExistingFiles: true,
+    force: opts.args.includes('--force-context-files'),
+    skip: {
+      workspaceMd: skipContext || opts.args.includes('--no-workspace-md'),
+      aiwgMd: skipContext || opts.args.includes('--no-aiwg-md'),
+      agentsMd: skipContext || opts.args.includes('--no-agents-md'),
+    },
+  });
+}
+
 async function deploySourceDirectory(opts: {
   ctx: HandlerContext;
   frameworkRoot: string;
@@ -1625,7 +1990,131 @@ async function deploySourceDirectory(opts: {
   if (opts.quiet) args.unshift('--quiet');
 
   const runner = createScriptRunner(opts.frameworkRoot);
-  return runner.run('tools/agents/deploy-agents.mjs', args, opts.quiet ? { capture: true } : {});
+  const result = await runner.run(
+    'tools/agents/deploy-agents.mjs',
+    args,
+    opts.quiet ? { capture: true } : {},
+  );
+  if (result.exitCode === 0) {
+    try {
+      await registerSourceCliCommands({
+        source: opts.source,
+        target: opts.target,
+        provider: opts.provider,
+        dryRun: opts.dryRun,
+        fallbackDescription: `${path.basename(opts.source)} addon commands`,
+      });
+    } catch (error) {
+      return {
+        exitCode: 1,
+        message: `Failed to register addon CLI commands: ${(error as Error).message}`,
+      };
+    }
+  }
+  return result;
+}
+
+async function assertNoSymlinks(root: string): Promise<void> {
+  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+    const candidate = path.join(root, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Refusing symbolic link in external bundle source: ${candidate}`);
+    }
+    if (entry.isDirectory()) await assertNoSymlinks(candidate);
+  }
+}
+
+async function installProjectLocalBundleInUserCatalog(bundle: ProjectLocalBundle): Promise<string> {
+  await assertNoSymlinks(bundle.bundlePath);
+  const catalogRoot = path.join(os.homedir(), '.aiwg', PROJECT_LOCAL_TYPE_TO_DIR[bundle.type]);
+  await fs.mkdir(catalogRoot, { recursive: true });
+  const destination = path.join(catalogRoot, bundle.id);
+  const stage = await fs.mkdtemp(path.join(catalogRoot, `.${bundle.id}-stage-`));
+  const backup = path.join(catalogRoot, `.${bundle.id}-backup-${process.pid}`);
+  let movedExisting = false;
+  try {
+    await fs.cp(bundle.bundlePath, stage, { recursive: true, force: true });
+    try {
+      await fs.rename(destination, backup);
+      movedExisting = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    await fs.rename(stage, destination);
+    if (movedExisting) await fs.rm(backup, { recursive: true, force: true });
+    return destination;
+  } catch (error) {
+    await fs.rm(stage, { recursive: true, force: true });
+    if (movedExisting) {
+      await fs.rm(destination, { recursive: true, force: true });
+      await fs.rename(backup, destination).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+async function rebuildExternalBundleIndex(
+  projectDir: string,
+  graph: 'project' | 'user',
+  verbose: boolean,
+): Promise<void> {
+  const originalLog = console.log;
+  if (!verbose) console.log = () => {};
+  try {
+    const [{ buildIndex }, { syncFortemiCoreIndex }] = await Promise.all([
+      import('../../artifacts/index-builder.js'),
+      import('../../artifacts/fortemi-core-sync.js'),
+    ]);
+    await buildIndex(projectDir, { graph, force: true, explicit: false });
+    syncFortemiCoreIndex(projectDir, { graph });
+  } finally {
+    console.log = originalLog;
+  }
+  ui.dim(`  Refreshed ${graph}-scope capability index`);
+}
+
+async function mirrorProjectLocalBundleToUserScope(opts: {
+  bundle: ProjectLocalBundle;
+  provider: string;
+  target: string;
+}): Promise<void> {
+  const paths = getProviderPaths(opts.provider);
+  const resolveProjectPath = (value: string): string =>
+    !value ? '' : path.isAbsolute(value) ? value : path.join(opts.target, value);
+  const mirrored = await mirrorToUserScope(opts.provider, {
+    agents: resolveProjectPath(paths.agents),
+    skills: resolveProjectPath(paths.skills),
+    kernelSkills: resolveProjectPath(getProviderKernelSkillsPath(opts.provider)),
+    commands: resolveProjectPath(paths.commands),
+    rules: resolveProjectPath(paths.rules),
+    behaviors: resolveProjectPath(paths.behaviors),
+  });
+  const counts = {
+    agents: mirrored.agents.count,
+    commands: mirrored.commands.count,
+    skills: mirrored.skills.count,
+    rules: mirrored.rules.count,
+  };
+  const total = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  if (total === 0) {
+    throw new Error(`External bundle '${opts.bundle.id}' produced no user-scope artifacts for ${opts.provider}`);
+  }
+  const { recordUserDeploy } = await import('../../config/user-registry.js');
+  await recordUserDeploy({
+    framework: opts.bundle.id,
+    provider: opts.provider,
+    version: opts.bundle.manifest.version,
+    source: 'project-local',
+    counts,
+    entries: {
+      agents: mirrored.agents.entries,
+      commands: mirrored.commands.entries,
+      skills: mirrored.skills.entries,
+      rules: mirrored.rules.entries,
+      behaviors: mirrored.behaviors.entries,
+    },
+    manifestHash: await hashManifest(path.join(opts.bundle.bundlePath, 'manifest.json')),
+  });
 }
 
 /**
@@ -1637,7 +2126,7 @@ async function deploySourceDirectory(opts: {
 export class UseHandler implements CommandHandler {
   id = 'use';
   name = 'Use Framework';
-  description = 'Deploy AIWG framework to current project';
+  description = 'Deploy AIWG framework to project or user scope';
   category = 'framework' as const;
   aliases: string[] = [];
 
@@ -1685,6 +2174,85 @@ export class UseHandler implements CommandHandler {
     if (prefixIdx >= 0 && remainingArgs[prefixIdx + 1]) {
       // Rewrite --prefix to --target for downstream compatibility
       remainingArgs[prefixIdx] = '--target';
+    }
+
+    // Global bootstrap deliberately avoids a persistent project artifact
+    // deployment. Build the normal provider output in an isolated staging
+    // directory, let the established user-scope mirror/registry path consume
+    // it, then discard the stage and emit only lightweight project context.
+    // `--scope user` remains additive for compatibility; `--global` is the
+    // explicit no-project-deploy contract.
+    if (remainingArgs.includes('--global')) {
+      const scopeIdx = remainingArgs.indexOf('--scope');
+      if (scopeIdx >= 0 && remainingArgs[scopeIdx + 1] === 'project') {
+        return { exitCode: 1, message: 'Error: --global conflicts with --scope project' };
+      }
+      const contextTargetIdx = remainingArgs.indexOf('--target');
+      const contextTarget = path.resolve(
+        contextTargetIdx >= 0 && remainingArgs[contextTargetIdx + 1]
+          ? remainingArgs[contextTargetIdx + 1]
+          : (ctx.cwd || process.cwd()),
+      );
+      const externalDiscovery = await discoverProjectLocalBundles(contextTarget);
+      const externalBundle = framework
+        ? externalDiscovery.bundles.find(bundle => bundle.id === framework)
+        : undefined;
+      const isFrameworkTarget = Boolean(framework && VALID_FRAMEWORKS.includes(framework as Framework));
+      if (!framework || (!isFrameworkTarget && !externalBundle)) {
+        return {
+          exitCode: 1,
+          message: 'Error: --global target must be a bundled framework or a valid external project-local bundle',
+        };
+      }
+      const originalConfig = await readAiwgConfig(contextTarget);
+      const providers = configuredGlobalProviders(remainingArgs, originalConfig);
+      const dryRun = remainingArgs.includes('--dry-run');
+      const stageRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'aiwg-global-bootstrap-'));
+
+      try {
+        if (externalBundle) {
+          const stagedBundle = path.join(
+            stageRoot,
+            '.aiwg',
+            PROJECT_LOCAL_TYPE_TO_DIR[externalBundle.type],
+            externalBundle.id,
+          );
+          await fs.mkdir(path.dirname(stagedBundle), { recursive: true });
+          await fs.cp(externalBundle.bundlePath, stagedBundle, { recursive: true, force: true });
+        }
+        for (const provider of providers) {
+          const innerArgs = [
+            framework,
+            ...removeGlobalBootstrapFlags(remainingArgs),
+            '--provider', provider,
+            '--scope', 'user',
+            '--target', stageRoot,
+            ...(externalBundle ? [] : ['--no-project-local']),
+            '--no-context-files',
+            '--no-hooks',
+            '--no-workspace-signals',
+          ];
+          const result = await this.execute({ ...ctx, cwd: stageRoot, args: innerArgs });
+          if (result.exitCode !== 0) return result;
+          if (!dryRun) {
+            await fs.mkdir(contextTarget, { recursive: true });
+            await generateGlobalProjectContext({
+              provider: normalizeProviderDefinitionId(provider) ?? provider,
+              projectPath: contextTarget,
+              args: remainingArgs,
+            });
+          }
+        }
+      } finally {
+        await fs.rm(stageRoot, { recursive: true, force: true });
+      }
+
+      return {
+        exitCode: 0,
+        message: dryRun
+          ? `Global ${externalBundle ? 'external bundle' : 'bootstrap'} preview complete; project context target: ${contextTarget}`
+          : `Global ${externalBundle ? 'external bundle' : 'bootstrap'} complete; user assets installed and capability index refreshed`,
+      };
     }
 
     // Project-isolation warning (UC-NUA-002 / SAD §5.1). Fires once per CLI
@@ -1781,7 +2349,10 @@ export class UseHandler implements CommandHandler {
       return { exitCode: 0 };
     }
 
-    const frameworkRoot = await getFrameworkRoot();
+    // Handler contexts already carry the active installation root. Respect it
+    // so linked worktrees, embedded callers, and tests do not silently deploy
+    // artifacts from a different channel checkout.
+    const frameworkRoot = ctx.frameworkRoot || await getFrameworkRoot();
 
     if (framework === 'all' && explicitTarget !== 'all' && !remainingArgs.includes('--no-workspace-signals')) {
       const profileIdx = remainingArgs.findIndex((a) => a === '--profile');
@@ -1897,6 +2468,8 @@ export class UseHandler implements CommandHandler {
           }
         }
 
+        await ensureProviderGeneratedDirsIgnored(target, providerName, { dryRun, verbose });
+
         if (!dryRun) {
           try {
             const registry = getRegistry();
@@ -1911,7 +2484,7 @@ export class UseHandler implements CommandHandler {
               cwd: target,
             });
 
-            const counts = await countDeployedArtifacts(target, paths);
+            const counts = await countDeployedArtifacts(target, paths, providerName);
             if (quiet) {
               ui.blank();
               if (counts.agents > 0) ui.deployCount('Agents', counts.agents);
@@ -1964,7 +2537,19 @@ export class UseHandler implements CommandHandler {
         const verboseSingle = remainingArgs.includes('--verbose') || remainingArgs.includes('-v');
         const forceSingle = remainingArgs.includes('--force');
         const targetIdxSingle = remainingArgs.findIndex(a => a === '--target');
-        const targetSingle = targetIdxSingle >= 0 && remainingArgs[targetIdxSingle + 1] ? remainingArgs[targetIdxSingle + 1] : process.cwd();
+        const targetSingle = targetIdxSingle >= 0 && remainingArgs[targetIdxSingle + 1] ? remainingArgs[targetIdxSingle + 1] : projectDir;
+        let scopeSingle: 'project' | 'user';
+        try {
+          scopeSingle = detectScope(remainingArgs);
+          if (scopeSingle === 'project' && remainingArgs.includes('--user')) {
+            scopeSingle = 'user';
+          }
+        } catch (error) {
+          return {
+            exitCode: 1,
+            message: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
 
         // Multi-provider expansion mirrors the framework path
         let providersForSingle: string[];
@@ -1972,9 +2557,39 @@ export class UseHandler implements CommandHandler {
         else if (config && config.providers.length > 0) providersForSingle = config.providers;
         else providersForSingle = ['claude'];
 
+        const resolvedProviders: string[] = [];
+        for (const requestedProvider of providersForSingle) {
+          const provider = normalizeProviderDefinitionId(requestedProvider);
+          if (!provider) {
+            return {
+              exitCode: 1,
+              message: `External bundle '${match.id}' cannot deploy to unsupported provider '${requestedProvider}'. Choose a provider declared in its manifest.`,
+            };
+          }
+          const support = match.manifest.platforms[provider as keyof typeof match.manifest.platforms]
+            ?? match.manifest.platforms.generic;
+          if (!support || support === 'none') {
+            const declared = Object.entries(match.manifest.platforms)
+              .filter(([, level]) => level && level !== 'none')
+              .map(([name]) => name)
+              .join(', ');
+            return {
+              exitCode: 1,
+              message: `External bundle '${match.id}' does not declare support for provider '${provider}'. Declared providers: ${declared || 'none'}.`,
+            };
+          }
+          if (scopeSingle === 'user' && !USER_SCOPE_PATHS[provider]) {
+            return {
+              exitCode: 1,
+              message: `External bundle '${match.id}' cannot install at user scope for provider '${provider}' because AIWG has no user-scope path contract for it.`,
+            };
+          }
+          resolvedProviders.push(provider);
+        }
+
         let totalDeployed = 0;
         let totalFailed = 0;
-        for (const p of providersForSingle) {
+        for (const p of resolvedProviders) {
           const r = await deployProjectLocalBundles({
             ctx, frameworkRoot, projectDir, provider: p, target: targetSingle,
             dryRun: dryRunSingle, verbose: verboseSingle, quiet: !verboseSingle && !dryRunSingle,
@@ -1984,11 +2599,39 @@ export class UseHandler implements CommandHandler {
           });
           totalDeployed += r.deployed;
           totalFailed += r.failed;
+          if (r.deployed > 0 && scopeSingle === 'user' && !dryRunSingle) {
+            try {
+              await mirrorProjectLocalBundleToUserScope({
+                bundle: match,
+                provider: p,
+                target: targetSingle,
+              });
+            } catch (error) {
+              totalFailed += 1;
+              ui.warn(`Failed to install external bundle '${match.id}' for user-scope provider '${p}': ${error instanceof Error ? error.message : String(error)}`);
+            }
+          }
+        }
+
+        if (totalDeployed > 0 && totalFailed === 0 && !dryRunSingle) {
+          try {
+            await rebuildExternalBundleIndex(projectDir, 'project', verboseSingle);
+            if (scopeSingle === 'user') {
+              await installProjectLocalBundleInUserCatalog(match);
+              await rebuildExternalBundleIndex(projectDir, 'user', verboseSingle);
+            }
+          } catch (error) {
+            totalFailed += 1;
+            ui.warn(`External bundle '${match.id}' index refresh failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
 
         if (!verboseSingle && !dryRunSingle) {
           ui.blank();
-          ui.success(`project-local ${match.type} '${match.id}' deployed (${totalDeployed} provider(s))`);
+          if (totalFailed === 0) {
+            const scopeLabel = scopeSingle === 'user' ? 'project + user' : 'project';
+            ui.success(`external ${match.type} '${match.id}' installed at ${scopeLabel} scope (${totalDeployed} provider(s)); capability index refreshed`);
+          }
         }
         return {
           exitCode: totalFailed > 0 ? 1 : 0,
@@ -2010,26 +2653,63 @@ export class UseHandler implements CommandHandler {
       const provider = explicitAddonProvider ?? (config?.providers?.[0] ?? 'claude');
       const targetIdx = remainingArgs.findIndex(a => a === '--target');
       const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
+      const dryRunAddon = remainingArgs.includes('--dry-run');
+      const verboseAddon = remainingArgs.includes('--verbose') || remainingArgs.includes('-v');
+      const forceAddon = remainingArgs.includes('--force');
+      const copyAllAddon = remainingArgs.includes('--copy-all')
+        || remainingArgs.includes('--copy-standard-skills');
 
       const kind = isExtension ? 'extension' : 'addon';
+      const activationOrder = isAddon
+        ? await resolveRequiredAddonActivationOrder(frameworkRoot, framework)
+        : [framework];
+      const requiredAddons = activationOrder.slice(0, -1);
+
+      for (const dependency of requiredAddons) {
+        ui.blank();
+        ui.header(`  Deploying required ${dependency} addon...`);
+        const dependencySource = addonPath(frameworkRoot, dependency);
+        const dependencyResult = await deploySourceDirectory({
+          ctx,
+          frameworkRoot: ctx.frameworkRoot,
+          source: dependencySource,
+          provider,
+          target,
+          dryRun: dryRunAddon,
+          verbose: verboseAddon,
+          force: forceAddon,
+          copyAll: copyAllAddon,
+          quiet: !verboseAddon && !dryRunAddon,
+          modelArgs: modelDeployArgs,
+        });
+        if (dependencyResult.exitCode !== 0) {
+          return {
+            ...dependencyResult,
+            message: dependencyResult.message
+              || `Failed to deploy required addon '${dependency}'`,
+          };
+        }
+        ui.success(dryRunAddon
+          ? `Required ${dependency} addon activation previewed`
+          : `Required ${dependency} addon deployed`);
+      }
+
       ui.blank();
       ui.header(`  Deploying ${framework} ${kind}...`);
       const addonSource = isExtension
         ? extensionPath(frameworkRoot, framework)
         : addonPath(frameworkRoot, framework);
-      const dryRun = remainingArgs.includes('--dry-run');
-      const verbose = remainingArgs.includes('--verbose') || remainingArgs.includes('-v');
       const addonResult = await deploySourceDirectory({
         ctx,
         frameworkRoot: ctx.frameworkRoot,
         source: addonSource,
         provider,
         target,
-        dryRun,
-        verbose,
-        force: remainingArgs.includes('--force'),
-        copyAll: remainingArgs.includes('--copy-all') || remainingArgs.includes('--copy-standard-skills'),
-        quiet: !verbose && !dryRun,
+        dryRun: dryRunAddon,
+        verbose: verboseAddon,
+        force: forceAddon,
+        copyAll: copyAllAddon,
+        quiet: !verboseAddon && !dryRunAddon,
         modelArgs: modelDeployArgs,
       });
 
@@ -2040,7 +2720,7 @@ export class UseHandler implements CommandHandler {
       // A direct addon/extension dry run ends with the provider preview. The
       // remaining steps mutate the in-process extension registry and may write
       // CLI command, hook, or topology-profile configuration into the target.
-      if (dryRun) {
+      if (dryRunAddon) {
         ui.blank();
         ui.success(`${framework} ${kind} dry run complete`);
         return { exitCode: 0 };
@@ -2062,36 +2742,6 @@ export class UseHandler implements CommandHandler {
         ui.success('Extension registration complete');
       } catch (error) {
         ui.warn(`Failed to register extensions: ${error instanceof Error ? error.message : String(error)}`);
-      }
-
-      // Register CLI commands if addon declares them
-      try {
-        const manifestPath = path.join(addonSource, 'manifest.json');
-        const manifestContent = await fs.readFile(manifestPath, 'utf-8');
-        const manifest = JSON.parse(manifestContent);
-
-        if (manifest.cli_commands?.namespace && manifest.cli_commands?.subcommands) {
-          const cmds = manifest.cli_commands;
-          const commandsSource = path.join(addonSource, cmds.entry || 'commands/');
-          await registerCliCommands(
-            target,
-            cmds.namespace,
-            cmds.description || `${framework} addon commands`,
-            commandsSource,
-            cmds.subcommands
-          );
-          ui.success(`CLI namespace '${cmds.namespace}' registered (${Object.keys(cmds.subcommands).length} subcommands)`);
-
-          // Register Claude Code hooks for subcommands with hook_event
-          if (provider === 'claude') {
-            const registeredHooks = await registerHooks(target, cmds.namespace, cmds.subcommands);
-            for (const hook of registeredHooks) {
-              ui.success(`Hook registered: ${hook}`);
-            }
-          }
-        }
-      } catch (error) {
-        ui.warn(`Failed to register CLI commands: ${error instanceof Error ? error.message : String(error)}`);
       }
 
       // Profile picker for addons with memory topology and multiple templates
@@ -2152,7 +2802,7 @@ export class UseHandler implements CommandHandler {
           }
 
           // Write profile config to project namespace
-          if (selectedProfile) {
+          if (selectedProfile && !dryRunAddon) {
             const namespace = topology.namespace || `.aiwg/${framework}`;
             const configDir = path.join(target, namespace);
             await fs.mkdir(configDir, { recursive: true });
@@ -2185,7 +2835,9 @@ export class UseHandler implements CommandHandler {
       }
 
       ui.blank();
-      ui.success(`${framework} addon deployed`);
+      ui.success(dryRunAddon
+        ? `${framework} addon activation preview complete`
+        : `${framework} addon deployed`);
       return {
         exitCode: 0,
       };
@@ -2404,6 +3056,17 @@ export class UseHandler implements CommandHandler {
         if (result.exitCode !== 0) {
           return result;
         }
+        try {
+          await registerSourceCliCommands({
+            source,
+            target,
+            provider,
+            dryRun,
+            fallbackDescription: `${addon} addon commands`,
+          });
+        } catch (error) {
+          ui.warn(`Failed to register CLI commands for '${addon}': ${(error as Error).message}`);
+        }
       }
 
       // Deploy all extensions from agentic/code/extensions/* (#1222).
@@ -2424,6 +3087,17 @@ export class UseHandler implements CommandHandler {
         const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
         if (result.exitCode !== 0) {
           return result;
+        }
+        try {
+          await registerSourceCliCommands({
+            source,
+            target,
+            provider,
+            dryRun,
+            fallbackDescription: `${ext} extension commands`,
+          });
+        } catch (error) {
+          ui.warn(`Failed to register CLI commands for '${ext}': ${(error as Error).message}`);
         }
       }
     }
@@ -2451,6 +3125,8 @@ export class UseHandler implements CommandHandler {
         ui.warn(`${plResult.failed} project-local bundle(s) failed to deploy`);
       }
     }
+
+    await ensureProviderGeneratedDirsIgnored(target, provider, { dryRun, verbose });
 
     const paths = getProviderPaths(provider);
     if (!dryRun && !skipUtils) {
@@ -2629,7 +3305,7 @@ export class UseHandler implements CommandHandler {
     if (quiet) {
       // Count deployed artifacts
       const paths = getProviderPaths(provider);
-      counts = await countDeployedArtifacts(target, paths);
+      counts = await countDeployedArtifacts(target, paths, provider);
       if (counts.agents > 0) ui.deployCount('Agents', counts.agents);
       if (counts.commands > 0) ui.deployCount('Commands', counts.commands);
       if (counts.skills > 0) ui.deployCount('Skills', counts.skills);
@@ -2678,6 +3354,7 @@ export class UseHandler implements CommandHandler {
         const projectPaths = {
           agents: resolveProjectPath(paths.agents),
           skills: resolveProjectPath(paths.skills),
+          kernelSkills: resolveProjectPath(getProviderKernelSkillsPath(provider)),
           commands: resolveProjectPath(paths.commands),
           rules: resolveProjectPath(paths.rules),
           behaviors: resolveProjectPath(paths.behaviors),

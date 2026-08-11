@@ -51,6 +51,10 @@ const { readAiwgConfig } = await importImpl(
   import.meta.url,
   'config/aiwg-config.js'
 );
+const { validateThreatAssessmentConfig } = await importImpl(
+  import.meta.url,
+  'security/threat-assessment-config.js'
+);
 const { collectPackagedAgentInventory, diagnoseOversizedAgent } = await importImpl(
   import.meta.url,
   'agents/packaged-agent-inventory.js'
@@ -295,7 +299,10 @@ function mergeSkillMeasurements(measurements) {
 async function checkTotalDeployedSkillBudgetForProvider(provName, label, provider) {
   const paths = new Set();
   if (provider?.kernelSkillsPath) paths.add(provider.kernelSkillsPath);
-  if (provider?.paths?.skills) paths.add(provider.paths.skills);
+  // Codex only scans the native kernel directory at startup. Standard-tier
+  // skills remain available through `aiwg discover`/`aiwg show`, but adding
+  // their hidden storage path here produces a false over-budget warning.
+  if (provName !== 'codex' && provider?.paths?.skills) paths.add(provider.paths.skills);
   if (paths.size === 0) return;
 
   const measurements = [];
@@ -341,7 +348,7 @@ async function checkTotalDeployedSkillBudgetForProvider(provName, label, provide
       check(
         `${label} Deployed Skill Count`,
         'warn',
-        `${stats.count} deployed skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's ${budgetLabel} (${budgetChars.toLocaleString()} chars). Run \`aiwg use all\` for workspace-aware filtering or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
+        `${stats.count} startup-visible skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's ${budgetLabel} (${budgetChars.toLocaleString()} chars). Run \`aiwg use all --provider codex --force\` to restore the kernel-only deployment, or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
       );
     }
   }
@@ -389,6 +396,7 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
     }
   } else if (provName === 'codex') {
     const { budgetChars, override } = await resolveCodexListingBudget();
+    usingOverride = Boolean(override);
     budget = budgetChars;
     budgetUnit = 'chars';
     usage = stats.totalChars;
@@ -397,6 +405,8 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
       ? `${budgetChars.toLocaleString()}-char project override in ${override.source.replace(os.homedir(), '~')}`
       : `${CODEX_DEFAULT_LISTING_CHAR_CAP.toLocaleString()}-char default cap`;
     if (usage > budget) {
+      recommendations.push('run `aiwg use all --provider codex --force` to restore the kernel-only deployment');
+      recommendations.push('use `aiwg list --deployed` to inspect include/exclude reasons');
       const verb = override ? 'raise' : 'set';
       recommendations.push(`${verb} codex.skillListingCharCap to ${Math.ceil((usage * 1.25) / 1000) * 1000} in .aiwg/aiwg.config`);
       recommendations.push('or trim skill descriptions / remove unused frameworks');
@@ -1255,6 +1265,41 @@ async function runDoctor() {
     }
   }
 
+  // 8d. Component-to-driver coverage (#1958).
+  //
+  // A healthy index is insufficient when a shipped component has no
+  // operational entry point. Join component manifests to source discovery
+  // metadata and surface the same invariant enforced by CI.
+  try {
+    const coverageModule = await import(pathToFileURL(
+      path.join(AIWG_ROOT, 'tools/manifest/check-discovery-coverage.mjs'),
+    ).href);
+    const coverage = coverageModule.buildCoverageReport(AIWG_ROOT);
+    if (coverage.ok) {
+      check(
+        'Discovery: component drivers',
+        'ok',
+        `${coverage.counts.covered} covered, ${coverage.counts.exempt} explicitly exempt`,
+      );
+    } else {
+      const missing = coverage.components
+        .filter(component => component.status === 'missing' || component.status === 'invalid')
+        .map(component => `${component.kind}:${component.component}`)
+        .slice(0, 8);
+      check(
+        'Discovery: component drivers',
+        'error',
+        `${coverage.counts.missing} missing, ${coverage.counts.invalid} invalid — ${missing.join(', ')}`,
+      );
+    }
+  } catch (error) {
+    check(
+      'Discovery: component drivers',
+      'warn',
+      `coverage report unavailable — ${error.message}`,
+    );
+  }
+
   // 9. Check installed addons
   const addonChecks = [
     { id: 'daemon', label: 'Daemon Addon', manifest: 'agentic/code/addons/daemon/manifest.json',
@@ -1589,6 +1634,26 @@ async function runDoctor() {
     }
   } catch {
     // Non-fatal — skip silently
+  }
+
+  // 11e. Validate configurable forge-content threat policy (#1938).
+  try {
+    const threatConfigPath = path.join(process.cwd(), '.aiwg', 'aiwg.config');
+    if (await fileExists(threatConfigPath)) {
+      const raw = JSON.parse(await fs.readFile(threatConfigPath, 'utf-8'));
+      const errors = validateThreatAssessmentConfig(raw.security?.threatAssessment);
+      if (errors.length) {
+        check('Threat Assessment Policy', 'error', errors.join('; '));
+      } else {
+        const policy = raw.security?.threatAssessment;
+        const profile = policy?.defaultProfile || 'balanced';
+        const mode = policy?.mode || 'enforce';
+        const source = policy ? '.aiwg/aiwg.config' : 'backward-compatible default';
+        check('Threat Assessment Policy', 'ok', `mode=${mode} profile=${profile} (${source})`);
+      }
+    }
+  } catch (error) {
+    check('Threat Assessment Policy', 'error', error.message);
   }
 
   // Permission normalization health (#1800). Errors fail closed in the

@@ -152,6 +152,12 @@ interface CommandMetadata {
 
 Natural language workflows triggered by phrases or conditions.
 
+For portable third-party `SKILL.md` bundles, see
+[Agent Skills import and deployment](../skills/agent-skills.md). That guide
+covers agentskills.io conformance, managed import, validation, strict provider
+projection, and the mapping between portable fields and AIWG extension
+metadata.
+
 **Metadata:**
 
 ```typescript
@@ -633,4 +639,4 @@ Existing formats automatically migrate to unified schema:
 - [Graph Backends](graph-backends.md) - Artifact index graph storage tiers and configuration
 - @src/extensions/types.ts - Source code
 - @.aiwg/architecture/unified-extension-schema.md - Full specification
-- @docs/cli-reference.md - CLI command reference
+- @docs/agents/cli-reference.md - CLI command reference

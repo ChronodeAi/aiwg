@@ -58,6 +58,7 @@
       "agent-examples/marketing-project-manager-examples.md",
       "agent-examples/reporting-specialist-examples.md",
       "agent-examples/workflow-coordinator-examples.md",
+      "design-operations-examples.md",
       "overview.md",
       "quickstart.md"
     ]
@@ -255,6 +256,16 @@
   },
   {
     "kind": "addons",
+    "name": "compound-memory",
+    "source": "agentic/code/addons/compound-memory/docs",
+    "dest": "docs/addons/compound-memory",
+    "files": [
+      "operator-guide.md",
+      "overview.md"
+    ]
+  },
+  {
+    "kind": "addons",
     "name": "daemon",
     "source": "agentic/code/addons/daemon/docs",
     "dest": "docs/addons/daemon",
@@ -269,6 +280,15 @@
     "name": "guided-implementation",
     "source": "agentic/code/addons/guided-implementation/docs",
     "dest": "docs/addons/guided-implementation",
+    "files": [
+      "overview.md"
+    ]
+  },
+  {
+    "kind": "addons",
+    "name": "line-memory",
+    "source": "agentic/code/addons/line-memory/docs",
+    "dest": "docs/addons/line-memory",
     "files": [
       "overview.md"
     ]

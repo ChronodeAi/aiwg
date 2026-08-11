@@ -8,8 +8,21 @@ Observe live agent work, attach to sessions, handle approvals, launch runtime
 targets, and coordinate AIWG actions from one local operator surface. Cockpit
 fronts the AIWG CLI and the agentic-sandbox executor; it does not replace either.
 
+If AIWG is not already connected to your project, paste this into your
+supported provider first:
+
+```text
+Install or repair AIWG for this project by following
+https://raw.githubusercontent.com/jmagly/aiwg/main/setup.aiwg.yaml
+Explain the plan before changing anything, preserve my existing work, and ask
+me only for choices you cannot safely determine.
+```
+
 ```bash
 npm i -g aiwg        # install the base AIWG CLI
+aiwg use all --provider <provider>
+aiwg index build --all
+aiwg regenerate --provider <provider>
 aiwg use cockpit     # install the opt-in Cockpit package, version-locked to AIWG
 aiwg cockpit         # launch the local Bridge + web UI
 ```
@@ -34,6 +47,9 @@ version to the installed AIWG version.
 
 ```bash
 npm i -g aiwg
+aiwg use all --provider <provider>
+aiwg index build --all
+aiwg regenerate --provider <provider>
 aiwg use cockpit
 aiwg cockpit --status
 aiwg cockpit
@@ -119,9 +135,9 @@ operator / CLI:  aiwg cockpit
 │    cost, sessions (create + attach_url), contributions       │
 │  · read-only catalog: aiwg discover / show (display only)    │
 │  · user asset library: clone/import/delete (never writes AIWG)│
-│  · serves the built React app (token-injected)               │
+│  · serves the React app (one-time nonce → HttpOnly session)  │
 └─────────────────────────────────────────────────────────────┘
-       │ proxies / sources              ▲ loads /?token=…
+       │ authenticated proxy            ▲ loads the token-gated shell
        ▼                                │
   agentic-sandbox executor       ┌──────┴──────┬───────────────┐
                                  browser     VS Code webview   Tauri window
@@ -129,8 +145,10 @@ operator / CLI:  aiwg cockpit
 ```
 
 - **Control plane** (lifecycle, approvals, actions) goes through the gated Bridge.
-- **Data plane** (the pty session stream) connects browser→executor directly via the
-  `attach_url` the Bridge issues (WS masking differs per direction).
+- **Data plane** (the PTY session stream) also goes through a Bridge-owned
+  `attach_url`. The browser presents only its HttpOnly Cockpit session; the
+  Bridge keeps the native-shell and executor credentials and authenticates the
+  upstream WebSocket upgrade.
 
 ## Surfaces (tabs)
 
@@ -183,6 +201,19 @@ under `~/.aiwg/cockpit/audit/events.jsonl` for lifecycle, session, and
 approval-response decisions (the web UI additionally records action injections
 as operator intents); bearer material and provider credentials are redacted
 before write.
+
+For an executor with operator bearer authentication enabled, store the selected
+least-privilege token in a mode-600 file and point the Bridge at the file:
+
+```bash
+AIWG_COCKPIT_EXECUTOR_TOKEN_FILE=/protected/path/cockpit-executor.token \
+AIWG_COCKPIT_EXECUTOR_URL=http://127.0.0.1:8122 \
+aiwg cockpit
+```
+
+The file contains one token. It is re-read for rotation, never copied into the
+browser, argv, URLs, reports, or audit records, and fails closed when its POSIX
+permissions allow group/other access.
 
 ## Run (dev/test, against a real agentic-sandbox executor)
 
@@ -244,6 +275,33 @@ QEMU/VM launches. Cockpit does not replace attached sessions when provisioning;
 it refreshes inventory and leaves concurrency and resource admission to
 agentic-sandbox.
 
+For VM rows, Inventory renders provider-aware fast-start actions only when the
+executor advertises the matching instance capability. Cloud Hypervisor rows can
+offer snapshot, restore, fork, and warm-pool handoff. Libvirt rows can offer
+checkpoint, restore, and warm-pool handoff when advertised. Cockpit sends
+restore, fork, and warm-pool requests through the unified sandbox
+`runtime_options` launch intent, polls the async operation resource to terminal
+state, and records request/terminal audit evidence through the Bridge. VFIO
+constraint exclusions keep unsafe fast-start actions disabled with the
+executor-provided reason.
+
+### VM provider and GPU/VFIO posture
+
+The Launch instance modal uses sandbox loadout compatibility metadata instead
+of assuming every VM provider supports every launch mode. Operators can select
+an advertised VM provider and GPU/VFIO posture. Required GPU passthrough sends
+`required_capabilities: ['device.vfio']`, excludes fast-start capabilities, and
+sets `fallback_mode: 'fail'` so Cockpit requests a cold VM launch rather than a
+snapshot/checkpoint path that would be unsafe for assigned devices. Inventory
+then displays assigned VFIO devices and executor-provided incompatibility
+reasons; it does not make VFIO generally available on hosts or loadouts that
+cannot provide it.
+
+The Apple Silicon validation path is preview-only. The sandbox `v2026.7.14`
+macOS artifact is an unsigned, unnotarized developer package, and native macOS
+is expected to lack Linux VM, Cloud Hypervisor, VFIO/GPU, vsock, and systemd
+capabilities unless the executor reports otherwise.
+
 ### Recover stale agents
 
 When a container, Docker, or VM runtime is still running but its agent
@@ -256,18 +314,25 @@ resolve an agent id.
 The Bridge handles recovery through:
 
 1. executor-owned reconnect endpoints when the sandbox exposes one, then
-2. local Docker fallback: `docker exec <container> agent-reconnect`, or
+2. local Docker fallback, only when
+   `AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK=1`: `docker exec <container> agent-reconnect`,
+   or
 3. VM fallback (#1778): the same reconnect SIGHUP delivered through the libvirt
    qemu-guest-agent channel (`virsh qemu-agent-command <domain> guest-exec
-   pkill -HUP -x agent-client`). Sessions survive reconnect on agentic-sandbox
+   pkill -HUP -x agent-client`). The libvirt fallback is automatic on Linux;
+   on non-Linux hosts set `AIWG_COCKPIT_LOCAL_LIBVIRT_FALLBACK=1` for explicit
+   local-development use. Sessions survive reconnect on agentic-sandbox
    2026.7.8+ agents; older agents preserve only detached tmux sessions
    (agentic-sandbox#634).
 
 The Docker fallback requires sandbox images that include the `agent-reconnect`
 helper (agentic-sandbox v2026.7.5+ images); the VM fallback requires virsh
-access to the domain from the Bridge host. If **Reconnect** reports that no
-reconnect path is available, rebuild or repull the sandbox image, then start the
-instance again. For host targets, prefer starting Cockpit with the host daemon:
+access to the domain from the Bridge host. If **Reconnect** reports
+`local_docker_fallback_disabled` or `local_libvirt_fallback_disabled`, either
+let the sandbox handle reconnect through its own endpoint or enable the matching
+local-development fallback intentionally. If no reconnect path is available,
+rebuild or repull the sandbox image, then start the instance again. For host
+targets, prefer starting Cockpit with the host daemon:
 
 ```bash
 AIWG_COCKPIT_START_HOST_DAEMON=1 npm run cockpit:up
@@ -278,7 +343,8 @@ Reconnect action never creates a replacement instance and never destroys the
 running container; it only attempts to restore the missing agent registration.
 
 `aiwg cockpit` (the operator command) will wrap this; the Bridge serves the built
-React app token-injected, falling back to a legacy page when no build is present.
+React app through the same one-time bootstrap/session contract, falling back to
+a legacy page when no build is present.
 
 ## Components
 
@@ -287,7 +353,7 @@ React app token-injected, falling back to a legacy page when no build is present
 | `web/` | React 19 + Vite + TS UI (the surfaces above) |
 | `mock-executor/` | **automated-test-only** wire-faithful agentic-sandbox A2A v2 stand-in (conformance 33/0/17). The Bridge refuses it for human launches (needs `AIWG_COCKPIT_ALLOW_MOCK_EXECUTOR=1`); a contract guard (#1636) pins its legacy `/admin/{running,approvals,cost}` divergence from real v2 so new drift fails CI. |
 | `bridge/` | the registry-bound control-plane server + static serving |
-| `shell-core/` | the cross-shell handshake (runtime token reference or fallback token → connect) |
+| `shell-core/` | the cross-shell handshake (native runtime credential → one-time browser bootstrap) |
 | `vscode/` · `desktop/` | VS Code extension + Tauri shells over the same Bridge |
 | `contrib/` | declarative UI contributions + schema (actions inject commands) |
 | `poc/` | Iteration-1 risk-gate PoCs (kill-bridge isolation, security) |
@@ -300,7 +366,9 @@ Tests run **at stages** — committed harnesses, never `/tmp` rigs (#1635):
 |---|---|---|---|
 | **Unit / integration** | `npm --prefix apps/cockpit run check` · `npx vitest run test/integration/cockpit-bridge.test.js` | **mock** (automated-test-only) | always |
 | **Dev e2e** (full control-plane chain: health→inventory→create session→attach) | `npm run e2e:cockpit-dev` | **real**, safe-skip when absent | non-blocking |
+| **Daily Linux operator gate** (protected auth + host/container + recovery + upgrade/rollback, #1842) | `npm run uat:cockpit-daily` | **real**, required/fail-closed | operator-scheduled |
 | **Release matrix** (host/docker/vm + provider workload, #1621) | `npm run uat:cockpit-live:matrix` | **real**, all three families | release gate |
+| **Provider-aware VM fast start** (#1843) | `npm --prefix apps/cockpit/web run test -- Inventory.test.tsx` · `node apps/cockpit/bridge/src/smoke.mjs` | **mock** plus live executor for release signoff | required before enabling new VM controls |
 
 ```bash
 npm --prefix apps/cockpit run check     # build web + typecheck + render/a11y tests + smokes + PoCs
@@ -308,8 +376,19 @@ npx vitest run test/integration/cockpit-bridge.test.js   # Bridge contract + moc
 npx vitest run test/smoke/cockpit-base-footprint.test.js # base-npm guard (CI)
 npm run e2e:cockpit-dev                                  # dev full-system e2e — real executor, skips cleanly
 npm run uat:cockpit-live                                  # opt-in real sandbox posture gate
+npm run uat:cockpit-daily                                 # required Linux daily gate (#1842)
 npm run uat:cockpit-live:matrix                           # required host/docker/vm live matrix (#1621)
 ```
+
+The daily gate's approvals, immutable-version inputs, operator hook contract,
+host/container working-directory expectations, cleanup boundary, and report
+schema are documented in
+[Cockpit Daily Linux Operator Gate](../../docs/cockpit/daily-operator-gate.md).
+VM and Apple remain reported preview tiers and do not block the first Linux
+supported result. Apple preview evidence is based on the agentic-sandbox
+developer package, `darwin/arm64` host runtime discovery, and Docker Desktop
+runtime posture; production signing/notarization is tracked separately and is
+not required to pass the Cockpit Linux gate.
 
 The React UI is also browser-verified per surface (see `.playwright-mcp/cockpit-*.png`).
 Conformance (`agentic-sandbox-conformance`) was 33 pass / 0 fail / 17 skip; the
@@ -332,7 +411,11 @@ safe version/build fields in the report. When the executor build does not expose
 that metadata, set `AIWG_COCKPIT_EXECUTOR_VERSION=<tag-or-commit>` so release
 evidence still names the tested agentic-sandbox build. A manual run against
 agentic-sandbox `v2026.6.15` or newer should attach its markdown/JSON result to
-epic roctinam/aiwg#1588 before the epic is considered done-done.
+epic roctinam/aiwg#1588 before the epic is considered done-done. The latest
+immutable fleet/activity qualification is
+[Agentic Sandbox v2026.8.3](../../docs/cockpit/qualifications/agentic-sandbox-v2026.8.3.md);
+older v2026.7.x entries below are historical feature-floor evidence, not the
+latest whole-integration claim.
 
 The executable release-validation procedure is
 `.aiwg/testing/cockpit-real-integration-uat-runbook.md`. Use that runbook for
@@ -346,9 +429,16 @@ The stricter matrix gate for #1621 is intentionally separate from the mock lane:
 
 ```bash
 AIWG_COCKPIT_EXECUTOR_URL=http://127.0.0.1:<real-executor-port> \
+AIWG_COCKPIT_EXECUTOR_TOKEN_FILE=/protected/path/cockpit-executor.token \
 AIWG_COCKPIT_LIVE_PROVIDER=codex \
 npm run uat:cockpit-live:matrix
 ```
+
+The token-file line is required when the executor has operator bearer auth
+enabled and may be omitted only for an explicitly unauthenticated local
+compatibility executor. The UAT uses the file for its direct readiness probes
+and passes the same reference to the Bridge; report output records only whether
+auth was configured, never the path or credential.
 
 Use `AIWG_COCKPIT_LIVE_PROVIDER=claude` instead when the live workload should
 exercise the pre-authenticated Claude session.
@@ -358,7 +448,8 @@ families in inventory. For each target it verifies inventory normalization,
 runtime and transport posture, session backend evidence, session create/list,
 observe attach, and a minimal provider-backed workload through a controller
 session when control is advertised. The selected provider is invoked through the
-attached session (`codex exec -s read-only ...`
+attached session (`codex exec --skip-git-repo-check -s read-only ...`
+for gate-owned non-repository workspaces,
 or `claude --print --permission-mode dontAsk --output-format text ...`) and must
 emit `AIWG_COCKPIT_LIVE_OK` and the expected discovery result (`issue-audit` by
 default). This proves a pre-authenticated agentic framework actually launched in
@@ -367,6 +458,9 @@ than only proving shell plumbing or provider login. Set
 `AIWG_COCKPIT_LIVE_DISCOVERY_EXPECT=<capability-name>` to validate a different
 discovered framework capability, or `AIWG_COCKPIT_LIVE_WORKLOAD=<prompt>` to
 replace the full prompt while still satisfying the marker and discovery checks.
+Custom prompts must request the `AIWG_COCKPIT` and `_LIVE_OK` fragments without
+containing the concatenated marker literally; this prevents terminal command
+echo from being mistaken for provider output.
 Set `AIWG_COCKPIT_LIVE_MATRIX_TARGETS=host` only for scoped rehearsal/evidence
 when Docker/container or VM are intentionally out of scope; the default remains
 `host,container,vm` for the release matrix. To prove controller-side PTY command
@@ -485,11 +579,13 @@ agentic-sandbox executor through `AIWG_COCKPIT_EXECUTOR_URL`. The host target
 (agentic-sandbox#461) have landed upstream; the Bridge seam is now the
 AIWG-side integration point for #1589. Runtime-tier provisioning and
 host-daemon surfacing (roctinam/aiwg#1615) and transport-trust visibility (#1618)
-**landed and are verified against `v2026.7.4`** — transport posture and
+**landed with a compatibility floor verified against `v2026.7.4`** — transport posture and
 host-daemon now render per instance (a host-daemon *detail-status* payload
 remains a residual under #1615). Direct/managed PTY negotiation (#1616) and the
 live real-sandbox gate (#1617) continue. Secure transport details map back to agentic-sandbox#409/#410/#412; local
-Browser/Tauri/VS Code-to-Bridge auth remains roctinam/aiwg#1595.
+Browser/Tauri/VS Code-to-Bridge auth is implemented under #1595/#1968 with
+one-time audience-bound bootstrap, HttpOnly session custody, and credential-free
+REST/SSE/PTY URLs.
 
 ### Operator-wall review modes (#1622)
 

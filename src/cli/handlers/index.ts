@@ -15,6 +15,7 @@ export { createScriptRunner, DefaultScriptRunner } from './script-runner.js';
 // Import all handlers
 import { helpHandler } from './help.js';
 import { versionHandler } from './version.js';
+import { authHandler } from './auth.js';
 import { useHandler } from './use.js';
 import {
   statusHandler,
@@ -105,6 +106,7 @@ import { bestPracticesAuditHandler } from './best-practices-audit.js';
 import { refreshHandler } from './refresh.js';
 import { regenerateHandler, regenerateHandlers } from './regenerate.js';
 import { workspaceContextHandler, workspaceContextHandlers } from './workspace-context.js';
+import { artifactsHandler, artifactsHandlers } from './artifacts.js';
 import { mcHandler, mcHandlers } from './mc.js';
 import { sdlcAccelerateHandler } from './sdlc-accelerate.js';
 import { teamHandler, teamHandlers } from './team.js';
@@ -113,12 +115,14 @@ import { packagesHandler } from './packages.js';
 import { marketplaceHandler } from './marketplace.js';
 import { initHandler } from './init.js';
 import { setupHandler } from './setup.js';
+import { setupGenerateHandler, setupRunHandler, setupValidateHandler } from './setup-manifest.js';
 import { runHandler } from './run.js';
 import { stewardHandler, stewardHandlers } from './steward.js';
 import { serveHandler } from './serve.js';
 import { lintHandler } from './lint.js';
 import { feedbackHandler } from './feedback.js';
 import { sessionHandler } from './session.js';
+import { sessionsHandler } from './sessions.js';
 import { sandboxHandler, sandboxHandlers } from './sandbox.js';
 import { diagnoseHandler } from './diagnose.js';
 import { localExecutorHandler, localExecutorServeHandler } from './local-executor.js';
@@ -129,6 +133,8 @@ import { cockpitHandler } from './cockpit.js';
 import { commandLogHandler } from './command-log.js';
 import { skillUsageHandler } from './skill-usage.js';
 import { modelsHandler } from './models.js';
+import { versionsHandler } from './resource-versions.js';
+import { jobHandler } from './job.js';
 
 import type { CommandHandler } from './types.js';
 
@@ -137,6 +143,7 @@ export {
   // Maintenance
   helpHandler,
   versionHandler,
+  authHandler,
   doctorHandler,
   updateHandler,
   refreshHandler,
@@ -153,14 +160,20 @@ export {
   marketplaceHandler,
   initHandler,
   setupHandler,
+  setupGenerateHandler,
+  setupRunHandler,
+  setupValidateHandler,
   issueHandler,
   issueAuditHandler,
   runHandler,
+  jobHandler,
 
   // Project
   newBundleHandler,
   quickrefHandler,
   newProjectHandler,
+  sessionHandler,
+  sessionsHandler,
 
   // Workspace
   statusHandler,
@@ -172,7 +185,9 @@ export {
   mcpHandler,
   catalogHandler,
   modelsHandler,
+  versionsHandler,
   indexHandler,
+  artifactsHandler,
   corpusHandler,
   discoverHandler,
   showHandler,
@@ -287,6 +302,7 @@ export {
   stewardHandlers,
   regenerateHandlers,
   workspaceContextHandlers,
+  artifactsHandlers,
   daemonHandlers,
   sandboxHandlers,
   repoAccessHandlers,
@@ -301,6 +317,7 @@ export const allHandlers: CommandHandler[] = [
   // Maintenance (shown first in help)
   helpHandler,
   versionHandler,
+  authHandler,
   doctorHandler,
   updateHandler,
   refreshHandler,
@@ -322,9 +339,13 @@ export const allHandlers: CommandHandler[] = [
   newProjectHandler,
   initHandler,
   setupHandler,
+  setupGenerateHandler,
+  setupRunHandler,
+  setupValidateHandler,
   issueHandler,
   issueAuditHandler,
   runHandler,
+  jobHandler,
 
   // Workspace management
   ...workspaceHandlers,
@@ -333,7 +354,9 @@ export const allHandlers: CommandHandler[] = [
   mcpHandler,
   catalogHandler,
   modelsHandler,
+  versionsHandler,
   indexHandler,
+  artifactsHandler,
   corpusHandler,
   discoverHandler,
   showHandler,
@@ -444,6 +467,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Session (#884)
   sessionHandler,
+  sessionsHandler,
 
   // Repo access policy (#1376)
   ...repoAccessHandlers,

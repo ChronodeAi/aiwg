@@ -1,18 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent, act } from '@testing-library/react';
 import { App, waitForSessionReady } from './App';
 
 // Rendered-DOM coverage (the a11y assertions deferred from T2, and a guard against the
 // "blank render" class of bug). The Welcome tab fetches inventory/running/approvals on
 // mount, so fetch is stubbed.
 beforeEach(() => {
-  (window as unknown as { __COCKPIT_TOKEN__: string }).__COCKPIT_TOKEN__ = 'test-token';
   window.history.replaceState({}, '', '/');
   globalThis.fetch = vi.fn(() => new Promise<Response>(() => undefined)) as typeof fetch;
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-const TAB_LABELS = ['Home', 'Inventory', 'Running', 'Missions', 'Sessions', 'Approvals', 'Explore', 'Library', 'Telemetry', 'Memory', 'Actions'];
+const TAB_LABELS = ['Home', 'Inventory', 'Running', 'Missions', 'Sessions', 'Approvals', 'Explore', 'Library', 'Telemetry', 'Activity', 'Memory', 'Actions'];
 
 describe('App shell (rendered DOM)', () => {
   it('renders an ARIA tablist with all Cockpit tabs', () => {
@@ -100,6 +99,7 @@ describe('App shell (rendered DOM)', () => {
           name: 'Release hardening',
           state: 'active',
           source: 'aiwg-mc',
+          updated_at: '2026-07-04T12:00:00.000Z',
           audit_count: 1,
           audit_tail: [{ event: 'mission_dispatched', ts: '2026-07-04T12:00:00.000Z', missionId: 'm-1' }],
           missions: [{ id: 'm-1', session_id: 'mc-1', source: 'aiwg-mc', title: 'Finish cockpit', status: 'running', loop: 1, max_iterations: 5, terminal: false }],
@@ -127,6 +127,64 @@ describe('App shell (rendered DOM)', () => {
     expect(screen.getByLabelText('Mission status summary').textContent).toContain('2 total');
     expect(screen.getByText('Finish cockpit')).toBeTruthy();
     expect(screen.getByText(/mission_dispatched/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Objective'), { target: { value: 'Run release verification' } });
+    fireEvent.change(screen.getByLabelText('Completion criteria'), { target: { value: 'all gates pass' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Queue mission' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/missions',
+      expect.objectContaining({ method: 'POST', body: expect.stringContaining('Run release verification') }),
+    ));
+    fireEvent.click(screen.getByRole('button', { name: 'Pause session' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/missions/mc-1/pause',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel mission' }));
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/missions/mc-1/m-1/cancel',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+  });
+
+  it('renders an AIWG parent mission with distinct Agentic Sandbox workload semantics and recovery posture', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/health')) return jsonResponse({ executor_url: 'http://127.0.0.1:8122' });
+      if (url.includes('/api/inventory')) return jsonResponse({ instances: [] });
+      if (url.includes('/api/running')) return jsonResponse({ count: 0, running: [] });
+      if (url.includes('/api/approvals')) return jsonResponse({ approvals: [] });
+      if (url.includes('/api/cost')) return jsonResponse({ total: { input_tokens: 0, output_tokens: 0, usd: 0 }, per_instance: [] });
+      if (url.includes('/api/missions')) {
+        const missions = [
+          { id: 'child-agent', workload_kind: 'persistent-agent', title: 'persistent-agent child-agent', status: 'retained', desired_state: 'running', target_id: 'target-1', executor_id: 'executor-1', runtime_id: 'runtime-1', runtime_session_id: 'session-1', task_id: 'task-1', revision: 4, last_seen: '2026-08-02T15:00:00Z', artifacts: [], terminal: false },
+          { id: 'child-daemon', workload_kind: 'daemon', title: 'daemon child-daemon', status: 'healthy', desired_state: 'running', health: 'healthy', target_id: 'target-2', executor_id: 'executor-2', runtime_id: 'runtime-2', task_id: 'task-2', revision: 8, last_seen: '2026-08-02T15:00:00Z', artifacts: [], terminal: false },
+          { id: 'child-command', workload_kind: 'one-shot-command', title: 'one-shot-command child-command', status: 'blocked', desired_state: 'running', target_id: 'target-3', executor_id: 'executor-3', runtime_id: 'runtime-3', task_id: 'task-3', command_id: 'command-3', revision: 3, last_seen: '2026-08-02T15:00:00Z', backpressure: { reason: 'approval', retryable: false }, artifacts: [{ kind: 'verifier', uri: 'https://evidence.test/verifier.json', sha256: 'a'.repeat(64) }], terminal: false },
+          { id: 'child-review', workload_kind: 'scheduled-collector', title: 'scheduled-collector child-review', status: 'operator-review-required', desired_state: 'running', schedule: '0 * * * *', target_id: 'target-4', executor_id: 'executor-4', runtime_id: 'runtime-4', revision: 9, last_seen: '2026-08-02T15:00:00Z', artifacts: [], terminal: false },
+        ];
+        const projected = missions.map((mission) => ({ ...mission, session_id: 'fleet:mission-orchestration', source: 'agentic-sandbox-fleet', parent_mission_id: 'mission-orchestration' }));
+        return jsonResponse({
+          source: 'aiwg-mc + agentic-sandbox', fetched_at: '2026-08-02T15:00:00Z', count: projected.length,
+          sessions: [{ id: 'fleet:mission-orchestration', parent_mission_id: 'mission-orchestration', name: 'Fleet mission mission-orchestration', state: 'operator-review-required', source: 'agentic-sandbox-fleet', updated_at: '2026-08-02T15:00:00Z', inventory_revision: 42, audit_count: 0, audit_tail: [], missions: projected }],
+          missions: projected,
+        });
+      }
+      return jsonResponse({});
+    }) as typeof fetch;
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Missions' }));
+
+    expect(await screen.findByText(/Parent mission mission-orchestration/)).toBeTruthy();
+    expect(screen.getByText(/inventory r42/)).toBeTruthy();
+    expect(screen.getByText(/persistent retention/)).toBeTruthy();
+    expect(screen.getByText(/daemon health/)).toBeTruthy();
+    expect(screen.getByText(/one-shot terminal result/)).toBeTruthy();
+    expect(screen.getByText(/scheduled collection/)).toBeTruthy();
+    expect(screen.getByText(/backpressure: approval · operator action/)).toBeTruthy();
+    expect(screen.getByText(/session session-1/)).toBeTruthy();
+    expect(screen.getByText(/command command-3/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'verifier' }).getAttribute('href')).toBe('https://evidence.test/verifier.json');
+    expect(screen.getAllByText('operator-review-required').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders Bridge-backed Telemetry from unified events and cost', async () => {
@@ -137,6 +195,32 @@ describe('App shell (rendered DOM)', () => {
       if (url.includes('/api/running')) return jsonResponse({ count: 1, running: [{ instance_id: 'host-1', task_id: 'task-abc', state: 'working', tenant: 'local' }] });
       if (url.includes('/api/approvals')) return jsonResponse({ approvals: [] });
       if (url.includes('/api/cost')) return jsonResponse({ total: { input_tokens: 1000, output_tokens: 2000, usd: 0.42 }, per_instance: [] });
+      if (url.includes('/api/mcp/discovery')) return jsonResponse({
+        enabled: true,
+        status: 'enabled',
+        endpoint: {
+          path: '/mcp',
+          methods: ['POST'],
+          transport: 'streamable-http',
+          stateless: true,
+          get_behavior: '405_method_not_allowed',
+          mcp_session_id: false,
+        },
+        protocol: { latest: '2025-11-25', supported: ['2025-11-25'] },
+        auth: {
+          scheme: 'bearer',
+          required: true,
+          principal_config: 'mcp-principals.toml',
+          principals: [{ client_id: 'cockpit-test', scopes: ['fleet.read', 'output.read'] }],
+          scopes: ['fleet.read', 'output.read'],
+        },
+        capabilities: {},
+        tools: [{ name: 'list_sandboxes' }, { name: 'tail_output' }],
+        resources: [{ uri: 'sandbox://fleet' }],
+        resource_templates: [{ uriTemplate: 'sandbox://sessions/{session_id}/screen' }],
+        errors: [],
+        notes: [],
+      });
       if (url.includes('/api/missions')) return jsonResponse({ count: 1, sessions: [], missions: [{ id: 'm-1', session_id: 'mc-1', source: 'aiwg-mc', title: 'Mission', status: 'completed', terminal: true }] });
       if (url.includes('/api/events/snapshot')) return jsonResponse({
         source: 'cockpit.unified-event-model/v1',
@@ -156,6 +240,8 @@ describe('App shell (rendered DOM)', () => {
 
     expect(await screen.findByText('cockpit.unified-event-model/v1')).toBeTruthy();
     expect(screen.getByText('$0.42')).toBeTruthy();
+    expect(screen.getByLabelText('MCP management posture').textContent).toContain('list_sandboxes');
+    expect(screen.getByLabelText('MCP management posture').textContent).toContain('session id not expected');
     expect(screen.getByText('mission.lifecycle')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'session' }));
     expect(screen.getByText('session.lifecycle')).toBeTruthy();
@@ -211,6 +297,49 @@ describe('App shell (rendered DOM)', () => {
     expect(screen.getByText('2 running')).toBeTruthy();
     expect(screen.getByText('1 responses needed')).toBeTruthy();
     expect(screen.getByText(/host ✓ · docker - · vm -/)).toBeTruthy();
+  });
+
+  it('shows reconnecting and restores all live views after a transient drop without a page refresh (#1763)', async () => {
+    vi.useFakeTimers();
+    try {
+      let executorAvailable = true;
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('/api/health')) return jsonResponse({ executor_url: 'http://127.0.0.1:8122' });
+        if (url.includes('/api/inventory')) {
+          return executorAvailable
+            ? jsonResponse({ count: 1, fetched_at: new Date().toISOString(), instances: [instance('host-1', 'host', 'Codex host')] })
+            : errorResponse(502);
+        }
+        if (url.includes('/api/running')) return executorAvailable ? jsonResponse({ count: 1, running: [] }) : errorResponse(502);
+        if (url.includes('/api/approvals')) return jsonResponse({ approvals: [] });
+        if (url.includes('/api/cost')) return jsonResponse({ total: { input_tokens: 0, output_tokens: 0, usd: 0 }, per_instance: [] });
+        return jsonResponse({});
+      }) as typeof fetch;
+
+      render(<App />);
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      expect(screen.getByText('Bridge live')).toBeTruthy();
+      expect(screen.getByText('1 stacks')).toBeTruthy();
+      const sessionCallsBeforeDrop = vi.mocked(globalThis.fetch).mock.calls
+        .filter(([input]) => String(input).includes('/api/sessions?instance=')).length;
+
+      executorAvailable = false;
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+      expect(screen.getByText('Reconnecting…')).toBeTruthy();
+      expect(screen.getByTitle(/showing last-known status/i)).toBeTruthy();
+      expect(screen.getByText('1 stacks')).toBeTruthy();
+
+      executorAvailable = true;
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(screen.getByText('Bridge live')).toBeTruthy();
+      expect(screen.queryByText('Reconnecting…')).toBeNull();
+      expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/running'), expect.anything());
+      expect(vi.mocked(globalThis.fetch).mock.calls
+        .filter(([input]) => String(input).includes('/api/sessions?instance=')).length).toBeGreaterThan(sessionCallsBeforeDrop);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('stays connected when the executor exposes no running/approvals admin surface (#1638)', async () => {
@@ -402,7 +531,11 @@ describe('App shell (rendered DOM)', () => {
   });
 
   it('keeps Destroy enabled for a stopped Docker row so it can be cleaned up', async () => {
-    const stale = { ...instance('stale-dkr-1', 'docker', 'full-suite'), state: 'stopped' };
+    const stale = {
+      ...instance('stale-dkr-1', 'docker', 'full-suite'),
+      state: 'stopped',
+      storage: { persistent: true, delete_on_destroy: true, scope: 'inbox' },
+    };
     const inventory = { instances: [stale], count: 1, fetched_at: new Date().toISOString() };
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -420,6 +553,7 @@ describe('App shell (rendered DOM)', () => {
     // Previously hard-disabled for stopped Docker rows, which trapped stale
     // containers in inventory with no in-UI way to remove them.
     expect((destroy as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.getByText(/storage: persistent · delete on destroy/i)).toBeTruthy();
   });
 
   it('offers Reconnect for a running Docker row whose agent is not registered', async () => {

@@ -16,14 +16,17 @@ function makeRepo({
   lockVersion = packageVersion,
   lockRootVersion = packageVersion,
   marketplaceVersion = packageVersion,
+  cliVersion = packageVersion,
 }: {
   packageVersion?: string;
   lockVersion?: string;
   lockRootVersion?: string;
   marketplaceVersion?: string;
+  cliVersion?: string;
 } = {}) {
   tempRoot = mkdtempSync(join(tmpdir(), 'aiwg-version-lockstep-'));
   mkdirSync(join(tempRoot, '.claude-plugin'), { recursive: true });
+  mkdirSync(join(tempRoot, 'packages', 'cli'), { recursive: true });
 
   writeJson(join(tempRoot, 'package.json'), {
     name: 'aiwg',
@@ -41,9 +44,11 @@ function makeRepo({
     },
   });
   writeJson(join(tempRoot, '.claude-plugin', 'marketplace.json'), {
-    metadata: {
-      version: marketplaceVersion,
-    },
+    version: marketplaceVersion,
+  });
+  writeJson(join(tempRoot, 'packages', 'cli', 'package.json'), {
+    name: '@aiwg/cli',
+    version: cliVersion,
   });
 
   return tempRoot;
@@ -66,6 +71,15 @@ describe('checkVersionLockstep', () => {
     expect(result.message).toContain('match package.json');
   });
 
+  it('accepts the legacy metadata.version location for existing marketplaces', () => {
+    const root = makeRepo();
+    writeJson(join(root, '.claude-plugin', 'marketplace.json'), {
+      metadata: { version: '2026.5.7' },
+    });
+
+    expect(checkVersionLockstep(root).ok).toBe(true);
+  });
+
   it('fails when package-lock.json top-level version drifts', () => {
     const root = makeRepo({ lockVersion: '2026.5.2' });
 
@@ -86,13 +100,23 @@ describe('checkVersionLockstep', () => {
     expect(result.message).toContain('2026.5.2');
   });
 
-  it('fails when marketplace metadata version drifts', () => {
+  it('fails when marketplace version drifts', () => {
     const root = makeRepo({ marketplaceVersion: '2026.5.6' });
 
     const result = checkVersionLockstep(root);
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain('marketplace metadata.version');
+    expect(result.message).toContain('marketplace version');
+    expect(result.message).toContain('2026.5.6');
+  });
+
+  it('fails when @aiwg/cli CalVer drifts from the main package', () => {
+    const root = makeRepo({ cliVersion: '2026.5.6' });
+
+    const result = checkVersionLockstep(root);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('@aiwg/cli version');
     expect(result.message).toContain('2026.5.6');
   });
 

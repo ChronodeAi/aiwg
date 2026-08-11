@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
 
 import {
   buildAiwgFortemiKnowledgeShard,
+  buildAiwgFortemiKnowledgeShardWithReport,
+  diagnoseAiwgFortemiShardMigration,
+  resolveAiwgFortemiShardTuple,
   writeAiwgFortemiKnowledgeShard,
   type AiwgFortemiShardConverter,
 } from "../../../src/artifacts/fortemi-shard-export.js";
@@ -15,9 +19,13 @@ import {
   openShard,
   packTarGz,
   unpackTarGz,
+  validateFullV1ShardArchive,
   validateShardArchive,
 } from "@fortemi/core";
-import { aiwgFortemiIndexFromKnowledgeShard } from "@fortemi/core/aiwg-index";
+import {
+  aiwgFortemiIndexFromKnowledgeShard,
+  aiwgFortemiIndexToKnowledgeShardWithReport,
+} from "@fortemi/core/aiwg-index-shard";
 import { INDEX_DIR } from "../../../src/artifacts/types.js";
 import type {
   ArtifactIndex,
@@ -36,8 +44,32 @@ interface EmbeddedAiwgRecord {
     relationships: Array<{ type: string }>;
     chunks?: Array<{ text?: string }>;
     provenance: Array<{ source: string }>;
+    operational_state?: {
+      source_id: string;
+      observed_state: string;
+      classification: string;
+    };
+    state_transfer?: {
+      deleted_at: string | null;
+    };
     skos_concepts?: Array<{ id: string }>;
   };
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function sortedRecords(
+  bytes: Uint8Array,
+  format: "json" | "jsonl",
+): Array<Record<string, unknown>> {
+  const text = new TextDecoder().decode(bytes);
+  const values = format === "json"
+    ? JSON.parse(text)
+    : text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  return (values as Array<Record<string, unknown>>)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
 }
 
 describe("AIWG portable Fortemi shard export", () => {
@@ -62,6 +94,22 @@ describe("AIWG portable Fortemi shard export", () => {
       summary: "Preserve the complete AIWG record in a Knowledge Shard.",
       dependencies: [targetPath],
       dependents: [],
+      operationalState: {
+        source_repo: "roctinam/aiwg",
+        source_kind: "issue",
+        source_id: "aiwg#1827",
+        observed_state: "open",
+        observed_at: "2026-07-16T00:00:00.000Z",
+        source_updated_at: "2026-07-16T00:00:00.000Z",
+        evidence_url: "https://git.integrolabs.net/roctinam/aiwg/issues/1827",
+        observer: "gitea-mcp",
+        classification: "fresh",
+        confidence: "source",
+        current_action_selector: true,
+      },
+      stateTransfer: {
+        deletedAt: null,
+      },
     };
     const target: MetadataEntry = {
       path: targetPath,
@@ -75,6 +123,9 @@ describe("AIWG portable Fortemi shard export", () => {
       summary: "Import the shard without custom transformation.",
       dependencies: [],
       dependents: [recordPath],
+      stateTransfer: {
+        deletedAt: "2026-07-25T09:30:00.000Z",
+      },
     };
     const index: ArtifactIndex = {
       version: "1.0.0",
@@ -117,6 +168,8 @@ describe("AIWG portable Fortemi shard export", () => {
         repo: "roctinam/aiwg",
         privacy: "sanitized",
         generatedAt: "2026-07-16T00:00:00.000Z",
+        schemaVersion: "1.2.0",
+        profile: "core-v1",
       },
       converter,
     );
@@ -129,7 +182,11 @@ describe("AIWG portable Fortemi shard export", () => {
     const result = await writeAiwgFortemiKnowledgeShard(
       tmpDir,
       out,
-      { generatedAt: "2026-07-16T00:00:00.000Z" },
+      {
+        generatedAt: "2026-07-16T00:00:00.000Z",
+        schemaVersion: "1.2.0",
+        profile: "core-v1",
+      },
       async () => encoded,
     );
 
@@ -138,6 +195,74 @@ describe("AIWG portable Fortemi shard export", () => {
       bytes: encoded.byteLength,
       items: 2,
       outPath: path.join(tmpDir, out),
+      written: true,
+      conversion: {
+        schemaVersion: "1.2.0",
+        profile: "core-v1",
+        success: true,
+        lossless: true,
+        losses: [],
+        receipt: null,
+      },
+    });
+  });
+
+  it("defaults to exact full-v1, rejects invalid tuples, and fails closed on loss", async () => {
+    expect(resolveAiwgFortemiShardTuple({})).toEqual({
+      schemaVersion: "2.0.0",
+      profile: "full-v1",
+    });
+    expect(() => resolveAiwgFortemiShardTuple({
+      schemaVersion: "1.2.0",
+      profile: "full-v1",
+    })).toThrow(/Unsupported Fortemi Knowledge Shard tuple/);
+
+    await expect(buildAiwgFortemiKnowledgeShardWithReport(
+      tmpDir,
+      { failOnLoss: true },
+      undefined,
+      async () => ({
+        success: true,
+        archive: encoded,
+        profile: "full-v1",
+        schema_version: "2.0.0",
+        lossless: false,
+        losses: [{ component: "attachments", reason: "fixture-loss" }],
+        receipt: { schema_version: "fixture" },
+      }),
+    )).rejects.toThrow(/reported 1 loss/);
+  });
+
+  it("is dry-run capable, non-overwriting, and gives source-less legacy artifacts an actionable diagnostic", async () => {
+    const out = path.join("artifacts", "dry-run.shard");
+    const dryRun = await writeAiwgFortemiKnowledgeShard(
+      tmpDir,
+      out,
+      {
+        schemaVersion: "1.2.0",
+        profile: "core-v1",
+        dryRun: true,
+      },
+      async () => encoded,
+    );
+    expect(dryRun.written).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, out))).toBe(false);
+
+    fs.mkdirSync(path.dirname(path.join(tmpDir, out)), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, out), "existing");
+    await expect(writeAiwgFortemiKnowledgeShard(
+      tmpDir,
+      out,
+      { schemaVersion: "1.2.0", profile: "core-v1" },
+      async () => encoded,
+    )).rejects.toThrow(/Refusing to overwrite/);
+    expect(fs.readFileSync(path.join(tmpDir, out), "utf8")).toBe("existing");
+
+    expect(diagnoseAiwgFortemiShardMigration(tmpDir, out)).toMatchObject({
+      supported: false,
+      mutationPlanned: false,
+      diagnostic: expect.stringContaining("cannot be reconstructed"),
+      action: expect.stringContaining("--schema-version 2.0.0 --profile full-v1"),
     });
   });
 
@@ -146,11 +271,15 @@ describe("AIWG portable Fortemi shard export", () => {
       repo: "Fortemi/fortemi-react",
       privacy: "sanitized",
       generatedAt: "2026-07-16T00:00:00.000Z",
+      schemaVersion: "1.2.0",
+      profile: "core-v1",
     });
     const repeated = await buildAiwgFortemiKnowledgeShard(tmpDir, {
       repo: "Fortemi/fortemi-react",
       privacy: "sanitized",
       generatedAt: "2026-07-16T00:00:00.000Z",
+      schemaVersion: "1.2.0",
+      profile: "core-v1",
     });
 
     const validation = validateShardArchive(shard);
@@ -160,7 +289,7 @@ describe("AIWG portable Fortemi shard export", () => {
     const reader = await openShard(shard);
     try {
       const notes = await reader.listNotes();
-      expect(notes.total).toBe(2);
+      expect(notes.total).toBe(1);
       expect(notes.items[0]?.source).toBe("aiwg-index");
       const sourceRecord = notes.items
         .map((note) => note.ai_metadata?.aiwg_fortemi_index as EmbeddedAiwgRecord | undefined)
@@ -199,6 +328,14 @@ describe("AIWG portable Fortemi shard export", () => {
           expect.objectContaining({ source: "aiwg-index" }),
         ]),
       );
+      expect(sourceRecord.record.operational_state).toMatchObject({
+        source_id: "aiwg#1827",
+        observed_state: "open",
+        classification: "fresh",
+      });
+      expect(sourceRecord.record.state_transfer).toEqual({
+        deleted_at: null,
+      });
       expect(sourceRecord.record.skos_concepts).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: "aiwg-tags:fortemi" }),
@@ -209,15 +346,96 @@ describe("AIWG portable Fortemi shard export", () => {
     }
   });
 
+  it("consumes the released public full-v1 converter deterministically as the default profile evidence", async () => {
+    const fixtureRoot = path.resolve(
+      process.cwd(),
+      "test/fixtures/fortemi-shard",
+    );
+    const sourceBytes = fs.readFileSync(
+      path.join(fixtureRoot, "aiwg-full-v1-source.json"),
+    );
+    const expectedArchive = new Uint8Array(
+      fs.readFileSync(path.join(fixtureRoot, "aiwg-full-v1.shard")),
+    );
+    const source = JSON.parse(sourceBytes.toString("utf8")) as Parameters<
+      typeof aiwgFortemiIndexToKnowledgeShardWithReport
+    >[0];
+    const options = {
+      createdAt: "2026-07-22T12:00:00.000Z",
+      matricVersion: "2026.7.13-candidate",
+    };
+
+    const first = await aiwgFortemiIndexToKnowledgeShardWithReport(
+      source,
+      options,
+    );
+    const repeated = await aiwgFortemiIndexToKnowledgeShardWithReport(
+      source,
+      options,
+    );
+
+    expect(first.success).toBe(true);
+    expect(first.lossless).toBe(true);
+    expect(first.losses).toEqual([]);
+    expect(first.archive).toEqual(expectedArchive);
+    expect(repeated.archive).toEqual(expectedArchive);
+    expect(repeated.receipt).toEqual(first.receipt);
+    expect(sha256(sourceBytes)).toBe(
+      "4cb6d89768f0ec37851012e3df4aedf09622dce911d76233916f099e10d5cfde",
+    );
+    expect(sha256(expectedArchive)).toBe(
+      "df87edc5725e3f0c8d95d8d4328c64a263e9b021520a127d9df5b7301c2afee5",
+    );
+    expect(await validateFullV1ShardArchive(expectedArchive)).toEqual({
+      valid: true,
+      errors: [],
+    });
+    expect(first.receipt).toMatchObject({
+      schema_version: "fortemi.aiwg-full-v1-conversion-receipt.v1",
+      authority_commit: "6343bd899958445bbc7e7e87b0dc92a8429d5a06",
+      authority_contract_sha256:
+        "5bf8d2fd8147d8df92599b1a3ce6b405ce022c83893f37547aefa7ca659f0783",
+      authority_schema_bundle_sha256:
+        "66dee80876c73fdc8756541c72e96ae189c098113a831c849d619381c4121c02",
+      contract_valid: true,
+      signed: false,
+    });
+
+    const files = unpackTarGz(expectedArchive);
+    const manifest = JSON.parse(
+      new TextDecoder().decode(files.get("manifest.json")!),
+    ) as {
+      version: string;
+      profile: string;
+      components: string[];
+    };
+    expect(manifest).toMatchObject({
+      version: "2.0.0",
+      profile: "full-v1",
+    });
+    expect(manifest.components).toHaveLength(33);
+  });
+
   it("round-trips through a fresh PGlite destination without transforming package bytes", async () => {
     const shard = await buildAiwgFortemiKnowledgeShard(tmpDir, {
       repo: "roctinam/aiwg",
       privacy: "sanitized",
       generatedAt: "2026-07-16T00:00:00.000Z",
+      schemaVersion: "1.2.0",
+      profile: "core-v1",
     });
     if (process.env.AIWG_FORTEMI_FIXTURE_OUT) {
       fs.writeFileSync(process.env.AIWG_FORTEMI_FIXTURE_OUT, shard);
     }
+    const committedCoreV1 = new Uint8Array(
+      fs.readFileSync(
+        path.resolve(
+          process.cwd(),
+          "test/fixtures/fortemi-shard/aiwg-core-v1.shard",
+        ),
+      ),
+    );
+    expect(shard).toEqual(committedCoreV1);
     const manager = new ArchiveManager("memory");
     try {
       const destination = await manager.create("aiwg-shard-receipt");
@@ -228,7 +446,58 @@ describe("AIWG portable Fortemi shard export", () => {
 
       const imported = await importShard(destination, shard);
       expect(imported.success).toBe(true);
-      expect(imported.counts).toMatchObject({ notes: 2, tags: 2, links: 2 });
+      expect(imported.counts).toMatchObject({
+        notes: 2,
+        collections: 3,
+        tags: 2,
+        links: 2,
+      });
+      const repeated = await importShard(destination, shard);
+      expect(repeated.success).toBe(true);
+      expect(repeated.counts).toMatchObject({
+        notes: 0,
+        collections: 0,
+        tags: 0,
+        links: 0,
+      });
+
+      const persisted = await destination.query<{
+        title: string;
+        deleted_at: string | null;
+        collection_name: string;
+        parent_name: string;
+      }>(`
+        SELECT
+          n.title,
+          CASE
+            WHEN n.deleted_at IS NULL THEN NULL
+            ELSE to_char(
+              n.deleted_at AT TIME ZONE 'UTC',
+              'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
+            )
+          END AS deleted_at,
+          c.name AS collection_name,
+          p.name AS parent_name
+        FROM note n
+        JOIN collection_note cn ON cn.note_id = n.id
+        JOIN collection c ON c.id = cn.collection_id
+        LEFT JOIN collection p ON p.id = c.parent_id
+        ORDER BY n.title
+      `);
+      expect(persisted.rows).toEqual([
+        {
+          title: "Portable Fortemi transport",
+          deleted_at: null,
+          collection_name: "design",
+          parent_name: ".aiwg",
+        },
+        {
+          title: "Shard import compatibility",
+          deleted_at: "2026-07-25T09:30:00.000Z",
+          collection_name: "requirements",
+          parent_name: ".aiwg",
+        },
+      ]);
 
       const reexport = await exportShardWithReport(destination, { profile: "core-v1" });
       expect(reexport.success).toBe(true);
@@ -239,6 +508,14 @@ describe("AIWG portable Fortemi shard export", () => {
         losses: [],
       });
       expect(reexport.archive).not.toBeNull();
+      const sourceFiles = unpackTarGz(shard);
+      const reexportedFiles = unpackTarGz(reexport.archive!);
+      expect(
+        sortedRecords(reexportedFiles.get("collections.json")!, "json"),
+      ).toEqual(sortedRecords(sourceFiles.get("collections.json")!, "json"));
+      expect(
+        sortedRecords(reexportedFiles.get("notes.jsonl")!, "jsonl"),
+      ).toEqual(sortedRecords(sourceFiles.get("notes.jsonl")!, "jsonl"));
       const restored = aiwgFortemiIndexFromKnowledgeShard(reexport.archive!);
       expect(restored.source).toMatchObject({
         repo: "roctinam/aiwg",
@@ -253,19 +530,72 @@ describe("AIWG portable Fortemi shard export", () => {
             relationships: expect.arrayContaining([
               expect.objectContaining({ type: "depends-on" }),
             ]),
+            operational_state: expect.objectContaining({
+              source_id: "aiwg#1827",
+              observed_state: "open",
+              classification: "fresh",
+            }),
+            state_transfer: { deleted_at: null },
+          }),
+          expect.objectContaining({
+            source: expect.objectContaining({ checksum: "def456" }),
+            state_transfer: {
+              deleted_at: "2026-07-25T09:30:00.000Z",
+            },
           }),
         ]),
       );
+
+      const oldestDefinedFiles = unpackTarGz(shard);
+      const oldestDefinedNotes = new TextDecoder()
+        .decode(oldestDefinedFiles.get("notes.jsonl")!)
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => {
+          const note = JSON.parse(line);
+          delete note.deleted_at;
+          return JSON.stringify(note);
+        });
+      const oldestDefinedNoteBytes = new TextEncoder().encode(
+        oldestDefinedNotes.join("\n"),
+      );
+      oldestDefinedFiles.set("notes.jsonl", oldestDefinedNoteBytes);
+      const oldestDefinedManifest = JSON.parse(
+        new TextDecoder().decode(oldestDefinedFiles.get("manifest.json")!),
+      );
+      oldestDefinedManifest.version = "1.0.0";
+      oldestDefinedManifest.min_reader_version = "1.0.0";
+      oldestDefinedManifest.checksums["notes.jsonl"] = sha256(
+        oldestDefinedNoteBytes,
+      );
+      oldestDefinedFiles.set(
+        "manifest.json",
+        new TextEncoder().encode(JSON.stringify(oldestDefinedManifest, null, 2)),
+      );
+      const oldestDestination = await manager.create("aiwg-shard-current-minus-two");
+      const oldestImported = await importShard(
+        oldestDestination,
+        packTarGz(oldestDefinedFiles),
+      );
+      expect(oldestImported.success, oldestImported.errors.join("; ")).toBe(true);
+      expect(oldestImported.counts).toMatchObject({
+        notes: 2,
+        collections: 3,
+        tags: 2,
+        links: 2,
+      });
     } finally {
       await manager.close();
     }
-  }, 20_000);
+  }, 45_000);
 
   it("rejects malformed, checksum, profile, version, and resource-limit input with zero mutation", async () => {
     const shard = await buildAiwgFortemiKnowledgeShard(tmpDir, {
       repo: "roctinam/aiwg",
       privacy: "sanitized",
       generatedAt: "2026-07-16T00:00:00.000Z",
+      schemaVersion: "1.2.0",
+      profile: "core-v1",
     });
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();

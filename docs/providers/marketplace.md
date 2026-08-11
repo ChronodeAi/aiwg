@@ -143,7 +143,11 @@ codex chat
 # Codex discovers AIWG via .agents/plugins/marketplace.json
 ```
 
-**Note on deployment paths**: Unlike Claude Code where agents/commands/skills deploy to project directories, Codex commands and skills deploy to **home directory** (`~/.codex/prompts/`, `~/.codex/skills/`) for user-level availability. This is a Codex convention, not an AIWG choice.
+**Note on deployment paths**: Codex prompts remain user-level under
+`~/.codex/prompts/`. Current AIWG framework skills and standard-aware managed
+Agent Skills deploy to the project `.agents/skills/` compatibility surface.
+AIWG-owned entries in the legacy `~/.codex/skills/` path are pruned; user-owned
+content is preserved.
 
 ---
 
@@ -338,6 +342,10 @@ aiwg use sdlc --provider hermes
 - Skills → `~/.hermes/skills/`
 - **No commands or rules** (Hermes doesn't currently support them)
 
+Managed imported Agent Skills use the separate `aiwg skills deploy <name>
+--target hermes` path. That command writes strict portable bundles directly
+under `~/.hermes/skills/<name>` and protects them with AIWG ownership sidecars.
+
 **Current limitations**: Hermes has the narrowest integration surface of any supported provider. As Hermes's capabilities grow, the provider config can be extended.
 
 ---
@@ -426,7 +434,7 @@ All AIWG-bundled plugins are MIT-licensed. Third-party plugins installed via the
 | Windsurf adapter | ✅ File deployment | `tools/agents/providers/windsurf.mjs` |
 | Warp adapter | ✅ File deployment + `WARP.md` | `tools/agents/providers/warp.mjs` |
 | OpenCode adapter | ✅ File deployment | `tools/agents/providers/opencode.mjs` |
-| Hermes adapter | ✅ Limited file deployment | `tools/agents/providers/hermes.mjs` |
+| Hermes adapter | ✅ Limited file deployment plus managed Agent Skills projection | `tools/agents/providers/hermes.mjs`; `src/skills/deployer.ts` |
 | Copilot adapter | ✅ `.agent.md` generation | `tools/agents/providers/copilot.mjs` |
 
 ---
@@ -440,6 +448,8 @@ All AIWG-bundled plugins are MIT-licensed. Third-party plugins installed via the
 
 ## Related Documentation
 
+- `@docs/providers/git-native-marketplace.md` — Git-native provenance,
+  immutable locks, signed catalogs, project/global scope, and offline exchange
 - `@docs/providers/skills-paths.md` — Provider deployment paths reference
 - `@docs/providers/capability-matrix.md` — Feature capability matrix
 - `@.aiwg/references/platforms/claude-code.md` — Claude Code deep reference
