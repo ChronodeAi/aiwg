@@ -602,6 +602,19 @@ export function deployFiles(files, destDir, opts, transformFn) {
   const { force = false, dryRun = false, provider = 'claude', fileExtension = '.md', injectPlatform = false } = opts;
   const deployVersion = opts.deployVersion || 'unknown';
   const deploySource = opts.deploySource || 'bundled';
+  const filenamePrefix = opts.filenamePrefix || '';
+  const artifactOwner = opts.artifactOwner || null;
+  const existingDestinationGuard = opts.existingDestinationGuard;
+
+  if (filenamePrefix && !/^[a-z0-9]+(?:-[a-z0-9]+)*-$/.test(filenamePrefix)) {
+    throw new Error(`Invalid deployment filename prefix: ${filenamePrefix}`);
+  }
+  if (artifactOwner && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(artifactOwner)) {
+    throw new Error(`Invalid deployment artifact owner: ${artifactOwner}`);
+  }
+  if (existingDestinationGuard !== undefined && typeof existingDestinationGuard !== 'function') {
+    throw new Error('existingDestinationGuard must be a function when provided');
+  }
   // Map of dest path → first batch entry that claimed it. Used to detect
   // and report cross-framework collisions within a single deploy batch
   // (#1169). Each value: { src, frameworkSlug }
@@ -624,8 +637,15 @@ export function deployFiles(files, destDir, opts, transformFn) {
       base = base.replace(/\.md$/, fileExtension);
     }
 
+    // Direct provider-addon deployments may namespace only the destination
+    // artifact filename. The transformed body (including native metadata such
+    // as a Codex TOML `name`) remains byte-for-byte independent of this prefix.
+    if (filenamePrefix && !base.startsWith(filenamePrefix)) {
+      base = `${filenamePrefix}${base}`;
+    }
+
     let dest = path.join(destDir, base);
-    const currentFrameworkSlug = extractFrameworkSlug(f);
+    const currentFrameworkSlug = artifactOwner || extractFrameworkSlug(f);
 
     // Read and transform source content (needed for content-equality check
     // and the collision-vs-duplicate distinction)
@@ -685,10 +705,36 @@ export function deployFiles(files, destDir, opts, transformFn) {
       continue;
     }
 
+    // Some provider-native artifacts cannot carry AIWG's Markdown managed
+    // marker. Let the provider enforce a stricter ownership policy before a
+    // differing destination can be replaced. Actions are only executed after
+    // this collection loop, so a thrown guard fails the whole batch before any
+    // file in it is written.
+    let guardedDestContent = null;
+    if (existingDestinationGuard && fs.existsSync(dest)) {
+      guardedDestContent = fs.readFileSync(dest, 'utf8');
+      if (guardedDestContent !== transformedContent) {
+        existingDestinationGuard({
+          src: f,
+          dest,
+          filename: base,
+          existingContent: guardedDestContent,
+          incomingContent: transformedContent,
+          sidecarEntry: sidecarManaged[base] || null,
+          artifactOwner: currentFrameworkSlug,
+        });
+      }
+    }
+
     // Skip-on-match: compare hash against sidecar manifest before reading dest file (#749)
     // Guard: only skip if the destination file still exists on disk. cleanupOldRuleFiles
     // may have deleted it before deployFiles runs, so the sidecar record is stale.
-    if (!force && sidecarManaged[base]?.hash === `sha256:${hash}` && fs.existsSync(dest)) {
+    if (
+      !force &&
+      sidecarManaged[base]?.hash === `sha256:${hash}` &&
+      fs.existsSync(dest) &&
+      (!existingDestinationGuard || guardedDestContent === transformedContent)
+    ) {
       actions.push({ type: 'skip', src: f, dest, reason: 'hash-match' });
       seen.set(dest, { src: f, frameworkSlug: currentFrameworkSlug, transformedContent });
       continue;
@@ -732,7 +778,7 @@ export function deployFiles(files, destDir, opts, transformFn) {
     if (!force && fs.existsSync(dest)) {
       const destContent = fs.readFileSync(dest, 'utf8');
       if (destContent === transformedContent) {
-        actions.push({ type: 'skip', src: f, dest, reason: 'unchanged', hash });
+        actions.push({ type: 'skip', src: f, dest, reason: 'unchanged', hash, frameworkSlug: currentFrameworkSlug });
         seen.set(dest, { src: f, frameworkSlug: currentFrameworkSlug, transformedContent });
         continue;
       }
@@ -756,7 +802,7 @@ export function deployFiles(files, destDir, opts, transformFn) {
     } else if (a.type === 'skip') {
       if (verbose) console.log(`skip (${a.reason}): ${path.basename(a.dest)}`);
       // Preserve existing sidecar entries for skipped files
-      if (a.hash) deployedEntries.push({ filename: path.basename(a.dest), hash: a.hash });
+      if (a.hash) deployedEntries.push({ filename: path.basename(a.dest), hash: a.hash, frameworkSlug: a.frameworkSlug });
     }
   }
 

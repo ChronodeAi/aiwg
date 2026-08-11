@@ -1,0 +1,39 @@
+# Full exemption — skipped for ALL THREE pass-2 contract rules (USE_WHEN_PREFIX,
+# SIBLING_POINTERS, DONE_WHEN), unlike bin/skill-contract-exempt.txt which only
+# skips SIBLING_POINTERS.
+#
+# Scope: the 8 workflow-orchestrator files that are built around a per-step
+# "confirm with the user before advancing unless they request end-to-end" gate
+# (registry/workflows.json canonical_file). Decided 2026-08-07
+# after researching whether these should move to Claude Code's native
+# commands/ or workflows/ plugin primitives instead of staying as skills:
+# workflows/ is disqualified because it forbids mid-run user input, which
+# conflicts with every one of these files' core design; commands/ is
+# deprecated Anthropic guidance (current docs say use skills/ for new
+# plugins). So they stay as skills, and forcing the literal Use-when/Done-when
+# template onto them is a no-op — their prose already documents the
+# equivalent per-step completion gate. This is a permanent structural
+# exemption for this genre, not a todo to eventually rewrite away.
+#
+# Correction (2026-08-08): assumptions, pm-review, and coaching were
+# originally left off this list on the claim that they already passed
+# USE_WHEN_PREFIX and DONE_WHEN without needing the exemption. That claim
+# was never verified against the actual registry and was wrong — all 3 fail
+# both rules today. Moved here alongside the original 8: same genre, same
+# mid-run-user-input conflict, no principled reason to hold them to a
+# stricter standard than their siblings.
+#
+# Adding a new entry here means deliberately deciding a skill belongs to this
+# exempt genre — it is not a judgement call made by the script.
+
+decisions
+opportunity
+measure
+meeting
+research
+prd
+stakeholder
+strategy
+assumptions
+pm-review
+coaching
