@@ -10,7 +10,7 @@ AIWG ships **480+ skills** across its frameworks. Agentic platforms (Claude Code
 
 Starting in 2026.5.0, AIWG splits its skill surface into two tiers, with discovery + on-demand fetch closing the loop:
 
-- **Kernel skills** — always-loaded into the platform's flat skill listing. ~21 skills total: 9 quickrefs (one per installed framework + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), and 10 self-maintenance ops.
+- **Kernel skills** — always-loaded into the platform's flat skill listing. 24 kernel skills total: 9 quickrefs (one per installed framework + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), and 13 self-maintenance ops.
 - **Standard skills** — the other ~460 skills. Stay at `$AIWG_ROOT` and are **not copied per-project** by default (#1217). Reachable via `aiwg discover` (find) and `aiwg show` (fetch).
 - **Project quickref** — an optional, generated kernel skill from committed
   `.aiwg/quickref.json`. It makes a small set of repository-specific precedence
@@ -40,6 +40,38 @@ aiwg doctor
 
 If the kernel quickref or the always-loaded ops skills don't already answer the question, run `aiwg discover`. Surface the top match (or top-3) to the user. Use `aiwg show` to read the file content without navigating storage paths yourself.
 
+## Benchmarking discovery changes
+
+Discovery ranking changes must be measured against the versioned operational
+corpus before they replace the lexical fallback:
+
+```bash
+aiwg index eval-discovery \
+  --queries test/fixtures/artifacts/discovery-relevance.jsonl \
+  --backend local \
+  --strategy lexical
+```
+
+`--backend` accepts `local` or `fortemi-core`. `--strategy` accepts `lexical`,
+`dense`, `hybrid-rrf`, `rerank`, or `chunk-multivector`; the latter four are
+benchmark prototypes, not live storage or discovery backends. Add `--json` for
+machine-readable output or `--out <path>` to retain the full per-query report.
+
+The report includes Hit@1/3/5, MRR, nDCG@10, per-type Hit@3, hard-negative
+intrusion, p50/p95 latency, index bytes, peak resident memory, and the hardware
+record. Adoption requires all of the following:
+
+- no per-type Hit@3 regression against `local:lexical`;
+- a positive aggregate MRR improvement whose paired 95% confidence interval
+  excludes zero;
+- p95 latency at or below 250 ms and storage at or below 2× the local index;
+- a production representation with tests. A Fortemi representation change must
+  be a separate follow-up with a named profile, published-package conformance,
+  and import/re-export evidence.
+
+The current measurements and decision are recorded in
+[`docs/reports/discovery-relevance-decision-2026-07-25.md`](reports/discovery-relevance-decision-2026-07-25.md).
+
 ## ⚠ Discover-First Protocol (rc.41+)
 
 For any user request mentioning **AIWG**, framework names (sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator), or capability keywords (skill, agent, rule, command, addon, workflow, template), `aiwg discover` MUST be the first information-gathering tool call.
@@ -65,13 +97,14 @@ You may skip the discover query only when: the user named a specific skill (`/fl
 
 ```mermaid
 flowchart TB
-  subgraph KERNEL["Kernel tier — 21 skills, always loaded"]
+  subgraph KERNEL["Kernel tier — 24 skills, always loaded"]
     direction LR
     K1[9 framework quickrefs<br/>sdlc / research / forensics /<br/>marketing / media-curator /<br/>security-eng / knowledge-base /<br/>ops / aiwg-utils-quickref]
-    K2[10 self-maintenance ops<br/>steward / aiwg-doctor / aiwg-refresh /<br/>aiwg-status / aiwg-help / use /<br/>aiwg-regenerate / aiwg-issue /<br/>aiwg-pr / aiwg-mission]
+    K2[2 routing maps<br/>aiwg-language-map / steward-quickref]
+    K3[13 self-maintenance ops<br/>steward / doctor / refresh / status / help / use /<br/>regenerate router + 3 branches / issue / PR / mission]
   end
 
-  subgraph STANDARD["Standard tier — ~460 skills, read from $AIWG_ROOT"]
+  subgraph STANDARD["Standard tier — ~456 skills, read from $AIWG_ROOT"]
     direction LR
     S1[SDLC workflows<br/>intake-wizard, sdlc-accelerate,<br/>flow-deploy-to-production,<br/>address-issues, ...]
     S2[Domain skills<br/>media-curator, research-,<br/>forensics-, marketing-, ...]
@@ -119,7 +152,7 @@ Source of truth ($AIWG_ROOT/agentic/code/...)
 │  ┌────────────────────────────┐
 ├─►│ KERNEL skills              │  copied per-project to platform-native skills dir
 │  │ kernel: true in frontmatter│  always-loaded into agent context
-│  │ (~21 skills today)         │  budget-bound; keep tight
+│  │ (24 skills today)          │  budget-bound; keep tight
 │  └────────────────────────────┘
 │
 └─►┌────────────────────────────┐
@@ -560,7 +593,7 @@ The bar for kernel-tier skills is high. Today's kernel falls into two categories
 ## References
 
 - [Artifact index and manifest loading internals](architecture/index-and-manifest-loading.md) — companion doc covering index file layout, graph configs, manifest loaders, and the search/load pipeline
-- CLI reference [Discovery section](cli-reference.md#discovery) — full command reference
+- CLI reference [Discovery section](https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md#discovery) — full command reference
 - [`skill-discovery`](../agentic/code/addons/aiwg-utils/rules/skill-discovery.md) — HIGH-enforcement framing rule
 - Epic [#1212](https://git.integrolabs.net/roctinam/aiwg/issues/1212) — index-driven skill discovery
 - Epic [#1217](https://git.integrolabs.net/roctinam/aiwg/issues/1217) — no-copy default

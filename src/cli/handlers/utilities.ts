@@ -16,8 +16,9 @@ import path from 'path';
 import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { createScriptRunner } from './script-runner.js';
 import { getFrameworkRoot } from '../../channel/manager.mjs';
-import { forceUpdateCheck } from '../../update/checker.mjs';
+import { updateInstallation } from '../../update/service.mjs';
 import { useHandler as useFrameworkHandler } from './use.js';
+import { projectAiwgPath } from '../../config/project-artifacts.js';
 import {
   checkCollisions,
 } from '../../smiths/skillsmith/collision-detector.js';
@@ -47,7 +48,7 @@ interface FrameworkRegistry {
  * Read the installed frameworks from the on-disk registry.
  */
 function readFrameworkRegistry(cwd: string): FrameworkRegistry | null {
-  const registryPath = path.join(cwd, '.aiwg', 'frameworks', 'registry.json');
+  const registryPath = projectAiwgPath(cwd, 'frameworks', 'registry.json');
   if (!fs.existsSync(registryPath)) {
     return null;
   }
@@ -151,8 +152,8 @@ function countSentences(s: string): number {
 }
 
 /**
- * Scan source SKILL.md files in `agentic/code/` for namespace issues:
- * - Missing `namespace: aiwg`
+ * Scan canonical AIWG source SKILL.md files in `agentic/code/` for policy issues:
+ * - Missing the AIWG-only `namespace: aiwg` source convention
  * - Slug (`aiwg-{name}`) that would shadow an AIWG CLI command
  *
  * Returns lines suitable for console output, or empty array if clean.
@@ -290,12 +291,14 @@ export const validateMetadataHandler: CommandHandler = {
       cwd: ctx.cwd,
     });
 
-    // Append namespace validation: scan source SKILL.md files
+    // Append canonical AIWG source policy. `namespace` is an AIWG extension,
+    // not an Agent Skills standard requirement; shared conformance is emitted
+    // by validate-metadata.mjs before this source-only convention.
     try {
       const issues = await scanSourceNamespaceIssues(frameworkRoot);
       if (issues.length > 0) {
-        console.log('\n── Namespace validation ──');
-        console.log(`  ${issues.length} skill(s) missing namespace field:`);
+        console.log('\n── AIWG source conventions ──');
+        console.log(`  ${issues.length} canonical source convention issue(s):`);
         // Show first 20 to avoid flooding output
         issues.slice(0, 20).forEach(l => console.log(l));
         if (issues.length > 20) {
@@ -303,10 +306,10 @@ export const validateMetadataHandler: CommandHandler = {
         }
         // Non-zero exit only in strict mode
         if (ctx.args.includes('--strict') && result.exitCode === 0) {
-          return { exitCode: 1, message: `Namespace validation failed: ${issues.length} skill(s) missing namespace field` };
+          return { exitCode: 1, message: `AIWG source convention validation failed: ${issues.length} issue(s)` };
         }
       } else {
-        console.log('\n── Namespace validation: all skills have namespace field ✓');
+        console.log('\n── AIWG source conventions: all canonical skills include the AIWG namespace extension ✓');
       }
     } catch {
       // Namespace scan is non-fatal
@@ -496,6 +499,16 @@ export const doctorHandler: CommandHandler = {
 
     // Run core doctor diagnostics
     const result = await runner.run('tools/cli/doctor.mjs', ctx.args, { cwd: ctx.cwd });
+    let agentSkillsFailure = false;
+
+    try {
+      const { buildAgentSkillsDoctorSection } = await import('../../skills/doctor.js');
+      const section = buildAgentSkillsDoctorSection(ctx.cwd || process.cwd());
+      console.log(section.output);
+      agentSkillsFailure = section.hasFailures;
+    } catch (error) {
+      console.log(`\n── Agent Skills conformance ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     // Surface feedback escape hatch when doctor finds issues
     if (result.exitCode !== 0) {
@@ -576,6 +589,19 @@ export const doctorHandler: CommandHandler = {
       // Project-local section is non-fatal for doctor
     }
 
+    // Web-backed resource lock/cache diagnostics (#1850). Report lock source
+    // mode, cold cache, and digest drift without requiring web mode to be in use.
+    try {
+      const { buildWebResourceDoctorSection } = await import('../../resources/doctor.js');
+      const section = buildWebResourceDoctorSection(ctx.cwd || process.cwd(), {
+        cacheRoot: process.env.AIWG_RESOURCE_CACHE_ROOT,
+      });
+      if (section.output) console.log(section.output);
+      if (section.hasFailures) return { exitCode: 1, message: '' };
+    } catch (error) {
+      console.log(`\n── Web resource cache ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
     // Canonical workspace-context graph diagnostics (#1811). Legacy projects
     // remain valid; drift, loops, conflicts, and possible credentials fail.
     try {
@@ -591,7 +617,9 @@ export const doctorHandler: CommandHandler = {
       console.log(`\n── Workspace context graph ──\n  ⚠ unable to audit: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    return result;
+    return agentSkillsFailure
+      ? { exitCode: 1, message: '' }
+      : result;
   },
 };
 
@@ -618,7 +646,7 @@ export const updateHandler: CommandHandler = {
   name: 'Update',
   description: 'Update AIWG and re-deploy installed frameworks',
   category: 'maintenance',
-  aliases: ['-update', '--update'],
+  aliases: ['-update', '--update', 'upgrade'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const args = ctx.args;
@@ -635,8 +663,12 @@ export const updateHandler: CommandHandler = {
     // Step 1: Check for package updates (unless --skip-check)
     if (!skipCheck) {
       try {
-        console.log('Checking for AIWG updates...\n');
-        await forceUpdateCheck();
+        console.log('Updating AIWG installation...\n');
+        const update = await updateInstallation({
+          dryRun,
+          offline: args.includes('--offline'),
+        });
+        console.log(`${update.message}\n`);
       } catch (error) {
         console.error(`Warning: Update check failed: ${error instanceof Error ? error.message : String(error)}`);
         console.log('Continuing with re-deployment...\n');
@@ -672,32 +704,15 @@ export const updateHandler: CommandHandler = {
       return { exitCode: 0 };
     }
 
-    // Map registry IDs to framework use-names
-    const installedFrameworks: string[] = [];
-    const unmapped: string[] = [];
-
-    for (const fw of registry.frameworks) {
-      const useName = REGISTRY_ID_TO_USE_NAME[fw.id];
-      if (useName) {
-        installedFrameworks.push(useName);
-      } else {
-        unmapped.push(fw.id);
-      }
-    }
-
-    if (installedFrameworks.length === 0) {
-      console.log('No recognized frameworks in registry');
-      if (unmapped.length > 0) {
-        console.log(`Unrecognized entries: ${unmapped.join(', ')}`);
-      }
-      return { exitCode: 0 };
-    }
+    // Canonical framework IDs need their historical public aliases. Add-ons,
+    // extensions, and project-local bundles are already accepted by `aiwg use`,
+    // so preserve their registry IDs instead of silently skipping them.
+    const installedFrameworks = registry.frameworks.map(
+      item => REGISTRY_ID_TO_USE_NAME[item.id] ?? item.id
+    );
 
     // Report what will be updated
     console.log(`Installed frameworks: ${installedFrameworks.join(', ')}`);
-    if (unmapped.length > 0) {
-      console.log(`Skipping unrecognized: ${unmapped.join(', ')}`);
-    }
     console.log('');
 
     if (dryRun) {

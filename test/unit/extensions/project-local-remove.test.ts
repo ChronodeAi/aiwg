@@ -14,6 +14,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { createHash } from 'crypto';
 import {
+  candidateDeployedPaths,
+  hashDeployedBundleArtifacts,
   hashBundleArtifacts,
   removeProjectLocalBundle,
 } from '../../../src/extensions/project-local-remove.js';
@@ -21,7 +23,7 @@ import {
   resetStorage,
   initStorage,
 } from '../../../src/storage/index.js';
-import type { AiwgConfig } from '../../../src/config/aiwg-config.js';
+import { updateInstalled, type AiwgConfig } from '../../../src/config/aiwg-config.js';
 
 function tmp(): string {
   const d = mkdtempSync(join(tmpdir(), 'aiwg-plr-'));
@@ -44,9 +46,10 @@ function writeBundle(projectDir: string, id: string, ruleBody = 'rule body'): st
 function deployArtifacts(projectDir: string, ruleBody = 'rule body'): void {
   // Pretend deploy: write provider files identical to source
   mkdirSync(join(projectDir, '.claude', 'rules'), { recursive: true });
-  mkdirSync(join(projectDir, '.claude', 'skills', 'demo-skill'), { recursive: true });
+  mkdirSync(join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill'), { recursive: true });
   writeFileSync(join(projectDir, '.claude', 'rules', 'r1.md'), ruleBody);
-  writeFileSync(join(projectDir, '.claude', 'skills', 'demo-skill', 'SKILL.md'), 'skill body');
+  writeFileSync(join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill', 'SKILL.md'), 'skill body');
+  writeFileSync(join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill', '.aiwg-managed'), '');
 }
 
 function makeConfig(bundleId: string, hashes: Record<string, string>): AiwgConfig {
@@ -63,6 +66,7 @@ function makeConfig(bundleId: string, hashes: Record<string, string>): AiwgConfi
         localType: 'extension',
         manifestVersion: '1',
         artifactHashes: hashes,
+        deployedArtifactHashes: { claude: hashes },
       },
     },
     scripts: {},
@@ -93,6 +97,54 @@ describe('hashBundleArtifacts', () => {
     const hashes = await hashBundleArtifacts(dir);
     expect(Object.keys(hashes)).not.toContain('rules/README.md');
     expect(Object.keys(hashes)).not.toContain('rules/INDEX.md');
+  });
+
+  it('records provider-transformed deployed bytes rather than source bytes (#1998)', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    const sourceHashes = await hashBundleArtifacts(dir);
+    deployArtifacts(projectDir);
+    writeFileSync(
+      join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill', 'SKILL.md'),
+      'provider-transformed skill body',
+    );
+
+    const deployed = await hashDeployedBundleArtifacts(projectDir, 'claude', sourceHashes);
+    expect(deployed['rules/r1.md']).toBe(sourceHashes['rules/r1.md']);
+    expect(deployed['skills/demo-skill/SKILL.md']).toBe(sha256('provider-transformed skill body'));
+    expect(deployed['skills/demo-skill/SKILL.md']).not.toBe(sourceHashes['skills/demo-skill/SKILL.md']);
+  });
+});
+
+describe('candidateDeployedPaths (#1869)', () => {
+  it('uses the provider definition namespaced skill root', () => {
+    expect(candidateDeployedPaths('/project', 'claude', 'skills/demo/SKILL.md')).toEqual([
+      '/project/.claude/.aiwg/skills/demo/SKILL.md',
+    ]);
+  });
+
+  it('includes provider-translated artifact extensions', () => {
+    expect(candidateDeployedPaths('/project', 'codex', 'agents/reviewer.md')).toEqual([
+      '/project/.codex/agents/reviewer.md',
+      '/project/.codex/agents/reviewer.toml',
+    ]);
+    expect(candidateDeployedPaths('/project', 'codex', 'skills/demo/SKILL.md')).toEqual([
+      '/project/.agents/skills/demo/SKILL.md',
+      '/project/.codex/.aiwg/skills/demo/SKILL.md',
+    ]);
+    expect(candidateDeployedPaths('/project', 'cursor', 'rules/policy.md')).toEqual([
+      '/project/.cursor/rules/policy.md',
+      '/project/.cursor/rules/policy.mdc',
+    ]);
+  });
+
+  it('resolves home-deploying provider definitions without the project prefix', () => {
+    const [candidate] = candidateDeployedPaths('/project', 'openclaw', 'skills/demo/SKILL.md');
+    expect(candidate).toContain('/.openclaw/.aiwg/skills/demo/SKILL.md');
+    expect(candidate).not.toContain('/project/');
+  });
+
+  it('returns no candidates for an unknown provider and preserves registry upstream', () => {
+    expect(candidateDeployedPaths('/project', 'unknown', 'rules/policy.md')).toEqual([]);
   });
 });
 
@@ -140,13 +192,51 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
     expect(result.partialProviders).toEqual([]);
     expect(result.revertedProviders).toEqual(['claude']);
     expect(existsSync(join(projectDir, '.claude', 'rules', 'r1.md'))).toBe(false);
-    expect(existsSync(join(projectDir, '.claude', 'skills', 'demo-skill', 'SKILL.md'))).toBe(false);
+    expect(existsSync(join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill', 'SKILL.md'))).toBe(false);
+    expect(existsSync(join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill', '.aiwg-managed'))).toBe(false);
     expect(config.installed['foo']).toBeUndefined();
 
     // Source preserved
     expect(existsSync(join(dir, 'rules', 'r1.md'))).toBe(true);
     expect(existsSync(join(dir, 'manifest.json'))).toBe(false); // we never wrote manifest in this fixture
     expect(existsSync(join(dir, 'skills', 'demo-skill', 'SKILL.md'))).toBe(true);
+  });
+
+  it('Case 1 (#1998): provider-specific deployed hashes classify transformed skills as pristine', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const deployedSkill = join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill', 'SKILL.md');
+    writeFileSync(deployedSkill, 'provider-transformed skill body');
+    const sourceHashes = await hashBundleArtifacts(dir);
+    const deployedHashes = await hashDeployedBundleArtifacts(projectDir, 'claude', sourceHashes);
+    const config = makeConfig('foo', sourceHashes);
+    config.installed.foo.deployedArtifactHashes = { claude: deployedHashes };
+
+    const result = await removeProjectLocalBundle(config, projectDir, 'foo');
+
+    expect(result.partialProviders).toEqual([]);
+    expect(result.outcomes.every(outcome => outcome.case === 'pristine')).toBe(true);
+    expect(existsSync(deployedSkill)).toBe(false);
+    expect(config.installed.foo).toBeUndefined();
+  });
+
+  it('Case 2 (#1998): edits after provider-hash capture remain protected', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const deployedSkill = join(projectDir, '.claude', '.aiwg', 'skills', 'demo-skill', 'SKILL.md');
+    writeFileSync(deployedSkill, 'provider-transformed skill body');
+    const sourceHashes = await hashBundleArtifacts(dir);
+    const deployedHashes = await hashDeployedBundleArtifacts(projectDir, 'claude', sourceHashes);
+    const config = makeConfig('foo', sourceHashes);
+    config.installed.foo.deployedArtifactHashes = { claude: deployedHashes };
+    writeFileSync(deployedSkill, 'operator edit after deployment');
+
+    const result = await removeProjectLocalBundle(config, projectDir, 'foo');
+
+    expect(result.partialProviders).toEqual(['claude']);
+    expect(result.outcomes.find(outcome => outcome.artifactPath.includes('demo-skill'))?.case).toBe('mutated');
+    expect(existsSync(deployedSkill)).toBe(true);
+    expect(config.installed.foo).toBeDefined();
   });
 
   it('Case 2 (mutated): default refuses, leaves file, marks partial', async () => {
@@ -183,7 +273,7 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
     expect(existsSync(join(dir, 'rules', 'r1.md'))).toBe(true);
   });
 
-  it('Case 3 (missing deployed file): silent success', async () => {
+  it('Case 3 (missing recorded artifact): preserves registry for retry', async () => {
     const dir = writeBundle(projectDir, 'foo');
     // Don't deploy — files are missing
     const hashes = await hashBundleArtifacts(dir);
@@ -191,11 +281,12 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
 
     const result = await removeProjectLocalBundle(config, projectDir, 'foo');
 
-    expect(result.partialProviders).toEqual([]);
-    expect(result.revertedProviders).toEqual(['claude']);
-    expect(config.installed['foo']).toBeUndefined();
+    expect(result.partialProviders).toEqual(['claude']);
+    expect(result.revertedProviders).toEqual([]);
+    expect(config.installed['foo']).toBeDefined();
     const out = result.outcomes.find(o => o.artifactPath === 'rules/r1.md');
     expect(out?.case).toBe('missing');
+    expect(out?.message).toContain('registry preserved');
   });
 
   it('Case 4 (replaced): refuses when another bundle owns the source path', async () => {
@@ -212,7 +303,7 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
       localPath: '.aiwg/extensions/other/',
       localType: 'extension',
       manifestVersion: '1',
-      artifactHashes: { 'rules/r1.md': 'differenthash' },
+      artifactHashes: { claude: { 'rules/r1.md': 'differenthash' } } as unknown as Record<string, string>,
     };
 
     const result = await removeProjectLocalBundle(config, projectDir, 'foo');
@@ -233,7 +324,7 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
       version: '1.0.0', source: 'project-local', installedAt: new Date().toISOString(),
       deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
       localPath: '.aiwg/extensions/other/', localType: 'extension', manifestVersion: '1',
-      artifactHashes: { 'rules/r1.md': 'x' },
+      artifactHashes: { claude: { 'rules/r1.md': 'x' } } as unknown as Record<string, string>,
     };
 
     const result = await removeProjectLocalBundle(config, projectDir, 'foo', { force: true });
@@ -258,6 +349,92 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
     expect(existsSync(join(projectDir, '.claude', 'rules', 'r1.md'))).toBe(false);
     // Registry entry removed (source was already gone — nothing to preserve there)
     expect(config.installed['foo']).toBeUndefined();
+  });
+
+  it('legacy flat hashes are treated as unhashed and preserve registry by default', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const hashes = await hashBundleArtifacts(dir);
+    const config = makeConfig('foo', hashes);
+    config.installed['foo'].artifactHashes = hashes as unknown as NonNullable<
+      AiwgConfig['installed'][string]['artifactHashes']
+    >;
+    delete config.installed['foo'].deployedArtifactHashes;
+
+    const result = await removeProjectLocalBundle(config, projectDir, 'foo');
+
+    expect(result.partialProviders).toEqual(['claude']);
+    expect(result.outcomes.some(outcome => outcome.case === 'unhashed')).toBe(true);
+    expect(existsSync(join(projectDir, '.claude', 'rules', 'r1.md'))).toBe(true);
+    expect(config.installed['foo']).toBeDefined();
+  });
+
+  it('uses Chronode legacy provider-nested hashes as deployed hashes', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const hashes = await hashBundleArtifacts(dir);
+    const config = makeConfig('foo', hashes);
+    delete config.installed.foo.deployedArtifactHashes;
+    config.installed.foo.artifactHashes = { claude: hashes } as unknown as Record<string, string>;
+
+    const result = await removeProjectLocalBundle(config, projectDir, 'foo');
+
+    expect(result.partialProviders).toEqual([]);
+    expect(result.revertedProviders).toEqual(['claude']);
+    expect(config.installed.foo).toBeUndefined();
+  });
+
+  it('migrates all Chronode nested provider hashes before writing the split registry shape', () => {
+    const sourceHashes = { 'rules/r1.md': 'source' };
+    const claudeHashes = { 'rules/r1.md': 'claude-deployed' };
+    const factoryHashes = { 'rules/r1.md': 'factory-deployed' };
+    const codexHashes = { 'rules/r1.md': 'codex-deployed' };
+    const config = makeConfig('foo', sourceHashes);
+    delete config.installed.foo.deployedArtifactHashes;
+    config.installed.foo.artifactHashes = {
+      claude: claudeHashes,
+      factory: factoryHashes,
+    } as unknown as Record<string, string>;
+
+    updateInstalled(
+      config,
+      'foo',
+      'codex',
+      { agents: 0, commands: 0, skills: 0, rules: 1 },
+      {
+        version: '1.0.0',
+        source: 'project-local',
+        localPath: '.aiwg/extensions/foo/',
+        localType: 'extension',
+        manifestVersion: '1',
+        artifactHashes: sourceHashes,
+        deployedArtifactHashes: codexHashes,
+      },
+    );
+
+    expect(config.installed.foo.artifactHashes).toEqual(sourceHashes);
+    expect(config.installed.foo.deployedArtifactHashes).toEqual({
+      claude: claudeHashes,
+      factory: factoryHashes,
+      codex: codexHashes,
+    });
+  });
+
+  it('missing or empty provider hashes preserve the registry for retry', async () => {
+    writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const config = makeConfig('foo', {});
+
+    const emptyResult = await removeProjectLocalBundle(config, projectDir, 'foo');
+    expect(emptyResult.partialProviders).toEqual(['claude']);
+    expect(emptyResult.outcomes[0]?.case).toBe('unhashed');
+    expect(config.installed['foo']).toBeDefined();
+
+    delete config.installed['foo'].artifactHashes;
+    const missingResult = await removeProjectLocalBundle(config, projectDir, 'foo');
+    expect(missingResult.partialProviders).toEqual(['claude']);
+    expect(missingResult.outcomes[0]?.message).toContain('registry preserved');
+    expect(config.installed['foo']).toBeDefined();
   });
 
   it('--dry-run: prints plan, no filesystem or registry changes', async () => {
@@ -286,6 +463,22 @@ describe('removeProjectLocalBundle (#1037 / #1048)', () => {
     expect(config.installed['foo']).toBeDefined();
     // Provider entries also preserved (we only delete deployedTo when not keepRegistry)
     expect(config.installed['foo'].deployedTo['claude']).toBeDefined();
+  });
+
+  it('provider-scoped full removal clears only that provider hash registry (#1998)', async () => {
+    const dir = writeBundle(projectDir, 'foo');
+    deployArtifacts(projectDir);
+    const hashes = await hashBundleArtifacts(dir);
+    const config = makeConfig('foo', hashes);
+    config.installed.foo.deployedTo.codex = { agents: 0, commands: 0, skills: 1, rules: 1 };
+    config.installed.foo.deployedArtifactHashes = { claude: hashes, codex: hashes };
+
+    await removeProjectLocalBundle(config, projectDir, 'foo', { provider: 'claude' });
+
+    expect(config.installed.foo.deployedTo.claude).toBeUndefined();
+    expect(config.installed.foo.deployedTo.codex).toBeDefined();
+    expect(config.installed.foo.deployedArtifactHashes?.claude).toBeUndefined();
+    expect(config.installed.foo.deployedArtifactHashes?.codex).toEqual(hashes);
   });
 
   // Sanity: source preservation invariant — verify no test scenario above

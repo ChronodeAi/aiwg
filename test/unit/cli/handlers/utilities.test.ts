@@ -25,9 +25,14 @@ vi.mock('../../../../src/channel/manager.mjs', () => ({
   getFrameworkRoot: vi.fn().mockResolvedValue('/mock/framework/root'),
 }));
 
-// Mock update checker
-vi.mock('../../../../src/update/checker.mjs', () => ({
-  forceUpdateCheck: vi.fn().mockResolvedValue(undefined),
+// Mock install-aware update service
+vi.mock('../../../../src/update/service.mjs', () => ({
+  updateInstallation: vi.fn().mockResolvedValue({
+    mode: 'npm',
+    status: 'updated',
+    changed: true,
+    message: 'Updated test installation.',
+  }),
 }));
 
 // Mock fs for registry reading
@@ -49,6 +54,7 @@ vi.mock('fs', async () => {
             frameworks: [
               { id: 'sdlc-complete', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
               { id: 'media-marketing-kit', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
+              { id: 'team-tools-addon', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
             ],
           });
         }
@@ -67,6 +73,7 @@ vi.mock('fs', async () => {
           frameworks: [
             { id: 'sdlc-complete', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
             { id: 'media-marketing-kit', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
+            { id: 'team-tools-addon', installed: '2026-01-13T00:00:00Z', version: '1.0.0' },
           ],
         });
       }
@@ -224,19 +231,24 @@ describe('Utility Command Handlers', () => {
     it('should have correct metadata', () => {
       expect(updateHandler.id).toBe('update');
       expect(updateHandler.category).toBe('maintenance');
-      expect(updateHandler.aliases).toEqual(['-update', '--update']);
+      expect(updateHandler.aliases).toEqual(['-update', '--update', 'upgrade']);
       expect(updateHandler.name).toBe('Update');
       expect(updateHandler.description).toMatch(/update/i);
     });
 
     it('should check for updates and re-deploy installed frameworks', async () => {
-      const { forceUpdateCheck } = await import('../../../../src/update/checker.mjs');
+      const { updateInstallation } = await import('../../../../src/update/service.mjs');
 
       const result = await updateHandler.execute(mockContext);
 
-      expect(forceUpdateCheck).toHaveBeenCalled();
-      // Should call UseHandler for each installed framework (sdlc, marketing)
-      expect(mockUseExecute).toHaveBeenCalledTimes(2);
+      expect(updateInstallation).toHaveBeenCalled();
+      // Canonical frameworks use aliases; add-ons preserve their registry ID.
+      expect(mockUseExecute).toHaveBeenCalledTimes(3);
+      expect(mockUseExecute.mock.calls.map(call => call[0].args[0])).toEqual([
+        'sdlc',
+        'marketing',
+        'team-tools-addon',
+      ]);
       expect(result.exitCode).toBe(0);
     });
 
@@ -245,7 +257,7 @@ describe('Utility Command Handlers', () => {
 
       await updateHandler.execute(mockContext);
 
-      // Both calls should include --provider factory
+      // Every installed item should include --provider factory
       for (const call of mockUseExecute.mock.calls) {
         const ctx = call[0] as HandlerContext;
         expect(ctx.args).toContain('--provider');
@@ -273,9 +285,9 @@ describe('Utility Command Handlers', () => {
       expect(mockUseExecute).not.toHaveBeenCalled();
     });
 
-    it('should handle errors from forceUpdateCheck gracefully', async () => {
-      const { forceUpdateCheck } = await import('../../../../src/update/checker.mjs');
-      (forceUpdateCheck as any).mockRejectedValueOnce(new Error('Network error'));
+    it('should handle errors from the update service gracefully', async () => {
+      const { updateInstallation } = await import('../../../../src/update/service.mjs');
+      (updateInstallation as any).mockRejectedValueOnce(new Error('Network error'));
 
       // Should still proceed with re-deployment
       const result = await updateHandler.execute(mockContext);
@@ -285,12 +297,12 @@ describe('Utility Command Handlers', () => {
     });
 
     it('should skip update check when --skip-check is passed', async () => {
-      const { forceUpdateCheck } = await import('../../../../src/update/checker.mjs');
+      const { updateInstallation } = await import('../../../../src/update/service.mjs');
       mockContext.args = ['--skip-check'];
 
       await updateHandler.execute(mockContext);
 
-      expect(forceUpdateCheck).not.toHaveBeenCalled();
+      expect(updateInstallation).not.toHaveBeenCalled();
       expect(mockUseExecute).toHaveBeenCalled();
     });
 
@@ -298,7 +310,8 @@ describe('Utility Command Handlers', () => {
       mockContext.args = ['--skip-check'];
       mockUseExecute
         .mockResolvedValueOnce({ exitCode: 0 })  // sdlc succeeds
-        .mockResolvedValueOnce({ exitCode: 1 });  // marketing fails
+        .mockResolvedValueOnce({ exitCode: 1 })  // marketing fails
+        .mockResolvedValueOnce({ exitCode: 0 }); // add-on succeeds
 
       const result = await updateHandler.execute(mockContext);
 

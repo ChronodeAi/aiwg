@@ -11,6 +11,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { HandlerContext } from "../../../../src/cli/handlers/types.js";
 import { researchQueryCommand } from "../../../../src/extensions/commands/definitions.js";
+import { PROJECT_LOCAL_SEARCH_PATHS_ENV } from "../../../../src/extensions/project-local-paths.js";
+
+const ARTIFACT_ENV_KEYS = [
+  "AIWG_ARTIFACTS_PATH",
+  "AIWG_PROJECT_ARTIFACTS_PATH",
+  "AIWG_PROJECT_AIWG_DIR",
+  PROJECT_LOCAL_SEARCH_PATHS_ENV,
+] as const;
+
+let originalEnv: Partial<Record<typeof ARTIFACT_ENV_KEYS[number], string | undefined>> = {};
 
 // Mock script runner
 const mockRun = vi.fn().mockResolvedValue({ exitCode: 0 });
@@ -22,8 +32,11 @@ vi.mock("../../../../src/cli/handlers/script-runner.js", () => ({
 }));
 
 // Mock channel manager
+const { mockGetFrameworkRoot } = vi.hoisted(() => ({
+  mockGetFrameworkRoot: vi.fn(),
+}));
 vi.mock("../../../../src/channel/manager.mjs", () => ({
-  getFrameworkRoot: vi.fn().mockResolvedValue("/mock/framework/root"),
+  getFrameworkRoot: mockGetFrameworkRoot,
 }));
 
 // Mock MCP CLI module
@@ -81,7 +94,13 @@ describe("Subcommand Handlers", () => {
   let mockContext: HandlerContext;
 
   beforeEach(() => {
+    originalEnv = {};
+    for (const key of ARTIFACT_ENV_KEYS) {
+      originalEnv[key] = process.env[key];
+      delete process.env[key];
+    }
     mockRun.mockResolvedValue({ exitCode: 0 });
+    mockGetFrameworkRoot.mockResolvedValue("/mock/framework/root");
     mockContext = {
       args: [],
       rawArgs: [],
@@ -89,6 +108,14 @@ describe("Subcommand Handlers", () => {
       frameworkRoot: "/mock/framework/root",
     };
     vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    for (const key of ARTIFACT_ENV_KEYS) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   });
 
   describe("mcpHandler", () => {
@@ -362,7 +389,7 @@ describe("Subcommand Handlers", () => {
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/plugin-installer-cli.mjs",
         mockContext.args,
-        { cwd: mockContext.cwd },
+        { cwd: mockContext.cwd, env: { AIWG_ROOT: "/mock/framework/root" } },
       );
     });
   });
@@ -425,19 +452,38 @@ describe("Subcommand Handlers", () => {
       await packagePluginHandler.execute(mockContext);
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/package-plugins.mjs",
-        ["my-plugin"],
+        ["--plugin", "my-plugin"],
         { cwd: mockContext.cwd },
       );
 
-      // Multiple plugins with flags
+      // Positional public name with supported flags
       vi.clearAllMocks();
-      mockContext.args = ["plugin1", "plugin2", "--output", "dist"];
+      mockContext.args = ["plugin1", "--provider", "codex", "--dry-run"];
       await packagePluginHandler.execute(mockContext);
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/package-plugins.mjs",
-        ["plugin1", "plugin2", "--output", "dist"],
+        ["--plugin", "plugin1", "--provider", "codex", "--dry-run"],
         { cwd: mockContext.cwd },
       );
+    });
+
+    it("preserves the legacy explicit --plugin compatibility form", async () => {
+      mockContext.args = ["--plugin", "sdlc", "--dry-run"];
+      await packagePluginHandler.execute(mockContext);
+      expect(mockRun).toHaveBeenCalledWith(
+        "tools/plugin/package-plugins.mjs",
+        ["--plugin", "sdlc", "--dry-run"],
+        { cwd: mockContext.cwd },
+      );
+    });
+
+    it("returns public AIWG help without exposing the internal node script", async () => {
+      mockContext.args = ["--help"];
+      const result = await packagePluginHandler.execute(mockContext);
+      expect(result.exitCode).toBe(0);
+      expect(result.message).toContain("aiwg package-plugin <name>");
+      expect(result.message).not.toContain("node tools/plugin");
+      expect(mockRun).not.toHaveBeenCalled();
     });
   });
 
@@ -466,13 +512,22 @@ describe("Subcommand Handlers", () => {
 
       // With additional args
       vi.clearAllMocks();
-      mockContext.args = ["--output", "dist"];
+      mockContext.args = ["--provider", "codex", "--dry-run"];
       await packageAllPluginsHandler.execute(mockContext);
       expect(mockRun).toHaveBeenCalledWith(
         "tools/plugin/package-plugins.mjs",
-        ["--all", "--output", "dist"],
+        ["--all", "--provider", "codex", "--dry-run"],
         { cwd: mockContext.cwd },
       );
+    });
+
+    it("returns public AIWG help", async () => {
+      mockContext.args = ["--help"];
+      const result = await packageAllPluginsHandler.execute(mockContext);
+      expect(result.exitCode).toBe(0);
+      expect(result.message).toContain("aiwg package-all-plugins");
+      expect(result.message).not.toContain("node tools/plugin");
+      expect(mockRun).not.toHaveBeenCalled();
     });
   });
 

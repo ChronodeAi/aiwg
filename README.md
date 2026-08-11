@@ -6,12 +6,53 @@
 
 **Multi-agent AI framework for Claude Code, Copilot, Cursor, Warp, and 6 more platforms**
 
-200+ agents, 67+ CLI commands, 400+ deployable agent/skill/command/rule artifacts, 8 core frameworks, 27 addons, and a training marketplace package. SDLC workflows, digital forensics, research management, marketing operations, media curation, ops infrastructure, knowledge base, and fine-tuning dataset curation — all deployable with one command.
+200+ agents, 109+ CLI commands, 400+ deployable agent/skill/command/rule artifacts, 8 core frameworks, 32 addons, and a 40-plugin Claude Code marketplace. SDLC workflows, digital forensics, research management, marketing operations, media curation, ops infrastructure, knowledge base, and fine-tuning dataset curation — all deployable with one command.
+
+The simplest setup is to paste this into a supported AI provider:
+
+```text
+Install or repair AIWG for this project by following
+https://raw.githubusercontent.com/jmagly/aiwg/main/setup.aiwg.yaml
+Explain the plan before changing anything, preserve my existing work, and ask
+me only for choices you cannot safely determine.
+```
+
+The installer detects old, broken, duplicate, and development-mode installs,
+then guides you through repair or update. It deploys the preferred complete
+system with `aiwg use all`, builds the indices, regenerates the project context,
+and verifies engagement. Most providers can continue in the same session. It
+asks you to restart only when the provider is demonstrably caching old startup
+instructions.
+
+If you prefer to install manually:
 
 ```bash
-npm i -g aiwg        # install globally
-aiwg use sdlc        # deploy SDLC framework
+npm i -g aiwg
+cd /path/to/your/project
+aiwg use all --provider <provider>
+aiwg index build --all
+aiwg regenerate --provider <provider>
+aiwg status --probe --json
 ```
+
+Replace `<provider>` with your AI tool's name, such as `claude`, `codex`,
+`copilot`, or `cursor`.
+
+For the complete beginner path and provider-name table, see
+[Install, Connect, and Verify](docs/getting-started/install-connect-verify.md).
+
+For a smaller CLI install that resolves signed, versioned resources from the
+release host:
+
+```bash
+npm i -g @aiwg/cli
+aiwg discover "architecture evolution"
+aiwg show skill architecture-evolution
+```
+
+See [Web-Backed AIWG Resources](docs/install/web-backed-resources.md) for source
+selection, exact-version overrides, cache verification, offline use, and the
+current framework-graph constraints.
 
 Then ask your AI assistant to set up the project for AIWG. The agent-led setup
 conversation should establish remotes, issue storage, delivery behavior,
@@ -33,7 +74,7 @@ Agents and stewards setting up AIWG end-to-end should use the
 
 [![Built With AIWG](https://aiwg.io/assets/badges/built-with-aiwg-dark.png)](https://aiwg.io/badges)
 
-[**Get Started**](#quick-start) · [**Features**](#what-you-get) · [**Agents**](#agents) · [**CLI Reference**](docs/cli-reference.md) · [**Documentation**](#documentation) · [**Community**](#community--support) · [**Badges**](https://aiwg.io/badges)
+[**Get Started**](#quick-start) · [**Features**](#what-you-get) · [**Agents**](#agents) · [**Documentation**](#documentation) · [**Community**](#community--support) · [**Badges**](https://aiwg.io/badges)
 
 [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white&style=flat-square)](https://discord.gg/BuAusFMxdA)
 [![Telegram](https://img.shields.io/badge/Telegram-Join-26A5E4?logo=telegram&logoColor=white&style=flat-square)](https://t.me/+oJg9w2lE6A5lOGFh)
@@ -105,21 +146,29 @@ You can also invoke AIWG without adjusting `PATH` by using `npx aiwg <command>`.
 
 ## What AIWG Is
 
-AIWG is a deployment tool and support utility for AI context. At its core, `aiwg use` copies markdown and YAML source files into the specific paths each AI platform looks in — `.claude/agents/`, `~/.codex/skills/`, `.cursor/rules/`, `.github/prompts/`, and six more — so one source of truth works across 10 platforms.
+AIWG is a deployment tool and support utility for AI context. At its core, `aiwg use` copies markdown and YAML source files into the specific paths each AI platform looks in — `.claude/agents/`, `.agents/skills/`, `.cursor/rules/`, `.github/prompts/`, and six more — so one source of truth works across 10 platforms.
 
 Around that core, AIWG ships agent-facing utilities for things the base platforms do not handle on their own: persistent artifact memory (`.aiwg/`), background orchestration, autonomous loops, artifact indexing, cost telemetry, health diagnostics, and more. These are tools the agent calls when you ask for something AIWG-shaped — you stay in chat. Most are opt-in. The deployment layer works standalone as plain text files the platform reads natively.
 
 ### Project scope (recommended) vs user scope (global)
 
-`aiwg use` writes artifacts at one of two scopes. Both are first-class supported (see ADR-NUA-001 in `.aiwg/studies/novice-user-adoption/`):
+`aiwg use` supports project deployments, additive user mirrors, and a
+user-global bootstrap:
 
-- **Project scope** — default. Run `aiwg use sdlc` from a project root and the artifacts land in `./.claude/agents/`, `./.claude/skills/`, etc. One project's agent set never bleeds into another's session. **This is the recommended default for most use cases.**
-- **User scope (global install)** — `aiwg use sdlc --scope user` writes to `~/.claude/agents/`, `~/.claude/skills/`, etc. Same artifact set loads into every session, regardless of project. Fits "AIWG in every conversation" workflows and is the canonical mode for OpenClaw and Hermes (whose primary discovery is user-scope).
+- **Project scope** — default. Run `aiwg use all --provider <provider>` from a project root and the artifacts land in that provider's project paths. One project's agent set never bleeds into another's session. **This is the recommended default for new users.**
+- **User scope (additive mirror)** — `aiwg use all --provider <provider> --scope user` keeps the
+  project deployment and mirrors it to `~/.claude/agents/`,
+  `~/.claude/skills/`, etc.
+- **Global bootstrap** — `aiwg use all --provider claude --global` installs
+  framework and kernel assets in native user-level paths while leaving only
+  lightweight context and provider bootstrap files in the current project.
+  Use `aiwg regenerate --provider <name>` to wire additional projects without
+  deploying their own skill copies.
 
 The trade-off is real: when the same agent set loads into every session, context from one project can bleed into reasoning about another. Research (REF-720, *Lost in Multi-Turn Conversation*, MSR/Salesforce 2025) measured a 39% capability drop when this happens. The non-blocking project-isolation warning surfaces the trade-off at deploy time so the scope choice is informed. Neither scope is wrong; pick the one that fits the workflow.
 
 See the [Agentic Install Runbook](docs/agentic-install-runbook.md) for the
-zero-to-running setup path, and `docs/cli-reference.md` (under `aiwg use` →
+zero-to-running setup path, and `https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md` (under `aiwg use` →
 "Scope models") for the per-provider details and the global-install rough-edge
 inventory.
 
@@ -386,7 +435,7 @@ AIWG adds structure (templates, phases, gates) that slows trivial tasks but scal
 User intent → AIWG CLI → Deploy agents + rules + templates → AI platform
                 │                                                │
                 ▼                                                ▼
-         "aiwg use sdlc"                              Claude Code / Copilot /
+         "aiwg use all --provider X"                  Claude Code / Copilot /
                 │                                     Cursor / Warp / Factory /
                 ▼                                     OpenCode / Codex / Windsurf
          ┌──────────────┐
@@ -420,7 +469,7 @@ flowchart LR
     TPL[100+ templates]
   end
 
-  CLI([aiwg use sdlc<br/>--provider X]) --> DEPLOY
+  CLI([aiwg use all<br/>--provider X]) --> DEPLOY
 
   subgraph DEPLOY["Deploy step (one-shot)"]
     direction TB
@@ -478,7 +527,8 @@ The orchestration pattern: **Primary Author → Parallel Reviewers → Synthesiz
 - **334 artifact templates** — progressive disclosure templates for requirements, architecture, testing, security, deployment, and more
 - **8 platform support** — deploy to Claude Code, Copilot, Cursor, Warp, Factory AI, OpenCode, Codex, and Windsurf
 - **8 core frameworks + training marketplace package** — SDLC, Digital Forensics, Marketing Operations, Research Management, Media Curation, Ops Infrastructure, Knowledge Base, Security Engineering, plus [`aiwg-training`](https://github.com/jmagly/aiwg-training) for fine-tuning dataset curation (corpus-to-dataset pipeline with DPO/KTO/ORPO/SimPO export)
-- **27 addons** — semantic-memory kernel, llm-wiki (Obsidian-native knowledge base), RLM recursive decomposition, voice profiles, testing quality, mutation testing, UAT automation, and more
+- **32 addons** — compound memory, line memory, llm-wiki (Obsidian-native knowledge base), RLM recursive decomposition, fleet operations, browser control, testing quality, and more
+- **40 Claude Code plugins** — the complete framework and addon catalog is installable independently from the AIWG marketplace
 - **Agent Loop** — iterative task execution with automatic error recovery and crash resilience (6-8 hour sessions)
 - **RLM addon** — recursive context decomposition for processing 10M+ tokens via sub-agent delegation
 - **YAML metalanguage** — declarative schema-validated workflow definitions (JSON Schema 2020-12)
@@ -560,20 +610,32 @@ The bundle is **byte-identical** in shape to its upstream form, so
 ```bash
 /plugin marketplace add jmagly/ai-writing-guide
 /plugin install sdlc@aiwg
+/plugin install agent-loop@aiwg
+/plugin install compound-memory@aiwg
 ```
+
+The marketplace contains all 40 packaged frameworks and addons, so you can
+install only the capabilities a Claude Code workspace needs.
 
 ### Multi-Platform Deployment
 
 ```bash
-aiwg use sdlc                          # Claude Code (default)
-aiwg use sdlc --provider copilot       # GitHub Copilot
-aiwg use sdlc --provider cursor        # Cursor
-aiwg use sdlc --provider warp          # Warp Terminal
-aiwg use sdlc --provider factory       # Factory AI
-aiwg use sdlc --provider opencode      # OpenCode
-aiwg use sdlc --provider openai        # OpenAI/Codex
-aiwg use sdlc --provider windsurf      # Windsurf
+aiwg use all --provider claude         # Claude Code
+aiwg use all --provider codex          # OpenAI Codex
+aiwg use all --provider copilot        # GitHub Copilot
+aiwg use all --provider cursor         # Cursor
+aiwg use all --provider factory        # Factory AI
+aiwg use all --provider opencode       # OpenCode
+aiwg use all --provider warp           # Warp Terminal
+aiwg use all --provider windsurf       # Windsurf
+aiwg use all --provider openclaw       # OpenClaw
+aiwg use all --provider hermes         # Hermes
+aiwg use all --provider openhuman      # OpenHuman
 ```
+
+`all` means the complete deployable end-user surface. It intentionally omits
+contributor-only development bundles and packages that cannot be deployed
+directly.
 
 ### First-Party Integrators
 
@@ -602,7 +664,7 @@ If you ship a product that bundles AIWG and want to be listed here, open an issu
 | **[Ops Complete](agentic/code/frameworks/ops-complete/)** | 12 | 3 | Operational infrastructure — incident management, runbooks, troubleshooting workflows |
 | **[Security Engineering](agentic/code/frameworks/security-engineering/)** | 2 | 5 | Applied security beyond STRIDE/OWASP — cryptographic primitive selection, chain-of-trust integrity, authentication-factor architecture, degraded-mode design, runtime secret hygiene, supply-chain trust, physical-access threats. Pattern-based, product-agnostic |
 
-### Addons (27)
+### Addons (31)
 
 | Addon | What It Does |
 |-------|--------------|
@@ -616,6 +678,8 @@ If you ship a product that bundles AIWG and want to be listed here, open an issu
 | **[Agentic Installer](agentic/code/addons/agentic-installer/)** | `setup.aiwg.io/v1` SetupManifest installer — cross-platform install workflows with recovery |
 | **[AIWG Dev](agentic/code/addons/aiwg-dev/)** | AIWG development tooling — extension scaffolding, local-source dev mode |
 | **[Daemon](agentic/code/addons/daemon/)** | Persistent daemon mode — background sessions, task queue, health monitoring |
+| **[Compound Memory](agentic/code/addons/compound-memory/)** | Persistent context architecture combining immutable raw inputs, linked wiki knowledge, line-memory facts, generated outputs, and governed maintenance workflows |
+| **[Line Memory](agentic/code/addons/line-memory/)** | Durable append-only facts with retrieval, reinforcement, decay, pruning, and concurrent process safety |
 | **[LLM Wiki](agentic/code/addons/llm-wiki/)** | Obsidian-native knowledge base for LLM agents — semantic linking, vault integration |
 | **[NLP Prod](agentic/code/addons/nlp-prod/)** | Production NLP pipelines — entity extraction, classification, summarization |
 | **[Prose Integration](agentic/code/addons/prose-integration/)** | OpenProse contract grammar integration — declarative service contracts |
@@ -631,6 +695,9 @@ If you ship a product that bundles AIWG and want to be listed here, open an issu
 | **[AIWG Hooks](agentic/code/addons/aiwg-hooks/)** | Lifecycle event handlers — pre-session, post-write, workflow tracing |
 | **[AIWG Utils](agentic/code/addons/aiwg-utils/)** | Core meta-utilities (auto-installed with any framework) |
 | **[Droid Bridge](agentic/code/addons/droid-bridge/)** | Factory Droid orchestration — multi-platform agent bridge |
+| **[AIWG Fleet](agentic/code/addons/aiwg-fleet/)** | Governed multi-project maintenance with repository discovery, policy-aware planning, approval gates, and auditable execution |
+| **[Browser Control](agentic/code/addons/browser-control/)** | Permission-aware browser automation for user-controlled sessions through Playwright MCP |
+| **[Twelve-Factor](agentic/code/addons/twelve-factor/)** | Evidence-based application architecture review against Twelve-Factor and modern 12+ Factor criteria |
 | **[Star Prompt](agentic/code/addons/star-prompt/)** | Repository star prompt for success celebration |
 
 ---
@@ -1301,7 +1368,7 @@ All 8 platforms receive agents, commands, skills, and rules. Deployment adapts t
 | **Factory AI** | Tested | `.factory/droids/` | `.factory/commands/` | `.factory/skills/` | `.factory/rules/` | `--provider factory` |
 | **Cursor** | Tested | `.cursor/agents/` | `.cursor/commands/` | `.cursor/skills/` | `.cursor/rules/` | `--provider cursor` |
 | **OpenCode** | Tested | `.opencode/agent/` | `.opencode/commands/` | `.opencode/skill/` | `.opencode/rule/` | `--provider opencode` |
-| **OpenAI/Codex** | Tested | `.codex/agents/` | `~/.codex/prompts/` | `~/.codex/skills/` | `.codex/rules/` | `--provider openai` |
+| **OpenAI/Codex** | Tested | `.codex/agents/` | `~/.codex/prompts/` | `.agents/skills/` | `.codex/rules/` | `--provider codex` |
 | **Windsurf** | Experimental | AGENTS.md | `.windsurf/workflows/` | `.windsurf/skills/` | `.windsurf/rules/` | `--provider windsurf` |
 
 ---
@@ -1808,7 +1875,9 @@ Full research background, citations, and methodology: [docs/research/](docs/rese
 
 - **[Quick Start Guide](docs/quickstart.md)** — Install and deploy in minutes
 - **[Prerequisites](docs/getting-started/prerequisites.md)** — Node.js, AI platforms, OS support
-- **[CLI Reference](docs/cli-reference.md)** — 67+ commands with examples
+- **[Agent and Operator Reference](docs/agents/README.md)** — deterministic
+  commands, flags, outputs, and recovery contracts for agents and advanced
+  operators
 
 ### Customize
 

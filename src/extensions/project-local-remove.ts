@@ -13,12 +13,12 @@
  * @implements #1037
  */
 
-import { lstat, readdir, stat, unlink } from 'fs/promises';
-import { resolve, join, relative } from 'path';
-import { homedir } from 'os';
+import { lstat, readdir, stat, unlink, rmdir } from 'fs/promises';
+import { resolve, join, relative, dirname, isAbsolute } from 'path';
 import type { AiwgConfig, InstalledEntry } from '../config/aiwg-config.js';
 import { appendProjectLocalActivity } from './project-local-activity.js';
 import { sha256OfFileNormalized } from './managed-marker.js';
+import { getProviderArtifactPathStrings } from '../providers/provider-definitions.js';
 
 export type RemoveCase =
   | 'pristine'      // Case 1
@@ -143,95 +143,95 @@ export async function hashBundleArtifacts(
 }
 
 /**
- * Compute hashes for the deployed artifacts of a project-local bundle for a
- * specific provider, keyed by source-relative path.
- *
- * Unlike `hashBundleArtifacts()` which hashes the raw source files, this
- * function walks the same source-relative paths but reads them from the
- * provider's deployed location (e.g., `.codex/agents/...`). This captures the
- * post-transform state so `aiwg doctor --project-local` and `aiwg remove` can
- * compare against the file that actually exists on disk after deployment.
- *
- * Home-deploying providers (openclaw, hermes) are skipped because revert is out
- * of scope for this iteration.
+ * Hash the provider-transformed files produced by a successful deployment.
+ * The source hash map supplies the canonical inventory/key shape; values are
+ * read from the first canonical provider path that exists.
  */
-export async function hashDeployedArtifactsForProvider(
-  bundleAbsPath: string,
-  provider: string,
+export async function hashDeployedBundleArtifacts(
   projectDir: string,
+  provider: string,
+  sourceHashes: Record<string, string>,
 ): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  const prefix = PROVIDER_PREFIX[provider];
-  if (!prefix) return out;
-
-  const sourceHashes = await hashBundleArtifacts(bundleAbsPath);
-  for (const sourceRel of Object.keys(sourceHashes)) {
-    const candidates = candidateDeployedPaths(provider, sourceRel);
-    for (const c of candidates) {
-      const absPath = resolve(projectDir, c);
+  const deployed: Record<string, string> = {};
+  for (const [sourceRel, sourceHash] of Object.entries(sourceHashes)) {
+    // Keep the complete inventory if a provider path unexpectedly cannot be
+    // resolved. Removal then fails safely instead of clearing the registry
+    // while leaving an untracked provider artifact behind.
+    deployed[sourceRel] = sourceHash;
+    for (const candidate of candidateDeployedPaths(projectDir, provider, sourceRel)) {
       try {
-        out[sourceRel] = await sha256Hex(absPath);
+        deployed[sourceRel] = await sha256Hex(candidate);
         break;
       } catch {
-        // Candidate missing — try next (e.g., .md vs .mdc for cursor rules)
+        // Try translated/provider-alternate paths before leaving it absent.
       }
     }
   }
+  return deployed;
+}
 
-  return out;
+function stringHashMap(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, hash]) => typeof hash === 'string'),
+  ) as Record<string, string>;
 }
 
 /**
- * Provider-specific deploy-path conventions for the artifact directories
- * we currently emit. Keyed by provider, value is the prefix relative to
- * the project (or HOME for HOME-deploying providers — those are out of
- * scope for revert in this iteration; they are silently skipped with a
- * message).
+ * Resolve current provider hashes while preserving both upstream's legacy
+ * flat source inventory and Chronode's legacy provider-nested deployed hashes.
  */
-// Per PUW-026 (#1127): home-deploying providers get absolute prefixes so
-// `resolve(projectDir, prefix)` correctly produces the home-rooted path.
-// Previously these were `null`, which silently skipped lifecycle ops
-// against home-deployed project-local bundles (OpenClaw, Hermes).
-const PROVIDER_PREFIX: Record<string, string | null> = {
-  claude: '.claude',
-  cursor: '.cursor',
-  factory: '.factory',
-  opencode: '.opencode',
-  windsurf: '.windsurf',
-  warp: '.warp',
-  codex: '.codex',
-  copilot: '.github',     // copilot uses .github/agents, .github/instructions, .github/skills
-  openclaw: resolve(homedir(), '.openclaw'),
-  hermes: resolve(homedir(), '.hermes'),
-};
+export function artifactHashesForProvider(
+  entry: InstalledEntry,
+  provider: string,
+): Record<string, string> {
+  const deployed = entry.deployedArtifactHashes?.[provider];
+  if (deployed) return deployed;
 
-/**
- * Translate a source-relative artifact path to the provider's deploy path,
- * relative to the project (or HOME) root. Returns null when the provider
- * is HOME-deploying (revert from HOME is out of scope for this iteration).
- *
- * For most providers this is a 1:1 mapping (rules/x.md → .{p}/rules/x.md).
- */
-function deployedPathFor(
+  const raw = entry.artifactHashes as unknown as Record<string, unknown> | undefined;
+  if (!raw) return {};
+
+  const nested = stringHashMap(raw[provider]);
+  return Object.keys(nested).length > 0 ? nested : stringHashMap(raw);
+}
+
+/** Resolve a recorded source-relative artifact through the canonical provider
+ * definition rather than assuming every artifact lives directly under the
+ * provider prefix (#1869). Returned paths are absolute for both project- and
+ * home-deploying providers. */
+export function candidateDeployedPaths(
+  projectDir: string,
   provider: string,
   sourceRel: string,
-): string | null {
-  const prefix = PROVIDER_PREFIX[provider];
-  if (!prefix) return null;
-  // Some providers rename rules to .mdc (cursor); revert checks both.
-  return `${prefix}/${sourceRel}`;
-}
+): string[] {
+  const separator = sourceRel.indexOf('/');
+  if (separator < 1) return [];
+  const artifactType = sourceRel.slice(0, separator);
+  if (!['agents', 'commands', 'skills', 'rules'].includes(artifactType)) return [];
 
-/** Try multiple plausible deployed paths (e.g., .md vs .mdc for rules). */
-function candidateDeployedPaths(provider: string, sourceRel: string): string[] {
-  const paths: string[] = [];
-  const main = deployedPathFor(provider, sourceRel);
-  if (main) paths.push(main);
-  // Cursor rule rename
-  if (provider === 'cursor' && sourceRel.startsWith('rules/') && sourceRel.endsWith('.md')) {
-    paths.push(`.cursor/${sourceRel.slice(0, -3)}.mdc`);
+  const paths = getProviderArtifactPathStrings(provider);
+  const root = paths?.[artifactType as 'agents' | 'commands' | 'skills' | 'rules'];
+  if (!root) return [];
+
+  const tail = sourceRel.slice(separator + 1);
+  const absoluteRoot = isAbsolute(root) ? root : resolve(projectDir, root);
+  const candidates = [join(absoluteRoot, tail)];
+
+  // Codex discovers project skills from the shared native `.agents/skills`
+  // root while retaining `.codex` as its compatibility deployment surface.
+  if (provider === 'codex' && artifactType === 'skills') {
+    candidates.unshift(join(resolve(projectDir, '.agents', 'skills'), tail));
   }
-  return paths;
+
+  // Provider adapters may translate source extensions.
+  if (provider === 'cursor' && artifactType === 'rules' && tail.endsWith('.md')) {
+    candidates.push(join(absoluteRoot, `${tail.slice(0, -3)}.mdc`));
+  }
+  if (provider === 'codex' && artifactType === 'agents' && tail.endsWith('.md')) {
+    candidates.push(join(absoluteRoot, `${tail.slice(0, -3)}.toml`));
+  }
+  return [...new Set(candidates)];
 }
 
 async function tryUnlink(absPath: string): Promise<{ deleted: boolean; permission?: boolean }> {
@@ -243,6 +243,17 @@ async function tryUnlink(absPath: string): Promise<{ deleted: boolean; permissio
     if (e.code === 'ENOENT') return { deleted: false };
     if (e.code === 'EACCES' || e.code === 'EROFS') return { deleted: false, permission: true };
     throw err;
+  }
+}
+
+async function cleanupManagedSkillDirectory(absPath: string): Promise<void> {
+  if (!absPath.endsWith('/SKILL.md')) return;
+  const skillDir = dirname(absPath);
+  await tryUnlink(join(skillDir, '.aiwg-managed'));
+  try {
+    await rmdir(skillDir);
+  } catch {
+    // Preserve directories containing any operator or provider-created files.
   }
 }
 
@@ -273,6 +284,38 @@ async function classify(
   return 'mutated';
 }
 
+type RemovalArtifactHashes = Record<string, string | undefined>;
+
+/**
+ * Read the current provider-scoped hash map while safely recognizing the
+ * legacy flat `Record<sourceRel, hash>` registry shape.
+ *
+ * Legacy values describe source artifacts, not provider-transformed deploys,
+ * so expose their keys with an undefined expected hash. Removal will classify
+ * them as `unhashed` and require confirmation or `--force` instead of silently
+ * trusting a potentially inapplicable hash.
+ */
+function removalHashesForProvider(
+  entry: InstalledEntry,
+  provider: string,
+): RemovalArtifactHashes {
+  const deployed = entry.deployedArtifactHashes?.[provider];
+  if (deployed) return deployed;
+
+  const raw = entry.artifactHashes as unknown as Record<string, unknown> | undefined;
+  if (!raw) return {};
+
+  const nested = stringHashMap(raw[provider]);
+  if (Object.keys(nested).length > 0) return nested;
+
+  // A flat map without provider-deployed hashes is a source inventory from an
+  // older registry. Preserve its keys, but do not trust source hashes as proof
+  // that a transformed provider artifact is pristine.
+  return Object.fromEntries(
+    Object.keys(stringHashMap(raw)).map(sourceRel => [sourceRel, undefined]),
+  );
+}
+
 /**
  * Look up which other installed bundle (if any) records this deployed-path
  * in its own registry entry. If found, the file belongs to another bundle —
@@ -287,9 +330,8 @@ function resolveOwnership(
   for (const [name, entry] of Object.entries(config.installed)) {
     if (name === selfBundleId) continue;
     if (entry.source !== 'project-local') continue;
-    if (!entry.artifactHashes) continue;
-    const providerHashes = entry.artifactHashes[provider];
-    if (providerHashes && sourceRel in providerHashes) {
+    const hashes = artifactHashesForProvider(entry, provider);
+    if (sourceRel in hashes) {
       // Same source-rel path claimed by another project-local bundle —
       // the deployed file (if present) is theirs, not ours.
       return name;
@@ -328,7 +370,6 @@ export async function removeProjectLocalBundle(
   const confirmMutation = opts.confirmMutation ?? (async () => false);
 
   const installedEntry = entry as InstalledEntry;
-  const artifactHashes = installedEntry.artifactHashes ?? {};
   const providers = Object.keys(installedEntry.deployedTo).filter(
     p => !onlyProvider || p === onlyProvider,
   );
@@ -339,9 +380,22 @@ export async function removeProjectLocalBundle(
 
   for (const provider of providers) {
     let providerHadSkip = false;
-    const providerHashes = artifactHashes[provider] ?? {};
+    const providerHashes = removalHashesForProvider(installedEntry, provider);
+    const sourceRels = Object.keys(providerHashes);
 
-    for (const sourceRel of Object.keys(providerHashes)) {
+    if (sourceRels.length === 0) {
+      providerHadSkip = true;
+      outcomes.push({
+        provider,
+        artifactPath: '(unknown)',
+        deployedAbsPath: '(unknown)',
+        case: 'unhashed',
+        reverted: false,
+        message: 'no per-provider artifact inventory — registry preserved for retry',
+      });
+    }
+
+    for (const sourceRel of sourceRels) {
       const owner = resolveOwnership(config, bundleId, provider, sourceRel);
       if (owner) {
         providerHadSkip = true;
@@ -364,28 +418,30 @@ export async function removeProjectLocalBundle(
         continue;
       }
 
-      const candidates = candidateDeployedPaths(provider, sourceRel);
+      const candidates = candidateDeployedPaths(projectDir, provider, sourceRel);
       let resolvedAbs: string | null = null;
       let detectedCase: RemoveCase = 'missing';
       for (const c of candidates) {
-        const abs = resolve(projectDir, c);
-        const k = await classify(providerHashes[sourceRel], abs);
+        const k = await classify(providerHashes[sourceRel], c);
         if (k !== 'missing') {
-          resolvedAbs = abs;
+          resolvedAbs = c;
           detectedCase = k;
           break;
         }
       }
       if (!resolvedAbs) {
         // Pick the first candidate just so the outcome carries a path
-        const fallback = candidates[0] ? resolve(projectDir, candidates[0]) : '(unknown)';
+        const fallback = candidates[0] ?? '(unknown)';
+        providerHadSkip = true;
         outcomes.push({
           provider,
           artifactPath: sourceRel,
           deployedAbsPath: fallback,
           case: 'missing',
           reverted: false,
-          message: 'already absent',
+          message: candidates.length === 0
+            ? 'provider artifact path unavailable — registry preserved'
+            : 'recorded artifact not found at canonical provider path — registry preserved for retry',
         });
         continue;
       }
@@ -400,6 +456,7 @@ export async function removeProjectLocalBundle(
             providerHadSkip = true;
             outcomes.push({ provider, artifactPath: sourceRel, deployedAbsPath: resolvedAbs, case: 'permission', reverted: false, message: 'permission denied' });
           } else {
+            if (r.deleted) await cleanupManagedSkillDirectory(resolvedAbs);
             outcomes.push({ provider, artifactPath: sourceRel, deployedAbsPath: resolvedAbs, case: 'pristine', reverted: r.deleted, message: r.deleted ? 'reverted' : 'already absent' });
           }
         }
@@ -430,6 +487,7 @@ export async function removeProjectLocalBundle(
           providerHadSkip = true;
           outcomes.push({ provider, artifactPath: sourceRel, deployedAbsPath: resolvedAbs, case: 'permission', reverted: false, message: 'permission denied' });
         } else {
+          if (r.deleted) await cleanupManagedSkillDirectory(resolvedAbs);
           outcomes.push({ provider, artifactPath: sourceRel, deployedAbsPath: resolvedAbs, case: detectedCase, reverted: r.deleted, message: r.deleted ? 'reverted (mutation overridden)' : 'already absent' });
         }
       }
@@ -444,6 +502,12 @@ export async function removeProjectLocalBundle(
     // Mutate registry for fully-reverted providers
     if (!dryRun && !keepRegistry && !providerHadSkip) {
       delete installedEntry.deployedTo[provider];
+      if (installedEntry.deployedArtifactHashes) {
+        delete installedEntry.deployedArtifactHashes[provider];
+        if (Object.keys(installedEntry.deployedArtifactHashes).length === 0) {
+          delete installedEntry.deployedArtifactHashes;
+        }
+      }
     }
   }
 

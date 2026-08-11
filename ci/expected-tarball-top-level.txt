@@ -48,5 +48,9 @@ docs
 man
 package.json
 prebuilt
+schemas
+setup.aiwg.yaml
 templates
+test
 tools
+vscode-extension

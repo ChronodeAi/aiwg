@@ -20,17 +20,29 @@ targets are deliberately excluded from the button (see
 A Reconnect never creates a replacement instance and never destroys the
 running runtime — it only attempts to restore the missing agent registration.
 
+Agentic Sandbox v2026.8.3 changes the managed Linux-container identity
+boundary to credential-free UDS control with a unique control UID and workload
+UID `10001`. Containers created by older releases must be reported as requiring
+recreation; reconnecting or restarting one does not establish the new boundary.
+Cockpit preserves the executor's legacy/recreation-required posture rather than
+silently labeling an existing container secure-default. See the
+[v2026.8.3 qualification](./qualifications/agentic-sandbox-v2026.8.3.md).
+
 ## What the Bridge tries, in order
 
-`POST /api/instances/:id/reconnect` walks three paths:
+`POST /api/instances/:id/reconnect` walks executor-owned recovery first, then
+local-development fallbacks only when policy allows them:
 
 1. **Executor-owned reconnect** — the sandbox's own reconnect endpoints
    (v2 admin first, then legacy candidates). If the executor handles it, done.
-2. **Docker/container fallback** — `docker exec <container> agent-reconnect`,
+2. **Docker/container fallback** — disabled by default. Set
+   `AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK=1` for local development to allow
+   `docker exec <container> agent-reconnect`,
    which SIGHUPs the in-container agent so it re-registers in place without
    restarting the container. Requires sandbox images that ship the
    `agent-reconnect` helper (agentic-sandbox v2026.7.5+); on failure the
-   response says to repull/rebuild the image.
+   response says to repull/rebuild the image. Without the opt-in, Cockpit
+   returns 409 `local_docker_fallback_disabled`.
 3. **VM fallback** (new in 2026.7, roctinam/aiwg#1778) — for `vm`/`qemu`/`kvm`
    instances the Bridge delivers the same SIGHUP **through the libvirt
    guest-agent channel**:
@@ -42,9 +54,12 @@ running runtime — it only attempts to restore the missing agent registration.
    The sandbox VM images bake qemu-guest-agent for exactly this kind of
    in-guest exec, and the agent handles SIGHUP as reconnect-in-place on every
    runtime, so no VM image change is needed. The libvirt domain name is the
-   instance's launch name. Requirements: the Bridge host needs `virsh` access
-   to the domain, and the guest-agent channel must be up — a 502 names
-   whichever is missing.
+   instance's launch name. This fallback is automatic on Linux. On non-Linux
+   hosts, set `AIWG_COCKPIT_LOCAL_LIBVIRT_FALLBACK=1` for explicit local
+   development; otherwise Cockpit returns 409
+   `local_libvirt_fallback_disabled`. Requirements: the Bridge host needs
+   `virsh` access to the domain, and the guest-agent channel must be up — a 502
+   names whichever is missing.
 
 If none of the paths apply, the 409 response spells out the manual host-side
 command (`pkill -HUP -x agent-client`).
@@ -71,7 +86,13 @@ vanish after a reconnect, check the agent version in that runtime before
 suspecting Cockpit. On older agents, prefer **managed** session backends for
 long-running work.
 
-After a successful reconnect: refresh Inventory, then attach from Sessions.
+Cockpit does not require a page refresh after a transient Bridge or executor
+drop. The global status changes to **Reconnecting…**, retains last-known counts
+with an explicit stale-state tooltip, retries the Bridge/executor path with
+bounded backoff, and pulses every mounted live-data view when both REST and the
+SSE event stream recover. Inventory continues its own polling, Sessions uses
+bounded retry, and terminal WebSockets reconnect independently. After the
+status returns to **Bridge live**, attach from Sessions as usual.
 
 ## Host runtimes
 
@@ -93,14 +114,16 @@ daemon silently. Manual agent recovery on a host is
 `DELETE /api/instances/:id` is defensive about executor/runtime state skew:
 
 - Tries the executor's v2 and legacy destroy surfaces.
-- For Docker rows, reconciles with `docker rm -f <name>` even after admin
-  success (current sandbox builds can list Docker rows the lifecycle verbs
-  don't know), and falls back to it when the admin surface returns
-  instance-not-found.
+- For Docker rows, local `docker rm -f <name>` reconciliation is disabled by
+  default and enabled only by `AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK=1`. With the
+  opt-in, Cockpit can reconcile after admin success or when the admin surface
+  reports instance-not-found; without it, those cases return 409
+  `local_docker_fallback_disabled` and preserve the executor boundary.
 - An already-removed target reports success with an `already_gone` marker
   instead of failing the operator's intent.
-- A stopped Docker row's Destroy removes the container directly — the UI
-  tooltip says so before you click.
+- A stopped Docker row can use local Docker removal only under the same
+  explicit fallback opt-in; otherwise Cockpit reports the disabled fallback
+  instead of crossing the executor boundary.
 
 ## Audit
 
@@ -114,3 +137,12 @@ and results (secrets redacted). See
 - [Sessions](./sessions.md) — backends and what "managed" buys you
 - upstream: roctinam/agentic-sandbox#633 (VM idle-drop root cause),
   roctinam/agentic-sandbox#634 (session survival across reconnect)
+## Managed-Docker identity upgrades
+
+An existing container without executor-reported control/workload identity
+evidence must be recreated. Reconnect and restart do not retrofit mounts,
+peer-credential mappings, UID separation, or cleared capability boundaries.
+Destroy the old managed container through the executor, then launch a new one.
+If a Docker startup profile is rejected for raw credential references, use the
+sandbox credential proxy or choose a VM runtime; Cockpit will not silently
+downgrade transport or materialize the credential in the container.

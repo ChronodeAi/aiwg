@@ -467,6 +467,7 @@ export async function deployCommands(targetDir, srcRoot, opts) {
       `or a validated AIWG_ROOT`
     );
   }
+  const helperRoot = path.resolve(path.dirname(scriptPath), '..', '..');
 
   console.log('Delegating command deployment to deploy-prompts-codex.mjs (~/.codex/prompts/)...');
 
@@ -489,7 +490,7 @@ export async function deployCommands(targetDir, srcRoot, opts) {
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
-      cwd: srcRoot
+      cwd: helperRoot
     });
 
     child.on('close', (code) => {
@@ -513,6 +514,7 @@ export async function deploySkills(targetDir, srcRoot, opts) {
       `or a validated AIWG_ROOT`
     );
   }
+  const helperRoot = path.resolve(path.dirname(scriptPath), '..', '..');
 
   console.log('Delegating skill deployment to deploy-skills-codex.mjs...');
 
@@ -539,7 +541,7 @@ export async function deploySkills(targetDir, srcRoot, opts) {
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
-      cwd: srcRoot
+      cwd: helperRoot
     });
 
     child.on('close', (code) => {

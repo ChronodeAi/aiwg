@@ -93,7 +93,10 @@ function displayHelp(): void {
   helpGroup('DISCOVERY', [
     ['discover "<phrase>"', 'Find skills/agents/commands/rules by capability'],
     ['show <type> <name>', 'Stream the body of an indexed artifact'],
+    ['versions <list|resolve|show>', 'Browse and resolve signed AIWG web resource releases'],
+    ['auth <login|status|logout>', 'Authenticate for paid AIWG web resources'],
     ['index <subcommand>', 'Manage the artifact index (build/query/discover/deps/stats)'],
+    ['artifacts move --to <path>', 'Move/rename the project AIWG artifact root and reindex'],
   ]);
 
   helpGroup('DISPATCH', [
@@ -139,7 +142,7 @@ function displayHelp(): void {
     ['doctor', 'Check installation health'],
     ['version', 'Show version and channel info'],
     ['refresh', 'Update AIWG and redeploy frameworks (formerly: sync)'],
-    ['update', 'Check for updates'],
+    ['update', 'Update the active installation and re-deploy installed frameworks (alias: upgrade)'],
     ['help', 'Show this help message'],
   ]);
 
@@ -155,6 +158,7 @@ function displayHelp(): void {
   ui.blank();
   console.log(`  ${ui.dimText('Examples:')}`);
   console.log(`    aiwg use sdlc                   ${ui.dimText('Install SDLC framework')}`);
+  console.log(`    aiwg use sdlc --global          ${ui.dimText('Install user assets + lightweight project wiring')}`);
   console.log(`    aiwg use cockpit                ${ui.dimText('Install opt-in Cockpit package')}`);
   console.log(`    aiwg cockpit                    ${ui.dimText('Launch Cockpit after install')}`);
   console.log(`    aiwg discover "deploy"          ${ui.dimText('Find skills by capability')}`);

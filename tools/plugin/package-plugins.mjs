@@ -15,11 +15,15 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { importImpl } from '../_resolve-impl.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const PLUGINS_DIR = path.join(ROOT_DIR, 'agentic/code/plugins');
+const RELEASE_VERSION = JSON.parse(
+  fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'),
+).version;
 
 // Plugin configurations
 const PLUGIN_CONFIGS = {
@@ -33,6 +37,16 @@ const PLUGIN_CONFIGS = {
       commands: 'agentic/code/frameworks/sdlc-complete/commands',
       skills: 'agentic/code/frameworks/sdlc-complete/skills'
     },
+    extraCopy: [
+      { from: 'tools/security/threat-assessment.mjs', to: 'tools/security/threat-assessment.mjs' }
+    ],
+    rewrites: [
+      {
+        file: 'skills/address-issues-threat-assess/scripts/assess.mjs',
+        from: '../../../../../../../tools/security/threat-assessment.mjs',
+        to: '../../../tools/security/threat-assessment.mjs'
+      }
+    ],
     readme: `# AIWG SDLC Complete
 
 Complete Software Development Lifecycle framework with 180+ specialized agents.
@@ -80,7 +94,6 @@ Key agents include:
     description: 'Marketing automation framework with 37 specialized agents for campaign management.',
     sources: {
       agents: 'agentic/code/frameworks/media-marketing-kit/agents',
-      commands: 'agentic/code/frameworks/media-marketing-kit/commands',
       skills: 'agentic/code/frameworks/media-marketing-kit/skills'
     },
     readme: `# AIWG Marketing Kit
@@ -212,7 +225,6 @@ Writing quality validation and AI pattern detection.
     description: 'Core AIWG utilities for context regeneration and workspace management.',
     sources: {
       agents: 'agentic/code/addons/aiwg-utils/agents',
-      commands: 'agentic/code/addons/aiwg-utils/commands',
       skills: 'agentic/code/addons/aiwg-utils/skills'
     },
     readme: `# AIWG Utilities
@@ -291,7 +303,6 @@ Then install in Codex via the \`/plugins\` command or the repo marketplace.
     description: 'Digital forensics and incident response framework with 14 specialized agents covering target profiling, evidence acquisition, log/memory/container/cloud analysis, IOC extraction, and reporting.',
     sources: {
       agents: 'agentic/code/frameworks/forensics-complete/agents',
-      commands: 'agentic/code/frameworks/forensics-complete/commands',
       skills: 'agentic/code/frameworks/forensics-complete/skills'
     },
     readme: `# AIWG Forensics Complete
@@ -335,7 +346,6 @@ Digital forensics and incident response framework with 14 specialized agents.
     description: 'Applied security framework for cryptographic primitive selection, chain-of-trust design, authentication factor analysis, supply-chain trust, and physical-threat modeling. Complements OWASP-style application audits.',
     sources: {
       agents: 'agentic/code/frameworks/security-engineering/agents',
-      commands: 'agentic/code/frameworks/security-engineering/commands',
       skills: 'agentic/code/frameworks/security-engineering/skills'
     },
     readme: `# AIWG Security Engineering
@@ -382,7 +392,6 @@ Applied security engineering framework for cryptographic primitive selection, ch
     description: 'Research workflow framework with 9 specialized agents for discovery, acquisition, synthesis, citation management, GRADE quality assessment, and OAIS-compliant archival.',
     sources: {
       agents: 'agentic/code/frameworks/research-complete/agents',
-      commands: 'agentic/code/frameworks/research-complete/commands',
       skills: 'agentic/code/frameworks/research-complete/skills'
     },
     readme: `# AIWG Research Complete
@@ -428,7 +437,6 @@ Research workflow framework with 9 specialized agents for academic and technical
     description: 'Media archive management framework with 7 specialized agents for source discovery, acquisition (yt-dlp / Internet Archive / Bandcamp), quality assessment, metadata tagging, and provenance tracking.',
     sources: {
       agents: 'agentic/code/frameworks/media-curator/agents',
-      commands: 'agentic/code/frameworks/media-curator/commands',
       skills: 'agentic/code/frameworks/media-curator/skills'
     },
     readme: `# AIWG Media Curator
@@ -442,6 +450,8 @@ Media archive management framework with 7 specialized agents.
 - **Acquisition**: yt-dlp patterns, archive download, format selection
 - **Quality Filtering**: Audio/video quality scoring, accept/reject thresholds
 - **Metadata Curation**: opustags / ffmpeg patterns, cover art embedding
+- **Transcription**: executable local WhisperX transcript sidecars
+- **Speaker Diarization**: anonymous speaker clustering with pyannote via WhisperX
 - **Provenance Tracking**: W3C PROV-O derivation chains
 - **Export**: Plex / Jellyfin / MPD / archival formats
 
@@ -456,6 +466,12 @@ Media archive management framework with 7 specialized agents.
 
 # Tag a collection
 /tag-collection
+
+# Generate a transcript sidecar
+/transcribe-media
+
+# Generate an anonymous speaker-diarized transcript sidecar
+/diarize-media
 
 # Verify archive integrity
 /verify-archive
@@ -475,7 +491,6 @@ Media archive management framework with 7 specialized agents.
     description: 'Operational infrastructure framework with 12 specialized agents covering incident response, runbook execution, fleet inventory, certificate lifecycle, and disaster recovery planning.',
     sources: {
       agents: 'agentic/code/frameworks/ops-complete/agents',
-      commands: 'agentic/code/frameworks/ops-complete/commands',
       skills: 'agentic/code/frameworks/ops-complete/skills'
     },
     readme: `# AIWG Ops Complete
@@ -594,6 +609,57 @@ Traces are written to \`.aiwg/traces/\` in JSONL format.
   }
 };
 
+// Manifest-backed Claude plugins. Keep the curated framework bundles above,
+// then expose every user-facing addon that contains a Claude-discoverable
+// component. Copying the complete addon directory is intentional: Claude Code
+// installs marketplace plugins into an isolated cache, so skills must not rely
+// on ../ paths back into the AIWG monorepo for templates, schemas, or scripts.
+const MANIFEST_PLUGIN_SOURCES = [
+  ['validation-complete', 'agentic/code/frameworks/validation-complete'],
+  ['agent-loop', 'agentic/code/addons/agent-loop'],
+  ['agent-persistence', 'agentic/code/addons/agent-persistence'],
+  ['agentic-installer', 'agentic/code/addons/agentic-installer'],
+  ['aiwg-evals', 'agentic/code/addons/aiwg-evals'],
+  ['aiwg-dev', 'agentic/code/addons/aiwg-dev'],
+  ['auto-memory', 'agentic/code/addons/auto-memory'],
+  ['browser-control', 'agentic/code/addons/browser-control'],
+  ['color-palette', 'agentic/code/addons/color-palette'],
+  ['context-curator', 'agentic/code/addons/context-curator'],
+  ['compound-memory', 'agentic/code/addons/compound-memory'],
+  ['daemon', 'agentic/code/addons/daemon'],
+  ['doc-intelligence', 'agentic/code/addons/doc-intelligence'],
+  ['droid-bridge', 'agentic/code/addons/droid-bridge'],
+  ['guided-implementation', 'agentic/code/addons/guided-implementation'],
+  ['line-memory', 'agentic/code/addons/line-memory'],
+  ['llm-wiki', 'agentic/code/addons/llm-wiki'],
+  ['nlp-prod', 'agentic/code/addons/nlp-prod'],
+  ['prose-integration', 'agentic/code/addons/prose-integration'],
+  ['rlm', 'agentic/code/addons/rlm'],
+  ['semantic-memory', 'agentic/code/addons/semantic-memory'],
+  ['skill-factory', 'agentic/code/addons/skill-factory'],
+  ['star-prompt', 'agentic/code/addons/star-prompt'],
+  ['testing-quality', 'agentic/code/addons/testing-quality'],
+  ['twelve-factor', 'agentic/code/addons/twelve-factor'],
+  ['uat-mcp', 'agentic/code/addons/uat-mcp'],
+  ['verbalized-sampling', 'agentic/code/addons/verbalized-sampling'],
+];
+
+for (const [id, sourceRoot] of MANIFEST_PLUGIN_SOURCES) {
+  if (!fs.existsSync(path.join(ROOT_DIR, sourceRoot, 'manifest.json'))) continue;
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(ROOT_DIR, sourceRoot, 'manifest.json'), 'utf8'),
+  );
+  PLUGIN_CONFIGS[id] = {
+    name: id,
+    displayName: manifest.name || id,
+    version: manifest.version || '1.0.0',
+    description: manifest.description || `${manifest.name || id} for AIWG`,
+    keywords: manifest.keywords || manifest.tags || [],
+    category: manifest.category || 'productivity',
+    sourceRoot,
+  };
+}
+
 // Parse command line arguments
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -617,6 +683,12 @@ function parseArgs() {
       case '--provider':
         options.provider = args[++i];
         break;
+      case '--source':
+        options.source = args[++i];
+        break;
+      case '--output':
+        options.output = args[++i];
+        break;
       case '--clean':
       case '-c':
         options.clean = true;
@@ -639,6 +711,8 @@ Options:
   --provider NAME       Package for a specific provider
                         (claude, codex, cursor, factory, openclaw, all)
                         Default: claude
+  --source PATH         Explicit project-local wrapper source
+  --output PATH         Standalone archive output (default: dist/plugins)
   --clean, -c           Clean plugins directory before packaging
   --dry-run, -n         Show what would be done without writing
   --help, -h            Show this help message
@@ -706,7 +780,7 @@ function cleanPlugin(pluginDir) {
 
   const entries = fs.readdirSync(pluginDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name === '.claude-plugin') continue;
+    if (entry.name.endsWith('-plugin') || entry.name === 'clawhub.json') continue;
 
     const fullPath = path.join(pluginDir, entry.name);
     if (entry.isDirectory()) {
@@ -730,6 +804,15 @@ function packagePlugin(name, config, options) {
     }
   }
 
+  // Copy a complete manifest-backed component so cached plugins retain every
+  // referenced script/template/schema. Curated legacy bundles continue to use
+  // their explicit source maps below.
+  if (config.sourceRoot) {
+    console.log(`  📁 Copying self-contained source from ${config.sourceRoot}...`);
+    const count = copyDir(config.sourceRoot, pluginDir, options.dryRun);
+    console.log(`     ${count} files`);
+  }
+
   // Copy sources
   for (const [type, srcPath] of Object.entries(config.sources || {})) {
     const destPath = path.join(pluginDir, type);
@@ -744,8 +827,28 @@ function packagePlugin(name, config, options) {
   for (const extra of config.extraCopy || []) {
     const destPath = path.join(pluginDir, extra.to);
     console.log(`  📁 Copying ${extra.to}...`);
-    const count = copyDir(extra.from, destPath, options.dryRun);
+    const sourcePath = path.join(ROOT_DIR, extra.from);
+    let count;
+    if (fs.statSync(sourcePath).isFile()) {
+      count = 1;
+      if (!options.dryRun) {
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        fs.copyFileSync(sourcePath, destPath);
+      }
+    } else {
+      count = copyDir(extra.from, destPath, options.dryRun);
+    }
     console.log(`     ${count} files`);
+  }
+
+  for (const rewrite of config.rewrites || []) {
+    if (options.dryRun) continue;
+    const target = path.join(pluginDir, rewrite.file);
+    const body = fs.readFileSync(target, 'utf8');
+    if (!body.includes(rewrite.from)) {
+      throw new Error(`${name}: rewrite source not found in ${rewrite.file}`);
+    }
+    fs.writeFileSync(target, body.replaceAll(rewrite.from, rewrite.to), 'utf8');
   }
 
   // Write README
@@ -755,7 +858,72 @@ function packagePlugin(name, config, options) {
     console.log('  📄 Created README.md');
   }
 
+  if (!options.dryRun) {
+    const manifestDir = path.join(pluginDir, '.claude-plugin');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(path.join(manifestDir, 'plugin.json'), `${JSON.stringify({
+      name: config.name,
+      // Claude caches pinned marketplace plugins by version. AIWG publishes
+      // these generated bundles with the repository release, so their
+      // distribution version must advance with package.json even when the
+      // canonical component's internal schema/API version does not.
+      version: RELEASE_VERSION,
+      description: config.description,
+      author: { name: 'AIWG Contributors', email: 'support@aiwg.io' },
+      homepage: 'https://aiwg.io',
+      repository: 'https://github.com/jmagly/aiwg',
+      license: 'MIT',
+      keywords: config.keywords || [],
+    }, null, 2)}\n`);
+  }
+
   console.log(`  ✅ ${config.displayName} packaged successfully`);
+}
+
+function writeClaudeMarketplaceManifest(options) {
+  const existingPath = path.join(ROOT_DIR, '.claude-plugin', 'marketplace.json');
+  const existing = JSON.parse(fs.readFileSync(existingPath, 'utf8'));
+  const external = existing.plugins
+    .filter((plugin) => typeof plugin.source !== 'string')
+    .map((plugin) => ({
+      ...plugin,
+      source: plugin.source?.type === 'github'
+        ? {
+            source: 'github',
+            repo: plugin.source.repo,
+            ...(plugin.source.branch ? { ref: plugin.source.branch } : {}),
+          }
+        : plugin.source,
+    }));
+  const local = Object.entries(PLUGIN_CONFIGS)
+    .filter(([, config]) => config.pluginType !== 'codex')
+    .map(([name, config]) => ({
+      name,
+      source: `./agentic/code/plugins/${name}`,
+      description: config.description,
+      version: RELEASE_VERSION,
+      author: { name: 'AIWG Contributors' },
+      license: 'MIT',
+      category: config.category || 'productivity',
+      keywords: config.keywords || [],
+    }));
+  const manifest = {
+    name: existing.name,
+    owner: existing.owner,
+    description: existing.metadata?.description || existing.description,
+    // The marketplace itself is a release artifact and must stay in lockstep
+    // with package.json. Preserving the previous manifest value silently
+    // leaves stale metadata after a release bump.
+    version: RELEASE_VERSION,
+    plugins: [...local, ...external],
+  };
+  if (options.dryRun) {
+    console.log(`\n[dry-run] Would write Claude marketplace: ${existingPath}`);
+    console.log(`  ${manifest.plugins.length} plugins`);
+    return;
+  }
+  fs.writeFileSync(existingPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  console.log(`\n✓ Wrote Claude marketplace: ${existingPath} (${manifest.plugins.length} plugins)`);
 }
 
 // Package a Codex-format plugin (generates .codex-plugin/plugin.json + marketplace.json)
@@ -902,6 +1070,30 @@ async function main() {
     console.log('   Mode: DRY RUN (no files will be changed)');
   }
 
+  if (options.plugin && !options.all) {
+    const { packageStandalonePlugin } = await importImpl(import.meta.url, 'plugins/standalone-packager.js');
+    const standalone = await packageStandalonePlugin({
+      cwd: process.cwd(),
+      name: options.plugin,
+      source: options.source,
+      output: options.output,
+      provider: options.provider,
+      clean: options.clean,
+      dryRun: options.dryRun,
+    });
+    if (standalone) {
+      console.log(`   Source: ${standalone.sourceRoot}`);
+      for (const plan of standalone.plans) {
+        console.log(`   ${options.dryRun ? 'Would write' : 'Wrote'} ${plan.provider}: ${plan.archivePath}`);
+      }
+      console.log('\n✨ Done!');
+      return;
+    }
+    if (options.source) {
+      throw new Error(`Standalone plugin source not found: ${options.source}`);
+    }
+  }
+
   // Resolve provider selection
   const PROVIDER_PLUGIN_FORMATS = ['claude', 'codex', 'cursor', 'factory', 'openclaw'];
   const requestedProvider = options.provider || 'claude';
@@ -933,11 +1125,11 @@ async function main() {
   // Package for each (provider, plugin) combination
   for (const provider of providersToRun) {
     for (const [name, config] of pluginsToPackage) {
-      // Respect the legacy pluginType flag when selecting defaults:
-      // if pluginType is set and provider is 'claude' (default), skip this
-      // plugin for claude and route it to its declared pluginType instead.
-      const effectiveProvider =
-        provider === 'claude' && config.pluginType ? config.pluginType : provider;
+      // Provider-specific bundles are not part of another provider's catalog.
+      if (provider === 'claude' && config.pluginType && config.pluginType !== 'claude') {
+        continue;
+      }
+      const effectiveProvider = provider;
 
       if (effectiveProvider === 'claude') {
         packagePlugin(name, config, options);
@@ -949,8 +1141,12 @@ async function main() {
       }
     }
 
+    if (provider === 'claude') {
+      writeClaudeMarketplaceManifest(options);
+    }
+
     // After packaging for Codex, also write the root marketplace.json
-    if (provider === 'codex' || (provider === 'claude' && pluginsToPackage.some(([, c]) => c.pluginType === 'codex'))) {
+    if (provider === 'codex') {
       writeCodexMarketplaceManifest(options);
     }
   }
@@ -966,4 +1162,7 @@ async function main() {
   console.log('  aiwg use sdlc --provider openclaw         # OpenClaw (ClawHub publish pending)');
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});

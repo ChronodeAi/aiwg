@@ -2,12 +2,13 @@
 // Self-contained (own ports); no deps. Exits non-zero on failure.
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { createExecutor } from '../../mock-executor/src/server.mjs';
-import { createBridge, normalizeSessionRows } from './server.mjs';
+import { createExecutor, DEFAULT_INSTANCE } from '../../mock-executor/src/server.mjs';
+import { createBridge, localLibvirtFallbackAllowed, normalizeSessionRows } from './server.mjs';
 
 const mock = createExecutor();
 await new Promise((r) => mock.listen(0, '127.0.0.1', r));
-const executorUrl = `http://127.0.0.1:${mock.address().port}`;
+const executorPort = mock.address().port;
+const executorUrl = `http://127.0.0.1:${executorPort}`;
 
 const bridge = createBridge({ executorUrl, allowMockExecutor: true });
 await new Promise((r) => bridge.listen(0, '127.0.0.1', r));
@@ -18,7 +19,7 @@ const f = (p, o = {}) => fetch(base + p, { ...o, headers: { ...(o.headers || {})
 try {
   // auth gate: /api/ without the token is 401; /healthz is open
   assert.equal((await fetch(`${base}/api/inventory`)).status, 401, 'gate: no token -> 401');
-  assert.equal((await fetch(`${base}/api/inventory?token=wrong`)).status, 401, 'gate: bad token -> 401');
+  assert.equal((await fetch(`${base}/api/inventory?token=${encodeURIComponent(bridge.cockpitToken)}`)).status, 401, 'gate: URL token is never accepted');
   assert.equal((await fetch(`${base}/healthz`)).status, 200, 'healthz open (no token)');
 
   // data path: Bridge reads the executor admin inventory
@@ -33,7 +34,19 @@ try {
   assert.equal(inv.instances.find((i) => i.transport?.mode === 'shared-secret')?.transport.trust, 'compatibility', 'legacy secret transport is compatibility posture');
   const i0 = inv.instances[0];
   for (const k of ['id', 'runtime', 'loadout', 'state', 'tenant', 'card_url', 'runtime_posture', 'host_daemon', 'transport', 'launch_context', 'session_backends']) assert.ok(k in i0, `field ${k}`);
+  assert.equal(i0.storage?.persistent, true, 'storage persistence surfaced');
+  assert.equal(i0.storage?.delete_on_destroy, true, 'storage delete-on-destroy surfaced');
   assert.ok(['vm', 'container', 'host', 'wasm-edge'].includes(i0.runtime), 'runtime kind');
+
+  // A transient executor outage must not poison Bridge state or require a
+  // Bridge restart. Every poll is a fresh upstream request, so the same Bridge
+  // reports the gap and resumes inventory as soon as the executor returns.
+  await new Promise((resolve) => mock.close(resolve));
+  assert.equal((await f('/api/inventory')).status, 502, 'transient executor drop -> 502');
+  await new Promise((resolve) => mock.listen(executorPort, '127.0.0.1', resolve));
+  const recoveredInventory = await f('/api/inventory');
+  assert.equal(recoveredInventory.status, 200, 'same Bridge resumes after executor returns');
+  assert.equal((await recoveredInventory.json()).count, 4, 'recovered inventory is complete');
 
   // running board: seeded working tasks on the running instances
   const rr = await f("/api/running");
@@ -44,13 +57,13 @@ try {
   for (const k of ['runtime_posture', 'transport']) assert.ok(k in run.running[0], `running posture field ${k}`);
   assert.equal(run.running[0].state, 'working', 'running task is working');
 
-  // sessions: the demo pty session is listed with a direct ws attach_url
+  // sessions: the demo pty session is listed with a Bridge-owned ws attach_url
   const sr = await f("/api/sessions?instance=550e8400-e29b-41d4-a716-446655440000");
   assert.equal(sr.status, 200, 'sessions 200');
   const sess = await sr.json();
   const demo = sess.sessions.find((s) => s.id === 'demo-shell');
   assert.ok(demo, 'demo-shell session present');
-  assert.match(demo.attach_url, /^ws:\/\/.*\/agents\/.*\/sessions\/demo-shell\/attach$/, 'ws attach_url shape');
+  assert.match(demo.attach_url, /^ws:\/\/.*\/api\/pty\/agents\/.*\/sessions\/demo-shell\/attach\/[A-Za-z0-9_-]+$/, 'ws attach_url shape');
   assert.ok(demo.liveness.replay_newest_seq >= 3, 'demo session has a seeded transcript');
   assert.equal(demo.session_class, 'direct', 'demo session class');
   assert.equal(demo.session_backend, 'native', 'demo session backend');
@@ -90,6 +103,45 @@ try {
   assert.ok(Array.isArray(lo.loadouts) && lo.loadouts.length >= 3, 'loadout catalog returned');
   assert.ok(lo.loadouts.every((l) => typeof l.id === 'string' && typeof l.label === 'string'), 'loadouts carry id+label');
   assert.ok(lo.loadouts.some((l) => l.id === 'security-audit'), 'catalog includes a non-default loadout');
+  const gpuLoadout = lo.loadouts.find((l) => l.id === 'gpu-vfio');
+  assert.ok(gpuLoadout?.runtime_options?.required_capabilities?.includes('device.vfio'), 'loadout runtime_options preserve VFIO requirement');
+  assert.ok(gpuLoadout?.compatibility?.[0]?.excluded_capabilities?.includes('instance.restore'), 'loadout compatibility preserves fast-start exclusion');
+
+  const caps = await (await f('/api/executor/capabilities')).json();
+  assert.ok(caps.runtime_providers?.providers?.some((p) => p.provider === 'cloud-hypervisor'), 'runtime providers discovered');
+  assert.ok(caps.runtime_providers.providers.find((p) => p.provider === 'cloud-hypervisor')?.capability_constraints?.[0]?.excludes?.includes('instance.restore'), 'provider VFIO constraint preserved');
+  const hostProvider = caps.runtime_providers.providers.find((p) => p.provider === 'host');
+  const dockerProvider = caps.runtime_providers.providers.find((p) => p.provider === 'docker');
+  assert.ok(hostProvider?.platforms?.includes('darwin/arm64'), 'Apple Silicon host runtime discovery is proxied');
+  assert.equal(hostProvider?.posture?.host_architecture, 'arm64', 'Apple Silicon host architecture is preserved');
+  assert.equal(dockerProvider?.engine, 'Docker Desktop', 'Docker Desktop runtime posture is proxied');
+  assert.equal(dockerProvider?.posture?.host_platform, 'darwin', 'Docker Desktop host platform is preserved');
+  assert.equal(localLibvirtFallbackAllowed('darwin', undefined), false, 'virsh fallback is not automatic on macOS');
+  assert.equal(localLibvirtFallbackAllowed('darwin', '1'), true, 'virsh fallback can be explicitly enabled for local development');
+  assert.equal(localLibvirtFallbackAllowed('linux', undefined), true, 'Linux bridge hosts retain local virsh fallback');
+
+  const vm = inv.instances.find((i) => i.provider === 'cloud-hypervisor');
+  assert.ok(vm, 'provider-aware VM inventory row present');
+  const fastStartAccepted = await (await f(`/api/instances/${encodeURIComponent(vm.id)}/snapshot`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ asset_ref: 'cockpit-smoke-snapshot' }),
+  })).json();
+  assert.ok(fastStartAccepted.id, 'fast-start proxy returns operation id');
+  const fastStartTerminal = await (await f(`/api/operations/${encodeURIComponent(fastStartAccepted.id)}`)).json();
+  assert.equal(fastStartTerminal.state, 'succeeded', 'fast-start operation reaches terminal state');
+  assert.equal(fastStartTerminal.result.provider, 'cloud-hypervisor', 'fast-start operation preserves provider');
+
+  const mcp = await (await f('/api/mcp/discovery')).json();
+  assert.equal(mcp.enabled, true, 'MCP discovery enabled');
+  assert.equal(mcp.endpoint?.path, '/mcp', 'MCP endpoint path surfaced');
+  assert.equal(mcp.endpoint?.mcp_session_id, false, 'MCP discovery is stateless/no session id');
+  assert.ok(mcp.tools.some((tool) => tool.name === 'list_sandboxes'), 'MCP tools surfaced');
+  assert.ok(mcp.resource_templates.some((template) => template.uriTemplate === 'sandbox://sessions/{session_id}/screen'), 'MCP resource templates surfaced');
+  assert.equal((await f('/api/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }) })).status, 503, 'MCP proxy fail-closed without token file');
+  const gatedReconnect = await f(`/api/instances/${DEFAULT_INSTANCE}/reconnect`, { method: 'POST' });
+  assert.equal(gatedReconnect.status, 409, 'Docker reconnect fallback is gated unless local dev flag is set');
+  assert.equal((await gatedReconnect.json()).error, 'local_docker_fallback_disabled', 'Docker reconnect fallback error is explicit');
 
   // registry binding: discover + show through the aiwg CLI (#1592)
   const cap = await (await f("/api/capabilities?q=" + encodeURIComponent("deploy production") + "&limit=4")).json();
@@ -168,13 +220,13 @@ try {
   // start a session (onboarding primary verb): create + issue a ws attach_url
   const started = await (await f('/api/instances/550e8400-e29b-41d4-a716-446655440000/sessions', { method: 'POST' })).json();
   assert.match(started.id ?? '', /^sess-/, 'start-session returns a new session id');
-  assert.match(started.attach_url ?? '', /\/sessions\/sess-[^/]+\/attach$/, 'start-session issues a ws attach_url');
+  assert.match(started.attach_url ?? '', /\/sessions\/sess-[^/]+\/attach\/[A-Za-z0-9_-]+$/, 'start-session issues a proxied ws attach_url');
 
-  // app shell served with the per-launch token injected (React build if present, else
-  // the legacy fallback — both carry the title + token)
+  // app shell is served without reusable credential material.
   const html = await (await fetch(base + "/")).text();
   assert.match(html, /AIWG.?Cockpit/i, 'app title rendered');
-  assert.ok(html.includes(`window.__COCKPIT_TOKEN__=${JSON.stringify(bridge.cockpitToken)}`), 'token injected into the served app');
+  assert.ok(!html.includes(bridge.cockpitToken), 'root does not inject the control token');
+  assert.ok(!html.includes('__COCKPIT_TOKEN__'), 'root has no legacy token bootstrap global');
   // strip HTML comments BEFORE matching — a module script trapped inside a comment
   // (the Vite '</head>'-in-comment gotcha) must not count as "referenced".
   const live = html.replace(/<!--[\s\S]*?-->/g, '');
@@ -185,7 +237,7 @@ try {
     assert.equal((await fetch(base + asset[1].replace(/^\.\//, '/'))).status, 200, 'built React bundle served');
   }
 
-  console.log(`SMOKE OK — inventory(4) + running(${run.count}) + sessions(demo-shell) + registry(discover→${cap.results.length}) + contrib(${contrib.actions.length}) + shell(${shell})`);
+  console.log(`SMOKE OK — inventory(4) + running(${run.count}) + sessions(demo-shell) + mcp(${mcp.tools.length} tools) + registry(discover→${cap.results.length}) + contrib(${contrib.actions.length}) + shell(${shell})`);
 } finally {
   bridge.close();
   mock.close();

@@ -6,14 +6,17 @@
 // Real Bridge grows: registry/discover/index binding, per-instance A2A, pty I/O,
 // per-launch token + OS-keychain (roctinam/aiwg#1595).
 import http from 'node:http';
+import https from 'node:https';
 import { spawn } from 'node:child_process';
-import { readFile, mkdir, writeFile, chmod, readdir, cp, rm, stat, appendFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { readFile, mkdir, writeFile, rename, chmod, readdir, cp, rm, stat, appendFile } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, basename, extname, resolve, sep } from 'node:path';
 import { storeCockpitToken } from '../../shell-core/keychain.mjs';
+import { assertActivityEvent } from './activity-contract.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 // Primary seam for roctinam/aiwg#1589: Cockpit talks to a real agentic-sandbox
@@ -26,6 +29,13 @@ const EXECUTOR_URL =
 const ALLOW_MOCK_EXECUTOR = process.env.AIWG_COCKPIT_ALLOW_MOCK_EXECUTOR === '1';
 const AUTOSTART_EXECUTOR = process.env.AIWG_COCKPIT_AUTOSTART_EXECUTOR !== '0';
 const EXECUTOR_COMMAND = process.env.AIWG_COCKPIT_EXECUTOR_COMMAND ?? '';
+const EXECUTOR_TOKEN_FILE = process.env.AIWG_COCKPIT_EXECUTOR_TOKEN_FILE ?? '';
+const MCP_TOKEN_FILE = process.env.AIWG_COCKPIT_MCP_TOKEN_FILE ?? '';
+const LOCAL_DOCKER_FALLBACK = process.env.AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK === '1';
+const REQUIRE_SANDBOX_MTLS = process.env.AIWG_COCKPIT_REQUIRE_SANDBOX_MTLS === '1';
+export function localLibvirtFallbackAllowed(platform = process.platform, envValue = process.env.AIWG_COCKPIT_LOCAL_LIBVIRT_FALLBACK) {
+  return platform === 'linux' || envValue === '1';
+}
 const RUNTIME_DIR = join(homedir(), '.aiwg', 'cockpit', 'runtime');
 const auditDir = () => process.env.AIWG_COCKPIT_AUDIT_DIR || join(homedir(), '.aiwg', 'cockpit', 'audit');
 const auditLog = () => join(auditDir(), 'events.jsonl');
@@ -33,8 +43,53 @@ const auditLog = () => join(auditDir(), 'events.jsonl');
 // legacy vanilla page so the Bridge works even before a web build.
 const WEB_DIST = fileURLToPath(new URL('../../web/dist', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon', '.png': 'image/png', '.woff2': 'font/woff2', '.map': 'application/json' };
-const CAPABILITY_TYPES = new Set(['skill', 'agent', 'command', 'rule', 'flow']);
+// Discovery indexes more than the four executable provider artifacts. Keep the
+// Bridge filter aligned with the complete corpus so Explore does not hide
+// extension and documentation surfaces (#1592).
+const CAPABILITY_TYPES = new Set([
+  'skill', 'agent', 'command', 'rule', 'flow', 'behavior', 'hook', 'template',
+  'tool', 'addon', 'framework', 'extension', 'plugin', 'provider', 'document',
+]);
 const mcSessionsDir = () => join(process.cwd(), '.aiwg', 'ralph-external', 'mc', 'sessions');
+const executorRequestContext = new AsyncLocalStorage();
+
+function executorAuthError(code, message, cause) {
+  const err = new Error(message, cause ? { cause } : undefined);
+  err.code = code;
+  return err;
+}
+
+async function resolveExecutorBearer(tokenFile) {
+  if (!tokenFile) return '';
+  const path = expandHome(String(tokenFile));
+  let metadata;
+  try {
+    metadata = await stat(path);
+  } catch (cause) {
+    throw executorAuthError('executor_credential_unavailable', 'executor credential file is unavailable', cause);
+  }
+  if (!metadata.isFile()) {
+    throw executorAuthError('executor_credential_invalid', 'executor credential path is not a regular file');
+  }
+  if (process.platform !== 'win32' && (metadata.mode & 0o077) !== 0) {
+    throw executorAuthError('executor_credential_permissions', 'executor credential file must not be accessible by group or other users');
+  }
+  const token = String(await readFile(path, 'utf8')).trim();
+  if (!token || /[\r\n]/.test(token)) {
+    throw executorAuthError('executor_credential_invalid', 'executor credential file must contain exactly one non-empty bearer token');
+  }
+  return token;
+}
+
+async function executorFetch(target, init = {}) {
+  const context = executorRequestContext.getStore();
+  const headers = new Headers(init.headers);
+  if (context && new URL(target).origin === context.executorOrigin && !headers.has('authorization')) {
+    const token = await resolveExecutorBearer(context.executorTokenFile);
+    if (token) headers.set('authorization', `Bearer ${token}`);
+  }
+  return fetch(target, { ...init, headers });
+}
 
 /** Serve a static file from the built web app, sandboxed to WEB_DIST. Returns true if served. */
 async function serveDistFile(res, relPath) {
@@ -48,13 +103,29 @@ async function serveDistFile(res, relPath) {
 // First-party contribution manifests; AIWG-extension-sourced ones layer in via AIWG_COCKPIT_CONTRIB (#1591).
 const CONTRIB_DIRS = [fileURLToPath(new URL('../../contrib', import.meta.url)), ...(process.env.AIWG_COCKPIT_CONTRIB ? [process.env.AIWG_COCKPIT_CONTRIB] : [])];
 
-/** Constant-time bearer-token check (header or ?token=). */
-function authed(req, url, token) {
+function constantTimeEqual(presented, expected) {
+  if (presented.length !== expected.length) return false;
+  try { return timingSafeEqual(Buffer.from(presented), Buffer.from(expected)); } catch { return false; }
+}
+
+/** Constant-time bearer-token check. URL query credentials are never accepted. */
+function bearerAuthed(req, token) {
   const hdr = String(req.headers['authorization'] ?? '');
   const bearer = hdr.startsWith('Bearer ') ? hdr.slice(7) : '';
-  const presented = bearer || url.searchParams.get('token') || '';
-  if (presented.length !== token.length) return false;
-  try { return timingSafeEqual(Buffer.from(presented), Buffer.from(token)); } catch { return false; }
+  return constantTimeEqual(bearer, token);
+}
+
+function cookies(req) {
+  return Object.fromEntries(String(req.headers.cookie ?? '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const split = part.indexOf('=');
+      if (split < 0) return [part, ''];
+      try { return [part.slice(0, split), decodeURIComponent(part.slice(split + 1))]; }
+      catch { return [part.slice(0, split), '']; }
+    }));
 }
 
 function isLocalHostName(hostname) {
@@ -67,21 +138,21 @@ function validBrowserOrigin(req) {
   try {
     const o = new URL(String(origin));
     const host = new URL(`http://${req.headers.host ?? 'localhost'}`);
-    return ['http:', 'https:'].includes(o.protocol) &&
+    return o.protocol === host.protocol &&
       isLocalHostName(o.hostname) &&
       isLocalHostName(host.hostname) &&
-      (!o.port || !host.port || o.port === host.port);
+      o.hostname === host.hostname &&
+      o.port === host.port;
   } catch {
     return false;
   }
 }
 
-function validCsrf(req, token) {
+function validCsrf(req, auth) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method ?? 'GET')) return true;
-  if (!req.headers.origin) return true;
+  if (auth?.kind === 'bearer' && !req.headers.origin) return true;
   const csrf = String(req.headers['x-cockpit-csrf'] ?? '');
-  if (csrf.length !== token.length) return false;
-  try { return timingSafeEqual(Buffer.from(csrf), Buffer.from(token)); } catch { return false; }
+  return constantTimeEqual(csrf, auth?.csrf ?? '');
 }
 
 /** Persist the per-launch token for the desktop/VS Code shells to read (mode 600). */
@@ -113,12 +184,87 @@ function spawnCollect(cmd, args) {
     p.stdout.on('data', (d) => (out += d));
     p.stderr.on('data', (d) => (err += d));
     p.once('error', reject);
-    p.once('close', (code) => (code === 0 ? resolve(out) : reject(new Error(err.trim() || `aiwg exit ${code}`))));
+    p.once('close', (code) => {
+      if (code === 0) return resolve(out);
+      const failure = new Error(err.trim() || `aiwg exit ${code}`);
+      failure.exitCode = code;
+      failure.stdout = out;
+      reject(failure);
+    });
   });
 }
 async function runAiwg(args) {
   try { return await spawnCollect('aiwg', args); }
   catch (e) { if (e && e.code === 'ENOENT') return spawnCollect(process.execPath, [REPO_BIN, ...args]); throw e; }
+}
+
+const MISSION_CONTROL_ID_RE = /^[a-zA-Z0-9._-]+$/;
+async function controlMission({ action, sessionId, missionId, expectedUpdatedAt, requestId }) {
+  if (!['pause', 'resume', 'cancel'].includes(action)) throw Object.assign(new Error('unsupported mission control action'), { status: 400 });
+  if (!MISSION_CONTROL_ID_RE.test(sessionId) || (missionId && !MISSION_CONTROL_ID_RE.test(missionId))) {
+    throw Object.assign(new Error('invalid Mission control identifier'), { status: 400 });
+  }
+  const args = ['mc', action, sessionId];
+  if (action === 'cancel') {
+    if (!missionId) throw Object.assign(new Error('mission id required'), { status: 400 });
+    args.push(missionId);
+  }
+  if (expectedUpdatedAt) args.push('--expected-updated-at', String(expectedUpdatedAt));
+  if (requestId) args.push('--request-id', String(requestId));
+  await appendAudit('mission.control.requested', {
+    action,
+    session_id: sessionId,
+    mission_id: missionId ?? null,
+    expected_updated_at: expectedUpdatedAt ?? null,
+    request_id: requestId ?? null,
+  });
+  try {
+    await runAiwg(args);
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    const status = error?.exitCode === 3 || /mission_conflict/.test(message) ? 409 : 422;
+    await appendAudit('mission.control.rejected', { action, session_id: sessionId, mission_id: missionId ?? null, request_id: requestId ?? null, status, reason: message });
+    throw Object.assign(new Error(message), { status });
+  }
+  await appendAudit('mission.control.completed', { action, session_id: sessionId, mission_id: missionId ?? null, request_id: requestId ?? null });
+  return { ok: true, action, session_id: sessionId, mission_id: missionId ?? null, request_id: requestId ?? null };
+}
+
+async function dispatchMission(body, upstreamUrl) {
+  const sessionId = String(body?.session_id ?? '');
+  const objective = String(body?.objective ?? '').trim();
+  const completion = String(body?.completion ?? '').trim();
+  const requestId = String(body?.request_id ?? randomBytes(16).toString('hex'));
+  if (!MISSION_CONTROL_ID_RE.test(sessionId)) throw Object.assign(new Error('invalid Mission control session id'), { status: 400 });
+  if (!objective || objective.length > 4096) throw Object.assign(new Error('objective is required and must be at most 4096 characters'), { status: 400 });
+  if (completion.length > 4096) throw Object.assign(new Error('completion must be at most 4096 characters'), { status: 400 });
+  if (!MISSION_CONTROL_ID_RE.test(requestId)) throw Object.assign(new Error('request_id must contain only letters, digits, dot, underscore, or hyphen'), { status: 400 });
+  const args = ['mc', 'dispatch', sessionId, objective, '--request-id', requestId];
+  if (completion) args.push('--completion', completion);
+  if (body?.priority) args.push('--priority', String(body.priority));
+  if (body?.expected_updated_at) args.push('--expected-updated-at', String(body.expected_updated_at));
+  if (body?.max_iterations !== undefined) {
+    const maxIterations = Number(body.max_iterations);
+    if (!Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 10_000) {
+      throw Object.assign(new Error('max_iterations must be an integer from 1 to 10000'), { status: 400 });
+    }
+    args.push('--max-iterations', String(maxIterations));
+  }
+  await appendAudit('mission.dispatch.requested', { session_id: sessionId, request_id: requestId, objective_digest: `sha256:${createHash('sha256').update(objective).digest('hex')}` });
+  try {
+    await runAiwg(args);
+    if (body?.run === true) {
+      await runAiwg(['mc', 'run', sessionId, ...(body?.accept_cost === true ? ['--accept-cost'] : [])]);
+    }
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    const status = error?.exitCode === 3 || /mission_conflict/.test(message) ? 409 : 422;
+    await appendAudit('mission.dispatch.rejected', { session_id: sessionId, request_id: requestId, status, reason: message });
+    throw Object.assign(new Error(message), { status });
+  }
+  const missionId = `m-${createHash('sha256').update(requestId).digest('hex').slice(0, 16)}`;
+  await appendAudit('mission.dispatch.completed', { session_id: sessionId, mission_id: missionId, request_id: requestId, run: body?.run === true });
+  return { ok: true, session_id: sessionId, mission_id: missionId, request_id: requestId, projection: await getMissions(upstreamUrl) };
 }
 // --- user asset library (#1591/#1593): the operator's OWN copied/cloned/imported
 // assets, on disk under ~/.aiwg/cockpit/library. AIWG install files are NEVER written
@@ -192,23 +338,32 @@ function resolveCorpusPath(p) {
 // --- UI contribution model (#1591): declarative screens/actions/event-hooks ---
 const ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 /** Validate one contribution manifest. Throws with a precise message on bad shape. */
-function validateContribution(m, where) {
+function validateContribution(m, where, { firstParty = false } = {}) {
   const fail = (msg) => { throw new Error(`${where}: ${msg}`); };
   if (!m || typeof m !== 'object') fail('manifest must be an object');
   if (!ID_RE.test(m.id || '')) fail('id must match [a-z0-9._-]{1,64}');
-  if (typeof m.version !== 'string') fail('version (string) required');
+  if (typeof m.version !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(m.version)) fail('version must be semantic version syntax');
   const c = m.contributes || {};
+  const actionIds = new Set();
   for (const a of c.actions || []) {
     if (!ID_RE.test(a.id || '')) fail(`action.id invalid: ${a.id}`);
+    if (actionIds.has(a.id)) fail(`duplicate action.id: ${a.id}`);
+    actionIds.add(a.id);
     if (typeof a.title !== 'string') fail(`action ${a.id}: title required`);
     // An action INJECTS a command into an agentic session — it does NOT run the CLI.
     if (!a.inject || typeof a.inject.command !== 'string') fail(`action ${a.id}: inject.command (string) required`);
+    if (!/^\/[a-z0-9][a-z0-9._-]*(?:\s[^\r\n]*)?$/i.test(a.inject.command)) fail(`action ${a.id}: inject.command must be one slash command without newlines`);
     if (a.inject.target && !['focused', 'new'].includes(a.inject.target)) fail(`action ${a.id}: inject.target must be focused|new`);
   }
   for (const s of c.screens || []) {
     if (!ID_RE.test(s.id || '')) fail(`screen.id invalid: ${s.id}`);
     if (typeof s.title !== 'string') fail(`screen ${s.id}: title required`);
     if (typeof s.source !== 'string') fail(`screen ${s.id}: source required`);
+    if (firstParty) {
+      if (!s.source.startsWith('cockpit://')) fail(`screen ${s.id}: first-party source must use cockpit://`);
+    } else if (!s.source.startsWith(`sandbox://${m.id}/`)) {
+      fail(`screen ${s.id}: third-party source must use sandbox://${m.id}/`);
+    }
   }
   for (const w of c.workflows || []) {
     if (!ID_RE.test(w.id || '')) fail(`workflow.id invalid: ${w.id}`);
@@ -216,24 +371,39 @@ function validateContribution(m, where) {
     if (!Array.isArray(w.steps) || w.steps.length === 0) fail(`workflow ${w.id}: steps required`);
     for (const step of w.steps) {
       if (!step || typeof step !== 'object' || !ID_RE.test(step.action || '')) fail(`workflow ${w.id}: step.action invalid`);
+      if (!actionIds.has(step.action)) fail(`workflow ${w.id}: unknown action ${step.action}`);
     }
   }
-  for (const h of c.hooks || []) { if (typeof h.on !== 'string' || !ID_RE.test(h.action || '')) fail(`hook invalid: on=${h.on}`); }
+  for (const h of c.hooks || []) {
+    if (typeof h.on !== 'string' || !ID_RE.test(h.action || '') || !actionIds.has(h.action)) fail(`hook invalid: on=${h.on}`);
+  }
   return m;
 }
 /** Load + validate + merge all contribution manifests across the configured dirs. */
 async function loadContributions() {
   const sources = [], actions = [], screens = [], hooks = [], workflows = [];
-  for (const dir of CONTRIB_DIRS) {
+  const manifestIds = new Set();
+  const itemIds = new Set();
+  for (const [dirIndex, dir] of CONTRIB_DIRS.entries()) {
+    const trustTier = dirIndex === 0 ? 'first-party' : 'sandboxed-third-party';
     let entries = [];
     try { entries = (await readdir(dir)).filter((f) => f.endsWith('.json') && f !== 'contribution.schema.json'); } catch { continue; }
     for (const file of entries) {
-      const m = validateContribution(JSON.parse(await readFile(join(dir, file), 'utf8')), file);
-      sources.push({ id: m.id, version: m.version, title: m.title ?? m.id, file });
-      for (const a of m.contributes?.actions || []) actions.push({ ...a, source: m.id });
-      for (const s of m.contributes?.screens || []) screens.push({ ...s, contribution: m.id });
-      for (const h of m.contributes?.hooks || []) hooks.push({ ...h, source: m.id });
-      for (const w of m.contributes?.workflows || []) workflows.push({ ...w, source: m.id });
+      const m = validateContribution(JSON.parse(await readFile(join(dir, file), 'utf8')), file, { firstParty: dirIndex === 0 });
+      if (manifestIds.has(m.id)) throw new Error(`${file}: duplicate contribution id ${m.id}`);
+      manifestIds.add(m.id);
+      sources.push({ id: m.id, version: m.version, title: m.title ?? m.id, file, trust_tier: trustTier });
+      for (const [kind, rows] of Object.entries({ actions: m.contributes?.actions || [], screens: m.contributes?.screens || [], hooks: m.contributes?.hooks || [], workflows: m.contributes?.workflows || [] })) {
+        for (const row of rows) {
+          const globalId = `${kind}:${row.id ?? `${row.on}:${row.action}`}`;
+          if (itemIds.has(globalId)) throw new Error(`${file}: duplicate ${globalId}`);
+          itemIds.add(globalId);
+        }
+      }
+      for (const a of m.contributes?.actions || []) actions.push({ ...a, source: m.id, trust_tier: trustTier });
+      for (const s of m.contributes?.screens || []) screens.push({ ...s, contribution: m.id, trust_tier: trustTier });
+      for (const h of m.contributes?.hooks || []) hooks.push({ ...h, source: m.id, trust_tier: trustTier });
+      for (const w of m.contributes?.workflows || []) workflows.push({ ...w, source: m.id, trust_tier: trustTier });
     }
   }
   return { sources, actions, screens, hooks, workflows };
@@ -290,6 +460,42 @@ async function rebuildIndex(req) {
   const status = await getIndexStatus();
   await appendAudit('index.rebuild.completed', { request_ts: requested.ts, graph: body.graph ?? null, all: body.all === true, force: body.force === true });
   return { status: 200, body: { ok: true, command: `aiwg ${args.join(' ')}`, output, status } };
+}
+
+export async function createUserIndexGraph(body, projectRoot = process.cwd()) {
+  const name = safeIndexGraph(body?.name);
+  if (!name || ['project', 'codebase', 'framework'].includes(name)) {
+    throw new Error('name must be a non-built-in graph identifier');
+  }
+  const scanDirs = Array.isArray(body?.scanDirs) ? body.scanDirs.map((value) => String(value).trim()) : [];
+  if (!scanDirs.length || scanDirs.some((value) => !value || value.startsWith('/') || value.split(/[\\/]+/).includes('..'))) {
+    throw new Error('scanDirs must contain safe project-relative paths');
+  }
+  const extensions = Array.isArray(body?.extensions) && body.extensions.length
+    ? body.extensions.map((value) => String(value).trim())
+    : ['.md', '.yaml', '.json'];
+  if (extensions.some((value) => !/^\.[a-z0-9]+$/i.test(value))) {
+    throw new Error('extensions must use forms such as .md or .json');
+  }
+  const configDir = join(projectRoot, '.aiwg');
+  const configPath = join(configDir, 'aiwg.config');
+  await mkdir(configDir, { recursive: true, mode: 0o700 });
+  let config = {};
+  try { config = JSON.parse(await readFile(configPath, 'utf8')); }
+  catch (error) { if (error?.code !== 'ENOENT') throw error; }
+  config.index = config.index && typeof config.index === 'object' ? config.index : {};
+  config.index.graphs = config.index.graphs && typeof config.index.graphs === 'object' ? config.index.graphs : {};
+  if (config.index.graphs[name]) throw new Error(`graph '${name}' already exists`);
+  config.index.graphs[name] = {
+    scanDirs,
+    extensions,
+    defaultBuild: body?.defaultBuild === true,
+    shared: body?.shared === true,
+  };
+  const temporary = `${configPath}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporary, configPath);
+  return { name, definition: config.index.graphs[name], config_path: configPath };
 }
 
 function json(res, status, body) {
@@ -352,8 +558,14 @@ async function readJsonBody(req) {
 
 /** Forward a control-plane call to the executor admin surface, relaying status + body. */
 async function proxy(res, method, target) {
-  const r = await fetch(target, { method });
+  const r = await executorFetch(target, { method });
   const body = await r.json().catch(() => ({}));
+  if (r.status === 401 || r.status === 403) {
+    const err = new Error(`executor ${r.status === 401 ? 'authentication' : 'authorization'} failed at ${new URL(target).pathname}`);
+    err.code = r.status === 401 ? 'executor_unauthenticated' : 'executor_forbidden';
+    err.upstreamStatus = r.status;
+    throw err;
+  }
   return json(res, r.status, body);
 }
 
@@ -373,6 +585,14 @@ function isConnectionRefusedError(err) {
   return /ECONNREFUSED|connection refused/i.test(text);
 }
 
+function rethrowExecutorSecurityError(err) {
+  if (
+    [401, 403].includes(Number(err?.upstreamStatus)) ||
+    String(err?.code ?? '').startsWith('executor_credential_') ||
+    String(err?.code ?? '').startsWith('executor_trust_')
+  ) throw err;
+}
+
 export async function fetchJsonFirst(candidates, { method = 'GET', headers, body: requestBodyOption, timeoutMs = 0 } = {}) {
   const failures = [];
   for (const candidate of candidates) {
@@ -384,8 +604,9 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
     const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     let r;
     try {
-      r = await fetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) });
+      r = await executorFetch(target, { method: requestMethod, headers: requestHeaders, body: requestBody, ...(controller ? { signal: controller.signal } : {}) });
     } catch (err) {
+      if (String(err?.code ?? '').startsWith('executor_credential_')) throw err;
       const failure = isAbortError(err) && timeoutMs > 0
         ? `${target} -> timeout after ${timeoutMs}ms`
         : `${target} -> ${String(err?.message ?? err)}`;
@@ -398,6 +619,12 @@ export async function fetchJsonFirst(candidates, { method = 'GET', headers, body
       if (timeout) clearTimeout(timeout);
     }
     const responseBody = await r.json().catch(() => ({}));
+    if (r.status === 401 || r.status === 403) {
+      const err = new Error(`executor ${r.status === 401 ? 'authentication' : 'authorization'} failed at ${new URL(target).pathname}`);
+      err.code = r.status === 401 ? 'executor_unauthenticated' : 'executor_forbidden';
+      err.upstreamStatus = r.status;
+      throw err;
+    }
     if (r.ok) return { target, status: r.status, body: responseBody };
     failures.push(`${target} -> ${r.status}`);
     if (r.status !== 404 && r.status !== 405) return { target, status: r.status, body: responseBody, failures };
@@ -435,7 +662,7 @@ async function assertRealExecutor(executorUrl, allowMockExecutor) {
 async function probeExecutor(executorUrl) {
   for (const path of ['/healthz/http', '/healthz', '/health']) {
     try {
-      const r = await fetch(`${executorUrl}${path}`, { signal: AbortSignal.timeout(1_500) });
+      const r = await executorFetch(`${executorUrl}${path}`, { signal: AbortSignal.timeout(1_500) });
       if (r.ok) return true;
     } catch {
       // Try the next health endpoint.
@@ -448,19 +675,143 @@ async function getExecutorCapabilities(executorUrl) {
   const candidates = ['/healthz/deep', '/healthz', '/health'].map((path) => `${executorUrl}${path}`);
   try {
     const { target, body } = await fetchJsonFirst(candidates);
+    const runtimeProviders = await fetchJsonFirst([
+      `${executorUrl}/api/v2/admin/runtime/providers`,
+      `${executorUrl}/api/v2/runtime/providers`,
+      `${executorUrl}/admin/runtime/providers`,
+      `${executorUrl}/runtime/providers`,
+    ])
+      .then((result) => result.body)
+      .catch(() => undefined);
     return {
       status: 'ok',
       source: new URL(target).pathname,
       host_runtime_enabled: body.host_runtime_enabled === true || body.hostRuntimeEnabled === true,
+      runtime_providers: runtimeProviders && Array.isArray(runtimeProviders.providers) ? runtimeProviders : undefined,
       raw_status: body.status ?? body.state ?? 'unknown',
     };
   } catch (err) {
+    rethrowExecutorSecurityError(err);
     return {
       status: 'unreachable',
       source: null,
       host_runtime_enabled: false,
       error: String(err?.message ?? err),
     };
+  }
+}
+
+async function getMcpDiscovery(executorUrl) {
+  try {
+    const { target, body } = await fetchJsonFirst([
+      `${executorUrl}/api/v2/admin/mcp/discovery`,
+      `${executorUrl}/admin/mcp/discovery`,
+    ]);
+    return {
+      source: executorUrl,
+      discovery_path: new URL(target).pathname,
+      fetched_at: new Date().toISOString(),
+      ...normalizeMcpDiscovery(body, executorUrl),
+    };
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
+    return normalizeMcpDiscovery({
+      enabled: false,
+      status: 'disabled',
+      reason_code: 'mcp.discovery_unavailable',
+      error: String(err?.message ?? err),
+    }, executorUrl);
+  }
+}
+
+function normalizeMcpDiscovery(body, source) {
+  const endpoint = body?.endpoint && typeof body.endpoint === 'object' ? body.endpoint : {};
+  const auth = body?.auth && typeof body.auth === 'object' ? body.auth : {};
+  return {
+    source: source ?? body?.source,
+    enabled: body?.enabled === true,
+    status: body?.status ?? (body?.enabled === true ? 'enabled' : 'disabled'),
+    reason_code: body?.reason_code ?? body?.reasonCode ?? null,
+    error: body?.error,
+    endpoint: {
+      path: endpoint.path ?? '/mcp',
+      methods: Array.isArray(endpoint.methods) ? endpoint.methods : ['POST'],
+      transport: endpoint.transport ?? 'streamable-http',
+      stateless: endpoint.stateless !== false,
+      get_behavior: endpoint.get_behavior ?? endpoint.getBehavior ?? '405_method_not_allowed',
+      mcp_session_id: endpoint.mcp_session_id ?? endpoint.mcpSessionId ?? false,
+    },
+    protocol: body?.protocol ?? { latest: '2025-11-25', supported: [] },
+    auth: {
+      scheme: auth.scheme ?? 'bearer',
+      required: auth.required !== false,
+      principal_config: auth.principal_config ?? auth.principalConfig ?? 'mcp-principals.toml',
+      principals: Array.isArray(auth.principals) ? auth.principals.map((principal) => ({
+        client_id: principal.client_id ?? principal.clientId ?? '',
+        scopes: Array.isArray(principal.scopes) ? principal.scopes : [],
+      })).filter((principal) => principal.client_id) : [],
+      scopes: Array.isArray(auth.scopes) ? auth.scopes : [],
+    },
+    capabilities: body?.capabilities ?? {},
+    tools: Array.isArray(body?.tools) ? body.tools : [],
+    resources: Array.isArray(body?.resources) ? body.resources : [],
+    resource_templates: Array.isArray(body?.resource_templates)
+      ? body.resource_templates
+      : Array.isArray(body?.resourceTemplates) ? body.resourceTemplates : [],
+    errors: Array.isArray(body?.errors) ? body.errors : [],
+    notes: Array.isArray(body?.notes) ? body.notes : [],
+  };
+}
+
+async function proxyMcpRequest(req, res, executorUrl, mcpTokenFile) {
+  if (!mcpTokenFile) {
+    await appendAudit('sandbox.mcp.proxy', {
+      result: 'blocked',
+      reason: 'mcp_token_file_unconfigured',
+    });
+    return json(res, 503, {
+      error: 'mcp_token_file_unconfigured',
+      message: 'Bridge MCP proxy requires AIWG_COCKPIT_MCP_TOKEN_FILE.',
+    });
+  }
+  const parsed = await readJsonBody(req);
+  if (parsed.error) return json(res, 400, { error: parsed.error });
+  const body = parsed.body || {};
+  const rpcMethod = typeof body.method === 'string' ? body.method : 'unknown';
+  const target = `${executorUrl}/mcp`;
+  let status = 502;
+  try {
+    const token = await resolveExecutorBearer(mcpTokenFile);
+    const headers = {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+    };
+    const protocolVersion = req.headers['mcp-protocol-version'];
+    if (typeof protocolVersion === 'string' && protocolVersion.trim()) {
+      headers['mcp-protocol-version'] = protocolVersion.trim();
+    }
+    const response = await fetch(target, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    status = response.status;
+    const responseBody = await response.json().catch(() => ({}));
+    await appendAudit('sandbox.mcp.proxy', {
+      result: response.ok ? 'ok' : 'error',
+      method: rpcMethod,
+      status,
+    });
+    return json(res, status, responseBody);
+  } catch (err) {
+    await appendAudit('sandbox.mcp.proxy', {
+      result: 'error',
+      method: rpcMethod,
+      status,
+      error: String(err?.code ?? err?.message ?? err),
+    });
+    throw err;
   }
 }
 
@@ -477,19 +828,27 @@ function defaultExecutorCommand() {
   return [];
 }
 
-async function ensureExecutor(executorUrl) {
-  if (!AUTOSTART_EXECUTOR || await probeExecutor(executorUrl)) return;
-  const cmd = defaultExecutorCommand();
+export async function ensureExecutor(
+  executorUrl,
+  { command, probe = probeExecutor, autostart = AUTOSTART_EXECUTOR } = {},
+) {
+  if (!autostart || await probe(executorUrl)) return;
+  const cmd = command ?? defaultExecutorCommand();
   if (!cmd.length) return;
   const child = spawn(cmd[0], cmd.slice(1), {
     detached: true,
     stdio: 'ignore',
     env: { ...process.env },
   });
+  const started = await new Promise((resolve) => {
+    child.once('spawn', () => resolve(true));
+    child.once('error', () => resolve(false));
+  });
+  if (!started) return;
   child.unref();
   for (let i = 0; i < 30; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 500));
-    if (await probeExecutor(executorUrl)) return;
+    if (await probe(executorUrl)) return;
   }
 }
 
@@ -498,6 +857,10 @@ async function proxyFirst(res, candidates, options) {
     const { status, body } = await fetchJsonFirst(candidates, options);
     return json(res, status, body);
   } catch (err) {
+    if ([401, 403].includes(Number(err?.upstreamStatus))) {
+      return json(res, Number(err.upstreamStatus), { error: err.code, message: String(err.message) });
+    }
+    if (String(err?.code ?? '').startsWith('executor_credential_')) throw err;
     const message = String(err?.message ?? err);
     const notFound = / -> 404(?:;|$)/.test(message);
     const methodNotAllowed = / -> 405(?:;|$)/.test(message);
@@ -508,8 +871,114 @@ async function proxyFirst(res, candidates, options) {
   }
 }
 
+function normalizedInstanceName(value, fallback = 'cockpit-fast-start') {
+  const cleaned = String(value || fallback)
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+$/g, '')
+    .slice(0, 63);
+  const prefixed = /^[a-z]/.test(cleaned) ? cleaned : `a-${cleaned.replace(/^-+/, '')}`;
+  return prefixed && prefixed.length >= 2 ? prefixed.slice(0, 63) : fallback;
+}
+
+function instanceVmName(instance, instanceId) {
+  return instance?.launch_context?.name
+    ?? instance?.launchContext?.name
+    ?? instance?.name
+    ?? instance?.id
+    ?? instanceId;
+}
+
+function defaultAssetRef(instanceId, action) {
+  return `${normalizedInstanceName(instanceId, 'cockpit-vm')}-${action}-${Date.now().toString(36)}`.slice(0, 96);
+}
+
+function upstreamBridgeError(err) {
+  rethrowExecutorSecurityError(err);
+  return { status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } };
+}
+
+async function providerFastStartAction(upstreamUrl, instanceId, action, body = {}) {
+  let inventory;
+  try { inventory = await getInventory(upstreamUrl); }
+  catch (err) { rethrowExecutorSecurityError(err); inventory = { instances: [] }; }
+  const inst = inventory.instances.find((i) => String(i.id) === String(instanceId));
+  if (!inst) return { status: 404, body: { error: 'instance_not_found', instance_id: instanceId } };
+  const runtime = String(inst.runtime_posture?.kind ?? inst.runtime ?? '').toLowerCase();
+  if (!['vm', 'qemu', 'kvm'].includes(runtime)) {
+    return { status: 422, body: { error: 'unsupported_runtime', message: 'fast-start actions are valid only for VM instances' } };
+  }
+  const provider = String(inst.provider ?? '').trim();
+  if (!provider) return { status: 422, body: { error: 'provider_required', message: 'executor inventory did not report an effective VM provider' } };
+
+  const vmName = instanceVmName(inst, instanceId);
+  const rawAsset = body.asset_ref ?? body.assetRef ?? body.snapshot_id ?? body.snapshotId ?? body.checkpoint_id ?? body.checkpointId ?? body.pool;
+  const assetRef = String(rawAsset ?? '').trim();
+  const restoreMode = String(body.restore_mode ?? body.restoreMode ?? 'ondemand').trim() || 'ondemand';
+  const childName = normalizedInstanceName(
+    body.name ?? body.child_name ?? body.childName,
+    `${normalizedInstanceName(vmName, 'cockpit-vm')}-${action === 'warm-pool' ? 'warm' : action}`,
+  );
+
+  if (action === 'snapshot' || action === 'checkpoint') {
+    const newAssetRef = assetRef || defaultAssetRef(vmName, provider === 'libvirt' ? 'checkpoint' : 'snapshot');
+    if (provider === 'cloud-hypervisor') {
+      return fetchJsonFirst([{
+        target: `${upstreamUrl}/api/v2/admin/cloud-hypervisor/snapshots`,
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          vm: vmName,
+          snapshot_id: newAssetRef,
+          pre_enrollment: body.pre_enrollment ?? body.preEnrollment ?? true,
+        }),
+      }]).catch(upstreamBridgeError);
+    }
+    if (provider === 'libvirt') {
+      return fetchJsonFirst([{
+        target: `${upstreamUrl}/api/v2/admin/libvirt/checkpoints`,
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          vm: vmName,
+          checkpoint_id: newAssetRef,
+          pre_enrollment: true,
+        }),
+      }]).catch(upstreamBridgeError);
+    }
+    return { status: 422, body: { error: 'unsupported_provider_action', provider, action } };
+  }
+
+  if (!assetRef) {
+    return { status: 400, body: { error: 'asset_ref_required', message: 'restore, fork, and warm-pool actions require an opaque asset_ref' } };
+  }
+  const mode = action === 'warm-pool' ? 'warm_pool' : action;
+  return fetchJsonFirst([{
+    target: `${upstreamUrl}/api/v2/admin/instances`,
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: childName,
+      runtime: 'qemu',
+      provider,
+      runtime_options: {
+        kind: 'vm',
+        provider,
+        launch_strategy: {
+          mode,
+          prefer_fast_start: true,
+          asset_ref: assetRef,
+          ...(provider === 'cloud-hypervisor' ? { restore_mode: restoreMode } : {}),
+        },
+      },
+    }),
+  }]).catch(upstreamBridgeError);
+}
+
 async function destroyInstance(upstreamUrl, instanceId) {
-  const inventory = await getInventory(upstreamUrl).catch(() => ({ instances: [] }));
+  let inventory;
+  try { inventory = await getInventory(upstreamUrl); }
+  catch (err) { rethrowExecutorSecurityError(err); inventory = { instances: [] }; }
   const inst = inventory.instances.find((i) => String(i.id) === String(instanceId));
   const runtime = String(inst?.runtime ?? inst?.runtime_posture?.kind ?? '').toLowerCase();
   const dockerName = inst?.launch_context?.name;
@@ -522,7 +991,7 @@ async function destroyInstance(upstreamUrl, instanceId) {
   try {
     const result = await fetchJsonFirst(candidates);
     if (result.status < 400) {
-      if (['docker', 'container'].includes(runtime) && dockerName) {
+      if (LOCAL_DOCKER_FALLBACK && ['docker', 'container'].includes(runtime) && dockerName) {
         try {
           await spawnCollect('docker', ['rm', '-f', dockerName]);
           return {
@@ -540,6 +1009,7 @@ async function destroyInstance(upstreamUrl, instanceId) {
       return result;
     }
   } catch (err) {
+    rethrowExecutorSecurityError(err);
     const message = String(err?.message ?? err);
     // A docker/container row with a resolvable name is still physically
     // removable even when admin-v2 has no instance record (404): fall through
@@ -571,6 +1041,18 @@ async function destroyInstance(upstreamUrl, instanceId) {
       target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/destroy`,
       status: 404,
       body: { error: 'instance_not_destroyable', message: `No destroyable runtime record for ${instanceId}` },
+    };
+  }
+  if (!LOCAL_DOCKER_FALLBACK) {
+    return {
+      target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/destroy`,
+      status: 409,
+      body: {
+        error: 'local_docker_fallback_disabled',
+        message: 'Sandbox management did not accept this destroy request. Local docker rm fallback is disabled unless AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK=1 is set for local development.',
+        runtime,
+        docker_name: dockerName,
+      },
     };
   }
 
@@ -634,7 +1116,9 @@ async function signalVmAgentReconnect(domain) {
 const VM_RUNTIME_KINDS = ['vm', 'qemu', 'kvm'];
 
 async function reconnectInstance(upstreamUrl, instanceId) {
-  const inventory = await getInventory(upstreamUrl).catch(() => ({ instances: [] }));
+  let inventory;
+  try { inventory = await getInventory(upstreamUrl); }
+  catch (err) { rethrowExecutorSecurityError(err); inventory = { instances: [] }; }
   const inst = inventory.instances.find((i) => String(i.id) === String(instanceId));
   const runtime = String(inst?.runtime ?? inst?.runtime_posture?.kind ?? '').toLowerCase();
   const dockerName = inst?.launch_context?.name;
@@ -646,12 +1130,25 @@ async function reconnectInstance(upstreamUrl, instanceId) {
   try {
     const result = await fetchJsonFirst(candidates, { timeoutMs: 5_000 });
     if (result.status < 400) return result;
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     // agentic-sandbox v2026.7.6 still exposes the container reconnect as an
     // in-image helper, not an HTTP endpoint. Fall through to the local-dev path.
   }
 
   if (['docker', 'container'].includes(runtime) && dockerName) {
+    if (!LOCAL_DOCKER_FALLBACK) {
+      return {
+        target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`,
+        status: 409,
+        body: {
+          error: 'local_docker_fallback_disabled',
+          message: 'Sandbox management did not accept this reconnect request. Local docker exec fallback is disabled unless AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK=1 is set for local development.',
+          runtime,
+          docker_name: dockerName,
+        },
+      };
+    }
     try {
       const output = await spawnCollect('docker', ['exec', dockerName, 'agent-reconnect']);
       return {
@@ -681,6 +1178,19 @@ async function reconnectInstance(upstreamUrl, instanceId) {
   }
 
   if (VM_RUNTIME_KINDS.includes(runtime)) {
+    if (!localLibvirtFallbackAllowed()) {
+      return {
+        target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`,
+        status: 409,
+        body: {
+          error: 'local_libvirt_fallback_disabled',
+          message: 'Sandbox management did not accept this reconnect request. Local virsh fallback is only automatic on Linux; set AIWG_COCKPIT_LOCAL_LIBVIRT_FALLBACK=1 for explicit local development on this host.',
+          runtime,
+          platform: process.platform,
+          arch: process.arch,
+        },
+      };
+    }
     // For VM instances the agent_id doubles as the libvirt domain name
     // (agentic-sandbox provision-vm.sh registers agent_id = $vm_name).
     const domain = dockerName ?? inst?.name ?? String(instanceId);
@@ -766,7 +1276,8 @@ async function resolveSessionAgentId(executorUrl, instanceId) {
     const agents = await getAgentList(executorUrl);
     const agent = agents.find((a) => String(a.instance_id ?? a.instanceId ?? '') === String(instanceId));
     return agent?.id ?? agent?.agent_id ?? agent?.agentId ?? instanceId;
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     return instanceId;
   }
 }
@@ -854,6 +1365,109 @@ function normalizeTransport(posture) {
   };
 }
 
+function safeRef(value) {
+  const ref = typeof value === 'string' ? value.trim() : '';
+  if (!ref) return undefined;
+  if (/-----BEGIN|PRIVATE KEY|TOKEN|SECRET|PASSWORD|[\r\n]/i.test(ref)) return '[redacted]';
+  return ref.slice(0, 160);
+}
+
+function normalizeBootstrapTrustReadiness(body, executorUrl, { available = true } = {}) {
+  const ca = body?.ca_provider && typeof body.ca_provider === 'object' ? body.ca_provider : {};
+  const bootstrap = body?.bootstrap && typeof body.bootstrap === 'object' ? body.bootstrap : {};
+  const status = String(body?.status ?? (available ? 'unknown' : 'disabled')).toLowerCase();
+  const normalizedStatus = ['secure', 'degraded', 'disabled'].includes(status)
+    ? status
+    : (ca.configured === true || ca.available === true ? 'degraded' : 'disabled');
+  const trustFresh = ca.trust_bundle_fresh ?? ca.trustBundleFresh ?? ca.fresh;
+  const tokenStoreConfigured = bootstrap.token_store_configured ?? bootstrap.tokenStoreConfigured;
+  const caConfigured = ca.configured ?? ca.available;
+  const missing = [];
+  if (caConfigured === false) missing.push('ca_provider');
+  if (tokenStoreConfigured === false) missing.push('bootstrap_token_store');
+  if (trustFresh === false) missing.push('fresh_trust_bundle');
+  const plaintextDev = new URL(executorUrl).protocol === 'http:' && isLocalHostName(new URL(executorUrl).hostname);
+  const recovery = normalizedStatus === 'secure'
+    ? 'Sandbox CA and bootstrap trust are ready.'
+    : normalizedStatus === 'degraded'
+      ? 'Refresh sandbox CA/bootstrap readiness, rotate stale trust material, then reload Cockpit.'
+      : plaintextDev
+        ? 'Plaintext local development mode only; enable sandbox mTLS before using remote or shared executors.'
+        : 'Configure sandbox CA provider and client trust refs before connecting Cockpit.';
+  return {
+    status: normalizedStatus,
+    mode: normalizedStatus === 'secure' ? 'mtls' : (plaintextDev ? 'plaintext-dev' : 'disabled'),
+    label: normalizedStatus === 'secure'
+      ? 'Sandbox mTLS ready'
+      : normalizedStatus === 'degraded'
+        ? 'Sandbox trust degraded'
+        : (plaintextDev ? 'Plaintext dev mode' : 'Sandbox trust disabled'),
+    source: body?.source ?? '/api/v2/admin/bootstrap/readiness',
+    ca_provider_ref: safeRef(ca.provider_ref ?? ca.providerRef ?? ca.provider ?? ca.id ?? ca.name),
+    trust_bundle_ref: safeRef(ca.trust_bundle_ref ?? ca.trustBundleRef ?? ca.bundle_ref ?? ca.bundleRef),
+    client_identity_ref: safeRef(ca.client_identity_ref ?? ca.clientIdentityRef ?? ca.identity_ref ?? ca.identityRef),
+    rotation_state: safeRef(ca.rotation_state ?? ca.rotationState ?? ca.state),
+    expires_at: safeRef(ca.expires_at ?? ca.expiresAt ?? ca.not_after ?? ca.notAfter),
+    trust_bundle_fresh: trustFresh === undefined ? undefined : Boolean(trustFresh),
+    token_store_configured: tokenStoreConfigured === undefined ? undefined : Boolean(tokenStoreConfigured),
+    missing_required_material: missing,
+    recovery,
+  };
+}
+
+function assertRequiredBootstrapTrust(posture) {
+  if (posture.status === 'secure' && posture.missing_required_material.length === 0) return;
+  const err = executorAuthError(
+    'executor_trust_required',
+    `sandbox mTLS is required but bootstrap trust is ${posture.status}: ${posture.recovery}`,
+  );
+  err.upstreamStatus = 503;
+  err.recovery = posture.recovery;
+  throw err;
+}
+
+async function getBootstrapTrustPosture(executorUrl, { requireSandboxMtls = false } = {}) {
+  try {
+    const { target, body } = await fetchJsonFirst([
+      `${executorUrl}/api/v2/admin/bootstrap/readiness`,
+      `${executorUrl}/admin/bootstrap/readiness`,
+    ]);
+    const posture = normalizeBootstrapTrustReadiness({ ...body, source: new URL(target).pathname }, executorUrl);
+    if (requireSandboxMtls) assertRequiredBootstrapTrust(posture);
+    return posture;
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
+    const posture = normalizeBootstrapTrustReadiness({
+      status: 'disabled',
+      source: '/api/v2/admin/bootstrap/readiness',
+      ca_provider: { configured: false },
+      bootstrap: { token_store_configured: false },
+    }, executorUrl, { available: false });
+    if (requireSandboxMtls) assertRequiredBootstrapTrust(posture);
+    return posture;
+  }
+}
+
+function normalizeStoragePosture(posture) {
+  const raw = posture && typeof posture === 'object' ? posture : {};
+  return {
+    persistent: Boolean(raw.persistent ?? raw.persists ?? raw.persistence === 'persistent'),
+    delete_on_destroy: Boolean(raw.delete_on_destroy ?? raw.deleteOnDestroy),
+    scope: raw.scope ?? raw.storage_scope ?? raw.storageScope,
+    reason: raw.reason ?? raw.detail,
+  };
+}
+
+function normalizeLifecycle(lifecycle) {
+  const raw = lifecycle && typeof lifecycle === 'object' ? lifecycle : {};
+  return {
+    destroy: raw.destroy ?? raw.delete ?? raw.remove,
+    reconnect: raw.reconnect,
+    start: raw.start,
+    stop: raw.stop,
+  };
+}
+
 function normalizeSessionBackends(backends, runtimeKind, state = 'unknown', agentReady = false) {
   const list = Array.isArray(backends) ? backends : [];
   if (!list.length && runtimeKind === 'host') {
@@ -905,6 +1519,10 @@ function normalizeInstance(executorUrl, i) {
   return {
     id,
     runtime,
+    provider: i.provider ?? i.runtime_provider ?? i.runtimeProvider ?? i.runtime?.provider,
+    capabilities: Array.isArray(i.capabilities) ? i.capabilities : i.runtime?.capabilities,
+    capability_constraints: i.capability_constraints ?? i.capabilityConstraints ?? i.runtime?.capability_constraints ?? i.runtime?.capabilityConstraints,
+    gpu: i.gpu ?? i.gpu_posture ?? i.gpuPosture ?? i.runtime?.gpu,
     loadout,
     state: i.state ?? i.status ?? 'unknown',
     tenant: i.tenant_id ?? i.tenant ?? i.tenantId ?? 'default',
@@ -916,6 +1534,7 @@ function normalizeInstance(executorUrl, i) {
         ? { mode: i.transport, trust: i.transport_posture, source: 'agentic-sandbox admin-v2' }
         : i.transport ?? i.transport_posture ?? i.security_posture ?? i.security?.transport,
     ),
+    managed_docker_posture: normalizeManagedDockerPosture(i, runtimePosture.kind),
     launch_context: {
       cwd: i.launch_context?.cwd ?? i.launchContext?.cwd ?? i.cwd,
       loadout,
@@ -926,10 +1545,157 @@ function normalizeInstance(executorUrl, i) {
       image_ref: i.image_ref ?? i.imageRef ?? i.runtime_extension?.image_ref ?? i.runtimeExtension?.imageRef,
       source: i.runtime_extension ? 'agent-card runtime extension' : i.launch_context?.source ?? i.launchContext?.source,
     },
+    storage: normalizeStoragePosture(i.storage ?? i.storage_posture ?? i.storagePosture ?? i.lifecycle?.storage),
+    lifecycle: normalizeLifecycle(i.lifecycle ?? i.lifecycle_support ?? i.lifecycleSupport),
     agent_ready: agentReady,
     registered_agent_id: i.registered_agent_id ?? i.registeredAgentId,
     session_backends: normalizeSessionBackends(i.session_backends ?? i.sessionBackends ?? i.session_host?.backends ?? i.sessionHost?.backends ?? i.capabilities?.session_backends ?? i.capabilities?.sessionBackends, runtimePosture.kind, i.state ?? i.status, agentReady),
   };
+}
+
+const MANAGED_DOCKER_CONTROL_UID_MIN = 200_000;
+const MANAGED_DOCKER_CONTROL_UID_MAX = 799_999;
+const MANAGED_DOCKER_WORKLOAD_UID = 10_001;
+
+/** Project only executor-attested, client-safe managed-Docker identity evidence. */
+export function normalizeManagedDockerPosture(i, runtimeKind) {
+  if (!['docker', 'container'].includes(String(runtimeKind).toLowerCase())) return undefined;
+  const source = i.managed_docker_posture ?? i.managedDockerPosture ?? i.security_posture ?? i.securityPosture ?? i;
+  const rawTransport = source.transport_mode ?? source.transportMode
+    ?? (typeof source.transport === 'string' ? source.transport : source.transport?.mode)
+    ?? (typeof i.transport === 'string' ? i.transport : i.transport?.mode)
+    ?? 'unknown';
+  const transportMode = String(rawTransport).toLowerCase();
+  const rawControlUid = source.control_uid ?? source.controlUid;
+  const controlUid = Number.isInteger(Number(rawControlUid)) ? Number(rawControlUid) : undefined;
+  const rawWorkloadUid = source.workload_uid ?? source.workloadUid;
+  const workloadUid = Number.isInteger(Number(rawWorkloadUid)) ? Number(rawWorkloadUid) : undefined;
+  const boundary = String(source.workload_boundary ?? source.workloadBoundary ?? source.boundary ?? 'unknown').toLowerCase();
+  const reportedFallback = String(source.fallback_reason_code ?? source.fallbackReasonCode ?? source.fallback_reason ?? source.fallbackReason ?? '').toLowerCase();
+  const fallbackReason = transportMode === 'mtls-bootstrap' || reportedFallback === 'docker_desktop_peer_uid_unavailable'
+    ? 'Docker Desktop UDS bridge does not preserve peer UID'
+    : reportedFallback === 'identity_resolver_unavailable'
+      ? 'Managed UDS identity resolver unavailable'
+      : ['operator-configured', 'explicit', 'mtls'].includes(transportMode)
+        ? 'Operator-configured compatibility transport'
+        : undefined;
+  const controlIdentityPresent = controlUid !== undefined;
+  const controlIdentityRangeValid = controlIdentityPresent
+    && controlUid >= MANAGED_DOCKER_CONTROL_UID_MIN
+    && controlUid <= MANAGED_DOCKER_CONTROL_UID_MAX;
+  const workloadIdentitySeparated = boundary === 'separated' && workloadUid === MANAGED_DOCKER_WORKLOAD_UID;
+  const secureDefault = transportMode === 'uds' && controlIdentityRangeValid && workloadIdentitySeparated;
+  const compatibility = transportMode !== 'uds';
+  const requiresRecreation = !controlIdentityPresent || !workloadUid || boundary === 'unknown';
+  return {
+    transport_mode: transportMode,
+    control_identity_present: controlIdentityPresent,
+    control_identity_range_valid: controlIdentityRangeValid,
+    workload_uid: workloadUid,
+    workload_identity_separated: workloadIdentitySeparated,
+    boundary,
+    secure_default: secureDefault,
+    compatibility,
+    fallback_reason: fallbackReason ? String(fallbackReason).slice(0, 300) : undefined,
+    requires_recreation: requiresRecreation,
+    source: 'agentic-sandbox',
+  };
+}
+
+const ACTIVITY_SCOPE_HEADERS = {
+  tenant_id: 'x-agentic-tenant-id', host_id: 'x-agentic-host-id',
+  instance_id: 'x-agentic-instance-id', agent_id: 'x-agentic-agent-id',
+};
+const ACTIVITY_FILTERS = new Set(['event_name', 'collector', 'trust', 'plane', 'outcome', 'session_id', 'mission_id', 'task_id', 'tool_call_id', 'command_id', 'process_id', 'trace_id', 'since', 'until', 'limit']);
+
+export function activityRequest(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw Object.assign(new Error('activity request must be an object'), { code: 'activity_invalid_request' });
+  const headers = { 'accept': 'application/json' };
+  const scope = {};
+  for (const [key, header] of Object.entries(ACTIVITY_SCOPE_HEADERS)) {
+    const value = String(input[key] ?? '').trim();
+    if (!value || value.length > 255 || /[\r\n]/.test(value)) throw Object.assign(new Error(`missing or invalid ${key}`), { code: 'activity_scope_required' });
+    headers[header] = value;
+    scope[key] = value;
+  }
+  const filter = {};
+  for (const [key, value] of Object.entries(input.filter ?? {})) {
+    if (!ACTIVITY_FILTERS.has(key)) throw Object.assign(new Error(`unsupported activity filter: ${key}`), { code: 'activity_invalid_filter' });
+    if (key === 'limit') {
+      if (!Number.isInteger(value) || value < 1 || value > 1000) throw Object.assign(new Error('activity limit must be 1..1000'), { code: 'activity_invalid_filter' });
+      filter[key] = value;
+    } else if (typeof value === 'string' && value.trim() && value.length <= 255 && !/[\r\n]/.test(value)) filter[key] = value.trim();
+    else throw Object.assign(new Error(`invalid activity filter: ${key}`), { code: 'activity_invalid_filter' });
+  }
+  return { headers, scope, filter };
+}
+
+export function validateActivityEnvelope(body, expectedScope, { includeEvents = false, exportEnvelope = false } = {}) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('malformed activity envelope'), { code: 'activity_malformed_envelope' });
+  if (!exportEnvelope && body.schema_version !== 'activity.event/v1') throw Object.assign(new Error('unsupported activity schema'), { code: 'activity_malformed_envelope' });
+  const events = Array.isArray(body.events) ? body.events : [];
+  if (includeEvents && !Array.isArray(body.events)) throw Object.assign(new Error('activity envelope has no events array'), { code: 'activity_malformed_envelope' });
+  if (!exportEnvelope && (!Array.isArray(body.coverage) || !body.completeness || typeof body.completeness.complete !== 'boolean')) {
+    throw Object.assign(new Error('activity envelope has invalid coverage'), { code: 'activity_malformed_envelope' });
+  }
+  const nonnegativeInteger = (value) => Number.isInteger(value) && value >= 0;
+  const nonnegativeFinite = (value) => Number.isFinite(value) && value >= 0;
+  const validCompleteness = (value) => value
+    && typeof value.label === 'string'
+    && nonnegativeInteger(value.collector_count)
+    && nonnegativeInteger(value.sequence_gap_count)
+    && nonnegativeInteger(value.durable_loss_count)
+    && nonnegativeInteger(value.restart_count)
+    && nonnegativeInteger(value.dropped_event_count)
+    && nonnegativeInteger(value.stale_collector_count)
+    && Array.isArray(value.unsupported_event_classes)
+    && value.unsupported_event_classes.every((item) => typeof item === 'string')
+    && nonnegativeFinite(value.maximum_clock_error_ms);
+  if (!exportEnvelope && !validCompleteness(body.completeness)) {
+    throw Object.assign(new Error('activity envelope has malformed completeness summary'), { code: 'activity_malformed_envelope' });
+  }
+  if (!exportEnvelope && body.coverage.some((entry) => !entry || typeof entry.collector_id !== 'string' || !Array.isArray(entry.sequence_gaps) || !Array.isArray(entry.durable_loss_records) || !nonnegativeInteger(entry.restart_count) || !nonnegativeInteger(entry.dropped_event_count) || typeof entry.stale !== 'boolean' || !Array.isArray(entry.unsupported_event_classes) || !entry.unsupported_event_classes.every((item) => typeof item === 'string') || !nonnegativeFinite(entry.maximum_clock_error_ms))) {
+    throw Object.assign(new Error('activity envelope has malformed collector coverage'), { code: 'activity_malformed_envelope' });
+  }
+  for (const event of events) {
+    assertActivityEvent(event, expectedScope);
+  }
+  const manifest = body.manifest;
+  if (exportEnvelope && (!manifest
+    || typeof manifest.batch_id !== 'string' || !manifest.batch_id
+    || manifest.tenant_id !== expectedScope.tenant_id
+    || typeof manifest.collector_id !== 'string' || !manifest.collector_id
+    || !Number.isInteger(manifest.event_count) || manifest.event_count < 0
+    || !/^[0-9a-f]{64}$/.test(manifest.merkle_root ?? '')
+    || typeof manifest.key_id !== 'string' || !manifest.key_id
+    || typeof manifest.signature !== 'string' || !manifest.signature
+    || (manifest.previous_root !== null && manifest.previous_root !== undefined && !/^[0-9a-f]{64}$/.test(manifest.previous_root)))) {
+    throw Object.assign(new Error('signed activity export has no valid manifest'), { code: 'activity_malformed_export' });
+  }
+  return body;
+}
+
+async function activityProxy(executorUrl, kind, input) {
+  const request = activityRequest(input);
+  const isExport = kind === 'export';
+  const query = new URLSearchParams(Object.entries(request.filter).map(([key, value]) => [key, String(value)]));
+  const target = `${executorUrl}/api/v2/activity/${kind}${!isExport && query.size ? `?${query}` : ''}`;
+  const result = await fetchJsonFirst([{ target, method: isExport ? 'POST' : 'GET', headers: { ...request.headers, ...(isExport ? { 'content-type': 'application/json' } : {}) }, body: isExport ? JSON.stringify(request.filter) : undefined }]);
+  if (!result.status.toString().startsWith('2')) return result;
+  return { ...result, body: validateActivityEnvelope(result.body, request.scope, { includeEvents: kind === 'timeline' || isExport, exportEnvelope: isExport }) };
+}
+
+function managedDockerLaunchError(status, body) {
+  const detail = String(body?.message ?? body?.error?.message ?? body?.error ?? body?.failure?.message ?? '');
+  if (/refuses startup profiles that materialize raw credential refs/i.test(detail)) return {
+    status: status >= 400 ? status : 422,
+    body: {
+      error: 'managed_docker_raw_credentials_rejected',
+      message: 'Managed Docker does not accept startup profiles with raw credential references.',
+      recovery: 'Use the sandbox credential proxy or select a VM runtime. Cockpit will not downgrade the transport automatically.',
+    },
+  };
+  return { status, body };
 }
 
 function defaultSessionLaunch(instance) {
@@ -947,7 +1713,11 @@ function defaultSessionLaunch(instance) {
     };
   }
   if (runtime === 'container' || runtime === 'docker' || runtime === 'vm' || runtime === 'qemu' || runtime === 'kvm') {
-    const home = runtime === 'container' || runtime === 'docker' ? '/root' : '/home/agent';
+    // Prefer the executor-reported target-local cwd. Current agentic-sandbox
+    // container and VM contracts report `/home/agent`; retain that value as a
+    // compatibility fallback for older inventory responses. `/root` is not
+    // readable by the mandatory uid 10001 container identity.
+    const home = instance?.launch_context?.cwd ?? '/home/agent';
     return {
       command: '/bin/bash',
       args: ['-lc', `cd ${shellSingleQuote(home)} && exec /bin/bash -l`],
@@ -1001,7 +1771,8 @@ async function enrichInstanceFromAgentCard(executorUrl, instance) {
       loadout: instance.loadout ?? runtimeExtension.loadout,
       image_ref: instance.image_ref ?? runtimeExtension.image_ref,
     };
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     return instance;
   }
 }
@@ -1009,7 +1780,8 @@ async function enrichInstanceFromAgentCard(executorUrl, instance) {
 async function getRegisteredAgents(executorUrl) {
   try {
     return await getAgentList(executorUrl);
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     return [];
   }
 }
@@ -1073,7 +1845,8 @@ async function getAgentBackedHostInventory(executorUrl, degradedDetail) {
 }
 
 /** Normalize the executor's admin inventory into the Bridge's UI shape. */
-async function getInventory(executorUrl) {
+async function getInventory(executorUrl, { requireSandboxMtls = false } = {}) {
+  const bootstrapTrust = await getBootstrapTrustPosture(executorUrl, { requireSandboxMtls });
   const { target, status, body } = await fetchJsonFirst([
     `${executorUrl}/admin/instances`,
     `${executorUrl}/api/v2/admin/instances`,
@@ -1095,6 +1868,7 @@ async function getInventory(executorUrl) {
         count: 0,
         degraded_admin_inventory: detail,
         admin_error: body,
+        bootstrap_trust: bootstrapTrust,
         instances: [],
       };
     }
@@ -1109,6 +1883,8 @@ async function getInventory(executorUrl) {
     admin_path: new URL(target).pathname,
     fetched_at: new Date().toISOString(),
     count: normalized.length,
+    bootstrap_trust: bootstrapTrust,
+    degraded_providers: body?.degraded_providers,
     instances: normalized,
   };
 }
@@ -1159,6 +1935,8 @@ async function getLoadouts(executorUrl) {
       label: l.label ?? l.display_name ?? l.displayName ?? id,
       description: l.description ?? l.summary,
       runtimes: l.runtimes ?? l.runtime_kinds ?? l.supported_runtimes,
+      runtime_options: l.runtime_options ?? l.runtimeOptions,
+      compatibility: l.compatibility,
     };
   }).filter((l) => l.id);
   return { source: executorUrl, loadouts_path: new URL(target).pathname, count: loadouts.length, loadouts };
@@ -1170,7 +1948,7 @@ async function getRunning(executorUrl) {
   await Promise.all(
     instances.filter((i) => i.state === 'running').map(async (inst) => {
       let tasks;
-      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch { return; }
+      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch (err) { rethrowExecutorSecurityError(err); return; }
       for (const t of tasks) {
         const state = taskState(t);
         if (!ACTIVE_TASK_STATES.has(state)) continue;
@@ -1250,7 +2028,7 @@ async function getApprovals(executorUrl, status) {
   await Promise.all(
     instances.filter((i) => i.state === 'running').map(async (inst) => {
       let tasks;
-      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch { return; }
+      try { tasks = await listInstanceTasks(executorUrl, inst.id); } catch (err) { rethrowExecutorSecurityError(err); return; }
       for (const t of tasks) {
         const approval = approvalFromTask(inst, t);
         if (!approval) continue;
@@ -1386,8 +2164,12 @@ async function taskMissionSession(executorUrl) {
 
 async function getMissions(executorUrl) {
   const sessions = await readMcSessions();
-  const live = await taskMissionSession(executorUrl);
+  const [live, fleetSessions] = await Promise.all([
+    taskMissionSession(executorUrl),
+    fleetMissionSessions(executorUrl),
+  ]);
   if (live) sessions.unshift(live);
+  sessions.unshift(...fleetSessions);
   const missions = sessions.flatMap((s) => s.missions);
   return {
     source: 'aiwg-mc + agentic-sandbox',
@@ -1398,11 +2180,109 @@ async function getMissions(executorUrl) {
   };
 }
 
+const FLEET_TERMINAL_STATES = new Set(['succeeded', 'failed', 'cancelled', 'timed-out']);
+
+function fleetParentState(records) {
+  const states = records.map((record) => record.status?.observed_state ?? 'unknown');
+  if (states.some((state) => state === 'operator-review-required' || state === 'unknown')) return 'operator-review-required';
+  if (records.some((record) => record.status?.backpressure?.reason === 'approval')) return 'awaiting-approval';
+  if (states.some((state) => state === 'failed' || state === 'timed-out')) return 'failed';
+  if (states.length > 0 && states.every((state) => FLEET_TERMINAL_STATES.has(state))) return 'completed';
+  return 'active';
+}
+
+function fleetMissionProjection(record, sessionId) {
+  const lineage = record.lineage ?? {};
+  const status = record.status ?? {};
+  const artifacts = Array.isArray(status.artifacts) ? status.artifacts : [];
+  return {
+    id: lineage.child_id,
+    session_id: sessionId,
+    source: 'agentic-sandbox-fleet',
+    title: `${record.kind ?? 'workload'} ${lineage.child_id ?? 'unknown'}`,
+    status: status.observed_state ?? 'unknown',
+    terminal: FLEET_TERMINAL_STATES.has(status.observed_state),
+    parent_mission_id: lineage.mission_id,
+    workload_kind: record.kind,
+    desired_state: record.spec?.desired_state,
+    target_id: lineage.target_id,
+    executor_id: lineage.executor_id,
+    runtime_id: lineage.runtime_id,
+    instance_id: lineage.runtime_id,
+    runtime_session_id: lineage.session_id,
+    task_id: lineage.task_id,
+    command_id: lineage.command_id,
+    dispatch_id: lineage.dispatch_id,
+    revision: status.revision,
+    last_seen: status.last_seen,
+    health: status.health,
+    backpressure: status.backpressure,
+    artifacts,
+    exit_classification: status.exit_classification,
+    error: status.error_code,
+    schedule: record.spec?.schedule,
+  };
+}
+
+async function fleetMissionSessions(executorUrl) {
+  let response;
+  try {
+    response = await fetchJsonFirst([`${executorUrl}/api/v2/fleet/workloads`]);
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
+    if (/\s->\s(?:404|405)(?:;|$)/.test(String(err?.message ?? err))) return [];
+    throw err;
+  }
+  if (response.status === 404 || response.status === 405) return [];
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`Agentic Sandbox fleet inventory failed with HTTP ${response.status}`);
+  }
+  const snapshot = response.body?.inventory ?? response.body;
+  if (
+    snapshot?.document_type !== 'inventory'
+    || snapshot?.api_version !== 'agentic-orchestration/v1'
+    || !Array.isArray(snapshot?.records)
+  ) {
+    throw new Error('Agentic Sandbox returned an invalid fleet inventory envelope');
+  }
+  const records = snapshot.records;
+  const groups = new Map();
+  const childIds = new Set();
+  for (const record of records) {
+    const missionId = record?.lineage?.mission_id;
+    const childId = record?.lineage?.child_id;
+    if (!missionId || !childId || !record?.kind || !record?.status?.observed_state) {
+      throw new Error('Agentic Sandbox fleet inventory contains an invalid workload record');
+    }
+    if (childIds.has(childId)) throw new Error(`Agentic Sandbox fleet inventory repeats child '${childId}'`);
+    childIds.add(childId);
+    const group = groups.get(missionId) ?? [];
+    group.push(record);
+    groups.set(missionId, group);
+  }
+  return [...groups.entries()].map(([missionId, missionRecords]) => {
+    const sessionId = `fleet:${missionId}`;
+    const lastSeen = missionRecords.map((record) => record.status?.last_seen).filter(Boolean).sort().at(-1);
+    return {
+      id: sessionId,
+      parent_mission_id: missionId,
+      name: `Fleet mission ${missionId}`,
+      state: fleetParentState(missionRecords),
+      source: 'agentic-sandbox-fleet',
+      updated_at: lastSeen ?? snapshot.generated_at,
+      inventory_revision: snapshot.inventory_revision,
+      audit_count: 0,
+      audit_tail: [],
+      missions: missionRecords.map((record) => fleetMissionProjection(record, sessionId)),
+    };
+  });
+}
+
 async function getSessionEventRows(executorUrl, instances) {
   const rows = [];
   await Promise.all((instances ?? []).map(async (inst) => {
     let sessions;
-    try { sessions = (await getSessions(executorUrl, inst.id)).sessions; } catch { return; }
+    try { sessions = (await getSessions(executorUrl, inst.id)).sessions; } catch (err) { rethrowExecutorSecurityError(err); return; }
     for (const session of sessions) {
       rows.push({
         id: session.id,
@@ -1492,16 +2372,13 @@ async function respondApproval(executorUrl, approvalId, decision) {
     const { status, body } = await fetchJsonFirst(candidates);
     return { status, body };
   } catch (e) {
+    rethrowExecutorSecurityError(e);
     return { status: 409, body: { error: 'approval_response_failed', detail: String(e?.message ?? e) } };
   }
 }
 
-/**
- * Sessions for one instance, each with a direct attach_url. Control plane (this
- * list) goes through the Bridge; the data plane (the pty stream) connects direct
- * to the executor — masking differs per WS direction, so the Bridge issues the
- * URL rather than proxying frames.
- */
+/** Sessions for one instance. Executor attach targets are normalized here and
+ * replaced with Bridge-owned proxy URLs at the request boundary. */
 async function getSessions(executorUrl, instanceId) {
   const sessionAgentId = await resolveSessionAgentId(executorUrl, instanceId);
   const agentIds = unique([instanceId, sessionAgentId]);
@@ -1546,6 +2423,7 @@ async function getSessionScreen(executorUrl, instanceId, sessionId) {
     const { body, target, status } = await fetchJsonFirst(paths);
     return { status, body: normalizeScreenSnapshot(body, { instanceId, sessionId, source: target }) };
   } catch (e) {
+    rethrowExecutorSecurityError(e);
     return {
       status: 404,
       body: {
@@ -1663,7 +2541,8 @@ async function endSession(executorUrl, instanceId, sessionId) {
   let sessions = [];
   try {
     sessions = (await getSessions(executorUrl, instanceId)).sessions;
-  } catch {
+  } catch (err) {
+    rethrowExecutorSecurityError(err);
     // Fall back to using the supplied id directly; older executors may not list
     // before delete, and delete should remain useful during recovery cleanup.
   }
@@ -1702,29 +2581,206 @@ function sessionResponseFromRow(row) {
   };
 }
 
-export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = ALLOW_MOCK_EXECUTOR, token } = {}) {
+function websocketCockpitToken(req) {
+  const protocols = String(req.headers['sec-websocket-protocol'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const encoded = protocols.find((value) => value.startsWith('cockpit.'))?.slice('cockpit.'.length) ?? '';
+  try { return Buffer.from(encoded, 'base64url').toString('utf8'); } catch { return ''; }
+}
+
+function websocketAuthed(req, expected) {
+  const presented = websocketCockpitToken(req);
+  if (presented.length !== expected.length) return false;
+  try { return timingSafeEqual(Buffer.from(presented), Buffer.from(expected)); } catch { return false; }
+}
+
+function writeUpgradeHead(socket, response) {
+  socket.write(`HTTP/1.1 ${response.statusCode} ${response.statusMessage ?? 'Switching Protocols'}\r\n`);
+  for (let index = 0; index < response.rawHeaders.length; index += 2) {
+    socket.write(`${response.rawHeaders[index]}: ${response.rawHeaders[index + 1]}\r\n`);
+  }
+  socket.write('\r\n');
+}
+
+async function proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile }) {
+  const token = await resolveExecutorBearer(executorTokenFile);
+  const requestedProtocols = String(req.headers['sec-websocket-protocol'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value && !value.startsWith('cockpit.'));
+  const headers = {
+    connection: 'Upgrade',
+    upgrade: 'websocket',
+    host: target.host,
+    'sec-websocket-key': req.headers['sec-websocket-key'],
+    'sec-websocket-version': req.headers['sec-websocket-version'],
+    ...(req.headers['sec-websocket-extensions'] ? { 'sec-websocket-extensions': req.headers['sec-websocket-extensions'] } : {}),
+    ...(requestedProtocols.length ? { 'sec-websocket-protocol': requestedProtocols.join(', ') } : {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
+  const transport = target.protocol === 'wss:' ? https : http;
+  const requestTarget = new URL(target);
+  requestTarget.protocol = target.protocol === 'wss:' ? 'https:' : 'http:';
+  const upstreamRequest = transport.request(requestTarget, { method: 'GET', headers });
+  upstreamRequest.on('upgrade', (response, upstreamSocket, upstreamHead) => {
+    writeUpgradeHead(socket, response);
+    if (head.length) upstreamSocket.write(head);
+    if (upstreamHead.length) socket.write(upstreamHead);
+    socket.pipe(upstreamSocket);
+    upstreamSocket.pipe(socket);
+    const closeBoth = () => {
+      if (!socket.destroyed) socket.destroy();
+      if (!upstreamSocket.destroyed) upstreamSocket.destroy();
+    };
+    socket.on('error', closeBoth);
+    upstreamSocket.on('error', closeBoth);
+  });
+  upstreamRequest.on('response', (response) => {
+    socket.write(`HTTP/1.1 ${response.statusCode ?? 502} ${response.statusMessage ?? 'Upstream Error'}\r\nConnection: close\r\n\r\n`);
+    socket.destroy();
+    response.resume();
+  });
+  upstreamRequest.on('error', () => {
+    if (!socket.destroyed) socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+  });
+  upstreamRequest.end();
+}
+
+export function createBridge({
+  executorUrl = EXECUTOR_URL,
+  allowMockExecutor = ALLOW_MOCK_EXECUTOR,
+  token,
+  executorTokenFile = EXECUTOR_TOKEN_FILE,
+  requireSandboxMtls = REQUIRE_SANDBOX_MTLS,
+  bootstrapTtlMs = 60_000,
+  sessionTtlMs = 12 * 60 * 60 * 1000,
+} = {}) {
   const upstreamUrl = executorUrl;
   const TOKEN = token ?? randomBytes(24).toString('hex');
-  const server = http.createServer(async (req, res) => {
+  const bootstrapNonces = new Map();
+  const browserSessions = new Map();
+  const digest = (value) => createHash('sha256').update(String(value)).digest('base64url');
+  const issueBootstrapNonce = (audience = 'browser') => {
+    if (!['browser', 'tauri', 'vscode'].includes(audience)) {
+      throw executorAuthError('invalid_bootstrap_audience', 'bootstrap audience must be browser, tauri, or vscode');
+    }
+    const nonce = randomBytes(24).toString('base64url');
+    bootstrapNonces.set(digest(nonce), { audience, expiresAt: Date.now() + bootstrapTtlMs });
+    return nonce;
+  };
+  const consumeBootstrapNonce = (nonce, audience) => {
+    const key = digest(nonce);
+    const pending = bootstrapNonces.get(key);
+    bootstrapNonces.delete(key);
+    return Boolean(
+      pending &&
+      pending.expiresAt >= Date.now() &&
+      pending.audience === audience &&
+      ['browser', 'tauri', 'vscode'].includes(audience),
+    );
+  };
+  const sessionAuth = (req) => {
+    const id = cookies(req).cockpit_session ?? '';
+    const session = browserSessions.get(digest(id));
+    if (!session) return null;
+    if (session.expiresAt < Date.now()) {
+      browserSessions.delete(digest(id));
+      return null;
+    }
+    return { kind: 'session', csrf: session.csrf };
+  };
+  const requestAuth = (req) => bearerAuthed(req, TOKEN)
+    ? { kind: 'bearer', csrf: TOKEN }
+    : sessionAuth(req);
+  const executorOrigin = new URL(upstreamUrl).origin;
+  const executorAddress = new URL(upstreamUrl);
+  const attachTargets = new Map();
+  const issueAttachUrl = (req, value) => {
+    const target = new URL(String(value));
+    const sameHost = target.hostname === executorAddress.hostname ||
+      (isLocalHostName(target.hostname) && isLocalHostName(executorAddress.hostname));
+    if (!['ws:', 'wss:'].includes(target.protocol) || !sameHost || !/^\/agents\/[^/]+\/sessions\/[^/]+\/attach$/.test(target.pathname)) {
+      throw executorAuthError('executor_attach_target_refused', 'executor returned an attach URL outside the allowed PTY endpoint');
+    }
+    const id = randomBytes(18).toString('base64url');
+    attachTargets.set(id, target);
+    if (attachTargets.size > 1024) attachTargets.delete(attachTargets.keys().next().value);
+    const wsProtocol = req.socket.encrypted ? 'wss:' : 'ws:';
+    return `${wsProtocol}//${req.headers.host}/api/pty${target.pathname}/${id}`;
+  };
+  const handleRequest = async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     try {
       // unauthenticated liveness probe (no /api/ prefix) — for the shell to wait on
       if (url.pathname === '/healthz') return json(res, 200, { status: 'ok' });
+      if (url.pathname === '/bootstrap/nonce' && req.method === 'POST') {
+        if (!validBrowserOrigin(req) || !bearerAuthed(req, TOKEN)) {
+          return json(res, 401, { error: 'unauthorized' });
+        }
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const payload = JSON.stringify({
+            nonce: issueBootstrapNonce(String(parsed.body.audience ?? 'browser')),
+            expires_in_ms: bootstrapTtlMs,
+          });
+          res.writeHead(201, {
+            'content-type': 'application/json',
+            'cache-control': 'no-store',
+            'content-length': Buffer.byteLength(payload),
+          });
+          return res.end(payload);
+        } catch (err) {
+          return json(res, 400, { error: err.code ?? 'invalid_bootstrap_audience' });
+        }
+      }
+      if (url.pathname === '/bootstrap/session' && req.method === 'POST') {
+        if (!validBrowserOrigin(req)) return json(res, 403, { error: 'forbidden_origin' });
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const nonce = String(parsed.body.nonce ?? '');
+        const audience = String(parsed.body.audience ?? '');
+        if (!nonce || !consumeBootstrapNonce(nonce, audience)) {
+          return json(res, 401, { error: 'bootstrap_invalid_or_expired' });
+        }
+        const id = randomBytes(32).toString('base64url');
+        const csrf = randomBytes(24).toString('base64url');
+        browserSessions.set(digest(id), { csrf, audience, expiresAt: Date.now() + sessionTtlMs });
+        res.writeHead(201, {
+          'content-type': 'application/json',
+          'cache-control': 'no-store',
+          'set-cookie': `cockpit_session=${encodeURIComponent(id)}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${Math.ceil(sessionTtlMs / 1000)}`,
+        });
+        return res.end(JSON.stringify({ csrf, expires_in_ms: sessionTtlMs }));
+      }
+      if (url.pathname === '/bootstrap/session' && req.method === 'GET') {
+        const auth = sessionAuth(req);
+        if (!auth) return json(res, 401, { error: 'unauthorized' });
+        res.setHeader('cache-control', 'no-store');
+        return json(res, 200, { csrf: auth.csrf });
+      }
       if (url.pathname.startsWith('/api/') && !validBrowserOrigin(req)) {
         return json(res, 403, { error: 'forbidden_origin' });
       }
-      // gate the control surface: per-launch bearer token on every /api/ call
-      if (url.pathname.startsWith('/api/') && !authed(req, url, TOKEN)) {
+      // Gate the control surface with either an explicit bearer for non-browser
+      // clients or the HttpOnly session established by a one-time bootstrap.
+      const auth = url.pathname.startsWith('/api/') ? requestAuth(req) : null;
+      if (url.pathname.startsWith('/api/') && !auth) {
         return json(res, 401, { error: 'unauthorized', detail: 'missing or invalid cockpit token' });
       }
-      if (url.pathname.startsWith('/api/') && !validCsrf(req, TOKEN)) {
+      if (url.pathname.startsWith('/api/') && !validCsrf(req, auth)) {
         return json(res, 403, { error: 'csrf_required' });
       }
       if (url.pathname.startsWith('/api/')) {
         try {
           await assertRealExecutor(upstreamUrl, allowMockExecutor);
+          if (requireSandboxMtls) {
+            await getBootstrapTrustPosture(upstreamUrl, { requireSandboxMtls: true });
+          }
         } catch (err) {
-          return json(res, 502, { error: err.code ?? 'executor_refused', message: String(err?.message ?? err) });
+          return json(res, Number(err?.upstreamStatus) || 502, { error: err.code ?? 'executor_refused', message: String(err?.message ?? err), recovery: err?.recovery });
         }
       }
       if (url.pathname === '/api/events' && req.method === 'GET') {
@@ -1742,11 +2798,59 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         req.on('close', () => clearInterval(timer));
         return;
       }
-      if (url.pathname === '/api/inventory') return json(res, 200, await getInventory(upstreamUrl));
+      if (url.pathname === '/api/inventory') return json(res, 200, await getInventory(upstreamUrl, { requireSandboxMtls }));
       if (url.pathname === '/api/executor/capabilities') return json(res, 200, await getExecutorCapabilities(upstreamUrl));
+      if (url.pathname === '/api/bootstrap/readiness' && req.method === 'GET') {
+        return json(res, 200, await getBootstrapTrustPosture(upstreamUrl, { requireSandboxMtls }));
+      }
+      if (url.pathname === '/api/mcp/discovery' && req.method === 'GET') return json(res, 200, await getMcpDiscovery(upstreamUrl));
+      if (url.pathname === '/api/mcp' && req.method === 'POST') return proxyMcpRequest(req, res, upstreamUrl, MCP_TOKEN_FILE);
       if (url.pathname === '/api/running') return json(res, 200, await getRunning(upstreamUrl));
-      if (url.pathname === '/api/missions') return json(res, 200, await getMissions(upstreamUrl));
+      if (url.pathname === '/api/missions' && req.method === 'GET') return json(res, 200, await getMissions(upstreamUrl));
+      if (url.pathname === '/api/missions' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        return json(res, 201, await dispatchMission(parsed.body, upstreamUrl));
+      }
       if (url.pathname === '/api/events/snapshot') return json(res, 200, await getEventSnapshot(upstreamUrl));
+      if (url.pathname === '/api/activity/coverage' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const result = await activityProxy(upstreamUrl, 'coverage', parsed.body);
+          await appendAudit('activity.coverage.queried', { scope: activityRequest(parsed.body).scope, complete: result.body?.completeness?.complete === true });
+          return json(res, result.status, result.body);
+        } catch (error) {
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+        }
+      }
+      if (url.pathname === '/api/activity/timeline' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const result = await activityProxy(upstreamUrl, 'timeline', parsed.body);
+          if (result.status < 200 || result.status >= 300) return json(res, result.status, result.body);
+          await appendAudit('activity.timeline.queried', { scope: activityRequest(parsed.body).scope, event_count: result.body.events.length, complete: result.body.completeness.complete });
+          return json(res, result.status, result.body);
+        } catch (error) {
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+        }
+      }
+      if (url.pathname === '/api/activity/export' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        try {
+          const result = await activityProxy(upstreamUrl, 'export', parsed.body);
+          if (result.status === 503) return json(res, 503, { error: 'activity_export_unavailable', message: 'The sandbox signing key is unavailable.' });
+          if (result.status < 200 || result.status >= 300) return json(res, result.status, result.body);
+          await appendAudit('activity.export.completed', { scope: activityRequest(parsed.body).scope, key_id: result.body.manifest.key_id, merkle_root: result.body.manifest.merkle_root, event_count: result.body.manifest.event_count });
+          res.setHeader('content-disposition', 'attachment; filename="activity-export.json"');
+          res.setHeader('cache-control', 'no-store');
+          return json(res, result.status, result.body);
+        } catch (error) {
+          return json(res, Number(error?.upstreamStatus) || (String(error?.code).startsWith('activity_') ? 400 : 502), { error: error?.code ?? 'activity_upstream_error', message: String(error?.message ?? error) });
+        }
+      }
       if (url.pathname === '/api/loadouts') return json(res, 200, await getLoadouts(upstreamUrl));
       if (url.pathname === '/api/index/status' && req.method === 'GET') return json(res, 200, await getIndexStatus());
       if (url.pathname === '/api/index/query' && req.method === 'GET') {
@@ -1756,6 +2860,19 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
       if (url.pathname === '/api/index/rebuild' && req.method === 'POST') {
         const result = await rebuildIndex(req);
         return json(res, result.status, result.body);
+      }
+      if (url.pathname === '/api/index/graphs' && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const requested = await appendAudit('index.graph.create.requested', { graph: parsed.body?.name ?? null });
+        try {
+          const graph = await createUserIndexGraph(parsed.body);
+          await appendAudit('index.graph.create.completed', { request_ts: requested.ts, graph: graph.name });
+          return json(res, 201, { ok: true, graph });
+        } catch (error) {
+          await appendAudit('index.graph.create.rejected', { request_ts: requested.ts, reason: String(error?.message ?? error) });
+          return json(res, 400, { error: 'invalid_graph_definition', detail: String(error?.message ?? error) });
+        }
       }
       if (url.pathname === '/api/audit' && req.method === 'GET') {
         const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 50)));
@@ -1807,8 +2924,9 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
             body: requestBody,
           },
         ]).catch((err) => ({ status: 502, body: { error: 'bridge_upstream_error', message: String(err?.message ?? err) } }));
-        await appendAudit('instance.launch.result', { request_ts: before.ts, status: result.status, result: result.body });
-        return json(res, result.status, result.body);
+        const projected = managedDockerLaunchError(result.status, result.body);
+        await appendAudit('instance.launch.result', { request_ts: before.ts, status: projected.status, result: projected.body });
+        return json(res, projected.status, projected.body);
       }
       if ((m = url.pathname.match(/^\/api\/operations\/([^/]+)$/)) && req.method === 'GET') {
         return proxyFirst(res, [
@@ -1818,7 +2936,12 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
       if (url.pathname === '/api/sessions') {
         const inst = url.searchParams.get('instance');
         if (!inst) return json(res, 400, { error: 'instance_required' });
-        return json(res, 200, await getSessions(upstreamUrl, inst));
+        const result = await getSessions(upstreamUrl, inst);
+        result.sessions = result.sessions.map((session) => ({
+          ...session,
+          attach_url: issueAttachUrl(req, session.attach_url),
+        }));
+        return json(res, 200, result);
       }
       if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/sessions\/([^/]+)$/)) && req.method === 'DELETE') {
         const { status, body } = await endSession(upstreamUrl, decodeURIComponent(m[1]), decodeURIComponent(m[2]));
@@ -1842,7 +2965,7 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         if (type && type !== 'all') {
           const types = type.split(',').map((t) => t.trim()).filter(Boolean);
           if (!types.length || types.some((t) => !CAPABILITY_TYPES.has(t))) {
-            return json(res, 400, { error: 'invalid_type', detail: 'type must be all, skill, agent, command, rule, flow, or a comma list of those kinds' });
+            return json(res, 400, { error: 'invalid_type', detail: `type must be all or a comma list of: ${[...CAPABILITY_TYPES].join(', ')}` });
           }
           args.push('--type', types.join(','));
         }
@@ -1992,10 +3115,39 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         // Same as the list path (#1671): the attach segment must be the instance
         // id the executor's pty-ws route accepts, not the resolved agent name.
         await appendAudit('session.start.requested', { instance_id: id, mode: mode || 'managed', backend: backend || 'tmux', loadout, status, session_id: sessionId, session_name: sessionName });
-        return json(res, status, { ...body, id: sessionId, session_name: body.session_name ?? body.sessionName ?? sessionName, attach_url: attachUrl ?? `${wsBase}/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/attach` });
+        const executorAttachUrl = attachUrl ?? `${wsBase}/agents/${encodeURIComponent(id)}/sessions/${encodeURIComponent(sessionId)}/attach`;
+        return json(res, status, {
+          ...body,
+          id: sessionId,
+          session_name: body.session_name ?? body.sessionName ?? sessionName,
+          attach_url: issueAttachUrl(req, executorAttachUrl),
+        });
       }
 
       // --- management surface (UC-012): lifecycle + task cancel ---
+      if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/(snapshot|checkpoint|restore|fork|warm-pool)$/)) && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const instanceId = decodeURIComponent(m[1]);
+        const action = m[2];
+        const body = parsed.body || {};
+        const before = await appendAudit('instance.fast_start.requested', {
+          instance_id: instanceId,
+          action,
+          asset_ref: body.asset_ref ?? body.assetRef ?? body.snapshot_id ?? body.snapshotId ?? body.checkpoint_id ?? body.checkpointId ?? body.pool,
+          name: body.name ?? body.child_name ?? body.childName,
+        });
+        const result = await providerFastStartAction(upstreamUrl, instanceId, action, body);
+        await appendAudit('instance.fast_start.accepted', {
+          request_ts: before.ts,
+          instance_id: instanceId,
+          action,
+          status: result.status,
+          operation_id: result.body?.id ?? result.body?.operation?.id,
+          result: result.body,
+        });
+        return json(res, result.status, result.body);
+      }
       if ((m = url.pathname.match(/^\/api\/instances\/([^/]+)\/(start|stop)$/)) && req.method === 'POST') {
         const result = await fetchJsonFirst([
           `${upstreamUrl}/admin/instances/${encodeURIComponent(m[1])}/${m[2]}`,
@@ -2013,6 +3165,29 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
         const { status, body } = await destroyInstance(upstreamUrl, decodeURIComponent(m[1]));
         await appendAudit('instance.destroy.requested', { instance_id: decodeURIComponent(m[1]), status, result: body });
         return json(res, status, body);
+      }
+      if ((m = url.pathname.match(/^\/api\/missions\/([^/]+)\/(pause|resume)$/)) && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const result = await controlMission({
+          action: m[2],
+          sessionId: decodeURIComponent(m[1]),
+          expectedUpdatedAt: parsed.body?.expected_updated_at,
+          requestId: parsed.body?.request_id,
+        });
+        return json(res, 200, { ...result, projection: await getMissions(upstreamUrl) });
+      }
+      if ((m = url.pathname.match(/^\/api\/missions\/([^/]+)\/([^/]+)\/cancel$/)) && req.method === 'POST') {
+        const parsed = await readJsonBody(req);
+        if (parsed.error) return json(res, 400, { error: parsed.error });
+        const result = await controlMission({
+          action: 'cancel',
+          sessionId: decodeURIComponent(m[1]),
+          missionId: decodeURIComponent(m[2]),
+          expectedUpdatedAt: parsed.body?.expected_updated_at,
+          requestId: parsed.body?.request_id,
+        });
+        return json(res, 200, { ...result, projection: await getMissions(upstreamUrl) });
       }
       if ((m = url.pathname.match(/^\/api\/tasks\/([^/]+)\/([^/]+)\/cancel$/)) && req.method === 'POST') {
         await appendAudit('task.cancel.requested', { instance_id: decodeURIComponent(m[1]), task_id: decodeURIComponent(m[2]) });
@@ -2032,18 +3207,25 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
       if (url.pathname === '/api/cost' && req.method === 'GET')
         return proxy(res, 'GET', `${upstreamUrl}/admin/cost`);
 
-      if (url.pathname === '/api/health') return json(res, 200, { status: 'ok', executor_url: upstreamUrl, mock_executor_allowed: allowMockExecutor });
+      if (url.pathname === '/api/health') return json(res, 200, {
+        status: 'ok',
+        executor_url: upstreamUrl,
+        mock_executor_allowed: allowMockExecutor,
+        executor_auth_configured: Boolean(executorTokenFile),
+      });
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const distIndex = join(WEB_DIST, 'index.html');
         const src = existsSync(distIndex) ? distIndex : join(__dir, 'public', 'index.html');
         const raw = await readFile(src, 'utf8');
-        // Inject the per-launch token so the same-origin app can call the gated API.
-        const html = raw.replace('</head>', `<script>window.__COCKPIT_TOKEN__=${JSON.stringify(TOKEN)}</script>\n</head>`);
-        // never cache the shell — it must always reference the latest hashed bundle
+        // The app exchanges a one-time nonce from the URL fragment for an
+        // HttpOnly session. No reusable credential is injected into HTML.
+        const html = raw;
+        // Never cache the shell or bootstrap-bearing navigation.
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
-          'cache-control': 'no-cache',
-          'set-cookie': `cockpit_csrf=${TOKEN}; Path=/; SameSite=Strict`,
+          'cache-control': 'no-store',
+          'content-security-policy': `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://${req.headers.host} wss://${req.headers.host}; frame-ancestors 'self' vscode-webview: tauri:`,
+          'referrer-policy': 'no-referrer',
         });
         return res.end(html);
       }
@@ -2053,10 +3235,41 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
       }
       json(res, 404, { error: 'not_found', path: url.pathname });
     } catch (err) {
-      json(res, 502, { error: 'bridge_upstream_error', message: String(err?.message ?? err) });
+      const status = Number(err?.status) || Number(err?.upstreamStatus) || 502;
+      json(res, status, { error: err?.code ?? 'bridge_upstream_error', message: String(err?.message ?? err) });
     }
-  });
+  };
+  const server = http.createServer((req, res) => executorRequestContext.run(
+    { executorOrigin, executorTokenFile },
+    () => handleRequest(req, res),
+  ));
+  server.on('upgrade', (req, socket, head) => executorRequestContext.run(
+    { executorOrigin, executorTokenFile },
+    async () => {
+      try {
+        const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+        const match = url.pathname.match(/^\/api\/pty\/agents\/[^/]+\/sessions\/[^/]+\/attach\/([^/]+)$/);
+        if (!match || !validBrowserOrigin(req)) {
+          socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        if (!websocketAuthed(req, TOKEN) && !sessionAuth(req)) {
+          socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        const target = attachTargets.get(match[1]);
+        if (!target || url.pathname !== `/api/pty${target.pathname}/${match[1]}`) {
+          socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+          return;
+        }
+        await proxyExecutorWebsocket({ req, socket, head, target, executorTokenFile });
+      } catch {
+        if (!socket.destroyed) socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+      }
+    },
+  ));
   server.cockpitToken = TOKEN; // exposed for shells/tests
+  server.issueBootstrapNonce = issueBootstrapNonce;
   return server;
 }
 
@@ -2066,6 +3279,20 @@ export function createBridge({ executorUrl = EXECUTOR_URL, allowMockExecutor = A
 // refuse to silently start on a reserved port.
 export const EXECUTOR_RESERVED_PORTS = [8120, 8121, 8122];
 export const DEFAULT_BRIDGE_PORT = 8140;
+
+/**
+ * npm exposes package binaries through symlinks. Node preserves that symlink
+ * in process.argv[1] while import.meta.url names the real module, so comparing
+ * the two strings makes an installed `aiwg-cockpit` silently skip startup.
+ */
+export function isDirectExecution(metaUrl = import.meta.url, argv1 = process.argv[1]) {
+  if (!argv1) return false;
+  try {
+    return realpathSync(fileURLToPath(metaUrl)) === realpathSync(argv1);
+  } catch {
+    return fileURLToPath(metaUrl) === resolve(argv1);
+  }
+}
 
 /** Resolve the Bridge listen port from the environment with a sane, off-range
  *  default. Throws on an invalid port or a collision with the executor range. */
@@ -2085,15 +3312,17 @@ export function resolveBridgePort(env = process.env) {
   return port;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isDirectExecution()) {
   const port = resolveBridgePort();
   await ensureExecutor(EXECUTOR_URL);
   const server = createBridge();
   server.listen(port, '127.0.0.1', async () => {
     try {
       const file = await writeRuntimeToken({ token: server.cockpitToken, port, pid: process.pid });
+      const browserNonce = server.issueBootstrapNonce('browser');
       console.log(`[cockpit-bridge] http://127.0.0.1:${port}  (executor ${EXECUTOR_URL})`);
-      console.log(`  token written ${file} (mode 600) — open the URL in a browser or attach a shell`);
+      console.log(`  runtime handshake ${file} (mode 600)`);
+      console.log(`  browser bootstrap http://127.0.0.1:${port}/#bootstrap=${browserNonce}&audience=browser (one-time, 60s)`);
     } catch (err) {
       console.error(`[cockpit-bridge] failed to persist runtime token: ${String(err?.message ?? err)}`);
       server.close(() => process.exit(1));
