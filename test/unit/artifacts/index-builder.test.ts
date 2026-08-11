@@ -74,6 +74,28 @@ index:
     const loaded = loadUserGraphConfigs(tmpDir);
     expect(loaded).toEqual([]);
   });
+
+  it('should load user-defined graphs from the configured artifact root', () => {
+    const artifactRoot = path.join(tmpDir, 'private-corpus', '.aiwg');
+    fs.mkdirSync(artifactRoot, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.aiwg-location'), 'private-corpus/.aiwg\n');
+    fs.writeFileSync(path.join(artifactRoot, 'aiwg.config'), JSON.stringify({
+      index: {
+        graphs: {
+          references: {
+            scanDirs: ['documentation/references'],
+            extensions: ['.md'],
+            defaultBuild: false,
+          },
+        },
+      },
+    }));
+
+    const loaded = loadUserGraphConfigs(tmpDir);
+
+    expect(loaded).toContain('references');
+    expect(GRAPH_CONFIGS['references'].scanDirs).toEqual(['documentation/references']);
+  });
 });
 
 describe('loadModuleGraphConfigs', () => {
@@ -172,6 +194,33 @@ describe('loadModuleGraphConfigs', () => {
 
     const loaded = loadModuleGraphConfigs(tmpDir);
     expect(loaded).toEqual([]);
+  });
+
+  it('should load module graph declarations from the configured artifact root registry', () => {
+    const artifactRoot = path.join(tmpDir, 'private-corpus', '.aiwg');
+    const registryDir = path.join(artifactRoot, 'frameworks');
+    fs.mkdirSync(registryDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, '.aiwg-location'), 'private-corpus/.aiwg\n');
+    fs.writeFileSync(path.join(registryDir, 'registry.json'), JSON.stringify({
+      version: '1.0.0',
+      frameworks: [{ id: 'relocated-framework' }],
+    }));
+
+    const frameworkDir = path.join(tmpDir, 'agentic', 'code', 'frameworks', 'relocated-framework');
+    fs.mkdirSync(frameworkDir, { recursive: true });
+    fs.writeFileSync(path.join(frameworkDir, 'manifest.json'), JSON.stringify({
+      id: 'relocated-framework',
+      index: {
+        graphs: {
+          'relocated-docs': { scanDirs: ['docs/relocated'], extensions: ['.md'] },
+        },
+      },
+    }));
+
+    const loaded = loadModuleGraphConfigs(tmpDir);
+
+    expect(loaded).toContain('relocated-docs');
+    expect(GRAPH_CONFIGS['relocated-docs'].scanDirs).toEqual(['docs/relocated']);
   });
 
   it('should also check addons directory', () => {
@@ -519,7 +568,7 @@ New users can register.
       // Check metadata content
       const metadata = JSON.parse(fs.readFileSync(path.join(indexDir, 'metadata.json'), 'utf-8'));
       expect(metadata.version).toBe('1.0.0');
-      expect(metadata.extractorVersion).toBe('2026.07.21.1');
+      expect(metadata.extractorVersion).toBe('2026.07.21.2');
       expect(Object.keys(metadata.entries)).toHaveLength(2);
 
       const uc001 = metadata.entries['.aiwg/requirements/UC-001.md'];
@@ -542,6 +591,84 @@ New users can register.
       expect(stats.byType['use-case']).toBe(2);
     });
 
+    it('normalizes allowlisted operational-state frontmatter into index metadata', async () => {
+      const issuePath = path.join(tmpDir, '.aiwg', 'issues', 'AIWG-1827.md');
+      fs.mkdirSync(path.dirname(issuePath), { recursive: true });
+      fs.writeFileSync(issuePath, `---
+title: Live-state provenance
+type: issue
+operational_state:
+  source_repo: roctinam/aiwg
+  source_kind: issue
+  source_id: aiwg#1827
+  observed_state: open
+  observed_at: 2026-07-21T10:00:00Z
+  source_updated_at: 2026-07-21T09:00:00Z
+  evidence_url: https://user:synthetic@git.example.test/roctinam/aiwg/issues/1827?token=synthetic
+  observer: gitea-mcp
+  classification: fresh
+  current_action_selector: true
+  bearer_token: synthetic-must-not-survive
+---
+# Live-state provenance
+`);
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await buildIndex(tmpDir, { force: true });
+      } finally {
+        consoleSpy.mockRestore();
+      }
+
+      const metadata = JSON.parse(fs.readFileSync(
+        path.join(tmpDir, INDEX_DIR, 'metadata.json'),
+        'utf-8',
+      ));
+      expect(metadata.entries['.aiwg/issues/AIWG-1827.md'].operationalState).toEqual({
+        source_repo: 'roctinam/aiwg',
+        source_kind: 'issue',
+        source_id: 'aiwg#1827',
+        observed_state: 'open',
+        observed_at: '2026-07-21T10:00:00.000Z',
+        source_updated_at: '2026-07-21T09:00:00.000Z',
+        evidence_url: 'https://git.example.test/roctinam/aiwg/issues/1827',
+        observer: 'gitea-mcp',
+        classification: 'fresh',
+        current_action_selector: true,
+      });
+      expect(JSON.stringify(metadata)).not.toContain('synthetic');
+    });
+
+    it('normalizes explicit state-transfer lifecycle without using operational state', async () => {
+      const artifactPath = path.join(tmpDir, '.aiwg', 'archive', 'retired.md');
+      fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+      fs.writeFileSync(artifactPath, `---
+title: Retired artifact
+state_transfer:
+  deleted_at: 2026-07-20T08:30:00-04:00
+---
+# Retired artifact
+`);
+
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await buildIndex(tmpDir, { force: true });
+      } finally {
+        consoleSpy.mockRestore();
+      }
+
+      const metadata = JSON.parse(fs.readFileSync(
+        path.join(tmpDir, INDEX_DIR, 'metadata.json'),
+        'utf-8',
+      ));
+      expect(metadata.entries['.aiwg/archive/retired.md'].stateTransfer).toEqual({
+        deletedAt: '2026-07-20T12:30:00.000Z',
+      });
+      expect(metadata.entries['.aiwg/archive/retired.md']).not.toHaveProperty(
+        'operationalState',
+      );
+    });
+
     it('indexes every operational asset type from project-local bundle layouts', async () => {
       const assets: Array<[string, string]> = [
         ['.aiwg/extensions/local-review/skills/local-review/SKILL.md', [
@@ -555,6 +682,11 @@ New users can register.
         // Provider-native project templates were the gap: the project graph
         // previously omitted non-Markdown/YAML extensions accepted upstream.
         ['.aiwg/frameworks/local-delivery/templates/provider/config.toml', 'mode = "local"\n'],
+        ['.aiwg/frameworks/local-delivery/schemas/deploy.schema.json', JSON.stringify({
+          title: 'DeployConfig',
+          description: 'Schema for local deployment configuration.',
+          type: 'object',
+        })],
         ['.aiwg/frameworks/local-delivery/runbooks/recovery-runbook.md', [
           '---', 'type: runbook', 'description: Recover the local delivery service.', '---',
           '# Recovery Runbook', '', '## Procedure', '', 'Restart the service.', '',
@@ -596,9 +728,14 @@ New users can register.
         '.aiwg/addons/local-ops/commands/local-check.md': 'command',
         '.aiwg/frameworks/local-delivery/behaviors/local-safety.md': 'behavior',
         '.aiwg/frameworks/local-delivery/templates/provider/config.toml': 'template',
+        '.aiwg/frameworks/local-delivery/schemas/deploy.schema.json': 'schema',
         '.aiwg/frameworks/local-delivery/runbooks/recovery-runbook.md': 'runbook',
         '.aiwg/frameworks/local-delivery/flows/release.yaml': 'flow',
         '.aiwg/plugins/local-tools/hooks/preflight.md': 'hook',
+      });
+      expect(byPath['.aiwg/frameworks/local-delivery/schemas/deploy.schema.json']).toMatchObject({
+        name: 'deploy',
+        title: 'DeployConfig',
       });
       expect(byPath['.aiwg/frameworks/local-delivery/flows/release.yaml']?.kind).toBe('FlowPlaybook');
     });
@@ -629,7 +766,7 @@ New users can register.
       logSpy.mockRestore();
       const rebuilt = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
       expect(rebuilt.version).toBe('1.0.0');
-      expect(rebuilt.extractorVersion).toBe('2026.07.21.1');
+      expect(rebuilt.extractorVersion).toBe('2026.07.21.2');
       expect(rebuilt.entries[entryPath].type).toBe('runbook');
       expect(rebuilt.entries[entryPath].kind).toBe('Runbook');
     });

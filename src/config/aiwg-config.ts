@@ -16,6 +16,7 @@ import type { ProjectLocalType } from '../extensions/manifest.js';
 import { normalizeNamedCaptures } from '../artifacts/index-builder.js';
 import {
   getProviderDefinition,
+  getProviderKernelSkillPath,
   PROVIDER_IDS,
   resolveProviderPathValue,
 } from '../providers/provider-definitions.js';
@@ -24,9 +25,27 @@ import {
   validateAuthorization,
   type AuthorizationConfig,
 } from '../policy/authorization.js';
+import { projectAiwgPath, resolveProjectAiwgDir } from './project-artifacts.js';
+import {
+  defaultThreatAssessmentConfig,
+  validateThreatAssessmentConfig,
+  type SecurityConfig,
+} from '../security/threat-assessment-config.js';
+
+export type {
+  SecurityConfig,
+  ThreatAction,
+  ThreatAssessmentConfig,
+  ThreatAssessmentMode,
+  ThreatPolicyStatement,
+  ThreatProfileConfig,
+  ThreatRulePackConfig,
+  ThreatSeverity,
+  ThreatSurface,
+  ThreatSurfaceConfig,
+} from '../security/threat-assessment-config.js';
 
 const CONFIG_FILENAME = 'aiwg.config';
-const AIWG_DIR = '.aiwg';
 
 /**
  * Artifact counts for one provider deployment
@@ -78,23 +97,30 @@ export interface InstalledEntry {
   manifestVersion?: string;
 
   /**
-   * Hashes of deployed artifacts at deploy time, keyed by provider then
-   * source-relative path (e.g., "codex" → "rules/my-rule.md").
-   *
-   * Because providers apply provider-specific transforms (model replacement,
-   * tool filtering, frontmatter rewriting) at deploy time, the hash of a
-   * source artifact differs from the hash of the deployed file. Recording
-   * per-provider deployed hashes lets `aiwg doctor --project-local` compare
-   * the live deployed file against the post-transform expected state, and
-   * lets `aiwg remove` detect pristine vs. mutated vs. replaced files per the
-   * design at @.aiwg/architecture/design-aiwg-remove-revert.md.
+   * Hashes of source artifacts at deploy time, keyed by source-relative path
+   * (e.g., "rules/my-rule.md", "skills/my-skill/SKILL.md"). Used by
+   * `aiwg remove` to detect pristine vs. mutated vs. replaced deployed
+   * files per the design at @.aiwg/architecture/design-aiwg-remove-revert.md.
    *
    * Optional — older entries without this field fall back to "always-prompt"
    * remove behavior until the next `aiwg use` re-records them.
    *
    * @implements #1037
    */
-  artifactHashes?: Record<string, Record<string, string>>;
+  artifactHashes?: Record<string, string>;
+
+  /**
+   * Hashes of the provider-transformed artifacts actually written by a
+   * project-local deployment. The outer key is the provider and the inner
+   * key uses the same source-relative artifact path as `artifactHashes`.
+   *
+   * Provider deployers may rewrite frontmatter or translate formats, so a
+   * source hash cannot reliably classify the deployed file. Older registry
+   * entries continue to use `artifactHashes` as a compatibility fallback.
+   *
+   * @implements #1998
+   */
+  deployedArtifactHashes?: Record<string, Record<string, string>>;
 }
 
 /**
@@ -292,6 +318,18 @@ export interface ExternalLinkConfig {
   audience?: string;
 }
 
+/** Project-local bundle discovery configuration. */
+export interface ProjectLocalConfig {
+  /**
+   * Additional roots to scan for project-local bundle directories.
+   *
+   * Each root may be absolute, project-relative, or `~/`-relative and should
+   * contain any of: extensions/, addons/, frameworks/, plugins/, providers/.
+   * The configured project AIWG artifact root is always scanned first.
+   */
+  searchPaths?: string[];
+}
+
 /**
  * Top-level shape of .aiwg/aiwg.config
  */
@@ -320,6 +358,9 @@ export interface AiwgConfig {
   /** Provider-neutral, deny-by-default permissions, roles, and assignments. */
   authorization?: AuthorizationConfig;
 
+  /** Deterministic, project-owned security policy including forge-content assessment. */
+  security?: SecurityConfig;
+
   /**
    * General multi-repository workspace metadata. Root manifests pair this
    * block with `repos`; external members may use `member_of` as a back-reference.
@@ -340,6 +381,12 @@ export interface AiwgConfig {
    * @implements #1796
    */
   externalLinks?: Record<string, ExternalLinkConfig>;
+
+  /**
+   * Project-local bundle discovery settings. Optional — when absent, AIWG only
+   * scans the configured project artifact root.
+   */
+  projectLocal?: ProjectLocalConfig;
 
   /**
    * Repo origin topology. Optional — when absent, agents treat `origin` as primary.
@@ -1077,8 +1124,8 @@ export async function readIndexConfig(
   if (cfg?.index && typeof cfg.index === 'object') {
     return { index: cfg.index, source: 'aiwg.config' };
   }
-  // Fallback: legacy .aiwg/config.yaml (deprecated).
-  const yamlPath = resolve(projectDir, AIWG_DIR, 'config.yaml');
+  // Fallback: legacy config.yaml in the resolved AIWG artifact directory (deprecated).
+  const yamlPath = projectAiwgPath(projectDir, 'config.yaml');
   try {
     await access(yamlPath);
     const { load: loadYaml } = await import('js-yaml');
@@ -1306,6 +1353,9 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
     providers,
     installed: {},
     scripts: {},
+    security: {
+      threatAssessment: defaultThreatAssessmentConfig(),
+    },
     delivery: {
       mode: 'pr-required',
       default_branch: 'main',
@@ -1326,10 +1376,13 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
 }
 
 /**
- * Resolve path to .aiwg/aiwg.config for a project directory
+ * Resolve path to the project-level AIWG config.
+ *
+ * Defaults to `<project>/.aiwg/aiwg.config`; honors `AIWG_ARTIFACTS_PATH` so
+ * projects can rename or relocate the AIWG artifact directory.
  */
 export function getConfigPath(projectDir: string): string {
-  return resolve(projectDir, AIWG_DIR, CONFIG_FILENAME);
+  return projectAiwgPath(projectDir, CONFIG_FILENAME);
 }
 
 /**
@@ -1389,14 +1442,23 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     throw new Error(`Invalid .aiwg/aiwg.config:\n${authorizationErrors.map(item => item.message).join('\n')}`);
   }
 
+  const threatAssessmentErrors = validateThreatAssessmentConfig(parsed.security?.threatAssessment);
+  if (threatAssessmentErrors.length > 0) {
+    throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
+  }
+
   return parsed;
 }
 
 /**
- * Write .aiwg/aiwg.config, creating .aiwg/ if needed.
+ * Write aiwg.config, creating the resolved AIWG artifact directory if needed.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
-  const dir = resolve(projectDir, AIWG_DIR);
+  const threatAssessmentErrors = validateThreatAssessmentConfig(config.security?.threatAssessment);
+  if (threatAssessmentErrors.length > 0) {
+    throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
+  }
+  const dir = resolveProjectAiwgDir(projectDir);
   await mkdir(dir, { recursive: true });
   const filePath = join(dir, CONFIG_FILENAME);
   // Atomic write: emit to a temp sibling, fsync-ish via rename. Prevents a
@@ -1437,12 +1499,10 @@ export function updateInstalled(
     localType?: ProjectLocalType;
     /** Set when source === 'project-local'. */
     manifestVersion?: string;
-    /**
-     * Optional per-provider deployed-artifact hash map for project-local
-     * remove revert and doctor drift detection (#1037). Outer key is provider,
-     * inner key is source-relative path.
-     */
-    artifactHashes?: Record<string, Record<string, string>>;
+    /** Optional source-artifact hash map for project-local remove revert (#1037). */
+    artifactHashes?: Record<string, string>;
+    /** Provider-specific hashes captured from the deployed files (#1998). */
+    deployedArtifactHashes?: Record<string, string>;
   }
 ): AiwgConfig {
   // Project-local invariant: `source: 'project-local'` requires localPath + localType
@@ -1474,19 +1534,27 @@ export function updateInstalled(
     existing.localType = opts.localType;
     if (opts.manifestVersion) existing.manifestVersion = opts.manifestVersion;
     if (opts.artifactHashes) {
-      existing.artifactHashes = existing.artifactHashes ?? {};
-      // Legacy artifactHashes used to be a flat Record<sourceRel, hash>.
-      // The new shape is Record<provider, Record<sourceRel, hash>>. When a
-      // provider-scoped update arrives, drop any surviving flat keys (they
-      // contain '/' or end in '.md') so the registry stays clean and typed.
-      for (const key of Object.keys(existing.artifactHashes)) {
-        if (key.includes('/') || key.endsWith('.md')) {
-          delete existing.artifactHashes[key];
+      // Chronode forks written before #1998 stored post-transform hashes in
+      // `artifactHashes[provider]`. Migrate every provider map before replacing
+      // that legacy field with the canonical flat source inventory.
+      const legacy = existing.artifactHashes as unknown as Record<string, unknown> | undefined;
+      if (legacy) {
+        for (const [legacyProvider, value] of Object.entries(legacy)) {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+          const hashes = Object.fromEntries(
+            Object.entries(value as Record<string, unknown>)
+              .filter(([, hash]) => typeof hash === 'string'),
+          ) as Record<string, string>;
+          if (Object.keys(hashes).length === 0) continue;
+          existing.deployedArtifactHashes ??= {};
+          existing.deployedArtifactHashes[legacyProvider] ??= hashes;
         }
       }
-      for (const [p, hashes] of Object.entries(opts.artifactHashes)) {
-        existing.artifactHashes[p] = hashes;
-      }
+      existing.artifactHashes = opts.artifactHashes;
+    }
+    if (opts.deployedArtifactHashes) {
+      existing.deployedArtifactHashes ??= {};
+      existing.deployedArtifactHashes[provider] = opts.deployedArtifactHashes;
     }
   } else {
     // Clear stale project-local fields if a previously project-local entry is
@@ -1495,6 +1563,7 @@ export function updateInstalled(
     delete existing.localType;
     delete existing.manifestVersion;
     delete existing.artifactHashes;
+    delete existing.deployedArtifactHashes;
   }
 
   config.installed[name] = existing;
@@ -1541,12 +1610,13 @@ export async function hashManifest(manifestPath: string): Promise<string | undef
 function getProviderDeployDirs(
   provider: string,
   projectDir: string,
-): { agents: string; skills: string; commands: string; rules: string } | null {
+): { agents: string; skills: string; kernelSkills: string; commands: string; rules: string } | null {
   const artifacts = getProviderDefinition(provider)?.paths.artifacts;
   if (!artifacts) return null;
   return {
     agents: resolveProviderPathValue(artifacts.agents, projectDir),
     skills: resolveProviderPathValue(artifacts.skills, projectDir),
+    kernelSkills: resolveProviderPathValue(getProviderKernelSkillPath(provider), projectDir),
     commands: resolveProviderPathValue(artifacts.commands, projectDir),
     rules: resolveProviderPathValue(artifacts.rules, projectDir),
   };
@@ -1597,7 +1667,11 @@ export async function populateDeployedTo(
     const counts: DeployedArtifactCounts = {
       agents:   await countDeployedInDir(projectDir, dirs.agents,   'md'),
       commands: await countDeployedInDir(projectDir, dirs.commands, 'md'),
-      skills:   await countDeployedInDir(projectDir, dirs.skills,   'dirs'),
+      skills:
+        (await countDeployedInDir(projectDir, dirs.skills, 'dirs')) +
+        (dirs.kernelSkills && dirs.kernelSkills !== dirs.skills
+          ? await countDeployedInDir(projectDir, dirs.kernelSkills, 'dirs')
+          : 0),
       rules:    await countDeployedInDir(projectDir, dirs.rules,    'md'),
     };
 

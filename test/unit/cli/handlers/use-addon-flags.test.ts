@@ -29,6 +29,7 @@ vi.mock('../../../../src/extensions/deployment-registration.js', () => ({
 }));
 
 vi.mock('../../../../src/cli/cli-extension-loader.js', () => ({
+  loadCliCommandsContribution: vi.fn(async () => null),
   registerCliCommands: state.registerCliCommands,
   registerHooks: state.registerHooks,
 }));
@@ -66,6 +67,7 @@ describe('UseHandler upstream addon and extension deploy flags', () => {
       type: 'addon',
       cli_commands: {
         namespace: id,
+        description: `${id} fixture commands`,
         entry: 'commands/',
         subcommands: {
           run: { file: 'run.mjs', hook_event: 'SessionStart' },
@@ -90,7 +92,7 @@ describe('UseHandler upstream addon and extension deploy flags', () => {
       frameworkRoot,
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode, result.message).toBe(0);
     expect(state.run).toHaveBeenCalledTimes(1);
     expect(state.run).toHaveBeenCalledWith(
       'tools/agents/deploy-agents.mjs',

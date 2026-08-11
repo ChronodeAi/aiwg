@@ -27,11 +27,8 @@ then to AIWG.md for framework discovery and routing.
 ### Linked Context
 
 - [AIWG framework context](./AIWG.md)
-- [AIWG project configuration](./.aiwg/aiwg.config)
-- [Provider-specific context](./.aiwg/context/providers/.hermes.md)
-- [Provider-specific context](./.aiwg/context/providers/AGENTS.override.md)
-- [Provider-specific context](./.aiwg/context/providers/CLAUDE.md)
-- [Project-local quickref](./.aiwg/quickref.json) (when configured)
+- [AIWG project configuration](.aiwg/aiwg.config)
+- [Project-local quickref](.aiwg/quickref.json) (when configured)
 
 <!-- AIWG:workspace-context:end -->
 
@@ -69,6 +66,7 @@ Multi-agent AI framework for Claude Code, Copilot, Cursor, Warp, and 6 more plat
 - [`docs/architecture`](./docs/architecture)
 - [`src`](./src)
 - [`apps`](./apps)
+- [`packages`](./packages)
 
 ### Testing
 
@@ -88,6 +86,7 @@ Multi-agent AI framework for Claude Code, Copilot, Cursor, Warp, and 6 more plat
 - [`.gitea/workflows/metadata-validation.yml`](./.gitea/workflows/metadata-validation.yml)
 - [`.gitea/workflows/notify-site.yml`](./.gitea/workflows/notify-site.yml)
 - [`.gitea/workflows/npm-publish.yml`](./.gitea/workflows/npm-publish.yml)
+- [`.gitea/workflows/scheduled-docs-release.yml`](./.gitea/workflows/scheduled-docs-release.yml)
 - [`.gitea/workflows/skill-lint-pr.yml`](./.gitea/workflows/skill-lint-pr.yml)
 - [`.gitea/workflows/upload-release-sigs.yml`](./.gitea/workflows/upload-release-sigs.yml)
 - [`.github/workflows/npm-publish.yml`](./.github/workflows/npm-publish.yml)

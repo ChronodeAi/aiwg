@@ -22,12 +22,243 @@ function notFound(res, path) {
   return json(res, 404, { jsonrpc: '2.0', id: null, error: { code: -32601, message: 'Not implemented in this increment', data: { path } } });
 }
 
+const operations = new Map();
+let operationSeq = 1;
+
+function acceptedOperation(kind, result = {}) {
+  const id = `op-mock-${operationSeq++}`;
+  const op = {
+    id,
+    kind,
+    state: 'succeeded',
+    created_at: new Date().toISOString(),
+    completed_at: new Date().toISOString(),
+    result,
+  };
+  operations.set(id, op);
+  return op;
+}
+
+async function readJson(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const raw = Buffer.concat(chunks).toString('utf8');
+  return raw ? JSON.parse(raw) : {};
+}
+
+const RUNTIME_PROVIDERS = {
+  default_provider: 'cloud-hypervisor',
+  kinds: [
+    { kind: 'host', label: 'Host', default_provider: 'host', providers: ['host'] },
+    { kind: 'container', label: 'Container', default_provider: 'docker', providers: ['docker'] },
+    { kind: 'vm', label: 'VM', default_provider: 'cloud-hypervisor', providers: ['cloud-hypervisor', 'libvirt'] },
+  ],
+  providers: [
+    {
+      provider: 'host',
+      kind: 'host',
+      label: 'Host runtime',
+      platforms: ['linux/x64', 'linux/arm64', 'darwin/arm64'],
+      architectures: ['x64', 'arm64'],
+      capabilities: [],
+      posture: { host_platform: 'darwin', host_architecture: 'arm64', available: true, reason: 'Apple Silicon developer package host runtime discovered.' },
+    },
+    {
+      provider: 'docker',
+      kind: 'container',
+      label: 'Docker Desktop',
+      platforms: ['linux/x64', 'linux/arm64', 'darwin/arm64'],
+      architectures: ['x64', 'arm64'],
+      engine: 'Docker Desktop',
+      capabilities: [],
+      posture: { host_platform: 'darwin', host_architecture: 'arm64', engine: 'Docker Desktop', available: true, reason: 'Docker Desktop runtime discovered on Apple Silicon.' },
+    },
+    {
+      provider: 'cloud-hypervisor',
+      kind: 'vm',
+      label: 'Cloud Hypervisor',
+      default: true,
+      capabilities: [
+        { id: 'instance.snapshot', label: 'Snapshot' },
+        { id: 'instance.restore', label: 'Restore' },
+        { id: 'instance.fork', label: 'Fork' },
+        { id: 'warm_pool.manage', label: 'Warm pools' },
+        { id: 'device.vfio', label: 'VFIO device passthrough' },
+      ],
+      capability_constraints: [{
+        capability: 'device.vfio',
+        excludes: ['instance.snapshot', 'instance.restore', 'instance.fork', 'warm_pool.manage'],
+        reason: 'VFIO-backed VMs cannot safely reuse memory state.',
+      }],
+    },
+    {
+      provider: 'libvirt',
+      kind: 'vm',
+      label: 'libvirt/QEMU',
+      capabilities: [
+        { id: 'instance.checkpoint', label: 'Checkpoint' },
+        { id: 'instance.restore', label: 'Checkpoint restore' },
+        { id: 'warm_pool.manage', label: 'Warm pools' },
+      ],
+    },
+  ],
+};
+
+const MCP_DISCOVERY = {
+  enabled: true,
+  status: 'enabled',
+  reason_code: null,
+  endpoint: {
+    path: '/mcp',
+    methods: ['POST'],
+    transport: 'streamable-http',
+    stateless: true,
+    get_behavior: '405_method_not_allowed',
+    mcp_session_id: false,
+  },
+  protocol: {
+    latest: '2025-11-25',
+    supported: ['2025-03-26', '2025-06-18', '2025-11-25'],
+  },
+  auth: {
+    scheme: 'bearer',
+    required: true,
+    principal_config: 'mcp-principals.toml',
+    principals: [{ client_id: 'cockpit-test', scopes: ['fleet.read', 'session.read', 'output.read'] }],
+    scopes: ['fleet.read', 'output.read', 'session.read'],
+  },
+  capabilities: {
+    tools: { listChanged: false },
+    resources: { subscribe: false, listChanged: false },
+  },
+  tools: [
+    { name: 'list_sandboxes', title: 'List sandboxes', description: 'List the canonical management fleet inventory.' },
+    { name: 'tail_output', title: 'Replay command output', description: 'Read bounded replay output for a command.' },
+  ],
+  resources: [
+    { uri: 'sandbox://fleet', name: 'fleet', description: 'Current sandbox fleet inventory', mimeType: 'application/json' },
+  ],
+  resource_templates: [
+    { uriTemplate: 'sandbox://instances/{instance_id}', name: 'sandbox-instance', mimeType: 'application/json' },
+    { uriTemplate: 'sandbox://sessions/{session_id}/screen', name: 'session-screen', mimeType: 'application/json' },
+  ],
+  errors: [
+    { http_status: 401, code: 'mcp.unauthorized', message: 'missing or invalid MCP bearer token' },
+    { http_status: 403, jsonrpc_code: -32003, code: 'mcp.insufficient_scope', message: 'Insufficient scope' },
+  ],
+  notes: ['GET /mcp is not a session endpoint.'],
+};
+
+const BOOTSTRAP_READINESS = {
+  status: 'secure',
+  ca_provider: {
+    configured: true,
+    provider_ref: 'local-ca://cockpit-mock',
+    trust_bundle_ref: 'trust-bundle://cockpit-mock/current',
+    client_identity_ref: 'spiffe://sandbox.agentic.local/cockpit/mock',
+    rotation_state: 'current',
+    trust_bundle_fresh: true,
+    expires_at: '2026-08-31T00:00:00.000Z',
+  },
+  bootstrap: {
+    token_store_configured: true,
+  },
+  error_taxonomy: [
+    { code: 'bootstrap.csr_invalid', recovery: 'Regenerate the CSR with the sandbox instance identity.' },
+  ],
+};
+
+function fleetRecord(kind, childId, targetId, runtimeId, observedState, extra = {}) {
+  return {
+    document_type: 'workload',
+    api_version: 'agentic-orchestration/v1',
+    kind,
+    lineage: {
+      orchestrator_id: 'aiwg-cockpit-mock', mission_id: 'mission-fleet-demo', dispatch_id: `dispatch-${childId}`,
+      idempotency_key: `idem-${childId}`, parent_id: 'mission-fleet-demo', child_id: childId,
+      target_id: targetId, executor_id: `executor-${targetId}`, runtime_id: runtimeId,
+      session_id: extra.session_id ?? null, task_id: extra.task_id ?? null, command_id: extra.command_id ?? null,
+    },
+    spec: {
+      desired_state: 'running', capabilities: [],
+      policy: { trust_tier: 'T1', isolation_kind: 'container' },
+      budgets: { max_attempts: 3, timeout_seconds: 600 },
+      ...(extra.schedule ? { schedule: extra.schedule } : {}),
+    },
+    status: {
+      observed_state: observedState, revision: extra.revision ?? 1,
+      last_seen: '2026-08-02T15:00:00.000Z', artifacts: extra.artifacts ?? [],
+      ...(extra.health ? { health: extra.health } : {}),
+      ...(extra.backpressure ? { backpressure: extra.backpressure } : {}),
+    },
+  };
+}
+
+const FLEET_INVENTORY = {
+  document_type: 'inventory',
+  api_version: 'agentic-orchestration/v1',
+  inventory_revision: 12,
+  generated_at: '2026-08-02T15:00:00.000Z',
+  records: [
+    fleetRecord('persistent-agent', 'child-agent', 'target-1', 'runtime-container-1', 'retained', { session_id: 'session-agent-1', task_id: 'task-agent-1', revision: 4 }),
+    fleetRecord('daemon', 'child-daemon', 'target-2', 'runtime-host-1', 'healthy', { task_id: 'task-daemon-1', health: 'healthy', revision: 8 }),
+    fleetRecord('one-shot-command', 'child-command', 'target-3', 'runtime-vm-1', 'blocked', {
+      task_id: 'task-command-1', command_id: 'command-1', revision: 3,
+      backpressure: { reason: 'approval', retryable: false },
+    }),
+  ],
+};
+
 export function createExecutor() {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
 
     if (path === '/health') return json(res, 200, { status: 'ok', surfaces: ['discovery', 'admin'] });
+    if (path === '/api/v2/admin/runtime/providers' && req.method === 'GET') return json(res, 200, RUNTIME_PROVIDERS);
+    if (path === '/api/v2/admin/mcp/discovery' && req.method === 'GET') return json(res, 200, MCP_DISCOVERY);
+    if (path === '/api/v2/admin/bootstrap/readiness' && req.method === 'GET') return json(res, 200, BOOTSTRAP_READINESS);
+    if (path === '/api/v2/fleet/workloads' && req.method === 'GET') return json(res, 200, FLEET_INVENTORY);
+    let opm;
+    if ((opm = path.match(/^\/api\/v2\/admin\/operations\/([^/]+)$/)) && req.method === 'GET') {
+      const op = operations.get(decodeURIComponent(opm[1]));
+      return op ? json(res, 200, op) : json(res, 404, { error: 'operation_not_found', id: decodeURIComponent(opm[1]) });
+    }
+    if (path === '/api/v2/admin/cloud-hypervisor/snapshots' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, 202, acceptedOperation('instance.snapshot', {
+        provider: 'cloud-hypervisor',
+        snapshot_id: body.snapshot_id,
+        vm: body.vm,
+      }));
+    }
+    if (path === '/api/v2/admin/libvirt/checkpoints' && req.method === 'POST') {
+      const body = await readJson(req);
+      return json(res, 202, acceptedOperation('instance.snapshot', {
+        provider: 'libvirt',
+        checkpoint_id: body.checkpoint_id,
+        vm: body.vm,
+      }));
+    }
+    if (path === '/api/v2/admin/instances' && req.method === 'POST') {
+      const body = await readJson(req);
+      const strategy = body.runtime_options?.launch_strategy;
+      if (strategy && strategy.mode !== 'cold') {
+        const provider = body.provider ?? body.runtime_options?.provider ?? 'cloud-hypervisor';
+        return json(res, 202, acceptedOperation(`instance.${strategy.mode}`, {
+          provider,
+          instance_id: `mock-${String(body.name ?? 'fast-start')}`,
+          name: body.name,
+          asset_ref: strategy.asset_ref,
+          runtime: 'qemu',
+        }));
+      }
+      return json(res, 202, acceptedOperation('instance.provision', {
+        provider: body.provider ?? body.runtime_options?.provider,
+        instance_id: `mock-${String(body.name ?? 'instance')}`,
+        runtime: body.runtime,
+      }));
+    }
 
     // --- Admin surface (Surface 1): fleet instance inventory ---
     if (path === '/admin/instances' && req.method === 'GET') {

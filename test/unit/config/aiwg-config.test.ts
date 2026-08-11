@@ -10,6 +10,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
+  type AiwgConfig,
   emptyConfig,
   getConfigPath,
   readAiwgConfig,
@@ -112,6 +113,21 @@ describe('aiwg-config', () => {
       const p = getConfigPath('/some/project');
       expect(p).toBe(resolve('/some/project', '.aiwg', 'aiwg.config'));
     });
+
+    it('honors AIWG_ARTIFACTS_PATH for renamed or external project corpus directories', () => {
+      const previous = process.env.AIWG_ARTIFACTS_PATH;
+      process.env.AIWG_ARTIFACTS_PATH = '../aiwg-web-release-ops/corpus/.aiwg';
+      try {
+        const p = getConfigPath('/some/project');
+        expect(p).toBe(resolve('/some/project', '../aiwg-web-release-ops/corpus/.aiwg', 'aiwg.config'));
+      } finally {
+        if (previous === undefined) {
+          delete process.env.AIWG_ARTIFACTS_PATH;
+        } else {
+          process.env.AIWG_ARTIFACTS_PATH = previous;
+        }
+      }
+    });
   });
 
   // ── readAiwgConfig / writeAiwgConfig ───────────────────────────────────────
@@ -171,6 +187,26 @@ describe('aiwg-config', () => {
 
       const read = await readAiwgConfig(tmpDir);
       expect(read?.externalLinks).toEqual(cfg.externalLinks);
+    });
+
+    it('reads and writes aiwg.config from AIWG_ARTIFACTS_PATH', async () => {
+      const externalAiwgDir = join(tmpDir, 'renamed-aiwg-corpus');
+      const previous = process.env.AIWG_ARTIFACTS_PATH;
+      process.env.AIWG_ARTIFACTS_PATH = externalAiwgDir;
+      try {
+        await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
+        expect(existsSync(join(externalAiwgDir, 'aiwg.config'))).toBe(true);
+        expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(false);
+
+        const read = await readAiwgConfig(tmpDir);
+        expect(read?.providers).toEqual(['codex']);
+      } finally {
+        if (previous === undefined) {
+          delete process.env.AIWG_ARTIFACTS_PATH;
+        } else {
+          process.env.AIWG_ARTIFACTS_PATH = previous;
+        }
+      }
     });
 
     it('clearly rejects malformed external links while preserving unrelated fields on disk', async () => {
@@ -338,6 +374,42 @@ describe('aiwg-config', () => {
         expect(entry.localPath).toBe('.aiwg/addons/foo/');
         expect(entry.localType).toBe('addon');
         expect(entry.manifestVersion).toBe('1');
+      });
+
+      it('writes split source/deployed hashes and migrates legacy provider maps', () => {
+        const cfg = emptyConfig();
+        cfg.installed['foo'] = {
+          version: '0.9.0',
+          source: 'project-local',
+          installedAt: new Date().toISOString(),
+          deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
+          localPath: '.aiwg/addons/foo/',
+          localType: 'addon',
+          artifactHashes: {
+            claude: { 'rules/claude.md': 'claude-deployed-hash' },
+            factory: { 'rules/factory.md': 'factory-deployed-hash' },
+          } as unknown as NonNullable<
+            AiwgConfig['installed'][string]['artifactHashes']
+          >,
+        };
+
+        const updated = updateInstalled(cfg, 'foo', 'cursor', { agents: 0, commands: 0, skills: 0, rules: 1 }, {
+          version: '1.0.0',
+          source: 'project-local',
+          localPath: '.aiwg/addons/foo/',
+          localType: 'addon',
+          artifactHashes: { 'rules/source.md': 'source-hash' },
+          deployedArtifactHashes: { 'rules/cursor.md': 'cursor-deployed-hash' },
+        });
+
+        expect(updated.installed['foo'].artifactHashes).toEqual({
+          'rules/source.md': 'source-hash',
+        });
+        expect(updated.installed['foo'].deployedArtifactHashes).toEqual({
+          claude: { 'rules/claude.md': 'claude-deployed-hash' },
+          factory: { 'rules/factory.md': 'factory-deployed-hash' },
+          cursor: { 'rules/cursor.md': 'cursor-deployed-hash' },
+        });
       });
 
       it('refuses source=project-local without localPath', () => {

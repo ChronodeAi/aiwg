@@ -203,6 +203,14 @@ describe('doctor: deployed skill budget warning', () => {
     expect(content).toContain('if (seenRealPaths.size <= 1) return;');
   });
 
+  it('offers an actionable Codex repair without counting hidden standard skills', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain('aiwg use all --provider codex --force');
+    expect(content).toContain("provName !== 'codex' && provider?.paths?.skills");
+    expect(content).toContain('startup-visible skills');
+  });
+
   it('uses the same Claude override budget for deployed skill count warnings', async () => {
     const { readFileSync } = await import('fs');
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');

@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useSession } from './useSession';
-import { api, TOKEN } from './api';
+import { api, sessionReady } from './api';
 import type { Approval, Instance, ResponseNeeded } from './types';
 import { runtimeFamily } from './util';
 import { Welcome } from './components/Welcome';
@@ -13,6 +13,7 @@ import { Explore } from './components/Explore';
 import { Library } from './components/Library';
 import { Actions } from './components/Actions';
 import { Telemetry } from './components/Telemetry';
+import { Activity } from './components/Activity';
 import { Memory } from './components/Memory';
 import { StartSessionModal } from './components/StartSessionModal';
 import { LaunchInstanceModal } from './components/LaunchInstanceModal';
@@ -28,6 +29,7 @@ const TABS = [
   { id: 'explore', label: 'Explore' },
   { id: 'library', label: 'Library' },
   { id: 'telemetry', label: 'Telemetry' },
+  { id: 'activity', label: 'Activity' },
   { id: 'memory', label: 'Memory' },
   { id: 'actions', label: 'Actions' },
 ] as const;
@@ -41,6 +43,7 @@ interface ChromeStatus {
   container: boolean;
   vm: boolean;
 }
+type ConnectionState = 'checking' | 'live' | 'reconnecting';
 
 const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -54,6 +57,9 @@ export function App() {
   const registryResponses = registryResponseNeededItems(sessionRegistry).filter((response) => response.id !== `pty:${sessionRegistry.activeKey}`);
   const [composer, setComposer] = useState('');
   const [chrome, setChrome] = useState<ChromeStatus | null>(null);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('checking');
+  const reconnectPendingRef = useRef(false);
+  const eventsDownRef = useRef(false);
   const [startOpen, setStartOpen] = useState(false);
   const [startInst, setStartInst] = useState<string | undefined>(undefined);
   const [launchOpen, setLaunchOpen] = useState(false);
@@ -61,6 +67,11 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: number | undefined;
+    let retryMs = 1_000;
+    const schedule = (ms: number) => {
+      timer = window.setTimeout(load, ms);
+    };
     const load = async () => {
       try {
         // Health + inventory decide "Bridge live". Running + approvals are
@@ -87,21 +98,65 @@ export function App() {
           container: families.includes('container'),
           vm: families.includes('vm'),
         });
+        if (!eventsDownRef.current) {
+          const recovered = reconnectPendingRef.current;
+          reconnectPendingRef.current = false;
+          setConnectionState('live');
+          // One recovery pulse refreshes every mounted live-data view. This is
+          // deliberately separate from their own polling/backoff, so Running,
+          // Missions, Sessions, and Inventory converge together after a blip.
+          if (recovered) setRefreshTick((t) => t + 1);
+        }
+        retryMs = 1_000;
+        if (!cancelled) schedule(15_000);
       } catch {
-        if (!cancelled) setChrome(null);
+        if (!cancelled) {
+          // Preserve last-known chrome while making its staleness explicit.
+          // Retry quickly, then back off to the normal 15 s poll ceiling.
+          reconnectPendingRef.current = true;
+          setConnectionState('reconnecting');
+          schedule(retryMs);
+          retryMs = Math.min(retryMs * 2, 15_000);
+        }
       }
     };
     load();
-    const timer = window.setInterval(load, 15_000);
-    return () => { cancelled = true; window.clearInterval(timer); };
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [session.responseNeeded.needed, refreshTick, registryResponses.length]);
 
   useEffect(() => {
-    if (typeof EventSource === 'undefined' || !TOKEN) return;
-    const events = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
-    events.addEventListener('cockpit.refresh', () => setRefreshTick((t) => t + 1));
-    events.onerror = () => undefined;
-    return () => events.close();
+    if (typeof EventSource === 'undefined') return;
+    let events: EventSource | undefined;
+    let cancelled = false;
+    const refresh = () => {
+      eventsDownRef.current = false;
+      setRefreshTick((t) => t + 1);
+    };
+    sessionReady().then(() => {
+      if (cancelled) return;
+      // Native EventSource carries the same-origin HttpOnly session cookie.
+      events = new EventSource('/api/events');
+      events.onopen = refresh;
+      events.addEventListener('cockpit.refresh', refresh);
+      events.onerror = () => {
+        eventsDownRef.current = true;
+        reconnectPendingRef.current = true;
+        setConnectionState('reconnecting');
+        // EventSource reconnects itself. Pulse the REST path now as well so a
+        // Bridge/executor drop does not wait for the normal poll interval.
+        setRefreshTick((t) => t + 1);
+      };
+    }).catch(() => {
+      eventsDownRef.current = true;
+      setConnectionState('reconnecting');
+    });
+    return () => {
+      cancelled = true;
+      events?.close();
+    };
   }, []);
 
   useEffect(() => {
@@ -162,8 +217,13 @@ export function App() {
           <span className="mark" aria-hidden="true">◆</span>
           <h1>AIWG&nbsp;Cockpit</h1>
         </div>
-        <div className="top-status" aria-label="Cockpit status">
-          <span className={`health-pill ${chrome ? 'ok' : 'warn'}`}>{chrome ? 'Bridge live' : 'Bridge checking'}</span>
+        <div className="top-status" aria-label="Cockpit status" aria-live="polite">
+          <span
+            className={`health-pill ${connectionState === 'live' ? 'ok' : 'warn'}`}
+            title={connectionState === 'reconnecting' && chrome ? 'Connection interrupted; showing last-known status while Cockpit retries.' : undefined}
+          >
+            {connectionState === 'live' ? 'Bridge live' : connectionState === 'reconnecting' ? 'Reconnecting…' : 'Bridge checking'}
+          </span>
           {chrome && (
             <>
               <span className="executor-pill" title={chrome.executor}>{chrome.executor}</span>
@@ -193,14 +253,15 @@ export function App() {
         <Panel id="missions" tab={tab}><Missions refreshTick={refreshTick} /></Panel>
         {/* Sessions stays mounted so the WebSocket survives tab switches */}
         <section id="panel-sessions" role="tabpanel" aria-labelledby="tab-sessions" hidden={tab !== 'sessions'}>
-          <Sessions session={session} composer={composer} setComposer={setComposer} onRequestStart={requestStart} />
+          <Sessions session={session} composer={composer} setComposer={setComposer} onRequestStart={requestStart} refreshTick={refreshTick} />
         </section>
         <Panel id="approvals" tab={tab}><Approvals refreshTick={refreshTick} responses={[...registryResponses, ...(session.responseNeeded.needed ? [sessionResponse(session)] : [])]} goSessions={() => setTab('sessions')} /></Panel>
-        <Panel id="explore" tab={tab}><Explore /></Panel>
+        <Panel id="explore" tab={tab}><Explore refreshTick={refreshTick} /></Panel>
         <Panel id="library" tab={tab}>
           <Library session={session} setComposer={setComposer} goSessions={() => setTab('sessions')} />
         </Panel>
         <Panel id="telemetry" tab={tab}><Telemetry refreshTick={refreshTick} /></Panel>
+        <Panel id="activity" tab={tab}><Activity /></Panel>
         <Panel id="memory" tab={tab}><Memory refreshTick={refreshTick} /></Panel>
         <Panel id="actions" tab={tab}>
           <Actions refreshTick={refreshTick} session={session} setComposer={setComposer} goSessions={() => setTab('sessions')} />

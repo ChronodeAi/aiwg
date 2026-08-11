@@ -6,11 +6,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WebSocket } from 'ws';
 import { createExecutor } from '../../apps/cockpit/mock-executor/src/server.mjs';
-import { createBridge, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, fetchJsonFirst } from '../../apps/cockpit/bridge/src/server.mjs';
+import { activityRequest, createBridge, createUserIndexGraph, normalizeManagedDockerPosture, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, ensureExecutor, fetchJsonFirst, isDirectExecution, validateActivityEnvelope } from '../../apps/cockpit/bridge/src/server.mjs';
 
 let mock, bridge, base, token;
 const testMcSessionId = `mc-cockpit-test-${Date.now()}`;
@@ -60,10 +63,180 @@ afterAll(async () => {
 });
 
 describe('cockpit Bridge — control surface', () => {
+  it('requires exact activity scope and rejects restricted or cross-scope events', () => {
+    const request = activityRequest({ tenant_id: 't', host_id: 'h', instance_id: 'i', agent_id: 'a', filter: { limit: 50 } });
+    expect(request.headers).toMatchObject({ 'x-agentic-tenant-id': 't', 'x-agentic-host-id': 'h', 'x-agentic-instance-id': 'i', 'x-agentic-agent-id': 'a' });
+    expect(() => activityRequest({ tenant_id: 't', host_id: 'h', instance_id: 'i' })).toThrow(/agent_id/);
+    const base = {
+      schema_version: 'activity.event/v1', event_id: '018f54b0-7c01-7000-8000-000000000001', event_name: 'process.started', plane: 'runtime',
+      occurred_at: '2026-08-04T00:00:00Z', observed_at: '2026-08-04T00:00:00.001Z',
+      source: { collector: 'runtime', layer: 'host', runtime: 'docker', trust: 'observed' },
+      sensitivity: 'metadata', retention_class: 'security', integrity: { collector_sequence: 1 }, correlation: request.scope,
+    };
+    const completeness = { complete: true, label: 'complete', collector_count: 0, sequence_gap_count: 0, durable_loss_count: 0, restart_count: 0, dropped_event_count: 0, stale_collector_count: 0, unsupported_event_classes: [], maximum_clock_error_ms: 0 };
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [{ ...base, payload: { command: 'metadata-id' } }], coverage: [], completeness }, request.scope, { includeEvents: true })).not.toThrow();
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [{ ...base, correlation: { ...request.scope, agent_id: 'other' }, payload: {} }], coverage: [], completeness }, request.scope, { includeEvents: true })).toThrow(/scope mismatch/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [{ ...base, payload: { terminal_content: 'nope' } }], coverage: [], completeness }, request.scope, { includeEvents: true })).toThrow(/restricted/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [], coverage: [], completeness: { ...completeness, unsupported_event_classes: undefined } }, request.scope)).toThrow(/completeness summary/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', events: [], coverage: [{ collector_id: 'runtime', sequence_gaps: [], durable_loss_records: [], stale: false }], completeness: { ...completeness, collector_count: 1 } }, request.scope)).toThrow(/collector coverage/);
+    expect(() => validateActivityEnvelope({ schema_version: 'activity.event/v1', additive_optional_field: { supported: true }, events: [{ ...base, payload: {} }], coverage: [], completeness }, request.scope, { includeEvents: true })).not.toThrow();
+    expect(() => validateActivityEnvelope({ events: [], manifest: { batch_id: 'b', tenant_id: 't', collector_id: 'runtime', event_count: 0, merkle_root: 'bad', previous_root: null, key_id: 'k', signature: 's' } }, request.scope, { exportEnvelope: true })).toThrow(/valid manifest/);
+  });
+
+  it('preserves upstream authorization failures for every activity route', async () => {
+    const upstream = http.createServer((req, res) => {
+      const status = req.url.includes('/timeline') ? 401 : 403;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: status === 401 ? 'unauthorized' : 'forbidden' }));
+    });
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const localBridge = createBridge({ executorUrl: `http://127.0.0.1:${upstream.address().port}`, allowMockExecutor: true });
+    await new Promise((resolve) => localBridge.listen(0, '127.0.0.1', resolve));
+    const localBase = `http://127.0.0.1:${localBridge.address().port}`;
+    const body = JSON.stringify({ tenant_id: 't', host_id: 'h', instance_id: 'i', agent_id: 'a' });
+    try {
+      for (const [route, status] of [['coverage', 403], ['timeline', 401], ['export', 403]]) {
+        const response = await fetch(`${localBase}/api/activity/${route}`, { method: 'POST', headers: { authorization: `Bearer ${localBridge.cockpitToken}`, 'content-type': 'application/json' }, body });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual(expect.objectContaining({ error: status === 401 ? 'executor_unauthenticated' : 'executor_forbidden' }));
+      }
+    } finally {
+      localBridge.close();
+      upstream.close();
+    }
+  });
+
+  it('projects managed Docker posture without exposing socket or bootstrap material', () => {
+    expect(normalizeManagedDockerPosture({ transport: 'uds', control_uid: 240404, workload_uid: 10001, workload_boundary: 'separated', socket_path: '/secret.sock' }, 'docker')).toEqual(expect.objectContaining({ secure_default: true, control_identity_range_valid: true, workload_identity_separated: true }));
+    expect(normalizeManagedDockerPosture({ transport: 'mtls-bootstrap', control_uid: 240405, workload_uid: 10001, workload_boundary: 'separated', bootstrap_token: 'secret' }, 'docker')).toEqual(expect.objectContaining({ secure_default: false, compatibility: true }));
+    expect(normalizeManagedDockerPosture({ transport: 'uds' }, 'docker')).toEqual(expect.objectContaining({ secure_default: false, requires_recreation: true }));
+    expect(normalizeManagedDockerPosture({ transport: 'uds', control_uid: 199999, workload_uid: 10001, workload_boundary: 'separated' }, 'docker')).toEqual(expect.objectContaining({ control_identity_range_valid: false }));
+  });
+  it('creates validated user-defined index graph configuration atomically', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aiwg-cockpit-index-'));
+    try {
+      const created = await createUserIndexGraph({ name: 'references', scanDirs: ['docs/references'], extensions: ['.md'] }, root);
+      expect(created).toMatchObject({ name: 'references', definition: { scanDirs: ['docs/references'], extensions: ['.md'] } });
+      const config = JSON.parse(await readFile(join(root, '.aiwg', 'aiwg.config'), 'utf8'));
+      expect(config.index.graphs.references.defaultBuild).toBe(false);
+      await expect(createUserIndexGraph({ name: '../escape', scanDirs: ['docs'] }, root)).rejects.toThrow(/graph must match/);
+      await expect(createUserIndexGraph({ name: 'bad-path', scanDirs: ['../outside'] }, root)).rejects.toThrow(/project-relative/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
   it('gates /api with the per-launch token; /healthz is open', async () => {
     expect((await fetch(`${base}/api/inventory`)).status).toBe(401);
+    expect((await fetch(`${base}/api/inventory?token=${encodeURIComponent(token)}`)).status).toBe(401);
     expect((await fetch(`${base}/healthz`)).status).toBe(200);
     expect((await f('/api/inventory')).status).toBe(200);
+  });
+
+  it('exchanges a one-time bootstrap for an HttpOnly session and rejects replay', async () => {
+    const issued = await f('/bootstrap/nonce', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ audience: 'browser' }),
+    });
+    expect(issued.status).toBe(201);
+    const { nonce } = await issued.json();
+
+    const exchange = await fetch(`${base}/bootstrap/session`, {
+      method: 'POST',
+      headers: { origin: base, 'content-type': 'application/json' },
+      body: JSON.stringify({ nonce, audience: 'browser' }),
+    });
+    expect(exchange.status).toBe(201);
+    const cookie = exchange.headers.get('set-cookie');
+    expect(cookie).toMatch(/^cockpit_session=[^;]+; HttpOnly; Path=\/; SameSite=Strict/);
+    expect(cookie).not.toContain(token);
+    const { csrf } = await exchange.json();
+    expect(csrf).toMatch(/^[A-Za-z0-9_-]+$/);
+
+    const replay = await fetch(`${base}/bootstrap/session`, {
+      method: 'POST',
+      headers: { origin: base, 'content-type': 'application/json' },
+      body: JSON.stringify({ nonce, audience: 'browser' }),
+    });
+    expect(replay.status).toBe(401);
+
+    const cookieHeader = cookie.split(';', 1)[0];
+    expect((await fetch(`${base}/api/inventory`, { headers: { cookie: cookieHeader, origin: base } })).status).toBe(200);
+    const mutationPath = '/api/instances/9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b/start';
+    expect((await fetch(base + mutationPath, {
+      method: 'POST',
+      headers: { cookie: cookieHeader, origin: base },
+    })).status).toBe(403);
+    expect((await fetch(base + mutationPath, {
+      method: 'POST',
+      headers: { cookie: cookieHeader, origin: base, 'x-cockpit-csrf': csrf },
+    })).status).toBe(200);
+
+    const events = await fetch(`${base}/api/events`, { headers: { cookie: cookieHeader, origin: base } });
+    expect(events.status).toBe(200);
+    expect(events.url).not.toContain('token=');
+    const reader = events.body.getReader();
+    await reader.read();
+    await reader.cancel();
+
+    const sessions = await (await fetch(
+      `${base}/api/sessions?instance=550e8400-e29b-41d4-a716-446655440000`,
+      { headers: { cookie: cookieHeader, origin: base } },
+    )).json();
+    const attachUrl = sessions.sessions.find((entry) => entry.id === 'demo-shell')?.attach_url;
+    expect(attachUrl).toMatch(/^ws:\/\/.*\/api\/pty\//);
+    const socket = new WebSocket(attachUrl, ['pty-ws.v1'], { headers: { cookie: cookieHeader } });
+    await new Promise((resolve, reject) => {
+      socket.once('open', resolve);
+      socket.once('error', reject);
+    });
+    socket.close();
+  });
+
+  it('rejects expired, wrong-audience, and cross-Bridge bootstrap attempts', async () => {
+    const candidate = createBridge({
+      executorUrl: `http://127.0.0.1:${mock.address().port}`,
+      allowMockExecutor: true,
+      bootstrapTtlMs: 1,
+    });
+    await new Promise((resolve) => candidate.listen(0, '127.0.0.1', resolve));
+    const candidateBase = `http://127.0.0.1:${candidate.address().port}`;
+    try {
+      const issue = async (audience = 'vscode') => {
+        const response = await fetch(`${candidateBase}/bootstrap/nonce`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${candidate.cockpitToken}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ audience }),
+        });
+        return (await response.json()).nonce;
+      };
+      const wrongAudience = await issue();
+      expect((await fetch(`${candidateBase}/bootstrap/session`, {
+        method: 'POST',
+        headers: { origin: candidateBase, 'content-type': 'application/json' },
+        body: JSON.stringify({ nonce: wrongAudience, audience: 'tauri' }),
+      })).status).toBe(401);
+
+      const expired = await issue();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect((await fetch(`${candidateBase}/bootstrap/session`, {
+        method: 'POST',
+        headers: { origin: candidateBase, 'content-type': 'application/json' },
+        body: JSON.stringify({ nonce: expired, audience: 'vscode' }),
+      })).status).toBe(401);
+
+      const foreign = bridge.issueBootstrapNonce('browser');
+      expect((await fetch(`${candidateBase}/bootstrap/session`, {
+        method: 'POST',
+        headers: { origin: candidateBase, 'content-type': 'application/json' },
+        body: JSON.stringify({ nonce: foreign, audience: 'browser' }),
+      })).status).toBe(401);
+    } finally {
+      await new Promise((resolve) => candidate.close(resolve));
+    }
   });
 
   it('rejects spoofed browser origins and requires CSRF on browser mutations', async () => {
@@ -97,6 +270,14 @@ describe('cockpit Bridge — control surface', () => {
     const inv = await (await f('/api/inventory')).json();
     expect(inv.count).toBe(4);
     expect(inv.source).toMatch(/^http:\/\/127\.0\.0\.1:/);
+    expect(inv.bootstrap_trust).toMatchObject({
+      status: 'secure',
+      mode: 'mtls',
+      ca_provider_ref: 'local-ca://cockpit-mock',
+      trust_bundle_ref: 'trust-bundle://cockpit-mock/current',
+      missing_required_material: [],
+    });
+    expect(JSON.stringify(inv.bootstrap_trust)).not.toMatch(/BEGIN CERTIFICATE|PRIVATE KEY|secret-value|sk-|Bearer /i);
     expect(inv.instances.find((x) => x.runtime === 'host')?.runtime_posture).toMatchObject({ isolation: 'least' });
     expect(inv.instances.find((x) => x.runtime === 'wasm-edge')?.runtime_posture).toMatchObject({ isolation: 'opaque' });
     expect(inv.instances.find((x) => x.transport?.trust === 'compatibility')?.transport.evidence).not.toMatch(/secret-value|token/i);
@@ -105,8 +286,53 @@ describe('cockpit Bridge — control surface', () => {
     expect(run.running[0]).toHaveProperty('runtime_posture');
     expect(run.running[0]).toHaveProperty('transport');
     const s = await (await f('/api/sessions?instance=550e8400-e29b-41d4-a716-446655440000')).json();
-    expect(s.sessions.find((x) => x.id === 'demo-shell')?.attach_url).toMatch(/^ws:\/\/.*\/attach$/);
+    expect(s.sessions.find((x) => x.id === 'demo-shell')?.attach_url).toMatch(/^ws:\/\/.*\/api\/pty\/agents\/.*\/attach\/[A-Za-z0-9_-]+$/);
     expect(s.sessions.find((x) => x.id === 'demo-shell')).toMatchObject({ session_class: 'direct', session_backend: 'native', role_policy: 'observe-default' });
+  });
+
+  it('fails closed when Cockpit requires sandbox mTLS and CA readiness is missing', async () => {
+    const upstream = http.createServer((req, res) => {
+      if (req.url === '/health') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', surfaces: ['admin'] }));
+        return;
+      }
+      if (req.url === '/api/v2/admin/bootstrap/readiness') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({
+          status: 'disabled',
+          ca_provider: { configured: false },
+          bootstrap: { token_store_configured: false },
+        }));
+        return;
+      }
+      if (req.url === '/admin/instances') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ instances: [] }));
+        return;
+      }
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'not_found' }));
+    });
+    await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+    const gated = createBridge({
+      executorUrl: `http://127.0.0.1:${upstream.address().port}`,
+      allowMockExecutor: true,
+      requireSandboxMtls: true,
+    });
+    await new Promise((r) => gated.listen(0, '127.0.0.1', r));
+    try {
+      const root = `http://127.0.0.1:${gated.address().port}`;
+      const res = await fetch(`${root}/api/inventory`, { headers: { authorization: `Bearer ${gated.cockpitToken}` } });
+      expect(res.status).toBe(503);
+      const body = await res.json();
+      expect(body).toMatchObject({ error: 'executor_trust_required' });
+      expect(body.message).toMatch(/sandbox mTLS is required/);
+      expect(body.recovery).toMatch(/Configure sandbox CA provider|Plaintext local development/);
+    } finally {
+      gated.close();
+      upstream.close();
+    }
   });
 
   it('proxies server-side PTY screen snapshots for background monitoring (#1742)', async () => {
@@ -123,7 +349,7 @@ describe('cockpit Bridge — control surface', () => {
   it('creates sessions with sandbox-advertised direct or managed backend selection', async () => {
     const id = '550e8400-e29b-41d4-a716-446655440000';
     const created = await (await f(`/api/instances/${id}/sessions?mode=managed&backend=tmux`, { method: 'POST' })).json();
-    expect(created.attach_url).toMatch(/^ws:\/\/.*\/attach$/);
+    expect(created.attach_url).toMatch(/^ws:\/\/.*\/api\/pty\/agents\/.*\/attach\/[A-Za-z0-9_-]+$/);
     expect(created.session_name).toMatch(/^cockpit-/);
     // Multi-session per instance: a second create is a NEW session (unique
     // per-request name), never a silent reuse of the first (#1749 follow-up to
@@ -278,6 +504,18 @@ describe('cockpit Bridge — control surface', () => {
       source: 'aiwg-mc',
     });
     expect(missions.sessions.some((s) => s.id === 'executor-live')).toBe(true);
+    const fleetSession = missions.sessions.find((s) => s.parent_mission_id === 'mission-fleet-demo');
+    expect(fleetSession).toMatchObject({
+      id: 'fleet:mission-fleet-demo',
+      source: 'agentic-sandbox-fleet',
+      state: 'awaiting-approval',
+      inventory_revision: 12,
+    });
+    expect(fleetSession.missions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ workload_kind: 'persistent-agent', target_id: 'target-1', runtime_session_id: 'session-agent-1', status: 'retained', terminal: false }),
+      expect.objectContaining({ workload_kind: 'daemon', target_id: 'target-2', health: 'healthy', status: 'healthy', terminal: false }),
+      expect.objectContaining({ workload_kind: 'one-shot-command', target_id: 'target-3', command_id: 'command-1', status: 'blocked', backpressure: { reason: 'approval', retryable: false }, terminal: false }),
+    ]));
 
     const events = await (await f('/api/events/snapshot')).json();
     expect(events.source).toBe('cockpit.unified-event-model/v1');
@@ -308,6 +546,152 @@ describe('cockpit Bridge — mock executor guard', () => {
     });
     expect(res.status).toBe(502);
     expect(await res.json()).toMatchObject({ error: 'mock_executor_refused' });
+  });
+});
+
+describe('cockpit Bridge — protected executor identity', () => {
+  const authDir = join(process.cwd(), '.aiwg', 'tmp-cockpit-executor-auth-test');
+  const adminTokenFile = join(authDir, 'admin.token');
+  const operatorTokenFile = join(authDir, 'operator.token');
+  const wrongTokenFile = join(authDir, 'wrong.token');
+  const invalidTokenFile = join(authDir, 'invalid.token');
+  const missingTokenFile = join(authDir, 'missing.token');
+  const looseTokenFile = join(authDir, 'loose.token');
+  let upstream, protectedBridge, protectedBase, protectedToken;
+  let attachAuthorization = '';
+  let expectedAdminToken = 'synthetic-admin-v1';
+
+  beforeAll(async () => {
+    await rm(authDir, { recursive: true, force: true });
+    await mkdir(authDir, { recursive: true, mode: 0o700 });
+    await writeFile(adminTokenFile, `${expectedAdminToken}\n`, { mode: 0o600 });
+    await writeFile(operatorTokenFile, 'synthetic-operator\n', { mode: 0o600 });
+    await writeFile(wrongTokenFile, 'synthetic-wrong\n', { mode: 0o600 });
+    await writeFile(invalidTokenFile, 'synthetic-one\nsynthetic-two\n', { mode: 0o600 });
+    await writeFile(looseTokenFile, 'synthetic-loose\n', { mode: 0o644 });
+    upstream = http.createServer((req, res) => {
+      const url = new URL(req.url, 'http://127.0.0.1');
+      const send = (status, body) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      if (url.pathname === '/health') return send(200, { status: 'ok', name: 'protected-executor' });
+      const bearer = String(req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+      if (!bearer || ![expectedAdminToken, 'synthetic-operator'].includes(bearer)) {
+        return send(401, { error: 'missing_or_invalid_operator_token' });
+      }
+      if (bearer === 'synthetic-operator' && url.pathname.includes('/admin/')) {
+        return send(403, { error: 'admin_role_required' });
+      }
+      if (url.pathname === '/admin/instances') {
+        return send(200, { instances: [{ id: 'protected-host', runtime: 'host', state: 'running', agent_ready: true }] });
+      }
+      if (url.pathname === '/api/v1/agents') {
+        return send(200, { agents: [{ id: 'protected-agent', instance_id: 'protected-host', status: 'Ready' }] });
+      }
+      if (url.pathname === '/agents/protected-host/sessions' || url.pathname === '/api/v1/agents/protected-agent/sessions') {
+        return send(200, { sessions: [{
+          id: 'protected-session',
+          instance_id: 'protected-host',
+          attach_url: `ws://127.0.0.1:${upstream.address().port}/agents/protected-host/sessions/protected-session/attach`,
+        }] });
+      }
+      return send(404, { error: 'not_found' });
+    });
+    upstream.on('upgrade', (req, socket) => {
+      attachAuthorization = String(req.headers.authorization ?? '');
+      if (attachAuthorization !== `Bearer ${expectedAdminToken}`) {
+        socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      const accept = createHash('sha1')
+        .update(`${req.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+        .digest('base64');
+      socket.write([
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${accept}`,
+        'Sec-WebSocket-Protocol: pty-ws.v1',
+        '',
+        '',
+      ].join('\r\n'));
+    });
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    protectedBridge = createBridge({
+      executorUrl: `http://127.0.0.1:${upstream.address().port}`,
+      executorTokenFile: adminTokenFile,
+    });
+    await new Promise((resolve) => protectedBridge.listen(0, '127.0.0.1', resolve));
+    protectedBase = `http://127.0.0.1:${protectedBridge.address().port}`;
+    protectedToken = protectedBridge.cockpitToken;
+  });
+
+  afterAll(async () => {
+    protectedBridge?.close();
+    upstream?.close();
+    await rm(authDir, { recursive: true, force: true });
+  });
+
+  const protectedFetch = (path, options = {}) => fetch(protectedBase + path, {
+    ...options,
+    headers: { ...(options.headers || {}), authorization: `Bearer ${protectedToken}` },
+  });
+
+  it('keeps the executor bearer in the Bridge for REST and PTY requests', async () => {
+    const inventory = await protectedFetch('/api/inventory');
+    expect(inventory.status).toBe(200);
+    expect(await inventory.json()).toMatchObject({ count: 1, instances: [expect.objectContaining({ id: 'protected-host' })] });
+
+    const sessions = await (await protectedFetch('/api/sessions?instance=protected-host')).json();
+    expect(sessions.sessions[0].attach_url).toMatch(new RegExp(`^ws://127\\.0\\.0\\.1:${protectedBridge.address().port}/api/pty/agents/`));
+    expect(sessions.sessions[0].attach_url).not.toContain(expectedAdminToken);
+
+    const cockpitProtocol = `cockpit.${Buffer.from(protectedToken).toString('base64url')}`;
+    const ws = new WebSocket(sessions.sessions[0].attach_url, ['pty-ws.v1', cockpitProtocol]);
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('protected PTY proxy did not open')), 3_000);
+      ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+      ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('protected PTY proxy failed')); }, { once: true });
+    });
+    expect(attachAuthorization).toBe(`Bearer ${expectedAdminToken}`);
+    ws.close();
+  });
+
+  it('reloads a rotated file token without restarting the Bridge', async () => {
+    expectedAdminToken = 'synthetic-admin-v2';
+    await writeFile(adminTokenFile, `${expectedAdminToken}\n`, { mode: 0o600 });
+    const inventory = await protectedFetch('/api/inventory');
+    expect(inventory.status).toBe(200);
+  });
+
+  it('preserves upstream 401/403 and rejects an over-broad credential file', async () => {
+    const cases = [
+      { file: wrongTokenFile, status: 401, error: 'executor_unauthenticated' },
+      { file: operatorTokenFile, status: 403, error: 'executor_forbidden' },
+      { file: missingTokenFile, status: 502, error: 'executor_credential_unavailable' },
+      { file: invalidTokenFile, status: 502, error: 'executor_credential_invalid' },
+      { file: looseTokenFile, status: 502, error: 'executor_credential_permissions' },
+    ];
+    for (const testCase of cases) {
+      const candidate = createBridge({
+        executorUrl: `http://127.0.0.1:${upstream.address().port}`,
+        executorTokenFile: testCase.file,
+      });
+      await new Promise((resolve) => candidate.listen(0, '127.0.0.1', resolve));
+      try {
+        const response = await fetch(`http://127.0.0.1:${candidate.address().port}/api/inventory`, {
+          headers: { authorization: `Bearer ${candidate.cockpitToken}` },
+        });
+        expect(response.status).toBe(testCase.status);
+        const body = await response.json();
+        expect(body.error).toBe(testCase.error);
+        expect(JSON.stringify(body)).not.toContain('synthetic-');
+        expect(JSON.stringify(body)).not.toContain(testCase.file);
+      } finally {
+        candidate.close();
+      }
+    }
   });
 });
 
@@ -347,6 +731,14 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
               status: 'running',
               tenantId: 'default',
               launchContext: { selectedTier: 'vm' },
+            }, {
+              instanceId: 'v2-container-1',
+              runtime: { kind: 'container' },
+              loadout: 'agentic-dev',
+              status: 'running',
+              tenantId: 'default',
+              cwd: '/srv/container-home',
+              launchContext: { selectedTier: 'container' },
             }],
           },
         });
@@ -374,6 +766,7 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
         return send(200, { agents: [
           { id: 'agent-v2-host-1', instance_id: 'v2-host-1', status: 'Ready' },
           { id: 'agent-ready-qemu-1', instance_id: 'ready-qemu-1', status: 'Ready' },
+          { id: 'agent-v2-container-1', instance_id: 'v2-container-1', status: 'Ready' },
         ] });
       }
       if (url.pathname === '/agents/v2-host-1/sessions') return send(404, { error: 'legacy_sessions_absent' });
@@ -418,6 +811,15 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
         req.on('end', () => {
           const body = raw ? JSON.parse(raw) : {};
           send(201, { session_id: 'sess-created-v1', requested: body, pty_ws_url: 'wss://{host}/agents/v2-host-1/sessions/sess-created-v1/attach' });
+        });
+        return;
+      }
+      if (url.pathname === '/api/v1/agents/agent-v2-container-1/sessions' && req.method === 'POST') {
+        let raw = '';
+        req.on('data', (chunk) => { raw += chunk; });
+        req.on('end', () => {
+          const body = raw ? JSON.parse(raw) : {};
+          send(201, { session_id: 'sess-created-container-v1', requested: body, pty_ws_url: 'wss://{host}/agents/v2-container-1/sessions/sess-created-container-v1/attach' });
         });
         return;
       }
@@ -474,7 +876,7 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
     expect(sessions.sessions[0].session_class).toBe('managed');
     // #1671: the fallback-built attach_url keys the agent segment by the instance
     // id, never the resolved agent name (agent-v2-host-1), which the route rejects.
-    expect(sessions.sessions[0].attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/agents\/v2-host-1\/sessions\/sess-v2\/attach$/);
+    expect(sessions.sessions[0].attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/api\/pty\/agents\/v2-host-1\/sessions\/sess-v2\/attach\/[A-Za-z0-9_-]+$/);
     expect(sessions.sessions[0].attach_url).not.toContain('agent-v2-host-1');
 
     const screen = await (await cf('/api/instances/v2-host-1/sessions/sess-v2/screen')).json();
@@ -491,7 +893,24 @@ describe('cockpit Bridge — real sandbox v2 admin compatibility', () => {
     });
     // Deterministic prefix + per-request nonce (multi-session per instance).
     expect(created.requested.session_name).toMatch(/^cockpit-v2-host-1-managed-tmux-[0-9a-f]{6}$/);
-    expect(created.attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/agents\/v2-host-1\/sessions\/sess-created-v1\/attach$/);
+    expect(created.attach_url).toMatch(/^ws:\/\/127\.0\.0\.1:.*\/api\/pty\/agents\/v2-host-1\/sessions\/sess-created-v1\/attach\/[A-Za-z0-9_-]+$/);
+  });
+
+  it('starts non-root container sessions in the executor-reported target cwd', async () => {
+    const created = await (await cf('/api/instances/v2-container-1/sessions', { method: 'POST' })).json();
+    expect(created).toMatchObject({
+      id: 'sess-created-container-v1',
+      requested: {
+        session_backend: 'tmux',
+        session_class: 'managed',
+        command: '/bin/bash',
+        working_dir: '/srv/container-home',
+      },
+    });
+    expect(created.requested.args).toEqual([
+      '-lc',
+      "cd '/srv/container-home' && exec /bin/bash -l",
+    ]);
   });
 
   it('caches agent-list resolution across session polls (#1747)', async () => {
@@ -555,6 +974,7 @@ describe('cockpit Bridge — executor without running/approvals admin surface (#
   // A2A tasks; when no task surface is available it returns empty 200s so Home
   // binds inventory and stays usable.
   let upstream, b, ubase, utoken;
+  let fleetMode = 'missing';
   beforeAll(async () => {
     upstream = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -569,6 +989,12 @@ describe('cockpit Bridge — executor without running/approvals admin surface (#
         }] } });
       }
       if (url.pathname === '/api/v1/agents') return send(200, { agents: [] });
+      if (url.pathname === '/api/v2/fleet/workloads' && fleetMode === 'error') {
+        return send(500, { error: 'fleet_unavailable' });
+      }
+      if (url.pathname === '/api/v2/fleet/workloads' && fleetMode === 'malformed') {
+        return send(200, { document_type: 'inventory', api_version: 'wrong/v1', records: [] });
+      }
       // No task surface on this executor — everything else 404s.
       return send(404, { error: 'not_found', path: url.pathname });
     });
@@ -594,6 +1020,22 @@ describe('cockpit Bridge — executor without running/approvals admin surface (#
     const approvals = await uf('/api/approvals?status=pending');
     expect(approvals.status).toBe(200);
     expect(await approvals.json()).toMatchObject({ approvals: [] });
+  });
+
+  it('keeps older no-fleet executors compatible but fails closed on fleet faults', async () => {
+    fleetMode = 'missing';
+    expect((await uf('/api/missions')).status).toBe(200);
+
+    fleetMode = 'error';
+    const failed = await uf('/api/missions');
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toMatchObject({ error: 'bridge_upstream_error' });
+
+    fleetMode = 'malformed';
+    const malformed = await uf('/api/missions');
+    expect(malformed.status).toBe(502);
+    expect((await malformed.json()).message).toMatch(/invalid fleet inventory envelope/);
+    fleetMode = 'missing';
   });
 });
 
@@ -641,6 +1083,25 @@ describe('cockpit mock — admin-surface contract guard (#1636)', () => {
 });
 
 describe('cockpit Bridge — port defaults off the executor range (#1634)', () => {
+  it('recognizes an npm-style symlink as direct binary execution', async () => {
+    const temp = await mkdtemp(join(tmpdir(), 'aiwg-cockpit-bin-'));
+    const targetUrl = new URL('../../apps/cockpit/bridge/src/server.mjs', import.meta.url);
+    const link = join(temp, 'aiwg-cockpit');
+    try {
+      await symlink(fileURLToPath(targetUrl), link);
+      expect(isDirectExecution(targetUrl.href, link)).toBe(true);
+    } finally {
+      await rm(temp, { recursive: true, force: true });
+    }
+  });
+
+  it('continues without crashing when an optional executor binary is not installed', async () => {
+    await expect(ensureExecutor('http://127.0.0.1:1', {
+      command: ['/definitely/not/an/installed/agentic-mgmt'],
+      probe: async () => false,
+    })).resolves.toBeUndefined();
+  });
+
   it('defaults to an off-range port and never into the agentic-sandbox 8120-8122 range', () => {
     expect(DEFAULT_BRIDGE_PORT).toBe(8140);
     expect(EXECUTOR_RESERVED_PORTS).toEqual([8120, 8121, 8122]);
@@ -709,7 +1170,10 @@ describe('cockpit web — app shell served', () => {
 
   it('declares a document language', () => expect(html).toMatch(/<html lang="en"/));
   it('renders the Cockpit title', () => expect(html).toMatch(/AIWG.?Cockpit/i));
-  it('injects the per-launch token', () => expect(html).toContain(`window.__COCKPIT_TOKEN__=${JSON.stringify(token)}`));
+  it('does not inject reusable credential material', () => {
+    expect(html).not.toContain(token);
+    expect(html).not.toContain('__COCKPIT_TOKEN__');
+  });
   it('references + serves the built bundle outside comments when a React build is present', async () => {
     // strip comments first: a module script trapped in a comment must not count.
     const live = html.replace(/<!--[\s\S]*?-->/g, '');

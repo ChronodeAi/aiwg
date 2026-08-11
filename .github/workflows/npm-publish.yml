@@ -19,7 +19,8 @@
 #   `npm view aiwg@<version> --json | jq .dist.attestations`.
 #
 # REQUIREMENTS (one-time, operator-side):
-# 1. npmjs.org → package settings → trusted publishers → add a publisher:
+# 1. npmjs.org → package settings → trusted publishers → add a publisher for
+#    each of `aiwg`, `@aiwg/cli`, and `@aiwg/cockpit`:
 #      Provider:      GitHub Actions
 #      Owner:         jmagly
 #      Repository:    aiwg
@@ -41,7 +42,7 @@
 #   notes above the npmjs.org publish steps pending operator removal once
 #   the OIDC path verifies its first release.
 # - .gitea/workflows/upload-release-sigs.yml — manual operator workflow
-#   that mirrors the four signed assets from the GitHub release to the
+#   that mirrors the release assets from the GitHub release to the
 #   Gitea release after this workflow lands them (#1287 / A8 — Wave 5).
 # - .aiwg/architecture/adr-npmjs-org-via-github-actions.md — A5 ADR.
 # - .aiwg/architecture/adr-tarball-cosign-signing.md — A8 ADR.
@@ -56,8 +57,7 @@
 # - A signed `release-manifest.json` (SHA-256 of tarball, version, tag SHA,
 #   build commit SHA, workflow run URL) is also attached, providing an
 #   audit-ready bridge between the published artifact and this CI run.
-# - All four assets (tarball + .sigstore, manifest + .sigstore) are
-#   uploaded to the GitHub release using the workflow's ephemeral
+# - All release assets are uploaded to the GitHub release using the workflow's ephemeral
 #   `GITHUB_TOKEN`. Gitea-side upload is operator-triggered via the
 #   companion .gitea/workflows/upload-release-sigs.yml workflow — kept
 #   manual to avoid expanding the Gitea write-token surface that Wave 4
@@ -65,10 +65,11 @@
 #
 # To publish:
 # 1. Bump version in package.json
-# 2. Sign and push tag: git tag -s vYYYY.M.PATCH -m "..." && git push github main --tags
+# 2. Sign with the dedicated release key: tools/release/cut-tag.sh YYYY.M.PATCH
+#    Then push the verified tag: git push github main --tags
 # 3. Watch this workflow on the GitHub mirror. The post-publish step verifies
 #    that the provenance attestation landed on npmjs.org, then cosign-signs
-#    the tarball + manifest and uploads all four signed assets to the GitHub
+#    the tarball + manifest and uploads release assets to the GitHub
 #    release.
 # 4. Mirror the signed assets to the Gitea release with the manual operator
 #    step in the runbook (`gh workflow run upload-release-sigs.yml -F tag=…`
@@ -86,6 +87,11 @@ on:
         description: 'Existing tag to re-attempt publish for (must already exist on this branch)'
         required: false
         type: string
+      remove_cli_bootstrap_tag:
+        description: 'Maintenance only: remove the deprecated @aiwg/cli bootstrap dist-tag without republishing'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: npmjs-publish-${{ github.ref }}
@@ -98,6 +104,7 @@ permissions:
 jobs:
   publish-to-npmjs-org:
     name: Publish to npmjs.org with provenance
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.remove_cli_bootstrap_tag }}
     runs-on: ubuntu-latest
     # Container pinned by digest per .gitea/workflows/README.md ("CI Pinning
     # Policy"). Same discipline as the Gitea workflows — no mutable tags.
@@ -199,17 +206,33 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install mandatory SQLite session test backend
+        # better-sqlite3 is an optional peer for end users, but the full test
+        # suite exercises the SQLite repository and must not run without it.
+        # This exact-version, no-save install runs after the age-gated locked
+        # install. Disable re-resolution's age filter here so npm does not
+        # reject already-locked young packages such as @fortemi/core.
+        # --save-dev is required here because npm otherwise treats an explicitly
+        # requested optional peer already declared by the root package as satisfied
+        # without placing it in node_modules.
+        run: |
+          npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0
+          node -e "require('better-sqlite3')"
+
       - name: Run type check
         run: npm run typecheck
 
       - name: Build TypeScript
         run: npm run build
 
+      - name: Assemble lightweight CLI package
+        run: npm run package:cli
+
       - name: Run tests
         # Test failures must block stable publish. `continue-on-error: true`
         # was removed from the Gitea workflow per #1280 (A2); the same
         # discipline applies here.
-        run: npm test -- --run
+        run: npm test -- --run --testTimeout=120000
 
       - name: Extract and verify version against tag
         id: version
@@ -257,6 +280,12 @@ jobs:
           set -o pipefail
           echo "=== Cockpit package contents ==="
           npm pack ./apps/cockpit --dry-run 2>&1 | tee cockpit-pack-output.txt
+
+      - name: Check lightweight CLI package contents
+        run: |
+          set -o pipefail
+          echo "=== @aiwg/cli package contents ==="
+          npm pack ./dist/packages/cli --dry-run 2>&1 | tee cli-pack-output.txt
 
       - name: Verify .aiwg/ excluded from package
         run: |
@@ -388,6 +417,24 @@ jobs:
             fi
           }
 
+      - name: Publish lightweight CLI to npmjs.org (OIDC + provenance)
+        run: |
+          set -o pipefail
+          NPM_TAG='${{ steps.version.outputs.npm_tag }}'
+          npm publish ./dist/packages/cli --provenance --access public --tag "$NPM_TAG" 2>&1 | tee cli-publish-output.txt || {
+            if grep -qE "cannot publish over|EPUBLISHCONFLICT|409" cli-publish-output.txt; then
+              echo "✓ @aiwg/cli version already published to npmjs.org — treating as success"
+            elif grep -qE "404.*PUT|is not in this registry" cli-publish-output.txt; then
+              echo "✗ @aiwg/cli publish failed: configure its npm trusted publisher for jmagly/aiwg and npm-publish.yml"
+              cat cli-publish-output.txt
+              exit 1
+            else
+              echo "✗ @aiwg/cli npmjs.org publish failed"
+              cat cli-publish-output.txt
+              exit 1
+            fi
+          }
+
       - name: Install jq (node:24 image does not ship it by default)
         # The verify-provenance step and the asset-upload steps below shell
         # out to jq. node:24-bookworm doesn't include it. rc.1 retag #6
@@ -433,6 +480,13 @@ jobs:
           fi
           echo "✓ Provenance attestation present for @aiwg/cockpit@${VERSION}"
 
+          CLI_ATTESTATIONS=$(npm view "@aiwg/cli@${VERSION}" --json 2>/dev/null | jq -r '.dist.attestations // empty')
+          if [ -z "$CLI_ATTESTATIONS" ]; then
+            echo "✗ No provenance attestation found for @aiwg/cli@${VERSION} on npmjs.org"
+            exit 1
+          fi
+          echo "✓ Provenance attestation present for @aiwg/cli@${VERSION}"
+
       - name: Verify dist-tag points at this version
         # Defense-in-depth against the dist-tag drift the Gitea workflow
         # was hardened against (#1247, #1280). Even on first OIDC publish
@@ -468,6 +522,19 @@ jobs:
               exit 1
             fi
           done
+          for i in 1 2 3 4 5; do
+            CURRENT=$(npm view "@aiwg/cli@${NPM_TAG}" version 2>/dev/null || echo "")
+            if [ "$CURRENT" = "$VERSION" ]; then
+              echo "✓ @aiwg/cli@${NPM_TAG} = ${VERSION} on npmjs.org"
+              break
+            fi
+            echo "Attempt $i: @aiwg/cli@${NPM_TAG} = ${CURRENT:-<missing>}, expected ${VERSION}; retrying in 10s..."
+            sleep 10
+            if [ "$i" = "5" ]; then
+              echo "✗ dist-tag verification exhausted retries (@aiwg/cli@${NPM_TAG} did not resolve to ${VERSION})"
+              exit 1
+            fi
+          done
 
       - name: Advance @next dist-tag on stable releases
         # On a stable publish (--tag latest), @next is still pointing at
@@ -478,7 +545,7 @@ jobs:
         # IMPORTANT: OIDC trusted-publishing tokens are publish-scoped only;
         # `npm dist-tag` requires a regular auth token. This step uses a
         # narrowly-scoped automation token (`NPM_DIST_TAG_TOKEN` — package
-        # management scope on the `aiwg` package, NOT the old NPMJS_TOKEN).
+        # management scope on all three AIWG packages, NOT the old NPMJS_TOKEN).
         # When the token is absent the step warns and continues — the
         # tarball + signatures are already published, only the @next
         # channel lags until an operator advances it manually.
@@ -500,29 +567,32 @@ jobs:
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
             echo "⚠ NPM_DIST_TAG_TOKEN not configured — @next will lag @latest."
             echo "  Operator follow-up: issue a granular automation token with"
-            echo "  package management scope on 'aiwg', store as NPM_DIST_TAG_TOKEN,"
+            echo "  package management scope on aiwg, @aiwg/cli, and @aiwg/cockpit,"
+            echo "  store it as NPM_DIST_TAG_TOKEN,"
             echo "  then re-run this workflow OR run manually:"
             echo "    npm dist-tag add aiwg@${VERSION} next"
+            echo "    npm dist-tag add @aiwg/cli@${VERSION} next"
+            echo "    npm dist-tag add @aiwg/cockpit@${VERSION} next"
             exit 0
           fi
-          echo "Advancing aiwg@next → ${VERSION}"
-          npm dist-tag add "aiwg@${VERSION}" next
-          # Cache-bust the verify (npm view caches dist-tags; right after a
-          # mutation the local cache can return the pre-mutation value even
-          # though the registry is updated). Retry against the registry until
-          # the new value propagates, with a hard ceiling.
-          for i in 1 2 3 4 5; do
-            CURRENT_NEXT=$(npm view "aiwg@next" version --prefer-online --no-update-notifier 2>/dev/null || echo "")
-            if [ "$CURRENT_NEXT" = "$VERSION" ]; then
-              echo "✓ aiwg@next = ${VERSION}"
-              break
-            fi
-            echo "Attempt $i: aiwg@next = ${CURRENT_NEXT:-<missing>}, expected ${VERSION}; retrying in 5s..."
-            sleep 5
-            if [ "$i" = "5" ]; then
-              echo "✗ aiwg@next verification exhausted retries"
-              exit 1
-            fi
+          for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
+            echo "Advancing ${PACKAGE}@next → ${VERSION}"
+            npm dist-tag add "${PACKAGE}@${VERSION}" next
+            # Cache-bust the verify (npm view caches dist-tags; right after a
+            # mutation the local cache can return the pre-mutation value).
+            for i in 1 2 3 4 5; do
+              CURRENT_NEXT=$(npm view "${PACKAGE}@next" version --prefer-online --no-update-notifier 2>/dev/null || echo "")
+              if [ "$CURRENT_NEXT" = "$VERSION" ]; then
+                echo "✓ ${PACKAGE}@next = ${VERSION}"
+                break
+              fi
+              echo "Attempt $i: ${PACKAGE}@next = ${CURRENT_NEXT:-<missing>}, expected ${VERSION}; retrying in 5s..."
+              sleep 5
+              if [ "$i" = "5" ]; then
+                echo "✗ ${PACKAGE}@next verification exhausted retries"
+                exit 1
+              fi
+            done
           done
 
       # ============================================================
@@ -593,8 +663,11 @@ jobs:
 
           # Resolve the annotated tag's object SHA — this is what `git tag
           # -v` verified against in the A9 gate above. Different from
-          # github.sha (which is the commit SHA the tag points at).
+          # the peeled commit the tag points at. GITHUB_SHA is the tag commit
+          # for a tag push but the workflow-definition branch commit for a
+          # workflow_dispatch recovery, so it cannot be used for this binding.
           TAG_OBJECT_SHA=$(git rev-parse "$TAG" 2>/dev/null || echo "$GITHUB_SHA")
+          TAG_COMMIT_SHA=$(git rev-list -n 1 "$TAG")
 
           # Release-manifest schema: human-readable JSON that pins together
           # version, tarball hash, tag, commit, and CI provenance. Also
@@ -613,7 +686,7 @@ jobs:
               --arg tarball_filename "$TARBALL" \
               --arg tag "$TAG" \
               --arg tag_object_sha "$TAG_OBJECT_SHA" \
-              --arg commit_sha "$GITHUB_SHA" \
+              --arg commit_sha "$TAG_COMMIT_SHA" \
               --arg workflow_run_url "$WORKFLOW_RUN_URL" \
               --arg issued_at "$ISSUED_AT" \
               '{
@@ -644,7 +717,7 @@ jobs:
             "tarball_filename": "$TARBALL",
             "tag": "$TAG",
             "tag_object_sha": "$TAG_OBJECT_SHA",
-            "commit_sha": "$GITHUB_SHA",
+            "commit_sha": "$TAG_COMMIT_SHA",
             "workflow_run_url": "$WORKFLOW_RUN_URL",
             "issued_at": "$ISSUED_AT",
             "signing": {
@@ -763,6 +836,34 @@ jobs:
             "$SBOM"
           echo "✓ Signed $SBOM → ${SBOM}.sigstore"
 
+      - name: Prepare installer and checksum manifest
+        id: release_files
+        run: |
+          set -euo pipefail
+          INSTALLER="install.sh"
+          CHECKSUMS="SHA256SUMS"
+          TARBALL='${{ steps.sign.outputs.tarball }}'
+          TARBALL_SIG='${{ steps.sign.outputs.tarball_sigstore }}'
+          MANIFEST='${{ steps.sign.outputs.manifest }}'
+          MANIFEST_SIG='${{ steps.sign.outputs.manifest_sigstore }}'
+          SBOM='${{ steps.sbom.outputs.sbom }}'
+          SBOM_SIG="${SBOM}.sigstore"
+
+          cp tools/install/install.sh "$INSTALLER"
+          chmod +x "$INSTALLER"
+          bash "$INSTALLER" --dry-run
+          sha256sum \
+            "$TARBALL" \
+            "$TARBALL_SIG" \
+            "$MANIFEST" \
+            "$MANIFEST_SIG" \
+            "$SBOM" \
+            "$SBOM_SIG" \
+            "$INSTALLER" > "$CHECKSUMS"
+          cat "$CHECKSUMS"
+          echo "installer=$INSTALLER" >> "$GITHUB_OUTPUT"
+          echo "checksums=$CHECKSUMS" >> "$GITHUB_OUTPUT"
+
       - name: Install GitHub CLI (node:24 image does not ship it)
         # node:24-bookworm doesn't include `gh`. The asset-upload step
         # below uses `gh release create` / `gh release upload`. rc.1
@@ -784,11 +885,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         # `gh release upload --clobber` is idempotent: if the release was
         # created by an earlier workflow run (or by `gh release create`
-        # manually), the six assets get attached/replaced. If the release
+        # manually), the assets get attached/replaced. If the release
         # doesn't exist yet, `gh release create` runs first — typical when
         # this workflow is the first thing that fires on a tag push.
         #
-        # Six assets, post-A13 (#1288):
+        # Core signed assets, post-A13 (#1288):
         #   1. aiwg-X.Y.Z.tgz              (the tarball itself; A8 baseline)
         #   2. aiwg-X.Y.Z.tgz.sigstore     (cosign bundle for #1)
         #   3. release-manifest.json       (provenance manifest)
@@ -805,6 +906,8 @@ jobs:
           MANIFEST_SIG='${{ steps.sign.outputs.manifest_sigstore }}'
           SBOM='${{ steps.sbom.outputs.sbom }}'
           SBOM_SIG="${SBOM}.sigstore"
+          INSTALLER='${{ steps.release_files.outputs.installer }}'
+          CHECKSUMS='${{ steps.release_files.outputs.checksums }}'
 
           # Pre-release detection (same logic as the version step above).
           if [ "$VERSION" != "${VERSION%%-*}" ]; then
@@ -832,9 +935,11 @@ jobs:
             "$MANIFEST_SIG" \
             "$SBOM" \
             "$SBOM_SIG" \
+            "$INSTALLER" \
+            "$CHECKSUMS" \
             --clobber
 
-          echo "✓ Uploaded 6 signed assets to GitHub release $TAG"
+          echo "✓ Uploaded signed assets, installer, and checksums to GitHub release $TAG"
 
       - name: Verification summary
         # Final operator-facing block. Copy/pasteable verification commands
@@ -888,3 +993,49 @@ jobs:
           See docs/releases/verifying.md for consumer-facing instructions.
           ============================================================
           EOF
+
+  remove-deprecated-cli-bootstrap-tag:
+    name: Remove deprecated @aiwg/cli bootstrap tag
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.remove_cli_bootstrap_tag }}
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Configure npmjs.org
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Remove bootstrap dist-tag and verify
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_DIST_TAG_TOKEN is required for dist-tag maintenance"
+            exit 1
+          fi
+
+          CURRENT=$(npm view @aiwg/cli dist-tags --json --prefer-online --no-update-notifier)
+          if node -e 'const tags=JSON.parse(process.argv[1]); process.exit(Object.hasOwn(tags, "bootstrap") ? 0 : 1)' "$CURRENT"; then
+            npm dist-tag rm @aiwg/cli bootstrap
+          else
+            echo "@aiwg/cli@bootstrap is already absent"
+          fi
+
+          for attempt in 1 2 3 4 5; do
+            CURRENT=$(npm view @aiwg/cli dist-tags --json --prefer-online --no-update-notifier)
+            if node -e 'const tags=JSON.parse(process.argv[1]); process.exit(Object.hasOwn(tags, "bootstrap") ? 1 : 0)' "$CURRENT"; then
+              echo "✓ @aiwg/cli bootstrap dist-tag is absent"
+              exit 0
+            fi
+            echo "Attempt ${attempt}: bootstrap tag still visible; retrying in 5s"
+            sleep 5
+          done
+
+          echo "::error::@aiwg/cli bootstrap dist-tag remained visible after removal"
+          exit 1

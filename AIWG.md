@@ -23,7 +23,19 @@ This project caps parallel agent fan-out (#1359):
 
 *Rationale*: Provider default for claude (migrated by aiwg refresh)
 
-When spawning parallel subagents, take the MIN of: this cap, `AIWG_CONTEXT_WINDOW` budget, the RLM 7-agent hard cap (RLM dispatches only), and the natural task decomposition. Bump via `aiwg config set --project parallelism.max_parallel_subagents N`.
+### Model-selected delegation rubric
+
+For each non-trivial task, assess whether it contains independent, bounded subtasks that can run concurrently. When delegation is supported, prefer the deployed model-pinned wrappers by task characteristics and consequence:
+
+- `aiwg-model-efficiency-worker`: discovery, inventory, focused edits, and other bounded low-cost work.
+- `aiwg-model-coding-worker`: implementation, tests, debugging, and routine technical delivery.
+- `aiwg-model-reasoning-worker`: architecture, synthesis, difficult analysis, and high-consequence review.
+
+Do not delegate trivial work, tightly coupled changes, serial dependencies, or tasks likely to collide in shared state; also keep work local when coordination costs exceed the expected benefit. Parallelize only independent work, and take the MIN of provider limits, `max_parallel_subagents`, `AIWG_CONTEXT_WINDOW` budget, framework-specific caps (including the RLM 7-agent hard cap for RLM dispatches), and natural task decomposition. Bump the project cap via `aiwg config set --project parallelism.max_parallel_subagents N`.
+
+The primary agent retains orchestration, final integration, conflict resolution, validation, and user-facing accountability.
+
+**Provider behavior (claude)**: native custom subagents can select the deployed model-worker wrapper. Verify the resolved model when provider or account policy may substitute it.
 
 <!-- AIWG-PARALLELISM-CAP:END -->
 
