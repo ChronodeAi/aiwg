@@ -3033,6 +3033,10 @@ export class UseHandler implements CommandHandler {
     addonBaseArgs.push(...modelDeployArgs);
     if (provider) addonBaseArgs.push('--provider', provider);
     if (target) addonBaseArgs.push('--target', target);
+    // `use all --dry-run` must remain read-only through every component pass,
+    // not only the initial full-root deployment. Without this, the first addon
+    // silently falls back to a live deploy after the preview completes.
+    if (dryRun) addonBaseArgs.push('--dry-run');
     if (verbose) addonBaseArgs.push('--verbose');
     // Forward --copy-all to addon deploys so the legacy mirror behavior
     // is consistent across the framework + every addon (#1219).
