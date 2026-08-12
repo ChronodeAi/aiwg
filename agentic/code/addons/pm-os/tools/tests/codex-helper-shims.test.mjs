@@ -376,6 +376,63 @@ test('disposable dry run is fingerprinted and read-only; live deploy preserves f
   }
 });
 
+test('kernel quickref coexists with the canonical Codex sidecar and rejects unsafe metadata', () => {
+  const fixture = disposableProject();
+  try {
+    const skillTarget = path.join(fixture.root, '.agents', 'skills');
+    const skillDir = path.join(skillTarget, 'pm-os-quickref');
+    const marker = path.join(skillDir, '.aiwg-managed');
+    const metadata = path.join(skillDir, 'agents', 'openai.yaml');
+
+    const firstDeploy = runHelper(skillHelper, fixture.source, '--mode', 'all');
+    assert.equal(firstDeploy.status, 0, firstDeploy.stderr);
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'pm-os\n');
+    assert.match(fs.readFileSync(metadata, 'utf8'), /^interface:\n  display_name: "Pm Os Quickref"\n/);
+
+    fs.writeFileSync(marker, 'aiwg\n');
+    const beforeDryRun = fingerprint(fixture.root);
+    const dryRun = runHelper(skillHelper, fixture.source, '--dry-run', '--mode', 'all');
+    assert.equal(dryRun.status, 0, dryRun.stderr);
+    assert.match(dryRun.stdout, /\[dry-run\] unchanged: pm-os-quickref/);
+    assert.equal(fingerprint(fixture.root), beforeDryRun);
+
+    const adoption = runHelper(skillHelper, fixture.source, '--mode', 'all');
+    assert.equal(adoption.status, 0, adoption.stderr);
+    assert.equal(fs.readFileSync(marker, 'utf8'), 'aiwg\n');
+    const adoptedFingerprint = fingerprint(fixture.root);
+    const idempotent = runHelper(skillHelper, fixture.source, '--mode', 'all');
+    assert.equal(idempotent.status, 0, idempotent.stderr);
+    assert.match(idempotent.stdout, /changed=0 unchanged=1/);
+    assert.equal(fingerprint(fixture.root), adoptedFingerprint);
+
+    fs.writeFileSync(path.join(skillDir, 'agents', 'foreign.txt'), 'not AIWG-managed\n');
+    const unsafeFingerprint = fingerprint(fixture.root);
+    const unsafe = runHelper(skillHelper, fixture.source, '--dry-run', '--mode', 'all');
+    assert.equal(unsafe.status, 2);
+    assert.match(unsafe.stderr, /unmanaged files: agents\/foreign\.txt/);
+    assert.equal(fingerprint(fixture.root), unsafeFingerprint);
+
+    fs.unlinkSync(path.join(skillDir, 'agents', 'foreign.txt'));
+    fs.writeFileSync(marker, 'foreign-owner\n');
+    const invalidMarkerFingerprint = fingerprint(fixture.root);
+    const invalidMarker = runHelper(skillHelper, fixture.source, '--dry-run', '--mode', 'all');
+    assert.equal(invalidMarker.status, 2);
+    assert.match(invalidMarker.stderr, /unrecognized quickref ownership marker/);
+    assert.equal(fingerprint(fixture.root), invalidMarkerFingerprint);
+
+    fs.writeFileSync(marker, 'aiwg\n');
+    fs.unlinkSync(metadata);
+    fs.symlinkSync('../SKILL.md', metadata);
+    const symlinkFingerprint = fingerprint(fixture.root);
+    const symlink = runHelper(skillHelper, fixture.source, '--dry-run', '--mode', 'all');
+    assert.equal(symlink.status, 2);
+    assert.match(symlink.stderr, /refusing symlinked deployment component|unsafe quickref artifact/);
+    assert.equal(fingerprint(fixture.root), symlinkFingerprint);
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('native lifecycle preflight fails closed without mutation on malformed or unowned targets', () => {
   const fixture = disposableProject();
   try {

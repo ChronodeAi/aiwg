@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest';
 import fs from 'fs/promises';
-import { existsSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync, spawnSync } from 'child_process';
@@ -114,7 +114,10 @@ async function makeProject(): Promise<string> {
   if (GIT_AVAILABLE) {
     execFileSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
   }
-  return dir;
+  // macOS exposes its temporary directory through the /var -> /private/var
+  // compatibility symlink. Provider helpers intentionally require a canonical,
+  // symlink-free project root, so hand the integration fixture its real path.
+  return realpathSync(dir);
 }
 
 async function cleanProject(dir: string) {
@@ -309,6 +312,11 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', () => {
       expect(existsSync(regenerateSkill), 'Codex should retain $aiwg-regenerate in .agents/skills after addon deploys').toBe(true);
       const regenerateMetadata = await fs.readFile(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'agents', 'openai.yaml'), 'utf-8');
       expect(regenerateMetadata).toContain('display_name: "AIWG Regenerate"');
+      const pmosSkillDir = path.join(projectDir, '.agents', 'skills', 'pm-os-quickref');
+      expect(existsSync(path.join(pmosSkillDir, 'SKILL.md')), 'Codex should retain the PMOS quickref after its addon helper runs').toBe(true);
+      const pmosMetadata = await fs.readFile(path.join(pmosSkillDir, 'agents', 'openai.yaml'), 'utf-8');
+      expect(pmosMetadata).toContain('display_name: "Pm Os Quickref"');
+      expect(['aiwg\n', 'pm-os\n']).toContain(await fs.readFile(path.join(pmosSkillDir, '.aiwg-managed'), 'utf-8'));
       expect(existsSync(path.join(projectDir, '.agents', 'skills', 'voice-apply', 'SKILL.md')), 'Codex default deploy should not copy standard skills into the native $ search path').toBe(false);
 
       const skillDirs = await fs.readdir(path.join(projectDir, '.agents', 'skills'), { withFileTypes: true });
@@ -318,6 +326,23 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', () => {
       expect(gitignore).toContain('.codex/');
       expect(gitignore).toContain('.agents/');
       expect(result.stdout).toMatch(/Skills\s+[1-9]\d*\s+deployed/);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the complete Codex dry run read-only through every addon sweep', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-dry-run-home-'));
+    try {
+      const result = runAiwgWithEnv(
+        ['use', 'all', '--provider', 'codex', '--target', projectDir, '--dry-run'],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir },
+      );
+      expect(result.exitCode, `aiwg use all --provider codex --dry-run failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(existsSync(path.join(projectDir, '.aiwg'))).toBe(false);
+      expect(existsSync(path.join(projectDir, '.codex'))).toBe(false);
+      expect(existsSync(path.join(projectDir, '.agents'))).toBe(false);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
