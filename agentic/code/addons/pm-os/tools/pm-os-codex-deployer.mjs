@@ -405,6 +405,23 @@ function renderQuickref(sourceFile) {
   return `---\nname: "${yamlDoubleQuoted(name)}"\ndescription: "${yamlDoubleQuoted(description)}"\nplatforms: [codex]\n---\n\n${match[2].trim()}\n`;
 }
 
+function renderQuickrefMetadata(content) {
+  const match = content.match(/^description:\s*("(?:[^"\\]|\\.)*")\s*$/m);
+  if (!match) fail('rendered pm-os-quickref description is invalid');
+  let description;
+  try {
+    description = JSON.parse(match[1]);
+  } catch (error) {
+    fail(`rendered pm-os-quickref description is not valid JSON: ${error.message}`);
+  }
+  const displayName = QUICKREF
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+  return `interface:\n  display_name: "${yamlDoubleQuoted(displayName)}"\n  short_description: "${yamlDoubleQuoted(description)}"\n`;
+}
+
 function atomicWrite(filename, content) {
   const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.pm-os-${process.pid}.tmp`);
   try {
@@ -804,24 +821,57 @@ export function deployKernelQuickref(argv) {
   );
   const source = path.join(layout.addonRoot, 'skills', QUICKREF, 'SKILL.md');
   const content = renderQuickref(source);
+  const metadataContent = renderQuickrefMetadata(content);
   const skillDir = path.join(target, QUICKREF);
   const destination = path.join(skillDir, 'SKILL.md');
   const marker = path.join(skillDir, '.aiwg-managed');
+  const metadataDir = path.join(skillDir, 'agents');
+  const metadata = path.join(metadataDir, 'openai.yaml');
 
   assertNoSymlinkComponents(layout.projectRoot, skillDir);
+  assertNoSymlinkComponents(layout.projectRoot, destination);
+  assertNoSymlinkComponents(layout.projectRoot, marker);
+  assertNoSymlinkComponents(layout.projectRoot, metadata);
   let action = 'create';
+  let markerContent = null;
   if (fs.existsSync(skillDir)) {
     if (!fs.statSync(skillDir).isDirectory() || fs.lstatSync(skillDir).isSymbolicLink()) {
       fail(`refusing non-directory quickref target: ${skillDir}`);
     }
-    const unexpected = fs.readdirSync(skillDir).filter((name) => !['SKILL.md', '.aiwg-managed'].includes(name));
+    const unexpected = fs.readdirSync(skillDir).filter((name) => !['SKILL.md', '.aiwg-managed', 'agents'].includes(name));
     if (unexpected.length > 0) fail(`refusing to alter quickref directory with unmanaged files: ${unexpected.join(', ')}`);
+
+    if (fs.existsSync(metadataDir)) {
+      const metadataDirStat = fs.lstatSync(metadataDir);
+      if (!metadataDirStat.isDirectory() || metadataDirStat.isSymbolicLink()) {
+        fail(`refusing unsafe quickref metadata directory: ${metadataDir}`);
+      }
+      const unexpectedMetadata = fs.readdirSync(metadataDir)
+        .filter((name) => name !== 'openai.yaml')
+        .map((name) => `agents/${name}`);
+      if (unexpectedMetadata.length > 0) {
+        fail(`refusing to alter quickref directory with unmanaged files: ${unexpectedMetadata.join(', ')}`);
+      }
+    }
+    for (const filename of [destination, marker, metadata]) {
+      if (!fs.existsSync(filename)) continue;
+      const stat = fs.lstatSync(filename);
+      if (!stat.isFile() || stat.isSymbolicLink()) fail(`refusing unsafe quickref artifact: ${filename}`);
+    }
+
+    if (fs.existsSync(marker)) {
+      markerContent = fs.readFileSync(marker, 'utf8');
+      if (!['pm-os\n', 'aiwg\n'].includes(markerContent)) {
+        fail(`refusing unrecognized quickref ownership marker: ${marker}`);
+      }
+    }
     if (fs.existsSync(destination)) {
       const current = fs.readFileSync(destination, 'utf8');
-      if (current === content && fs.existsSync(marker)) action = 'unchanged';
-      else if (!fs.existsSync(marker)) fail(`refusing to overwrite unowned quickref: ${destination}`);
+      if (!markerContent) fail(`refusing to overwrite unowned quickref: ${destination}`);
+      const metadataMatches = fs.existsSync(metadata) && fs.readFileSync(metadata, 'utf8') === metadataContent;
+      if (current === content && metadataMatches) action = 'unchanged';
       else action = 'update';
-    } else if (!fs.existsSync(marker)) {
+    } else if (!markerContent) {
       fail(`refusing unowned quickref directory: ${skillDir}`);
     }
   }
@@ -834,10 +884,16 @@ export function deployKernelQuickref(argv) {
 
   if (!cfg.dryRun && action !== 'unchanged') {
     fs.mkdirSync(skillDir, { recursive: true });
+    fs.mkdirSync(metadataDir, { recursive: true });
     atomicWrite(destination, content);
-    atomicWrite(marker, 'pm-os\n');
+    atomicWrite(metadata, metadataContent);
+    if (!markerContent) atomicWrite(marker, 'pm-os\n');
   }
-  if (!cfg.dryRun && (fs.readFileSync(destination, 'utf8') !== content || fs.readFileSync(marker, 'utf8') !== 'pm-os\n')) {
+  if (!cfg.dryRun && (
+    fs.readFileSync(destination, 'utf8') !== content ||
+    fs.readFileSync(metadata, 'utf8') !== metadataContent ||
+    !['pm-os\n', 'aiwg\n'].includes(fs.readFileSync(marker, 'utf8'))
+  )) {
     fail('post-write verification failed for pm-os-quickref');
   }
   console.log(`Summary: expected=1 planned=1 changed=${action === 'unchanged' ? 0 : 1} unchanged=${action === 'unchanged' ? 1 : 0} pruned=0 standard-skills-indexed=${EXPECTED_SOURCE_SKILLS}`);
