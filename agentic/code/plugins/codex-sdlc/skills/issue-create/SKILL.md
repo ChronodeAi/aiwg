@@ -3,6 +3,11 @@ namespace: aiwg
 name: issue-create
 platforms: [all]
 description: Create a new ticket/issue with configurable backend (Gitea, GitHub, Jira, Linear, or local files)
+script:
+  entrypoint: scripts/compose.mjs
+  runtime: node
+  cwd: project-root
+  argsHint: plan --title <title> [--body <text>|--body-file <path>] [--labels a,b]
 commandHint:
   argumentHint: <title> [description] [--provider NAME --labels "label1,label2" --assignee USER --check-regression]
   allowedTools: Read, Write, Glob, Bash, mcp__gitea__create_issue
@@ -29,12 +34,16 @@ commandHint:
 
 ## Semantic Label Contract (#1789)
 
-Resolve `.aiwg/aiwg.config` `remotes.issue_tracker` and `issues.labels` before
+Resolve the target workspace member first and check its `issue-comment`
+capability. Then resolve that member's `.aiwg/aiwg.config`
+`remotes.issue_tracker`, `remotes.tracker_actor`, and `issues.labels` before
 translating any semantic label role into a tracker-native string. Validate the
 resolved label against the target tracker catalog. Preserve caller-supplied
 unrelated labels, report unavailable roles, and never provision a missing label
 implicitly. If `issues.labels` is absent, retain legacy behavior with an
 explicit fallback warning rather than silently guessing project semantics.
+Reject any write route whose authenticated login is listed in the target
+member's `forbid_actors`.
 
 ## Purpose
 
@@ -44,11 +53,15 @@ Create a new ticket/issue for tracking work items, bugs, features, or tasks. Aut
 
 Given a ticket title and optional description:
 
-1. **Load configuration** from `.aiwg/config.yaml` or project `CLAUDE.md`
+1. **Resolve the target member and authorization**, then load its `.aiwg/aiwg.config`
 2. **Validate configuration** and authenticate with provider
 3. **Check for regressions** (if bug report with `--check-regression`)
-4. **Create ticket** using appropriate backend (MCP, CLI, or local file)
-5. **Return ticket reference** (issue number, URL, or file path)
+4. **Compose and assess the final draft before any write**; split it at enforced
+   policy boundaries when possible
+5. **Create only approved ticket segment(s)** using the appropriate backend
+   (MCP, CLI, or local file), then cross-link split siblings
+6. **Return ticket reference(s)** and deterministic recovery state if a
+   multi-ticket write stops partway through
 
 ## Parameters
 
@@ -113,26 +126,26 @@ Given a ticket title and optional description:
 
 ### Step 1: Parse Parameters
 
-Extract from command invocation:
+Extract from the user's request or from composed skill arguments:
 
 ```bash
-# Basic usage
-/issue-create "Implement user auth"
+# Basic request
+Create an issue titled "Implement user auth"
 
 # With description
-/issue-create "Fix navigation bug" "Nav menu not showing on mobile devices"
+Create an issue titled "Fix navigation bug" with the body "Nav menu not showing on mobile devices"
 
 # With labels
-/issue-create "Add dark mode" "Implement theme toggle" --labels "feature,ui"
+Create an issue titled "Add dark mode" with labels "feature,ui"
 
 # With assignee
-/issue-create "Security audit" "Run penetration test" --assignee "security-team" --priority high
+Create an issue titled "Security audit", assign security-team, and mark it high priority
 
 # Bug report with regression check
-/issue-create "Login broken after deployment" "Users can't login" --labels "bug,critical" --check-regression
+Create a bug issue titled "Login broken after deployment" and check whether it is a regression
 
 # Override provider
-/issue-create "Local task" "Quick reminder" --provider local
+Create a local issue titled "Local task" with the body "Quick reminder"
 ```
 
 **Parameter extraction**:
@@ -145,23 +158,21 @@ Extract from command invocation:
 **Resolution precedence** (highest first):
 
 1. **`--provider` flag** — explicit override always wins.
-2. **`.aiwg/aiwg.config` `remotes.issue_tracker`** (#994) — derive provider from the remote's URL.
+2. **Target member `.aiwg/aiwg.config` `remotes.issue_tracker`** (#994, #1764) — derive provider from that member remote's URL.
 3. **Legacy `.aiwg/config.yaml`** (`ticketing` block) — back-compat for older projects.
 4. **`CLAUDE.md` "Issueing Configuration" block** — fallback for projects pre-dating either.
 5. **`local`** — default if nothing is configured.
 
-**Resolving from `.aiwg/aiwg.config`** (the preferred path):
+**Resolving from a workspace member** (the preferred path):
 
 ```ts
-import { readAiwgConfig, resolveRemotes, resolveRemoteProvider } from 'aiwg/config';
+import { authorizeWorkspaceOperation } from 'aiwg/config/workspace';
 
-const cfg = await readAiwgConfig(projectDir);
-const resolved = resolveRemotes(cfg?.remotes);
-// resolved.issue_tracker is a git remote name (defaults to "origin")
-
-// Resolve the URL via `git remote get-url <name>`
-const url = exec(`git remote get-url ${resolved.issue_tracker}`).trim();
-const provider = resolveRemoteProvider(url); // 'gitea' | 'github' | 'gitlab' | 'unknown'
+const decision = await authorizeWorkspaceOperation(workspaceDir, targetRepo, 'issue-comment');
+if (!decision.allowed || !decision.member) throw new Error(decision.reason);
+const provider = decision.member.issueTracker.provider;
+const url = decision.member.issueTracker.url;
+const actor = decision.member.remotes.tracker_actor;
 ```
 
 When `provider === 'unknown'` (self-hosted instances we can't classify by URL), the operator must pass `--provider` explicitly. Don't guess.
@@ -171,7 +182,7 @@ When `provider === 'unknown'` (self-hosted instances we can't classify by URL), 
 - `resolved.issue_tracker` = `'origin'`
 - `git remote get-url origin` = `git@git.integrolabs.net:roctinam/aiwg.git`
 - `resolveRemoteProvider(url)` returns `'unknown'` (the host doesn't include "gitea")
-- → operator must set `--provider gitea`, OR the project's `aiwg.config` providers list must explicitly include `gitea` so we can fall through to that.
+- → operator must set `--provider gitea`, OR the project's `aiwg.config` must set `remotes.issue_provider: "gitea"` so issue tooling can use that explicit tracker hint.
 
 **Override warning**: if `--provider` differs from the auto-resolved one, print:
 `⚠️ Using --provider github (resolved from .aiwg/aiwg.config: gitea)`
@@ -263,7 +274,43 @@ fi
 - If validation fails, report error and suggest fix
 - Optionally fall back to `local` provider with warning
 
-### Step 5: Create Issue (Provider-Specific)
+### Step 5: Policy-Boundary Composition (Required Before Every Write)
+
+After regression metadata, labels, priority, and acceptance criteria are final,
+run the same threat policy that `address-issues` will apply later:
+
+```bash
+aiwg run skill issue-create -- plan \
+  --title "$TITLE" \
+  --body-file "$DRAFT_BODY_FILE" \
+  --labels "$LABELS" \
+  --project-root "$TARGET_REPO"
+```
+
+The returned `aiwg.issue-composition-plan.v1` envelope is authoritative for the
+write step:
+
+- `single`: create the one draft unchanged.
+- `authorization-required`: do not write until the issue-specific policy
+  authorization is recorded for the returned digest.
+- `split`: create every segment in order, using its exact title, body, labels,
+  priority, provider scope, and provenance marker.
+- `split-authorization-required`: obtain authorization for the digest, then
+  create every independently assessed segment in order.
+- `blocked`: make no tracker mutation. Report `blockingRule` and the suggested
+  human-editable segments.
+
+Never delete the `aiwg-policy-segment` marker. Before retrying a partial split,
+search the target tracker for every marker in the recovery envelope and reuse
+existing matches. After all segments exist, replace `{{AIWG_RELATED_ISSUES}}`
+with sibling links and the declared dependency. This is what prevents a retry
+from duplicating the first issue after a later write fails.
+
+This preflight is mandatory for Gitea MCP, `tea`, GitHub CLI/API, Jira, Linear,
+and local-file routes. Higher-level flows that author issues must call this
+skill or the same composer; they may not jump directly to a tracker create API.
+
+### Step 6: Create Issue (Provider-Specific)
 
 #### Gitea
 
@@ -505,7 +552,7 @@ Status: open
 Priority: medium
 ```
 
-### Step 6: Attach Regression Report (if applicable)
+### Step 7: Attach Regression Report (if applicable)
 
 If regression check was run and regression detected:
 
@@ -520,7 +567,7 @@ if [ -f /tmp/regression-results.md ]; then
 fi
 ```
 
-### Step 7: Return Issue Reference
+### Step 8: Return Issue Reference
 
 **Output format** (consistent across providers):
 
@@ -541,18 +588,18 @@ fi
 ## Next Steps
 
 - View ticket: {url-or-command}
-- Update status: `/issue-update {ticket-id} --status in_progress`
-- Add comment: `/issue-update {ticket-id} --comment "Working on implementation"`
-- List tickets: `issue-list`
+- To update status, discover and load `issue-update`.
+- To add a comment, discover and load `issue-update`.
+- To list tickets, discover and load `issue-list`.
 ```
 
 ## Examples
 
 ### Example 1: Create Feature Request (Gitea)
 
-**Command**:
+**Request**:
 ```bash
-/issue-create "Add dark mode" "Implement theme toggle for light/dark mode preferences" --labels "feature,ui" --priority high
+Create a high-priority feature issue titled "Add dark mode" with body "Implement theme toggle for light/dark mode preferences" and labels "feature,ui".
 ```
 
 **Config** (`.aiwg/config.yaml`):
@@ -579,16 +626,16 @@ View at: https://git.integrolabs.net/roctinam/ai-writing-guide/issues/42
 ## Next Steps
 
 - View ticket: https://git.integrolabs.net/roctinam/ai-writing-guide/issues/42
-- Update status: `/issue-update ISSUE-42 --status in_progress`
-- Add comment: `/issue-update ISSUE-42 --comment "Started implementation"`
-- List tickets: `/issue-list --label feature`
+- Update status by loading `issue-update` for ISSUE-42.
+- Add comments through `issue-update`.
+- List feature tickets by loading `issue-list`.
 ```
 
 ### Example 2: Create Bug Report with Regression Check (Local)
 
-**Command**:
+**Request**:
 ```bash
-/issue-create "Login broken after deployment" "Users unable to authenticate since v2.1.4 deployment" --labels "bug,critical" --check-regression
+Create a critical bug issue titled "Login broken after deployment" with body "Users unable to authenticate since v2.1.4 deployment" and run the regression check.
 ```
 
 **Output**:
@@ -616,16 +663,16 @@ File: .aiwg/issues/ISSUE-003.md
 
 - View ticket: cat .aiwg/issues/ISSUE-003.md
 - View regression details: cat .aiwg/issues/ISSUE-003-regression-report.md
-- Update status: `/issue-update ISSUE-003 --status in_progress`
-- Run regression analysis: `/regression-check --baseline v2.1.3 --format detailed`
-- List regression issues: `/issue-list --label regression-confirmed`
+- Update status by loading `issue-update` for ISSUE-003.
+- Run regression analysis through the regression-check capability.
+- List regression issues by loading `issue-list`.
 ```
 
 ### Example 3: Create Task with Assignee (GitHub)
 
-**Command**:
+**Request**:
 ```bash
-/issue-create "Security audit" "Run penetration test on authentication endpoints" --assignee security-team --labels "security,high-priority" --milestone "Q1-2026"
+Create an issue titled "Security audit" with body "Run penetration test on authentication endpoints", assign security-team, add labels "security,high-priority", and set milestone "Q1-2026".
 ```
 
 **Config** (`CLAUDE.md`):
@@ -653,16 +700,16 @@ View at: https://github.com/jmagly/aiwg/issues/128
 ## Next Steps
 
 - View ticket: gh issue view 128
-- Update status: `/issue-update 128 --status in_progress`
-- Add comment: `/issue-update 128 --comment "Starting audit tomorrow"`
-- List tickets: `/issue-list --label security`
+- Update status by loading `issue-update` for #128.
+- Add comments through `issue-update`.
+- List security tickets by loading `issue-list`.
 ```
 
 ### Example 4: Bug Report with Auto-Detected Regression Check
 
-**Command**:
+**Request**:
 ```bash
-/issue-create "Payment calculation incorrect" "Discount not applying for orders > $1000" --labels "bug,payments"
+Create a payments bug issue titled "Payment calculation incorrect" with body "Discount not applying for orders > $1000".
 ```
 
 **Output**:
@@ -782,12 +829,15 @@ Use `regression-check` manually after issue creation to verify.
 ```
 ❌ Issue title is required.
 
-Usage: /issue-create <title> [description] [options]
+Usage: discover and load the skill, then compose the issue request:
+
+aiwg discover "issue create"
+aiwg show skill issue-create
 
 Examples:
-- /issue-create "Implement user auth"
-- /issue-create "Fix bug" "Nav menu broken on mobile"
-- /issue-create "Add feature" "Dark mode toggle" --labels "feature,ui"
+- Create an issue titled "Implement user auth"
+- Create a bug issue titled "Fix bug" with body "Nav menu broken on mobile"
+- Create a feature issue titled "Add feature" with labels "feature,ui"
 ```
 
 ### Provider-Specific Errors
@@ -812,7 +862,7 @@ Error: gh: command not found
 - Install GitHub CLI: brew install gh (or platform equivalent)
 - Authenticate: gh auth login
 
-Or use local provider: /issue-create "title" --provider local
+Or ask for a local issue explicitly after loading the `issue-create` skill.
 ```
 
 **Jira API Error**:
@@ -856,37 +906,37 @@ Cannot create ticket.
 **Requirements Phase**:
 ```bash
 # Create tickets from use cases
-/issue-create "Implement UC-001: User Login" "See @.aiwg/requirements/use-cases/UC-001-login.md" --labels "requirement,feature"
+Create an issue titled "Implement UC-001: User Login" referencing @.aiwg/requirements/use-cases/UC-001-login.md with labels "requirement,feature"
 ```
 
 **Architecture Phase**:
 ```bash
 # Create tickets from ADR decisions
-/issue-create "Implement ADR-003: Use PostgreSQL" "Migrate from SQLite to PostgreSQL per @.aiwg/architecture/adrs/003-use-postgresql.md" --labels "architecture,database"
+Create an issue titled "Implement ADR-003: Use PostgreSQL" referencing @.aiwg/architecture/adrs/003-use-postgresql.md with labels "architecture,database"
 ```
 
 **Testing Phase**:
 ```bash
 # Create tickets from test failures with regression check
-/issue-create "Fix failing test: auth.test.ts" "Test failure in authentication module" --priority high --labels "bug,testing" --check-regression
+Create a high-priority bug issue titled "Fix failing test: auth.test.ts" and run the regression check
 ```
 
 **Security Review**:
 ```bash
 # Create tickets from security audit findings
-/issue-create "Fix SQL injection vulnerability" "Parameterize queries in auth module" --priority critical --labels "security,vulnerability"
+Create a critical security issue titled "Fix SQL injection vulnerability" with labels "security,vulnerability"
 ```
 
 **Retrospectives**:
 ```bash
 # Create tickets from retro action items
-/issue-create "Improve CI/CD pipeline" "Reduce build time from 10min to 5min" --labels "process-improvement,devops"
+Create an issue titled "Improve CI/CD pipeline" with labels "process-improvement,devops"
 ```
 
 **Regression Detection**:
 ```bash
 # Create issue from detected regression
-/issue-create "Performance regression in API" "p99 latency increased from 200ms to 450ms" --labels "bug,performance,regression" --check-regression
+Create a regression issue titled "Performance regression in API" and include p99 latency evidence
 ```
 
 ## References

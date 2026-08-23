@@ -1,7 +1,7 @@
 {
   "name": "doc-intelligence",
-  "version": "2026.8.7",
-  "description": "Documentation intelligence addon for scraping, extraction, and analysis. Coordinates doc-scraper, pdf-extractor, llms-txt-support, source-unifier, and doc-splitter skills.",
+  "version": "2026.8.17",
+  "description": "Documentation intelligence addon for scraping, extraction, analysis, and generated-docs auditing.",
   "author": {
     "name": "AIWG Contributors",
     "email": "support@aiwg.io"
@@ -15,6 +15,8 @@
     "pdf",
     "extraction",
     "llms-txt",
-    "doc-analysis"
+    "doc-analysis",
+    "docs-audit",
+    "discoverability"
   ]
 }

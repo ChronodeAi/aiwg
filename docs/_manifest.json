@@ -42,7 +42,11 @@
     "overview/executive-brief",
     "getting-started/prerequisites",
     "install",
+    "cli",
+    "cli/install-and-repair",
     "security/supply-chain-hardening",
+    "research/asset-authenticity-and-provenance",
+    "architecture/adr-cross-asset-attestation-envelope",
     "install/web-backed-resources",
     "install/non-interactive",
     "quickstart",
@@ -84,7 +88,11 @@
     "architecture/adr-agent-skills-portability-contract",
     "reports/agentskills-standard-audit-2026-07-25",
     "configuration/aiwg-config",
+    "architecture/adr-artifact-output-destinations",
+    "context-tier-model",
+    "skills-budget-guide",
     "security/threat-assessment-policy",
+    "security/context-memory-firewall",
     "security/repo-access-manifest",
     "fortemi-core-prebuilt-indices",
     "user-level-indices",
@@ -569,6 +577,21 @@
       "parent": "install"
     },
     {
+      "id": "cli",
+      "title": "CLI",
+      "summary": "Direct-user install and repair commands, with agent and automation references",
+      "file": "cli/README.md",
+      "collapsed": true,
+      "parent": "getting-started"
+    },
+    {
+      "id": "cli/install-and-repair",
+      "title": "Install and Repair Commands",
+      "summary": "The intentionally small direct-user CLI surface",
+      "file": "cli/install-and-repair.md",
+      "parent": "cli"
+    },
+    {
       "id": "security/supply-chain-hardening",
       "title": "npm Supply-Chain Hardening",
       "summary": "Harden npm projects against install-time malware and publish-path abuse",
@@ -661,8 +684,8 @@
     },
     {
       "id": "integrations/windsurf-quickstart",
-      "title": "Windsurf",
-      "summary": "Setup for Windsurf",
+      "title": "Devin Desktop",
+      "summary": "Setup for Devin Desktop using the Windsurf compatibility adapter",
       "file": "integrations/windsurf-quickstart.md",
       "parent": "integrations"
     },
@@ -901,10 +924,52 @@
       "parent": "reference"
     },
     {
+      "id": "architecture/adr-artifact-output-destinations",
+      "title": "Artifact Output Destinations",
+      "summary": "Canonical storage, optional provider-native presentation, precedence, and provenance",
+      "file": "architecture/adr-artifact-output-destinations.md",
+      "parent": "reference"
+    },
+    {
+      "id": "context-tier-model",
+      "title": "Context Tier Model",
+      "summary": "Keep standing provider context small with discoverable on-demand references",
+      "file": "context-tier-model.md",
+      "parent": "reference"
+    },
+    {
+      "id": "skills-budget-guide",
+      "title": "Skills Budget Guide",
+      "summary": "Diagnose and remediate provider skill-listing budget pressure",
+      "file": "skills-budget-guide.md",
+      "parent": "reference"
+    },
+    {
       "id": "security/threat-assessment-policy",
       "title": "Threat-Assessment Policy",
       "summary": "Configure deterministic threat assessment across forge and delivery surfaces",
       "file": "security/threat-assessment-policy.md",
+      "parent": "reference"
+    },
+    {
+      "id": "research/asset-authenticity-and-provenance",
+      "title": "Cross-Asset Authenticity",
+      "summary": "Threat model, trust matrix, signed-envelope contract, and rollout plan for every AIWG asset class",
+      "file": "research/asset-authenticity-and-provenance.md",
+      "parent": "reference"
+    },
+    {
+      "id": "architecture/adr-cross-asset-attestation-envelope",
+      "title": "Cross-Asset Attestation Decision",
+      "summary": "DSSE and in-toto architecture decision for common AIWG artifact verification",
+      "file": "architecture/adr-cross-asset-attestation-envelope.md",
+      "parent": "reference"
+    },
+    {
+      "id": "security/context-memory-firewall",
+      "title": "Context and Memory Firewall",
+      "summary": "Audit provider context budgets, deployment drift, and persistent-memory trust",
+      "file": "security/context-memory-firewall.md",
       "parent": "reference"
     },
     {

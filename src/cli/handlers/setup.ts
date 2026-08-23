@@ -1,7 +1,13 @@
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import type { Interface as ReadlineInterface } from 'readline';
-import type { AiwgConfig, DeliveryConfig, RemotesConfig, SecondaryRemote } from '../../config/aiwg-config.js';
+import type {
+  AiwgConfig,
+  DeliveryConfig,
+  IssueProviderConfig,
+  RemotesConfig,
+  SecondaryRemote,
+} from '../../config/aiwg-config.js';
 import {
   emptyConfig,
   getConfigPath,
@@ -17,9 +23,10 @@ import * as ui from '../ui.js';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
 
-type IssueProvider = 'gitea' | 'github' | 'local';
+type IssueProvider = IssueProviderConfig;
 type DeliveryMode = 'direct' | 'feature-branch' | 'pr-required';
 type ForcePushPolicy = 'never' | 'own-branch-only' | 'allowed';
+type LegacyForcePushPolicy = 'main-only-blocked';
 type SigningFormat = 'openpgp' | 'ssh' | 'x509';
 type TrackerVia = 'tea' | 'gh' | 'mcp' | 'api';
 
@@ -38,8 +45,10 @@ export interface SetupProjectOptions {
   yes?: boolean;
   primary?: string;
   issueTracker?: string;
+  customerIssueTracker?: string;
   ci?: string;
   issueProvider?: IssueProvider;
+  customerIssueProvider?: IssueProvider;
   deliveryMode?: DeliveryMode;
   defaultBranch?: string;
   requireCiGreen?: boolean;
@@ -54,6 +63,8 @@ export interface SetupProjectOptions {
   signingEnforce?: 'commits' | 'tags' | 'all';
   trackerActorLogin?: string;
   trackerActorVia?: TrackerVia;
+  customerTrackerActorLogin?: string;
+  customerTrackerActorVia?: TrackerVia;
   providers?: string[];
   confirm?: boolean;
 }
@@ -132,8 +143,10 @@ export function parseSetupProjectOptions(ctx: HandlerContext): SetupProjectOptio
     nonInteractive: boolFlag(args, '--non-interactive') || boolFlag(args, '--yes'),
     primary: flagValue(args, '--primary'),
     issueTracker: flagValue(args, '--issue-tracker'),
+    customerIssueTracker: flagValue(args, '--customer-issue-tracker'),
     ci: flagValue(args, '--ci'),
     issueProvider: parseEnum(flagValue(args, '--issue-provider'), ISSUE_PROVIDERS, '--issue-provider'),
+    customerIssueProvider: parseEnum(flagValue(args, '--customer-issue-provider'), ISSUE_PROVIDERS, '--customer-issue-provider'),
     deliveryMode: parseEnum(flagValue(args, '--delivery-mode'), DELIVERY_MODES, '--delivery-mode'),
     defaultBranch: flagValue(args, '--default-branch'),
     requireCiGreen: parseBooleanFlag(args, '--require-ci-green'),
@@ -148,6 +161,8 @@ export function parseSetupProjectOptions(ctx: HandlerContext): SetupProjectOptio
     signingEnforce: parseEnum(flagValue(args, '--signing-enforce'), ['commits', 'tags', 'all'] as const, '--signing-enforce'),
     trackerActorLogin: flagValue(args, '--tracker-actor-login'),
     trackerActorVia: parseEnum(flagValue(args, '--tracker-actor-via'), TRACKER_VIA, '--tracker-actor-via'),
+    customerTrackerActorLogin: flagValue(args, '--customer-tracker-actor-login'),
+    customerTrackerActorVia: parseEnum(flagValue(args, '--customer-tracker-actor-via'), TRACKER_VIA, '--customer-tracker-actor-via'),
     providers: parseStringList(flagValue(args, '--providers')),
   };
 }
@@ -218,6 +233,19 @@ function secondaryRemotes(remotes: GitRemoteInfo[], primary: string, issueTracke
     }));
 }
 
+function normalizeForcePushPolicy(
+  value: DeliveryConfig['force_push_policy'] | LegacyForcePushPolicy | undefined,
+  warnings: string[],
+): ForcePushPolicy | undefined {
+  if (value === 'main-only-blocked') {
+    warnings.push(
+      'delivery.force_push_policy=main-only-blocked is a legacy alias; setup normalized it to own-branch-only.',
+    );
+    return 'own-branch-only';
+  }
+  return value;
+}
+
 function cloneConfig(config: AiwgConfig): AiwgConfig {
   return JSON.parse(JSON.stringify(config)) as AiwgConfig;
 }
@@ -257,6 +285,15 @@ function validateSetupConfig(config: AiwgConfig, remotes: GitRemoteInfo[], issue
   } else {
     checkRemote('remotes.issue_tracker', config.remotes?.issue_tracker);
   }
+  if (config.remotes?.issue_provider && !ISSUE_PROVIDERS.includes(config.remotes.issue_provider as IssueProvider)) {
+    errors.push('remotes.issue_provider is invalid');
+  }
+  if (config.remotes?.customer_issue_tracker) {
+    checkRemote('remotes.customer_issue_tracker', config.remotes.customer_issue_tracker);
+  }
+  if (config.remotes?.customer_issue_provider && !ISSUE_PROVIDERS.includes(config.remotes.customer_issue_provider as IssueProvider)) {
+    errors.push('remotes.customer_issue_provider is invalid');
+  }
   checkRemote('remotes.ci', config.remotes?.ci);
 
   if (!DELIVERY_MODES.includes(config.delivery?.mode as DeliveryMode)) errors.push('delivery.mode is invalid');
@@ -270,6 +307,9 @@ function validateSetupConfig(config: AiwgConfig, remotes: GitRemoteInfo[], issue
   }
   if (config.remotes?.tracker_actor?.via && !TRACKER_VIA.includes(config.remotes.tracker_actor.via as TrackerVia)) {
     errors.push('remotes.tracker_actor.via is invalid');
+  }
+  if (config.remotes?.customer_tracker_actor?.via && !TRACKER_VIA.includes(config.remotes.customer_tracker_actor.via as TrackerVia)) {
+    errors.push('remotes.customer_tracker_actor.via is invalid');
   }
   if (!config.providers.every(p => (VALID_PROVIDERS as readonly string[]).includes(p))) {
     errors.push('providers contains an unknown AIWG provider');
@@ -288,15 +328,21 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
   const primaryRemote = remotes.find(r => r.name === primary);
   const hasLocalIssues = existsSync(projectAiwgPath(options.projectDir, 'issues', 'config.json'));
   const issueProvider = options.issueProvider ?? chooseIssueProvider(primaryRemote, hasLocalIssues);
+  const warnings: string[] = [];
   const issueTracker = issueProvider === 'local'
     ? 'local'
     : options.issueTracker ?? base.remotes?.issue_tracker ?? primary;
   const ci = options.ci ?? base.remotes?.ci ?? primary;
+  const customerIssueTracker = options.customerIssueTracker ?? base.remotes?.customer_issue_tracker;
+  const customerIssueProvider = options.customerIssueProvider ?? base.remotes?.customer_issue_provider;
 
   const remotesConfig: RemotesConfig = {
     primary,
     issue_tracker: issueTracker,
+    issue_provider: issueProvider,
     ci,
+    ...(customerIssueTracker ? { customer_issue_tracker: customerIssueTracker } : {}),
+    ...(customerIssueProvider ? { customer_issue_provider: customerIssueProvider } : {}),
     secondary: base.remotes?.secondary ?? secondaryRemotes(remotes, primary, issueTracker, ci),
   };
   const trackerLogin = options.trackerActorLogin ?? base.remotes?.tracker_actor?.login;
@@ -308,6 +354,16 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
       ...(trackerVia ? { via: trackerVia } : {}),
     };
   }
+  const customerTrackerLogin = options.customerTrackerActorLogin ?? base.remotes?.customer_tracker_actor?.login;
+  const customerTrackerVia = options.customerTrackerActorVia ?? base.remotes?.customer_tracker_actor?.via
+    ?? (customerIssueProvider === 'github' ? 'gh' : customerIssueProvider === 'gitea' ? 'tea' : undefined);
+  if (customerTrackerLogin || customerTrackerVia || base.remotes?.customer_tracker_actor?.forbid_actors) {
+    remotesConfig.customer_tracker_actor = {
+      ...(base.remotes?.customer_tracker_actor ?? {}),
+      ...(customerTrackerLogin ? { login: customerTrackerLogin } : {}),
+      ...(customerTrackerVia ? { via: customerTrackerVia } : {}),
+    };
+  }
 
   const existingDelivery = base.delivery ?? {};
   const delivery: DeliveryConfig = {
@@ -317,9 +373,13 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
     require_ci_green: options.requireCiGreen ?? existingDelivery.require_ci_green ?? true,
     auto_close_issues: options.autoCloseIssues ?? existingDelivery.auto_close_issues ?? true,
     issue_comment_on_cycle: options.issueCommentOnCycle ?? existingDelivery.issue_comment_on_cycle ?? true,
-    force_push_policy: options.forcePushPolicy ?? existingDelivery.force_push_policy ?? 'never',
     require_signed_commits: options.requireSignedCommits ?? existingDelivery.require_signed_commits ?? false,
   };
+  delivery.force_push_policy = (
+    options.forcePushPolicy
+    ?? normalizeForcePushPolicy(existingDelivery.force_push_policy as DeliveryConfig['force_push_policy'] | LegacyForcePushPolicy | undefined, warnings)
+    ?? 'never'
+  );
 
   const committerName = options.committerName ?? existingDelivery.committer?.name ?? gitConfig(options.projectDir, 'user.name');
   const committerEmail = options.committerEmail ?? existingDelivery.committer?.email ?? gitConfig(options.projectDir, 'user.email');
@@ -345,7 +405,6 @@ export async function buildSetupProjectPlan(options: SetupProjectOptions): Promi
   base.remotes = remotesConfig;
   base.delivery = delivery;
 
-  const warnings: string[] = [];
   if (primaryRemote?.provider === 'unknown' && issueProvider !== 'local') {
     warnings.push(`Remote '${primary}' is self-hosted or unknown; provider '${issueProvider}' was selected explicitly/defaulted.`);
   }

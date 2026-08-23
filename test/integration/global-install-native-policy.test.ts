@@ -50,6 +50,7 @@ function installedEnv(): NodeJS.ProcessEnv {
     AIWG_RESOURCE_CACHE_ROOT: path.join(home, '.cache', 'aiwg-web'),
     AIWG_RESOURCE_TRUST_ROOT_FILE: trustRootFile,
     AIWG_RESOURCE_ALLOW_INSECURE_LOOPBACK_HTTP: '1',
+    AIWG_BIN: cliPath,
     AIWG_LOG_LEVEL: 'silent',
     NO_UPDATE_NOTIFIER: '1',
   };
@@ -106,6 +107,18 @@ function expectCliSuccess(result: CliResult): void {
 describe('global install native lifecycle-script policy', () => {
   beforeAll(async () => {
     tempRoot = await mkdtemp(path.join(os.tmpdir(), 'aiwg-global-install-'));
+    // Release indices are generated artifacts and are intentionally ignored by
+    // git. A clean tag checkout therefore has no package fallback until the
+    // release build materializes it. Build it explicitly before using
+    // --ignore-scripts so this test exercises the packed artifact without
+    // relying on another test or workflow step to have run first.
+    const materialize = spawnSync(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      ['run', 'release:fortemi-index'],
+      { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 180_000 },
+    );
+    if (materialize.status !== 0) throw new Error(materialize.stderr || materialize.stdout);
+
     const releasePackLock = await acquireDirectoryLock(
       path.join(PROJECT_ROOT, 'prebuilt', 'fortemi-core', '.framework-build.lock'),
     );
@@ -166,7 +179,7 @@ describe('global install native lifecycle-script policy', () => {
     fixture.publishRelease();
     trustRootFile = path.join(home, 'release-root.pem');
     await writeFile(trustRootFile, fixture.publicKeyPem, { mode: 0o600 });
-  }, 180_000);
+  }, 300_000);
 
   afterAll(async () => {
     await fixture?.stop();
@@ -271,7 +284,34 @@ describe('global install native lifecycle-script policy', () => {
     expect(shown.stdout).toContain('name: aiwg-status');
     expect(existsSync(path.join(project, '.claude'))).toBe(false);
     expect(existsSync(path.join(project, '.agents'))).toBe(false);
+  }, 30_000);
+
+  it('runs the workspace status probe from the packed install', async () => {
+    const status = await runInstalledCli(['status', '--probe', '--json']);
+
+    expectCliSuccess(status);
+    const payload = JSON.parse(status.stdout);
+    expect(payload).toHaveProperty('status');
+    expect(payload).toHaveProperty('checks');
+    expect(status.stderr).not.toContain('ERR_MODULE_NOT_FOUND');
   });
+
+  it('doctor verifies a known capability instead of accepting an empty discovery result', async () => {
+    const doctor = await runInstalledCli(['doctor', '--provider', 'claude']);
+
+    expectCliSuccess(doctor);
+    expect(doctor.stdout).toContain('Discovery: aiwg discover');
+    expect(doctor.stdout).toContain('`aiwg discover aiwg doctor --json --limit 10` succeeded');
+    expect(doctor.stdout).toContain('prebuilt framework index present');
+    expect(existsSync(path.join(
+      installRoot,
+      'prebuilt', 'fortemi-core', 'framework', 'manifest.json',
+    ))).toBe(true);
+    expect(existsSync(path.join(
+      installRoot,
+      'prebuilt', 'fortemi-core', 'framework', 'aiwg-fortemi-index-v2.json',
+    ))).toBe(true);
+  }, 30_000);
 
   it('runs installed-CLI web discover/show and warm offline through legacy configuration', async () => {
     const discovered = await runInstalledCli([

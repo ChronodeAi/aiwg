@@ -1,6 +1,6 @@
 {
   "name": "@aiwg/cli",
-  "version": "2026.8.7",
+  "version": "2026.8.17",
   "description": "Lightweight AIWG CLI for signed, versioned web-backed resources.",
   "type": "module",
   "license": "MIT",
@@ -24,8 +24,10 @@
   },
   "files": [
     "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
     "bin/",
     "agentic/code/providers/",
+    "schemas/security/",
     "dist/src/",
     "!dist/**/*.d.ts",
     "!dist/**/*.map",
@@ -65,6 +67,7 @@
   "dependencies": {
     "@fortemi/core": "2026.7.15",
     "@modelcontextprotocol/sdk": "^1.30.0",
+    "ajv": "^8.20.0",
     "chalk": "^4.1.2",
     "chokidar": "^4.0.3",
     "commander": "^12.1.0",
@@ -79,6 +82,9 @@
   },
   "optionalDependencies": {
     "@hono/node-server": "2.0.11",
+    "@sigstore/bundle": "4.0.0",
+    "@sigstore/protobuf-specs": "0.5.0",
+    "@sigstore/verify": "3.1.1",
     "hono": "^4.12.31",
     "ws": "^8.21.1"
   }

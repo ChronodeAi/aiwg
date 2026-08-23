@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { Platform } from '../agents/types.js';
+import { resolveHermesHomePath } from './hermes-home.js';
 import {
   getProviderCapabilities,
   type DeployTarget,
@@ -619,7 +620,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     id: 'hermes',
     aliases: [],
     builtIn: true,
-    surfaces: { primary: 'hermes', compatibility: [], precedence: ['AGENTS.md', '.hermes.md', '~/.hermes/skills/'], related: [] },
+    surfaces: { primary: 'hermes', compatibility: [], precedence: ['.hermes.md', 'AGENTS.md', resolveHermesHomePath('skills')], related: [] },
     detection: {
       env: [],
       process: ['hermes'],
@@ -629,18 +630,18 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       artifacts: {
         agents: null,
         commands: null,
-        skills: '~/.hermes/.aiwg/skills',
+        skills: resolveHermesHomePath('skills', '.aiwg'),
         rules: null,
         behaviors: null,
       },
-      kernelSkills: '~/.hermes/skills',
+      kernelSkills: resolveHermesHomePath('skills'),
       configFile: 'AGENTS.md',
       contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: '.hermes.md', contextFile: 'AGENTS.md' },
     },
     smithPaths: {
       agents: null,
       commands: null,
-      skills: '~/.hermes/skills',
+      skills: resolveHermesHomePath('skills'),
       rules: null,
       fileExtension: '.md',
       configFile: 'AGENTS.md',
@@ -859,11 +860,13 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
   },
   {
     id: 'windsurf',
-    aliases: ['devin-desktop', 'devin-local', 'cascade'],
+    displayName: 'Devin Desktop',
+    status: 'stable',
+    aliases: ['devin', 'devin-desktop', 'devin-local', 'cascade'],
     builtIn: true,
     surfaces: {
-      primary: 'windsurf',
-      compatibility: ['devin-desktop', 'devin-local', 'cascade'],
+      primary: 'devin',
+      compatibility: ['devin-desktop', 'windsurf', 'devin-local', 'cascade'],
       precedence: ['.devin/rules/', '.windsurf/rules/', 'AGENTS.md', '.windsurfrules'],
       related: [
         {
@@ -871,7 +874,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
           displayName: 'Devin Desktop',
           relationship: 'same-provider',
           deployable: true,
-          aliases: ['windsurf', 'cascade'],
+          aliases: ['devin', 'windsurf', 'cascade'],
           paths: {
             rules: ['.devin/rules/*.md', '.windsurf/rules/*.md'],
             skills: [],
@@ -879,7 +882,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
             legacy: ['.windsurfrules'],
           },
           notes: [
-            'Devin Desktop is the renamed Windsurf local IDE surface; --provider windsurf remains the deployable compatibility id.',
+            'Devin Desktop is the current product name; --provider devin is preferred and --provider windsurf remains a deprecated compatibility id.',
             '.devin/rules is preferred by Devin Desktop, but AIWG keeps .devin/ as ignored local provider output and currently emits the compatibility surface through .windsurf/ plus AGENTS.md.',
           ],
         },

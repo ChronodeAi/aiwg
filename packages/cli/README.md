@@ -21,10 +21,22 @@ agents, CI, and web-backed installations.
 
 ```text
 Install or repair AIWG for this project by following
-https://raw.githubusercontent.com/jmagly/aiwg/main/setup.aiwg.yaml
+https://aiwg.io/setup.aiwg.yaml
 Explain the plan before changing anything, preserve my existing work, and ask
 me only for choices you cannot safely determine.
 ```
+
+The equivalent manual path is three steps:
+
+```bash
+npm install --global aiwg
+cd /path/to/your/project
+aiwg use all --provider <provider>
+```
+
+The final command deploys, refreshes indices and project context, verifies the
+provider wiring, and reports one result. Standalone index, regenerate, status,
+and doctor commands remain advanced maintenance and recovery tools.
 
 [![npm version](https://img.shields.io/npm/v/%40aiwg%2Fcli/latest?label=%40aiwg%2Fcli&color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/@aiwg/cli)
 [![npm downloads](https://img.shields.io/npm/dm/%40aiwg%2Fcli?color=CB3837&logo=npm&style=flat-square)](https://www.npmjs.com/package/@aiwg/cli)
@@ -221,7 +233,7 @@ offline operation is required.
 
 For a first installation, an uncertain environment, or a machine with an old
 or broken AIWG setup, use the full `aiwg` package and the
-[agentic installer manifest](https://raw.githubusercontent.com/jmagly/aiwg/main/setup.aiwg.yaml).
+[agentic installer manifest](https://aiwg.io/setup.aiwg.yaml).
 The flow detects development checkouts and preserves development mode unless
 the user explicitly approves switching to the published package.
 
@@ -263,7 +275,7 @@ rather than merely printed.
 Agents do not need to memorize the remaining command surface. AIWG discovery
 finds the relevant skill, and the skill supplies the right CLI step. Operators
 who need the complete syntax and examples can use the
-[AIWG CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md).
+[AIWG CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md).
 
 ## How It Works
 
@@ -454,7 +466,7 @@ This README therefore documents the operating model, package boundary, trust
 model, and troubleshooting path instead of duplicating every command and flag.
 The complete operator reference is maintained at:
 
-**[AIWG CLI Reference — every command and example](https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md)**
+**[AIWG CLI Reference — every command and example](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md)**
 
 Keeping the command catalog in one canonical location prevents package
 documentation from drifting as the runtime grows.
@@ -508,7 +520,7 @@ security guidance.
 Do not routinely call `aiwg help` and place the full output in the model
 context. If a skill exists, use it. If a maintainer or operator needs an
 unfamiliar command, link to the canonical
-[CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md) or retrieve only
+[CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md) or retrieve only
 the relevant section.
 
 ## Using AIWG from a Web-Connected Chat
@@ -1064,7 +1076,7 @@ Package invariants include:
 
 ## Documentation
 
-- [Complete AIWG CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md)
+- [Complete AIWG CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md)
 - [AIWG documentation](https://docs.aiwg.io/)
 - [AIWG project README](https://github.com/jmagly/aiwg#readme)
 - [Web-backed resources guide](https://github.com/jmagly/aiwg/blob/main/docs/install/web-backed-resources.md)
@@ -1086,7 +1098,10 @@ opening a public issue.
 
 ## License
 
-MIT. See the
+AIWG-authored code is MIT licensed. See the
 [AIWG license](https://github.com/jmagly/aiwg/blob/main/LICENSE).
 
-The package includes its own copy of `LICENSE` in every published tarball.
+Runtime dependencies retain their own licenses. Every published tarball
+includes `LICENSE` and `THIRD_PARTY_NOTICES.md`; the latter identifies the
+reviewed Fortemi and Bytecask AGPL boundary, corresponding source links, and
+commands for inspecting the versions npm resolved.

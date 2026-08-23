@@ -13,6 +13,7 @@ import { execFileSync, execSync } from 'child_process';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
 import { scanStartupContext } from '../lint/claude-context-inventory.mjs';
+import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
 
 const { getFrameworkRoot, getVersionInfo } = await importImpl(
   import.meta.url,
@@ -55,9 +56,17 @@ const { validateThreatAssessmentConfig } = await importImpl(
   import.meta.url,
   'security/threat-assessment-config.js'
 );
+const { validateArtifactOutputs } = await importImpl(
+  import.meta.url,
+  'artifacts/output-policy.js'
+);
 const { collectPackagedAgentInventory, diagnoseOversizedAgent } = await importImpl(
   import.meta.url,
   'agents/packaged-agent-inventory.js'
+);
+const { auditProjectArtifactHealth } = await importImpl(
+  import.meta.url,
+  'config/project-artifacts-health.mjs'
 );
 
 // AIWG_ROOT: env override > channel-manager resolved path > legacy edge path
@@ -108,13 +117,29 @@ const PROVIDER_AGENT_DIRS = {
 
 // Parse doctor-specific flags from process.argv (no commander dependency).
 function parseDoctorArgs(argv) {
-  const out = { provider: null, allProviders: false, noBudgetCheck: false };
+  const out = {
+    provider: null,
+    allProviders: false,
+    noBudgetCheck: false,
+    strictContext: false,
+    contextBaseline: '.aiwg/context-memory-firewall-baseline.json',
+    contextBudgetTokens: 200_000,
+  };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--provider' && argv[i + 1]) { out.provider = argv[i + 1]; i += 1; continue; }
     if (a.startsWith('--provider=')) { out.provider = a.slice('--provider='.length); continue; }
     if (a === '--all-providers') { out.allProviders = true; continue; }
     if (a === '--no-budget-check') { out.noBudgetCheck = true; continue; }
+    if (a === '--strict-context') { out.strictContext = true; continue; }
+    if (a === '--context-baseline' && argv[i + 1]) { out.contextBaseline = argv[i + 1]; i += 1; continue; }
+    if (a.startsWith('--context-baseline=')) { out.contextBaseline = a.slice('--context-baseline='.length); continue; }
+    if (a === '--context-budget-tokens' && argv[i + 1]) {
+      out.contextBudgetTokens = Number(argv[i + 1]); i += 1; continue;
+    }
+    if (a.startsWith('--context-budget-tokens=')) {
+      out.contextBudgetTokens = Number(a.slice('--context-budget-tokens='.length)); continue;
+    }
   }
   return out;
 }
@@ -478,7 +503,7 @@ async function checkStartupContextBudget(provName, label) {
       `${label} Startup Context`,
       'warn',
       `tight — ${headline}. Limited headroom for real work on standard Sonnet. ` +
-        `Run \`npm run lint:claude-context -- --startup\` for the breakdown (#1673).`,
+        `Run \`aiwg context-firewall scan --provider claude\` for the attributed breakdown (#1673).`,
     );
   } else {
     check(`${label} Startup Context`, 'ok', headline);
@@ -742,7 +767,7 @@ async function runDoctor() {
     check('Community Links', 'warn', err instanceof Error ? err.message : String(err));
   }
 
-  // 3. Check .aiwg directory in current project
+  // 3. Check the repository-local control plane and external artifact corpus.
   const projectAiwg = path.join(process.cwd(), '.aiwg');
   const hasProjectAiwg = await fileExists(projectAiwg);
   if (hasProjectAiwg) {
@@ -750,13 +775,33 @@ async function runDoctor() {
   } else {
     check('Project .aiwg/', 'info', 'No .aiwg/ in current directory (not an AIWG project)');
   }
+  try {
+    const artifactHealth = auditProjectArtifactHealth(process.cwd());
+    if (artifactHealth.external_configured) {
+      const detail = `${artifactHealth.classification}; local=${artifactHealth.local_control_root}; external=${artifactHealth.artifact_root}`;
+      check(
+        'External Artifact Corpus',
+        artifactHealth.severity === 'ok' ? 'ok' : artifactHealth.severity === 'error' ? 'error' : 'warn',
+        artifactHealth.action ? `${detail} — ${artifactHealth.action}` : detail,
+      );
+    }
+  } catch (error) {
+    check('External Artifact Corpus', 'error', `health audit failed: ${error.message}`);
+  }
 
   // 4-5. Provider-aware agents + commands check (#1057).
   // Determine which providers to inspect:
   //   --provider <name>  → just that one
   //   --all-providers    → every supported provider
   //   (default)          → auto-detect deployed providers via PROVIDER_AGENT_DIRS
-  const { provider: providerArg, allProviders, noBudgetCheck } = parseDoctorArgs(process.argv.slice(2));
+  const {
+    provider: providerArg,
+    allProviders,
+    noBudgetCheck,
+    strictContext,
+    contextBaseline,
+    contextBudgetTokens,
+  } = parseDoctorArgs(process.argv.slice(2));
   let providersToCheck = [];
   if (providerArg) {
     providersToCheck = [providerArg];
@@ -915,6 +960,50 @@ async function runDoctor() {
 
     if (provName === 'openhuman') {
       await checkOpenHumanHarnessTier2();
+    }
+  }
+
+  // Provider context and persistent-memory firewall (#2040). This complements
+  // per-provider listing/startup estimates with one cross-category inventory,
+  // deployment-manifest drift checks, reviewed digests, and poisoning labels.
+  // The default doctor is advisory; --strict-context promotes any violation or
+  // missing review baseline to an error and therefore a non-zero doctor exit.
+  if (!noBudgetCheck) {
+    try {
+      const supported = providersToCheck.filter((name) =>
+        ['claude', 'codex', 'copilot', 'cursor', 'factory', 'opencode', 'warp', 'windsurf', 'hermes', 'openhuman'].includes(name),
+      );
+      const firewall = await scanContextMemoryFirewall({
+        rootDir: process.cwd(),
+        packageRoot: AIWG_ROOT,
+        providers: supported,
+        baselinePath: contextBaseline,
+        budgetTokens: contextBudgetTokens,
+      });
+      const stale = firewall.trust.stale;
+      const quarantined = firewall.trust.quarantined;
+      const external = firewall.trust.external;
+      const changed = firewall.records.filter((record) => record.reviewStatus === 'changed-review-required').length;
+      const categorySummary = Object.entries(firewall.categories)
+        .map(([category, value]) => `${category}=${value.bytes.toLocaleString()}B`)
+        .join(', ');
+      const summary =
+        `${firewall.totals.files} file(s), ~${firewall.totals.approxTokens.toLocaleString()} / `
+        + `${firewall.budget.tokens.toLocaleString()} tokens; ${categorySummary}; `
+        + `stale=${stale}, quarantined=${quarantined}, external=${external}, changed=${changed}`;
+      const baselineMissing = !firewall.baseline.exists;
+      const unsafe = firewall.violations.length > 0 || baselineMissing;
+      if (unsafe) {
+        const status = strictContext ? 'error' : 'warn';
+        const baselineMessage = baselineMissing
+          ? ` Review baseline missing at ${firewall.baseline.path}; run \`aiwg context-firewall baseline --plan\`, review every record, then use the confirmed write command it prints.`
+          : '';
+        check('Context/memory firewall', status, `${summary}.${baselineMessage}`);
+      } else {
+        check('Context/memory firewall', 'ok', `${summary}; reviewed baseline ${firewall.baseline.path}`);
+      }
+    } catch (error) {
+      check('Context/memory firewall', strictContext ? 'error' : 'warn', `scan failed: ${error.message}`);
     }
   }
 
@@ -1197,11 +1286,15 @@ async function runDoctor() {
   // knows the install is degraded before they try to use it.
   const { spawnSync } = await import('node:child_process');
   const aiwgBin = process.env.AIWG_BIN || 'aiwg';
-  const probeCommand = (name, args, expectStdout = null) => {
+  const probeCommand = (name, args, expectStdout = null, validateStdout = null) => {
     try {
       const r = spawnSync(aiwgBin, args, {
         encoding: 'utf-8',
-        timeout: 10_000,
+        // Framework discovery can legitimately take longer than ten seconds
+        // while the release suite is concurrently packing and rebuilding
+        // provider indices. Keep the probe bounded, but align it with the
+        // integration runner budget so doctor does not report a false outage.
+        timeout: 30_000,
         shell: process.platform === 'win32',
       });
       if (r.error || r.status !== 0) {
@@ -1213,6 +1306,10 @@ async function runDoctor() {
       if (expectStdout && !(r.stdout || '').includes(expectStdout)) {
         return { ok: false, detail: `stdout missing expected marker '${expectStdout}'` };
       }
+      if (validateStdout) {
+        const validation = validateStdout(r.stdout || '');
+        if (validation !== true) return { ok: false, detail: validation };
+      }
       return { ok: true };
     } catch (e) {
       return { ok: false, detail: e.message };
@@ -1222,8 +1319,22 @@ async function runDoctor() {
   const discoveryProbes = [
     {
       label: 'Discovery: aiwg discover',
-      args: ['discover', 'doctor', '--json', '--limit', '1'],
+      args: ['discover', 'aiwg doctor', '--json', '--limit', '10'],
       hint: 'aiwg discover is unavailable — agents may bypass index-driven lookup',
+      validateStdout: (stdout) => {
+        try {
+          const payload = JSON.parse(stdout);
+          if (!Array.isArray(payload.results) || payload.results.length === 0) {
+            return 'discover exited successfully but returned zero results for the known aiwg-doctor capability';
+          }
+          if (!payload.results.some((result) => result?.name === 'aiwg-doctor')) {
+            return 'discover did not return the known aiwg-doctor capability';
+          }
+          return true;
+        } catch (error) {
+          return `discover returned invalid JSON: ${error.message}`;
+        }
+      },
     },
     {
       label: 'Discovery: aiwg show',
@@ -1249,7 +1360,7 @@ async function runDoctor() {
 
   let discoverOk = false;
   for (const probe of discoveryProbes) {
-    const r = probeCommand(probe.label, probe.args);
+    const r = probeCommand(probe.label, probe.args, null, probe.validateStdout);
     if (probe.args[0] === 'discover') discoverOk = r.ok;
     if (r.ok) {
       check(probe.label, 'ok', `\`aiwg ${probe.args.join(' ')}\` succeeded`);
@@ -1471,6 +1582,23 @@ async function runDoctor() {
     }
   } catch {
     // Non-fatal — skip silently
+  }
+
+  // Artifact output destination policy (#2122). Missing blocks are valid and
+  // resolve to the safe explicit-only compatibility default.
+  try {
+    const aiwgCfgPath = path.join(process.cwd(), '.aiwg', 'aiwg.config');
+    if (await fileExists(aiwgCfgPath)) {
+      const raw = JSON.parse(await fs.readFile(aiwgCfgPath, 'utf-8'));
+      const issues = validateArtifactOutputs(raw.artifact_outputs);
+      if (issues.length > 0) check('Artifact Output Policy', 'error', issues.join('; '));
+      else {
+        const policy = raw.artifact_outputs ?? { canonical: 'aiwg', provider_native: 'explicit-only' };
+        check('Artifact Output Policy', 'ok', `canonical=${policy.canonical ?? 'aiwg'}, provider-native=${policy.provider_native ?? 'explicit-only'}`);
+      }
+    }
+  } catch (err) {
+    check('Artifact Output Policy', 'warn', `Could not validate artifact_outputs: ${err.message}`);
   }
 
   // 11c. Validate .aiwg/aiwg.config delivery block (#995)
@@ -1891,7 +2019,7 @@ async function runDoctor() {
   try {
     const { index, source } = await readIndexConfig(process.cwd());
     if (source === 'config.yaml') {
-      check('index-config', 'warn', 'index config still in .aiwg/config.yaml — migrate the index block into .aiwg/aiwg.config (#1491; see docs/cli-reference.md)');
+      check('index-config', 'warn', 'index config still in .aiwg/config.yaml — migrate the index block into .aiwg/aiwg.config (#1491; see docs/cli/reference.md)');
     }
     if (index) {
       const errs = validateIndexConfig(index);

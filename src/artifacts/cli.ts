@@ -543,7 +543,7 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('');
     console.log('Default behavior (no --graph): builds all graphs with defaultBuild: true');
     console.log('Multi-graph builds run by buildOrder/buildTier (refs → citations → bibliography before heavy graphs)');
-    console.log('  Built-in defaults: project (always), codebase (skipped if src/test/tools absent)');
+    console.log('  Built-in defaults: project (always), codebase (auto-detects JavaScript/TypeScript and Python layouts)');
     console.log('');
     console.log('Examples:');
     console.log('  aiwg index build');
@@ -768,7 +768,7 @@ async function requireEmbeddingIndex(cwd: string, graph: GraphType | undefined):
   if (!deps.available) {
     console.error(`Error: semantic search needs optional dependencies: ${deps.missing.join(', ')}`);
     console.error('Install them to enable semantic features:');
-    console.error('  npm install @xenova/transformers hnswlib-node');
+    console.error('  aiwg features install embeddings');
     return null;
   }
   const dir = resolveIndexDir(cwd, graph);
@@ -974,7 +974,7 @@ async function handleEmbed(args: string[]): Promise<void> {
   const deps = await checkEmbeddingDeps();
   if (!deps.available) {
     console.error(`Error: embedding needs optional dependencies: ${deps.missing.join(', ')}`);
-    console.error('  npm install @xenova/transformers hnswlib-node');
+    console.error('  aiwg features install embeddings');
     process.exit(1);
   }
   const index = loadGraphIndexFile<{ entries: Record<string, unknown> }>(cwd, 'metadata.json', graph);

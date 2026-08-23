@@ -1,5 +1,6 @@
 ---
-name: research-to-feature
+name: research
+aliases: [research-to-feature]
 description: Transform raw interview transcripts into a tested feature hypothesis — from transcript cleanup through JTBD extraction, clustering, hypothesis formation, and experiment design. Use when synthesizing user interviews, deriving jobs-to-be-done, or turning research into feature hypotheses.
 ---
 

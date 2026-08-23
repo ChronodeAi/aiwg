@@ -12,17 +12,31 @@ The simplest setup is to paste this into a supported AI provider:
 
 ```text
 Install or repair AIWG for this project by following
-https://raw.githubusercontent.com/jmagly/aiwg/main/setup.aiwg.yaml
+https://aiwg.io/setup.aiwg.yaml
 Explain the plan before changing anything, preserve my existing work, and ask
 me only for choices you cannot safely determine.
 ```
 
 The installer detects old, broken, duplicate, and development-mode installs,
 then guides you through repair or update. It deploys the preferred complete
-system with `aiwg use all`, builds the indices, regenerates the project context,
-and verifies engagement. Most providers can continue in the same session. It
-asks you to restart only when the provider is demonstrably caching old startup
-instructions.
+system with one self-verifying `aiwg use all` command. That command refreshes
+the indices, regenerates project context, verifies the resulting deployment,
+and reports whether a provider reload is actually required.
+
+For secure long-running agents, install AIWG Cockpit with a self-hosted Agentic
+Sandbox executor you control and audit:
+
+```text
+Install or repair AIWG Cockpit and Agentic Sandbox by following
+https://aiwg.io/agentic-sandbox/setup.aiwg.yaml
+Install the required prerequisites, explain the plan before changing anything,
+preserve my existing work, and ask me about the isolation, network, storage,
+and access choices you cannot safely determine.
+```
+
+This option audits the host, installs the approved Docker or KVM/libvirt runtime
+and sandbox prerequisites, connects Cockpit to the real executor, applies your
+resource and access choices, and verifies the control and audit path end to end.
 
 If you prefer to install manually:
 
@@ -30,13 +44,14 @@ If you prefer to install manually:
 npm i -g aiwg
 cd /path/to/your/project
 aiwg use all --provider <provider>
-aiwg index build --all
-aiwg regenerate --provider <provider>
-aiwg status --probe --json
 ```
 
 Replace `<provider>` with your AI tool's name, such as `claude`, `codex`,
 `copilot`, or `cursor`.
+
+The final command deploys, indexes, connects, verifies, and reports one outcome.
+The standalone index, regenerate, status, and doctor commands remain available
+for advanced maintenance and troubleshooting; they are not extra install steps.
 
 For the complete beginner path and provider-name table, see
 [Install, Connect, and Verify](docs/getting-started/install-connect-verify.md).
@@ -94,6 +109,8 @@ work without them. Enable only the capability you need:
 ```bash
 aiwg features install pty         # builds node-pty for local interactive terminals
 aiwg features install embeddings  # builds hnswlib-node for dense semantic search
+aiwg features install graph       # enables the Graphology artifact backend
+aiwg features install terminal    # enables auditable headless PTY screen parsing
 aiwg doctor                       # verifies the native entry points actually load
 ```
 
@@ -168,7 +185,7 @@ user-global bootstrap:
 The trade-off is real: when the same agent set loads into every session, context from one project can bleed into reasoning about another. Research (REF-720, *Lost in Multi-Turn Conversation*, MSR/Salesforce 2025) measured a 39% capability drop when this happens. The non-blocking project-isolation warning surfaces the trade-off at deploy time so the scope choice is informed. Neither scope is wrong; pick the one that fits the workflow.
 
 See the [Agentic Install Runbook](docs/agentic-install-runbook.md) for the
-zero-to-running setup path, and `https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md` (under `aiwg use` →
+zero-to-running setup path, and `https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md` (under `aiwg use` →
 "Scope models") for the per-provider details and the global-install rough-edge
 inventory.
 
@@ -437,7 +454,7 @@ User intent → AIWG CLI → Deploy agents + rules + templates → AI platform
                 ▼                                                ▼
          "aiwg use all --provider X"                  Claude Code / Copilot /
                 │                                     Cursor / Warp / Factory /
-                ▼                                     OpenCode / Codex / Windsurf
+                ▼                                  OpenCode / Codex / Devin Desktop
          ┌──────────────┐
          │ 188 Agents   │  Specialized AI personas with domain expertise
          │ 50 Commands  │  CLI + slash commands for workflow automation
@@ -462,8 +479,8 @@ User intent → AIWG CLI → Deploy agents + rules + templates → AI platform
 flowchart LR
   subgraph Source["AIWG framework source"]
     direction TB
-    KERN[16 kernel skills<br/>~15-25k tokens]
-    STD[~385 standard skills<br/>read from $AIWG_ROOT]
+    KERN[25 kernel skills<br/>within provider listing budgets]
+    STD[~455 standard skills<br/>read from $AIWG_ROOT]
     AGENT[200+ agents]
     RULES[60+ rules]
     TPL[100+ templates]
@@ -525,7 +542,7 @@ The orchestration pattern: **Primary Author → Parallel Reviewers → Synthesiz
 - **128 workflow skills** — natural language triggers for regression testing, forensics, voice profiles, quality gates, and CI/CD integration
 - **35 enforcement rules** — anti-laziness detection, token security, citation integrity, executable feedback, failure mitigation across 6 LLM archetypes
 - **334 artifact templates** — progressive disclosure templates for requirements, architecture, testing, security, deployment, and more
-- **8 platform support** — deploy to Claude Code, Copilot, Cursor, Warp, Factory AI, OpenCode, Codex, and Windsurf
+- **Multi-platform support** — deploy to Claude Code, Copilot, Cursor, Warp, Factory AI, OpenCode, Codex, Devin Desktop, OpenClaw, Hermes, and OpenHuman
 - **8 core frameworks + training marketplace package** — SDLC, Digital Forensics, Marketing Operations, Research Management, Media Curation, Ops Infrastructure, Knowledge Base, Security Engineering, plus [`aiwg-training`](https://github.com/jmagly/aiwg-training) for fine-tuning dataset curation (corpus-to-dataset pipeline with DPO/KTO/ORPO/SimPO export)
 - **32 addons** — compound memory, line memory, llm-wiki (Obsidian-native knowledge base), RLM recursive decomposition, fleet operations, browser control, testing quality, and more
 - **40 Claude Code plugins** — the complete framework and addon catalog is installable independently from the AIWG marketplace
@@ -571,6 +588,10 @@ aiwg use all               # Everything
 aiwg regenerate --existing-project --dry-run
 aiwg regenerate --existing-project --apply
 aiwg workspace-context doctor
+
+# Recommended default: inspect project state and select the safe branch
+aiwg regenerate --dry-run
+aiwg regenerate
 
 # Fresh or already-migrated projects: ordinary canonical refresh
 aiwg regenerate --workspace
@@ -627,7 +648,7 @@ aiwg use all --provider cursor         # Cursor
 aiwg use all --provider factory        # Factory AI
 aiwg use all --provider opencode       # OpenCode
 aiwg use all --provider warp           # Warp Terminal
-aiwg use all --provider windsurf       # Windsurf
+aiwg use all --provider devin          # Devin Desktop
 aiwg use all --provider openclaw       # OpenClaw
 aiwg use all --provider hermes         # Hermes
 aiwg use all --provider openhuman      # OpenHuman
@@ -1184,7 +1205,7 @@ aiwg validate-metadata
 
 ### Capability Discovery — `aiwg discover` + `aiwg show`
 
-The headline operator surface for finding and reading AIWG capabilities. Most AIWG skills (~385 of 400) are **not loaded into your platform's flat skill listing** — they stay at `$AIWG_ROOT` and are reached on demand through `aiwg discover` (find) and `aiwg show` (fetch). The kernel set on disk is small on purpose: 9 framework quickrefs + 6 self-maintenance ops = 15 skills, well under every supported platform's skill-listing budget.
+The headline operator surface for finding and reading AIWG capabilities. Most AIWG skills (~455 of 480+) are **not loaded into your platform's flat skill listing** — they stay at `$AIWG_ROOT` and are reached on demand through `aiwg discover` (find) and `aiwg show` (fetch). The kernel set on disk is small on purpose: 9 framework quickrefs + 16 self-maintenance and discovery skills = 25 skills, within supported provider listing budgets.
 
 ```bash
 # Find a skill by capability
@@ -1205,7 +1226,7 @@ aiwg show rule no-attribution
 aiwg show metadata aiwg:skill:6f1477d99813ca8d --json
 ```
 
-The kernel quickrefs ship **curated, validated discovery phrases per capability domain** — phrases tested against the live scorer to surface the right top-3 candidates. The 6 self-maintenance ops (`steward`, `aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, `use`) stay loaded so the agent retains repair surfaces even when discovery itself is broken. See [`docs/discovery-and-kernel-skills.md`](docs/discovery-and-kernel-skills.md) for the full best-practices guide, ASCII flow diagrams, and verification steps.
+The kernel quickrefs ship **curated, validated discovery phrases per capability domain** — phrases tested against the live scorer to surface the right top-3 candidates. The self-maintenance and discovery set (including `steward`, `aiwg-doctor`, `aiwg-refresh`, `aiwg-status`, `aiwg-help`, and `use`) stays loaded so the agent retains repair surfaces even when discovery itself is broken. See [`docs/discovery-and-kernel-skills.md`](docs/discovery-and-kernel-skills.md) for the full best-practices guide, ASCII flow diagrams, and verification steps.
 
 ### Artifact Index — `aiwg index`
 
@@ -1369,7 +1390,12 @@ All 8 platforms receive agents, commands, skills, and rules. Deployment adapts t
 | **Cursor** | Tested | `.cursor/agents/` | `.cursor/commands/` | `.cursor/skills/` | `.cursor/rules/` | `--provider cursor` |
 | **OpenCode** | Tested | `.opencode/agent/` | `.opencode/commands/` | `.opencode/skill/` | `.opencode/rule/` | `--provider opencode` |
 | **OpenAI/Codex** | Tested | `.codex/agents/` | `~/.codex/prompts/` | `.agents/skills/` | `.codex/rules/` | `--provider codex` |
-| **Windsurf** | Experimental | AGENTS.md | `.windsurf/workflows/` | `.windsurf/skills/` | `.windsurf/rules/` | `--provider windsurf` |
+| **Devin Desktop** | Tested compatibility adapter | AGENTS.md | `.windsurf/workflows/` | `.windsurf/skills/` | `.windsurf/rules/` | `--provider devin` |
+
+The legacy `--provider windsurf` selector remains supported and writes the
+same `.windsurf/` compatibility paths, but new commands should use `devin`.
+`devin-cli` is a distinct product surface and is not currently a deployable
+AIWG provider.
 
 ---
 
@@ -1377,7 +1403,7 @@ All 8 platforms receive agents, commands, skills, and rules. Deployment adapts t
 
 | Category | Commands | Description |
 |----------|----------|-------------|
-| **Maintenance** | `help`, `version`, `doctor`, `update` | Installation health, updates, diagnostics |
+| **Maintenance** | `help`, `version`, `doctor`, `context-firewall`, `update` | Installation health, context safety, updates, diagnostics |
 | **Framework** | `use`, `list`, `remove` | Deploy, inspect, and remove frameworks |
 | **Project** | `new` | Scaffold new project with AIWG structure |
 | **Workspace** | `status`, `migrate-workspace`, `rollback-workspace` | Workspace health and migration |
@@ -1386,7 +1412,7 @@ All 8 platforms receive agents, commands, skills, and rules. Deployment adapts t
 | **Marketplace packaging** | `install-plugin`, `uninstall-plugin`, `plugin-status`, `package-plugin`, `package-all-plugins` | Install and package delivery wrappers |
 | **Scaffolding** | `add-agent`, `add-command`, `add-skill`, `add-template`, `scaffold-addon`, `scaffold-extension`, `scaffold-framework` | Create new extensions |
 | **Ralph** | `ralph`, `ralph-status`, `ralph-abort`, `ralph-resume`, `ralph-external`, `ralph-memory`, `ralph-config` | Iterative execution engine |
-| **Metrics** | `cost-report`, `cost-history`, `metrics-tokens` | Token usage and cost tracking |
+| **Metrics & evidence** | `cost-report`, `cost-history`, `metrics-tokens`, `evidence` | Token usage, cost tracking, and portable evaluation evidence |
 | **Index** | `index build`, `index query`, `index deps`, `index stats` | Artifact discovery and dependency graphing |
 | **Documentation** | `doc-sync` | Bidirectional doc-code synchronization |
 | **SDLC** | `sdlc-accelerate` | Idea-to-construction-ready pipeline |
@@ -1408,6 +1434,7 @@ aiwg use sdlc --provider copilot # Deploy to GitHub Copilot
 aiwg new my-project              # Scaffold new project
 aiwg status                      # Workspace health
 aiwg doctor                      # Installation diagnostics
+aiwg context-firewall scan       # Provider context, trust, drift, and budget audit
 
 # Iterative execution (Agent Loop)
 aiwg ralph "Fix all tests" --completion "npm test passes"
@@ -1426,7 +1453,10 @@ aiwg doc-sync code-to-docs --dry-run
 aiwg doc-sync full --interactive
 
 # Metrics
-aiwg cost-report                 # Session cost breakdown
+aiwg cost-report                 # Agent-native session cost breakdown
+aiwg cost-report --fleet         # OpenRouter per-bot MTD spend observation
+aiwg evidence export --output ./evidence  # Package evaluation evidence and provenance
+aiwg evidence verify ./evidence           # Verify hashes and the bundle checkpoint
 aiwg metrics-tokens              # Token usage
 
 # SDLC accelerate
@@ -1988,7 +2018,10 @@ AIWG is optimized for token efficiency. Rules deploy as a consolidated index (~2
 
 ## License
 
-**MIT License** — Free to use, modify, and distribute. See [LICENSE](LICENSE).
+AIWG-authored code is available under the **MIT License**. See [LICENSE](LICENSE).
+Runtime dependencies retain their own licenses; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the reviewed Fortemi and
+Bytecask AGPL boundary, source links, and inspection instructions.
 
 **Important:** This framework does not provide legal, security, or financial advice. All generated content should be reviewed before use. See [Terms of Use](docs/terms.md) for full disclaimers.
 
