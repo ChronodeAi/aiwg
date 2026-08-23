@@ -334,6 +334,7 @@ export function renderProjectQuickref(definition: ProjectQuickref): string {
     '---',
     `name: ${skillName}`,
     `description: ${JSON.stringify(`Project-specific orientation for ${definition.project.name}`)}`,
+    'namespace: aiwg',
     'kernel: true',
     'platforms: [all]',
     '---',
