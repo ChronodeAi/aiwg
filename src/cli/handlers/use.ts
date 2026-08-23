@@ -886,13 +886,13 @@ async function countDeployedArtifacts(
   paths: { agents: string; skills: string; commands: string; rules: string; behaviors: string },
   provider?: string
 ): Promise<{ agents: number; commands: number; skills: number; rules: number; behaviors: number }> {
-  const countMd = async (dir: string): Promise<number> => {
+  const countFiles = async (dir: string, extensions: readonly string[]): Promise<number> => {
     if (!dir) return 0;
     try {
       // Support absolute paths (openclaw deploys to home dir)
       const resolvedDir = path.isAbsolute(dir) ? dir : path.join(target, dir);
       const entries = await fs.readdir(resolvedDir);
-      return entries.filter(f => f.endsWith('.md')).length;
+      return entries.filter(file => extensions.some(extension => file.endsWith(extension))).length;
     } catch {
       return 0;
     }
@@ -942,8 +942,8 @@ async function countDeployedArtifacts(
   // Codex's native `.agents/skills` path (#766).
   const kernelSkillsPath = provider ? getProviderKernelSkillsPath(provider) : '';
   return {
-    agents: await countMd(paths.agents),
-    commands: await countMd(paths.commands),
+    agents: await countFiles(paths.agents, provider === 'codex' ? ['.md', '.toml'] : ['.md']),
+    commands: await countFiles(paths.commands, ['.md']),
     skills:
       (await countDirs(paths.skills)) +
       (kernelSkillsPath && kernelSkillsPath !== paths.skills
