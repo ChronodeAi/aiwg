@@ -13,6 +13,7 @@ import {
   type ProjectQuickref,
 } from '../../../src/extensions/project-quickref.js';
 import { PROJECT_LOCAL_SEARCH_PATHS_ENV } from '../../../src/extensions/project-local-paths.js';
+import { isOwnedByNamespace } from '../../../src/smiths/skillsmith/collision-detector.js';
 
 const roots: string[] = [];
 const ARTIFACT_ENV_KEYS = [
@@ -107,6 +108,7 @@ describe('project quickref generation and deployment (#1788)', () => {
 
     const generated = await generateProjectQuickref(projectDir, { dryRun: true });
     expect(generated.content).toContain('name: aiwg-project-managed-project-quickref');
+    expect(generated.content).toContain('namespace: aiwg');
     expect(generated.content).toContain('aiwg show skill team-workflow');
     expect(existsSync(projectAiwgPath(projectDir, 'generated'))).toBe(false);
   });
@@ -236,6 +238,7 @@ describe('project quickref generation and deployment (#1788)', () => {
     expect(first.changed).toBe(true);
     expect(second.changed).toBe(false);
     expect(await readFile(first.targetPath, 'utf8')).toContain('kernel: true');
+    expect(await isOwnedByNamespace(join(projectDir, '.claude', 'skills', first.skillName))).toBe(true);
   });
 
   it('prunes obsolete output beneath the generated quickref root', async () => {

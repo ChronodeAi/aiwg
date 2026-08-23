@@ -334,6 +334,11 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
       const gitignore = await fs.readFile(path.join(projectDir, '.gitignore'), 'utf-8');
       expect(gitignore).toContain('.codex/');
       expect(gitignore).toContain('.agents/');
+      const codexAgents = (await fs.readdir(path.join(projectDir, '.codex', 'agents')))
+        .filter(file => file.endsWith('.toml'));
+      expect(codexAgents.length).toBeGreaterThan(0);
+      const config = JSON.parse(await fs.readFile(path.join(projectDir, '.aiwg', 'aiwg.config'), 'utf-8'));
+      expect(config.installed.all.deployedTo.codex.agents).toBe(codexAgents.length);
       expect(result.stdout).toMatch(/Deployed to OpenAI Codex \(codex\)[\s\S]*\bSkills [1-9]\d*\b/);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
