@@ -1,5 +1,6 @@
 ---
-name: multi-perspective-review
+name: pm-review
+aliases: [multi-perspective-review]
 description: Review any product document from 7 cross-functional perspectives — Engineering, Design, Executive, Legal, UX Research, Devil's Advocate, and Customer Voice — with framework-grounded feedback and Socratic questioning. Use when reviewing a PRD, strategy doc, roadmap, or design from multiple stakeholder perspectives.
 ---
 

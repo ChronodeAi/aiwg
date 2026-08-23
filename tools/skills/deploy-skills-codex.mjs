@@ -421,6 +421,27 @@ function isFullAiwgSourceRoot(srcRoot) {
   const repoRoot = path.resolve(scriptDir, '..', '..');
   const srcRoot = source || repoRoot;
   const fullAiwgSourceRoot = isFullAiwgSourceRoot(srcRoot);
+  const copyStandardSkills = cfg.copyStandardSkills === true;
+  // Component-scoped deploys (the way `aiwg use all` installs selected
+  // frameworks/addons) still need a complete inventory for stale-skill
+  // reconciliation.  AIWG_ROOT is supplied by the orchestrator for exactly
+  // this purpose; fall back to the script checkout for standalone use.
+  const configuredAiwgRoot = process.env.AIWG_ROOT
+    ? path.resolve(process.env.AIWG_ROOT)
+    : repoRoot;
+  const inventoryRoot = fullAiwgSourceRoot
+    ? srcRoot
+    : (!copyStandardSkills && isFullAiwgSourceRoot(configuredAiwgRoot) ? configuredAiwgRoot : null);
+  const inventoryRelativeSource = inventoryRoot
+    ? path.relative(inventoryRoot, srcRoot)
+    : null;
+  const inventoryOwnsSource = fullAiwgSourceRoot || (
+    inventoryRelativeSource !== null
+    && inventoryRelativeSource !== ''
+    && inventoryRelativeSource !== '..'
+    && !inventoryRelativeSource.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(inventoryRelativeSource)
+  );
 
   console.log(`Deploying skills to Codex`);
   console.log(`  Source: ${srcRoot}`);
@@ -444,8 +465,6 @@ function isFullAiwgSourceRoot(srcRoot) {
   // Codex normally deploys to the project `.agents/skills/` target, so the
   // kernel/standard split is enforced at filter time rather than via separate
   // destination directories. The standalone legacy default remains supported.
-  const copyStandardSkills = cfg.copyStandardSkills === true;
-
   // Track every AIWG-managed source skill name so we can scope post-deploy
   // cleanup to skills AIWG ships — never delete user-authored or
   // third-party skills sitting alongside.
@@ -461,10 +480,13 @@ function isFullAiwgSourceRoot(srcRoot) {
   // so full-root cleanup can remove stale AIWG skills. Component-scoped
   // cleanup is limited below to names owned by that component, preserving
   // user-authored skills alongside the generated set.
-  for (const { dir } of getSkillDirectories(srcRoot, 'all')) {
+  for (const { dir } of getSkillDirectories(inventoryRoot || srcRoot, 'all')) {
     const allSkills = findSkillDirs(dir);
     for (const s of allSkills) {
       allManagedNames.add(path.basename(s));
+      if (!copyStandardSkills && isKernelSkill(s)) {
+        desiredNames.add(path.basename(s));
+      }
       // Also record the frontmatter `name:` since Codex uses that as the
       // target dir. Best-effort — ignore parse errors.
       try {
@@ -473,7 +495,11 @@ function isFullAiwgSourceRoot(srcRoot) {
         if (fmMatch) {
           const nameMatch = fmMatch[1].match(/^\s*name:\s*(.+?)\s*$/m);
           if (nameMatch) {
-            allManagedNames.add(stripWrappingQuotes(nameMatch[1]));
+            const deployedName = stripWrappingQuotes(nameMatch[1]);
+            allManagedNames.add(deployedName);
+            if (!copyStandardSkills && isKernelSkill(s)) {
+              desiredNames.add(deployedName);
+            }
           }
         }
       } catch { /* ignore */ }
@@ -537,13 +563,13 @@ function isFullAiwgSourceRoot(srcRoot) {
       // many other AIWG addons. In that mode, ownership is bounded strictly
       // to names declared by THIS bundle; a generic `.aiwg-managed` marker is
       // not enough evidence that this invocation owns the directory. Full
-      // AIWG-root deploys retain the holistic cleanup behavior used for
-      // removed/renamed framework skills.
+      // AIWG-root and official component deploys retain the holistic cleanup
+      // behavior used for removed/renamed framework skills.
       let isAiwgManaged = allManagedNames.has(name);
-      if (fullAiwgSourceRoot) {
+      if (inventoryOwnsSource) {
         isAiwgManaged = isAiwgManaged || LEGACY_RENAMED_SKILLS.has(name);
       }
-      if (!isAiwgManaged && fullAiwgSourceRoot) {
+      if (!isAiwgManaged && inventoryOwnsSource) {
         // Check for the .aiwg-managed marker file (preferred — survives
         // frontmatter transforms) or fall back to namespace check.
         const markerFile = path.join(target, name, '.aiwg-managed');

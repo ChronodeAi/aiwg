@@ -11,7 +11,11 @@ import * as path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readAiwgConfig, type AiwgConfig } from '../../config/aiwg-config.js';
-import { projectAiwgPath } from '../../config/project-artifacts.js';
+import {
+  projectAiwgPath,
+  projectControlPath,
+  resolveProjectAiwgDir,
+} from '../../config/project-artifacts.js';
 import { renderTrackerProtocol, resolveTrackerAuthority } from '../../tracker/capability-protocol.js';
 import {
   buildExternalLinksSection,
@@ -59,14 +63,31 @@ function displayProjectPath(projectPath: string, targetPath: string): string {
   return targetPath;
 }
 
-export async function buildContextFinalizationBlock(projectPath: string): Promise<string> {
+function documentRelativeHref(projectPath: string, documentPath: string, targetPath: string): string {
+  const absoluteDocument = path.isAbsolute(documentPath)
+    ? documentPath
+    : path.resolve(projectPath, documentPath);
+  const absoluteTarget = path.isAbsolute(targetPath)
+    ? targetPath
+    : path.resolve(projectPath, targetPath);
+  const relative = path.relative(path.dirname(absoluteDocument), absoluteTarget).replace(/\\/g, '/');
+  if (!relative) return `./${path.basename(absoluteTarget)}`;
+  return relative.startsWith('./') || relative.startsWith('../')
+    ? relative
+    : `./${relative}`;
+}
+
+export async function buildContextFinalizationBlock(
+  projectPath: string,
+  documentPath = path.join(projectPath, 'AIWG.md'),
+): Promise<string> {
   const config = await readConfig(projectPath);
   const remoteUrls = await readGitRemoteUrls(projectPath);
   const providers = config?.providers ?? [];
   const installed = Object.entries(config?.installed ?? {});
   const installedNames = installed.map(([name]) => name);
   const providerDeployments = new Set<string>();
-  const normalizedAiwgMdPath = displayProjectPath(projectPath, projectAiwgPath(projectPath, 'AIWG.md'));
+  const normalizedAiwgMdPath = displayProjectPath(projectPath, projectControlPath(projectPath, 'AIWG.md'));
   const normalizedAiwgMdLabel = `\`${normalizedAiwgMdPath}\``;
 
   for (const [, entry] of installed) {
@@ -75,6 +96,7 @@ export async function buildContextFinalizationBlock(projectPath: string): Promis
     }
   }
 
+  const trackerAuthority = resolveTrackerAuthority(config, remoteUrls);
   const lines = [
     FINALIZATION_START,
     '## Context Finalization',
@@ -98,7 +120,9 @@ export async function buildContextFinalizationBlock(projectPath: string): Promis
     '',
     'When a user asks whether AIWG is active or engaged in this project, run or read `aiwg status --probe --json` and report the result plainly: engaged state, project root, deployed provider files, installed frameworks/addons, and the next action from the probe. Do not add AIWG attribution, signatures, generated-by text, or passive footers to user files, commits, PRs, comments, code headers, or docs.',
     '',
-    renderTrackerProtocol(resolveTrackerAuthority(config, remoteUrls)),
+    renderTrackerProtocol(trackerAuthority, {
+      configHref: documentRelativeHref(projectPath, documentPath, trackerAuthority.configPath),
+    }),
     '',
     '### Source Model',
     '',
@@ -126,9 +150,10 @@ export function replaceOrAppendFinalizationBlock(content: string, block: string)
 }
 
 export async function buildNormalizedAiwgMd(projectPath: string, existing = ''): Promise<string> {
-  const block = await buildContextFinalizationBlock(projectPath);
+  const normalizedDocumentPath = projectControlPath(projectPath, 'AIWG.md');
+  const block = await buildContextFinalizationBlock(projectPath, normalizedDocumentPath);
   const externalLinksSection = await buildExternalLinksSection(projectPath);
-  const normalizedAiwgMdPath = displayProjectPath(projectPath, projectAiwgPath(projectPath, 'AIWG.md'));
+  const normalizedAiwgMdPath = displayProjectPath(projectPath, projectControlPath(projectPath, 'AIWG.md'));
   const base = existing.trim().length > 0
     ? existing
     : [
@@ -149,7 +174,7 @@ export async function buildNormalizedAiwgMd(projectPath: string, existing = ''):
 }
 
 export async function writeNormalizedAiwgMd(projectPath: string): Promise<string> {
-  const targetPath = projectAiwgPath(projectPath, 'AIWG.md');
+  const targetPath = projectControlPath(projectPath, 'AIWG.md');
   let existing = '';
   try {
     existing = await fs.readFile(targetPath, 'utf8');
@@ -159,6 +184,18 @@ export async function writeNormalizedAiwgMd(projectPath: string): Promise<string
 
   const content = await buildNormalizedAiwgMd(projectPath, existing);
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
-  await fs.writeFile(targetPath, content.endsWith('\n') ? content : `${content}\n`, 'utf8');
+  const normalizedContent = content.endsWith('\n') ? content : `${content}\n`;
+  await fs.writeFile(targetPath, normalizedContent, 'utf8');
+
+  const artifactRoot = resolveProjectAiwgDir(projectPath);
+  const artifactPath = projectAiwgPath(projectPath, 'AIWG.md');
+  if (artifactPath !== targetPath) {
+    try {
+      await fs.access(artifactRoot);
+      await fs.writeFile(artifactPath, normalizedContent, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
   return targetPath;
 }

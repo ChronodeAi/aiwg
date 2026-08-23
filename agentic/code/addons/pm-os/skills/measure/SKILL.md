@@ -1,5 +1,6 @@
 ---
-name: measure-what-matters
+name: measure
+aliases: [measure-what-matters]
 description: Turn vague intangibles into quantified decision inputs by chaining clarification, decomposition, value-of-information analysis, and small-sample measurement into a single structured workflow. Use when defining KPIs, deciding what to measure, or designing ROI analysis on intangibles.
 ---
 

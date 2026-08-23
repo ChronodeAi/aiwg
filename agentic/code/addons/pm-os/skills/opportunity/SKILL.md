@@ -1,5 +1,6 @@
 ---
-name: opportunity-mapping
+name: opportunity
+aliases: [opportunity-mapping]
 description: Map product opportunities systematically — from structured OST intake through opportunity tree construction, optional MECE refinement, to selecting one prioritized target opportunity. Use when mapping product opportunities, building an opportunity solution tree, or selecting initiatives to pursue.
 ---
 

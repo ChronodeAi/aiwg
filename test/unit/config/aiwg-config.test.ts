@@ -80,6 +80,10 @@ describe('aiwg-config', () => {
       expect(cfg.delivery!.force_push_policy).toBe('never');
     });
 
+    it('ships the safe artifact output policy (#2122)', () => {
+      expect(emptyConfig().artifact_outputs).toEqual({ canonical: 'aiwg', provider_native: 'explicit-only', destinations: {} });
+    });
+
     it('ships an explicit parallelism block with provider defaults (#1359)', () => {
       const cfg = emptyConfig(); // default provider = claude
       expect(cfg.parallelism).toBeDefined();
@@ -114,12 +118,12 @@ describe('aiwg-config', () => {
       expect(p).toBe(resolve('/some/project', '.aiwg', 'aiwg.config'));
     });
 
-    it('honors AIWG_ARTIFACTS_PATH for renamed or external project corpus directories', () => {
+    it('keeps the config in the local control plane when the corpus is external', () => {
       const previous = process.env.AIWG_ARTIFACTS_PATH;
       process.env.AIWG_ARTIFACTS_PATH = '../aiwg-web-release-ops/corpus/.aiwg';
       try {
         const p = getConfigPath('/some/project');
-        expect(p).toBe(resolve('/some/project', '../aiwg-web-release-ops/corpus/.aiwg', 'aiwg.config'));
+        expect(p).toBe(resolve('/some/project', '.aiwg', 'aiwg.config'));
       } finally {
         if (previous === undefined) {
           delete process.env.AIWG_ARTIFACTS_PATH;
@@ -189,14 +193,15 @@ describe('aiwg-config', () => {
       expect(read?.externalLinks).toEqual(cfg.externalLinks);
     });
 
-    it('reads and writes aiwg.config from AIWG_ARTIFACTS_PATH', async () => {
+    it('writes the local control config and mirrors an existing external control copy', async () => {
       const externalAiwgDir = join(tmpDir, 'renamed-aiwg-corpus');
+      mkdirSync(externalAiwgDir, { recursive: true });
       const previous = process.env.AIWG_ARTIFACTS_PATH;
       process.env.AIWG_ARTIFACTS_PATH = externalAiwgDir;
       try {
         await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
         expect(existsSync(join(externalAiwgDir, 'aiwg.config'))).toBe(true);
-        expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(false);
+        expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
 
         const read = await readAiwgConfig(tmpDir);
         expect(read?.providers).toEqual(['codex']);
@@ -206,6 +211,20 @@ describe('aiwg-config', () => {
         } else {
           process.env.AIWG_ARTIFACTS_PATH = previous;
         }
+      }
+    });
+
+    it('falls back to a legacy external config when the local control copy is missing', async () => {
+      const externalAiwgDir = join(tmpDir, 'legacy-external-aiwg');
+      mkdirSync(externalAiwgDir, { recursive: true });
+      writeFileSync(join(externalAiwgDir, 'aiwg.config'), JSON.stringify(emptyConfig(['codex'])));
+      const previous = process.env.AIWG_ARTIFACTS_PATH;
+      process.env.AIWG_ARTIFACTS_PATH = externalAiwgDir;
+      try {
+        expect((await readAiwgConfig(tmpDir))?.providers).toEqual(['codex']);
+      } finally {
+        if (previous === undefined) delete process.env.AIWG_ARTIFACTS_PATH;
+        else process.env.AIWG_ARTIFACTS_PATH = previous;
       }
     });
 
@@ -496,8 +515,12 @@ describe('aiwg-config', () => {
       expect(r).toEqual({
         primary: 'origin',
         issue_tracker: 'origin',
+        issue_provider: undefined,
         ci: 'origin',
         tracker_actor: undefined,
+        customer_issue_tracker: undefined,
+        customer_issue_provider: undefined,
+        customer_tracker_actor: undefined,
         transport: undefined,
         secondary: [],
       });
@@ -507,8 +530,10 @@ describe('aiwg-config', () => {
       const r = resolveRemotes({});
       expect(r.primary).toBe('origin');
       expect(r.issue_tracker).toBe('origin');
+      expect(r.issue_provider).toBeUndefined();
       expect(r.ci).toBe('origin');
       expect(r.tracker_actor).toBeUndefined();
+      expect(r.customer_issue_tracker).toBeUndefined();
       expect(r.transport).toBeUndefined();
       expect(r.secondary).toEqual([]);
     });
@@ -524,9 +549,11 @@ describe('aiwg-config', () => {
       const r = resolveRemotes({
         primary: 'origin',
         issue_tracker: 'gitea',
+        issue_provider: 'gitea',
         ci: 'jenkins',
       });
       expect(r.issue_tracker).toBe('gitea');
+      expect(r.issue_provider).toBe('gitea');
       expect(r.ci).toBe('jenkins');
     });
 
@@ -544,6 +571,28 @@ describe('aiwg-config', () => {
         via: 'tea',
         forbid_actors: ['roctibot'],
       });
+    });
+
+    it('preserves a distinct customer tracker and actor', () => {
+      const r = resolveRemotes({
+        primary: 'origin',
+        issue_tracker: 'origin',
+        customer_issue_tracker: 'github',
+        customer_issue_provider: 'github',
+        customer_tracker_actor: {
+          login: 'customer-maintainer',
+          via: 'gh',
+          forbid_actors: ['release-bot'],
+        },
+      });
+      expect(r.customer_issue_tracker).toBe('github');
+      expect(r.customer_issue_provider).toBe('github');
+      expect(r.customer_tracker_actor).toEqual({
+        login: 'customer-maintainer',
+        via: 'gh',
+        forbid_actors: ['release-bot'],
+      });
+      expect(r.issue_tracker).toBe('origin');
     });
 
     it('preserves primary remote transport identity metadata', () => {

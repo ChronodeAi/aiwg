@@ -13,6 +13,25 @@ import { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { createScriptRunner } from './script-runner.js';
 import { getFrameworkRoot } from '../../channel/manager.mjs';
 import { maybePrintCommunityFooter } from '../../community/footer.js';
+import { buildDeploymentStatusProbe } from '../services/deployment-verification.js';
+import { detectScope } from '../scope-resolver.js';
+
+function statusProjectRoot(args: string[], fallback: string): string {
+  const valueFlags = new Set(['--scope', '--provider', '--bundle']);
+  for (let index = 0; index < args.length; index += 1) {
+    if (valueFlags.has(args[index])) {
+      index += 1;
+      continue;
+    }
+    if (!args[index].startsWith('-')) return args[index];
+  }
+  return fallback;
+}
+
+function statusFlagValue(args: string[], flag: string): string | undefined {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
+}
 
 /**
  * Handler for workspace status command
@@ -33,6 +52,21 @@ export const statusHandler: CommandHandler = {
   aliases: ['-status', '--status'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--probe')) {
+      const projectRoot = statusProjectRoot(ctx.args, ctx.cwd ?? process.cwd());
+      const scope = detectScope(ctx.args);
+      const probe = await buildDeploymentStatusProbe(projectRoot, ctx.frameworkRoot, {
+        scope,
+        provider: statusFlagValue(ctx.args, '--provider'),
+        bundle: statusFlagValue(ctx.args, '--bundle'),
+      });
+      return {
+        exitCode: probe.status === 'needs-repair' ? 1 : 0,
+        message: JSON.stringify(probe, null, 2),
+        rawOutput: true,
+      };
+    }
+
     const frameworkRoot = await getFrameworkRoot();
     const runner = createScriptRunner(frameworkRoot);
 

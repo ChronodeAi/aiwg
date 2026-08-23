@@ -11,7 +11,7 @@
 
 import { readFile, writeFile, mkdir, access, readdir, rename, unlink } from 'fs/promises';
 import { createHash, randomBytes } from 'crypto';
-import { resolve, join, isAbsolute } from 'path';
+import { resolve, join, dirname, isAbsolute } from 'path';
 import type { ProjectLocalType } from '../extensions/manifest.js';
 import { normalizeNamedCaptures } from '../artifacts/index-builder.js';
 import {
@@ -25,12 +25,18 @@ import {
   validateAuthorization,
   type AuthorizationConfig,
 } from '../policy/authorization.js';
-import { projectAiwgPath, resolveProjectAiwgDir } from './project-artifacts.js';
+import {
+  projectAiwgPath,
+  projectControlPath,
+  resolveProjectAiwgDir,
+} from './project-artifacts.js';
 import {
   defaultThreatAssessmentConfig,
   validateThreatAssessmentConfig,
   type SecurityConfig,
 } from '../security/threat-assessment-config.js';
+import { defaultArtifactOutputs, validateArtifactOutputs, type ArtifactOutputsConfig } from '../artifacts/output-policy.js';
+export type { ArtifactOutputsConfig } from '../artifacts/output-policy.js';
 
 export type {
   SecurityConfig,
@@ -145,6 +151,9 @@ export interface TrackerActorConfig {
   forbid_actors?: string[];
 }
 
+/** Explicit issue-tracker provider hint for self-hosted or local trackers. */
+export type IssueProviderConfig = 'gitea' | 'github' | 'local';
+
 /** Git transport identity and the project-local helper that enforces it. */
 export interface RemoteTransportConfig {
   /** Forge login expected to authenticate git pushes. */
@@ -168,10 +177,18 @@ export interface RemotesConfig {
   primary?: string;
   /** Where issues live. Defaults to `primary`. */
   issue_tracker?: string;
+  /** Explicit tracker provider for ambiguous self-hosted or local issue stores. */
+  issue_provider?: IssueProviderConfig;
   /** Where CI runs. Defaults to `primary`. */
   ci?: string;
   /** Which forge account/tool performs delivery writes. */
   tracker_actor?: TrackerActorConfig;
+  /** Optional customer-facing issue intake remote, distinct from internal engineering work. */
+  customer_issue_tracker?: string;
+  /** Explicit provider hint for the customer-facing tracker. */
+  customer_issue_provider?: IssueProviderConfig;
+  /** Account/tool used for customer acknowledgements, comments, and closures. */
+  customer_tracker_actor?: TrackerActorConfig;
   /** Identity and helper used for git transport to the primary remote. */
   transport?: RemoteTransportConfig;
   /** Mirrors, fork bases, publishing targets. */
@@ -185,8 +202,12 @@ export interface RemotesConfig {
 export interface ResolvedRemotes {
   primary: string;
   issue_tracker: string;
+  issue_provider?: IssueProviderConfig;
   ci: string;
   tracker_actor?: TrackerActorConfig;
+  customer_issue_tracker?: string;
+  customer_issue_provider?: IssueProviderConfig;
+  customer_tracker_actor?: TrackerActorConfig;
   transport?: RemoteTransportConfig;
   secondary: SecondaryRemote[];
 }
@@ -360,6 +381,9 @@ export interface AiwgConfig {
 
   /** Deterministic, project-owned security policy including forge-content assessment. */
   security?: SecurityConfig;
+
+  /** Canonical artifact storage and optional provider-native presentation/export policy. */
+  artifact_outputs?: ArtifactOutputsConfig;
 
   /**
    * General multi-repository workspace metadata. Root manifests pair this
@@ -782,9 +806,20 @@ export function resolveParallelism(
  */
 export interface IndexConfig {
   graphs?: Record<string, IndexGraphDef | IndexMarkdownIndices>;
+  graphOverrides?: {
+    codebase?: IndexBuiltinGraphOverride;
+  };
   userIndices?: {
     enabled?: boolean;
   };
+}
+
+/** Safe operator-controlled fields for adapting an immutable built-in graph. */
+export interface IndexBuiltinGraphOverride {
+  /** Replaces the built-in scan roots when present. */
+  scanDirs?: string[];
+  /** Replaces the built-in extension allow-list when present. */
+  extensions?: string[];
 }
 
 export interface UserIndicesConfig {
@@ -851,13 +886,46 @@ export function validateIndexConfig(index: unknown): string[] {
     return ['index: must be an object'];
   }
 
-  const graphs = (index as Record<string, unknown>).graphs;
-  if (graphs === undefined) return errors; // index with no graphs is permissible
-  if (typeof graphs !== 'object' || graphs === null || Array.isArray(graphs)) {
-    return ['index.graphs: must be an object mapping graph names to definitions'];
+  const indexObject = index as Record<string, unknown>;
+  const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+  const graphOverrides = indexObject.graphOverrides;
+  if (graphOverrides !== undefined) {
+    if (typeof graphOverrides !== 'object' || graphOverrides === null || Array.isArray(graphOverrides)) {
+      errors.push('index.graphOverrides: must be an object mapping supported built-in graph names to overrides');
+    } else {
+      for (const [name, rawOverride] of Object.entries(graphOverrides as Record<string, unknown>)) {
+        const where = `index.graphOverrides.${name}`;
+        if (name !== 'codebase') {
+          errors.push(`${where}: unsupported built-in graph override (supported: codebase)`);
+          continue;
+        }
+        if (typeof rawOverride !== 'object' || rawOverride === null || Array.isArray(rawOverride)) {
+          errors.push(`${where}: must be an object`);
+          continue;
+        }
+        const override = rawOverride as Record<string, unknown>;
+        for (const field of Object.keys(override)) {
+          if (field !== 'scanDirs' && field !== 'extensions') {
+            errors.push(`${where}.${field}: unknown field (supported: scanDirs, extensions)`);
+          }
+        }
+        if (override.scanDirs !== undefined && (!isStringArray(override.scanDirs) || override.scanDirs.length === 0)) {
+          errors.push(`${where}.scanDirs: must be a non-empty array of strings`);
+        }
+        if (override.extensions !== undefined && (!isStringArray(override.extensions) || override.extensions.length === 0)) {
+          errors.push(`${where}.extensions: must be a non-empty array of strings`);
+        }
+      }
+    }
   }
 
-  const isStringArray = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === 'string');
+  const graphs = indexObject.graphs;
+  if (graphs === undefined) return errors; // index with no graphs is permissible
+  if (typeof graphs !== 'object' || graphs === null || Array.isArray(graphs)) {
+    errors.push('index.graphs: must be an object mapping graph names to definitions');
+    return errors;
+  }
 
   for (const [name, rawDef] of Object.entries(graphs as Record<string, unknown>)) {
     const where = `index.graphs.${name}`;
@@ -1151,8 +1219,8 @@ export async function readIndexConfig(
  *   - any host containing 'gitea' (or matching the typical Gitea path shape) → 'gitea'
  *
  * Returns 'unknown' for self-hosted instances we can't classify by host alone —
- * callers should then prompt the operator or fall back to the configured
- * AIWG provider list.
+ * callers should then prompt the operator or use `remotes.issue_provider`
+ * when the project has declared one.
  *
  * @implements #997
  */
@@ -1169,7 +1237,7 @@ export function resolveRemoteProvider(remoteUrl: string): 'github' | 'gitlab' | 
   // gitea — identified by hostname token. Self-hosted Gitea instances often
   // don't include 'gitea' in their hostname (e.g. corporate git servers), so
   // 'unknown' is the honest answer there — callers should consult the
-  // configured AIWG provider list rather than guess.
+  // explicit remotes.issue_provider hint rather than guess.
   if (lower.includes('gitea')) return 'gitea';
 
   return 'unknown';
@@ -1181,6 +1249,7 @@ export function resolveRemoteProvider(remoteUrl: string): 'github' | 'gitlab' | 
  * Defaults:
  *   - `primary` defaults to "origin"
  *   - `issue_tracker` defaults to `primary`
+ *   - customer tracker fields remain unset unless explicitly configured
  *   - `ci` defaults to `primary`
  *   - `secondary` defaults to `[]`
  *
@@ -1191,8 +1260,12 @@ export function resolveRemotes(remotes: RemotesConfig | undefined): ResolvedRemo
   return {
     primary,
     issue_tracker: remotes?.issue_tracker ?? primary,
+    issue_provider: remotes?.issue_provider,
     ci: remotes?.ci ?? primary,
     tracker_actor: remotes?.tracker_actor,
+    customer_issue_tracker: remotes?.customer_issue_tracker,
+    customer_issue_provider: remotes?.customer_issue_provider,
+    customer_tracker_actor: remotes?.customer_tracker_actor,
     transport: remotes?.transport,
     secondary: remotes?.secondary ?? [],
   };
@@ -1356,6 +1429,7 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
     security: {
       threatAssessment: defaultThreatAssessmentConfig(),
     },
+    artifact_outputs: defaultArtifactOutputs(),
     delivery: {
       mode: 'pr-required',
       default_branch: 'main',
@@ -1378,11 +1452,11 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
 /**
  * Resolve path to the project-level AIWG config.
  *
- * Defaults to `<project>/.aiwg/aiwg.config`; honors `AIWG_ARTIFACTS_PATH` so
- * projects can rename or relocate the AIWG artifact directory.
+ * The config is part of the repository-local control plane. Relocating the
+ * artifact corpus does not relocate this path.
  */
 export function getConfigPath(projectDir: string): string {
-  return projectAiwgPath(projectDir, CONFIG_FILENAME);
+  return projectControlPath(projectDir, CONFIG_FILENAME);
 }
 
 /**
@@ -1410,11 +1484,19 @@ export function getProjectDir(
  * Returns null if the file does not exist.
  */
 export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | null> {
-  const filePath = getConfigPath(projectDir);
+  const localPath = getConfigPath(projectDir);
+  const artifactPath = projectAiwgPath(projectDir, CONFIG_FILENAME);
+  let filePath = localPath;
   try {
-    await access(filePath);
+    await access(localPath);
   } catch {
-    return null;
+    if (artifactPath === localPath) return null;
+    try {
+      await access(artifactPath);
+      filePath = artifactPath;
+    } catch {
+      return null;
+    }
   }
 
   const content = await readFile(filePath, 'utf-8');
@@ -1447,36 +1529,58 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }
 
+  const artifactOutputErrors = validateArtifactOutputs(parsed.artifact_outputs);
+  if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
+
   return parsed;
 }
 
 /**
- * Write aiwg.config, creating the resolved AIWG artifact directory if needed.
+ * Write aiwg.config to the repository-local control plane. When a reachable
+ * external corpus also carries the compatibility control copy, keep it in
+ * sync so split-root health remains deterministic.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
   const threatAssessmentErrors = validateThreatAssessmentConfig(config.security?.threatAssessment);
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }
-  const dir = resolveProjectAiwgDir(projectDir);
-  await mkdir(dir, { recursive: true });
-  const filePath = join(dir, CONFIG_FILENAME);
-  // Atomic write: emit to a temp sibling, fsync-ish via rename. Prevents a
-  // crash or kill mid-write from corrupting the config file. Rename is
-  // atomic on POSIX and on NTFS when both paths are on the same volume.
-  // The random suffix avoids collisions if two concurrent writers run.
-  const tmpPath = `${filePath}.${randomBytes(6).toString('hex')}.tmp`;
-  try {
-    await writeFile(tmpPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-    await rename(tmpPath, filePath);
-  } catch (err) {
-    // Best-effort cleanup of the temp file on failure, ignoring ENOENT.
+  const artifactOutputErrors = validateArtifactOutputs(config.artifact_outputs);
+  if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
+  const localPath = getConfigPath(projectDir);
+  const artifactDir = resolveProjectAiwgDir(projectDir);
+  const artifactPath = join(artifactDir, CONFIG_FILENAME);
+  const content = JSON.stringify(config, null, 2) + '\n';
+
+  const writeAtomic = async (filePath: string): Promise<void> => {
+    await mkdir(dirname(filePath), { recursive: true });
+    // Atomic write: emit to a temp sibling, fsync-ish via rename. Prevents a
+    // crash or kill mid-write from corrupting the config file. Rename is
+    // atomic on POSIX and on NTFS when both paths are on the same volume.
+    // The random suffix avoids collisions if two concurrent writers run.
+    const tmpPath = `${filePath}.${randomBytes(6).toString('hex')}.tmp`;
     try {
-      await unlink(tmpPath);
-    } catch {
-      /* ignore */
+      await writeFile(tmpPath, content, 'utf-8');
+      await rename(tmpPath, filePath);
+    } catch (err) {
+      // Best-effort cleanup of the temp file on failure, ignoring ENOENT.
+      try {
+        await unlink(tmpPath);
+      } catch {
+        /* ignore */
+      }
+      throw err;
     }
-    throw err;
+  };
+
+  await writeAtomic(localPath);
+  if (artifactPath !== localPath) {
+    try {
+      await access(artifactDir);
+      await writeAtomic(artifactPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 }
 

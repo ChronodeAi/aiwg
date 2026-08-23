@@ -17,7 +17,7 @@
 
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import { projectAiwgPath } from '../../config/project-artifacts.js';
+import { projectControlPath } from '../../config/project-artifacts.js';
 import { buildParallelismSection, replaceOrAppendParallelismBlock } from './parallelism-section.js';
 import { buildContextFinalizationBlock, replaceOrAppendFinalizationBlock } from './finalization.js';
 import {
@@ -59,7 +59,10 @@ export async function buildAiwgMdContent(
   // #1362: parallelism cap section, injected after generation so it surfaces
   // in regenerated context files regardless of CLAUDE.md content.
   const parallelismSection = await buildParallelismSection(projectPath);
-  const finalizationBlock = await buildContextFinalizationBlock(projectPath);
+  const finalizationBlock = await buildContextFinalizationBlock(
+    projectPath,
+    path.join(projectPath, 'AIWG.md'),
+  );
   const externalLinksSection = await buildExternalLinksSection(projectPath);
 
   if (claudeMdContent) {
@@ -94,7 +97,7 @@ export async function buildAiwgMdContent(
   }
 
   // Fallback stub.
-  const normalizedPath = projectAiwgPath(projectPath, 'AIWG.md');
+  const normalizedPath = projectControlPath(projectPath, 'AIWG.md');
   const normalizedRelative = path.relative(projectPath, normalizedPath).replace(/\\/g, '/');
   const normalizedLink = normalizedRelative.startsWith('.') ? normalizedRelative : `./${normalizedRelative}`;
   const stub = [

@@ -1,5 +1,6 @@
 ---
-name: stakeholder-copilot
+name: stakeholder
+aliases: [stakeholder-copilot]
 description: Navigate stakeholder complexity end-to-end — from power mapping and risk review through message framing, challenging meeting prep, difficult conversations, and executive presence review. Use when mapping power dynamics, planning influence strategy, or navigating organizational politics.
 ---
 

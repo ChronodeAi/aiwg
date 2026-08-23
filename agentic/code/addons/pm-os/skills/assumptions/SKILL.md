@@ -1,5 +1,6 @@
 ---
-name: assumption-mapping
+name: assumptions
+aliases: [assumption-mapping]
 description: Surface, prioritize, and find early signals for the riskiest assumptions in your product strategy — from assumption generation through prioritization to identifying the easiest validation signal. Use when mapping product assumptions, prioritizing risk, or designing validation experiments.
 ---
 

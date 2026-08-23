@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { homedir, tmpdir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   sanitizeDescription,
   sanitizeTag,
@@ -491,9 +491,19 @@ describe('context finalization emission', () => {
         expect(content).toContain('show command');
         expect(content).toContain('.aiwg/aiwg.config');
         expect(content).toContain('Tracker Authority Protocol');
-        expect(content).toContain('Canonical tracker: `origin` (gitea;');
+        expect(content).toContain('Internal/canonical tracker: `origin` (gitea;');
+        expect(content).toContain('Customer issue tracker: not configured');
         expect(content).toContain('MCP/app tools for the configured tracker');
         expect(content).toContain('Git SSH remote access is repository sync, not issue-tracker API access');
+      }
+      const sourceLinks = [
+        [result.aiwgMdPath, './.aiwg/aiwg.config'],
+        [result.normalizedAiwgMdPath, './aiwg.config'],
+      ] as const;
+      for (const [file, href] of sourceLinks) {
+        const content = readFileSync(file, 'utf8');
+        expect(content).toContain(`Source of truth: [.aiwg/aiwg.config](${href})`);
+        expect(existsSync(resolve(dirname(file), href))).toBe(true);
       }
       for (const file of [result.agentsMdPath, ...result.twinPaths]) {
         const content = readFileSync(file, 'utf8');
@@ -553,7 +563,7 @@ describe('context finalization emission', () => {
       expect(readFileSync(overridePath, 'utf8')).toBe('# AGENTS.override.md\n\nOperator tracker notes stay here.\n');
       const normalized = readFileSync(join(dir, '.aiwg', 'AIWG.md'), 'utf8');
       expect(normalized).toContain('Tracker Authority Protocol');
-      expect(normalized).toContain('Canonical tracker: `github` (github;');
+      expect(normalized).toContain('Internal/canonical tracker: `github` (github;');
       expect(normalized).toContain('Issue storage mode: github-only');
     } finally {
       rmSync(dir, { recursive: true, force: true });

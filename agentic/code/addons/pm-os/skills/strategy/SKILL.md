@@ -1,5 +1,6 @@
 ---
-name: core-strategy-development
+name: strategy
+aliases: [core-strategy-development]
 description: Build a grounded product strategy from first principles — from identifying the strategic crux through competitive analysis to a limit-based strategy and value chain map. Use when developing product strategy, identifying the strategic crux, or doing competitive analysis.
 ---
 

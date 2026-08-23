@@ -1,5 +1,6 @@
 ---
-name: prd-construction
+name: prd
+aliases: [prd-construction]
 description: Build a complete PRD end-to-end — from raw inputs (transcript, design, research) through use cases, user stories, and acceptance criteria to a drafted PRD reviewed by 9 specialised reviewers (2 PRD-specific personas + 7 cross-functional). Use when you need a full PRD, not just a one-shot draft.
 ---
 

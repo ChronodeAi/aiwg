@@ -43,6 +43,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
 
   const required = [
     path.join(repoRoot, 'LICENSE'),
+    path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'),
     path.join(repoRoot, 'bin', 'aiwg.mjs'),
     path.join(repoRoot, 'dist', 'src', 'cli', 'router.js'),
     path.join(repoRoot, 'dist', 'src', 'api', 'index.js'),
@@ -80,6 +81,12 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
     path.join(outputDir, 'agentic', 'code', 'providers'),
     { recursive: true },
   );
+  await mkdir(path.join(outputDir, 'schemas'), { recursive: true });
+  await cp(
+    path.join(repoRoot, 'schemas', 'security'),
+    path.join(outputDir, 'schemas', 'security'),
+    { recursive: true },
+  );
   await mkdir(path.join(outputDir, 'tools', 'agents'), { recursive: true });
   await mkdir(path.join(outputDir, 'tools', 'commands'), { recursive: true });
   await mkdir(path.join(outputDir, 'tools', 'plugin'), { recursive: true });
@@ -97,6 +104,7 @@ export async function buildCliPackage({ outputDir = defaultOutputDir } = {}) {
   await cp(path.join(repoRoot, 'bin', 'aiwg.mjs'), path.join(outputDir, 'bin', 'aiwg.mjs'));
   await chmod(path.join(outputDir, 'bin', 'aiwg.mjs'), 0o755);
   await cp(path.join(repoRoot, 'LICENSE'), path.join(outputDir, 'LICENSE'));
+  await cp(path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'), path.join(outputDir, 'THIRD_PARTY_NOTICES.md'));
   await cp(path.join(sourceDir, 'README.md'), path.join(outputDir, 'README.md'));
   await writeFile(path.join(outputDir, 'package.json'), `${JSON.stringify(cli, null, 2)}\n`, 'utf8');
 

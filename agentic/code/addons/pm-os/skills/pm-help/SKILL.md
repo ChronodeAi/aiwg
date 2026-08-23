@@ -1,5 +1,6 @@
 ---
-name: help
+name: pm-help
+aliases: [help]
 description: >-
   Use when the user wants a live system tour, asks what PM OS can do, or
   says '/help' or '/pm-help'. Not for orienting on current state and a

@@ -28,6 +28,9 @@ export interface TrackerAuthority {
   issueTrackerUrl?: string;
   issueStorage?: string;
   provider: TrackerProvider;
+  customerIssueTrackerRemote?: string;
+  customerIssueTrackerUrl?: string;
+  customerProvider?: TrackerProvider;
   secondaryRemotes: SecondaryRemote[];
 }
 
@@ -49,6 +52,11 @@ export interface TrackerAccessDecision {
   blocker?: string;
 }
 
+export interface TrackerProtocolRenderOptions {
+  /** Link target relative to the document receiving the rendered protocol. */
+  configHref?: string;
+}
+
 function providerFromIssueStorage(issueStorage: string | undefined): TrackerProvider {
   const value = issueStorage?.toLowerCase() ?? '';
   if (!value) return 'unknown';
@@ -60,7 +68,7 @@ function providerFromIssueStorage(issueStorage: string | undefined): TrackerProv
 }
 
 function normalizeProvider(provider: string): TrackerProvider {
-  return provider === 'gitea' || provider === 'github' || provider === 'gitlab'
+  return provider === 'gitea' || provider === 'github' || provider === 'gitlab' || provider === 'local'
     ? provider
     : 'unknown';
 }
@@ -92,7 +100,17 @@ export function resolveTrackerAuthority(
   const issueStorage = config?.delivery?.issue_storage;
   const issueTrackerUrl = remoteUrls[remotes.issue_tracker];
   const storageProvider = providerFromIssueStorage(issueStorage);
+  const configuredProvider = remotes.issue_provider ? normalizeProvider(remotes.issue_provider) : 'unknown';
   const urlProvider = issueTrackerUrl ? normalizeProvider(resolveRemoteProvider(issueTrackerUrl)) : 'unknown';
+  const customerIssueTrackerUrl = remotes.customer_issue_tracker
+    ? remoteUrls[remotes.customer_issue_tracker]
+    : undefined;
+  const configuredCustomerProvider = remotes.customer_issue_provider
+    ? normalizeProvider(remotes.customer_issue_provider)
+    : 'unknown';
+  const customerUrlProvider = customerIssueTrackerUrl
+    ? normalizeProvider(resolveRemoteProvider(customerIssueTrackerUrl))
+    : 'unknown';
 
   return {
     configPath,
@@ -101,7 +119,18 @@ export function resolveTrackerAuthority(
     ciRemote: remotes.ci,
     issueTrackerUrl,
     issueStorage,
-    provider: storageProvider !== 'unknown' ? storageProvider : urlProvider,
+    provider: configuredProvider !== 'unknown'
+      ? configuredProvider
+      : storageProvider !== 'unknown'
+        ? storageProvider
+        : urlProvider,
+    ...(remotes.customer_issue_tracker ? {
+      customerIssueTrackerRemote: remotes.customer_issue_tracker,
+      customerIssueTrackerUrl,
+      customerProvider: configuredCustomerProvider !== 'unknown'
+        ? configuredCustomerProvider
+        : customerUrlProvider,
+    } : {}),
     secondaryRemotes: remotes.secondary,
   };
 }
@@ -132,7 +161,10 @@ export function chooseTrackerAccess(
   };
 }
 
-export function renderTrackerProtocol(authority: TrackerAuthority): string {
+export function renderTrackerProtocol(
+  authority: TrackerAuthority,
+  options: TrackerProtocolRenderOptions = {},
+): string {
   const secondary = authority.secondaryRemotes.length > 0
     ? authority.secondaryRemotes
         .map((remote) => `${remote.name}${remote.purpose ? ` (${remote.purpose})` : ''}`)
@@ -140,12 +172,17 @@ export function renderTrackerProtocol(authority: TrackerAuthority): string {
     : 'none configured';
   const issueStorage = authority.issueStorage ?? 'not configured';
   const trackerUrl = authority.issueTrackerUrl ?? 'remote URL unavailable';
+  const customerTracker = authority.customerIssueTrackerRemote
+    ? `\`${authority.customerIssueTrackerRemote}\` (${authority.customerProvider ?? 'unknown'}; ${authority.customerIssueTrackerUrl ?? 'remote URL unavailable'})`
+    : 'not configured';
+  const configHref = options.configHref ?? `./${authority.configPath}`;
 
   return [
     '### Tracker Authority Protocol',
     '',
-    `- Source of truth: [${authority.configPath}](./${authority.configPath})`,
-    `- Canonical tracker: \`${authority.issueTrackerRemote}\` (${authority.provider}; ${trackerUrl})`,
+    `- Source of truth: [${authority.configPath}](${configHref})`,
+    `- Internal/canonical tracker: \`${authority.issueTrackerRemote}\` (${authority.provider}; ${trackerUrl})`,
+    `- Customer issue tracker: ${customerTracker}`,
     `- Primary repo remote: \`${authority.primaryRemote}\`; CI remote: \`${authority.ciRemote}\``,
     `- Secondary/mirror remotes: ${secondary}`,
     `- Issue storage mode: ${issueStorage}`,
@@ -157,6 +194,8 @@ export function renderTrackerProtocol(authority: TrackerAuthority): string {
     '4. Stop and report a blocker.',
     '',
     '- Project config decides tracker authority; installed/authenticated CLIs do not.',
+    '- Route internal engineering, delivery, and CI-sensitive issue work to the internal tracker.',
+    '- Route customer acknowledgements, follow-up, and closure to the customer tracker when configured.',
     '- Git SSH remote access is repository sync, not issue-tracker API access.',
     '- Do not file on mirror or secondary remotes just because their CLI is authenticated.',
     '- Treat an unauthenticated tracker CLI as one failed access path, then continue probing MCP/app/API before blocking.',

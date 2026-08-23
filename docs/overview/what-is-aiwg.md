@@ -8,7 +8,7 @@
 
 ## The Elevator Pitch
 
-AIWG is a deployment tool and support utility for AI context. At its core, `aiwg use` copies markdown and YAML source files into the specific paths each AI platform looks in — `.claude/agents/`, `~/.codex/skills/`, `.cursor/rules/`, `.github/prompts/`, and seven more — so one source of truth works across 11 platforms. Around that core, AIWG ships utilities for things the base platforms do not handle on their own: persistent artifact memory, background orchestration, autonomous loops, artifact indexing, cost telemetry, and health diagnostics. Most utilities are opt-in; the deployment layer works standalone as plain text.
+AIWG is a deployment tool and support utility for AI context. At its core, `aiwg use` copies markdown and YAML source files into the specific paths each AI platform looks in — `.claude/agents/`, `.agents/skills/` for Codex, `.cursor/rules/`, `.github/prompts/`, and seven more — so one source of truth works across 11 platforms. Around that core, AIWG ships utilities for things the base platforms do not handle on their own: persistent artifact memory, background orchestration, autonomous loops, artifact indexing, cost telemetry, and health diagnostics. Most utilities are opt-in; the deployment layer works standalone as plain text.
 
 The compounding story matters more than any single file. Hundreds of small artifacts — each a readable, editable `.md` file — snap together into multi-agent workflows (SDLC, forensics, marketing, research) that would otherwise take a bespoke agent platform to build. AIWG implements patterns from cognitive science, multi-agent systems, and software engineering as file conventions and deployment rules, not as a runtime you depend on.
 
@@ -441,7 +441,7 @@ aiwg use sdlc --provider warp          # Warp Terminal
 aiwg use sdlc --provider factory       # Factory AI
 aiwg use sdlc --provider opencode      # OpenCode
 aiwg use sdlc --provider openai        # OpenAI/Codex
-aiwg use sdlc --provider windsurf      # Windsurf
+aiwg use sdlc --provider devin         # Devin Desktop
 ```
 
 Each platform receives agents, commands, skills, and rules adapted to its conventions automatically. Write once, deploy everywhere.
@@ -484,10 +484,10 @@ aiwg ralph-external "..."  # Crash-resilient long-running
 aiwg index build           # Artifact discovery
 aiwg doc-sync              # Bidirectional doc sync
 aiwg sdlc-accelerate "..." # Idea to construction-ready
-aiwg cost-report           # Token cost tracking
+aiwg cost-report --fleet   # OpenRouter fleet cost observation
 ```
 
-Full reference: `@docs/agents/cli-reference.md`
+Full reference: `@docs/cli/reference.md`
 
 ---
 
@@ -504,7 +504,7 @@ Full reference: `@docs/agents/cli-reference.md`
 | Long-running tasks | Babysit the terminal | External Al runs 6-8+ hours autonomously |
 | Citation integrity | Can hallucinate | Retrieval-first (0% hallucination rate) |
 | Standards compliance | None | FAIR, OAIS, PROV, GRADE, MCP, NIST, MITRE ATT&CK |
-| Platform support | Single platform | 8 platforms (Claude Code, Copilot, Cursor, Warp, Factory, OpenCode, Codex, Windsurf) |
+| Platform support | Single platform | Multi-platform (Claude Code, Copilot, Cursor, Warp, Factory, OpenCode, Codex, Devin Desktop, and more) |
 | Reproducibility | Non-deterministic | Strict mode (temperature=0), checkpoints, validation |
 | Context beyond window | Lost | RLM recursive decomposition (10M+ tokens) |
 
@@ -518,7 +518,7 @@ Full reference: `@docs/agents/cli-reference.md`
 | Cost control | Token limits | Phase gates prevent runaway |
 | Auditability | Limited provenance | Full W3C PROV chain of custody |
 | Reproducibility | Non-deterministic | Checkpointing, execution logs |
-| Cross-platform | Single environment | 8 platforms (Claude, Cursor, Copilot, Warp, Factory, OpenCode, Codex, Windsurf) |
+| Cross-platform | Single environment | Claude, Cursor, Copilot, Warp, Factory, OpenCode, Codex, Devin Desktop, and more |
 | Long-running tasks | Token limit = hard stop | External Al with crash recovery (hours to days) |
 | Scheduled agents | Not supported | Cron-based recurring tasks with completion criteria |
 
