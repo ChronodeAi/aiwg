@@ -1,5 +1,6 @@
 ---
-name: make-great-decisions
+name: decisions
+aliases: [make-great-decisions]
 description: Make high-quality product decisions by working through root causes, classifying reversibility, journaling the decision, structuring the problem, synthesizing recommendations, and defining decision rights. Use when making a tradeoff, classifying reversibility, or running a structured decision audit.
 ---
 

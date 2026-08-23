@@ -371,14 +371,9 @@ async function spawnSandboxWsPty(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let wsMod: any;
   try {
-    wsMod = await (new Function('m', 'return import(m)'))('ws');
+    wsMod = await loadFeaturePackage('ws');
   } catch {
-    try {
-      // @ts-expect-error Optional runtime dependency; this workspace does not ship @types/ws.
-      wsMod = await import('ws');
-    } catch {
-      throw new Error('ws package required for sandbox PTY bridge. Run: npm install ws');
-    }
+    throw new Error('WebSocket support is required for the sandbox PTY bridge; run `aiwg features install webserver`');
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -826,19 +821,14 @@ export async function handlePtyConnection(
       return;
     }
   } else if (!session.exited) {
-    // Reconnect to existing session — replay buffer
+    // Reconnect to an existing session by replaying the complete retained
+    // buffer. Do not trim at the last full-screen erase: terminal erase
+    // sequences repaint the current viewport but xterm still needs the bytes
+    // that preceded them to reconstruct scrollback when a user switches away
+    // from a session and later returns (#2146).
     registry.addClient(sessionId, clientId, ws);
     if (session.outputBuffer) {
-      // Trim replay to start from the last full-screen erase so that tmux's
-      // screen-init sequences (cursor moves, status-bar paint) from before the
-      // erase don't render as literal garbage in a fresh xterm.js context.
-      // Everything before \x1b[2J would be cleared by the erase anyway;
-      // everything after is the session content tmux redrew (MOTD, history, etc).
-      // If no erase is found, replay the whole buffer unchanged.
-      const ERASE = '\x1b[2J';
-      const lastErase = session.outputBuffer.lastIndexOf(ERASE);
-      const replay = lastErase !== -1 ? session.outputBuffer.slice(lastErase) : session.outputBuffer;
-      ws.send(JSON.stringify({ type: 'data', payload: replay }));
+      ws.send(JSON.stringify({ type: 'data', payload: session.outputBuffer }));
     }
   } else {
     // Session exited — inform client

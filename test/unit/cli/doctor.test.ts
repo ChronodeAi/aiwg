@@ -65,6 +65,14 @@ describe('tools/cli/doctor.mjs — file', () => {
     expect(content).toContain("shell: process.platform === 'win32'");
     expect(content).toContain('spawn failed: ${r.error.code || r.error.message}');
   });
+
+  it('requires discovery to return the known aiwg-doctor capability', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain("args: ['discover', 'aiwg doctor', '--json', '--limit', '10']");
+    expect(content).toContain("result?.name === 'aiwg-doctor'");
+    expect(content).toContain('returned zero results for the known aiwg-doctor capability');
+  });
 });
 
 // ── Installation check logic ──────────────────────────────────
@@ -558,5 +566,35 @@ describe('tools/cli/doctor.mjs — startup-context budget (#1673)', () => {
     // Must not fail doctor (error => exit 1) for a structural over-budget.
     expect(fn).not.toContain("'error'");
     expect(fn).toContain('Startup Context');
+  });
+});
+
+// ── Context and persistent-memory firewall (#2040) ────────────────────
+
+describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
+  let content: string;
+  beforeEach(async () => {
+    const { readFileSync } = await import('fs');
+    content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  });
+
+  it('imports and invokes the cross-category firewall', () => {
+    expect(content).toContain('scanContextMemoryFirewall');
+    expect(content).toContain("from '../security/context-memory-firewall.mjs'");
+    expect(content).toContain('const firewall = await scanContextMemoryFirewall');
+  });
+
+  it('exposes strict, baseline, and provider-budget controls', () => {
+    expect(content).toContain("a === '--strict-context'");
+    expect(content).toContain("a === '--context-baseline'");
+    expect(content).toContain("a === '--context-budget-tokens'");
+    expect(content).toContain("strictContext ? 'error' : 'warn'");
+  });
+
+  it('reports all six context contributions and review states', () => {
+    expect(content).toContain('Object.entries(firewall.categories)');
+    expect(content).toContain('firewall.trust.stale');
+    expect(content).toContain('firewall.trust.quarantined');
+    expect(content).toContain("record.reviewStatus === 'changed-review-required'");
   });
 });

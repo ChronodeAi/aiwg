@@ -1,5 +1,6 @@
 ---
-name: pm-coaching
+name: coaching
+aliases: [pm-coaching]
 description: PM coaching grounded in what designers and engineers actually say about their best product managers. Run situation retrospectives, reveal how your team sees you, stress-test yourself in adversarial roleplay, audit past decisions, and surface the blind spots you can't see from the inside. Use when the user wants to debrief a situation, audit a decision, do an adversarial roleplay, or scan blind spots.
 ---
 

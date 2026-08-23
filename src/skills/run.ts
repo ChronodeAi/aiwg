@@ -27,6 +27,8 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { resolveRuntime, supportedRuntimes } from './runtime.js';
 import type { ArtifactIndex, GraphType, MetadataEntry } from '../artifacts/types.js';
+import { recordTypeForEntry, stableRecordId } from '../artifacts/browser-export.js';
+import { loadFortemiCoreMetadataEntries } from '../artifacts/fortemi-core-query-adapter.js';
 
 interface IndexLoader {
   loadGraphIndexFile<T>(cwd: string, filename: string, graph?: GraphType): T | null;
@@ -67,20 +69,26 @@ async function findSkillEntry(
   const reader: IndexLoader = await import('../artifacts/index-reader.js');
   const entries: MetadataEntry[] = [];
   for (const g of ['framework', 'project', 'codebase'] as GraphType[]) {
-    const idx = reader.loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', g);
-    if (idx) entries.push(...Object.values(idx.entries));
+    const canonical = loadFortemiCoreMetadataEntries(cwd, g);
+    if (canonical.entries.length > 0) {
+      entries.push(...canonical.entries);
+    } else {
+      const idx = reader.loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', g);
+      if (idx) entries.push(...Object.values(idx.entries));
+    }
   }
   if (entries.length === 0) {
     const legacy = reader.loadMetadataIndex(cwd);
     if (legacy) entries.push(...Object.values(legacy.entries));
   }
-  const skills = entries.filter(e => e.type === 'skill');
+  const skills = entries.filter(e => e.type === 'skill' || e.type === 'aiwg.skill');
   const needle = name.trim();
   // Basename match — skills are conventionally `<dir>/SKILL.md`
   const matches = skills.filter(e => {
     const dir = path.basename(path.dirname(e.path));
     const stem = path.basename(e.path).replace(/\.[^.]+$/, '');
-    return dir === needle || stem === needle || e.path === needle;
+    const id = stableRecordId(recordTypeForEntry({ ...e, type: 'skill' }, 'v2'), e.path);
+    return id === needle || e.name === needle || dir === needle || stem === needle || e.path === needle;
   });
   if (matches.length === 0) return null;
   // Prefer one with a script declaration over one without
@@ -112,6 +120,8 @@ export interface RunSkillOptions {
   args: string[];
   /** Override the script's CWD policy from the CLI (e.g., --cwd <path>) */
   cwdOverride?: string;
+  /** Additional resolved runtime policy exported by the CLI wrapper. */
+  env?: Record<string, string>;
 }
 
 /**
@@ -171,6 +181,7 @@ export async function runSkill(opts: RunSkillOptions): Promise<number> {
     AIWG_SKILL_DIR: skillDir,
     AIWG_PROJECT_ROOT: opts.cwd,
     ...(aiwgRoot ? { AIWG_ROOT: aiwgRoot } : {}),
+    ...opts.env,
   };
   const fullArgs = [...invocation.prefixArgs, entrypointPath, ...opts.args];
   return new Promise<number>((resolve) => {
@@ -204,7 +215,7 @@ export async function runSkill(opts: RunSkillOptions): Promise<number> {
  * Anything after `--` is verbatim-forwarded. If no `--`, all args after
  * the skill name are forwarded.
  */
-export async function main(args: string[]): Promise<number> {
+export async function main(args: string[], env?: Record<string, string>): Promise<number> {
   // First positional must be the kind ("skill" — reserved for future kinds).
   if (args.length === 0) {
     printUsage();
@@ -264,11 +275,12 @@ export async function main(args: string[]): Promise<number> {
     name,
     args: scriptArgs,
     cwdOverride,
+    env,
   });
 }
 
 function printUsage(): void {
-  console.log('Usage: aiwg run skill <name> [--cwd <path>] [-- <args...>]');
+  console.log('Usage: aiwg run skill <stable-id-or-name> [--cwd <path>] [-- <args...>]');
   console.log('');
   console.log('Examples:');
   console.log('  aiwg run skill voice-apply -- --voice technical-authority --input draft.md');

@@ -1,5 +1,6 @@
 ---
-name: meeting-mastery
+name: meeting
+aliases: [meeting-mastery]
 description: Run high-impact meetings — surface hidden agendas before, apply influence principles during, and capture structured summaries after. Use when preparing a meeting agenda, summarizing a meeting, or preparing influence tactics.
 ---
 

@@ -22,7 +22,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { UserConfig } from './user-config.js';
 import { AiwgError, EXIT_CODES } from '../cli/errors.js';
-import { projectAiwgPath, resolveProjectAiwgDir } from './project-artifacts.js';
+import { projectControlPath, resolveProjectAiwgDir } from './project-artifacts.js';
 
 const _scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -161,7 +161,8 @@ async function handleSet(config: UserConfig, args: string[]): Promise<void> {
 //   aiwg config get --project remotes.primary
 //
 // Set validates enum membership for known fields (delivery.mode,
-// delivery.merge_style, delivery.force_push_policy) before writing.
+// delivery.merge_style, delivery.force_push_policy, remotes.issue_provider)
+// before writing.
 
 const ENUM_RULES: Record<string, readonly string[]> = {
   'delivery.mode': ['direct', 'feature-branch', 'pr-required'],
@@ -171,10 +172,15 @@ const ENUM_RULES: Record<string, readonly string[]> = {
   'delivery.signing.enforce': ['commits', 'tags', 'all'],
   'delivery.release_signing.format': ['openpgp', 'ssh', 'x509'],
   'delivery.release_signing.enforce': ['commits', 'tags', 'all'],
+  'remotes.issue_provider': ['gitea', 'github', 'local'],
+  'remotes.customer_issue_provider': ['gitea', 'github', 'local'],
   'remotes.tracker_actor.via': ['tea', 'gh', 'mcp', 'api'],
+  'remotes.customer_tracker_actor.via': ['tea', 'gh', 'mcp', 'api'],
   'remotes.transport.protocol': ['ssh', 'https'],
   'repo_maintainer.tiers.local': ['collaborator', 'maintainer', 'admin'],
   'security.threatAssessment.mode': ['off', 'audit', 'enforce'],
+  'artifact_outputs.canonical': ['aiwg'],
+  'artifact_outputs.provider_native': ['disabled', 'explicit-only', 'project-default'],
 };
 
 const BOOLEAN_FIELDS = new Set([
@@ -189,6 +195,7 @@ const BOOLEAN_FIELDS = new Set([
 
 const STRING_ARRAY_FIELDS = new Set([
   'remotes.tracker_actor.forbid_actors',
+  'remotes.customer_tracker_actor.forbid_actors',
   'command_log.scopes',
   'telemetry.skill_usage.scopes',
 ]);
@@ -472,7 +479,7 @@ async function handleProjectValidate(args: string[]): Promise<void> {
       : resolveIssueLabels(undefined, 'local').diagnostics;
   const diagnostics = [...indexErrors, ...externalLinkErrors, ...labelDiagnostics];
 
-  console.log(`Project config: ${projectAiwgPath(projectDir, 'aiwg.config')}`);
+  console.log(`Project config: ${projectControlPath(projectDir, 'aiwg.config')}`);
   console.log(`Artifact root:  ${resolveProjectAiwgDir(projectDir)}\n`);
   if (diagnostics.length === 0) {
     console.log('✓ Project config valid');
@@ -667,6 +674,9 @@ For project-level config: aiwg config show --project [--json]
   const remotesView = {
     primary: { name: resolvedRemotes.primary, url: getUrl(resolvedRemotes.primary) },
     issue_tracker: { name: resolvedRemotes.issue_tracker, url: getUrl(resolvedRemotes.issue_tracker) },
+    customer_issue_tracker: resolvedRemotes.customer_issue_tracker
+      ? { name: resolvedRemotes.customer_issue_tracker, url: getUrl(resolvedRemotes.customer_issue_tracker) }
+      : null,
     ci: { name: resolvedRemotes.ci, url: getUrl(resolvedRemotes.ci) },
     secondary: resolvedRemotes.secondary.map((s) => ({
       ...s,
@@ -689,7 +699,7 @@ For project-level config: aiwg config show --project [--json]
   }
 
   // Human-readable view
-  console.log(`Project config: ${projectAiwgPath(projectDir, 'aiwg.config')}`);
+  console.log(`Project config: ${projectControlPath(projectDir, 'aiwg.config')}`);
   console.log(`Artifact root:  ${resolveProjectAiwgDir(projectDir)}\n`);
   console.log(`Schema version: ${cfg.version}`);
   console.log(`Providers:      ${cfg.providers.join(', ') || '(none)'}`);
@@ -727,7 +737,10 @@ For project-level config: aiwg config show --project [--json]
   };
   console.log(fmt('Primary       ', remotesView.primary));
   if (remotesView.issue_tracker.name !== remotesView.primary.name) {
-    console.log(fmt('Issue tracker ', remotesView.issue_tracker));
+    console.log(fmt('Internal issues', remotesView.issue_tracker));
+  }
+  if (remotesView.customer_issue_tracker) {
+    console.log(fmt('Customer issues', remotesView.customer_issue_tracker));
   }
   if (remotesView.ci.name !== remotesView.primary.name) {
     console.log(fmt('CI            ', remotesView.ci));

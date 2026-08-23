@@ -106,11 +106,22 @@ function displayHelp(): void {
 
   helpGroup('FEATURES', [
     ['features', 'Show optional feature install status'],
-    ['cockpit [--status]', 'Launch the opt-in AIWG Cockpit control plane'],
+    ['cockpit [--status|doctor]', 'Launch Cockpit or diagnose its executor topology'],
   ]);
 
   helpGroup('VALIDATION', [
     ['validate-metadata [path]', 'Validate AIWG component metadata (defaults to agentic/code)'],
+    ['context-firewall [scan]', 'Audit provider context, trust, drift, poisoning signals, and budget'],
+    ['context-firewall baseline', 'Plan or explicitly write the reviewed context baseline'],
+  ]);
+
+  helpGroup('METRICS', [
+    ['cost-report --fleet', 'Observe OpenRouter per-bot MTD spend and correlate local activity'],
+  ]);
+
+  helpGroup('EVIDENCE', [
+    ['evidence export --output <dir>', 'Package portable activity, report, source, eval, and provenance evidence'],
+    ['evidence verify <bundle>', 'Verify every member hash and the bundle checkpoint'],
   ]);
 
   helpGroup('SCAFFOLDING', [

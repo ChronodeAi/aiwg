@@ -8,10 +8,10 @@ Find the scenario that matches where you are right now.
 
 | I want to... | Guide |
 |---|---|
+| Get AIWG installed, repaired, connected, and verified with one pasted prompt | [Agentic Install Runbook](../agentic-install-runbook.md) |
 | Get one useful AIWG result before learning the whole system | [Start Here](start-here.md) |
 | Install AIWG and correctly connect it to my provider | [Install, Connect, and Verify](install-connect-verify.md) |
 | Install Node.js/npm without version or permission conflicts | [Install Node.js and npm Safely](install-node.md) |
-| Have an agent or steward install AIWG from zero to running | [Agentic Install Runbook](../agentic-install-runbook.md) |
 | Install AIWG on macOS or fix npm `EACCES` | [macOS Install Guide](macos-install.md) |
 | Walk through provider, project, deployment, and verification choices | [Start Here: guided recovery](start-here.md#guided-recovery-escape-hatch) |
 | Ask AIWG which path to use first | [Ask The Steward To Route You](first-success-ask-steward.md) |
@@ -69,7 +69,7 @@ and common repair paths.
 
 **Ask The Steward To Route You** — You want AIWG to choose a path for your goal. Ask the steward in chat for one recommendation; the agent verifies it against AIWG's capability index before answering.
 
-**Provider Handoff** — You know whether you are using Claude Code, Codex, Cursor, Copilot, Factory, OpenCode, Warp, Windsurf, Hermes, or OpenClaw, and need the short handoff from local deployment to that tool.
+**Provider Handoff** — You know whether you are using Claude Code, Codex, Cursor, Copilot, Factory, OpenCode, Warp, Devin Desktop, Hermes, or OpenClaw, and need the short handoff from local deployment to that tool.
 
 **Scope And Recovery** — You may have run AIWG from the wrong folder, or you need to understand project-scoped setup versus global/user-scoped setup.
 

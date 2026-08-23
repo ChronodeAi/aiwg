@@ -44,6 +44,7 @@ Writes are atomic: the loader writes to a randomly-suffixed temp sibling, then
 | `installed`     | `Record<string, InstalledEntry>` | yes      | Frameworks and addons currently deployed, keyed by the name passed to `aiwg use`. Defaults to `{}`.                                                   |
 | `scripts`       | `Record<string, string>`         | yes      | User-defined scripts, run via `aiwg run <name>`. Executed with `sh -c "<command>"` (or `cmd /c` on Windows). Defaults to `{}`.                        |
 | `security`      | `SecurityConfig`                 | optional | Project-owned deterministic security policy. See [Threat Assessment](#threat-assessment).                                                         |
+| `artifact_outputs` | `ArtifactOutputsConfig`       | optional | Canonical storage and optional provider-native presentation/export policy. Safe default: AIWG canonical + explicit-only. See [Artifact Outputs](#artifact-outputs). |
 | `workspace`     | `WorkspaceConfig`                | optional | General workspace metadata or an external-member back-reference. See [Workspace Repositories](#workspace-repositories).                               |
 | `repos`         | `WorkspaceRepoConfig[]`          | optional | Canonical member list and per-member allowed operations. Requires `workspace.name`.                                                                   |
 | `externalLinks` | `Record<string, ExternalLink>`   | optional | Named public resources that travel with the project and appear in provider-facing context. See [External Links](#external-links).                     |
@@ -70,6 +71,38 @@ its own trust posture and does not inherit this block from a workspace parent.
 See [Threat-assessment policy](../security/threat-assessment-policy.md) for the
 schema, precedence model, examples, CLI operations, migration behavior, and
 provider/platform safety boundary.
+
+## Artifact Outputs
+
+`artifact_outputs` separates durable canonical storage from optional provider-native presentation or export surfaces:
+
+```json
+{
+  "artifact_outputs": {
+    "canonical": "aiwg",
+    "provider_native": "explicit-only",
+    "destinations": {
+      "claude-code.design": {
+        "enabled": true,
+        "use_when": "user-requested"
+      }
+    }
+  }
+}
+```
+
+`canonical` is currently `aiwg`; an export never replaces it. `provider_native`
+is `disabled`, `explicit-only`, or `project-default`. Each stable destination
+ID can be disabled, restricted to `user-requested`, or declared as a
+`project-default`. Legacy configs with no block resolve to the safe
+`aiwg`/`explicit-only` behavior.
+
+Project policy is the ceiling. Within it, an explicit task request outranks a
+user preference, and provider defaults are lowest authority. Unknown or
+unsupported destinations fail safe. Dual output writes the canonical artifact
+first and records the presentation reference in artifact-output provenance.
+See [the architecture decision](../architecture/adr-artifact-output-destinations.md)
+for migration, degraded-mode, precedence, and provenance details.
 
 ## Project Local Block
 
@@ -429,9 +462,10 @@ Example, auto-detected defaults with one project override:
 ## Remotes Block
 
 The `remotes` block declares repo topology — which git remote drives CI and PRs
-(primary), where issues live, and which secondary remotes are mirrors or publishing
-targets. Defaults: `primary: origin`, `issue_tracker: primary`, `ci: primary`,
-`secondary: []`.
+(primary), where internal engineering issues live, an optional customer-facing
+issue intake tracker, and which secondary remotes are mirrors or publishing
+targets. Defaults: `primary: origin`, `issue_tracker: primary`, no customer
+tracker, `ci: primary`, `secondary: []`.
 
 ### Fields
 
@@ -439,8 +473,12 @@ targets. Defaults: `primary: origin`, `issue_tracker: primary`, `ci: primary`,
 | --------------- | ----------------------- | --------- | ----------------------------------------------------------------------------------- |
 | `primary`       | string                  | `origin`  | Git remote name driving CI and PRs by default. Must match a name from `git remote`. |
 | `issue_tracker` | string                  | `primary` | Where issues live.                                                                  |
+| `issue_provider`| enum                    | unset     | Explicit tracker provider for self-hosted or local trackers (`gitea`, `github`, `local`). |
 | `ci`            | string                  | `primary` | Where CI runs.                                                                      |
 | `tracker_actor` | `TrackerActorConfig`    | unset     | Forge login and tool route for issue, PR, comment, label, and closure writes.       |
+| `customer_issue_tracker` | string          | unset     | Optional customer-facing issue intake remote; does not become CI or delivery authority. |
+| `customer_issue_provider` | enum            | unset     | Explicit provider hint for the customer tracker.                                    |
+| `customer_tracker_actor` | `TrackerActorConfig` | unset | Forge login and tool route for customer acknowledgements, comments, and closures.   |
 | `transport`     | `RemoteTransportConfig` | unset     | Login, protocol, helper, and public SSH fingerprint used for Git pushes.            |
 | `secondary`     | `SecondaryRemote[]`     | `[]`      | Mirrors, fork bases, publishing targets.                                            |
 
@@ -469,6 +507,26 @@ writes and Git pushes may authenticate through different mechanisms.
 `transport.protocol` accepts `ssh` or `https`. A configured helper should fail
 closed when the authenticated account or public key fingerprint does not match.
 
+When customer intake and internal delivery use different forges, declare both
+roles explicitly. For example, AIWG keeps engineering and CI on Gitea while
+responding to customer reports on GitHub:
+
+```json
+{
+  "issue_tracker": "origin",
+  "issue_provider": "gitea",
+  "tracker_actor": { "login": "roctinam", "via": "tea" },
+  "customer_issue_tracker": "github",
+  "customer_issue_provider": "github",
+  "customer_tracker_actor": { "login": "jmagly", "via": "gh" }
+}
+```
+
+Internal implementation, delivery, and CI-sensitive issue state remains on
+`issue_tracker`. Customer acknowledgement, follow-up, and closure route to
+`customer_issue_tracker`. Projects without customer fields retain the existing
+single-tracker behavior.
+
 ### `SecondaryRemote` shape
 
 | Field             | Type   | Description                                                                     |
@@ -484,7 +542,7 @@ The loader exposes `resolveRemoteProvider(url)` which classifies a remote URL by
 - `github.com` → `github`
 - `gitlab.com` or self-hosted GitLab → `gitlab`
 - Hosts containing `gitea` → `gitea`
-- Anything else → `unknown` (callers fall back to the configured provider list)
+- Anything else → `unknown` (callers use `remotes.issue_provider` when set, or ask for an explicit provider)
 
 ## Worked Examples
 

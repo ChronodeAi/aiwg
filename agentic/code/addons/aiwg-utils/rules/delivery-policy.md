@@ -53,7 +53,7 @@ Located at `.aiwg/aiwg.config` (top level), the `delivery` block contains:
       "enforce": "tags"
     },
     "require_ci_green": true,
-    "force_push_policy": "never" | "main-only-blocked" | "allowed",
+    "force_push_policy": "never" | "own-branch-only" | "allowed",
     "require_signed_commits": true,
     "auto_close_issues": true,
     "issue_comment_on_cycle": true,
@@ -92,10 +92,12 @@ preparing release tags, the agent MUST run a project-config preflight:
    `.aiwg/aiwg.config` from the **target member repository**. Never apply the
    workspace root config or a sibling config to the target. In a single-repo
    project: Read `.aiwg/aiwg.config` from the repository root.
-2. Resolve `remotes.primary`, `remotes.issue_tracker`, and `remotes.ci`.
+2. Resolve `remotes.primary`, `remotes.issue_tracker`, optional
+   `remotes.customer_issue_tracker`, and `remotes.ci`.
 3. Resolve `delivery.mode`, `delivery.default_branch`, commit and release-tag
    signing requirements, and `delivery.committer` when present.
-4. Resolve `remotes.tracker_actor` for tracker mutations and reject any route
+4. Resolve `remotes.tracker_actor` for internal tracker mutations and
+   `remotes.customer_tracker_actor` for customer tracker mutations; reject any route
    that would write as a login listed in `remotes.tracker_actor.forbid_actors`.
 5. Resolve `remotes.transport` for git pushes and verify its configured login,
    protocol, helper, and public key fingerprint rather than using an arbitrary
@@ -195,7 +197,8 @@ When `push_on_release: true`, release workflows MUST push release commits and ta
 
 Always resolve remote names through `aiwg.config.remotes`:
 
-- Issues, PRs, milestones, labels → `remotes.issue_tracker`
+- Internal engineering issues, PRs, milestones, labels → `remotes.issue_tracker`
+- Customer acknowledgements, follow-up, and closure → `remotes.customer_issue_tracker` when configured
 - CI status checks → `remotes.ci`
 - Tag pushes → `remotes.primary` (and `remotes.secondary[].push_on_release` if applicable)
 
@@ -239,7 +242,7 @@ When the policy is already declared, do NOT use `AskUserQuestion` (or equivalent
 `force_push_policy` defines what's allowed:
 
 - `never`: no force-push to any branch, ever
-- `main-only-blocked`: force-push allowed on feature branches, never on `default_branch`
+- `own-branch-only`: force-push allowed on the agent's own feature branch, never on `default_branch`
 - `allowed`: force-push allowed everywhere (rare; only configure on solo projects)
 
 Agents MUST NOT force-push outside the declared policy.

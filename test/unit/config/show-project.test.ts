@@ -87,17 +87,12 @@ describe('aiwg config show --project (#999)', () => {
     const artifactRoot = join(tmp, 'private-corpus');
     process.env.AIWG_ARTIFACTS_PATH = artifactRoot;
     mkdirSync(artifactRoot, { recursive: true });
-    writeFileSync(join(artifactRoot, 'aiwg.config'), JSON.stringify({
-      version: '1',
-      providers: ['claude'],
-      installed: {},
-      scripts: {},
-    }));
+    writeConfig(tmp, {});
 
     await main(['show', '--project', '--target', tmp]);
 
     const out = logs.join('\n');
-    expect(out).toContain(`Project config: ${join(artifactRoot, 'aiwg.config')}`);
+    expect(out).toContain(`Project config: ${join(tmp, '.aiwg', 'aiwg.config')}`);
     expect(out).toContain(`Artifact root:  ${artifactRoot}`);
   });
 
@@ -127,6 +122,21 @@ describe('aiwg config show --project (#999)', () => {
     expect(out).toContain('github.com/o/r.git');
     expect(out).toContain('public-mirror');
     expect(out).toContain('push tags on release');
+  });
+
+  it('shows a distinct customer issue tracker', async () => {
+    execSync('git remote add origin https://primary/r.git', { cwd: tmp });
+    execSync('git remote add github https://github.com/o/r.git', { cwd: tmp });
+    writeConfig(tmp, {
+      remotes: {
+        primary: 'origin',
+        issue_tracker: 'origin',
+        customer_issue_tracker: 'github',
+        customer_issue_provider: 'github',
+      },
+    });
+    await main(['show', '--project', '--target', tmp]);
+    expect(logs.join('\n')).toContain('Customer issues: github (https://github.com/o/r.git)');
   });
 
   it('emits stable JSON with --json', async () => {
