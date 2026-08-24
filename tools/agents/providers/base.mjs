@@ -1070,6 +1070,11 @@ export function deploySkillsWithKernelRouting(
   // removed sources) happens in a separate post-all-deploys step
   // (`pruneStaleAiwgSkills`) — running per-call here would race because
   // `deploySkills` may be invoked multiple times in one orchestration.
+  //
+  // Ownership-gated like every other prune in this function: kernelDestDir
+  // may be a cross-provider shared root (`.agents/skills/` is scanned by
+  // Codex and DeepSeek Harness too), so a bare name match with an incoming
+  // standard-tier skill must never delete operator-authored content.
   let prunedFromKernelDir = 0;
   if (kernelDestDir && fs.existsSync(kernelDestDir) && !opts?.dryRun) {
     for (const entry of fs.readdirSync(kernelDestDir, { withFileTypes: true })) {
@@ -1078,6 +1083,19 @@ export function deploySkillsWithKernelRouting(
       if (!fs.existsSync(skillMd)) continue;
       if (!standardNames.has(entry.name)) continue;
       const target = path.join(kernelDestDir, entry.name);
+      const marker = path.join(target, '.aiwg-managed');
+      let managed = fs.existsSync(marker);
+      if (!managed) {
+        try {
+          managed = /^\s*namespace:\s*["']?aiwg["']?\s*$/m.test(
+            parseFrontmatter(fs.readFileSync(skillMd, 'utf8')).frontmatter ?? '',
+          );
+        } catch { /* preserve unreadable/operator-owned content */ }
+      }
+      if (!managed) {
+        if (opts?.verbose) console.log(`skip operator-owned kernel-dir entry (name collides with standard tier): ${entry.name}`);
+        continue;
+      }
       try {
         fs.rmSync(target, { recursive: true, force: true });
         prunedFromKernelDir++;
@@ -1499,6 +1517,35 @@ export function deploySkillDir(skillDir, destDir, opts) {
   }
 
   const destSkillDir = path.join(destDir, skillName);
+
+  // Operator-owned collision guard: when the destination already holds a
+  // SKILL.md that carries no AIWG ownership evidence (`.aiwg-managed` marker
+  // or `namespace: aiwg` frontmatter), a differing incoming SKILL.md must not
+  // silently overwrite it — the name collision may be coincidental and the
+  // content may be operator-authored. `--force` overrides; identical content
+  // proceeds so idempotent refreshes of legacy unmanaged installs keep working.
+  if (!force && !dryRun) {
+    const destSkillMd = path.join(destSkillDir, 'SKILL.md');
+    if (fs.existsSync(destSkillMd)) {
+      const owned = fs.existsSync(path.join(destSkillDir, '.aiwg-managed')) ||
+        /^\s*namespace:\s*["']?aiwg["']?\s*$/m.test(
+          (() => { try { return parseFrontmatter(fs.readFileSync(destSkillMd, 'utf8')).frontmatter ?? ''; } catch { return ''; } })(),
+        );
+      if (!owned) {
+        let incoming = null;
+        try {
+          const rawIncoming = fs.readFileSync(skillMdPath, 'utf8');
+          incoming = provider ? injectPlatformInContent(rawIncoming, PROVIDER_TO_PLATFORM[provider] || provider) : rawIncoming;
+        } catch { /* unreadable source — fall through to ownership decision with null */ }
+        const existingContent = fs.existsSync(destSkillMd) ? fs.readFileSync(destSkillMd, 'utf8') : '';
+        if (incoming !== null && existingContent !== incoming) {
+          console.warn(`Warning: skipping '${skillName}' at ${destSkillDir} — operator-owned skill with differing content; use --force to overwrite.`);
+          return;
+        }
+      }
+    }
+  }
+
   if (!dryRun) ensureDir(destSkillDir);
 
   function copyRecursive(src, dest) {

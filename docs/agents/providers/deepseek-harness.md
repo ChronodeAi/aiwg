@@ -32,13 +32,13 @@ DeepSeek Harness is a plugin-based agent harness built on the Cordis kernel ("ev
                 ▼
         AIWG (CLI + corpus at $AIWG_ROOT)
           ├── Deployed skills (.agents/skills/)
-          ├── aiwg discover / aiwg show for the long tail (~460 skills)
+          ├── aiwg discover / aiwg show for the long tail (~715 index-only skills)
           └── .aiwg/ artifacts, workflows, templates
 ```
 
 **DeepSeek Harness owns**: the agent loop, session log, tool execution, sandboxing, subagent/workflow orchestration, skill loading, model wiring (cordis.yml llm plugins).
 
-**AIWG owns**: workflow content, SDLC/marketing/etc. skill bodies, agent personas (dispatched as skills), artifact output in `.aiwg/`, templates.
+**AIWG owns**: workflow content, SDLC/marketing/etc. skill bodies, agent personas (dispatched as skills), artifact output in `.aiwg/`, templates. The corpus ships ~740 skills (26 canonical kernel + the rest index-discoverable); most are not in your context and reach you through `aiwg discover` / `aiwg show`.
 
 **The seams are the skill directory and AGENTS.md.** Coexistence with clear boundaries — not system unification. DSH does not need to know how AIWG produced a skill body; AIWG does not need to know how DSH schedules or sandboxes a run.
 

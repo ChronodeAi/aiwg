@@ -976,7 +976,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     status: 'experimental',
     aliases: ['deepseek', 'deepseek-harness'],
     builtIn: true,
-    surfaces: { primary: 'dsh', compatibility: ['deepseek'], precedence: ['.agents/skills/', '.dsh/skills/', 'AGENTS.md'], related: [] },
+    surfaces: { primary: 'dsh', compatibility: ['deepseek'], precedence: ['.dsh/skills/', '.agents/skills/', 'AGENTS.md'], related: [] },
     detection: {
       env: ['DEEPSEEK_API_KEY', 'DSH_AGENTS_HOME'],
       process: ['dsh'],
