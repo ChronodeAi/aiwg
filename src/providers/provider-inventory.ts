@@ -22,6 +22,7 @@ const PROVIDER_EXECUTABLES: Partial<Record<Platform, string[]>> = {
   openhuman: ['openhuman'],
   warp: ['warp'],
   windsurf: ['windsurf'],
+  dsh: ['dsh'],
 };
 
 export type ProviderEvidenceKind =

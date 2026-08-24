@@ -89,6 +89,16 @@ describe('resolveScopePaths', () => {
     expect(r.behaviors).toBe('');
   });
 
+  it('returns user-scope DeepSeek Harness skills under the agents home without inventing other surfaces', () => {
+    const r = resolveScopePaths('dsh', 'user', projectPaths);
+    const expectedHome = process.env.DSH_AGENTS_HOME?.trim() || path.join(homedir(), '.agents');
+    expect(r.skills).toBe(path.resolve(expectedHome, 'skills'));
+    expect(r.agents).toBe('');
+    expect(r.commands).toBe('');
+    expect(r.rules).toBe('');
+    expect(r.behaviors).toBe('');
+  });
+
   it('falls back to project paths for unknown provider', () => {
     const r = resolveScopePaths('nonexistent', 'user', projectPaths);
     expect(r).toEqual(projectPaths);

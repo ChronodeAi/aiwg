@@ -115,6 +115,16 @@
       "artifactFormat": "Standalone TOML agent definition",
       "verification": "Parse against OpenHuman definition schema",
       "sourceUrl": "https://github.com/tinyhumansai/openhuman/blob/main/src/openhuman/agent/harness/definition.rs", "verifiedAt": "2026-07-20"
+    },
+    "dsh": {
+      "agent": "global-only", "skill": "unsupported", "globalChild": "native",
+      "identifierSyntax": "deepseek-chat | deepseek-reasoner | any OpenAI-compatible model id",
+      "inheritance": "One llm plugin per session in cordis.yml; every agent in the composition shares it",
+      "invalidPinFallback": "Session fails loud at load when the configured model is unavailable; report the actual preset model",
+      "configTarget": "cordis.yml llm plugin (model field) + DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL",
+      "artifactFormat": "cordis.yml plugin config",
+      "verification": "Inspect the assembled session preset's llm plugin config or `dsh` launch logs",
+      "sourceUrl": "https://api-docs.deepseek.com/", "verifiedAt": "2026-08-23"
     }
   }
 }

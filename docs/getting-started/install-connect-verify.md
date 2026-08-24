@@ -92,6 +92,7 @@ aiwg use all --provider <provider>
 | OpenClaw | `openclaw` |
 | Hermes | `hermes` |
 | OpenHuman | `openhuman` |
+| DeepSeek Harness | `dsh` |
 
 For example, a Codex user types:
 

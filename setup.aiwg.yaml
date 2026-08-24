@@ -38,6 +38,7 @@ spec:
         - warp
         - devin
         - windsurf
+        - dsh
   steps:
     - id: explain-and-confirm
       type: agentic

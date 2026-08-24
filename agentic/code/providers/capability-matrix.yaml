@@ -470,6 +470,69 @@ providers:
     deploy_target: mixed
     aggregated_output: true
 
+  dsh:
+    display_name: DeepSeek Harness
+    aliases:
+      - deepseek
+      - deepseek-harness
+    status: experimental
+    # deepseek-ai/deepseek-harness — plugin-based agent harness on the Cordis
+    # kernel ("everything is a plugin", developer preview). Skills are natively
+    # discovered from project `.agents/skills/` and user `$DSH_AGENTS_HOME|~/.agents/skills/`
+    # (packages/skill/skill-filesystem). Context is AGENTS.md prose-directive.
+    # MCP is native via the @deepseek-ai/dsh-mcp-client cordis.yml plugin (stdio +
+    # streamable-http), not a JSON config file, so mcp injection stays null.
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: "(not supported — DSH subagents are cordis.yml plugin compositions; dispatch AIWG personas via skills or `aiwg run skill`)"
+      commands: "(no separate command surface — SKILL.md user-invocable skills serve as commands)"
+      skills: ".dsh/.aiwg/skills/"                        # bulk framework/addon payload; index-discoverable, NOT flat-scanned (kernel pivot #1217)
+      skills_kernel: ".agents/skills/"                    # canonical kernel/quickref inventory; natively scanned (PROJECT_AGENTS source)
+      skills_user: "~/.agents/skills/"                    # user-scope mirror of the kernel surface; native scan (USER_AGENTS; honors $DSH_AGENTS_HOME)
+      rules: "(not supported — context is AGENTS.md prose; fetch rules via `aiwg show rule <name>`)"
+      behaviors: "(not supported)"
+    native_features:
+      cron: false                  # dsh-schedule owns in-session reminders (after/at/every), not OS cron
+      agent_teams: true            # subagent capability + workflow orchestration plugins
+      tasks: true                  # todo_write tool
+      mcp: true                    # @deepseek-ai/dsh-mcp-client (stdio + streamable-http) + project routing
+      behaviors: false
+      mission_control: false
+      daemon: false                # automation surface is the ACP server / headless profile instead
+    emulation:
+      cron: external-trigger       # OS scheduler triggers `dsh --profile headless`; session reminders are native but scoped
+      agent_teams: native
+      tasks: native
+      mcp: native
+      behaviors: null
+      mission_control: null
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      hook_file: AGENTS.md         # regenerate appends the managed AIWG section directly (prose-directive loader)
+      fallback: full-inject
+      context_file: AGENTS.md
+    interaction:
+      structured_questions: native
+      tool: ask_user_question
+      notes: Interaction/ask-user capability plugins expose a structured question tool in every assembled profile.
+    deploy_target: mixed
+    aggregated_output: false
+    agent_capabilities:
+      default:
+        context_window: 128000     # DeepSeek V3-class models
+        max_output_tokens: 8192
+        max_tool_calls: 40
+        max_concurrent_subagents: 4
+        supports_streaming: true
+        million_context_requires_extra_usage: false
+        quota_available: false
+        recovery:
+          context_overflow: retry_with_prefiltered_context
+          quota_exhausted: retry_with_different_model
+          timeout: retry_with_smaller_scope
+
 # Feature definitions — documents what each feature key means and
 # what emulation strategies are available when native support is absent.
 features:
