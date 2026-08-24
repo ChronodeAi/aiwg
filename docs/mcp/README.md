@@ -75,6 +75,16 @@ After running `aiwg mcp install claude`, the config is placed in:
 
 After running `aiwg mcp install cursor`, the config is added to your Cursor settings.
 
+### DeepSeek Harness
+
+After running `aiwg mcp inject --provider dsh`, registry servers are emitted as
+`@deepseek-ai/dsh-mcp-client` rows into `~/.dsh/profiles/web/cordis.patch.yml`
+inside a managed block — re-run to update in place. To register the AIWG server
+itself (catalog toolset only), see the provider reference:
+[docs/agents/providers/deepseek-harness.md](../agents/providers/deepseek-harness.md).
+Note: profile-gated injection (`aiwg mcp profile`) is not yet wired for dsh
+sessions; injected rows mount globally per launch.
+
 ## Manual Configuration
 
 If automatic installation doesn't work, add this to your MCP config:
