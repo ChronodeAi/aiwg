@@ -516,7 +516,10 @@ providers:
     interaction:
       structured_questions: native
       tool: ask_user_question
-      notes: Interaction/ask-user capability plugins expose a structured question tool in every assembled profile.
+      notes: >-
+        Registered in the code, cordis, and standard CLI agent presets; the
+        minimal benchmarking preset omits it. Base bundle registers the
+        ask-user service but not the tool plugin.
     deploy_target: mixed
     aggregated_output: false
     agent_capabilities:
