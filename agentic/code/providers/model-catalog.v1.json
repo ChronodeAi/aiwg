@@ -91,6 +91,14 @@
         "efficiency": { "id": "Hint(efficiency)", "status": "active", "observed": false }
       },
       "sourceUrl": "https://github.com/tinyhumansai/openhuman/blob/main/src/openhuman/agent/harness/definition.rs", "verifiedAt": "2026-07-20"
+    },
+    "dsh": {
+      "roles": {
+        "reasoning": { "id": "deepseek-reasoner", "status": "active", "observed": true },
+        "coding": { "id": "deepseek-chat", "status": "active", "observed": true },
+        "efficiency": { "id": "deepseek-chat", "status": "active", "observed": true }
+      },
+      "sourceUrl": "https://api-docs.deepseek.com/quick_start/pricing", "verifiedAt": "2026-08-23"
     }
   }
 }

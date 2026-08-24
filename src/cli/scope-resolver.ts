@@ -13,6 +13,7 @@
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { resolveHermesHome, resolveHermesHomePath } from '../providers/hermes-home.js';
+import { resolveDshAgentsHomePath } from '../providers/dsh-home.js';
 
 export const hermesHome = resolveHermesHome;
 
@@ -190,6 +191,19 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
     skills: path.join(homedir(), '.openhuman', 'skills'),
     commands: '',
     rules: path.join(homedir(), '.openhuman', '.aiwg', 'rules'),
+    behaviors: '',
+  },
+  dsh: {
+    // Verified against DeepSeek Harness source of record
+    // (packages/skill/skill-filesystem): the user-level provider scans
+    // `$DSH_AGENTS_HOME|~/.agents/skills/` (USER_AGENTS source) alongside
+    // `~/.dsh/skills/` (USER_DSH). Skills are the only artifact class DSH
+    // discovers from directories; agents are cordis.yml plugin compositions,
+    // and rules surface through AGENTS.md prose, so those stay empty here.
+    agents: '',
+    skills: resolveDshAgentsHomePath('skills'),
+    commands: '',
+    rules: '',
     behaviors: '',
   },
   factory: {

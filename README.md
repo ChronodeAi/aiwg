@@ -542,7 +542,7 @@ The orchestration pattern: **Primary Author → Parallel Reviewers → Synthesiz
 - **128 workflow skills** — natural language triggers for regression testing, forensics, voice profiles, quality gates, and CI/CD integration
 - **35 enforcement rules** — anti-laziness detection, token security, citation integrity, executable feedback, failure mitigation across 6 LLM archetypes
 - **334 artifact templates** — progressive disclosure templates for requirements, architecture, testing, security, deployment, and more
-- **Multi-platform support** — deploy to Claude Code, Copilot, Cursor, Warp, Factory AI, OpenCode, Codex, Devin Desktop, OpenClaw, Hermes, and OpenHuman
+- **Multi-platform support** — deploy to Claude Code, Copilot, Cursor, Warp, Factory AI, OpenCode, Codex, Devin Desktop, OpenClaw, Hermes, OpenHuman, and DeepSeek Harness
 - **8 core frameworks + training marketplace package** — SDLC, Digital Forensics, Marketing Operations, Research Management, Media Curation, Ops Infrastructure, Knowledge Base, Security Engineering, plus [`aiwg-training`](https://github.com/jmagly/aiwg-training) for fine-tuning dataset curation (corpus-to-dataset pipeline with DPO/KTO/ORPO/SimPO export)
 - **32 addons** — compound memory, line memory, llm-wiki (Obsidian-native knowledge base), RLM recursive decomposition, fleet operations, browser control, testing quality, and more
 - **40 Claude Code plugins** — the complete framework and addon catalog is installable independently from the AIWG marketplace
@@ -652,6 +652,7 @@ aiwg use all --provider devin          # Devin Desktop
 aiwg use all --provider openclaw       # OpenClaw
 aiwg use all --provider hermes         # Hermes
 aiwg use all --provider openhuman      # OpenHuman
+aiwg use all --provider dsh            # DeepSeek Harness
 ```
 
 `all` means the complete deployable end-user surface. It intentionally omits

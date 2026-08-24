@@ -159,6 +159,7 @@ export const ProviderConfigSchema = z.object({
     'openhuman',
     'warp',
     'windsurf',
+    'dsh',
   ]),
   displayName: z.string().min(1).max(128).optional(),
   aliases: z.array(z.string().min(1).max(64)).max(20).optional(),

@@ -1,0 +1,62 @@
+<!-- AIWG SDLC Framework Integration -->
+
+## AIWG SDLC Framework
+
+This project uses [AIWG](https://aiwg.io) for SDLC orchestration with DeepSeek Harness.
+
+### Skills
+
+Kernel skills deploy flat to `.agents/skills/` (natively scanned by DeepSeek
+Harness); the bulk framework/addon payload deploys to `.dsh/.aiwg/skills/`
+(index-discoverable, not flat-scanned — keeps session catalogs lean). User-scope
+deploys land in `~/.agents/skills/`.
+
+```bash
+aiwg use sdlc --provider dsh        # redeploy / refresh
+aiwg list                           # inventory
+```
+
+**Discover-first protocol:** most AIWG skills are not in your context. Run
+`aiwg discover "<need>"`, then `aiwg show skill <name>` to load the body.
+
+### Artifacts
+
+SDLC artifacts stored in `.aiwg/`:
+
+```
+.aiwg/
+├── intake/        # Project intake forms
+├── requirements/  # User stories, use cases
+├── architecture/  # SAD, ADRs
+├── planning/      # Phase plans
+├── testing/       # Test strategy, plans
+├── security/      # Threat models
+└── deployment/    # Deployment plans
+```
+
+### Natural Language Workflows
+
+- "Run intake on this idea"
+- "Generate a threat model for this design"
+- "Create an architecture decision record"
+- "What's the project status?"
+- "Run security review"
+
+### MCP Server (Optional)
+
+DSH's MCP client plugin can connect to AIWG's server — add to `cordis.yml`:
+
+```yaml
+- id: aiwg-mcp
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: aiwg
+    transport: stdio
+    command: npx
+    args: ['aiwg', 'mcp', 'serve']
+```
+
+### Resources
+
+- Provider reference: `docs/agents/providers/deepseek-harness.md` in the AIWG repo
+- Redeploy: `aiwg use all --provider dsh`

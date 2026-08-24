@@ -26,6 +26,7 @@ or command interface so it can connect AIWG to the current project.
 | `aiwg.agent-reference.provider.codex` | OpenAI Codex | [Operational reference](codex.md) |
 | `aiwg.agent-reference.provider.copilot` | GitHub Copilot | [Operational reference](copilot.md) |
 | `aiwg.agent-reference.provider.cursor` | Cursor | [Operational reference](cursor.md) |
+| `aiwg.agent-reference.provider.dsh` | DeepSeek Harness (`dsh`; aliases `deepseek`, `deepseek-harness`) | [Operational reference](deepseek-harness.md) |
 | `aiwg.agent-reference.provider.factory` | Factory | [Operational reference](factory.md) |
 | `aiwg.agent-reference.provider.hermes` | Hermes | [Operational reference](hermes.md) |
 | `aiwg.agent-reference.provider.openclaw` | OpenClaw | [Operational reference](openclaw.md) |
