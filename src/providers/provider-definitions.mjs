@@ -69,6 +69,19 @@ const MCP_INJECTION_DEFINITIONS = [
     },
   },
   {
+    id: 'dsh',
+    aliases: ['deepseek', 'deepseek-harness'],
+    mcp: {
+      providerId: 'dsh',
+      includeInSupportedProviders: true,
+      configFormat: 'cordis-yml',
+      serverConfigFormat: 'standard',
+      serversKey: '',
+      configPath: { scope: 'home', path: '.dsh/profiles/web/cordis.patch.yml' },
+      supportsEphemeral: false,
+    },
+  },
+  {
     id: 'windsurf',
     aliases: ['devin', 'devin-desktop', 'devin-local', 'cascade'],
     mcp: {
