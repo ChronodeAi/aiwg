@@ -9,7 +9,7 @@
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
 import { resolveConfigDir } from '../config/user-config.js';
 import { getProviderDefinition } from '../providers/provider-definitions.js';
 
@@ -76,7 +76,8 @@ export type InjectProvider =
   | 'openai'
   | 'opencode'
   | 'windsurf'
-  | 'warp';
+  | 'warp'
+  | 'dsh';
 
 type McpInjectionAdapter = 'claude-code' | 'cursor' | 'factory' | 'codex' | 'opencode' | 'windsurf' | 'warp' | null;
 
@@ -387,6 +388,7 @@ export function getProviderConfigPath(provider: InjectProvider, projectDir = '.'
     opencode: resolve(projectDir, 'opencode.json'),
     windsurf: resolve(homeDir, '.codeium/windsurf/mcp_config.json'),
     warp: resolve(homeDir, '.warp/mcp.json'),
+    dsh: resolve(homeDir, '.dsh/profiles/web/cordis.patch.yml'),
   };
 
   return pathMap[provider] || '';
@@ -432,8 +434,106 @@ export async function injectServers(
     return injectToml(registry, allServers, configPath, provider, dryRun, result);
   }
 
+  // Handle the DeepSeek Harness cordis.patch.yml profile separately
+  if (provider === 'dsh') {
+    return injectDsh(allServers, configPath, dryRun, result);
+  }
+
   // JSON-based providers
   return injectJson(registry, allServers, configPath, provider, dryRun, result);
+}
+
+/**
+ * Inject registry servers into the DeepSeek Harness web profile as
+ * `@deepseek-ai/dsh-mcp-client` cordis.patch.yml rows. Text-managed block:
+ * re-runs replace between the BEGIN/END markers in place; operator content
+ * elsewhere in the file is untouched.
+ */
+const DSH_MANAGED_BEGIN = '# BEGIN aiwg-managed:mcp-fleet';
+const DSH_MANAGED_END = '# END aiwg-managed:mcp-fleet';
+
+async function injectDsh(
+  servers: McpServerDefinition[],
+  configPath: string,
+  dryRun: boolean,
+  result: InjectResult,
+): Promise<InjectResult> {
+  const rows: string[] = [];
+  for (const server of servers) {
+    const id = `mcp-${server.name}`;
+    const cfg: string[] = [
+      `      serverName: ${server.name}`,
+    ];
+    if (server.type === 'http' || server.type === 'sse') {
+      cfg.push(`      transport: streamable-http`);
+      cfg.push(`      url: ${server.url}`);
+      const headerLines = Object.entries(server.headers ?? {}).map(
+        ([k, v]) => `        ${k}: '${v}'`,
+      );
+      if (headerLines.length > 0) {
+        cfg.push(`      headers:`);
+        cfg.push(...headerLines);
+      }
+    } else {
+      cfg.push(`      transport: stdio`);
+      cfg.push(`      command: ${server.command}`);
+      if (server.args && server.args.length > 0) {
+        cfg.push(`      args: [${server.args.map(a => `'${a}'`).join(', ')}]`);
+      }
+      const envLines = Object.entries(server.env ?? {}).map(
+        ([k, v]) => `        ${k}: '${v}'`,
+      );
+      if (envLines.length > 0) {
+        cfg.push(`      env:`);
+        cfg.push(...envLines);
+      }
+    }
+    cfg.push(`      failOnStartupError: false`);
+    rows.push(
+      [
+        `  - id: ${id}`,
+        `    name: '@deepseek-ai/dsh-mcp-client'`,
+        `    config:`,
+        ...cfg,
+      ].join('\n'),
+    );
+    result.serversInjected.push(server.name);
+  }
+
+  const managedBlock = `${DSH_MANAGED_BEGIN}\n- insert:\n${rows.join('\n')}\n${DSH_MANAGED_END}`;
+
+  let existing = '';
+  try {
+    existing = await readFile(configPath, 'utf-8');
+  } catch {
+    // File doesn't exist yet — start fresh with just the managed block.
+  }
+
+  const beginIdx = existing.indexOf(DSH_MANAGED_BEGIN);
+  const endIdx = existing.indexOf(DSH_MANAGED_END);
+
+  let updated: string;
+  let verb: string;
+  if (beginIdx !== -1 && endIdx !== -1 && endIdx > beginIdx) {
+    updated =
+      existing.slice(0, beginIdx) +
+      managedBlock +
+      existing.slice(endIdx + DSH_MANAGED_END.length);
+    verb = updated === existing ? 'noop' : 'update';
+  } else {
+    updated = existing.replace(/\n*$/, '\n\n') + managedBlock + '\n';
+    verb = existing ? 'append' : 'create';
+  }
+
+  if (verb === 'noop') {
+    for (const server of servers) result.alreadyPresent.push(server.name);
+    return result;
+  }
+  if (!dryRun) {
+    await mkdir(dirname(configPath), { recursive: true });
+    await writeFile(configPath, updated, 'utf-8');
+  }
+  return result;
 }
 
 async function injectJson(
@@ -546,4 +646,5 @@ export const SUPPORTED_PROVIDERS: InjectProvider[] = [
   'opencode',
   'windsurf',
   'warp',
+  'dsh',
 ];
