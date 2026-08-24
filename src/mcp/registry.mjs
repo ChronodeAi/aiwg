@@ -12,7 +12,7 @@
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
-import { resolve } from 'path';
+import { dirname, resolve } from 'path';
 import { homedir } from 'os';
 import { existsSync } from 'fs';
 import {
@@ -315,8 +315,51 @@ export async function injectServers(registry, provider, options = {}) {
   if (mcpDefinition?.configFormat === 'toml') {
     return injectToml(registry, allServers, configPath, provider, dryRun, result);
   }
+  if (mcpDefinition?.configFormat === 'cordis-yml') {
+    return injectDsh(allServers, configPath, dryRun, result);
+  }
 
   return injectJson(registry, allServers, configPath, provider, dryRun, result);
+}
+
+const DSH_MANAGED_BEGIN = '# BEGIN aiwg-managed:mcp-fleet';
+const DSH_MANAGED_END = '# END aiwg-managed:mcp-fleet';
+
+async function injectDsh(servers, configPath, dryRun, result) {
+  const rows = [];
+  for (const server of servers) {
+    const cfg = ['      serverName: ' + server.name];
+    if (server.type === 'http' || server.type === 'sse') {
+      cfg.push('      transport: streamable-http');
+      cfg.push('      url: ' + server.url);
+      const hs = Object.entries(server.headers ?? {}).map(([k, v]) => '        ' + k + ": '" + v + "'");
+      if (hs.length > 0) { cfg.push('      headers:'); cfg.push(...hs); }
+    } else {
+      cfg.push('      transport: stdio');
+      cfg.push('      command: ' + server.command);
+      if (server.args && server.args.length > 0) cfg.push('      args: [' + server.args.map(a => "'" + a + "'").join(', ') + ']');
+      const es = Object.entries(server.env ?? {}).map(([k, v]) => '        ' + k + ": '" + v + "'");
+      if (es.length > 0) { cfg.push('      env:'); cfg.push(...es); }
+    }
+    cfg.push('      failOnStartupError: false');
+    rows.push(['  - id: mcp-' + server.name, "    name: '@deepseek-ai/dsh-mcp-client'", '    config:', ...cfg].join('\n'));
+    result.serversInjected.push(server.name);
+  }
+  const managedBlock = DSH_MANAGED_BEGIN + '\n- insert:\n' + rows.join('\n') + '\n' + DSH_MANAGED_END;
+  let existing = '';
+  try { existing = await readFile(configPath, 'utf-8'); } catch {}
+  const b = existing.indexOf(DSH_MANAGED_BEGIN), e = existing.indexOf(DSH_MANAGED_END);
+  let updated, verb;
+  if (b !== -1 && e !== -1 && e > b) {
+    updated = existing.slice(0, b) + managedBlock + existing.slice(e + DSH_MANAGED_END.length);
+    verb = updated === existing ? 'noop' : 'update';
+  } else {
+    updated = existing.replace(/\n*$/, '\n\n') + managedBlock + '\n';
+    verb = existing ? 'append' : 'create';
+  }
+  if (verb === 'noop') { for (const sv of servers) result.alreadyPresent.push(sv.name); return result; }
+  if (!dryRun) { await mkdir(dirname(configPath), { recursive: true }); await writeFile(configPath, updated, 'utf-8'); }
+  return result;
 }
 
 async function injectJson(registry, servers, configPath, provider, dryRun, result) {
