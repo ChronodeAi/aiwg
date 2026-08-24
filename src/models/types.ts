@@ -70,7 +70,8 @@ export type Provider =
   | 'openhuman'
   | 'openai'
   | 'warp'
-  | 'windsurf';
+  | 'windsurf'
+  | 'dsh';
 
 export type ModelEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 

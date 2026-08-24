@@ -7,6 +7,19 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- **DeepSeek Harness provider (`dsh`)** - AIWG now deploys natively to
+  DeepSeek Harness (github.com/deepseek-ai/deepseek-harness), the Cordis-kernel
+  agent harness. Kernel skills deploy flat to `.agents/skills/` (DSH's native
+  project scan root) with the bulk payload index-only under `.dsh/.aiwg/skills/`
+  per the #1217 kernel pivot; user-scope skills land in `~/.agents/skills/`
+  honoring `DSH_AGENTS_HOME`. Context follows the codex shape — managed
+  AGENTS.md section over the canonical WORKSPACE.md/AIWG.md graph, prose-directive,
+  no include syntax. MCP stays provider-native via DSH's `dsh-mcp-client`
+  cordis.yml plugin, so no JSON injection adapter ships. Aliases: `deepseek`,
+  `deepseek-harness`. Provider reference: `docs/agents/providers/deepseek-harness.md`.
+
 ## [2026.8.17] - 2026-08-22 - "Runnable graphs, useful release conversations"
 
 ### Added

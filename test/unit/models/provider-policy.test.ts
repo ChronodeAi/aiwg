@@ -13,15 +13,22 @@ describe('provider model registry', () => {
   it('covers every audited provider with sourced, dated capability entries', () => {
     const registry = loadProviderModelCapabilities();
     expect(Object.keys(registry.providers).sort()).toEqual([
-      'claude', 'codex', 'copilot', 'cursor', 'factory', 'hermes',
+      'claude', 'codex', 'copilot', 'cursor', 'dsh', 'factory', 'hermes',
       'openclaw', 'opencode', 'openhuman', 'warp', 'windsurf',
     ]);
     for (const capability of Object.values(registry.providers)) {
       expect(capability.sourceUrl).toMatch(/^https:\/\//);
-      expect(capability.verifiedAt).toBe('2026-07-20');
+      expect(capability.verifiedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(capability.identifierSyntax).not.toBe('');
       expect(capability.verification).not.toBe('');
     }
+    // The July 2026 registry sweep audited these providers together.
+    for (const id of ['claude', 'codex', 'copilot', 'cursor', 'factory', 'hermes',
+      'openclaw', 'opencode', 'openhuman', 'warp', 'windsurf'] as const) {
+      expect(registry.providers[id].verifiedAt).toBe('2026-07-20');
+    }
+    // dsh joined later, with its own verification pass.
+    expect(registry.providers.dsh.verifiedAt).toBe('2026-08-23');
   });
   it('keeps exact IDs in the separately refreshable catalog', () => {
     const catalog = loadProviderModelCatalog();

@@ -19,6 +19,7 @@ const CURRENT_PLATFORM_IDS = [
   'openhuman',
   'warp',
   'windsurf',
+  'dsh',
   'generic',
 ];
 
@@ -126,5 +127,42 @@ describe('provider definition registry', () => {
     expect(getProviderDefinition('copilot')?.paths.contextDiscovery.rules).toBe('.github/instructions');
     expect(getProviderDefinition('openhuman')?.paths.artifacts.agents).toBeNull();
     expect(getProviderDefinition('openhuman')?.paths.contextDiscovery.agents).toBe('.agents/agents');
+  });
+
+  it('models the DeepSeek Harness skills-only topology', () => {
+    const dsh = getProviderDefinition('dsh');
+    expect(dsh).toBeDefined();
+    expect(dsh?.displayName).toBe('DeepSeek Harness');
+    expect(normalizeProviderDefinitionId('deepseek')).toBe('dsh');
+    expect(normalizeProviderDefinitionId('deepseek-harness')).toBe('dsh');
+
+    // Skills are the only directory-deployed artifact class: the kernel
+    // inventory deploys flat to `.agents/skills/` (natively scanned by DSH's
+    // skill provider) while the bulk payload lands in `.dsh/.aiwg/skills/`
+    // (index-discoverable only, mirroring Codex's kernel pivot).
+    expect(dsh?.paths.artifacts.skills).toBe('.dsh/.aiwg/skills');
+    expect(dsh?.paths.kernelSkills).toBe('.agents/skills');
+    expect(dsh?.paths.contextDiscovery.skills).toBe('.agents/skills');
+    expect(dsh?.paths.artifacts.agents).toBeNull();
+    expect(dsh?.paths.artifacts.commands).toBeNull();
+    expect(dsh?.paths.artifacts.rules).toBeNull();
+
+    // Context is AGENTS.md prose-directive over the canonical workspace graph
+    // (WORKSPACE.md → AGENTS.md + AIWG.md), matching the codex context shape.
+    expect(dsh?.context.loadMode).toBe('prose-directive');
+    expect(dsh?.context.includeSyntax).toBeNull();
+    expect(dsh?.context.bootstrapTargets).toEqual(['AGENTS.md']);
+    expect(dsh?.context.support).toBe('supported');
+    expect(dsh?.paths.contextFiles.aiwgMd).toBe(true);
+    expect(dsh?.paths.contextFiles.agentsMd).toBe(true);
+    expect(dsh?.paths.contextFiles.claudeMdHook).toBe(false);
+
+    // MCP is native via cordis.yml plugin composition, not JSON injection.
+    expect(dsh?.adapters.mcpInjection).toBeNull();
+    expect(dsh?.adapters.contextAggregation).toBe('agents-md');
+    expect(dsh?.capabilities.nativeFeatures.mcp).toBe(true);
+    expect(dsh?.capabilities.nativeFeatures.agent_teams).toBe(true);
+    expect(dsh?.skillNamespace.pathType).toBe('project');
+    expect(dsh?.skillNamespace.skillsBaseDir).toBe('.agents/skills');
   });
 });

@@ -102,6 +102,7 @@ export function generateHelp(registry: ExtensionRegistry): string {
   lines.push('  warp                  Warp Terminal');
   lines.push('  devin                 Devin Desktop');
   lines.push('  windsurf              Deprecated alias for devin');
+  lines.push('  dsh                   DeepSeek Harness');
   lines.push('');
 
   // Examples

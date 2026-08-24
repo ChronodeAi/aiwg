@@ -108,9 +108,11 @@ const PROVIDER_ALIASES = {
   'devin-desktop': 'windsurf',
   'devin-local': 'windsurf',
   'cascade': 'windsurf',
+  'deepseek': 'dsh',
+  'deepseek-harness': 'dsh',
 };
 
-const AVAILABLE_PROVIDERS = ['claude', 'factory', 'codex', 'opencode', 'copilot', 'cursor', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman'];
+const AVAILABLE_PROVIDERS = ['claude', 'factory', 'codex', 'opencode', 'copilot', 'cursor', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'dsh'];
 
 const UNSUPPORTED_PROVIDER_HINTS = {
   'devin-cli': [
@@ -152,7 +154,7 @@ const MIRRORED_KERNEL_COMMAND_SKILLS = new Set([
 ]);
 
 function providerUsesSkillsNatively(providerName) {
-  return ['claude', 'cursor', 'hermes', 'openhuman'].includes(providerName);
+  return ['claude', 'cursor', 'hermes', 'openhuman', 'dsh'].includes(providerName);
 }
 
 function shouldMirrorStandardCommandSkill(skillName) {
