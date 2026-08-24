@@ -181,8 +181,12 @@ describe('provider policy', () => {
     expect(shouldEmitContextFiles('warp')).toBe(true);
     expect(shouldEmitContextFiles('factory')).toBe(true);
     expect(shouldEmitContextFiles('opencode')).toBe(true);
+    expect(shouldEmitContextFiles('dsh')).toBe(true);
+    expect(shouldEmitAgentsMd('dsh')).toBe(true);
+    expect(shouldEmitAiwgMd('dsh')).toBe(true);
+    expect(shouldEmitClaudeMdHook('dsh')).toBe(false);
     expect(shouldEmitContextFiles('openhuman')).toBe(false);
-    expect(AGENTS_MD_PROVIDERS.size).toBe(8);
+    expect(AGENTS_MD_PROVIDERS.size).toBe(9);
   });
 
   // #1437: claude is no longer skipped — it gets AIWG.md emission + CLAUDE.md hook
