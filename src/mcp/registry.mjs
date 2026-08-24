@@ -316,7 +316,7 @@ export async function injectServers(registry, provider, options = {}) {
     return injectToml(registry, allServers, configPath, provider, dryRun, result);
   }
   if (mcpDefinition?.configFormat === 'cordis-yml') {
-    return injectDsh(allServers, configPath, dryRun, result);
+    return injectDsh(registry, allServers, configPath, dryRun, result);
   }
 
   return injectJson(registry, allServers, configPath, provider, dryRun, result);
@@ -325,7 +325,7 @@ export async function injectServers(registry, provider, options = {}) {
 const DSH_MANAGED_BEGIN = '# BEGIN aiwg-managed:mcp-fleet';
 const DSH_MANAGED_END = '# END aiwg-managed:mcp-fleet';
 
-async function injectDsh(servers, configPath, dryRun, result) {
+async function injectDsh(registry, servers, configPath, dryRun, result) {
   const rows = [];
   for (const server of servers) {
     const cfg = ['      serverName: ' + server.name];
@@ -357,8 +357,13 @@ async function injectDsh(servers, configPath, dryRun, result) {
     updated = existing.replace(/\n*$/, '\n\n') + managedBlock + '\n';
     verb = existing ? 'append' : 'create';
   }
-  if (verb === 'noop') { for (const sv of servers) result.alreadyPresent.push(sv.name); return result; }
+  if (verb === 'noop') {
+    for (const sv of servers) result.alreadyPresent.push(sv.name);
+    if (!dryRun) for (const sv of servers) await registry.recordInjection(sv.name, 'dsh');
+    return result;
+  }
   if (!dryRun) { await mkdir(dirname(configPath), { recursive: true }); await writeFile(configPath, updated, 'utf-8'); }
+  for (const sv of servers) await registry.recordInjection(sv.name, 'dsh');
   return result;
 }
 

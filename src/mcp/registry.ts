@@ -436,7 +436,7 @@ export async function injectServers(
 
   // Handle the DeepSeek Harness cordis.patch.yml profile separately
   if (provider === 'dsh') {
-    return injectDsh(allServers, configPath, dryRun, result);
+    return injectDsh(registry, allServers, configPath, dryRun, result);
   }
 
   // JSON-based providers
@@ -453,6 +453,7 @@ const DSH_MANAGED_BEGIN = '# BEGIN aiwg-managed:mcp-fleet';
 const DSH_MANAGED_END = '# END aiwg-managed:mcp-fleet';
 
 async function injectDsh(
+  registry: McpServerRegistry,
   servers: McpServerDefinition[],
   configPath: string,
   dryRun: boolean,
@@ -527,11 +528,19 @@ async function injectDsh(
 
   if (verb === 'noop') {
     for (const server of servers) result.alreadyPresent.push(server.name);
+    if (!dryRun) {
+      for (const server of servers) {
+        await registry.recordInjection(server.name, 'dsh');
+      }
+    }
     return result;
   }
   if (!dryRun) {
     await mkdir(dirname(configPath), { recursive: true });
     await writeFile(configPath, updated, 'utf-8');
+  }
+  for (const server of servers) {
+    await registry.recordInjection(server.name, 'dsh');
   }
   return result;
 }
