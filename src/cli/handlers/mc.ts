@@ -703,7 +703,12 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
     }
 
     try {
+      // Provider selection (issue: provider-routed missions): AIWG_MISSION_PROVIDER
+      // overrides the launcher default ('claude') per run, e.g. AIWG_MISSION_PROVIDER=dsh
+      // routes iterations through the DeepSeek Harness headless profile.
+      const missionProvider = (process.env.AIWG_MISSION_PROVIDER ?? '').trim() || undefined;
       const result = await launchExternalRalph(frameworkRoot, projectRoot, {
+        provider: missionProvider,
         objective: mission.objective,
         completionCriteria: mission.completion,
         maxIterations: mission.maxIterations,

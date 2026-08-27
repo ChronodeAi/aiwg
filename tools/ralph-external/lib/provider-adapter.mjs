@@ -278,6 +278,9 @@ async function registerBuiltinProviders() {
   try {
     await import('./factory-adapter.mjs');
   } catch { /* ignore if not found */ }
+  try {
+    await import('./dsh-adapter.mjs');
+  } catch { /* ignore if not found */ }
 }
 
 // Run registration — store promise so callers can await it
