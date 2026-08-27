@@ -58,6 +58,17 @@ export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     dangerousFlag: '--dangerously-bypass-approvals-and-sandbox',
     name: 'OpenAI Codex',
   },
+  dsh: {
+    // DeepSeek Harness headless profile: `dsh --profile headless "<task>"`
+    // (examples/headless-agent) — one nonblank task, fresh session, final
+    // assistant text on stdout, exit. Credentials via OPENROUTER_API_KEY
+    // (env or AGENTIC_CREDENTIAL_DIR lease); model via DSH_HOME settings
+    // (e.g. z-ai/glm-5.3-flash). No bypass flag: profile owns sandboxing.
+    binary: 'dsh',
+    promptPrefix: ['--profile', 'headless'],
+    dangerousFlag: null,
+    name: 'DeepSeek Harness (dsh)',
+  },
   hermes: {
     // Hermes is a model series (NousResearch), not a confirmed standalone CLI.
     // Treat as IDE/runtime-integrated until a CLI is confirmed.
