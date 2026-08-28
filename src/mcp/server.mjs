@@ -607,21 +607,39 @@ async function scanDirectory(dir, type) {
 
 /**
  * Start the MCP server with stdio transport
+ *
+ * Resolves only when the server shuts down. Earlier versions resolved right
+ * after connect(), which let the CLI router treat `aiwg mcp serve` as a
+ * finished command and tear down the process — the sidecar exited silently
+ * after answering `initialize` and never served tools/list (#fix: sidecar
+ * lifetime). Long-lived via the stopped-promise gate below.
  */
 export async function startServer() {
   const server = createServer();
   const transport = new StdioServerTransport();
 
   console.error('[AIWG MCP] Starting server...');
+
+  // Gate on the transport's lifetime: when stdin closes (client disconnect)
+  // or the server closes, the promise chain settles and serve() may return.
+  const stopped = new Promise((resolve) => {
+    const finish = () => resolve();
+    process.stdin.on('end', finish);
+    process.stdin.on('close', finish);
+    process.on('SIGINT', finish);
+    process.on('SIGTERM', finish);
+  });
+
   await server.connect(transport);
   console.error('[AIWG MCP] Server connected via stdio transport');
 
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    console.error('[AIWG MCP] Shutting down...');
-    await server.close();
-    process.exit(0);
-  });
+  // Keep the process alive until the client disconnects or signals shutdown.
+  const keepalive = setInterval(() => {}, 1 << 30);
+  await stopped;
+
+  clearInterval(keepalive);
+  try { await server.close(); } catch { /* already closed */ }
+  console.error('[AIWG MCP] Server stopped');
 }
 
 // Run if executed directly
