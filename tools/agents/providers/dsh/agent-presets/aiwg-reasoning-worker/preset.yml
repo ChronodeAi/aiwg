@@ -1,0 +1,2 @@
+name: "AIWG Reasoning Worker"
+description: "Model-role: reasoning. Architecture, synthesis, difficult analysis, high-consequence review. Canonical AIWG worker-wrapper persona (discover-show-before-apply, parent scope, structured return)."
