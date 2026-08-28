@@ -528,7 +528,7 @@ providers:
     aggregated_output: false
     agent_capabilities:
       default:
-        context_window: 128000     # DeepSeek V3-class models
+        context_window: 1048576    # observed session route; z-ai/glm-5.3-flash offers 1,310,720 (OpenRouter, verified 2026-08-28)
         max_output_tokens: 8192
         max_tool_calls: 40
         max_concurrent_subagents: 4
@@ -539,6 +539,8 @@ providers:
           context_overflow: retry_with_prefiltered_context
           quota_exhausted: retry_with_different_model
           timeout: retry_with_smaller_scope
+    model_policy:
+      route: "OpenRouter-first; primary z-ai/glm-5.3-flash (best cost-for-intelligence, frontier coding); z-ai/glm-5.3 for deeper reasoning passes; premium OpenAI/Anthropic models sparingly, only for specific hyper-focused high-consequence tasks (tier-1 decision row 97cb2f83, dsh-aiwg-fleet). Per-session single route via cordis.yml llm plugin; roles are documentation + aiwg models resolve, not runtime switches."
 
 # Feature definitions — documents what each feature key means and
 # what emulation strategies are available when native support is absent.

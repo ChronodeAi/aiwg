@@ -13,6 +13,12 @@ const ROLE_PATTERNS = [
   ['reasoning', /(?:^|[/:._-])opus(?:$|[/:._-]|\d)/i],
   ['coding', /(?:^|[/:._-])sonnet(?:$|[/:._-]|\d)/i],
   ['efficiency', /(?:^|[/:._-])haiku(?:$|[/:._-]|\d)/i],
+  // Z.ai GLM family via OpenRouter (DSH fleet primary; tier-1 decision row
+  // 97cb2f83, dsh-aiwg-fleet): flash is the coding/efficiency workhorse,
+  // non-flash glm-5.3 the deeper reasoning pass, other glm ids efficiency.
+  ['coding', /(?:^|[/:._-])glm-5\.3-flash(?:$|[/:._-])/i],
+  ['reasoning', /(?:^|[/:._-])glm-5\.3(?:$|[/:._-])/i],
+  ['efficiency', /(?:^|[/:._-])glm(?:$|[/:._-])/i],
 ];
 
 /**
