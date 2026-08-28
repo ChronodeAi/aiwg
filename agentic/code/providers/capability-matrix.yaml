@@ -540,7 +540,7 @@ providers:
           quota_exhausted: retry_with_different_model
           timeout: retry_with_smaller_scope
     model_policy:
-      route: "OpenRouter-first; primary z-ai/glm-5.3-flash (best cost-for-intelligence, frontier coding); z-ai/glm-5.3 for deeper reasoning passes; premium OpenAI/Anthropic models sparingly, only for specific hyper-focused high-consequence tasks (tier-1 decision row 97cb2f83, dsh-aiwg-fleet). Per-session single route via cordis.yml llm plugin; roles are documentation + aiwg models resolve, not runtime switches."
+      route: "OpenRouter-first; z-ai/glm-5.3-flash is the primary route for ALL roles (reasoning, coding, efficiency - best cost-for-intelligence, frontier coding; operator amendment to tier-1 row 97cb2f83, dsh-aiwg-fleet). z-ai/glm-5.3 (non-flash) is an optional deeper alternative; premium OpenAI/Anthropic models sparingly, only for specific hyper-focused high-consequence tasks. Per-session single route via cordis.yml llm plugin; roles are documentation + aiwg models resolve, not runtime switches."
 
 # Feature definitions — documents what each feature key means and
 # what emulation strategies are available when native support is absent.

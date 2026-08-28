@@ -238,7 +238,7 @@
     "dsh": {
       "roles": {
         "reasoning": {
-          "id": "z-ai/glm-5.3",
+          "id": "z-ai/glm-5.3-flash",
           "status": "active",
           "observed": true
         },
