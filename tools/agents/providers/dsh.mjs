@@ -13,19 +13,25 @@
  *   - Standard skills: .dsh/.aiwg/skills/ (bulk framework/addon payload;
  *     index-discoverable via aiwg discover/show but NOT flat-scanned by DSH,
  *     mirroring Codex's kernel pivot #1217 so session catalogs stay lean)
+ *   - Agent presets: ($DSH_HOME|~/.dsh)/.agent-presets/<id>/ — DSH's named-agent
+ *     compositions (packages/preset/agent-presets: agent.cordis.yml + preset.yml).
+ *     Session-scoped; delegated children join the parent's preset (#1707).
  *   - AGENTS.md: managed AIWG section via BEGIN/END markers; operator content
  *     outside the markers is preserved (#1571)
  *
  * What this provider SKIPS:
- *   - Agents: DSH subagents are cordis.yml plugin compositions, not markdown dirs
+ *   - Agent markdown dirs: DSH has no .md agent-file surface; personas ship as
+ *     agent presets above and per-child persona shadowing (ChildComposition)
  *   - Commands: no separate command surface; user-invocable skills serve as commands
  *   - Rules: context is AGENTS.md prose; full bodies via `aiwg show rule <name>`
  *
  * See: docs/agents/providers/deepseek-harness.md
  */
 
+import os from 'os';
 import realFs from 'fs';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 const _require = createRequire(import.meta.url);
 let fs;
 try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs; } catch { fs = realFs; }
@@ -131,6 +137,93 @@ export function deploySkills(skillDirs, opts) {
 }
 
 // ============================================================================
+// Agent Presets Deployment
+// ============================================================================
+
+/**
+ * Resolve the DeepSeek Harness harness home exactly as
+ * `packages/skill/skill-filesystem` and `packages/preset/agent-presets` do:
+ * `$DSH_HOME`, defaulting to `~/.dsh`. Mirrors src/providers/dsh-home.ts
+ * (resolveDshHarnessHome) — keep the two in sync.
+ */
+function resolveDshHarnessHome() {
+  const configured = (process.env.DSH_HOME || '').trim();
+  if (configured) return path.resolve(configured);
+  const home = process.env.HOME || process.env.USERPROFILE || os.homedir();
+  return path.join(home, '.dsh');
+}
+
+/** Corpus source dir holding preset directories (agent.cordis.yml + preset.yml). */
+export const agentPresetsSourceDir = path.join(
+  path.dirname(fileURLToPath(import.meta.url)), 'dsh', 'agent-presets'
+);
+
+/** DSH's user-level preset root (dsh-agent-presets USER_PRESET_DIR). */
+export function dshAgentPresetsRoot() {
+  return path.join(resolveDshHarnessHome(), '.agent-presets');
+}
+
+/**
+ * `all`-mode runs invoke deploy() once per framework pass; presets are
+ * harness-home artifacts, so deploy them once per process (idempotent either
+ * way — this only avoids redundant copies).
+ */
+let presetsDeployedThisProcess = false;
+
+/**
+ * Deploy AIWG agent presets into DSH's user preset root. Discovery in
+ * dsh-agent-presets re-reads roots on every call, so deployed presets are
+ * visible to running and new sessions without a restart. Corpus copies win on
+ * redeploy (they are the source of truth); operator-authored presets with
+ * other ids are untouched.
+ *
+ * @returns {number} presets deployed (or that would deploy, in dry-run)
+ */
+export function deployAgentPresets(opts) {
+  const { dryRun } = opts;
+  const sourceRoot = opts.presetSourceDir || agentPresetsSourceDir;
+  let sourceDirs = [];
+  try {
+    sourceDirs = fs.readdirSync(sourceRoot, { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => e.name)
+      .sort();
+  } catch {
+    return 0; // no presets shipped for this provider build
+  }
+  if (sourceDirs.length === 0) return 0;
+
+  const destRoot = opts.presetDestRoot || dshAgentPresetsRoot();
+  if (!dryRun && !opts.quiet) {
+    console.log(`  Deploying ${sourceDirs.length} agent presets to ${destRoot}...`);
+  }
+  let deployed = 0;
+  for (const id of sourceDirs) {
+    const srcDir = path.join(sourceRoot, id);
+    const destDir = path.join(destRoot, id);
+    const files = ['agent.cordis.yml', 'preset.yml'].filter(f =>
+      fs.existsSync(path.join(srcDir, f))
+    );
+    if (files.length === 0) continue;
+    if (!dryRun) {
+      fs.mkdirSync(destDir, { recursive: true });
+      for (const f of files) {
+        // Write-then-rename so a crash mid-copy never leaves a truncated
+        // composition behind (DSH discovery would surface it as a broken
+        // roster row until the next deploy heals it).
+        const tmpFile = path.join(destDir, `.${f}.aiwg-tmp`);
+        fs.copyFileSync(path.join(srcDir, f), tmpFile);
+        fs.renameSync(tmpFile, path.join(destDir, f));
+      }
+    } else if (!opts.quiet) {
+      console.log(`  [dry-run] deploy preset ${id} -> ${destDir}`);
+    }
+    deployed++;
+  }
+  return deployed;
+}
+
+// ============================================================================
 // Main Deploy Function
 // ============================================================================
 
@@ -194,6 +287,21 @@ export async function deploy(opts) {
     }
   }
 
+  // ── Agent presets (DSH named-agent compositions, user root) ───────────────
+  // Presets are harness-home artifacts every DSH session can pick, so they are
+  // independent of project scope — but they ship from THIS provider's install
+  // root only. `all`-mode re-invokes this deployer once per framework/addon/
+  // extension pass with a different --source; the install-root check keeps
+  // presets to the main pass (the memo covers any remaining second main pass).
+  let presetCount = 0;
+  const isInstallRootPass = Boolean(
+    opts.srcRoot && fs.existsSync(path.join(opts.srcRoot, 'tools', 'agents', 'providers', 'dsh', 'agent-presets'))
+  );
+  if (!opts.commandsOnly && !opts.rulesOnly && isInstallRootPass && !presetsDeployedThisProcess) {
+    presetCount = deployAgentPresets(opts);
+    presetsDeployedThisProcess = true;
+  }
+
   // ── AGENTS.md managed section (opt-in, mirroring codex --create-agents-md) ─
   // DSH projects frequently carry hand-maintained AGENTS.md files; never touch
   // one unless the operator asked. `aiwg-regenerate` is the other entry point.
@@ -213,6 +321,9 @@ export async function deploy(opts) {
   if (!opts.quiet) {
     console.log('');
     console.log(`Kernel skills root: ${path.join(target, '.agents', 'skills')}`);
+    if (presetCount > 0) {
+      console.log(`Agent presets: ${presetCount} deployed to ${dshAgentPresetsRoot()} (pick one when starting a session; children inherit it).`);
+    }
     console.log('Rules are surfaced through AGENTS.md; full bodies via `aiwg show rule <name>`.');
     console.log('Optional: connect AIWG MCP via @deepseek-ai/dsh-mcp-client in cordis.yml (`aiwg mcp serve`).');
     console.log('See: docs/agents/providers/deepseek-harness.md');

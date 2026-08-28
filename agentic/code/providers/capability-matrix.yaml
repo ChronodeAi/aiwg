@@ -479,13 +479,17 @@ providers:
     # deepseek-ai/deepseek-harness — plugin-based agent harness on the Cordis
     # kernel ("everything is a plugin", developer preview). Skills are natively
     # discovered from project `.agents/skills/` and user `$DSH_AGENTS_HOME|~/.agents/skills/`
-    # (packages/skill/skill-filesystem). Context is AGENTS.md prose-directive.
+    # (packages/skill/skill-filesystem). Named agents are agent presets
+    # (packages/preset/agent-presets): agent.cordis.yml compositions under the
+    # harness home `.agent-presets/`, discovered live; sessions name one at
+    # creation and delegated children join the parent's preset. Context is
+    # AGENTS.md prose-directive.
     # MCP is native via the @deepseek-ai/dsh-mcp-client cordis.yml plugin (stdio +
     # streamable-http), not a JSON config file, so mcp injection stays null.
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
-      agents: "(not supported — DSH subagents are cordis.yml plugin compositions; dispatch AIWG personas via skills or `aiwg run skill`)"
+      agents: "($DSH_HOME|~/.dsh)/.agent-presets/<id>/ — DSH agent presets (agent.cordis.yml + preset.yml; session-scoped named agents; deployed by aiwg use/refresh). Per-delegation persona shadowing via ChildComposition; no per-delegation preset param (children join the parent preset)."
       commands: "(no separate command surface — SKILL.md user-invocable skills serve as commands)"
       skills: ".dsh/.aiwg/skills/"                        # bulk framework/addon payload; index-discoverable, NOT flat-scanned (kernel pivot #1217)
       skills_kernel: ".agents/skills/"                    # canonical kernel/quickref inventory; natively scanned (PROJECT_AGENTS source)

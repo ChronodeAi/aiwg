@@ -103,8 +103,12 @@ opencode.json
 # Maintainer checkouts should use a local `.aiwg-location` pointer to that
 # directory. AIWG_ARTIFACTS_PATH remains available as a temporary override.
 # Public clones can build and test without private corpus access.
-.aiwg/
+# `/*` (not `/`) so operator-authored inputs below can be re-included.
+.aiwg/*
 .aiwg-location
+!.aiwg/quickref.config.json
+!.aiwg/quickref.json
+!.aiwg/issues/
 
 # Agent temporary files
 _agent-temp/
@@ -122,3 +126,13 @@ test/**/.tmp-*/
 
 # stale docs preview build target (active target is dist/aiwg-docs)
 .docs-preview/
+
+# AIWG project-local bundle source — track these (managed by AIWG)
+!.aiwg/aiwg.config
+!.aiwg/quickref.json
+!.aiwg/quickref.config.json
+!.aiwg/addons/
+!.aiwg/extensions/
+!.aiwg/frameworks/
+!.aiwg/plugins/
+!.aiwg/providers/
