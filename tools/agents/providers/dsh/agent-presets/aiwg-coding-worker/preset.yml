@@ -1,2 +1,3 @@
 name: "AIWG Coding Worker"
 description: "Model-role: coding. Implementation, tests, debugging, routine technical delivery. Canonical AIWG worker-wrapper persona (discover-show-before-apply, parent scope, structured return)."
+model_policy: "Default route: z-ai/glm-5.3-flash via OpenRouter (primary coding workhorse)."
