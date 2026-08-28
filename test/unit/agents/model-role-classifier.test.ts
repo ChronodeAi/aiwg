@@ -29,6 +29,13 @@ describe('classifyModelRole', () => {
     ['haiku', 'efficiency'],
     ['claude-haiku-4-5-20251001', 'efficiency'],
     ['anthropic/claude-haiku-4-5', 'efficiency'],
+    // Z.ai GLM family via OpenRouter (DSH fleet primary, tier-1 row 97cb2f83)
+    ['z-ai/glm-5.3-flash', 'coding'],
+    ['glm-5.3-flash', 'coding'],
+    ['z-ai/glm-5.3', 'reasoning'],
+    ['glm-5.3', 'reasoning'],
+    ['z-ai/glm-5.2', 'efficiency'],
+    ['glm-5-turbo', 'efficiency'],
   ])('classifies %s as %s', (model, role) => {
     expect(classifyModelRole(model)).toBe(role);
   });
