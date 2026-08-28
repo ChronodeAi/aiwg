@@ -290,8 +290,17 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
         process.env.CLAUDE_CODE_VERSION !== undefined ||
         process.env.ANTHROPIC_API_KEY !== undefined;
 
+      // Hermes Agent desktop/CLI sessions export HERMES_AGENT (+ HERMES_HOME).
+      // Hermes natively provides cron (cronjob tool) and agent teams/tasks
+      // (delegate_task subagents) — matches the capability matrix (hermes block).
+      const isHermesContext =
+        process.env.HERMES_AGENT !== undefined ||
+        process.env.HERMES_SESSION_ID !== undefined;
+
       if (isClaudeCodeContext) {
         schedulerBackend = 'native-cron (CronCreate); external trigger outside agent sessions';
+      } else if (isHermesContext) {
+        schedulerBackend = 'native (Hermes cronjob tool)';
       }
 
       console.log(`\nScheduler:`);
@@ -305,15 +314,17 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
         console.log(`    macOS:         brew install chrony`);
       }
 
-      // Team backend detection
+      // Team backend detection — Hermes has native delegation (delegate_task).
       const teamBackend = isClaudeCodeContext
         ? 'native (Claude Code agent teams)'
-        : 'aiwg mc emulation';
+        : isHermesContext
+          ? 'native (Hermes delegate_task subagents)'
+          : 'aiwg mc emulation';
 
       console.log(`\nAgent Teams:`);
       console.log(`  Backend:  ${teamBackend}`);
 
-      if (!isClaudeCodeContext) {
+      if (!isClaudeCodeContext && !isHermesContext) {
         console.log(`  Note:     Run 'aiwg team run <name>' to dispatch via Mission Control`);
       }
 

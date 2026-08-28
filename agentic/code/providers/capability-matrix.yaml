@@ -375,18 +375,23 @@ providers:
       skills_cross_agent: "~/.hermes/skills/.aiwg/"
       rules: "AGENTS.md ### Rule sections + aiwg show rule (MCP rule-list/rule-show optional)"
       behaviors: .hermes/behaviors/
+    # Native capabilities verified 2026-08-28 against a live Hermes desktop install:
+    # cron => `cronjob` tool (scheduled dispatch); agent_teams/tasks => `delegate_task`
+    # (isolated subagents, max_concurrent_children 10, max_spawn_depth 1) plus
+    # terminal background tasks. mission_control stays emulated (aiwg-mc) — Hermes
+    # has no durable multi-mission monitor of its own.
     native_features:
-      cron: false
-      agent_teams: false
-      tasks: false
+      cron: true
+      agent_teams: true
+      tasks: true
       mcp: true
       behaviors: false
       mission_control: false
       daemon: false
     emulation:
-      cron: null
-      agent_teams: aiwg-mc
-      tasks: aiwg-mc
+      cron: native
+      agent_teams: native
+      tasks: native
       mcp: native
       behaviors: aiwg-mc
       mission_control: aiwg-mc
@@ -398,6 +403,21 @@ providers:
       context_file: AGENTS.md
     deploy_target: mixed
     aggregated_output: true
+    agent_capabilities:
+      default:
+        # Model-dependent values are conservative placeholders; the concurrency and
+        # depth figures are verified against Hermes delegation config defaults.
+        context_window: 200000
+        max_output_tokens: 12000
+        max_tool_calls: 40
+        max_concurrent_subagents: 10
+        max_spawn_depth: 1
+        supports_streaming: true
+        quota_available: true
+        recovery:
+          context_overflow: retry_with_prefiltered_context
+          quota_exhausted: retry_with_different_model
+          timeout: retry_with_smaller_scope
 
   openclaw:
     display_name: OpenClaw
