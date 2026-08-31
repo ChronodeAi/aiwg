@@ -152,8 +152,10 @@ export class ProcessMonitor extends EventEmitter {
     try {
       // Use ps command to get process stats
       // Format: %cpu %mem etime stat
+      // Empty header names ("-o %cpu=") suppress headers portably:
+      // BSD/macOS ps has no --no-headers (GNU procps only).
       const output = execSync(
-        `ps -p ${pid} -o %cpu,%mem,etime,stat --no-headers`,
+        `ps -p ${pid} -o %cpu=,%mem=,etime=,stat=`,
         { encoding: 'utf8' }
       ).trim();
 

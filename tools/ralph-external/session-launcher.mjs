@@ -1,8 +1,9 @@
 /**
  * Session Launcher for External Ralph Loop
  *
- * Handles spawning Claude Code CLI sessions with proper argument
- * construction and output capture.
+ * Spawns provider CLI sessions. Per ADR-001, ALL argument construction is
+ * owned by the active provider adapter (buildSessionArgs); this module
+ * resolves the adapter, spawns the process, and captures output.
  *
  * @implements @.aiwg/requirements/design-ralph-external.md
  * @security docs/ralph-external-security.md
@@ -32,10 +33,145 @@
  */
 
 import { spawn } from 'child_process';
-import { createWriteStream, mkdirSync, existsSync, readFileSync, copyFileSync } from 'fs';
-import { dirname, join } from 'path';
+import {
+  accessSync,
+  constants as fsConstants,
+  copyFileSync,
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'fs';
+import { dirname, isAbsolute, join, relative, resolve as resolvePath } from 'path';
 import { EventEmitter } from 'events';
 import { homedir } from 'os';
+import { DispatchCapabilityError } from './lib/provider-adapter.mjs';
+
+// ── ADR-002: deliverable write-path gate ─────────────────────────────────────
+
+/**
+ * Typed dispatch refusal for the ADR-002 deliverable write-path gate. Carries
+ * both sides of the mismatch — the operator's first diagnostic is the delta
+ * between the sandbox root and the unwritable target (triage plan FC2 fix #1;
+ * task 11159769 was the withheld-status cost of NOT naming both).
+ */
+export class DeliverableUnwritableError extends Error {
+  /**
+   * @param {{ target: string, sandboxRoot: string, provider: string, detail?: string }} params
+   */
+  constructor({ target, sandboxRoot, provider, detail }) {
+    super(
+      `deliverable path ${target} unwritable under provider sandbox root ${sandboxRoot} ` +
+      `(provider: ${provider})${detail ? `: ${detail}` : ''}`
+    );
+    this.name = 'DeliverableUnwritableError';
+    this.target = target;
+    this.sandboxRoot = sandboxRoot;
+    this.provider = provider;
+    this.detail = detail ?? null;
+  }
+}
+
+/**
+ * Containment invariant (ADR-002 §4): sandboxRoot ⊇ path. A mission whose
+ * target lies outside the declared root is rejected before spawn with the
+ * same typed error as a refused writability probe.
+ * @private
+ * @param {string} pathValue
+ * @param {string} sandboxRoot
+ * @param {string} provider
+ * @param {string} label - Config-surface name of the path ('projectRoot' | 'deliverable path')
+ */
+function _assertPathWithinSandboxRoot(pathValue, sandboxRoot, provider, label) {
+  const resolved = resolvePath(pathValue);
+  const root = resolvePath(sandboxRoot);
+  const rel = relative(root, resolved);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new DeliverableUnwritableError({
+      target: resolved,
+      sandboxRoot: root,
+      provider,
+      detail: `${label} lies outside the sandbox root (invariant: sandbox-root ⊇ ${label})`,
+    });
+  }
+}
+
+/**
+ * Sentinel writability probe (ADR-002 §1): write+unlink a unique dot-file in
+ * the nearest existing ancestor of dirPath (mkdir -p semantics — a not-yet-
+ * created deliverable tree is probed at its first existing ancestor, so a
+ * refused dispatch allocates nothing but a legitimate fresh target passes).
+ * fs.accessSync(W_OK) runs on refusal to enrich the error detail.
+ * @private
+ * @param {string} dirPath - Directory that must be writable
+ * @param {{ target: string, sandboxRoot: string, provider: string }} errCtx
+ * @returns {true} When the probe succeeds
+ * @throws {DeliverableUnwritableError} When the probe is refused
+ */
+function _probeWritable(dirPath, errCtx) {
+  let dir = resolvePath(dirPath);
+  while (!existsSync(dir)) {
+    const parent = dirname(dir);
+    if (parent === dir) break; // reached filesystem root
+    dir = parent;
+  }
+  try {
+    const sentinel = join(
+      dir,
+      `.deliverable-write-probe-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    );
+    writeFileSync(sentinel, '');
+    unlinkSync(sentinel);
+  } catch (err) {
+    let accessDetail;
+    try {
+      accessSync(dir, fsConstants.W_OK);
+      accessDetail = 'access(W_OK) reports writable (denial is enforcement-level, not mode-level)';
+    } catch (accessErr) {
+      accessDetail = `access(W_OK): ${accessErr.message}`;
+    }
+    throw new DeliverableUnwritableError({
+      ...errCtx,
+      detail: `writability probe failed at ${dir} (${err.message}); ${accessDetail}`,
+    });
+  }
+  return true;
+}
+
+/**
+ * ADR-002 pre-flight probe: verify the mission's deliverable path is writable
+ * under the provider's *effective* sandbox root. Runs BEFORE spawn (and
+ * before output-dir mkdir), so an unwritable target refuses the dispatch at
+ * the cheapest possible point with both sides of the mismatch named.
+ *
+ * @param {{ targetPath: string, sandboxRoot: string, provider: string }} params
+ * @returns {true} When the target is writable under the root
+ * @throws {DeliverableUnwritableError} Containment or writability refusal
+ */
+export function assertDeliverableWritable({ targetPath, sandboxRoot, provider }) {
+  const target = resolvePath(targetPath);
+  const root = resolvePath(sandboxRoot);
+  _assertPathWithinSandboxRoot(target, root, provider, 'deliverable path');
+
+  // An existing deliverable file must itself be writable (overwrite path).
+  if (existsSync(target)) {
+    try {
+      accessSync(target, fsConstants.W_OK);
+    } catch (err) {
+      throw new DeliverableUnwritableError({
+        target,
+        sandboxRoot: root,
+        provider,
+        detail: `existing deliverable file is not writable: ${err.message}`,
+      });
+    }
+  }
+
+  _probeWritable(dirname(target), { target, sandboxRoot: root, provider });
+  return true;
+}
 
 /**
  * @typedef {Object} LaunchOptions
@@ -51,6 +187,8 @@ import { homedir } from 'os';
  * @property {string} stdoutPath - Path to capture stdout
  * @property {string} stderrPath - Path to capture stderr
  * @property {string} outputDir - Directory for session artifacts
+ * @property {string} [projectRoot] - Mission project root (ADR-002): must be contained in the provider's effective sandbox root
+ * @property {string} [deliverablePath] - Mission deliverable target (ADR-002): must be writable under the provider's effective sandbox root
  * @property {number} [timeoutMs] - Timeout in milliseconds
  */
 
@@ -79,6 +217,25 @@ import { homedir } from 'os';
  * @property {Object} data - Event data
  */
 
+/**
+ * Capability → provider-CLI flags that capability governs (ADR-001). The
+ * launcher refuses to spawn when the active adapter's buildSessionArgs()
+ * emits any of these flags without the corresponding declared capability —
+ * a claude-idiom flag reaching a binary that rejects it (the Aug-27
+ * `error: unknown option '--resume'` crash class) becomes structurally
+ * impossible, not audited-against.
+ * @type {Record<string, string[]>}
+ */
+const CAPABILITY_FLAG_MAP = Object.freeze({
+  sessionResume: ['--session-id', '--resume'],
+  budgetControl: ['--max-budget-usd'],
+  systemPrompt: ['--append-system-prompt'],
+  streamJson: ['--output-format'],
+  agentMode: ['--agent'],
+  mcpConfig: ['--mcp-config'],
+  maxTurns: ['--max-turns'],
+});
+
 export class SessionLauncher extends EventEmitter {
   constructor() {
     super();
@@ -97,7 +254,70 @@ export class SessionLauncher extends EventEmitter {
   }
 
   /**
-   * Build Claude CLI arguments
+   * Structural capability gate (ADR-001): the launcher must never emit a
+   * flag the active adapter does not declare. Checks the adapter-produced
+   * args against CAPABILITY_FLAG_MAP and fails loud before spawn.
+   *
+   * @private
+   * @param {string[]} args - Args produced by the adapter's buildSessionArgs()
+   * @throws {DispatchCapabilityError} When an undeclared capability's flag appears
+   */
+  _assertFlagsWithinCapabilities(args) {
+    const caps = this.providerAdapter.getCapabilities();
+    for (const [capability, flags] of Object.entries(CAPABILITY_FLAG_MAP)) {
+      if (caps[capability]) continue;
+      const offender = flags.find((flag) => args.includes(flag));
+      if (offender) {
+        throw new DispatchCapabilityError(
+          capability,
+          `adapter emitted "${offender}" without declaring ${capability}`,
+          this.providerAdapter.getName()
+        );
+      }
+    }
+  }
+
+  /**
+   * ADR-002 pre-flight gate. Resolves the provider's effective sandbox root —
+   * adapter-declared getSandboxRoot(workingDir) per ADR-002 §3; adapters that
+   * do not declare the capability are treated as root = workingDir (the
+   * documented migration default until projectRoot is backfilled) — then
+   * enforces the containment invariant sandboxRoot ⊇ projectRoot ⊇
+   * deliverablePath plus writability of the mission target.
+   *
+   * @private
+   * @param {LaunchOptions} options
+   * @returns {void}
+   * @throws {DeliverableUnwritableError} Before any spawn or allocation
+   */
+  _assertDeliverableWritable(options) {
+    const provider = this.providerAdapter.getName();
+    const sandboxRoot =
+      typeof this.providerAdapter.getSandboxRoot === 'function'
+        ? this.providerAdapter.getSandboxRoot(options.workingDir)
+        : options.workingDir;
+
+    if (options.projectRoot) {
+      _assertPathWithinSandboxRoot(options.projectRoot, sandboxRoot, provider, 'projectRoot');
+      _probeWritable(options.projectRoot, {
+        target: resolvePath(options.projectRoot),
+        sandboxRoot: resolvePath(sandboxRoot),
+        provider,
+      });
+    }
+
+    if (options.deliverablePath) {
+      assertDeliverableWritable({ targetPath: options.deliverablePath, sandboxRoot, provider });
+    }
+  }
+
+  /**
+   * LEGACY (ADR-001): claude-style inline flag construction. Dead code on
+   * the dispatch path — _launchSession routes every launch through the
+   * active provider adapter's buildSessionArgs() and fails loud when no
+   * adapter is set. Retained only so historical unit tests of the pure
+   * method keep passing; do NOT add new call sites.
+   *
    * @param {LaunchOptions} options
    * @returns {string[]}
    */
@@ -175,6 +395,22 @@ export class SessionLauncher extends EventEmitter {
    * @returns {Promise<SessionResult>}
    */
   _launchSession(options) {
+    // ADR-001: launching without an adapter previously fell back to inline
+    // claude-style flags — that silent claude behavior was part of the FC1
+    // blast radius, not a feature. Fail loud instead.
+    if (!this.providerAdapter) {
+      throw new Error(
+        'No provider adapter configured: call setProviderAdapter() before launch() ' +
+        '(ADR-001: all provider-CLI argument construction is adapter-owned)'
+      );
+    }
+
+    // ADR-002: deliverable write-path gate — BEFORE the Promise body, before
+    // output-dir mkdirSync, before spawn. A refused dispatch allocates
+    // nothing and names both the effective sandbox root and the unwritable
+    // target (task 11159769's failure discovered mid-loop, silently).
+    this._assertDeliverableWritable(options);
+
     return new Promise((resolve, reject) => {
       // Ensure output directories exist
       mkdirSync(dirname(options.stdoutPath), { recursive: true });
@@ -183,19 +419,36 @@ export class SessionLauncher extends EventEmitter {
         mkdirSync(options.outputDir, { recursive: true });
       }
 
-      // Use adapter for args if available, otherwise use legacy buildArgs
-      const args = this.providerAdapter
-        ? this.providerAdapter.buildSessionArgs({
-            prompt: options.prompt,
-            sessionId: options.sessionId,
-            model: options.model,
-            budget: options.budget,
-            maxTurns: options.maxTurns,
-            verbose: options.verbose,
-            systemPrompt: options.systemPrompt,
-            mcpConfig: options.mcpConfig,
-          })
-        : this.buildArgs(options);
+      // ADR-001 §4 resume policy: a carried sessionId is ralph-external
+      // bookkeeping and, historically, the resume identity. When the active
+      // adapter declares sessionResume: false, refuse the resume loudly and
+      // start a fresh session — never translate sessionId into whatever
+      // flag the adapter happens to accept.
+      if (options.sessionId && !this.providerAdapter.hasCapability('sessionResume')) {
+        this.emit('resume-refused', {
+          provider: this.providerAdapter.getName(),
+          sessionId: options.sessionId,
+          action: 'fresh-session',
+          reason:
+            'Adapter declares sessionResume: false; sessionId is ralph-external ' +
+            'bookkeeping only and is not forwarded as a provider flag',
+        });
+      }
+
+      // ADR-001: the adapter seam is mandatory — ALL provider-CLI flags are
+      // born inside the active adapter's buildSessionArgs(), gated by its
+      // declared capabilities. No inline fallback.
+      const args = this.providerAdapter.buildSessionArgs({
+        prompt: options.prompt,
+        sessionId: options.sessionId,
+        model: options.model,
+        budget: options.budget,
+        maxTurns: options.maxTurns,
+        verbose: options.verbose,
+        systemPrompt: options.systemPrompt,
+        mcpConfig: options.mcpConfig,
+      });
+      this._assertFlagsWithinCapabilities(args);
       this.startTime = Date.now();
 
       // Create write streams for output capture
@@ -206,9 +459,9 @@ export class SessionLauncher extends EventEmitter {
       let stdoutBuffer = '';
       const maxBufferSize = 100000; // 100KB
 
-      // Spawn process using provider adapter or legacy Claude defaults
-      const binary = this.providerAdapter ? this.providerAdapter.getBinary() : 'claude';
-      const envOverrides = this.providerAdapter ? this.providerAdapter.getEnvOverrides() : { CI: 'true' };
+      // Spawn process via the active provider adapter (ADR-001: no binary fallback)
+      const binary = this.providerAdapter.getBinary();
+      const envOverrides = this.providerAdapter.getEnvOverrides();
 
       this.currentProcess = spawn(binary, args, {
         cwd: options.workingDir,

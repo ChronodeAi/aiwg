@@ -22,7 +22,9 @@ const DEFAULT_CREDENTIAL_DIR = '/run/agentic-sandbox/credentials';
 export class DshAdapter extends ProviderAdapter {
   /** @returns {string} */
   getBinary() {
-    return 'dsh';
+    // DSH_BIN override for detached spawns whose PATH excludes the shim
+    // location (~/.local/bin). Falls back to plain `dsh`.
+    return process.env.DSH_BIN || 'dsh';
   }
 
   /** @returns {string} */
@@ -37,7 +39,8 @@ export class DshAdapter extends ProviderAdapter {
   getCapabilities() {
     return {
       streamJson: false,   // final assistant text on stdout
-      sessionResume: true, // --resume <session-id> passthrough
+      sessionResume: false,// headless creates a fresh session per invocation;
+                           // inner app rejects --resume (empirically verified)
       budgetControl: false,// provider does not report usage/cost mid-flight
       systemPrompt: false,
       agentMode: false,
@@ -56,15 +59,10 @@ export class DshAdapter extends ProviderAdapter {
     const profile = process.env.AGENTIC_DSH_PROFILE || 'headless';
     const args = ['--profile', profile];
 
-    // Session resume passthrough (provider-native)
-    if (options.sessionId) {
-      args.push('--resume', options.sessionId);
-    }
-
-    // Model selection (provider-routed slug, e.g. z-ai/glm-5.3-flash)
-    if (options.model) {
-      args.push('--model', options.model);
-    }
+    // NOTE: no --resume and no --model. The dsh launcher rejects both flags
+    // (empirical: 'unknown option'); model routing is owned by the worker's
+    // DSH_HOME settings (provider-routed, e.g. z-ai/glm-5.3-flash), and each
+    // headless invocation creates a fresh session by design.
 
     // The prompt itself (must be last)
     args.push(options.prompt);

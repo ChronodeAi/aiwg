@@ -47,7 +47,15 @@ export function parseProjectArtifactLocation(contents) {
 
 export function readProjectArtifactLocation(projectDir) {
   const pointerPath = resolve(projectDir, PROJECT_AIWG_LOCATION_FILE);
-  if (!existsSync(pointerPath)) return null;
+  // existsSync is guarded: partial fs mocks in tests (and genuinely missing
+  // pointers at runtime) must degrade to null, never throw.
+  let exists = false;
+  try {
+    exists = typeof existsSync === 'function' ? existsSync(pointerPath) : false;
+  } catch {
+    exists = false;
+  }
+  if (!exists) return null;
   return parseProjectArtifactLocation(readFileSync(pointerPath, 'utf-8'));
 }
 

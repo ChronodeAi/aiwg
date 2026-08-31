@@ -6,6 +6,12 @@
  * single-process embedding only. Executor substrates report capacity and run
  * admitted work, but do not own this policy.
  *
+ * ADR-004: the admission lease is a measured contract, not a fixed guess —
+ * TTL is sourced from config (`serve.admissionLease`) with a floor derived
+ * from measured startup latency, renewal is anchored to live loop heartbeats
+ * through an injected probe, and lease-expired requests are requeued a
+ * bounded number of times when capacity exists.
+ *
  * @implements #1566
  */
 
@@ -16,10 +22,11 @@ import {
   openSync,
   readFileSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export type AdmissionState =
   | 'queued'
@@ -52,6 +59,8 @@ export interface AdmissionRecord extends AdmissionRequest {
   leaseExpiresAt?: string;
   finishedAt?: string;
   preemptedBy?: string;
+  /** ADR-004: how many times this request has been requeued after lease expiry. */
+  requeueAttempts?: number;
 }
 
 export interface SharedHostPolicy {
@@ -64,6 +73,12 @@ export interface SharedHostPolicy {
   runtimeQuotas?: Partial<Record<RuntimeKind, number>>;
   /** Host execution is least isolated and defaults to one concurrent lease. */
   defaultHostQuota?: number;
+  /** ADR-004: heartbeat freshness window; a heartbeat at most this old renews an expired lease. Default 90_000 (3 heartbeat intervals). */
+  renewalGraceMs?: number;
+  /** ADR-004: bounded requeue attempts for lease-expired requests. Default 2. */
+  maxRequeueAttempts?: number;
+  /** ADR-004: measured startup p95 (admission→first heartbeat); when set, a leaseTtlMs below it is a construction error. */
+  startupP95Ms?: number | null;
 }
 
 export interface AdmissionSnapshot {
@@ -74,6 +89,108 @@ export interface AdmissionSnapshot {
 export interface AdmissionStore {
   transact<T>(mutate: (snapshot: AdmissionSnapshot) => T): T;
   read(): AdmissionSnapshot;
+}
+
+/** Liveness probe injected by the caller: age in ms of the freshest heartbeat
+ * for a loop, or null when no live signal exists. */
+export type HeartbeatProbe = (loopId: string) => number | null;
+
+// ── ADR-004: shared admission-lease policy ───────────────────
+
+/** Config surface under `serve.admissionLease` (ADR-004 §Specific Design). */
+export interface AdmissionLeaseConfig {
+  minTtlMs?: number;
+  ttlMultiplier?: number;
+  renewalGraceMs?: number;
+  maxRequeueAttempts?: number;
+}
+
+export interface AdmissionLeasePolicy {
+  leaseTtlMs: number;
+  agingIntervalMs: number;
+  renewalGraceMs: number;
+  maxRequeueAttempts: number;
+  startupP95Ms: number | null;
+}
+
+/** Defaults preserve today's behavior when no config or measurements exist. */
+export const DEFAULT_ADMISSION_LEASE: AdmissionLeasePolicy = {
+  leaseTtlMs: 300_000,
+  agingIntervalMs: 30_000,
+  renewalGraceMs: 90_000,
+  maxRequeueAttempts: 2,
+  startupP95Ms: null,
+};
+
+const STARTUP_LATENCY_RELPATH = join('.aiwg', 'serve', 'startup-latency.json');
+
+function readStartupP95Ms(root: string = process.cwd()): number | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(root, STARTUP_LATENCY_RELPATH), 'utf8')) as {
+      startupP95Ms?: unknown;
+    };
+    const p95 = parsed.startupP95Ms;
+    return typeof p95 === 'number' && Number.isFinite(p95) && p95 > 0 ? p95 : null;
+  } catch {
+    return null; // no measurements yet — minTtlMs applies
+  }
+}
+
+function positiveOr<T>(value: T | undefined, fallback: number, isValid: (v: T) => boolean): number {
+  return value !== undefined && isValid(value) ? (value as unknown as number) : fallback;
+}
+
+/**
+ * One shared lease-lifecycle policy for every scheduler construction site.
+ * TTL formula (ADR-004): `max(minTtlMs, ttlMultiplier × startupP95Ms)`; with
+ * no startup measurements, `minTtlMs` (default 300_000) applies.
+ */
+export function loadAdmissionLeasePolicy(
+  cfg: unknown,
+  startupP95Ms: number | null = readStartupP95Ms(),
+): AdmissionLeasePolicy {
+  const section = (cfg as { serve?: { admissionLease?: AdmissionLeaseConfig } } | null | undefined)
+    ?.serve?.admissionLease;
+  const minTtlMs = positiveOr(section?.minTtlMs, DEFAULT_ADMISSION_LEASE.leaseTtlMs, v => v > 0);
+  const ttlMultiplier = positiveOr(section?.ttlMultiplier, 3, v => v > 0);
+  const renewalGraceMs = positiveOr(
+    section?.renewalGraceMs,
+    DEFAULT_ADMISSION_LEASE.renewalGraceMs,
+    v => v > 0,
+  );
+  const maxRequeueAttempts = positiveOr(
+    section?.maxRequeueAttempts,
+    DEFAULT_ADMISSION_LEASE.maxRequeueAttempts,
+    v => Number.isInteger(v) && v >= 0,
+  );
+  const measured =
+    startupP95Ms !== null && Number.isFinite(startupP95Ms) && startupP95Ms > 0 ? startupP95Ms : null;
+  const leaseTtlMs = Math.max(minTtlMs, ttlMultiplier * (measured ?? 0));
+  return {
+    leaseTtlMs,
+    agingIntervalMs: DEFAULT_ADMISSION_LEASE.agingIntervalMs,
+    renewalGraceMs,
+    maxRequeueAttempts,
+    startupP95Ms: measured,
+  };
+}
+
+/**
+ * Default heartbeat probe: stats `.aiwg/ralph/heartbeats/<loopId>` (written
+ * every 30s by tools/ralph-external/process-monitor.mjs) and returns the file
+ * age in ms, or null when no heartbeat exists. Callers with a different
+ * liveness source inject their own probe instead.
+ */
+export function fileHeartbeatProbe(root: string): HeartbeatProbe {
+  return (loopId: string): number | null => {
+    try {
+      const path = join(root, '.aiwg', 'ralph', 'heartbeats', loopId);
+      if (!existsSync(path)) return null;
+      return Date.now() - statSync(path).mtimeMs;
+    } catch {
+      return null;
+    }
+  };
 }
 
 export class InMemoryAdmissionStore implements AdmissionStore {
@@ -138,16 +255,44 @@ const terminalStates = new Set<AdmissionState>([
 ]);
 
 export class SharedHostScheduler {
+  private readonly renewalGraceMs: number;
+  private readonly maxRequeueAttempts: number;
+  private readonly heartbeatProbe: HeartbeatProbe;
+
   constructor(
     private readonly store: AdmissionStore,
     private readonly policy: SharedHostPolicy,
     private readonly clock: () => number = Date.now,
+    options: { heartbeatProbe?: HeartbeatProbe } = {},
   ) {
     if (!Number.isInteger(policy.maxConcurrent) || policy.maxConcurrent < 1) {
       throw new Error('maxConcurrent must be a positive integer');
     }
     if (policy.leaseTtlMs < 1 || policy.agingIntervalMs < 1) {
       throw new Error('leaseTtlMs and agingIntervalMs must be positive');
+    }
+    this.renewalGraceMs = policy.renewalGraceMs ?? DEFAULT_ADMISSION_LEASE.renewalGraceMs;
+    this.maxRequeueAttempts = policy.maxRequeueAttempts ?? DEFAULT_ADMISSION_LEASE.maxRequeueAttempts;
+    this.heartbeatProbe = options.heartbeatProbe ?? (() => null);
+    if (policy.renewalGraceMs !== undefined && policy.renewalGraceMs < 1) {
+      throw new Error('renewalGraceMs must be positive');
+    }
+    if (
+      policy.maxRequeueAttempts !== undefined
+      && (!Number.isInteger(policy.maxRequeueAttempts) || policy.maxRequeueAttempts < 0)
+    ) {
+      throw new Error('maxRequeueAttempts must be a non-negative integer');
+    }
+    // ADR-004 hardened validation: an operator TTL shorter than loops take to
+    // start is a configuration error by evidence, not a positivity nit.
+    if (
+      policy.startupP95Ms != null
+      && Number.isFinite(policy.startupP95Ms)
+      && policy.leaseTtlMs < policy.startupP95Ms
+    ) {
+      throw new Error(
+        `leaseTtlMs (${policy.leaseTtlMs} ms) is shorter than the measured startup p95 (${policy.startupP95Ms} ms); loops need at least ${policy.startupP95Ms} ms to start — raise serve.admissionLease.minTtlMs`,
+      );
     }
   }
 
@@ -190,6 +335,17 @@ export class SharedHostScheduler {
     });
   }
 
+  /** ADR-004: record the launched loop id on the admission record so the
+   * aging sweep can consult heartbeats for this dispatch. */
+  attachLoopId(requestId: string, loopId: string): AdmissionRecord {
+    return this.store.transact(snapshot => {
+      const record = this.required(snapshot, requestId);
+      record.metadata = { ...record.metadata, loopId };
+      record.revision += 1;
+      return structuredClone(record);
+    });
+  }
+
   release(requestId: string): AdmissionSnapshot {
     return this.store.transact(snapshot => {
       const record = this.required(snapshot, requestId);
@@ -220,10 +376,35 @@ export class SharedHostScheduler {
     const now = this.clock();
     for (const record of Object.values(snapshot.records)) {
       if (record.state === 'admitted' && Date.parse(record.leaseExpiresAt ?? '') <= now) {
+        // ADR-004 heartbeat-anchored renewal: a live loop (fresh heartbeat
+        // inside the grace window) is renewed, not evicted. Liveness is
+        // claimed only by evidence — a dead heartbeat writer still expires.
+        const loopId = record.metadata?.loopId ?? record.requestId;
+        const heartbeatAgeMs = this.heartbeatProbe(loopId);
+        if (heartbeatAgeMs !== null && heartbeatAgeMs <= this.renewalGraceMs) {
+          record.leaseExpiresAt = new Date(now + this.policy.leaseTtlMs).toISOString();
+          record.reason = 'lease renewed';
+          record.revision += 1;
+          continue;
+        }
         record.state = 'timed-out';
-        record.reason = 'admission lease expired; capacity recovered';
         record.finishedAt = new Date(now).toISOString();
-        record.revision += 1;
+        const attempts = record.requeueAttempts ?? 0;
+        if (attempts < this.maxRequeueAttempts && this.hasCapacity(snapshot, record)) {
+          // ADR-004 bounded requeue: capacity exists and attempts remain —
+          // return to the queue for a fresh admission attempt.
+          record.state = 'queued';
+          record.reason = `lease expired; requeued (attempt ${attempts + 1}/${this.maxRequeueAttempts})`;
+          record.requeueAttempts = attempts + 1;
+          record.submittedAt = new Date(now).toISOString();
+          delete record.leaseExpiresAt;
+          delete record.admittedAt;
+          delete record.finishedAt;
+          record.revision += 1;
+        } else {
+          record.reason = 'admission lease expired; capacity recovered';
+          record.revision += 1;
+        }
       } else if (record.state === 'queued' && Date.parse(record.submittedAt) + record.queueTimeoutMs <= now) {
         record.state = 'timed-out';
         record.reason = 'queue deadline elapsed';
