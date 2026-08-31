@@ -9,12 +9,15 @@ export { run } from '../cli/router.js';
 export * from '../resources/index.js';
 export * from '../sessions/index.js';
 export * from '../memory/index.js';
+export * from '../storage/index.js';
 export * from '../security/threat-assessment-config.js';
 export * from '../security/artifact-verifier.js';
 export * from '../security/artifact-attestation.js';
 export * from '../providers/transformation-receipt.js';
 export * from '../providers/transformation-receipt-integration.js';
 export * from '../marketplace/artifact-attestation.js';
+export * from '../uhp/index.js';
+export * from '../mission-protocol/index.js';
 export {
   ARTIFACT_TRUST_ROOT_MEDIA_TYPE,
   ARTIFACT_TRUST_ROOT_SCHEMA_VERSION,

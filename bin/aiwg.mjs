@@ -46,7 +46,18 @@ function detectVersionChannel(version) {
   if (version.includes('-alpha.')) return 'alpha';
   if (version.includes('-nightly.')) return 'nightly';
   try {
-    const raw = readFileSync(path.join(os.homedir(), '.aiwg', 'channel.json'), 'utf8');
+    const legacyDir = path.join(os.homedir(), '.aiwg');
+    const xdgDir = path.join(os.homedir(), '.config', 'aiwg');
+    const configDir = process.env.AIWG_CONFIG
+      ? path.resolve(process.env.AIWG_CONFIG)
+      : existsSync(legacyDir) ? legacyDir : existsSync(xdgDir) ? xdgDir : legacyDir;
+    const installationFile = path.join(configDir, 'installation.json');
+    if (existsSync(installationFile)) {
+      const installation = JSON.parse(readFileSync(installationFile, 'utf8'));
+      if (installation?.runMode === 'development') return 'dev';
+      if (typeof installation?.channel === 'string') return installation.channel;
+    }
+    const raw = readFileSync(path.join(configDir, 'channel.json'), 'utf8');
     const cfg = JSON.parse(raw);
     if (cfg?.devMode) return 'dev';
     if (typeof cfg?.channel === 'string') return cfg.channel;
@@ -124,6 +135,7 @@ const FAST_HELP_TEXT = `
 
   VALIDATION
     validate-metadata [path]     Validate AIWG component metadata (defaults to agentic/code)
+    installation <action>        Inspect/adopt/switch canonical global installation
     verify <artifact>            Verify DSSE provenance using an explicit versioned trust root
     verify trust <action>        Bootstrap, update, or inspect artifact trust state
     context-firewall [scan]      Audit provider context, trust, drift, poisoning signals, and budget
@@ -191,13 +203,6 @@ function maybeHandleFastHelp(args) {
   return true;
 }
 
-if (maybeHandleFastVersion(process.argv.slice(2))) {
-  process.exit(0);
-}
-if (maybeHandleFastHelp(process.argv.slice(2))) {
-  process.exit(0);
-}
-
 // Preflight: verify dist/ is built before any of the dynamic imports below
 // try to resolve files that don't exist. Without this, a missing/incomplete
 // dist/ surfaces as a raw `Cannot find module '.../dist/src/.../*.mjs'` from
@@ -227,6 +232,31 @@ function maybeWarnUnbuiltDist() {
   process.exit(1);
 }
 maybeWarnUnbuiltDist();
+
+// Display a cached notice and schedule its refresh before every eligible CLI
+// path, including fast help/version, channel recovery, and later preflight
+// failures. This local-only bootstrap never waits on the registry and failures
+// are deliberately ignored so update advice cannot change command behavior.
+async function runUpdateNotifierBootstrap() {
+  try {
+    const notifierPath = path.join(packageRoot, 'dist', 'src', 'update', 'notifier.mjs');
+    const notifier = await import(pathToFileURL(notifierPath).href);
+    const activePackageRoot = notifier.resolveActivePackageRoot(packageRoot);
+    notifier.maybePrintNotice(activePackageRoot);
+    notifier.scheduleBackgroundCheck(activePackageRoot);
+  } catch {
+    // Best effort: installation/router diagnostics retain authority.
+  }
+}
+
+await runUpdateNotifierBootstrap();
+
+if (maybeHandleFastVersion(process.argv.slice(2))) {
+  process.exit(0);
+}
+if (maybeHandleFastHelp(process.argv.slice(2))) {
+  process.exit(0);
+}
 
 // Mint or inherit an invocation ID before anything else loads. Child processes
 // spawned by handlers (detached update-notifier, aiwg exec, etc.) inherit the
@@ -368,22 +398,23 @@ async function main() {
 
   // Resolve the active router once. In dev mode this points into the checkout,
   // while packageRoot still points at the globally installed launcher.
-  const routerPath = await resolveRouterPath();
+  const routerPath = args[0] === 'installation'
+    ? path.join(packageRoot, 'dist', 'src', 'cli', 'router.js')
+    : await resolveRouterPath();
   const activePackageRoot = path.resolve(path.dirname(routerPath), '..', '..', '..');
+
+  // Fail closed when a different installation wins PATH resolution. Recovery
+  // commands remain reachable so an operator can explicitly adopt or switch.
+  if (args[0] !== 'installation') {
+    const identityPath = path.join(activePackageRoot, 'dist', 'src', 'installation', 'manager.mjs');
+    const { assertCanonicalInstallation } = await import(pathToFileURL(identityPath).href);
+    assertCanonicalInstallation({ actualRoot: activePackageRoot });
+  }
 
   // Wire up the logger level from -v/-vv/--quiet/AIWG_LOG_LEVEL before any
   // handler runs, and stamp the top-level invocation ID so the logger can
   // tag every record with it.
   await applyVerbosityFromArgs(args, routerPath);
-
-  // Update notifier: print any pending notice from the previous run's
-  // background check, then schedule the next background check. Both are
-  // non-blocking — the current command never waits on the network.
-  // Honors NO_UPDATE_NOTIFIER, CI=*, and non-TTY stderr.
-  const notifierPath = path.join(activePackageRoot, 'dist', 'src', 'update', 'notifier.mjs');
-  const { scheduleBackgroundCheck, maybePrintNotice } = await import(pathToFileURL(notifierPath).href);
-  maybePrintNotice(activePackageRoot);
-  scheduleBackgroundCheck(activePackageRoot);
 
   // Top-level cancellation controller. SIGINT / SIGTERM flip it, long-running
   // handlers plumb ctx.signal through fetches and loops so Ctrl-C cancels

@@ -132,17 +132,20 @@ export function buildHitlResponseMessage(opts: {
   messageId: string;
   taskId?: string;
   contextId?: string;
+  /** Optional AIWG extension metadata (for example aiwg.flow.graph). */
+  metadata?: Record<string, JsonValue>;
 }): Message {
   const message: Message = {
     messageId: opts.messageId,
     role: 'user',
     parts: [
       {
-        kind: 'data',
+        type: 'data',
         data: opts.response,
       },
     ],
     metadata: {
+      ...(opts.metadata ?? {}),
       hitl_response_for: {
         prompt_id: opts.promptId,
         payload: opts.response,

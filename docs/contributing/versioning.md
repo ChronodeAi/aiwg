@@ -96,13 +96,11 @@ reader-AppRole credentials.
 # Commit the release prep (personal key — GitHub Verified)
 git commit -S -m "docs(release): prepare 2026.X.Y artifacts"
 
-# Export the ci-aiwg reader bootstrap from the TPM-backed credential handoff.
-# The concrete release-key routes come from the operator's private routing
-# environment or protected forge variables; never commit them here.
-source /path/to/private/vault-runtime.env
-export VAULT_CI_ROLE_ID="$(_vault_cred ci-aiwg role-id)"
-export VAULT_CI_SECRET_ID="$(_vault_cred ci-aiwg secret-id)"
-source /path/to/private/aiwg-release-routing.env
+# Follow the private itops release-signing runbook to source the mode-0600
+# ci-aiwg bootstrap and export VAULT_ADDR, VAULT_CACERT, and the four
+# RELEASE_SIGNING_* route variables. This public repository intentionally omits
+# concrete provider paths and fields. Never print or copy bootstrap values into
+# a project file.
 
 # Cut the signed tag — fetches the vault key, signs with the release-only key,
 # supplies its passphrase through batch loopback pinentry (no dialog), and runs
@@ -119,15 +117,15 @@ git push origin main --tags
 # creating the verified GitHub release.
 git push github main --tags
 
-unset VAULT_CI_ROLE_ID VAULT_CI_SECRET_ID
+unset VAULT_CI_ROLE_ID VAULT_CI_SECRET_ID VAULT_ADDR VAULT_CACERT
 unset RELEASE_SIGNING_KEY_VAULT_PATH RELEASE_SIGNING_KEY_VAULT_FIELD
 unset RELEASE_SIGNING_PASSPHRASE_VAULT_PATH RELEASE_SIGNING_PASSPHRASE_VAULT_FIELD
 ```
 
 **Signing-key custody note**: the active release-signing key is
 `401584AAA3376B898FB34427839584D0E25E5126` (`AIWG Release Signing`). Its private
-material and passphrase live vault-only; the concrete route is supplied by the
-private routing environment, not checked-in docs. The separate
+material and passphrase live vault-only; the concrete route is governed by the
+private itops runbook and intentionally omitted here. The separate
 `9292EFCBB0EA41BECEEFDAFA9C1B8CE0E0E09C33` key signed `v2026.7.12` and remains
 published for historical verification, but it is not the active release key.
 CI only pulls repository contents and verifies tags against committed public
@@ -140,7 +138,7 @@ commit the recovery-medium path or manifest here.
 
 Vault source of truth:
 
-- SOP: private itops secret-management runbook.
+- SOP: private itops secret-management and release-signing runbooks.
 - Release key route: `RELEASE_SIGNING_KEY_VAULT_PATH` and
   `RELEASE_SIGNING_KEY_VAULT_FIELD`.
 - Release passphrase route: `RELEASE_SIGNING_PASSPHRASE_VAULT_PATH` and
@@ -375,7 +373,7 @@ In addition to the four steps above, the following CI workflows act as **release
 
 ### A2A Conformance Gate Details
 
-The `A2A Conformance` workflow provisions a reference agentic-sandbox v2 instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. Failure blocks the release.
+The `A2A Conformance` workflow provisions a reference agentic-sandbox instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. The separate `npm run uat:serve-live` lane exercises AIWG's own versioned client; set `AIWG_A2A_LIVE_DISPATCH=1 AIWG_A2A_LIVE_REQUIRE_BOTH=1` for a release qualification that requires live 0.3 and 1.0 interfaces. Mock and fixture results are recorded separately and do not substitute for this live lane. Failure blocks the release.
 
 - **What to do on green**: proceed with tagging.
 - **What to do on red**: open the run, download the `conformance-reports-*` artifact (`report.md` + `report.junit.xml`), and diagnose. Common categories of failure are listed in the harness's own `report.md`. Do **not** force a stable tag past a red conformance run without explicit issue documentation and a follow-up tracking issue — that's how interop regressions ship.

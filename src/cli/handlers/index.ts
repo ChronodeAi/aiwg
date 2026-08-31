@@ -109,6 +109,7 @@ import { regenerateHandler, regenerateHandlers } from './regenerate.js';
 import { workspaceContextHandler, workspaceContextHandlers } from './workspace-context.js';
 import { artifactsHandler, artifactsHandlers } from './artifacts.js';
 import { mcHandler, mcHandlers } from './mc.js';
+import { missionHandlers } from './mission.js';
 import { sdlcAccelerateHandler } from './sdlc-accelerate.js';
 import { teamHandler, teamHandlers } from './team.js';
 import { installHandler } from './install.js';
@@ -140,6 +141,8 @@ import { costReportHandler } from './cost-report.js';
 import { evidenceHandler } from './evidence.js';
 import { artifactVerifyHandler } from './artifact-verify.js';
 import { outputModeHandler } from './output-mode.js';
+import { installationHandler } from './installation.js';
+import { uhpHandler } from './uhp.js';
 
 import type { CommandHandler } from './types.js';
 
@@ -177,6 +180,7 @@ export {
   evidenceHandler,
   artifactVerifyHandler,
   outputModeHandler,
+  installationHandler,
 
   // Project
   newBundleHandler,
@@ -217,6 +221,7 @@ export {
   researchQueryHandler,
   runtimeInfoHandler,
   agentcardHandler,
+  uhpHandler,
 
   // Agentic Tools (RLM)
   chunkHandler,
@@ -308,6 +313,7 @@ export {
   ralphHandlers,
   subcommandHandlers,
   mcHandlers,
+  missionHandlers,
   teamHandlers,
   stewardHandlers,
   regenerateHandlers,
@@ -332,6 +338,7 @@ export const allHandlers: CommandHandler[] = [
   contextFirewallHandler,
   updateHandler,
   refreshHandler,
+  installationHandler,
   regenerateHandler,
   workspaceContextHandler,
 
@@ -379,6 +386,7 @@ export const allHandlers: CommandHandler[] = [
   skillsHandler,
   runtimeInfoHandler,
   agentcardHandler,
+  uhpHandler,
 
   // Utilities
   prefillCardsHandler,
@@ -402,6 +410,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Mission Control
   ...mcHandlers,
+  ...missionHandlers,
 
   // Agent Teams
   ...teamHandlers,

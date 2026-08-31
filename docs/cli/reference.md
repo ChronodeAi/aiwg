@@ -163,7 +163,14 @@ Display comprehensive CLI help information.
 aiwg help
 aiwg -help
 aiwg --help
+aiwg <command> --help
+aiwg <command> -h
 ```
+
+Per-command help is intercepted before command hooks and normal handler
+execution, so requesting help does not enter a state-changing command path.
+Commands that declare detailed help return it; all other registered commands
+return a non-executing pointer to `aiwg help`.
 
 **Capabilities:** cli, help, documentation
 **Platforms:** All
@@ -312,6 +319,14 @@ aiwg -update
 - Source/dev checkouts receive a non-destructive Git/build workflow
 - Re-deploys installed frameworks and add-ons after the distribution update step
 
+Updates use the canonical installation identity and its recorded absolute
+package-manager executable. A root/method mismatch stops the update before
+re-deployment.
+
+On Windows, recorded `.cmd` and `.bat` manager wrappers run through `cmd.exe`.
+AIWG quotes the wrapper path and arguments once, then passes that command payload
+verbatim so Node does not re-escape paths containing spaces.
+
 **Channel switching:**
 
 ```bash
@@ -321,6 +336,25 @@ aiwg --use-main
 # Switch back to stable
 aiwg --use-stable
 ```
+
+---
+
+### installation
+
+Inspect or explicitly recover the provider-neutral global installation
+identity.
+
+```bash
+aiwg installation show [--json]
+aiwg installation adopt [--method <npm|web|source>] [--manager <absolute-path>]
+aiwg installation switch --root <path> --method <npm|web|source> \
+  [--manager <absolute-path>] [--run-mode <normal|development>]
+```
+
+`show` reports canonical and actual method/path, run mode, update strategy,
+release channel, and drift. `adopt` deliberately makes the package currently
+handling the command canonical. `switch` records another verified root. These
+recovery actions remain available when drift blocks ordinary commands.
 
 ---
 
@@ -345,16 +379,32 @@ aiwg --refresh
 - Re-deploys all installed frameworks (or specific ones)
 - Runs health check via `aiwg doctor`
 
+If the package update fails, refresh still attempts re-deployment but repeats the
+failure in its final summary. Quiet mode reports
+`"status":"refreshed-with-update-failure"` so automation cannot mistake the
+exit-0 resilience path for a successful package update.
+
 **Flags:**
 
-| Flag                  | Description                                      |
-| --------------------- | ------------------------------------------------ |
-| `--dry-run`           | Show what would change without making changes    |
-| `--quiet`             | Machine-readable JSON output (for orchestration) |
-| `--skip-update`       | Skip npm update, only re-deploy frameworks       |
-| `--provider <name>`   | Target specific provider (default: auto-detect)  |
-| `--channel <name>`    | Update channel (stable, main)                    |
-| `--frameworks <list>` | Comma-separated frameworks to re-deploy          |
+| Flag                        | Description                                      |
+| --------------------------- | ------------------------------------------------ |
+| `--dry-run`                 | Show what would change without making changes    |
+| `--quiet`                   | Machine-readable JSON output (for orchestration) |
+| `--skip-update`             | Skip the installation update                     |
+| `--packages-only`           | Refresh remote packages only                     |
+| `--provider <name>`         | Target specific provider (default: auto-detect)  |
+| `--channel <name>`          | Update channel (stable, main)                    |
+| `--frameworks <list>`       | Comma-separated frameworks to re-deploy          |
+| `--model <name>`            | Override all deployed agent model tiers          |
+| `--reasoning-model <name>`  | Override the reasoning model tier                |
+| `--coding-model <name>`     | Override the coding model tier                   |
+| `--efficiency-model <name>` | Override the efficiency model tier               |
+| `--filter <pattern>`        | Limit model deployment by agent name             |
+| `--filter-role <role>`      | Limit model deployment by role                   |
+| `--model-tier <tier>`       | Limit model deployment by tier                   |
+| `--save`                    | Save model overrides to the project              |
+| `--save-user`               | Save model overrides to user configuration       |
+| `-h`, `--help`              | Show help without running refresh                |
 
 **Examples:**
 
@@ -2732,6 +2782,38 @@ aiwg daemon-init [profile-name] [--force]
 
 ---
 
+## Remote Transport Commands
+
+### uhp
+
+Inspect or smoke-test an explicitly selected experimental UHP endpoint profile.
+AIWG is a UHP client only and does not claim server conformance.
+
+```bash
+aiwg uhp discover --profile <name>
+aiwg uhp harnesses --profile <name>
+aiwg uhp models --profile <name> [--harness <id>]
+aiwg uhp run --profile <name> --input <text> \
+  [--harness <id>] [--model <id>] [--stream]
+```
+
+Every operation requires `--profile`; endpoint and bearer overrides are not
+accepted. `discover` is unauthenticated. Other operations resolve the profile's
+environment secret locator only at request time. The client pins UHP
+`2026-08-11` and does not fall back to A2A or another version.
+
+The CLI covers discovery, catalogues, and task smoke tests. Stored reads,
+continuation, cancellation, uploads, and artifact retrieval are available from
+the exported `UhpClient` package API. See the [experimental UHP client
+guide](../uhp-client.md) for configuration, complete examples, recovery,
+security, limitations, and upgrades.
+
+**Capabilities:** cli, transport, uhp, remote-harness, experimental
+**Platforms:** All
+**Tools:** Network
+
+---
+
 ## Mission Control Commands
 
 Mission Control provides multi-loop background orchestration for parallel long-running agents.
@@ -4208,6 +4290,13 @@ Fields:
 
 User-defined graph names cannot override built-in names (`project`, `codebase`, `framework`).
 
+The same `index.graphs` contract is accepted in `~/.aiwg/aiwg.config` for shared
+user-level graphs; those graphs also default `defaultBuild` to `true` and are
+reported by bare `aiwg index stats` after they have been built. The concise
+`indices.user.roots` form is different: it creates explicit-build user roots
+with `defaultBuild: false`; use `index.graphs` when a user-level graph should be
+part of the default build/stats set.
+
 To replace only the built-in `codebase` graph's scan roots or extension allow-list, use the bounded `index.graphOverrides.codebase` contract. Present fields replace the detected/default value; omitted fields retain it. The graph identity, storage location, sharing mode, build policy, and backend cannot be widened through an override.
 
 ```json
@@ -4538,7 +4627,7 @@ aiwg index deps <path> [options]
 
 **Behavior:**
 
-- `upstream` - What this artifact depends on (its @-mentions)
+- `upstream` - What this artifact depends on (its @-mentions and scoped Markdown links)
 - `downstream` - What depends on this artifact (mentions it)
 - `both` - Both directions
 
@@ -5363,7 +5452,8 @@ All commands are registered as extensions in the unified schema. This enables:
 
 - **Dynamic discovery**: Commands found via semantic search
 - **Capability-based routing**: Match commands by what they do
-- **Auto-generated help**: Help text always in sync
+- **Safe help routing**: Registry overviews plus optional command-owned detail
+  and a non-executing fallback
 - **Platform awareness**: Deploy to correct platform paths
 
 **Extension properties:**
@@ -5388,7 +5478,7 @@ All commands are registered as extensions in the unified schema. This enables:
 
 | Category                | Count | Commands                                                                                                                                                                                              |
 | ----------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Maintenance**         | 12    | help, version, doctor, update, refresh, regenerate, workspace-context, steward, cleanup-audit, features, diagnose, feedback                                                                           |
+| **Maintenance**         | 13    | help, version, doctor, update, installation, refresh, regenerate, workspace-context, steward, cleanup-audit, features, diagnose, feedback                                                             |
 | **Framework**           | 7     | use, list, remove, promote, install, packages, marketplace                                                                                                                                            |
 | **Catalog**             | 3     | models, catalog, skills                                                                                                                                                                               |
 | **Utility**             | 17    | cockpit, run, prefill-cards, contribute-start, validate-metadata, skill-lint, repo-access, lint, storage, activity-log, command-log, skill-usage, kb, memory, reflections, provenance, research-store |

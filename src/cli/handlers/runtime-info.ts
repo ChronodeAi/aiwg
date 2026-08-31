@@ -12,6 +12,8 @@
 import path from 'path';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { AiwgError, EXIT_CODES, handlerResultFromError } from '../errors.js';
+import { getPackageRoot } from '../../channel/manager.mjs';
+import { inspectInstallation } from '../../installation/manager.mjs';
 
 function isMissingRuntimeCatalogError(error: unknown): boolean {
   return error instanceof Error && error.message.includes('No catalog found');
@@ -58,8 +60,35 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
   const hasCheck = checkIndex >= 0;
   const hasCapabilities = args.includes('--capabilities');
   const hasProviders = args.includes('--providers');
+  const hasTransports = args.includes('--transports');
   const featureIndex = args.indexOf('--feature');
   const hasFeature = featureIndex >= 0;
+
+  if (hasTransports) {
+    const { readAiwgConfig } = await import('../../config/aiwg-config.js');
+    const config = await readAiwgConfig(cwd);
+    const profiles = Object.entries(config?.uhp?.profiles ?? {}).map(([name, profile]) => ({
+      name,
+      transport: 'uhp' as const,
+      protocolVersion: profile.version,
+      experimental: true,
+      configured: true,
+      enabled: config?.uhp?.enabled === true,
+      endpointOrigin: new URL(profile.endpoint).origin,
+      credentialSource: profile.credential.source,
+      credentialReference: profile.credential.name,
+    }));
+    const output = { providersAreTransports: false, transports: { uhp: { experimental: true, enabled: config?.uhp?.enabled === true, profiles } } };
+    if (hasJson) console.log(JSON.stringify(output, null, 2));
+    else {
+      console.log('\nTransport Inventory');
+      console.log('===================');
+      console.log('UHP is a remote execution transport, not an AIWG provider.');
+      if (!profiles.length) console.log('  UHP: not configured (experimental)');
+      for (const profile of profiles) console.log(`  UHP/${profile.name}: ${profile.enabled ? 'enabled' : 'disabled'}, ${profile.protocolVersion}, ${profile.endpointOrigin}`);
+    }
+    return;
+  }
 
   // --- Capability matrix queries (no RuntimeDiscovery needed) ---
   if (hasProviders) {
@@ -250,8 +279,9 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       summary = await discovery.getSummary();
     }
 
+    const installation = inspectInstallation({ actualRoot: getPackageRoot() });
     if (hasJson) {
-      console.log(JSON.stringify(summary, null, 2));
+      console.log(JSON.stringify({ ...summary, installation }, null, 2));
     } else {
       console.log(`\nRuntime Environment Summary`);
       console.log(`===========================`);
@@ -270,6 +300,11 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       console.log(`\nTotal: ${summary.totalTools} verified tools`);
       console.log(`\nLast Discovery: ${summary.lastDiscovery}`);
       console.log(`Catalog: ${summary.catalogPath}`);
+      console.log(`\nAIWG Installation:`);
+      console.log(`  Canonical: ${installation.identity?.method ?? 'unrecorded'} at ${installation.identity?.root ?? '(unrecorded)'}`);
+      console.log(`  Actual:    ${installation.actualMethod} at ${installation.actualRoot}`);
+      console.log(`  Run mode:  ${installation.identity?.runMode ?? '(unrecorded)'}`);
+      console.log(`  State:     ${installation.state}`);
 
       // Scheduler backend detection
       const { execSync } = await import('child_process');
