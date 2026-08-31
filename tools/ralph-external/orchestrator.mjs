@@ -744,22 +744,35 @@ export class Orchestrator {
         if (this.pidController && this.metricsCollector && state.currentIteration > 1) {
           // Extract metrics from last iteration
           const metrics = this.metricsCollector.extractIterationMetrics(lastIteration);
-          const pidMetrics = this.metricsCollector.computePIDMetrics(metrics);
+          const pidMetrics = this.metricsCollector.collect(metrics); // fix: computePIDMetrics never existed on MetricsCollector; collect() returns {proportional, integral, derivative}
 
-          // Adjust gains based on situation
-          if (this.gainScheduler && assessment) {
-            const adjustedGains = this.gainScheduler.adjustGains({
-              phase: assessment.phase || 'normal',
-              volatility: pidMetrics.derivative,
-              errorMagnitude: pidMetrics.proportional,
-            });
-            this.pidController.updateGains(adjustedGains);
+          // Adjust gains via the scheduler's real API (update()), then let the
+          // controller run its own integrated pipeline (process()) —
+          // PIDController owns its gains internally; there is no updateGains()
+          // and no compute(). The former phantom APIs here crashed every
+          // succeeding loop into retry-until-limit (#FC5, observed 2026-08-30).
+          try {
+            if (this.gainScheduler && assessment) {
+              this.gainScheduler.update({
+                proportional: pidMetrics.proportional,
+                integral: pidMetrics.integral ?? 0,
+                derivative: pidMetrics.derivative,
+                trend: 'stable',
+                iterationNumber: state.currentIteration,
+                maxIterations: state.maxIterations,
+              });
+            }
+            controlSignals = (await Promise.resolve(
+              this.pidController.process(lastIteration, {
+                currentIteration: state.currentIteration,
+                maxIterations: state.maxIterations,
+              })
+            )) ?? null;
+            console.log(`[External Ralph] PID control: P=${Number(pidMetrics.proportional ?? 0).toFixed(3)}, decision=${controlSignals?.action ?? 'n/a'}`);
+          } catch (pidErr) {
+            console.log(`[External Ralph] PID control unavailable (non-fatal): ${pidErr.message}`);
+            controlSignals = null;
           }
-
-          // Compute control output
-          controlSignals = this.pidController.compute(pidMetrics.proportional);
-
-          console.log(`[External Ralph] PID control: P=${pidMetrics.proportional.toFixed(3)}, output=${controlSignals.output.toFixed(3)}`);
         }
 
         // ValidationAgent: Pre-iteration validation
@@ -1328,21 +1341,28 @@ export class Orchestrator {
           });
         }
 
-        // LearningExtractor & MemoryPromotion
+        // LearningExtractor & MemoryPromotion — enrichment only: a failure here
+        // must NEVER fail a loop whose completion criteria are met (#FC5: the
+        // phantom extract() call crashed succeeding iterations into
+        // retry-until-limit; real API is extractFromLoop, as used at loop end).
         if (this.learningExtractor && this.memoryPromotion && verificationPassed) {
-          console.log('[External Ralph] Extracting and promoting learnings...');
-          const learnings = await this.learningExtractor.extract({
-            iteration: state.currentIteration,
-            analysis,
-            strategy,
-            outcome: 'success',
-          });
-
-          if (learnings.length > 0) {
-            await this.memoryPromotion.promote({
-              learnings,
-              source: `loop-${state.loopId}-iteration-${state.currentIteration}`,
+          try {
+            console.log('[External Ralph] Extracting and promoting learnings...');
+            const learnings = await this.learningExtractor.extractFromLoop({
+              loopId: state.loopId,
+              objective: state.objective,
+              iterations: state.iterations,
+              outcome: 'success',
             });
+
+            if (learnings && learnings.length > 0) {
+              await this.memoryPromotion.promote({
+                learnings,
+                source: `loop-${state.loopId}-iteration-${state.currentIteration}`,
+              });
+            }
+          } catch (enrichErr) {
+            console.log(`[External Ralph] Learning enrichment skipped (non-fatal): ${enrichErr.message}`);
           }
         }
 

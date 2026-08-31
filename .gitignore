@@ -136,3 +136,6 @@ test/**/.tmp-*/
 !.aiwg/frameworks/
 !.aiwg/plugins/
 !.aiwg/providers/
+
+# AIWG — ignore only high-churn runtime subdirs, NOT .aiwg/ itself
+.aiwg/ralph-external/

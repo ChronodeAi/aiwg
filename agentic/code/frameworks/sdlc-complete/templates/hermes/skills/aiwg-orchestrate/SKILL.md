@@ -64,6 +64,12 @@ Never store artifact body content in memory. The artifact lives in `.aiwg/` — 
 - Do NOT load artifact content into parent context after delegation — defeats the purpose
 - Do NOT skip delegation for "quick" AIWG calls — even small tool results accumulate
 - Context isolation is automatic in delegate_task — child agents never see AGENTS.md or memory files
+- Child hangs are NOT provider rate limits: delegate children use the non-streaming transport
+  with a stale watchdog (default 90s when unconfigured — see chat_completion_helpers.py). If
+  children time out repeatedly, raise the provider stale timeout, e.g.:
+  `hermes config set providers.openrouter.stale_timeout_seconds 300`
+- The user's delegation.model must resolve via the configured provider pool; a hung/empty model
+  (e.g. thinking-only responses) stalls children regardless of timeout — watch first-call latency
 
 ## Verification
 

@@ -100,6 +100,14 @@ vi.mock('../../../../src/cli/handlers/ralph-launcher.js', () => ({
 
 vi.mock('../../../../src/serve/shared-host-scheduler.js', () => ({
   FileAdmissionStore: class FileAdmissionStore {},
+  loadAdmissionLeasePolicy: () => ({
+    leaseTtlMs: 5 * 60_000,
+    agingIntervalMs: 30_000,
+    renewalGraceMs: 90_000,
+    maxRequeueAttempts: 2,
+    startupP95Ms: null,
+  }),
+  fileHeartbeatProbe: () => () => null,
   SharedHostScheduler: class SharedHostScheduler {
     submit(request: { requestId: string }) {
       return {
@@ -113,10 +121,11 @@ vi.mock('../../../../src/serve/shared-host-scheduler.js', () => ({
       return { requestId, state: 'admitted', leaseExpiresAt: '2026-08-03T12:05:00.000Z' };
     }
     release() { return { revision: 1, records: {} }; }
+    attachLoopId(requestId: string, loopId: string) { return { requestId, loopId }; }
   },
 }));
 
-import { mcHandler } from '../../../../src/cli/handlers/mc.js';
+import { mcHandler, providerBudgetControl, validateDispatchBudgets, DEFAULT_WALL_CLOCK_MINUTES } from '../../../../src/cli/handlers/mc.js';
 import { launchExternalRalph } from '../../../../src/cli/handlers/ralph-launcher.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -643,6 +652,171 @@ describe('mc run (#1439)', () => {
     const jsonOutput = jsonCalls.find(s => { try { JSON.parse(s); return true; } catch { return false; } });
     const session = JSON.parse(jsonOutput!);
     expect(session.missions[0].status).toBe('queued'); // skipped, still queued
+    consoleSpy.mockRestore();
+  });
+});
+
+// ── mc dispatch budgets (ADR-003) ────────────────────────────
+
+describe('mc dispatch budgets (ADR-003)', () => {
+  const PREV_DEFAULT_WALL_CLOCK = process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES;
+  const PREV_MISSION_PROVIDER = process.env.AIWG_MISSION_PROVIDER;
+
+  afterEach(() => {
+    if (PREV_DEFAULT_WALL_CLOCK === undefined) delete process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES;
+    else process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES = PREV_DEFAULT_WALL_CLOCK;
+    if (PREV_MISSION_PROVIDER === undefined) delete process.env.AIWG_MISSION_PROVIDER;
+    else process.env.AIWG_MISSION_PROVIDER = PREV_MISSION_PROVIDER;
+  });
+
+  it('providerBudgetControl mirrors the adapter capability flags; unknown providers are conservative', () => {
+    expect(providerBudgetControl('claude')).toBe(true);
+    expect(providerBudgetControl('codex')).toBe(false);
+    expect(providerBudgetControl('dsh')).toBe(false);
+    expect(providerBudgetControl('factory')).toBe(false);
+    expect(providerBudgetControl('opencode')).toBe(false);
+    expect(providerBudgetControl('hermes')).toBe(false);
+    expect(providerBudgetControl('unknown')).toBe(false);
+  });
+
+  it('validateDispatchBudgets rejects spend ceilings on a budgetControl:false provider without an operator wall clock', () => {
+    const decision = validateDispatchBudgets({
+      provider: 'dsh',
+      ceilings: { maxTotalCost: 0.5 },
+      operatorWallClockMinutes: undefined,
+      configWallClockMinutes: 60,
+    });
+    expect(decision.ok).toBe(false);
+    expect(decision.error).toMatch(/UNOBSERVABLE/);
+    expect(decision.error).toMatch(/'dsh'/);
+    expect(decision.error).toMatch(/maxTotalCost/);
+  });
+
+  it('validateDispatchBudgets accepts spend ceilings via the wall-clock escape hatch, recording enforceable:false', () => {
+    const decision = validateDispatchBudgets({
+      provider: 'dsh',
+      ceilings: { maxTotalCost: 0.5, maxTotalTokens: 1000 },
+      operatorWallClockMinutes: 45,
+    });
+    expect(decision.ok).toBe(true);
+    expect(decision.spendEnforceable).toBe(false);
+    expect(decision.wallClockSource).toBe('operator');
+    expect(decision.effectiveWallClockMinutes).toBe(45);
+  });
+
+  it('validateDispatchBudgets accepts spend ceilings on a budgetControl:true provider', () => {
+    const decision = validateDispatchBudgets({
+      provider: 'claude',
+      ceilings: { maxTotalCost: 0.5 },
+      operatorWallClockMinutes: undefined,
+    });
+    expect(decision.ok).toBe(true);
+    expect(decision.spendEnforceable).toBe(true);
+  });
+
+  it('auto-injects the 30-minute default wall clock when omitted; env then config override it', () => {
+    delete process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES;
+    const injected = validateDispatchBudgets({ provider: 'claude', ceilings: {}, operatorWallClockMinutes: undefined });
+    expect(injected.effectiveWallClockMinutes).toBe(DEFAULT_WALL_CLOCK_MINUTES);
+    expect(injected.wallClockSource).toBe('auto-injected');
+
+    process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES = '90';
+    const fromEnv = validateDispatchBudgets({ provider: 'claude', ceilings: {}, operatorWallClockMinutes: undefined, configWallClockMinutes: 60 });
+    expect(fromEnv.effectiveWallClockMinutes).toBe(90);
+
+    delete process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES;
+    const fromConfig = validateDispatchBudgets({ provider: 'claude', ceilings: {}, operatorWallClockMinutes: undefined, configWallClockMinutes: 60 });
+    expect(fromConfig.effectiveWallClockMinutes).toBe(60);
+  });
+
+  it('the auto-injected default does NOT satisfy the operator-acknowledgment escape hatch', () => {
+    delete process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES;
+    const decision = validateDispatchBudgets({
+      provider: 'dsh',
+      ceilings: { maxTotalTokens: 1000 },
+      operatorWallClockMinutes: undefined,
+      configWallClockMinutes: 60, // would be auto-injected — still not operator acknowledgment
+    });
+    expect(decision.ok).toBe(false);
+    expect(decision.effectiveWallClockMinutes).toBe(60);
+  });
+
+  it('mc run exits 1 before any launch when spend ceilings are unenforceable and no operator wall clock was set', async () => {
+    delete process.env.AIWG_MISSION_PROVIDER;
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const startResult = await mcHandler.execute(makeCtx(['start']));
+    const sessionId = startResult.message!;
+    await mcHandler.execute(
+      makeCtx(['dispatch', sessionId, 'Unenforceable ceiling', '--completion', 'tests pass', '--max-total-cost', '3.50']),
+    );
+
+    const runResult = await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']));
+    expect(runResult.exitCode).toBe(1);
+    expect(vi.mocked(launchExternalRalph)).not.toHaveBeenCalled();
+
+    // No admission consumed, mission never launched.
+    const jsonCalls: string[] = [];
+    consoleSpy.mockImplementation((arg) => { jsonCalls.push(String(arg)); });
+    await mcHandler.execute(makeCtx(['status', sessionId, '--json']));
+    const jsonOutput = jsonCalls.find(s => { try { JSON.parse(s); return true; } catch { return false; } });
+    const session = JSON.parse(jsonOutput!);
+    expect(session.missions[0].status).toBe('queued');
+    expect(session.missions[0].ralphLoopId).toBeUndefined();
+    consoleSpy.mockRestore();
+  });
+
+  it('records enforceable:false on the mission record when the wall-clock escape hatch is used', async () => {
+    delete process.env.AIWG_MISSION_PROVIDER;
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const startResult = await mcHandler.execute(makeCtx(['start']));
+    const sessionId = startResult.message!;
+    await mcHandler.execute(
+      makeCtx([
+        'dispatch', sessionId, 'Escape-hatch mission', '--completion', 'tests pass',
+        '--max-total-cost', '3.50', '--max-wall-clock-minutes', '45',
+      ]),
+    );
+
+    const runResult = await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']));
+    expect(runResult.exitCode).toBe(0);
+
+    const jsonCalls: string[] = [];
+    consoleSpy.mockImplementation((arg) => { jsonCalls.push(String(arg)); });
+    await mcHandler.execute(makeCtx(['status', sessionId, '--json']));
+    const jsonOutput = jsonCalls.find(s => { try { JSON.parse(s); return true; } catch { return false; } });
+    const session = JSON.parse(jsonOutput!);
+    const mission = session.missions[0];
+    expect(mission.budget.spend.enforceable).toBe(false);
+    expect(mission.budget.spend.declared.maxTotalCost).toBe(3.5);
+    expect(mission.budget.wallClockMinutes).toBe(45);
+    expect(mission.budget.wallClockSource).toBe('operator');
+    consoleSpy.mockRestore();
+  });
+
+  it('auto-injects a 30-minute wall-clock hard stop on missions that omit one, and records it', async () => {
+    delete process.env.AIWG_MISSION_PROVIDER;
+    delete process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES;
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const startResult = await mcHandler.execute(makeCtx(['start']));
+    const sessionId = startResult.message!;
+    await mcHandler.execute(makeCtx(['dispatch', sessionId, 'Default clock mission', '--completion', 'tests pass']));
+
+    const runResult = await mcHandler.execute(makeCtx(['run', sessionId, '--accept-cost']));
+    expect(runResult.exitCode).toBe(0);
+    expect(vi.mocked(launchExternalRalph)).toHaveBeenCalledWith(
+      '/mock/framework/root',
+      '/mock/cwd',
+      expect.objectContaining({ maxWallClockMinutes: 30 }),
+    );
+
+    const jsonCalls: string[] = [];
+    consoleSpy.mockImplementation((arg) => { jsonCalls.push(String(arg)); });
+    await mcHandler.execute(makeCtx(['status', sessionId, '--json']));
+    const jsonOutput = jsonCalls.find(s => { try { JSON.parse(s); return true; } catch { return false; } });
+    const session = JSON.parse(jsonOutput!);
+    expect(session.missions[0].maxWallClockMinutes).toBe(30);
+    expect(session.missions[0].budget.wallClockSource).toBe('auto-injected');
+    expect(session.missions[0].budget.spend.enforceable).toBe(true); // no spend ceilings declared
     consoleSpy.mockRestore();
   });
 });

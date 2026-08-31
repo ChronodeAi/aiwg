@@ -16,7 +16,9 @@ import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import * as ui from '../ui.js';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createHash, randomBytes } from 'node:crypto';
+import { projectAiwgPath } from '../../config/project-artifacts-runtime.mjs';
 
 // ── Constants ────────────────────────────────────────────────
 
@@ -24,10 +26,123 @@ const MC_ROOT = '.aiwg/ralph-external/mc';
 const SESSIONS_DIR = join(MC_ROOT, 'sessions');
 const CONTROL_ID_RE = /^[a-zA-Z0-9._-]+$/;
 
+// ── ADR-003: dispatch-time budget enforceability ─────────────
+
+/**
+ * Provider budget-enforcement capability mirrored at the dispatch seam.
+ *
+ * Runtime authority: tools/ralph-external/lib/provider-adapter.mjs — the
+ * adapter `budgetControl` capability flags (lib/dsh-adapter.mjs:43-45 is the
+ * canonical `budgetControl: false` wrapper-provider declaration). The mc
+ * handler must not import tools/ code across the package boundary, so the
+ * flags are mirrored here; this map must be kept in sync with the adapters.
+ * Unknown providers are treated conservatively as budgetControl: false.
+ */
+const PROVIDER_BUDGET_CONTROL: Record<string, boolean> = {
+  claude: true,
+  codex: false,
+  dsh: false,
+  factory: false,
+  opencode: false,
+  hermes: false,
+};
+
+export function providerBudgetControl(provider: string): boolean {
+  return PROVIDER_BUDGET_CONTROL[provider] ?? false;
+}
+
+/** Provider-independent wall-clock default when the operator omits one. */
+export const DEFAULT_WALL_CLOCK_MINUTES = 30;
+
+export interface SpendCeilings {
+  maxTotalTokens?: number;
+  maxOutputTokens?: number;
+  maxToolCalls?: number;
+  maxTotalCost?: number;
+}
+
+export interface DispatchBudgetDecision {
+  ok: boolean;
+  error?: string;
+  /** Whether the declared spend ceilings can actually fire on this provider. */
+  spendEnforceable: boolean;
+  effectiveWallClockMinutes: number;
+  wallClockSource: 'operator' | 'auto-injected';
+}
+
+/**
+ * ADR-003: validate one dispatch's budgets before anything is launched.
+ *
+ * Rules, in order:
+ *  1. Wall clock is mandatory: operator value, else the AIWG_DEFAULT_WALL_CLOCK_MINUTES
+ *     env override, else budgets.defaultWallClockMinutes from config, else 30.
+ *  2. Spend ceilings (usage-measured budgets) are accepted only when the
+ *     provider declares budgetControl: true. On budgetControl: false providers,
+ *     an operator-explicit --max-wall-clock-minutes is the one escape hatch:
+ *     dispatch proceeds with the ceiling recorded enforceable: false. The
+ *     auto-injected default never satisfies that acknowledgment.
+ */
+export function validateDispatchBudgets(input: {
+  provider: string;
+  ceilings: SpendCeilings;
+  operatorWallClockMinutes?: number;
+  configWallClockMinutes?: number;
+}): DispatchBudgetDecision {
+  const envRaw = process.env.AIWG_DEFAULT_WALL_CLOCK_MINUTES;
+  const envMinutes =
+    envRaw !== undefined && envRaw.trim() !== '' && Number.isFinite(Number(envRaw)) && Number(envRaw) > 0
+      ? Number(envRaw)
+      : undefined;
+  const operator = input.operatorWallClockMinutes;
+  const effectiveWallClockMinutes =
+    operator ?? envMinutes ?? input.configWallClockMinutes ?? DEFAULT_WALL_CLOCK_MINUTES;
+  const wallClockSource: 'operator' | 'auto-injected' =
+    operator !== undefined ? 'operator' : 'auto-injected';
+
+  const declared = Object.entries(input.ceilings).filter(([, value]) => value !== undefined);
+  const accept = (spendEnforceable: boolean): DispatchBudgetDecision => ({
+    ok: true,
+    spendEnforceable,
+    effectiveWallClockMinutes,
+    wallClockSource,
+  });
+
+  if (declared.length === 0) return accept(true);
+  if (providerBudgetControl(input.provider)) return accept(true);
+  if (operator !== undefined) {
+    // Escape hatch: the operator explicitly set --max-wall-clock-minutes and
+    // has acknowledged that enforcement rests on the wall clock. Proceed, but
+    // the spend ceiling is recorded enforceable: false so analytics can audit it.
+    return accept(false);
+  }
+  return {
+    ok: false,
+    error:
+      `Declared budget ceiling(s) ${declared.map(([name]) => name).join(', ')} are UNOBSERVABLE on provider `
+      + `'${input.provider}' (budgetControl: false — the adapter reports no usage) — they cannot fire. `
+      + 'Drop the spend ceiling(s), or re-dispatch with an explicit --max-wall-clock-minutes to accept a '
+      + 'provider-independent hard stop (the ceiling is then recorded as enforceable: false).',
+    spendEnforceable: false,
+    effectiveWallClockMinutes,
+    wallClockSource,
+  };
+}
+
 type MissionStatus = 'queued' | 'running' | 'done' | 'failed' | 'aborted' | 'paused';
 type SessionState = 'active' | 'paused' | 'stopped';
 
 type MissionMode = 'direct' | 'pty-orchestrator';
+
+/** ADR-003: effective budget block recorded on the mission at dispatch. */
+export interface MissionBudget {
+  spend: {
+    declared: SpendCeilings;
+    enforceable: boolean;
+    source: 'operator' | 'auto-injected';
+  };
+  wallClockMinutes: number;
+  wallClockSource: 'operator' | 'auto-injected';
+}
 
 interface Mission {
   id: string;
@@ -43,6 +158,8 @@ interface Mission {
   maxWallClockMinutes?: number;
   explorationQuota?: number;
   budgetStopPolicy?: 'completion-wins' | 'budget-wins';
+  /** ADR-003: effective budget block recorded at dispatch time. */
+  budget?: MissionBudget;
   priority: string;
   mode: MissionMode;
   targetAgent?: string;
@@ -639,19 +756,66 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   const projectRoot = ctx.cwd || process.cwd();
   const frameworkRoot = ctx.frameworkRoot;
   const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
+  const { FileAdmissionStore, SharedHostScheduler, loadAdmissionLeasePolicy, fileHeartbeatProbe } = await import('../../serve/shared-host-scheduler.js');
   const cfg = await readAiwgConfig(projectRoot).catch(() => null);
   const provider = cfg?.providers[0] ?? 'unknown';
   const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
+
+  // ADR-003: dispatch-time budget validation — the single validation seam.
+  // Runs before any admission record exists, so a mis-declared budget has
+  // zero blast radius: no slot consumed, no lease created, no half-started loop.
+  const budgetConfigWallClock = (cfg as { budgets?: { defaultWallClockMinutes?: number } } | null | undefined)?.budgets?.defaultWallClockMinutes;
+  for (const mission of eligible) {
+    const missionProvider = (process.env.AIWG_MISSION_PROVIDER ?? '').trim() || provider;
+    const decision = validateDispatchBudgets({
+      provider: missionProvider,
+      ceilings: {
+        maxTotalTokens: mission.maxTotalTokens,
+        maxOutputTokens: mission.maxOutputTokens,
+        maxToolCalls: mission.maxToolCalls,
+        maxTotalCost: mission.maxTotalCost,
+      },
+      operatorWallClockMinutes: mission.maxWallClockMinutes,
+      configWallClockMinutes: budgetConfigWallClock,
+    });
+    if (!decision.ok) {
+      ui.error(decision.error ?? `Budget validation failed for mission ${mission.id}.`);
+      ui.error(`Mission ${mission.id} not dispatched.`);
+      return { exitCode: 1 };
+    }
+    // Mandatory provider-independent wall-clock hard stop (ADR-003): the
+    // operator's value, else the default. Auto-injections are logged loudly.
+    if (decision.wallClockSource === 'auto-injected') {
+      ui.warn(`wall-clock hard stop: ${decision.effectiveWallClockMinutes} min (auto-injected) for mission ${mission.id}`);
+    }
+    mission.maxWallClockMinutes = decision.effectiveWallClockMinutes;
+    mission.budget = {
+      spend: {
+        declared: {
+          maxTotalTokens: mission.maxTotalTokens,
+          maxOutputTokens: mission.maxOutputTokens,
+          maxToolCalls: mission.maxToolCalls,
+          maxTotalCost: mission.maxTotalCost,
+        },
+        enforceable: decision.spendEnforceable,
+        source: 'operator',
+      },
+      wallClockMinutes: decision.effectiveWallClockMinutes,
+      wallClockSource: decision.wallClockSource,
+    };
+  }
+  await writeSession(session);
+
   const scheduler = new SharedHostScheduler(
     new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
     {
       maxConcurrent,
-      leaseTtlMs: 5 * 60_000,
-      agingIntervalMs: 30_000,
+      ...loadAdmissionLeasePolicy(cfg),
       allowPreemption: false,
       defaultHostQuota: maxConcurrent,
     },
+    Date.now,
+    { heartbeatProbe: fileHeartbeatProbe(projectRoot) },
   );
 
   for (const mission of queued) {
@@ -727,6 +891,9 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
       mission.startedAt = new Date().toISOString();
       mission.ralphLoopId = result.loopId;
       mission.ralphPid = result.pid;
+      // ADR-004: link the admission lease to the live loop so heartbeat-
+      // anchored renewal can find its heartbeats during the aging sweep.
+      try { scheduler.attachLoopId(admissionRequestId, result.loopId); } catch { /* best-effort */ }
       await writeSession(session);
       await appendLog(session.id, {
         event: 'mission_started',
@@ -781,28 +948,39 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
 async function syncMissionsFromRalph(session: Session, projectRoot: string): Promise<boolean> {
   let mutated = false;
   const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-  const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
+  const { FileAdmissionStore, SharedHostScheduler, loadAdmissionLeasePolicy } = await import('../../serve/shared-host-scheduler.js');
   const cfg = await readAiwgConfig(projectRoot).catch(() => null);
   const provider = cfg?.providers[0] ?? 'unknown';
   const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
   const scheduler = new SharedHostScheduler(
     new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-    { maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent },
+    { maxConcurrent, ...loadAdmissionLeasePolicy(cfg), allowPreemption: false, defaultHostQuota: maxConcurrent },
   );
   for (const mission of session.missions) {
     if (mission.status !== 'running') continue;
     if (!mission.ralphLoopId) continue;
-    const ralphStatePath = join(
-      projectRoot,
-      '.aiwg',
-      'ralph-external',
-      'loops',
-      mission.ralphLoopId,
-      'session-state.json',
-    );
-    try {
-      const raw = await fs.readFile(ralphStatePath, 'utf-8');
-      const state = JSON.parse(raw);
+    // ralph-external relocates its registry via projectAiwgPath (env/.aiwg-location)
+    // and archives the loop dir the moment it finishes. Sync must consult every
+    // root the launcher may have used — repo-local AND relocated, live AND
+    // archive — or completed missions project as running forever (observed
+    // 2026-08-30: E2E loop completed 'Success: true' while MC showed failed).
+    const ralphStateCandidates = [
+      join(projectAiwgPath(projectRoot, 'ralph-external', 'loops', mission.ralphLoopId), 'session-state.json'),
+      join(projectAiwgPath(projectRoot, 'ralph-external', 'archive', mission.ralphLoopId), 'session-state.json'),
+      join(projectRoot, '.aiwg', 'ralph-external', 'loops', mission.ralphLoopId, 'session-state.json'),
+      join(projectRoot, '.aiwg', 'ralph-external', 'archive', mission.ralphLoopId, 'session-state.json'),
+    ];
+    let state: { status?: unknown; error?: unknown; currentIteration?: unknown; iteration?: unknown } | null = null;
+    for (const candidate of ralphStateCandidates) {
+      try {
+        const raw = await fs.readFile(candidate, 'utf-8');
+        state = JSON.parse(raw);
+        break;
+      } catch {
+        // try next candidate
+      }
+    }
+    if (state) {
       const ralphStatus = String(state.status || '').toLowerCase();
       // Map ralph status → mc mission status
       let nextStatus: MissionStatus | null = null;
@@ -845,8 +1023,9 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
           // An expired lease is reconciled on the next run; status remains best-effort.
         }
       }
-    } catch {
-      // State file missing/unreadable — leave mission status unchanged.
+    } else {
+      // No state file in any known root — leave mission status unchanged;
+      // ADR-005 reconcile-on-read handles true liveness separately.
     }
   }
   if (mutated) {
@@ -856,12 +1035,104 @@ async function syncMissionsFromRalph(session: Session, projectRoot: string): Pro
   return mutated;
 }
 
+
+// ── ADR-005: reconcile-on-read (loop liveness projection) ─────
+
+interface ReconcileSettings {
+  enabled: boolean;
+  heartbeatStaleMs: number;
+  watchMinIntervalMs: number;
+}
+
+const DEFAULT_RECONCILE_SETTINGS: ReconcileSettings = {
+  enabled: true,
+  heartbeatStaleMs: 60_000, // 2 × the 30s heartbeat interval (process-monitor.mjs:42)
+  watchMinIntervalMs: 1_000,
+};
+
+/** Last reconcile-on-read run per session id — watch write-amplification guard. */
+const lastReconcileAt = new Map<string, number>();
+
+async function loadReconcileSettings(projectRoot: string): Promise<ReconcileSettings> {
+  try {
+    const { readAiwgConfig } = await import('../../config/aiwg-config.js');
+    const cfg = await readAiwgConfig(projectRoot);
+    const rc = (cfg as unknown as { mc?: { reconcile?: Partial<ReconcileSettings> } } | null)?.mc?.reconcile;
+    return {
+      enabled: rc?.enabled ?? DEFAULT_RECONCILE_SETTINGS.enabled,
+      heartbeatStaleMs:
+        typeof rc?.heartbeatStaleMs === 'number' ? rc.heartbeatStaleMs : DEFAULT_RECONCILE_SETTINGS.heartbeatStaleMs,
+      watchMinIntervalMs:
+        typeof rc?.watchMinIntervalMs === 'number' ? rc.watchMinIntervalMs : DEFAULT_RECONCILE_SETTINGS.watchMinIntervalMs,
+    };
+  } catch {
+    return DEFAULT_RECONCILE_SETTINGS;
+  }
+}
+
+/**
+ * ADR-005: before a read path projects mission/session state, reconcile
+ * non-terminal missions against loop liveness (heartbeat age within N×30s,
+ * AND a PID existence check when a PID is known) and terminalize sessions
+ * whose every mission is terminal. All writes flow through
+ * tools/mc-bridge/status-writer.mjs (per-session mutex, transitionFrom
+ * guard, atomic tmp+rename) — reconcile is a consumer of the existing write
+ * path, never a second writer, and never resurrects a dead session.
+ *
+ * tools/ code is loaded from the workspace root at runtime (same
+ * package-boundary rule as the ADR-003 provider flags: no static import,
+ * nothing bundled). Any failure degrades to projecting the on-disk state —
+ * reconcile must never hard-fail a read.
+ */
+async function reconcileSessionForRead(session: Session, projectRoot: string): Promise<Session> {
+  try {
+    // B2 fix (remediation G3): sync loop terminal states BEFORE liveness
+    // judging — otherwise a completed-and-archived loop (state file only in
+    // archive/) is judged dead by heartbeat/PID and permanently labeled
+    // failed before syncMissionsFromRalph can record 'done'. `mc list` never
+    // synced at all; doing it here fixes every read path at the class level.
+    await syncMissionsFromRalph(session, projectRoot);
+    const settings = await loadReconcileSettings(projectRoot);
+    if (!settings.enabled) return session;
+
+    // Rate-limit: at most one reconcile run per session per watch interval so
+    // a high-frequency poll loop cannot turn the read path into a write
+    // amplifier (mc.reconcile.watchMinIntervalMs).
+    const last = lastReconcileAt.get(session.id) ?? 0;
+    const nowMs = Date.now();
+    if (nowMs - last < settings.watchMinIntervalMs) return session;
+    lastReconcileAt.set(session.id, nowMs);
+
+    const livenessUrl = pathToFileURL(join(projectRoot, 'tools', 'mc-bridge', 'liveness.mjs')).href;
+    const liveness = (await import(livenessUrl)) as {
+      reconcileSessionLiveness: (
+        path: string,
+        opts: { projectRoot: string; heartbeatStaleMs: number },
+      ) => Promise<{ reconciled: string[]; terminal: boolean }>;
+    };
+    const result = await liveness.reconcileSessionLiveness(join(SESSIONS_DIR, session.id, 'session.json'), {
+      projectRoot,
+      heartbeatStaleMs: settings.heartbeatStaleMs,
+    });
+
+    // The writer owns the file after a reconcile — re-read for projection.
+    if (result.reconciled.length > 0 || result.terminal) {
+      const fresh = await readSession(session.id);
+      if (fresh) return fresh;
+    }
+    return session;
+  } catch {
+    // Degrade to projecting what is on disk (ADR-005: never a hard read failure).
+    return session;
+  }
+}
+
 async function mcStatus(ctx: HandlerContext): Promise<HandlerResult> {
   const positional = getPositionalArgs(ctx.args);
   const sessionId = positional[0];
   const json = hasFlag(ctx.args, '--json');
 
-  const session = await findActiveSession(sessionId);
+  let session = await findActiveSession(sessionId);
   if (!session) {
     if (json) {
       console.log(JSON.stringify({ error: 'no_active_session' }));
@@ -874,8 +1145,13 @@ async function mcStatus(ctx: HandlerContext): Promise<HandlerResult> {
   // #1439: Sync mission statuses from ralph loop state files BEFORE display
   // so 'mc status' reflects the true state of any in-flight ralph processes
   // (otherwise missions launched by 'mc run' stay 'running' in mc.session.json
-  // even after the ralph loop has completed).
-  await syncMissionsFromRalph(session, ctx.cwd || process.cwd());
+  // even after the ralph loop has completed). Reconcile-on-read below also
+  // syncs first (remediation G3), so this standalone call is redundant —
+  // left as a cheap no-op second sync would double the file scans per read.
+  // ADR-005: judge non-terminal missions against loop
+  // liveness (heartbeat age + PID) before projecting. Writes flow only
+  // through status-writer.mjs; failure degrades to the on-disk state.
+  session = await reconcileSessionForRead(session, ctx.cwd || process.cwd());
 
   if (json) {
     console.log(JSON.stringify(session, null, 2));
@@ -977,13 +1253,13 @@ async function mcAbort(ctx: HandlerContext): Promise<HandlerResult> {
       try {
         const projectRoot = ctx.cwd || process.cwd();
         const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
-        const { FileAdmissionStore, SharedHostScheduler } = await import('../../serve/shared-host-scheduler.js');
+        const { FileAdmissionStore, SharedHostScheduler, loadAdmissionLeasePolicy } = await import('../../serve/shared-host-scheduler.js');
         const cfg = await readAiwgConfig(projectRoot).catch(() => null);
         const provider = cfg?.providers[0] ?? 'unknown';
         const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
         const scheduler = new SharedHostScheduler(
           new FileAdmissionStore(join(projectRoot, MC_ROOT, 'admission.json')),
-          { maxConcurrent, leaseTtlMs: 5 * 60_000, agingIntervalMs: 30_000, allowPreemption: false, defaultHostQuota: maxConcurrent },
+          { maxConcurrent, ...loadAdmissionLeasePolicy(cfg), allowPreemption: false, defaultHostQuota: maxConcurrent },
         );
         scheduler.cancel(mission.admissionRequestId);
       } catch {
@@ -1080,7 +1356,13 @@ async function mcStop(ctx: HandlerContext): Promise<HandlerResult> {
 
 async function mcList(ctx: HandlerContext): Promise<HandlerResult> {
   const json = hasFlag(ctx.args, '--json');
-  const sessions = await listSessions();
+  const listed = await listSessions();
+  // ADR-005: list is a read surface — reconcile each session against loop
+  // liveness before projecting (same degrade-on-failure contract as status).
+  const sessions: Session[] = [];
+  for (const listedSession of listed) {
+    sessions.push(await reconcileSessionForRead(listedSession, ctx.cwd || process.cwd()));
+  }
 
   if (json) {
     console.log(JSON.stringify(sessions.map(s => ({
