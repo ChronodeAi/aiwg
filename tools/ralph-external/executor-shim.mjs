@@ -48,6 +48,39 @@ const DEFAULT_HITL_PATTERNS = [
   /\[y\/n\]/i,
 ];
 
+// ── ADR-002: sandbox write-path gate-trip classification ─────────────────────
+
+/**
+ * Recognize a sandbox-gate-flavored loop failure (the launcher's pre-flight
+ * DeliverableUnwritableError). The supervisor may deliver either the Error
+ * instance or a stringified form; both are recognized.
+ * @param {unknown} error
+ * @returns {boolean}
+ */
+function isSandboxGateTrip(error) {
+  if (!error) return false;
+  if (error instanceof Error) return error.name === 'DeliverableUnwritableError';
+  return typeof error === 'string' && error.includes('unwritable under provider sandbox root');
+}
+
+/**
+ * Extract the gate-trip descriptor carried by DeliverableUnwritableError.
+ * @param {unknown} error
+ * @returns {{ message: string, target?: string, sandboxRoot?: string, provider?: string, detail?: string }}
+ */
+function describeGateTrip(error) {
+  if (error instanceof Error) {
+    return {
+      message:     error.message,
+      target:      error.target,
+      sandboxRoot: error.sandboxRoot,
+      provider:    error.provider,
+      detail:      error.detail ?? undefined,
+    };
+  }
+  return { message: String(error) };
+}
+
 // ── Platform detection ───────────────────────────────────────────────────────
 
 // Sync version for module initialisation
@@ -251,6 +284,10 @@ export class ExecutorShim extends EventEmitter {
       objective,
       completion,
       metadata,
+      // ADR-002: escalation channel for sandbox write-path gate trips.
+      // GATED DEFAULT-OFF (operator decision 2026-08-30): 'none' unless the
+      // mission config explicitly opts into the bridge approvals inbox.
+      hitlChannel: metadata?.hitlChannel === 'bridge' ? 'bridge' : 'none',
     });
     this._loopToMission.set(loopId, missionId);
 
@@ -323,6 +360,74 @@ export class ExecutorShim extends EventEmitter {
     });
 
     return { missionId, hitl_id, status: 'forwarded' };
+  }
+
+  /**
+   * ADR-002: route a sandbox write-path gate trip (deliverable target
+   * unwritable under the provider's effective sandbox root) to the mission's
+   * configured escalation channel.
+   *
+   * Escalation is GATED DEFAULT-OFF (operator decision, 2026-08-30):
+   *  - hitlChannel 'none' (default): NO hitl_required is emitted. The mission
+   *    fails loud immediately with a NAMED reason — an escalation attempted
+   *    into a void ("no approval channel is available", task 11159769) is
+   *    prohibited.
+   *  - hitlChannel 'bridge': the trip escalates through the existing
+   *    mission.hitl_required envelope (→ executor-ws-client.mjs:222 →
+   *    executor-registry.ts:546 → dashboard HITL drawer), answered via
+   *    POST /api/v1/missions/:id/hitl_response.
+   *
+   * @param {string} missionId
+   * @param {{ message?: string, target?: string, sandboxRoot?: string, provider?: string, detail?: string }} [gateError]
+   * @returns {{ routed: boolean, channel: 'bridge'|'none', hitlId?: string, failedLoud?: boolean }}
+   */
+  handleSandboxGateTrip(missionId, gateError = {}) {
+    const mission = this._missions.get(missionId);
+    if (!mission) return { routed: false, channel: 'none' };
+
+    const channel = mission.hitlChannel ?? 'none';
+    const now     = new Date().toISOString();
+    const message =
+      gateError.message ??
+      `deliverable path ${gateError.target ?? 'unknown'} unwritable under provider sandbox root ` +
+      `${gateError.sandboxRoot ?? 'unknown'} (provider: ${gateError.provider ?? 'unknown'})`;
+
+    if (channel !== 'bridge') {
+      // Default-off: fail loud with a named error. Never park the mission on
+      // an approval channel that was never wired; never emit a phantom HITL
+      // request; never hang.
+      mission.state       = 'failed';
+      mission.updatedAt   = now;
+      mission.completedAt = now;
+      mission.error       = 'sandbox_gate_escalation_disabled';
+
+      this._emitMissionEvent(missionId, 'mission.failed', {
+        state:  'failed',
+        reason: 'sandbox_gate_escalation_disabled',
+        error:  message,
+      });
+      return { routed: false, channel, failedLoud: true };
+    }
+
+    const hitlId = `hitl-${missionId}-sandbox-gate`;
+    mission.pendingHitl = { hitl_id: hitlId };
+    mission.state       = 'hitl-required';
+    mission.updatedAt   = now;
+
+    // Same envelope shape as the stdout HITL detector (handleStdoutChunk);
+    // context is a string per schemas/executor-v1.json $defs/data_mission_hitl_required.
+    this._emitMissionEvent(missionId, 'mission.hitl_required', {
+      hitl_id: hitlId,
+      prompt:  message,
+      context: [
+        'kind=sandbox_gate_trip',
+        gateError.target ? `target=${gateError.target}` : null,
+        gateError.sandboxRoot ? `sandbox_root=${gateError.sandboxRoot}` : null,
+        gateError.provider ? `provider=${gateError.provider}` : null,
+        gateError.detail ? `detail=${gateError.detail}` : null,
+      ].filter(Boolean).join(' '),
+    });
+    return { routed: true, channel, hitlId };
   }
 
   /**
@@ -507,6 +612,20 @@ export class ExecutorShim extends EventEmitter {
       if (!missionId) return;
       const mission = this._missions.get(missionId);
       if (!mission) return;
+
+      // ADR-002: a sandbox write-path gate trip is an escalation-class
+      // failure — route it through the mission's configured channel instead
+      // of the generic failed path. Escalation off (default) → mission fails
+      // loud with a named reason; 'bridge' → mission parks in hitl-required
+      // pending an operator response (loop mapping kept for resume).
+      if (isSandboxGateTrip(error)) {
+        const routed = this.handleSandboxGateTrip(missionId, describeGateTrip(error));
+        if (routed.routed) return;
+        if (routed.failedLoud) {
+          this._loopToMission.delete(loopId);
+          return;
+        }
+      }
 
       mission.state       = 'failed';
       mission.updatedAt   = new Date().toISOString();

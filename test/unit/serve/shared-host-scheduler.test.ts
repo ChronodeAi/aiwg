@@ -116,7 +116,13 @@ describe('SharedHostScheduler (#1566)', () => {
     s.submit(request('waiting', { queueTimeoutMs: 30_000 }));
     current += 11_000;
     s.reconcileNow();
-    expect(s.snapshot().records.abandoned!.state).toBe('timed-out');
+    // ADR-004: the expired lease is requeued (bounded) instead of dying
+    // terminally; the waiting request wins the freed slot on submittedAt order.
+    expect(s.snapshot().records.abandoned).toMatchObject({
+      state: 'queued',
+      reason: 'lease expired; requeued (attempt 1/2)',
+      requeueAttempts: 1,
+    });
     expect(s.snapshot().records.waiting!.state).toBe('admitted');
 
     s.submit(request('short', { submittedAt: new Date(current).toISOString(), queueTimeoutMs: 5_000 }));

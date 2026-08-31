@@ -1,0 +1,35 @@
+{
+  "version": "1",
+  "project": {
+    "id": "my-aiwg",
+    "name": "AIWG",
+    "description": "Agentic AI Workflow Generator — the AIWG product monorepo; frameworks, addons, providers, and CLI live here"
+  },
+  "entries": [
+    {
+      "title": "AIWG product development",
+      "summary": "Route product changes through SDLC flows; canonical artifacts to .aiwg/, provider-native exports explicit-only.",
+      "discover": ["aiwg doctor", "aiwg refresh", "deploy framework"],
+      "show": [{"type": "skill", "name": "aiwg-doctor"}, {"type": "skill", "name": "use"}]
+    },
+    {
+      "title": "Project-local extension authoring",
+      "summary": "Pilot bundles under .aiwg/{extensions,addons,frameworks}/, validate with project-local doctor, promote upstream when mature.",
+      "discover": ["author an expansion", "scaffold a project"],
+      "show": [{"type": "skill", "name": "scaffold-extension"}, {"type": "command", "name": "new-bundle"}]
+    },
+    {
+      "title": "Context firewall",
+      "summary": "Provider-facing context budget audit and reviewed baseline management (plan-first) before shipping context changes.",
+      "discover": ["check context budget", "context firewall baseline"],
+      "show": [{"type": "skill", "name": "context-firewall"}, {"type": "rule", "name": "context-window-budget"}]
+    },
+    {
+      "title": "Delivery PRs",
+      "summary": "AIWG product/workspace changes ship via aiwg-pr (delivery-policy, no-attribution, CI gate); generic PRs use normal flow.",
+      "discover": ["delivery policy", "aiwg steward"],
+      "show": [{"type": "rule", "name": "delivery-policy"}, {"type": "skill", "name": "steward"}]
+    }
+  ],
+  "discovery": {"enabled": true, "excludeBundles": [], "overrides": {}}
+}

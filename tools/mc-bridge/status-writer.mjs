@@ -123,3 +123,40 @@ export async function applyStatusUpdatesBatched(sessionJsonPath, updates) {
     release();
   }
 }
+
+/**
+ * Reconcile helper (ADR-005): guarded top-level session-state transition
+ * (e.g. 'active' → 'stopped' terminalization) under the same per-session
+ * mutex and atomic-write discipline as mission updates.
+ *
+ * Guarantees:
+ * - Never resurrects: a session already in `state` returns 'unchanged' with
+ *   no write (updatedAt untouched) — idempotent.
+ * - Never overwrites a fresher concurrent write: with `transitionFrom` set
+ *   and the on-disk state mismatched, returns 'stale' with no write.
+ *
+ * @param {string} sessionJsonPath
+ * @param {{state: 'active'|'paused'|'stopped', transitionFrom?: string}} transition
+ * @returns {Promise<{outcome: 'updated'|'unchanged'|'missing-session'|'stale', session?: object}>}
+ */
+export async function markSessionState(sessionJsonPath, transition) {
+  const release = await acquire(sessionJsonPath);
+  try {
+    const session = await readSession(sessionJsonPath);
+    if (!session) return { outcome: 'missing-session' };
+
+    if (transition.transitionFrom && session.state !== transition.transitionFrom) {
+      // Avoid clobbering a more recent state set by a parallel handler.
+      return { outcome: 'stale', session };
+    }
+    if (session.state === transition.state) {
+      return { outcome: 'unchanged', session };
+    }
+
+    session.state = transition.state;
+    await writeSessionAtomic(sessionJsonPath, session);
+    return { outcome: 'updated', session };
+  } finally {
+    release();
+  }
+}

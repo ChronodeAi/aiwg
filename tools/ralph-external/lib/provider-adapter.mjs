@@ -43,6 +43,30 @@ import { spawn, spawnSync } from 'child_process';
  */
 
 /**
+ * Error thrown when a dispatch requests a capability the active provider
+ * adapter does not declare (ADR-001: fail loud at dispatch, before spawn —
+ * never forward the raw flag toward a binary that rejects it).
+ */
+export class DispatchCapabilityError extends Error {
+  /**
+   * @param {string} capability - Capability name from ProviderCapabilities
+   * @param {string} [feature] - Human-readable feature description
+   * @param {string} [provider] - Provider name
+   */
+  constructor(capability, feature, provider) {
+    super(
+      `Provider "${provider || 'unknown'}" does not declare capability "${capability}"` +
+      (feature ? ` (${feature})` : '') +
+      ' — refusing dispatch (ADR-001)'
+    );
+    this.name = 'DispatchCapabilityError';
+    this.capability = capability;
+    this.feature = feature;
+    this.provider = provider;
+  }
+}
+
+/**
  * Base class for provider adapters.
  * Subclasses must override all methods that throw NotImplementedError.
  */
@@ -193,6 +217,23 @@ export class ProviderAdapter {
   }
 
   /**
+   * Enforce a dispatch-blocking capability (ADR-001): throws
+   * DispatchCapabilityError when this adapter does not declare it. Upgrades
+   * hasCapability()/warnUnsupported() from advisory to enforcing for
+   * dispatch-blocking features; warnUnsupported remains for genuinely
+   * cosmetic degradations.
+   *
+   * @param {string} capability - Capability name from ProviderCapabilities
+   * @param {string} [feature] - Human-readable feature description
+   * @throws {DispatchCapabilityError} When the capability is not declared
+   */
+  requireCapability(capability, feature) {
+    if (!this.hasCapability(capability)) {
+      throw new DispatchCapabilityError(capability, feature, this.getName());
+    }
+  }
+
+  /**
    * Log a capability warning when a feature is not supported.
    *
    * @param {string} capability - Capability name
@@ -280,6 +321,9 @@ async function registerBuiltinProviders() {
   } catch { /* ignore if not found */ }
   try {
     await import('./dsh-adapter.mjs');
+  } catch { /* ignore if not found */ }
+  try {
+    await import('./hermes-adapter.mjs');
   } catch { /* ignore if not found */ }
 }
 
