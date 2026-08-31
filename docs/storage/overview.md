@@ -1,5 +1,8 @@
 # Storage Backends — Overview
 
+The versioned scalable-backend semantics and conservative capability matrix are
+defined in [`Scalable Storage Backend Contract v1`](backend-contract.md).
+
 AIWG persists artifacts (memory pages, knowledge-base entries, activity log, reflections, provenance records, research corpus, sandbox identities) through a **pluggable storage adapter system**. By default everything lives on the local filesystem under `.aiwg/`. With one config file you can route any subsystem to:
 
 - **Obsidian** vault — your AIWG memory becomes searchable via the graph
@@ -154,6 +157,8 @@ See `docs/storage/security.md` for the full security model — credential handli
 
 - `docs/storage/security.md` — credential handling, path safety, doctor validation
 - `docs/storage/migration.md` — `aiwg storage migrate` walkthrough
+- `docs/storage/backend-contract.md` — scalable backend capabilities and maturity matrix
+- `docs/storage/migration-protocol.md` — scalable offline/online migration contract and safety boundaries
 - `docs/storage/backends/<type>.md` — per-backend setup, env vars, caveats
 - `docs/fortemi-core-prebuilt-indices.md` — Fortemi Core prebuilt framework index packaged with npm releases
 - `.aiwg/architecture/storage-design.md` — full design (adapter interface, subsystem registry, phasing)

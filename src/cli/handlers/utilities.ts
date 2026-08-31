@@ -505,6 +505,10 @@ export const doctorHandler: CommandHandler = {
   category: 'maintenance',
   aliases: ['-doctor', '--doctor'],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     if (ctx.args.includes('--help') || ctx.args.includes('-h')) {
       return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
@@ -826,6 +830,10 @@ export const updateHandler: CommandHandler = {
         });
         console.log(`${update.message}\n`);
       } catch (error) {
+        if ((error as { code?: string }).code === 'AIWG_INSTALLATION_DRIFT'
+          || (error as { code?: string }).code === 'AIWG_INSTALLATION_INVALID') {
+          return { exitCode: 78, message: error instanceof Error ? error.message : String(error) };
+        }
         console.error(`Warning: Update check failed: ${error instanceof Error ? error.message : String(error)}`);
         console.log('Continuing with re-deployment...\n');
       }

@@ -184,6 +184,9 @@ jobs:
           TAG='${{ steps.release_tag.outputs.release_tag }}'
           git checkout --detach "refs/tags/${TAG}"
 
+      - name: Verify source-bound storage benchmark claims (#2191)
+        run: npm run verify:storage-claims
+
       - name: Setup Node.js with npmjs.org registry
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0 (ci/digests.txt) — Node 24
         with:
@@ -237,6 +240,12 @@ jobs:
           AIWG_PERF_BUDGET_VERSION_MS: "300"
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
+          # Deployment tests replace HOME to prove clean-user behavior. Pass
+          # the container workspace trust as command-level Git config so their
+          # nested Git probes retain it without polluting those isolated homes.
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: ${{ github.workspace }}
         run: npm test -- --run --testTimeout=120000
 
       - name: Extract and verify version against tag

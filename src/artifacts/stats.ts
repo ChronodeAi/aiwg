@@ -9,7 +9,7 @@
  */
 
 import type { ArtifactIndex, GraphType, IndexStats } from './types.js';
-import { GRAPH_CONFIGS, loadUserGraphConfigs } from './types.js';
+import { GRAPH_CONFIGS, loadGlobalGraphConfigs, loadUserGraphConfigs, resolveGraphBackendType } from './types.js';
 import { loadIndexStats, loadGraphIndexFile } from './index-reader.js';
 import { collectGraphIndexFiles, indexPathFor } from './index-files.js';
 
@@ -54,6 +54,8 @@ export async function showStats(
   options: StatsOptions = {}
 ): Promise<void> {
   const { graph } = options;
+  loadUserGraphConfigs(cwd);
+  loadGlobalGraphConfigs();
 
   if (graph) {
     // Single graph mode
@@ -68,7 +70,6 @@ export async function showStats(
   }
 
   // No graph specified: show all graphs with defaultBuild=true
-  loadUserGraphConfigs(cwd);
   const graphTypes: GraphType[] = Object.entries(GRAPH_CONFIGS)
     .filter(([, config]) => config.defaultBuild)
     .map(([name]) => name);
@@ -97,6 +98,7 @@ export async function showStats(
       const coverage = await calculateCoverage(cwd, s, type);
       combined[type] = {
         ...s,
+        backend: resolveGraphBackendType(type),
         coverage,
       };
     }
@@ -124,6 +126,7 @@ async function renderStats(
     const coverage = await calculateCoverage(cwd, stats, graphType);
     console.log(JSON.stringify({
       ...stats,
+      backend: resolveGraphBackendType(graphType),
       coverage,
     }, null, 2));
     return;
@@ -135,6 +138,7 @@ async function renderStats(
   console.log(`Index version: ${stats.version}`);
   console.log(`Last built:    ${stats.builtAt}`);
   console.log(`Build time:    ${stats.buildTimeMs}ms`);
+  console.log(`Graph backend: ${resolveGraphBackendType(graphType)}`);
   console.log('');
 
   // By phase
@@ -167,6 +171,9 @@ async function renderStats(
   // Dependency graph
   console.log('Dependency Graph:');
   console.log(`  Total edges:        ${stats.graphMetrics.totalEdges}`);
+  if (stats.graphMetrics.markdownLinkEdges !== undefined) {
+    console.log(`  Markdown link edges:${String(stats.graphMetrics.markdownLinkEdges).padStart(3)}`);
+  }
   if (stats.graphMetrics.canonicalEdges !== undefined) {
     console.log(`  Canonical edges:    ${stats.graphMetrics.canonicalEdges}`);
     console.log(`  Outgoing declares:  ${stats.graphMetrics.outgoingDeclarations}`);

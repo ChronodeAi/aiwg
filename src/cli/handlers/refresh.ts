@@ -10,7 +10,7 @@
  *
  * @implements @agentic/code/frameworks/sdlc-complete/rules/self-maintenance.md
  * @source @src/cli/router.ts
- * @issue #482, #557, #694
+ * @issue #173, #174, #482, #557, #694
  */
 
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
@@ -176,6 +176,31 @@ export function collectModelDeployArgs(args: string[]): string[] {
   return forwarded;
 }
 
+const REFRESH_HELP = `Usage: aiwg refresh [options]
+
+Update AIWG, re-deploy installed frameworks, and run health verification.
+
+Options:
+  --dry-run                 Preview changes without updating or deploying
+  --quiet                   Suppress progress output
+  --skip-update             Skip the installation update
+  --packages-only           Refresh remote packages only
+  --provider <name>         Override provider auto-detection
+  --channel <name>          Select the update channel (stable or main)
+  --frameworks <list>       Re-deploy a comma-separated installed subset
+  --model <name>            Override all deployed agent model tiers
+  --reasoning-model <name>  Override the reasoning model tier
+  --coding-model <name>     Override the coding model tier
+  --efficiency-model <name> Override the efficiency model tier
+  --filter <pattern>        Limit model deployment by agent name
+  --filter-role <role>      Limit model deployment by role
+  --model-tier <tier>       Limit model deployment by tier
+  --save                    Save model overrides to the project
+  --save-user               Save model overrides to user configuration
+  -h, --help                Show this help without running refresh
+
+Alias: aiwg sync (deprecated)`;
+
 /**
  * Refresh command handler (formerly sync)
  */
@@ -185,6 +210,10 @@ export const refreshHandler: CommandHandler = {
   description: 'Refresh AIWG to latest version and re-deploy installed frameworks',
   category: 'maintenance',
   aliases: ['--refresh', 'sync', '--sync'],
+
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: REFRESH_HELP, rawOutput: true };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const dryRun = hasFlag(ctx.args, '--dry-run');
@@ -230,6 +259,7 @@ export const refreshHandler: CommandHandler = {
     // Step 2.5: Refresh remote packages (always, unless --packages-only skips npm)
     if (!quiet) ui.info(dryRun ? 'Would refresh remote packages...' : 'Refreshing remote packages...');
     const deploymentFailures: string[] = [];
+    let updateFailure: { exitCode: number } | null = null;
     if (!dryRun) {
       try {
         const refreshed = await refreshAllPackages();
@@ -261,7 +291,10 @@ export const refreshHandler: CommandHandler = {
         if (updateResult.exitCode === 0) {
           if (!quiet) ui.success('Package up to date');
         } else {
-          if (!quiet) ui.warn('Update check returned non-zero (may already be current)');
+          updateFailure = { exitCode: updateResult.exitCode };
+          if (!quiet) {
+            ui.warn('Installation update failed; continuing with re-deployment. Run `aiwg installation show` for canonical-install diagnostics.');
+          }
         }
       }
     } else {
@@ -454,6 +487,11 @@ export const refreshHandler: CommandHandler = {
       ui.rule();
       if (dryRun) {
         ui.info('Dry run complete — no changes made');
+      } else if (updateFailure) {
+        ui.warn(
+          `Refresh completed with installation update failure (exit ${updateFailure.exitCode}); ` +
+          're-deployment continued, but AIWG may still be on the previous version.',
+        );
       } else {
         ui.success('Refresh complete');
       }
@@ -463,13 +501,18 @@ export const refreshHandler: CommandHandler = {
     // Quiet mode: JSON output
     if (quiet) {
       const output = JSON.stringify({
-        status: dryRun ? 'dry-run' : 'refreshed',
+        status: dryRun
+          ? 'dry-run'
+          : updateFailure
+            ? 'refreshed-with-update-failure'
+            : 'refreshed',
         provider: detectedProvider,
         frameworks,
         skipUpdate,
         channel: channel || undefined,
         staleAgentRemovals,
         deploymentFailures,
+        updateFailure,
       });
       console.log(output);
     }

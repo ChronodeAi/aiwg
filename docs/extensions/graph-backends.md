@@ -11,19 +11,26 @@ The AIWG artifact index stores dependency and relationship data as a directed gr
 
 | Tier | Backend | Sweet spot | Extra deps |
 |------|---------|-----------|------------|
-| **Default** | `json` | All projects, <5k nodes | none |
-| **Optional** | `graphology` | Rich traversal, community detection, <50k nodes | `graphology` + ecosystem (~50KB) |
-| **Optional** | `sqlite` | Large corpora, SQL set ops, persistence | `better-sqlite3` (~200KB native) |
+| **Default** | `json` | Zero-dependency local graphs | none |
+| **Optional** | `graphology` | Rich in-process graph operations | `graphology` ecosystem |
+| **Optional** | `sqlite` | Persistent same-host graph storage | `better-sqlite3` (native) |
 
 A fourth, orthogonal capability — **semantic embeddings** — can be added to any tier for similarity search.
 
-All three tiers produce the same `dependencies.json` output format and support the same `aiwg index` CLI surface. The backend is an implementation detail.
+All three tiers produce the same `dependencies.json` compatibility output. The
+resolved backend is visible in `aiwg index status` and `aiwg index stats`.
 
 ---
 
 ## Default: JSON Backend
 
 No configuration needed. The JSON backend is always active unless overridden.
+
+Backend selection is deterministic: a graph's `graphBackend` overrides the
+project-level `index.graphBackend`; when neither is present, AIWG uses `json`.
+SQLite graphs persist at `.aiwg/.index/<graph>/graph.db` (shared graphs use
+their existing shared index directory). Selecting an unavailable optional
+backend fails with an installation diagnostic and does not silently use JSON.
 
 **Capabilities:**
 - Typed edges (`{ path, type }` via `EdgeRef`)
@@ -33,7 +40,8 @@ No configuration needed. The JSON backend is always active unless overridden.
 
 **Limitations:**
 - Graph rebuilt in memory on every `aiwg index` invocation
-- Set operations on large neighbor lists are O(n×m)
+- Set operations use JavaScript `Set` membership and are O(n+m) for two input
+  lists
 - No cross-graph SQL joins (compose with shell `comm` instead)
 
 ---
@@ -52,19 +60,25 @@ npm install graphology-shortest-path graphology-communities
 
 ### Activate
 
-```yaml
-# .aiwg/config.yaml
-index:
-  graphBackend: graphology
+```json
+{
+  "index": { "graphBackend": "graphology" }
+}
 ```
 
 Or per-graph:
 
-```yaml
-index:
-  graphs:
-    citation-network:
-      graphBackend: graphology
+```json
+{
+  "index": {
+    "graphs": {
+      "citation-network": {
+        "scanDirs": ["documentation/citations"],
+        "graphBackend": "graphology"
+      }
+    }
+  }
+}
 ```
 
 ### Staged Build Order
@@ -121,7 +135,9 @@ const path = bidirectional(graph, 'REF-001', 'REF-234');
 
 ## Optional: SQLite Backend
 
-Best for large corpora (5k+ nodes), teams running repeated cross-graph citation queries, or workflows where the graph must persist between runs without a full rebuild.
+Use SQLite when a graph must persist on the same host. A reproducible
+reference-host observation is published below, but it is not a universal
+support envelope.
 
 ### Install
 
@@ -133,13 +149,13 @@ npm install better-sqlite3
 
 ### Activate
 
-```yaml
-# .aiwg/config.yaml
-index:
-  graphBackend: sqlite
+```json
+{
+  "index": { "graphBackend": "sqlite" }
+}
 ```
 
-### Set operations (native SQL)
+### SQL inspection
 
 ```sql
 -- Papers that cited both REF-008 and REF-016
@@ -153,23 +169,72 @@ EXCEPT
 SELECT source FROM edges WHERE target = 'REF-001' AND edge_type = 'cites';
 ```
 
-These run via `aiwg index query --set-query` or are composed by the `aiwg index neighbors` command when the SQLite backend is active.
+The SQLite backend executes union, intersection, and difference with native
+`UNION`, `INTERSECT`, and `EXCEPT`, returning identity-sorted results.
 
 ### Cross-graph federation
 
-```sql
-ATTACH DATABASE '.aiwg/.index/summaries/graph.db' AS summaries;
-ATTACH DATABASE '.aiwg/.index/citation-network/graph.db' AS cn;
-
-SELECT s.id, s.title
-FROM summaries.nodes s
-JOIN cn.edges e ON e.source = s.id
-WHERE e.target = 'REF-008' AND e.edge_type = 'cites';
-```
+Cross-database `ATTACH` is explicitly out of scope. AIWG does not expose it
+because attached-file authorization, lifecycle, and consistent-snapshot
+semantics are not defined. Use the existing multi-graph query surface and
+combine its deterministic identity results instead.
 
 ### Incremental updates
 
-The SQLite backend writes at the row level — only changed nodes and edges are updated. For large corpora where most files are unchanged between builds, this significantly reduces rebuild time.
+Rebuild reconciliation runs in one transaction, upserts desired nodes and
+typed edges, and removes stale rows. Node `type`, `phase`, `title`, `summary`,
+and `checksum` are queryable columns while the complete attribute object is
+retained for compatibility.
+
+### WAL, concurrency, and recovery policy
+
+On-disk graphs require verified WAL mode, `synchronous=NORMAL` by default, a
+5-second busy timeout, and a 1,000-frame automatic checkpoint. `SQLITE_BUSY`
+and `SQLITE_LOCKED` exhaustion is surfaced as `AIWG_SQLITE_BUSY`; it is not
+reported as an empty result. `walMetrics()` exposes busy, log-frame, and
+checkpointed-frame counts, and callers can request bounded passive, restart,
+or truncate checkpoints. Backup uses SQLite's online backup API.
+
+WAL is a same-host feature: it supports concurrent readers and one writer and
+must not be placed on a network filesystem. AIWG rejects SQLite releases
+affected by the upstream WAL-reset corruption defect, accepting the official
+patched lines 3.44.6, 3.50.7, and 3.51.3 or later (excluding withdrawn 3.52).
+See the [SQLite WAL documentation](https://www.sqlite.org/wal.html#walreset).
+
+The backend uses schema `user_version=1`; migrations run transactionally and
+an unknown newer schema fails closed.
+
+Run the reproducible local benchmark with `npm run benchmark:index:sqlite`.
+Its JSON reports binding/engine versions, corpus shape, exact correctness and
+source digests, database/WAL size, CPU/RSS, throughput, latency percentiles,
+and event-loop delay.
+
+<!-- aiwg-storage-benchmark-claim:sqlite-local-reference-v1:start -->
+A 2026-08-28 reference-host qualification on linux x64, Node 24.12.0, better-sqlite3 12.8.0, and SQLite 3.51.3 produced:
+
+| Nodes / edges | Write throughput | Query + traversal pairs | Write latency p50/p95/p99 | Query latency p50/p95/p99 | Event-loop delay p95 | DB / peak WAL bytes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10,000 / 9,999 | 4,011 ops/s | 506 pairs/s | 254.77 / 378.22 / 378.22 ms | 1.2 / 1.97 / 2.74 ms | 378.27 ms | 2,379,776 / 4,157,112 |
+
+Evidence: [sqlite-local-reference-v1](../storage/evidence/sqlite-local-reference-v1.json). The release gate rejects this claim when its correctness digest, source digest, freshness window, or rendered values no longer match.
+<!-- aiwg-storage-benchmark-claim:sqlite-local-reference-v1:end -->
+
+This is a qualification point, not a universal capacity limit. The high p95
+delay reflects synchronous native calls and is part of the selection decision:
+keep latency-sensitive event loops isolated from bulk SQLite graph builds.
+Operators must run the benchmark on their own hardware and workload before
+declaring a support envelope; #2191 owns the comparative release gate.
+
+Run the common local correctness gate with:
+
+```bash
+npm run test:conformance:storage
+```
+
+The versioned `aiwg.storage-backend-golden/v1` corpus checks declared topology,
+Unicode and null attributes, typed directional traversal, set parity,
+incremental updates, deletion/reload, and exact counts across JSON, Graphology,
+and SQLite. It does not certify remote PostgreSQL, MySQL, or Fortemi services.
 
 ### Combining backends
 
@@ -204,8 +269,8 @@ npm install @xenova/transformers hnswlib-node
 index:
   embedding:
     enabled: true
-    model: Xenova/all-MiniLM-L6-v2   # ~22MB, ~5ms/embedding on CPU
-    # model: Xenova/all-mpnet-base-v2  # ~110MB, higher quality
+    model: Xenova/all-MiniLM-L6-v2
+    # model: Xenova/all-mpnet-base-v2
     topK: 10
 ```
 
@@ -238,13 +303,9 @@ binary-like, AIWG falls back to the node's title and summary text.
 
 ### Corpus size guidance
 
-| Corpus | Model | One-time build | Query |
-|--------|-------|---------------|-------|
-| 234 nodes | all-MiniLM-L6-v2 | ~12s | <5ms |
-| 1,000 nodes | all-MiniLM-L6-v2 | ~50s | <5ms |
-| 5,000 nodes | all-MiniLM-L6-v2 | ~4 min | <5ms |
-
 Incremental rebuilds only re-embed nodes whose content checksum changed.
+No embedding support envelope is published without a source-bound benchmark
+record; measure the selected model and hardware before choosing a corpus tier.
 
 ---
 
@@ -253,21 +314,21 @@ Incremental rebuilds only re-embed nodes whose content checksum changed.
 | Feature | JSON | Graphology | SQLite |
 |---------|:----:|:----------:|:------:|
 | Typed edges | ✓ | ✓ | ✓ |
-| BFS/DFS traversal | ✓ | ✓ (library) | ✓ (recursive CTE) |
-| Set intersection/difference | ✓ (JS) | ✓ (JS/operators) | ✓ (native SQL) |
-| Cross-graph joins | shell `comm` | manual merge | SQL `ATTACH` |
+| Bounded traversal | ✓ | ✓ | ✓ (recursive CTE) |
+| Set intersection/difference | ✓ (JS) | ✓ (JS) | ✓ (native SQL) |
+| Cross-graph joins | shell `comm` | manual merge | — |
 | Shortest path | — | ✓ | — |
 | Community detection | — | ✓ (Louvain) | — |
 | Persistent (survives rebuild) | — | — | ✓ |
-| Incremental row-level updates | — | — | ✓ |
+| Incremental row-level updates | — | — | ✓ (transactional reconcile) |
 | Zero native deps | ✓ | ✓ | — |
-| Corpus sweet spot | <5k | <50k | 5k–500k |
+| Measured support envelope | not published | not published | not published |
 
 ---
 
 ## Module Graph Declarations
 
-Frameworks and addons can declare their own graph configurations in `manifest.json`. This means operators who install `aiwg use research` automatically get `papers`, `citation-network`, and `summaries` graphs — no manual `.aiwg/config.yaml` changes needed.
+Frameworks and addons can declare their own graph configurations in `manifest.json`. This means operators who install `aiwg use research` automatically get `papers`, `citation-network`, and `summaries` graphs — no manual `.aiwg/aiwg.config` changes needed.
 
 ### How it works
 
@@ -304,7 +365,7 @@ Each framework manifest may include an `index.graphs` section:
 
 ### Operator override
 
-Operator `.aiwg/config.yaml` always takes precedence over framework-declared graphs:
+Operator `.aiwg/aiwg.config` always takes precedence over framework-declared graphs:
 
 ```yaml
 index:

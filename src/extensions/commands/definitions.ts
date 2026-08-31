@@ -175,6 +175,25 @@ export const updateCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const installationCommand: Extension = {
+  id: 'installation',
+  type: 'command',
+  name: 'Installation Identity',
+  description: 'Inspect, adopt, or deliberately switch the canonical global AIWG installation',
+  version: '1.0.0',
+  capabilities: ['cli', 'installation', 'update', 'diagnostics', 'recovery'],
+  keywords: ['installation', 'canonical', 'adopt', 'switch', 'package-manager', 'drift'],
+  category: 'maintenance',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<show|adopt|switch> [--root <path>] [--method <npm|web|source>] [--manager <absolute-path>] [--json]',
+    allowedTools: ['Read', 'Write'],
+  } satisfies CommandMetadata,
+};
+
 // Renamed from `refreshCommand` as part of #694 (avoid collision with git sync
 // semantics) and re-linked to `refreshHandler` in #919. Users who type
 // `aiwg sync` still reach this handler via its 'sync' alias and see a
@@ -952,7 +971,7 @@ export const serveCommand: Extension = {
     triggerPhrases: ['serve dashboard', 'start server', 'open dashboard', 'aiwg serve'],
     commandHint: {
       template: 'utility',
-      argumentHint: '[--port <n>] [--bind <host>] [--no-open] [--read-only]',
+      argumentHint: '[--port <n>] [--bind <host>] [--no-open] [--read-only] [--a2a-protocol <0.3|1.0|auto>] [--a2a-protocol-fallback] [--no-a2a-legacy-executor-fallback]',
       allowedTools: ['Bash'],
     },
   } satisfies SkillMetadata,
@@ -1723,6 +1742,25 @@ export const agentcardCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const uhpCommand: Extension = {
+  id: 'uhp',
+  type: 'command',
+  name: 'Unified Harness Protocol',
+  description: 'Inspect discovery and run smoke tasks through an explicit experimental UHP endpoint profile',
+  version: '1.0.0',
+  capabilities: ['cli', 'uhp', 'remote-harness', 'transport'],
+  keywords: ['uhp', 'unified harness protocol', 'remote harness', 'responses'],
+  category: 'toolsmith',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<discover|harnesses|models|run> --profile <name> [--harness <id>] [--model <id>] [--input <text>] [--stream]',
+    allowedTools: ['Read', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
 // Utility Commands
 
 export const prefillCardsCommand: Extension = {
@@ -2460,6 +2498,25 @@ export const mcCommand: Extension = {
       ],
     },
   } satisfies SkillMetadata,
+};
+
+export const missionCommand: Extension = {
+  id: 'mission',
+  type: 'command',
+  name: 'Mission Protocol',
+  description: 'Preview, apply, verify, resume, and roll back versioned Mission workspace migrations',
+  version: '1.0.0',
+  capabilities: ['cli', 'orchestration', 'mission-protocol', 'migration', 'rollback'],
+  keywords: ['mission', 'migrate', 'migration', 'preview', 'resume', 'rollback'],
+  category: 'orchestration',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'orchestration',
+    allowedTools: ['Bash', 'Read', 'Write'],
+    argumentHint: 'migrate [--dry-run|--apply|--verify|--resume|--rollback]',
+  } satisfies CommandMetadata,
 };
 
 // Steward Commands
@@ -3768,6 +3825,7 @@ export const commandDefinitions: Extension[] = [
   doctorCommand,
   contextFirewallCommand,
   updateCommand,
+  installationCommand,
   refreshCommand,
   regenerateCommand,
   workspaceContextCommand,
@@ -3817,6 +3875,7 @@ export const commandDefinitions: Extension[] = [
   // Toolsmith (1)
   runtimeInfoCommand,
   agentcardCommand,
+  uhpCommand,
 
   // Utility (5)
   prefillCardsCommand,
@@ -3854,6 +3913,7 @@ export const commandDefinitions: Extension[] = [
 
   // Mission Control (1)
   mcCommand,
+  missionCommand,
 
   // Steward (1)
   stewardCommand,

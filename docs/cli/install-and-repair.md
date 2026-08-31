@@ -43,13 +43,75 @@ points:
 aiwg status
 aiwg doctor
 aiwg refresh
+aiwg installation show
 ```
 
 - `status` reports what AIWG can see without changing the installation.
 - `doctor` diagnoses installation and provider wiring problems.
 - `refresh` updates and redeploys managed AIWG context. Review its plan before
   approving changes when prompted.
+- `installation show` reports the provider-neutral canonical installation,
+  the package-manager executable used for updates, the currently executing
+  installation, and any drift between them.
+
+## Canonical installation and recovery
+
+AIWG records the first resolved global installation in `installation.json`
+under the global user-config directory. The directory follows the standard
+resolution contract: `AIWG_CONFIG`, an existing `~/.aiwg`, an existing
+`~/.config/aiwg`, then `~/.aiwg`. Provider directories and project `.aiwg/`
+directories never own this record.
+
+Updates use the recorded method and executable. For example, an AIWG installed
+by npm under nvm continues using that npm even if Homebrew later appears first
+on `PATH`. AIWG stops with a diagnostic if another package root handles the
+command; it does not silently change ownership.
+
+After intentionally reinstalling or changing Node managers, adopt the
+installation that currently handles the command:
+
+```bash
+aiwg installation show
+aiwg installation adopt --manager /absolute/path/to/npm
+```
+
+To select a different known installation explicitly:
+
+```bash
+aiwg installation switch \
+  --root /absolute/path/to/aiwg \
+  --method npm \
+  --manager /absolute/path/to/npm
+```
+
+Use `--method web` for the signed lightweight web CLI and `--method source
+--run-mode development` for a source checkout. `show`, `adopt`, and `switch`
+remain available when drift blocks ordinary commands. Existing `channel.json`
+state is migrated on first use, including channel, development path, and
+update-check timestamps.
 
 Exact flags, machine-readable output, and automation contracts belong in the
 [agent and automation CLI reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md), not in ordinary user
 journeys.
+
+## Update notifications
+
+Eligible interactive CLI invocations check a local cache at startup and may
+write an update notice to stderr before command output. The notice identifies
+the installed and available versions, routes every installation type through
+`aiwg update`, and asks you to rerun the prior command without echoing its
+arguments. The foreground command never contacts the registry: a detached,
+timeout-bounded child refreshes the cache for a later invocation.
+
+Notices and background refreshes are suppressed for non-TTY use, `CI`,
+`GITHUB_ACTIONS`, `GITLAB_CI`, `NO_UPDATE_NOTIFIER`,
+`AIWG_NO_UPDATE_CHECK`, and installations with `checkOnStartup: false`.
+Successful notices and refresh attempts are rate-limited by the installation's
+`updateCheckInterval` (24 hours by default). Fast help/version and channel
+commands participate in the same bootstrap behavior; notifier failures remain
+best-effort and never change the requested command's exit status.
+
+The bootstrap depends on the packaged notifier module. If `dist/` itself is
+missing or incomplete, the CLI emits the existing build/reinstall diagnostic
+first because no notifier implementation is available to load; this recovery
+exception never performs a network request.
