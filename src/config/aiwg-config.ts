@@ -36,6 +36,9 @@ import {
   type SecurityConfig,
 } from '../security/threat-assessment-config.js';
 import { defaultArtifactOutputs, validateArtifactOutputs, type ArtifactOutputsConfig } from '../artifacts/output-policy.js';
+import { validateUhpConfig } from '../uhp/config.js';
+import type { UhpConfig } from '../uhp/types.js';
+export type { UhpConfig, UhpEndpointProfile } from '../uhp/types.js';
 export type { ArtifactOutputsConfig } from '../artifacts/output-policy.js';
 
 export type {
@@ -384,6 +387,9 @@ export interface AiwgConfig {
 
   /** Canonical artifact storage and optional provider-native presentation/export policy. */
   artifact_outputs?: ArtifactOutputsConfig;
+
+  /** Experimental remote Unified Harness Protocol client profiles. */
+  uhp?: UhpConfig;
 
   /**
    * General multi-repository workspace metadata. Root manifests pair this
@@ -805,6 +811,8 @@ export function resolveParallelism(
  * src/artifacts/types.ts).
  */
 export interface IndexConfig {
+  /** Default graph backend. Individual graph definitions take precedence. */
+  graphBackend?: 'json' | 'graphology' | 'sqlite';
   graphs?: Record<string, IndexGraphDef | IndexMarkdownIndices>;
   graphOverrides?: {
     codebase?: IndexBuiltinGraphOverride;
@@ -887,6 +895,9 @@ export function validateIndexConfig(index: unknown): string[] {
   }
 
   const indexObject = index as Record<string, unknown>;
+  if (indexObject.graphBackend !== undefined && !GRAPH_BACKENDS.includes(indexObject.graphBackend as string)) {
+    errors.push(`index.graphBackend: must be one of ${GRAPH_BACKENDS.join(' | ')}`);
+  }
   const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
   const graphOverrides = indexObject.graphOverrides;
@@ -1532,6 +1543,9 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   const artifactOutputErrors = validateArtifactOutputs(parsed.artifact_outputs);
   if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
 
+  const uhpErrors = validateUhpConfig(parsed.uhp);
+  if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
+
   return parsed;
 }
 
@@ -1547,6 +1561,8 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   }
   const artifactOutputErrors = validateArtifactOutputs(config.artifact_outputs);
   if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
+  const uhpErrors = validateUhpConfig(config.uhp);
+  if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
   const localPath = getConfigPath(projectDir);
   const artifactDir = resolveProjectAiwgDir(projectDir);
   const artifactPath = join(artifactDir, CONFIG_FILENAME);

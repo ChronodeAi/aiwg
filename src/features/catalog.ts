@@ -61,6 +61,17 @@ export const FEATURE_CATALOG: FeatureDefinition[] = [
     cost: '~5 MB — native compile via node-gyp',
   },
   {
+    name: 'postgres',
+    description: 'Advanced direct PostgreSQL canonical-storage backend',
+    packages: ['pg'],
+    packageSpecs: { pg: '8.23.0' },
+    enables: [
+      'aiwg.storage-backend/v1 direct PostgreSQL persistence',
+      'transactional migration batches, snapshots, cursors, and tombstones',
+    ],
+    cost: '~1 MB — pure JavaScript PostgreSQL client',
+  },
+  {
     name: 'pty',
     description: 'PTY bridge for daemon — pass-through interactive TUIs (Claude Code, Codex, etc.)',
     packages: ['node-pty'],
@@ -90,7 +101,7 @@ export const FEATURE_CATALOG: FeatureDefinition[] = [
   },
   {
     name: 'graph',
-    description: 'Graphology backend for rich artifact traversal and graph operators',
+    description: 'Graphology backend for artifact-index traversal only; not Flow graph execution',
     packages: ['graphology', 'graphology-operators', 'graphology-traversal'],
     packageSpecs: {
       graphology: '0.26.0',
@@ -100,6 +111,7 @@ export const FEATURE_CATALOG: FeatureDefinition[] = [
     enables: [
       'index.graphBackend: graphology',
       'in-memory attributed graph traversal and operator workflows',
+      'artifact graph data operations (use graph-pattern addon for Flow execution graphs)',
     ],
     cost: '~2 MB — pure JS, no native deps',
   },

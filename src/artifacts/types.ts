@@ -80,6 +80,9 @@ export interface MetadataEntry {
   /** Outbound @-mention references (paths this artifact depends on) */
   dependencies: string[];
 
+  /** Raw relative Markdown link targets parsed from this artifact. */
+  markdownLinks?: string[];
+
   /** Computed: paths that reference this artifact */
   dependents: string[];
 
@@ -337,6 +340,8 @@ export interface IndexStats {
     incomingDeclarations?: number;
     /** Stored upstream plus downstream adjacency entries. */
     adjacencyEntries?: number;
+    /** Edges derived from relative Markdown links that resolve to indexed nodes. */
+    markdownLinkEdges?: number;
     /** Canonical outgoing citations without a matching incoming declaration. */
     unmirroredOutgoing?: number;
     /** Incoming declarations without a matching canonical outgoing citation. */
@@ -420,7 +425,7 @@ export const INDEX_VERSION = '1.0.0';
  * making the serialized index schema incompatible; a mismatch simply forces a
  * one-time content re-extraction during the next incremental build.
  */
-export const INDEX_EXTRACTOR_VERSION = '2026.07.21.2';
+export const INDEX_EXTRACTOR_VERSION = '2026.08.24.1';
 
 /**
  * Built-in graph type identifiers
@@ -671,6 +676,13 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
  * @implements #426
  */
 export const GRAPH_CONFIGS: Record<string, GraphConfig> = { ...BUILTIN_GRAPH_CONFIGS };
+
+let projectGraphBackend: GraphConfig['graphBackend'];
+
+/** Resolve backend precedence: graph override, project default, then JSON. */
+export function resolveGraphBackendType(graph?: GraphType): NonNullable<GraphConfig['graphBackend']> {
+  return (graph ? GRAPH_CONFIGS[graph]?.graphBackend : undefined) ?? projectGraphBackend ?? 'json';
+}
 
 interface BuiltinGraphOverride {
   scanDirs?: string[];
@@ -951,6 +963,7 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
   // Reset on every project load so a prior cwd cannot leak its override or
   // detected Python package roots into a later build in the same process.
   GRAPH_CONFIGS.codebase = detectPythonCodebaseConfig(cwd, freshBuiltinGraphConfig('codebase'));
+  projectGraphBackend = undefined;
 
   // Load module-declared graphs first (frameworks/addons)
   const moduleLoaded = loadModuleGraphConfigs(cwd, diagnostics);
@@ -963,6 +976,7 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
   let graphs: Record<string, unknown> | undefined;
   let graphOverrides: Record<string, unknown> | undefined;
   let fromDeprecatedYaml = false;
+  let canonicalIndexPresent = false;
 
   // (a) Canonical: .aiwg/aiwg.config (JSON).
   try {
@@ -970,6 +984,8 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
     if (fs.existsSync(aiwgConfigPath)) {
       const parsed = JSON.parse(fs.readFileSync(aiwgConfigPath, 'utf-8')) as Record<string, unknown>;
       const idx = parsed.index as Record<string, unknown> | undefined;
+      canonicalIndexPresent = idx !== undefined;
+      if (idx?.graphBackend === 'json' || idx?.graphBackend === 'graphology' || idx?.graphBackend === 'sqlite') projectGraphBackend = idx.graphBackend;
       const g = idx?.graphs as Record<string, unknown> | undefined;
       if (g && typeof g === 'object') graphs = g;
       const overrides = idx?.graphOverrides as Record<string, unknown> | undefined;
@@ -986,12 +1002,13 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
   }
 
   // (b) Fallback: legacy .aiwg/config.yaml.
-  if (!graphs && !graphOverrides) {
+  if (!canonicalIndexPresent && !graphs && !graphOverrides) {
     try {
       const configPath = projectAiwgPath(cwd, 'config.yaml');
       if (fs.existsSync(configPath)) {
         const config = loadYaml(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown> | null;
         const idx = config?.index as Record<string, unknown> | undefined;
+        if (idx?.graphBackend === 'json' || idx?.graphBackend === 'graphology' || idx?.graphBackend === 'sqlite') projectGraphBackend = idx.graphBackend;
         const g = idx?.graphs as Record<string, unknown> | undefined;
         if (g && typeof g === 'object') {
           graphs = g;

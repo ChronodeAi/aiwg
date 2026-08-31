@@ -106,6 +106,8 @@
     "configuration/model-configuration",
     "hook-patterns",
     "mcp/README",
+    "uhp-client",
+    "security/uhp-client-threat-model",
     "plugin-marketplace-guide",
     "daemon-guide",
     "soul-md-guide",
@@ -293,6 +295,7 @@
     "cockpit/development",
     "cockpit/releases",
     "serve-guide",
+    "a2a-protocol-compatibility",
     "concierge-guide",
     "customization",
     "customization/README",
@@ -306,7 +309,9 @@
     "storage",
     "storage/README",
     "storage/overview",
+    "storage/backend-contract",
     "storage/migration",
+    "storage/migration-protocol",
     "storage/security",
     "providers",
     "providers/capability-matrix",
@@ -991,6 +996,20 @@
       "title": "MCP Server",
       "summary": "Model Context Protocol integration",
       "file": "mcp/README.md",
+      "parent": "reference"
+    },
+    {
+      "id": "uhp-client",
+      "title": "Experimental UHP Client",
+      "summary": "Configure, operate, recover, and safely qualify remote UHP harness execution",
+      "file": "uhp-client.md",
+      "parent": "reference"
+    },
+    {
+      "id": "security/uhp-client-threat-model",
+      "title": "UHP Client Threat Model",
+      "summary": "Trust boundaries, controls, residual risks, and operator review for UHP client transport",
+      "file": "security/uhp-client-threat-model.md",
       "parent": "reference"
     },
     {
@@ -2304,6 +2323,13 @@
       "file": "serve-guide.md"
     },
     {
+      "id": "a2a-protocol-compatibility",
+      "title": "A2A Protocol Compatibility",
+      "summary": "Negotiate A2A 0.3 compatibility and 1.0 HTTP+JSON",
+      "file": "a2a-protocol-compatibility.md",
+      "parent": "serve-guide"
+    },
+    {
       "id": "concierge-guide",
       "title": "Concierge Guide",
       "summary": "Concierge agent interface",
@@ -2394,6 +2420,20 @@
       "title": "Storage Migration",
       "summary": "Migrate between storage backends",
       "file": "storage/migration.md",
+      "parent": "storage"
+    },
+    {
+      "id": "storage/backend-contract",
+      "title": "Scalable Backend Contract",
+      "summary": "Versioned capabilities, consistency, and scaling semantics",
+      "file": "storage/backend-contract.md",
+      "parent": "storage"
+    },
+    {
+      "id": "storage/migration-protocol",
+      "title": "Scalable Migration Protocol",
+      "summary": "Checksum-backed offline and online migration safety contract",
+      "file": "storage/migration-protocol.md",
       "parent": "storage"
     },
     {

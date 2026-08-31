@@ -49,6 +49,94 @@ export { ObsidianAdapter } from './backends/obsidian.js';
 export { LogseqAdapter } from './backends/logseq.js';
 export { FortemiAdapter } from './backends/fortemi.js';
 export type { McpClientLike, McpClientFactory, FortemiAdapterOptions } from './backends/fortemi.js';
+export {
+  STORAGE_BACKEND_CONTRACT,
+  STORAGE_BACKEND_MATRIX,
+  StorageCapabilityError,
+  negotiateStorageCapabilities,
+  type StorageBackendContractVersion,
+  type StorageBackendKind,
+  type StorageCapability,
+  type StorageBackendDescriptor,
+  type CapabilityRequest,
+  type CapabilityReceipt,
+  type LogicalRecordIdentity,
+  type VersionedRecord,
+  type AtomicMutation,
+  type BatchReceipt,
+  type SnapshotHandle,
+  type ChangePage,
+} from './backend-contract.js';
+export {
+  STORAGE_MIGRATION_PROTOCOL,
+  MigrationProtocolError,
+  StorageMigrationCoordinator,
+  approvalDigest,
+  digestRecordChunks,
+  digestRecords,
+  validateManifest,
+  type MigrationMode,
+  type MigrationState,
+  type MigrationEndpointIdentity,
+  type MigrationRecordReceipt,
+  type MigrationBoundaryState,
+  type MigrationBoundaryReceipt,
+  type MigrationRoutingReceipt,
+  type MigrationManifest,
+  type MigrationSnapshot,
+  type MigrationChangePage,
+  type MigrationEndpoint,
+  type MigrationManifestStore,
+  type MigrationSafetyControl,
+  type MigrationRoutingControl,
+  type MigrationSemanticDimension,
+  type MigrationSemanticCheck,
+  type MigrationSemanticVerification,
+  type MigrationVerifierContext,
+  type MigrationSemanticVerifier,
+  type MigrationRunOptions,
+  type MigrationVerification,
+} from './migration-protocol.js';
+export {
+  PostgresStorageBackend,
+  PostgresBackendError,
+  type PostgresBackendOptions,
+  type PostgresClientLike,
+  type PostgresPoolLike,
+  type PostgresPage,
+  type PostgresHealth,
+  type PostgresSnapshotLease,
+} from './backends/postgres.js';
+export {
+  POSTGRES_SCHEMA_VERSION,
+  POSTGRES_SCHEMA_V1_SQL,
+  inspectPostgresSchema,
+  upgradePostgresSchemaV1,
+  rollbackPostgresSchemaV1,
+  postgresLeastPrivilegeSql,
+  type PostgresSchemaInspection,
+  type PostgresSchemaRollbackApproval,
+} from './backends/postgres-schema.js';
+export {
+  PostgrestStorageBackend,
+  PostgrestBackendError,
+  type PostgrestBackendOptions,
+  type PostgrestHealth,
+  type PostgrestBootstrapRow,
+} from './backends/postgrest.js';
+export { POSTGREST_SCHEMA_V1_SQL, installPostgrestSchemaV1, postgrestLeastPrivilegeSql } from './backends/postgrest-schema.js';
+export {
+  STORAGE_QUALIFICATION_REPORT,
+  StorageQualificationError,
+  qualifyStorageBackend,
+  verifyExactRecords,
+  assertCurrentStorageEvidence,
+  type StorageQualificationScope,
+  type StorageResourceObservation,
+  type StorageQualificationReport,
+  type QualifiableStorageEndpoint,
+  type QualificationOptions,
+} from './qualification.js';
 
 interface RegistryState {
   projectRoot: string;

@@ -13,7 +13,18 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
 import { createExecutor } from '../../apps/cockpit/mock-executor/src/server.mjs';
-import { activityRequest, createBridge, createUserIndexGraph, normalizeManagedDockerPosture, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, ensureExecutor, fetchJsonFirst, isDirectExecution, validateActivityEnvelope } from '../../apps/cockpit/bridge/src/server.mjs';
+import { activityRequest, createBridge, createUserIndexGraph, missionSummary, normalizeManagedDockerPosture, resolveBridgePort, DEFAULT_BRIDGE_PORT, EXECUTOR_RESERVED_PORTS, ensureExecutor, fetchJsonFirst, isDirectExecution, validateActivityEnvelope } from '../../apps/cockpit/bridge/src/server.mjs';
+
+it('normalizes canonical UHP Mission evidence without losing transport-native fields', () => {
+  const projected = missionSummary({
+    apiVersion: 'mission.aiwg.io/v1', kind: 'Mission',
+    metadata: { id: 'resp_fixture' }, spec: { objective: 'Remote task', completionCriterion: 'done' },
+    status: { state: 'incomplete', terminal: true, nativeState: 'incomplete', artifacts: [{ id: 'file_fixture', kind: 'uhp-file' }] },
+    provenance: { sourceContract: 'uhp-2026-08-11', sourceVersion: '2026-08-11', transport: 'uhp' },
+    extensions: { 'aiwg.source.uhp-2026-08-11': { endpointProfile: 'research', responseId: 'resp_fixture', sessionId: 'hsessfixture' } },
+  });
+  expect(projected).toMatchObject({ id: 'resp_fixture', status: 'incomplete', terminal: true, transport: 'uhp', protocol_version: '2026-08-11', endpoint_profile: 'research', response_id: 'resp_fixture', remote_session_id: 'hsessfixture', artifacts: [{ id: 'file_fixture' }] });
+});
 
 let mock, bridge, base, token;
 const testMcSessionId = `mc-cockpit-test-${Date.now()}`;
@@ -47,6 +58,8 @@ beforeAll(async () => {
       maxIterations: 5,
       priority: 'high',
       ralphLoopId: 'ralph-loop-1',
+      graph: { schemaVersion: 'graph.flow.aiwg.io/v1', graphId: 'examples/cockpit', graphVersion: '1.0.0', runId: 'run-cockpit-1', checkpointId: 'cp-1' },
+      graphNodes: [{ nodeId: 'screen', nodeRunId: 'run-cockpit-1:screen', state: 'retrying', runtimeBinding: 'a2a-sandbox', routeReason: 'transient failure', evidenceSummary: 'redacted sandbox receipt', retryCount: 1, costUsd: 0.02, tokens: 20 }],
     }],
   }, null, 2));
   await writeFile(join(testMcSessionDir, 'log.jsonl'), [
@@ -502,6 +515,8 @@ describe('cockpit Bridge — control surface', () => {
       status: 'running',
       ralph_loop_id: 'ralph-loop-1',
       source: 'aiwg-mc',
+      graph: { graph_id: 'examples/cockpit', run_id: 'run-cockpit-1', checkpoint_id: 'cp-1' },
+      graph_nodes: [expect.objectContaining({ node_id: 'screen', state: 'retrying', runtime_binding: 'a2a-sandbox', evidence_summary: 'redacted sandbox receipt' })],
     });
     expect(missions.sessions.some((s) => s.id === 'executor-live')).toBe(true);
     const fleetSession = missions.sessions.find((s) => s.parent_mission_id === 'mission-fleet-demo');
@@ -525,6 +540,52 @@ describe('cockpit Bridge — control surface', () => {
       expect.objectContaining({ type: 'inventory.instance' }),
       expect.objectContaining({ type: 'session.lifecycle', subject: 'demo-shell', state: 'available' }),
     ]));
+  });
+});
+
+describe('cockpit Bridge — A2A 1.0 normalized projections', () => {
+  let v1Mock, v1Bridge, v1Base, v1Token;
+  beforeAll(async () => {
+    v1Mock = createExecutor({ protocolMode: 'dual' });
+    await new Promise((resolve) => v1Mock.listen(0, '127.0.0.1', resolve));
+    v1Bridge = createBridge({
+      executorUrl: `http://127.0.0.1:${v1Mock.address().port}`,
+      allowMockExecutor: true,
+      a2aProtocolPolicy: '1.0',
+    });
+    await new Promise((resolve) => v1Bridge.listen(0, '127.0.0.1', resolve));
+    v1Base = `http://127.0.0.1:${v1Bridge.address().port}`;
+    v1Token = v1Bridge.cockpitToken;
+  });
+  afterAll(() => { v1Bridge?.close(); v1Mock?.close(); });
+  const v1Fetch = (path, options = {}) => fetch(v1Base + path, {
+    ...options,
+    headers: { ...(options.headers || {}), authorization: `Bearer ${v1Token}` },
+  });
+
+  it('normalizes 1.0 task enums for inventory, running, cancel, and HITL views', async () => {
+    const inventory = await (await v1Fetch('/api/inventory')).json();
+    expect(inventory.instances[0].a2a_protocol.selected_version).toBe('1.0');
+
+    const running = await (await v1Fetch('/api/running')).json();
+    expect(running.running[0]).toMatchObject({ state: 'working', task_id: expect.any(String) });
+    const victim = running.running[0];
+    const canceledResponse = await v1Fetch(
+      `/api/tasks/${encodeURIComponent(victim.instance_id)}/${encodeURIComponent(victim.task_id)}/cancel`,
+      { method: 'POST' }
+    );
+    const canceled = await canceledResponse.json();
+    expect(canceledResponse.status, JSON.stringify(canceled)).toBe(200);
+    expect(canceled).toHaveProperty('status');
+    expect(canceled.status.state).toBe('canceled');
+
+    const approvals = await (await v1Fetch('/api/approvals?status=pending')).json();
+    expect(approvals.approvals[0]).toMatchObject({ status: 'pending', task_id: expect.any(String) });
+    const approved = await (await v1Fetch(
+      `/api/approvals/${encodeURIComponent(approvals.approvals[0].id)}?decision=approve`,
+      { method: 'POST' }
+    )).json();
+    expect(approved.status.state).toBe('completed');
   });
 });
 
@@ -1077,7 +1138,7 @@ describe('cockpit mock — admin-surface contract guard (#1636)', () => {
   it('serves the real A2A agent surface the Bridge derives from (v2-aligned)', async () => {
     const inst = '550e8400-e29b-41d4-a716-446655440000';
     expect((await g(`/agents/${inst}/sessions`)).status).toBe(200);
-    expect((await g(`/agents/${inst}/tasks`)).status).toBe(200);
+    expect((await g(`/agents/${inst}/v1/tasks`)).status).toBe(200);
     expect((await g(`/agents/${inst}/.well-known/agent-card.json`)).status).toBe(200);
   });
 });
