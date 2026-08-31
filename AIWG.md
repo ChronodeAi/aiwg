@@ -42,7 +42,7 @@ This project caps parallel agent fan-out (#1359):
 - **max_parallel_ralph_loops**: 2 (provider default for claude)
 - **max_parallel_mc_missions**: 4 (provider default for claude)
 
-*Rationale*: Provider default for claude (migrated by aiwg refresh)
+*Rationale*: Provider default for claude — adjust via 'aiwg config set --project parallelism.max_parallel_subagents N'
 
 ### Model-selected delegation rubric
 
@@ -67,9 +67,9 @@ This section is synthesized after template emission from the current workspace s
 
 ### Workspace Snapshot
 
-- Configured providers: claude, codex
-- Installed frameworks/addons: all, testing-quality, composition-engine
-- Recorded deployments: claude, codex
+- Configured providers: claude, dsh
+- Installed frameworks/addons: sdlc, all
+- Recorded deployments: claude, copilot, dsh
 - Normalized project context: `.aiwg/AIWG.md`
 
 ### Discover-First Protocol
@@ -85,10 +85,10 @@ When a user asks whether AIWG is active or engaged in this project, run or read 
 ### Tracker Authority Protocol
 
 - Source of truth: [.aiwg/aiwg.config](./.aiwg/aiwg.config)
-- Internal/canonical tracker: `origin` (gitea; git@git.integrolabs.net:roctinam/aiwg.git)
-- Customer issue tracker: `github` (github; https://github.com/jmagly/aiwg.git)
+- Internal/canonical tracker: `origin` (github; https://github.com/ChronodeAi/aiwg.git)
+- Customer issue tracker: not configured
 - Primary repo remote: `origin`; CI remote: `origin`
-- Secondary/mirror remotes: github (public-mirror)
+- Secondary/mirror remotes: none configured
 - Issue storage mode: not configured
 
 Tracker access order for issue, PR, release, and CI-sensitive tracker operations:
