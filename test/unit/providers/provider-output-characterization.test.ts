@@ -193,7 +193,11 @@ const REGENERATE_FILE_GOLDENS: Record<string, string[]> = {
   copilot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.github/copilot-instructions.md'],
   cursor: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   factory: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
-  hermes: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.hermes.md'],
+  // Hermes 0.21 alignment: NO .hermes.md twin — it sat at the top of Hermes's
+  // first-match context chain and suppressed AGENTS.md on every turn. The
+  // regenerate path now emits AGENTS.md with the CRITICAL rules inline and
+  // removes previously emitted AIWG twins (see context-pipeline-hermes.test.ts).
+  hermes: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   opencode: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   warp: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', 'WARP.md'],
   windsurf: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],

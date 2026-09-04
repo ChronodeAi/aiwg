@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { promises as fs } from 'node:fs';
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import {
@@ -187,30 +188,28 @@ describe('buildAgentsMd thin-pointer body (#1239)', () => {
 });
 
 describe('twin-file emission per ADR-1 §4', () => {
-  it('writes .hermes.md alongside AGENTS.md, with Hermes-specific MCP suffix (#1242)', async () => {
+  it('emits NO .hermes.md twin for hermes (0.21 alignment) — AGENTS.md carries the payload', async () => {
     const result = await generate({
       provider: 'hermes',
       projectPath: tmpDir,
       sections: [{ type: 'agents', entries: [makeEntry('foo')] }],
     });
-    expect(result.twinPaths).toContain(path.join(tmpDir, '.hermes.md'));
-    const hermes = await fs.readFile(path.join(tmpDir, '.hermes.md'), 'utf8');
+    // A .hermes.md twin sits at the TOP of Hermes's first-match context chain
+    // (.hermes.md > AGENTS.md > CLAUDE.md) and suppresses AGENTS.md on every
+    // turn — see hermes-contract.ts. Hermes gets its payload inline in
+    // AGENTS.md instead; other providers keep their twins.
+    expect(result.twinPaths).not.toContain(path.join(tmpDir, '.hermes.md'));
+    expect(existsSync(path.join(tmpDir, '.hermes.md'))).toBe(false);
+
     const agents = await fs.readFile(path.join(tmpDir, 'AGENTS.md'), 'utf8');
-
-    // The twin diverges from AGENTS.md by appending the Hermes-MCP suffix.
-    // AGENTS.md must remain the cross-platform thin pointer (no Hermes-isms).
-    expect(hermes).not.toBe(agents);
+    expect(agents).toContain('## CRITICAL Rules (always apply)');
+    expect(agents).toContain('### Rule: no-attribution');
+    expect(agents).toContain('## Hermes Subagents (0.21+)');
+    expect(agents).toContain('embed the workspace');
+    expect(agents).not.toContain('automatically exclude context files');
     expect(agents).not.toContain('## For Hermes Sessions');
-
-    // Hermes twin must start with the AGENTS.md body and append the suffix.
-    expect(hermes.startsWith(agents)).toBe(true);
-    expect(hermes).toContain('## For Hermes Sessions');
-    expect(hermes).toContain('artifact-read AIWG.md');
-    expect(hermes).toContain('aiwg discover');
-    expect(hermes).toContain('delegate_task');
-
-    // Finalized context is still compact enough for provider startup context.
-    expect(Buffer.byteLength(hermes, 'utf8')).toBeLessThan(8 * 1024);
+    expect(agents).toContain('aiwg discover');
+    expect(agents.indexOf('WORKSPACE.md')).toBeLessThan(agents.indexOf('AIWG.md'));
   });
 
   it('writes WARP.md alongside AGENTS.md for warp provider', async () => {
@@ -252,7 +251,7 @@ describe('twin-file emission per ADR-1 §4', () => {
     expect(result.twinPaths).toEqual([]);
   });
 
-  it('additively installs the canonical prose hook into an operator-owned twin, never full-overwriting (#1597/#1579)', async () => {
+  it('preserves an operator-authored .hermes.md untouched, warning that it outranks AGENTS.md (#1597 0.21-alignment)', async () => {
     // Pre-existing operator-claimed .hermes.md (no AIWG signature).
     await fs.writeFile(path.join(tmpDir, '.hermes.md'), '# Operator content\n', 'utf8');
     const result = await generate({
@@ -261,14 +260,17 @@ describe('twin-file emission per ADR-1 §4', () => {
       sections: [{ type: 'agents', entries: [makeEntry('foo')] }],
       detectExistingFiles: true,
     });
-    // The guard still refuses a full overwrite — but it no longer skips: it installs
-    // the hook additively, so the twin is processed and listed.
-    expect(result.twinPaths).toContain(path.join(tmpDir, '.hermes.md'));
+    // 0.21 alignment: no twin is emitted and no hook is installed into an
+    // operator .hermes.md — installing a hook would keep AIWG content at the
+    // top of Hermes's first-match chain. The file is preserved byte-for-byte
+    // and a warning explains the precedence consequence.
+    expect(result.twinPaths).not.toContain(path.join(tmpDir, '.hermes.md'));
     const hermes = await fs.readFile(path.join(tmpDir, '.hermes.md'), 'utf8');
-    expect(hermes).toContain('# Operator content'); // preserved
-    expect(hermes.indexOf('WORKSPACE.md')).toBeLessThan(hermes.indexOf('AIWG.md'));
-    expect(hermes).toContain('<!-- AIWG:context-hook:start -->');
-    expect(result.warnings.some((w) => w.includes('.hermes.md') && w.includes('additively'))).toBe(true);
+    expect(hermes).toBe('# Operator content\n'); // preserved byte-for-byte
+    expect(hermes).not.toContain('<!-- AIWG:context-hook:start -->');
+    expect(
+      result.warnings.some((w) => w.includes('.hermes.md') && w.includes('operator-authored')),
+    ).toBe(true);
   });
 });
 
