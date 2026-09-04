@@ -327,8 +327,12 @@ Handle in Hermes directly: one-off questions, short tasks, conversation.
 When AIWG returns an artifact: store path + one-sentence summary in MEMORY.md.
 Do NOT copy artifact body text into memory. Reference, don't replicate.
 
-Use \`delegate_task(goal="...", context="...")\` for AIWG workflows.
-Child agents automatically exclude context files and memory.
+Use \`delegate_task(goal="...", context="...", output_schema={...})\` for AIWG workflows.
+Hermes 0.21+ subagents embed the workspace's project context files (this
+AGENTS.md) as binding conventions automatically — do not re-inline rules.
+They still cannot call clarify/memory/cronjob/send_message: inline the AIWG
+persona body and task specifics in \`context\`, and validate child returns
+with \`output_schema\`.
 
 ## Artifact Store (.aiwg/)
 
