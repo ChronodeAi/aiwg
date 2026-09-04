@@ -371,37 +371,45 @@ Fetch on demand via \`mcp_aiwg_artifact_read\`:
   return 1;
 }
 
-/**
- * Generate `.hermes.md` thin pointer at the project root (#1319 / S8).
- *
- * Hermes loads `.hermes.md` with priority over `AGENTS.md` (first-match-wins
- * at `agent/prompt_builder.py:1417-1456`). The pointer is short so the
- * actual context payload remains in AGENTS.md which is shared with other
- * tools (Claude Code, Codex, etc.).
- */
-export function generateHermesMd(targetDir, opts) {
-  const { dryRun } = opts;
-  const body = `# Hermes Routing
+// ============================================================================
+// Stale .hermes.md cleanup (Hermes 0.21 alignment)
+// ============================================================================
 
-AIWG project context lives in \`AGENTS.md\` (this file is a thin Hermes pointer).
+// Pre-0.21-alignment deploys wrote a ~1.2K thin pointer that SUPPRESSED the
+// full AGENTS.md on every Hermes turn (first-match-wins context loading,
+// agent/prompt_builder.py:2540). New deploys no longer emit it; this removes
+// previously deployed AIWG pointers so AGENTS.md loads again. Signature-checked:
+// a user-authored .hermes.md is NEVER touched.
+const AIWG_HERMES_MD_SIGNATURES = ['# Hermes Routing', 'thin Hermes pointer'];
 
-**Routing**: see \`AGENTS.md\` in this directory.
-**MCP**: AIWG is reachable via \`mcp_aiwg_*\` tools.
-**Skills**: kernel skills at \`$HERMES_HOME/skills/\`; standard skills at \`$HERMES_HOME/skills/.aiwg/\`.
-When unset, \`HERMES_HOME\` defaults to the platform-native Hermes home.
-
-Hermes loads only \`.hermes.md\` when it is present (first-match-wins). Keep
-this file minimal; its routing instruction tells the agent to read \`AGENTS.md\`
-when the full AIWG project context is needed.
-`;
-  const destPath = path.join(targetDir, '.hermes.md');
-  if (dryRun) {
-    console.log(`[dry-run] Would write .hermes.md (${body.length} chars)`);
-  } else {
-    fs.writeFileSync(destPath, body, 'utf8');
-    console.log(`  Created .hermes.md (${body.length} chars)`);
+export function removeStaleAiwgHermesMd(targetDir, opts) {
+  const { dryRun, quiet } = opts;
+  const p = path.join(targetDir, '.hermes.md');
+  let content;
+  try {
+    content = fs.readFileSync(p, 'utf8');
+  } catch {
+    return; // absent — nothing to do
   }
-  return 1;
+  const isAiwgThinPointer =
+    content.length < 2_000 &&
+    AIWG_HERMES_MD_SIGNATURES.every((s) => content.includes(s));
+  if (!isAiwgThinPointer) {
+    if (!quiet) console.log('  .hermes.md present but not AIWG-generated — preserved');
+    return;
+  }
+  if (dryRun) {
+    if (!quiet) console.log(`  [dry-run] Would remove stale AIWG .hermes.md thin pointer: ${p}`);
+    return;
+  }
+  try {
+    fs.rmSync(p);
+    if (!quiet) {
+      console.log(`  Removed stale AIWG .hermes.md thin pointer (${p}) — AGENTS.md now loads on Hermes turns`);
+    }
+  } catch (err) {
+    if (!quiet) console.log(`  Warning: could not remove ${p}: ${err.message}`);
+  }
 }
 
 // ============================================================================
@@ -534,7 +542,7 @@ export async function deploy(opts) {
     const agentCount = (artifacts.agents || []).length;
     const skillCount = (artifacts.skills || []).length;
     generateAgentsMd(agentCount, skillCount, target, opts);
-    generateHermesMd(target, opts);
+    removeStaleAiwgHermesMd(target, opts);
   }
 
   // ── aiwg-orchestrate convenience skill (#1242) ──────────────────────────────
