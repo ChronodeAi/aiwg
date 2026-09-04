@@ -226,14 +226,14 @@ execution, `AIWG_MCP_TOOLSETS=flows` for Flow tools, or
 
 Create an `AGENTS.md` at your project root that tells Hermes when to call AIWG.
 
-> **First-match-wins context loading** (verified against Hermes v0.13.0 `agent/prompt_builder.py:1417-1456`). Hermes loads exactly **one** project-context file per turn, by priority:
+> **First-match-wins context loading** (verified against Hermes v0.13.0 `agent/prompt_builder.py:1417-1456`; re-verified 0.21.0 at `agent/prompt_builder.py:2540`). Hermes loads exactly **one** project-context file per turn, by priority:
 >
 > 1. `.hermes.md` / `HERMES.md` (walks up to git root)
-> 2. `AGENTS.md` / `agents.md` (cwd only, no walk)
+> 2. `AGENTS.md` / `agents.md` (merged directory chain, git root down to cwd; per-directory `AGENTS.override.md` wins over `AGENTS.md`)
 > 3. `CLAUDE.md` / `claude.md` (cwd only, no walk)
 > 4. `.cursorrules` / `.cursor/rules/*.mdc` (cwd only)
 >
-> The code comment is explicit: *"Priority (first found wins — only ONE project context type is loaded)."* Earlier docs that suggested Hermes loads `AGENTS.md` and `CLAUDE.md` together were aspirational. AIWG always emits a `.hermes.md` twin file (#1239 / #1242), so when this integration is installed, `AGENTS.md` and `CLAUDE.md` never load on Hermes turns — they remain valid context files for Claude Code, Codex, etc., but are silent on Hermes.
+> The code comment is explicit: *"Priority (first found wins — only ONE project context type is loaded)."* As of the 0.21 alignment, AIWG does **not** emit a `.hermes.md` pointer. The pointer suppressed the full AGENTS.md on every Hermes turn — so deploys now remove previously emitted AIWG pointers (signature-checked; user-authored `.hermes.md` files are preserved and still take precedence). With no pointer present, Hermes falls through to the full AIWG `AGENTS.md`, which remains a valid context file for Claude Code, Codex, etc.
 
 ```mermaid
 flowchart TB
@@ -251,7 +251,7 @@ flowchart TB
   R -->|Yes| RLOAD[Load .cursorrules<br/>STOP — winner]
   R -->|No| NONE[No project context loaded]
 
-  HLOAD --> CAP[Cap at 20,000 chars<br/>head/tail truncate above]
+  HLOAD --> CAP[Dynamic cap: 20K floor,<br/>scales with context window]
   ALOAD --> CAP
   CLOAD --> CAP
   RLOAD --> CAP
@@ -264,9 +264,9 @@ flowchart TB
 
 ![Polished version (placeholder — generate from #1248 prompts)](../architecture-overview/images/06-hermes-resolver.png)
 
-> **Each context source is capped at 20,000 chars** (`CONTEXT_FILE_MAX_CHARS` in v0.13.0 `agent/prompt_builder.py:824`). Above that, head/tail truncation kicks in with a `[...truncated]` marker. The thin `.hermes.md` AIWG emits (~450 chars) is well under the cap, and the deployed `AGENTS.md` (which inlines top-7 CRITICAL rule priming as `### Rule:` sections) is currently well below the hard cap.
+> **Each context source is capped dynamically** (Hermes 0.21+ `agent/prompt_builder.py:1505-1540`): 20K-char floor, `context_length × 4 chars × 0.06`, 500K ceiling — a 200K-window model gets a 48K budget. Above the budget, head/tail truncation kicks in with a `[...truncated]` marker. AIWG keeps a 38K generation cap on AGENTS.md (valid on ≥160K-window models; smaller windows head-tail truncate instead of erroring).
 
-> **Token budget reminder:** even within the 20K cap, Hermes loads context in full on every turn. Keep routing guidance compact — AIWG's default `.hermes.md` is ~230 tokens.
+> **Token budget reminder:** even within the budget, Hermes loads context in full on every turn. The full AIWG AGENTS.md (~9K chars, ~2.3K tokens) rides in the cached prefix — that is the intended trade since the 0.21 alignment: the CRITICAL rules and routing guide are worth more than the pointer's token savings.
 
 **Create `AGENTS.md` in your project root:**
 

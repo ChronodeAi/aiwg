@@ -179,7 +179,9 @@ export function transformHermesSkillContent(content) {
 }
 
 // ============================================================================
-// Model Mapping (not applicable — Hermes uses local Ollama models)
+// Model Mapping (not applicable — Hermes 0.21 children inherit the parent's
+// provider/model; per-batch overrides via delegation.model/provider in
+// config.yaml, applied by the operator at orchestrate time, not at deploy time).
 // ============================================================================
 
 export function mapModel(shorthand, modelCfg, modelsConfig) {
@@ -603,17 +605,19 @@ export async function deploy(opts) {
 // ============================================================================
 
 /**
- * Hermes v0.12.0+ ships an autonomous Curator (`agent/curator.py`) that
- * grades and archives skills on a 7-day cycle. Skills are excluded from
- * archival if either:
- *   (a) they appear in `~/.hermes/skills/.bundled_manifest` (one name per
- *       line, format `name:tag`), or
- *   (b) their path's first component starts with `.` (verified at
- *       `tools/skill_usage.py:241-243`).
+ * Hermes ships an autonomous Curator (`agent/curator.py`). As of 0.21,
+ * archival eligibility (`tools/skill_usage.py: is_curation_eligible`) keys
+ * on skill ownership, not a dot-prefix path rule: external-dirs,
+ * protected built-ins, and hub-installed skills are never eligible;
+ * bundled skills only with curator.prune_builtins; agent-created
+ * (created_by policy) skills are managed. There is no longer a blanket
+ * dot-prefix exemption for `.aiwg/` standard skills, so manifest
+ * registration below is belt-and-braces for kernel skills and remains
+ * correct: the parser reads `name:<anything>` per line (split on ':').
  *
- * AIWG standard skills under `~/.hermes/skills/.aiwg/...` are protected
- * by (b) automatically. AIWG kernel skills land at the top level
- * (`~/.hermes/skills/<name>/SKILL.md`) and need explicit (a) registration.
+ * AIWG standard skills under `~/.hermes/skills/.aiwg/...` are not
+ * manifest-registered; kernel skills land at the top level
+ * (`~/.hermes/skills/<name>/SKILL.md`) and get explicit registration.
  *
  * This function writes/updates the bundled manifest with the kernel-skill
  * names AIWG owns. Idempotent: existing entries (from Hermes's own bundle
