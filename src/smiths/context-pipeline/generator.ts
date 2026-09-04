@@ -28,6 +28,7 @@ import { writeNormalizedAiwgMd } from './finalization.js';
 import { shouldEmitAgentsMd, shouldEmitAiwgMd, shouldEmitClaudeMdHook } from './provider-policy.js';
 import { ensureClaudeMdHook } from './claude-hook.js';
 import { ensureManagedHook } from './managed-hook.js';
+import { HERMES_CRITICAL_RULES, HERMES_SUBAGENT_NOTE, removeStaleAiwgHermesTwin } from './hermes-contract.js';
 import {
   buildProviderBootstrapBlock,
   ensureWorkspaceContext,
@@ -180,6 +181,17 @@ export async function buildAgentsMd(opts: ContextPipelineOptions): Promise<{
   parts.push('Use `aiwg discover "<intent>"` and `aiwg show <type> <name>` to browse');
   parts.push('skills, agents, rules, and commands across the installation.');
   parts.push('');
+
+  if (opts.provider === 'hermes') {
+    // Hermes 0.21 alignment: AGENTS.md is the ONE file Hermes auto-loads
+    // (first-match: .hermes.md > AGENTS.md > CLAUDE.md). It must carry the
+    // CRITICAL rule directives inline — a thin pointer leaves them behind
+    // mid-session tool reads. See hermes-contract.ts and the sync test.
+    parts.push(HERMES_CRITICAL_RULES);
+    parts.push('');
+    parts.push(HERMES_SUBAGENT_NOTE);
+    parts.push('');
+  }
 
   if (opts.projectContext && opts.projectContext.trim().length > 0) {
     warnings.push('projectContext is no longer inlined in provider startup files; place it in the protected WORKSPACE.md operator section.');
@@ -462,10 +474,21 @@ export async function generate(opts: ContextPipelineOptions): Promise<ContextPip
           : `AGENTS.md is operator-owned; ${hook.action} the WORKSPACE.md → AIWG.md hook additively (existing content preserved). Pass --force to replace the whole file.`,
       );
     }
-    // Per-provider twin emission per ADR-1 §4 (Hermes .hermes.md, Warp WARP.md);
-    // each twin is guarded individually (managed → full write, operator-owned →
-    // additive hook), so this runs whether or not AGENTS.md itself was rewritten.
-    await writeTwinFiles(opts.provider, opts.projectPath, built.content, opts, result);
+    // Per-provider twin emission per ADR-1 §4. EXCEPTION — Hermes (0.21
+    // alignment): no .hermes.md twin is emitted. A twin sits at the TOP of
+    // Hermes's first-match context chain and suppresses AGENTS.md (the file
+    // this generator just filled with the CRITICAL rules) on every turn.
+    // Instead, remove previously emitted AIWG twins / stale thin pointers;
+    // operator-authored .hermes.md files are preserved (with a warning).
+    if (opts.provider === 'hermes') {
+      const twinPath = path.join(opts.projectPath, '.hermes.md');
+      const action = await removeStaleAiwgHermesTwin(opts.projectPath, twinPath);
+      if (action.action !== 'absent') {
+        result.warnings.push(action.warning);
+      }
+    } else {
+      await writeTwinFiles(opts.provider, opts.projectPath, built.content, opts, result);
+    }
   }
 
   if (!opts.skip?.aiwgMd && shouldEmitAiwgMd(opts.provider)) {
