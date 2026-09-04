@@ -43,6 +43,12 @@ export {
 } from './provider-policy.js';
 export { generateAiwgMd } from './aiwg-md.js';
 export {
+  HERMES_CRITICAL_RULES,
+  HERMES_SUBAGENT_NOTE,
+  removeStaleAiwgHermesTwin,
+  type HermesTwinAction,
+} from './hermes-contract.js';
+export {
   CLAUDE_HOOK_START,
   CLAUDE_HOOK_END,
   buildClaudeHookBlock,

@@ -33,8 +33,10 @@ delegate_task(
 )
 ```
 
-Note: Child agents automatically exclude context files (AGENTS.md, SOUL.md) and memory
-(MEMORY.md, USER.md) — this is hardcoded behavior, not configurable per-call.
+Note: Hermes 0.21+ subagents embed the workspace's project context files
+(AGENTS.md chain) as binding conventions automatically — no need to re-inline
+rules in the child briefing. They still cannot call clarify/memory/cronjob/
+send_message, and they do not load MEMORY.md/USER.md — those stay parent-only.
 The delegation model is set globally in `~/.hermes/config.yaml` under `delegation.model`.
 
 4. When the child returns, extract: artifact path + one-sentence summary
@@ -63,11 +65,12 @@ Never store artifact body content in memory. The artifact lives in `.aiwg/` — 
 
 - Do NOT load artifact content into parent context after delegation — defeats the purpose
 - Do NOT skip delegation for "quick" AIWG calls — even small tool results accumulate
-- Context isolation is automatic in delegate_task — child agents never see AGENTS.md or memory files
-- Child hangs are NOT provider rate limits: delegate children use the non-streaming transport
-  with a stale watchdog (default 90s when unconfigured — see chat_completion_helpers.py). If
-  children time out repeatedly, raise the provider stale timeout, e.g.:
-  `hermes config set providers.openrouter.stale_timeout_seconds 300`
+- Context isolation is per-conversation in delegate_task — children embed the workspace's
+  project context files (AGENTS.md chain) as binding conventions, but never see the
+  parent's conversation, memory, or skills-index context
+- Child hangs are not provider rate limits: Hermes 0.21's delegation stall monitor
+  (450s idle / 1200s in-tool, 120s grace) interrupts wedged children — steer once
+  (delegate_task action=steer), then stop and keep the partial result if silent
 - The user's delegation.model must resolve via the configured provider pool; a hung/empty model
   (e.g. thinking-only responses) stalls children regardless of timeout — watch first-call latency
 
