@@ -191,16 +191,21 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 // ============================================================================
 
 /**
- * Generate a lean AGENTS.md for Hermes
+ * Generate AGENTS.md for Hermes
  *
- * Hermes loads AGENTS.md on every turn — keep it under 1,000 characters
- * to preserve context budget on 12GB VRAM setups.
- * See: docs/integrations/hermes-quickstart.md (Part 3)
+ * Hermes 0.21+ truncates context files at a DYNAMIC cap, not a flat 20K:
+ * floor 20K chars, context_length × 4 chars × 0.06, ceiling 500K
+ * (agent/prompt_builder.py:1505-1540 — CONTEXT_FILE_MAX_CHARS floor,
+ * _dynamic_context_file_max_chars). A 200K-window model gets a 48K budget.
+ * Hard cap 38K is safe for ≥160K windows; smaller windows head-tail
+ * truncate rather than error, which is acceptable.
+ * See: docs/agents/providers/hermes.md
  */
-// Hermes context cap is 20K chars (head-tail truncated above). Hard limit
-// to leave headroom for project-specific additions and skill-discovery.
-const HERMES_AGENTS_MD_HARD_CAP = 19_000;
-const HERMES_AGENTS_MD_SOFT_WARN = 15_000;
+// 38K hard cap: fits the 0.21 dynamic budget on 200K-window models (48K)
+// with headroom for project additions. 128K-window models (30.7K budget)
+// head-tail truncate above their budget — current output is ~9K.
+const HERMES_AGENTS_MD_HARD_CAP = 38_000;
+const HERMES_AGENTS_MD_SOFT_WARN = 30_000;
 
 /**
  * Top-7 CRITICAL rule directives, inlined into AGENTS.md for guaranteed
@@ -349,7 +354,7 @@ Fetch on demand via \`mcp_aiwg_artifact_read\`:
   if (output.length > HERMES_AGENTS_MD_HARD_CAP) {
     throw new Error(
       `Hermes AGENTS.md (${output.length} chars) exceeds hard cap of ${HERMES_AGENTS_MD_HARD_CAP}. ` +
-      `Hermes truncates above 20K. Trim the priming block or split rule bodies further.`
+      `Hermes 0.21 dynamic budget floors at 20K; 38K fits >=160K context windows. Trim the priming block or split rule bodies further.`
     );
   }
 
