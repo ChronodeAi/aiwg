@@ -118,3 +118,32 @@ describe('hermes.mjs text sync (single source of truth enforced by test)', () =>
     expect(HERMES_SUBAGENT_NOTE).toBe(fromMjs);
   });
 });
+
+describe('Hermes 0.21 injection-scanner compatibility', () => {
+  // Hermes 0.21 tools/threat_patterns.py html_comment_injection: any HTML
+  // comment containing ignore/override/system/secret/hidden blocks the WHOLE
+  // context file from loading. "AGENTS.override.md" inside a comment trips
+  // it — the pre-alignment marker did exactly that.
+  const SCANNER = /<!--[^>]{0,512}(?:ignore|override|system|secret|hidden)[^>]{0,512}-->/i;
+
+  it('pipeline AGENTS.md (hermes) is scanner-safe', async () => {
+    const dir = makeTmpDir();
+    try {
+      seedProject(dir);
+      const result = await generate({ provider: 'hermes', projectPath: dir, sections: [], detectExistingFiles: true });
+      const agentsMd = readFileSync(result.agentsMdPath, 'utf8');
+      expect(SCANNER.test(agentsMd)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('hermes.mjs direct-deploy header is scanner-safe', () => {
+    const hermesMjs = readFileSync(join(REPO_ROOT, 'tools/agents/providers/hermes.mjs'), 'utf8');
+    const headerMatch = hermesMjs.match(/const header = `([^`]+)`/);
+    expect(headerMatch).not.toBeNull();
+    // Evaluate the raw template slice (it may contain ${...} placeholders but
+    // no comments of its own) — scan what deploy would actually emit.
+    expect(SCANNER.test(headerMatch![1])).toBe(false);
+  });
+});
