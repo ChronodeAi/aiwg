@@ -87,4 +87,20 @@ describe('Hermes deployment', () => {
       rmSync(homeDir, { recursive: true, force: true });
     }
   });
+
+  it('documents 0.21 subagent context-file embedding, not the stale exclusion claim', async () => {
+    const projectDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-hermes-project-'));
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-hermes-home-'));
+    try {
+      execFileSync('git', ['init'], { cwd: projectDir, stdio: 'pipe' });
+      deployHermes(projectDir, homeDir);
+      const agentsMd = await fs.readFile(path.join(projectDir, 'AGENTS.md'), 'utf8');
+      expect(agentsMd).not.toContain('automatically exclude context files');
+      expect(agentsMd).toContain('embed the workspace');
+      expect(agentsMd).toContain('output_schema');
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
 });
