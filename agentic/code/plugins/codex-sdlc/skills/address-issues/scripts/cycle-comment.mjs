@@ -46,7 +46,9 @@ export function renderCycleComment(input) {
   };
   let rendered = readFileSync(TEMPLATE_URL, 'utf8').trim();
   for (const [name, value] of Object.entries(replacements)) {
-    rendered = rendered.replaceAll(`{{${name}}}`, value);
+    // Replace via callback. Cycle evidence quoting shell, regex or TOML can contain
+    // $&, $`, $' or $$, which a replacement string reinterprets instead of inserting.
+    rendered = rendered.replaceAll(`{{${name}}}`, () => value);
   }
   if (/\{\{[^}]+\}\}/.test(rendered)) throw new Error('canonical template contains an unresolved field');
   return rendered;
