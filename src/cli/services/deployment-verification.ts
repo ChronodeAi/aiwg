@@ -536,6 +536,9 @@ export async function verifyProviderDeployment(
   const findings: DeploymentVerificationFinding[] = [];
   const counts = emptyCounts();
   const restartNotice = RESTART_NOTICES[normalized] ?? null;
+  // A provider with no notice gets no restart claim, which is what it got
+  // before this field existed. The label is the absence of a known restart
+  // requirement, not a positive claim that the client refreshes live.
   const reloadPolicy: ProviderReloadPolicy = restartNotice?.policy ?? 'live-refresh';
   const restartRequired = reloadPolicy === 'restart-required';
   // Only a `restart-required` provider gets an imperative restart step. A

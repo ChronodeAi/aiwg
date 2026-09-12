@@ -120,7 +120,11 @@ describe('docs:collect relative link rewriting (#2519)', () => {
     const result = collect(voice, 'quickstart.md', content);
     expect(result.unresolved).toEqual([]);
     expect(result.content).toBe(content);
-    expect(resolvesFromDest(result.dest, 'writing-workflows.md')).toBe(true);
+    // Deliberately not asserting the target exists on disk: whether a collect
+    // has been run is not part of this contract, and the collected output is
+    // not committed. Both files are in the collected set, which is what makes
+    // the link correct at the destination.
+    expect(collectedDests.has(path.join(ROOT, 'docs/addons/voice-framework/writing-workflows.md'))).toBe(true);
   });
 
   it('preserves fragments and rewrites reference definitions', () => {
