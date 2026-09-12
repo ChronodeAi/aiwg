@@ -91,7 +91,8 @@ describe('Ralph Command Handlers', () => {
       expect(ralphHandler.name).toBe('Agent Loop');
       expect(ralphHandler.description.toLowerCase()).toContain('iterative task loop');
       expect(ralphHandler.category).toBe('ralph');
-      expect(ralphHandler.aliases).toEqual(['ralph', '-ralph', '--ralph']);
+      // #705: ralph* names stay accepted as aliases through the agent-loop rename.
+      expect(ralphHandler.aliases).toEqual(expect.arrayContaining(['ralph', '-ralph', '--ralph']));
     });
 
     it('should show help message when --help is passed', async () => {
@@ -332,7 +333,7 @@ describe('Ralph Command Handlers', () => {
       expect(ralphStatusHandler.name).toBe('Ralph Status');
       expect(ralphStatusHandler.description.toLowerCase()).toContain('status');
       expect(ralphStatusHandler.category).toBe('ralph');
-      expect(ralphStatusHandler.aliases).toEqual(['ralph-status']);
+      expect(ralphStatusHandler.aliases).toEqual(expect.arrayContaining(['ralph-status']));
     });
 
     it('should show message when no loops found', async () => {
@@ -432,7 +433,7 @@ describe('Ralph Command Handlers', () => {
       expect(ralphAbortHandler.name).toBe('Ralph Abort');
       expect(ralphAbortHandler.description.toLowerCase()).toContain('abort');
       expect(ralphAbortHandler.category).toBe('ralph');
-      expect(ralphAbortHandler.aliases).toEqual(['ralph-abort']);
+      expect(ralphAbortHandler.aliases).toEqual(expect.arrayContaining(['ralph-abort']));
     });
 
     it('should abort running loop', async () => {
@@ -499,7 +500,7 @@ describe('Ralph Command Handlers', () => {
       expect(ralphResumeHandler.name).toBe('Ralph Resume');
       expect(ralphResumeHandler.description.toLowerCase()).toContain('resume');
       expect(ralphResumeHandler.category).toBe('ralph');
-      expect(ralphResumeHandler.aliases).toEqual(['ralph-resume']);
+      expect(ralphResumeHandler.aliases).toEqual(expect.arrayContaining(['ralph-resume']));
     });
 
     it('should resume aborted loop', async () => {
