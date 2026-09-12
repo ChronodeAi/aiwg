@@ -114,8 +114,14 @@ export default defineConfig({
     maxWorkers: 8,
     minWorkers: 1,
 
-    // Reporter configuration
-    reporters: ['default'],
+    // Reporter configuration.
+    //
+    // On CI, also run the hanging-process reporter. Vitest's own exit guard
+    // prints nothing about *what* is holding the loop, and a run that finishes
+    // its tests but will not exit is one of the candidates for the silent
+    // three-hour CI hang in #2521. The reporter costs nothing on a clean run
+    // and names the open handle on a dirty one.
+    reporters: process.env.CI ? ['default', 'hanging-process'] : ['default'],
     outputFile: {
       json: './test-results/test-results.json'
     }

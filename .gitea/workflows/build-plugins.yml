@@ -152,4 +152,10 @@ jobs:
           AIWG_PERF_BUDGET_VERSION_MS: "300"
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
-        run: npm test -- --run
+        # Bounded below this job's timeout-minutes so a hang fails with
+        # attribution instead of silently holding a runner slot for hours.
+        # Vitest's own exit guard is armed only once the run completes, so a
+        # wedged worker never trips it (#2521). Healthy Validate Build runs
+        # measured 3.0-4.8 min end to end, so 10m is roughly 2x headroom on the
+        # whole job and still fires ahead of the 15m job cap.
+        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm test -- --run
