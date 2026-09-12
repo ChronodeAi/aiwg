@@ -121,6 +121,9 @@ jobs:
     runs-on: ubuntu-latest
     container: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2 (see ci/digests.txt)
     needs: build
+    # Healthy runs finish in 3-5 min. Without a bound, a non-terminating test
+    # handle pins the runner indefinitely (a hang held one for 3h on 2026-09-12).
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
