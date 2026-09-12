@@ -235,3 +235,46 @@ for (const [name, args, output] of [
     assert.match(result.stdout, output);
   });
 }
+
+// #1766: budget stops and the exploration quota live in the analytics subsystem,
+// so --no-analytics voids every declared ceiling. The operator must be told at
+// parse time rather than discovering an uncapped loop afterwards.
+function captureParseWarnings(args) {
+  const warnings = [];
+  const original = console.warn;
+  console.warn = (...parts) => warnings.push(parts.join(' '));
+  try {
+    return { parsed: parseArgs(args), warnings };
+  } finally {
+    console.warn = original;
+  }
+}
+
+for (const [name, args, expected] of [
+  ['a token ceiling', ['task', '--no-analytics', '--max-total-tokens', '1000'], ['total_tokens']],
+  ['a spend ceiling', ['task', '--no-analytics', '--max-total-cost', '5'], ['spend_usd']],
+  ['an exploration quota', ['task', '--no-analytics', '--exploration-quota', '3'], ['exploration_quota']],
+  ['every declared control', ['task', '--no-analytics', '--max-total-tokens', '1000', '--max-total-cost', '5', '--exploration-quota', '2'],
+    ['total_tokens', 'spend_usd', 'exploration_quota']],
+]) {
+  test(`--no-analytics warns that it voids ${name}`, () => {
+    const { warnings } = captureParseWarnings(args);
+    const voided = warnings.filter(line => line.includes('will NOT fire'));
+    assert.equal(voided.length, 1, `expected exactly one voided-control warning, got ${JSON.stringify(warnings)}`);
+    for (const control of expected) {
+      assert.ok(voided[0].includes(control), `warning must name ${control}: ${voided[0]}`);
+    }
+    assert.ok(voided[0].includes('--no-analytics'), 'warning must name the responsible flag');
+  });
+}
+
+for (const [name, args] of [
+  ['--no-analytics without any declared control', ['task', '--no-analytics']],
+  ['declared controls while analytics stays enabled', ['task', '--max-total-tokens', '1000', '--exploration-quota', '3']],
+  ['a zero-valued ceiling that was never in effect', ['task', '--no-analytics', '--budget', '5']],
+]) {
+  test(`no voided-control warning for ${name}`, () => {
+    const { warnings } = captureParseWarnings(args);
+    assert.deepEqual(warnings.filter(line => line.includes('will NOT fire')), []);
+  });
+}
