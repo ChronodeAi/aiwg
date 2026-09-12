@@ -202,6 +202,31 @@ function remapTarget(rawTarget, srcPath, destPath, collectedMap, collectedDests)
 }
 
 /**
+ * Byte ranges covered by fenced code blocks. A match starting inside one is a
+ * markdown sample, not a link the docsite will resolve.
+ */
+export function fencedRanges(text) {
+  const ranges = [];
+  let offset = 0;
+  let start = -1;
+  let marker = '';
+  for (const line of text.split('\n')) {
+    const fence = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (fence) {
+      if (start < 0) { start = offset; marker = fence[1][0]; }
+      else if (fence[1][0] === marker) {
+        ranges.push([start, offset + line.length]);
+        start = -1;
+        marker = '';
+      }
+    }
+    offset += line.length + 1;
+  }
+  if (start >= 0) ranges.push([start, text.length]);
+  return ranges;
+}
+
+/**
  * Rewrite every relative link in a markdown document for its collected location.
  *
  * Fenced code blocks are left untouched — a markdown sample inside a fence is
@@ -214,28 +239,12 @@ function rewriteRelativeLinks(content, srcPath, destPath, collectedMap, collecte
   const unresolved = [];
   const sourceLinks = [];
 
-  // Offsets covered by fenced code blocks. A match starting inside one is a
-  // markdown sample, not a link the docsite will resolve.
-  const fenced = [];
-  let offset = 0;
-  let fenceStart = -1;
-  let fenceMarker = '';
-  for (const line of content.split('\n')) {
-    const fence = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
-    if (fence) {
-      if (fenceStart < 0) { fenceStart = offset; fenceMarker = fence[1][0]; }
-      else if (fence[1][0] === fenceMarker) {
-        fenced.push([fenceStart, offset + line.length]);
-        fenceStart = -1;
-        fenceMarker = '';
-      }
-    }
-    offset += line.length + 1;
-  }
-  if (fenceStart >= 0) fenced.push([fenceStart, content.length]);
-  const inFence = (at) => fenced.some(([start, end]) => at >= start && at < end);
-
   const apply = (text, regex, build) => {
+    // Recomputed per pass: an earlier pass rewrites targets and shifts every
+    // later offset, so ranges measured against the previous text would
+    // misclassify links near a fence.
+    const fenced = fencedRanges(text);
+    const inFence = (at) => fenced.some(([start, end]) => at >= start && at < end);
     regex.lastIndex = 0;
     return text.replace(regex, (...groups) => {
       const match = groups[0];

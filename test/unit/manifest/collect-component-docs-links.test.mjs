@@ -136,6 +136,27 @@ describe('docs:collect relative link rewriting (#2519)', () => {
     expect(result.content).toContain('[b]: ../../voice/writing-briefs.md');
   });
 
+  it('keeps fenced blocks masked after an earlier pass shifts offsets', () => {
+    // The reference-definition pass rewrites targets and changes the document's
+    // length. Fence ranges measured before it would be stale for the inline
+    // pass, misclassifying a link near a fence in either direction.
+    const content = [
+      '[ref]: ../../../../../docs/voice/writing-briefs.md',
+      '',
+      '```markdown',
+      'Sample: [schema](../../../../../docs/voice/channels.md)',
+      '```',
+      '',
+      'Real: [revision](../../../../../docs/voice/revision.md)',
+    ].join('\n');
+    const result = collect(voice, 'writing-workflows.md', content);
+
+    expect(result.content).toContain('[ref]: ../../voice/writing-briefs.md');
+    // Still fenced, despite the ref-def line above it getting shorter.
+    expect(result.content).toContain('Sample: [schema](../../../../../docs/voice/channels.md)');
+    expect(result.content).toContain('Real: [revision](../../voice/revision.md)');
+  });
+
   it('does not touch links inside fenced code blocks', () => {
     const content = [
       'Real: [schema](../../../../../docs/voice/writing-briefs.md)',
