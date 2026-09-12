@@ -852,14 +852,25 @@ export function nextStepsFor(framework: Framework, provider: string = 'claude'):
  * Steward FAQ so operators stop hitting the "fallback to general-purpose"
  * path silently.
  */
-const SESSION_RELOAD_NOTICE: Record<string, { action: string; rationale: string; symptom?: string }> = {
+const SESSION_RELOAD_NOTICE: Record<string, {
+  action: string;
+  rationale: string;
+  symptom?: string;
+  /**
+   * `false` when the client rescans between turns, so a reload is a fallback
+   * rather than a precondition for using what was just deployed (#2309).
+   */
+  required?: boolean;
+}> = {
   claude: {
     action: 'Restart your Claude Code session (close and reopen) to load the newly deployed agents.',
     rationale: 'Claude Code reads .claude/agents/ at session start. A running session retains its old registry until reloaded.',
   },
   codex: {
-    action: 'Restart/open Codex in this target workspace so it picks up newly deployed agents and .agents/skills entries.',
-    rationale: 'Codex caches its agent and skill registry per session. Project .agents/skills/ and .codex/agents/ are scanned from the Codex working directory up to the repo root on startup.',
+    required: false,
+    action: 'No restart needed for deployed skills — Codex exposes them on the next turn. Reopen Codex in this workspace only if a deployed skill or agent is still missing after that.',
+    rationale: 'A running Codex desktop session listed the newly deployed project skills on the very next user turn without any restart (#2309). Custom agent registry and MCP server changes were not observed to refresh live, so reopening remains the fallback for those.',
+    symptom: 'If a deployed skill or agent stays absent after the next turn, the registry did not rescan — reopen Codex in this workspace.',
   },
   copilot: {
     action: 'Reload the VS Code window (`Developer: Reload Window`) so Copilot picks up the new .github/agents/ entries.',
@@ -901,7 +912,8 @@ function printSessionReloadNotice(provider: string): void {
   if (!notice) return;
   const defaultSymptom =
     'Until reloaded, the Agent/Task tool will report "Agent type not found" for the newly deployed agents.';
-  ui.section('Session reload required:', [
+  const required = notice.required !== false;
+  ui.section(required ? 'Session reload required:' : 'Session reload (only if something is missing):', [
     notice.action,
     `Why: ${notice.rationale}`,
     notice.symptom ?? defaultSymptom,

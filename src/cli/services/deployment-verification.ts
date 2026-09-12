@@ -26,6 +26,14 @@ export type DeploymentOutcome =
   | 'degraded'
   | 'failed';
 export type DeploymentExitClassification = 'preview' | 'success' | 'degraded' | 'failure';
+/**
+ * How a provider picks up newly deployed artifacts.
+ *
+ * - `restart-required` — the running client keeps its old registry until it is restarted.
+ * - `live-refresh` — the running client rescans between turns; a restart is a fallback,
+ *   not a precondition for using what was just deployed (#2309).
+ */
+export type ProviderReloadPolicy = 'restart-required' | 'live-refresh';
 export type DeploymentPhaseState = 'planned' | 'passed' | 'skipped' | 'failed';
 export type DeploymentFindingSeverity = 'info' | 'advisory' | 'blocking';
 
@@ -53,6 +61,9 @@ export interface ProviderDeploymentVerification {
   restartRequired: boolean;
   restartAction: string | null;
   restartReason: string | null;
+  reloadPolicy: ProviderReloadPolicy;
+  /** Conditional guidance used only when a deployed artifact does not appear. */
+  reloadFallback: string | null;
   counts: DeployedArtifactCounts & { behaviors: number };
   phases: DeploymentPhaseResult[];
   findings: DeploymentVerificationFinding[];
@@ -99,40 +110,60 @@ export interface VerifyProviderDeploymentOptions {
   reportMissingReceipt?: boolean;
 }
 
-const RESTART_NOTICES: Readonly<Record<string, { action: string; reason: string }>> = {
+interface ReloadNotice {
+  /** Whether a restart is a precondition for using what was just deployed. */
+  policy: ProviderReloadPolicy;
+  /** Imperative next step. Only surfaced for `restart-required` providers. */
+  action: string;
+  reason: string;
+  /** Conditional guidance for `live-refresh` providers when an artifact does not appear. */
+  fallback?: string;
+}
+
+const RESTART_NOTICES: Readonly<Record<string, ReloadNotice>> = {
   claude: {
+    policy: 'restart-required',
     action: 'Restart Claude Code so the running session reloads deployed agents and skills.',
     reason: 'Claude Code reads its agent and skill registries when a session starts.',
   },
   codex: {
-    action: 'Restart or reopen Codex in this workspace so it reloads deployed agents and skills.',
-    reason: 'Codex scans project agent and skill registries when a session starts.',
+    policy: 'live-refresh',
+    action: 'Reopen Codex in this workspace if a deployed skill or agent does not appear.',
+    reason: 'Codex refreshes project skills between turns — a running session exposed newly deployed skills on the next turn without a restart (#2309).',
+    fallback: 'Codex picks up newly deployed skills on the next turn. Reopen Codex in this workspace only if a deployed skill or agent is still missing after that.',
   },
   copilot: {
+    policy: 'restart-required',
     action: 'Reload the VS Code window so Copilot reloads workspace agents and instructions.',
     reason: 'Copilot caches workspace agent definitions until the VS Code window reloads.',
   },
   cursor: {
+    policy: 'restart-required',
     action: 'Reload the Cursor workspace so it reloads agents and rules.',
     reason: 'Cursor reads workspace agents and rules when the workspace opens.',
   },
   factory: {
+    policy: 'restart-required',
     action: 'Restart the Factory droid runtime so it reloads deployed droids.',
     reason: 'Factory loads its droid registry when the runtime starts.',
   },
   opencode: {
+    policy: 'restart-required',
     action: 'Restart the OpenCode session so it reloads deployed agents.',
     reason: 'OpenCode scans its agent directory when the session starts.',
   },
   openclaw: {
+    policy: 'restart-required',
     action: 'Restart OpenClaw so it reloads its home-directory registry.',
     reason: 'OpenClaw loads its home-directory registry when the process starts.',
   },
   warp: {
+    policy: 'restart-required',
     action: 'Open a fresh Warp tab so it reloads project context.',
     reason: 'Warp reads project context when a tab starts.',
   },
   windsurf: {
+    policy: 'restart-required',
     action: 'Reload Devin Desktop so it reparses project context.',
     reason: 'Devin Desktop reads the Windsurf-compatible project context when the workspace opens.',
   },
@@ -505,9 +536,13 @@ export async function verifyProviderDeployment(
   const findings: DeploymentVerificationFinding[] = [];
   const counts = emptyCounts();
   const restartNotice = RESTART_NOTICES[normalized] ?? null;
-  const restartAction = restartNotice?.action ?? null;
+  const reloadPolicy: ProviderReloadPolicy = restartNotice?.policy ?? 'live-refresh';
+  const restartRequired = reloadPolicy === 'restart-required';
+  // Only a `restart-required` provider gets an imperative restart step. A
+  // `live-refresh` provider keeps its rationale and a conditional fallback (#2309).
+  const restartAction = restartRequired ? (restartNotice?.action ?? null) : null;
   const restartReason = restartNotice?.reason ?? null;
-  const restartRequired = restartAction !== null;
+  const reloadFallback = restartRequired ? null : (restartNotice?.fallback ?? null);
 
   if (!definition) {
     findings.push(finding(
@@ -781,6 +816,8 @@ export async function verifyProviderDeployment(
     restartRequired,
     restartAction,
     restartReason,
+    reloadPolicy,
+    reloadFallback,
     counts,
     phases,
     findings,
@@ -798,7 +835,9 @@ export function buildDryRunUseResult(options: {
   const providers = options.providers.map((provider) => {
     const normalized = normalizeProviderDefinitionId(provider) ?? provider;
     const restartNotice = RESTART_NOTICES[normalized] ?? null;
-    const restartAction = restartNotice?.action ?? null;
+    const reloadPolicy: ProviderReloadPolicy = restartNotice?.policy ?? 'live-refresh';
+    const restartRequired = reloadPolicy === 'restart-required';
+    const restartAction = restartRequired ? (restartNotice?.action ?? null) : null;
     const phases: DeploymentPhaseResult[] = [
       phase('resolve', 'planned', true, `Would resolve ${options.projectRoot}, ${normalized}, ${options.scope} scope.`),
       phase('deploy', 'planned', true, 'Would deploy the requested managed artifact surface.'),
@@ -811,9 +850,11 @@ export function buildDryRunUseResult(options: {
       provider: normalized,
       scope: options.scope,
       outcome: 'planned' as const,
-      restartRequired: restartAction !== null,
+      restartRequired,
       restartAction,
       restartReason: restartNotice?.reason ?? null,
+      reloadPolicy,
+      reloadFallback: restartRequired ? null : (restartNotice?.fallback ?? null),
       counts: emptyCounts(),
       phases,
       findings: [],
@@ -929,6 +970,8 @@ export async function verifyConfiguredDeployments(
       restartRequired: false,
       restartAction: null,
       restartReason: null,
+      reloadPolicy: 'live-refresh',
+      reloadFallback: null,
       counts: emptyCounts(),
       phases: [phase('verify', 'failed', true, 'No installed provider deployment could be resolved.')],
       findings: [finding(fallback, 'deployment-not-configured', 'blocking', 'No installed provider deployment could be resolved.', 'Run aiwg use all --provider <provider>.')],
@@ -1094,6 +1137,14 @@ export function renderUseDeploymentResult(
     if (result.discovery) {
       lines.push(...wrapParagraph(`Framework index built: ${result.discovery.builtAt}`, width));
     }
+  }
+
+  const reloadFallbacks = result.providers
+    .filter((provider) => !provider.restartRequired && provider.reloadFallback)
+    .map((provider) => provider.reloadFallback as string);
+  if (reloadFallbacks.length > 0) {
+    lines.push('', 'If something is missing');
+    for (const note of reloadFallbacks) lines.push(...wrapParagraph(note, width));
   }
 
   const restartActions = result.providers

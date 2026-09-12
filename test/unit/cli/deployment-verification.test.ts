@@ -158,16 +158,44 @@ describe.sequential('deployment verification contract (#2069)', () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  it('reports a fresh and repeated deployment as verified with a restart action', async () => {
+  it('reports a fresh and repeated deployment as verified without demanding a Codex restart (#2309)', async () => {
     const fixture = await readyCodexFixture();
     const first = await verifyFixture(fixture.projectRoot, fixture.frameworkRoot);
     const second = await verifyFixture(fixture.projectRoot, fixture.frameworkRoot);
 
-    expect(first.outcome).toBe('ready-restart-required');
-    expect(first.restartAction).toMatch(/Restart or reopen Codex/);
+    expect(first.outcome).toBe('ready');
+    expect(first.reloadPolicy).toBe('live-refresh');
+    expect(first.restartRequired).toBe(false);
+    expect(first.restartAction).toBeNull();
+    // The evidence-based fallback survives — it is conditional, not an instruction.
+    expect(first.reloadFallback).toMatch(/only if a deployed skill or agent is still missing/);
+    expect(first.restartReason).toMatch(/refreshes project skills between turns/);
     expect(first.findings.filter((item) => item.severity === 'blocking')).toHaveLength(0);
     expect(second.outcome).toBe(first.outcome);
     expect(second.counts).toEqual(first.counts);
+  });
+
+  it('keeps a required restart for providers that only rescan on session start (#2309)', async () => {
+    const fixture = await readyCodexFixture();
+    const codex = await verifyFixture(fixture.projectRoot, fixture.frameworkRoot);
+    const dryRun = buildDryRunUseResult({
+      projectRoot: fixture.projectRoot,
+      frameworkRoot: fixture.frameworkRoot,
+      providers: ['claude', 'codex'],
+      scope: 'project',
+      requestedBundles: ['all'],
+    });
+    const claude = dryRun.providers.find((item) => item.provider === 'claude');
+    const codexPlanned = dryRun.providers.find((item) => item.provider === 'codex');
+
+    expect(claude?.reloadPolicy).toBe('restart-required');
+    expect(claude?.restartRequired).toBe(true);
+    expect(claude?.restartAction).toMatch(/Restart Claude Code/);
+    expect(claude?.reloadFallback).toBeNull();
+
+    expect(codexPlanned?.reloadPolicy).toBe('live-refresh');
+    expect(codexPlanned?.restartRequired).toBe(false);
+    expect(codex.reloadPolicy).toBe('live-refresh');
   });
 
   it('fails closed for missing artifacts, stale indexes, context loss, and invalid registry state', async () => {
@@ -262,8 +290,10 @@ describe.sequential('deployment verification contract (#2069)', () => {
     expect(probe).toMatchObject({
       schema: 'aiwg.status.probe.v1',
       engaged: true,
-      status: 'ready-restart-required',
+      // Codex refreshes live; the probe must not claim a required restart (#2309).
+      status: 'ready',
     });
+    expect(probe).toMatchObject({ deployment_verification: expect.objectContaining({ restartRequired: false }) });
   });
 
   it('surfaces the five receipt drift classes through deployment, doctor, and probe verification', async () => {
@@ -278,7 +308,7 @@ describe.sequential('deployment verification contract (#2069)', () => {
       reportMissingReceipt: false,
     });
     expect(firstUse.findings.some((finding) => finding.id.startsWith('provider-drift:missing-receipt'))).toBe(false);
-    expect(firstUse.outcome).toBe('ready-restart-required');
+    expect(firstUse.outcome).toBe('ready');
 
     const altered = await readyCodexFixture();
     await writeFile(path.join(altered.projectRoot, '.codex/commands/fixture.md'), '# operator changed managed output\n');
@@ -469,6 +499,8 @@ function outputFixture(overrides: Partial<UseDeploymentResult> = {}): UseDeploym
     restartRequired: true,
     restartAction: 'Restart or reopen Codex in this workspace.',
     restartReason: 'Codex reads its registry when a session starts.',
+    reloadPolicy: 'restart-required',
+    reloadFallback: null,
     counts: { agents: 204, commands: 50, skills: 30, rules: 2, behaviors: 1 },
     phases: [
       { id: 'resolve', state: 'passed', required: true, summary: 'Resolved the project and provider.' },
