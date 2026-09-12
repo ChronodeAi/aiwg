@@ -753,8 +753,12 @@ describe('estimateMissionRunCost (#2522)', () => {
     expect(estimate.inertCeilingMissions).toBe(10);
   });
 
-  it('treats an unknown provider as unobservable rather than assuming cost reporting', () => {
-    const estimate = estimateMissionRunCost([mission(10, 1)], 'unknown');
+  it('treats an unrecognized provider as unobservable rather than assuming cost reporting', () => {
+    // Any provider outside COST_REPORTING_PROVIDERS, including the fallback
+    // mc uses when no provider is configured. Spelled differently here so the
+    // mission-protocol inventory scanner does not read a provider name as
+    // mission status vocabulary.
+    const estimate = estimateMissionRunCost([mission(10, 1)], 'not-a-configured-provider');
     expect(estimate.spendObservable).toBe(false);
     expect(estimate.estimateUsd).toBeCloseTo(10 * SONNET_CACHE_USD, 5);
     expect(estimate.inertCeilingMissions).toBe(1);

@@ -169,7 +169,11 @@ describe('fifteen-provider session release conformance', () => {
     const testJob = workflow.jobs.test;
     expect(testJob.name).toBe('Test');
     const commands = testJob.steps.map((step: { run?: string }) => step.run ?? '');
-    expect(commands).toContain('npm run test:ci');
+    // Substring, not equality: the gate is "the full suite runs in required
+    // CI", and the step is wrapped by the hang reporter (#2521). Pinning the
+    // exact invocation would break on any such wrapper without the contract
+    // this test exists to protect having changed.
+    expect(commands.some((command) => command.includes('npm run test:ci'))).toBe(true);
     expect(commands).toContain('npm run test:sessions:sqlite');
     expect(workflow.jobs.build.name).toBe('Build');
     expect(workflow.jobs.build.needs).toContain('test');
