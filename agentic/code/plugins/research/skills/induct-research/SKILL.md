@@ -121,9 +121,9 @@ For each source, ensure full content is available before analysis:
 1. **Acquire the PDF** — call `/research-acquire <url> --extract-text` to download the PDF
    to `sources/pdfs/full/` and extract full text to `sources/text/`
 2. **Verify acquisition** — confirm the PDF exists at the expected path and is non-empty
-3. **If PDF unavailable** (paywall, dead link): mark as `acquisition-failed` in frontmatter,
-   file a stub with `status: pending-acquisition`, and skip to next source.
-   Do NOT write a full analysis doc from the abstract alone.
+3. **If the first path fails**, do NOT conclude the source is unavailable. Run the
+   unavailability gate below. Only after it completes may you record a deficit status,
+   and never write a full analysis doc from the abstract alone.
 
 **For URIs (web sources)**:
 1. **Fetch the full page** (WebFetch) — save to `sources/web/<slug>.html`
@@ -142,6 +142,60 @@ For each source, ensure full content is available before analysis:
 - Extract referenced URLs, files, or topics
 - If URLs point to papers: acquire PDFs before analysis
 - If no external sources: treat as a research brief stub
+
+#### Unavailability gate (before recording any acquisition deficit)
+
+Applies to every source type above, not just PDFs. One failing request is not evidence of
+unavailability. Before recording
+`pending-acquisition` or `acquisition-deficit`, complete both steps and record what each
+returned. Both are cheap; step B is cheaper than any network call.
+
+**A. Enumerate the host's access paths.** Try them in order rather than inventing one:
+
+| Host | Try, in order |
+|------|---------------|
+| Hugging Face | `resolve/main/<file>`, `raw/main/<file>`, `api/datasets/<id>`, `api/.../tree/main?recursive=true`, `api/.../croissant`, `datasets-server/splits`, `hf-mirror.com` |
+| arXiv | `/abs/<id>`, `/pdf/<id>`, `/e-print/<id>` |
+| Publisher DOI | publisher URL, Unpaywall, Europe PMC, Semantic Scholar `openAccessPdf`, arXiv full-text search, author/lab pages, institutional repository |
+| Conference | ACL Anthology, PMLR, OpenReview, proceedings site |
+
+Two traps worth naming, because both have produced false "gated" verdicts:
+
+- On Hugging Face, `raw/main/README.md` can return **401** while `resolve/main/README.md`
+  returns **200 with the complete card** — same repo, same revision, same anonymous client.
+  The API's `description` field is also truncated (~600 chars) where the card behind
+  `resolve/main` is not.
+- `export.arxiv.org/api/query` returns **503** from some networks while `arxiv.org/abs`
+  serves fine with a browser UA. An API failure is not source unavailability.
+
+**B. Check the corpus before declaring unavailable.** Ask both, and record the answers:
+
+1. Does the corpus already hold a source that **introduces, specifies or evaluates** this
+   artifact? Benchmarks, datasets, models and tools are usually defined in a paper, and
+   that paper is often already inducted and text-extracted on local disk.
+2. Is there an **open-access companion** — preprint, technical report, or a same-group
+   paper on the same subject — covering the claim the citing document needed?
+
+Both are `grep`/index queries against `sources/text/` and the corpus index.
+
+**Record the outcome as a named obstacle, not a bare flag.** `pending-acquisition` alone
+conflates four states that need different actions:
+
+| State | Means | Action |
+|-------|-------|--------|
+| `not-attempted` | ordinary backlog | do the work |
+| `credential-required` | one credential away (e.g. needs `HF_TOKEN`) | credential decision |
+| `structurally-unobtainable` | closed access, N services checked | subscription decision, or accept |
+| `artifact-absent` | the named artifact was never published | close as not-planned |
+
+Write the state and the specific obstacle — `structurally-unobtainable: closed access;
+Unpaywall reports zero OA locations; Semantic Scholar reports the publisher elided the
+abstract; no arXiv preprint` — not `acquisition-failed: true`. A bare boolean cannot be
+triaged, and the paths-tried record is what makes the verdict credible to a reader.
+
+For tracker hand-off, mirror the state as a label (`blocked:credential-required`,
+`blocked:structurally-unobtainable`, `artifact-absent`) so the distinction survives into
+triage instead of collapsing into one undifferentiated queue.
 
 ### Phase 2.5: Per-Source Analysis (on full content)
 
@@ -163,6 +217,106 @@ Only after full content is acquired, run analysis:
 **Quality gate**: If the resulting analysis doc is under 80 lines, flag it as a potential
 stub. Either the source content wasn't fully read or the analysis was superficial.
 Consider re-running with explicit instructions to read the full text.
+
+#### Cheap-verification gate (stated uncertainty is not a terminal state)
+
+Honest limitation sections are good, but they are the **residue after cheap checks**, not a
+substitute for them. An induction that completes while carrying "no OpenReview query was
+run" has not declared a limitation — it has skipped a one-request check and described the
+skip. That reads as diligence and is a provenance gap.
+
+**Rule.** Before writing any statement of the form *"X was not checked / not retrieved /
+not queried / is unverified / rests on Y rather than an independent record"*, either:
+
+1. **Resolve it**, if resolving costs roughly one request against a known endpoint; or
+2. **Record why it is not cheap** — endpoint unknown, rate-limited after N attempts with
+   backoff, requires a credential, behind an anti-bot wall, paywalled — naming the
+   specific obstacle.
+
+"I did not check" is not an acceptable terminal state on its own. "I could not check,
+because `pubpeer.com` returns HTTP 403 to this client" is.
+
+**The four cheap checks to run by default.** Named explicitly because agents do not reach
+for them unprompted:
+
+- **Venue confirmation.** If `source_type` is `peer_reviewed_*` on the strength of an arXiv
+  comment or a LaTeX template, confirm against an independent record — OpenReview, ACL
+  Anthology, PMLR, DBLP — before asserting it. **A conference template is not evidence of
+  acceptance.** If confirmation fails, demote to `preprint` rather than asserting the venue.
+- **Published version.** Once a peer-reviewed venue is confirmed, fetch the camera-ready and
+  archive it alongside the preprint. Record the diff — page count, extracted-text size,
+  occurrence counts for the doc's own headline claims — so a reader knows whether the
+  analysis needs re-reading. "Materially identical, no analysis changed" is a *finding*;
+  assuming it is not.
+- **Asserted URLs.** Probe every code, project and dataset URL the document asserts. An
+  originating issue carrying a wrong GitHub URL is a normal occurrence, and nothing else in
+  this flow would catch it.
+- **Retraction and citation census.** Run both by default. OpenAlex (`is_retracted`,
+  unauthenticated) and Semantic Scholar (`citationCount`, `influentialCitationCount`) are one
+  call each. Record the source and the date, and **record a null result as a null result**
+  — `is_retracted: false, OpenAlex, 2026-09-12` — never as the absence of a check. A census
+  also does real work: a high influential-citation count independently corroborates a GRADE
+  assignment and can reframe in-corpus sidecars that reference the work.
+
+**Register the residue as a check, not as prose.** Any uncertainty that survives the gate
+must be recorded as a declared check with an outcome, so it lands as `incomplete` or
+`blocked` per [`verification-contracts.md`](../../../../../../docs/verification-contracts.md)
+instead of as narrative an automated reader cannot see.
+
+**Worked example.** The same uncertainty, stated three ways:
+
+| Statement | Verdict |
+|-----------|---------|
+| "ICLR 2024 attribution rests on the arXiv comment and the `iclr2024_conference` template. No OpenReview or proceedings query was run." | **Not acceptable alone.** One query against a known endpoint was available and skipped. |
+| "OpenReview queried 2026-09-12; acceptance confirmed as ICLR 2024 poster (plus an ATTRIB workshop listing)." | **Acceptable** — resolved. |
+| "PubPeer not checked — `pubpeer.com` returns HTTP 403 to this client." | **Acceptable** — named obstacle, correctly not cheap. |
+
+Scope note: this gate is about *cheap* checks. It does not ask for exhaustive verification,
+and "expensive, and here is the specific reason" remains a valid outcome.
+
+#### Bibliography ground truth (what the paper actually cites)
+
+Citation edges and reference counts come from the **compiled** bibliography. For arXiv
+e-print sources the shipped `.bib` is the author's *library*, not the paper's reference
+list: it routinely contains entries that were never cited. Treating it as the membership
+set fabricates edges and inflates counts.
+
+**1. Authoritative sources, in order of preference:**
+
+1. `.bbl` — `\bibitem` for natbib/plain, `\entry{}` for biblatex. What the paper printed.
+2. `\begin{thebibliography}` inline in the `.tex`, when no `.bbl` ships.
+3. The reference list in the extracted PDF text.
+4. The shipped `.bib` — **only** to enrich metadata for entries already confirmed present
+   by 1–3. Never as the membership set.
+
+A 15-entry gap between a shipped `.bib` (81) and its compiled `.bbl` (66) is ordinary, not
+a sign of a broken artifact.
+
+**2. Counts come from counting entries in the compiled bibliography.** Count `\bibitem` /
+`\entry` occurrences. Never use `.bib` size, and never sum artifacts — summing `.bib` and
+`.bbl` without dedup has produced counts inflated by 2–3x (209 claimed vs 100 actual; 38 vs
+12). **Record the counting method alongside the number**, and note printed-vs-unique where
+they differ (92 printed, 90 unique).
+
+**3. Confirm every asserted edge against the printed entry** — not by title similarity
+against a corpus index. Record *how* each edge was confirmed: arXiv ID, exact title, or
+printed-entry read.
+
+Two failure modes title matching cannot catch:
+
+- **Author-year collisions.** "Zou et al. 2023" may be GCG *or* Representation Engineering —
+  same first author, same year, different work. Author-year and fuzzy-title resolution both
+  land on the wrong node. Only reading the printed entry disambiguates.
+- **Brace-escaped titles.** `{AI}`, `{Prompt}-{Driven}` defeat naive matching; normalise
+  before comparing.
+
+**4. Record rejections.** When a candidate edge is dropped because it is `.bib`-only, say so
+in the sidecar. This stops a later extraction pass silently reintroducing it.
+
+**5. Direction is a check, not an assumption.** Publication dates bound edge direction: a
+work cannot cite something published after it. Assert this explicitly — sidecars have
+shipped with outgoing edges to works published up to three years *later*, incoming edges
+from works that predate the paper, and edges to papers the work does not cite at all.
 
 ---
 
@@ -202,6 +356,20 @@ For each analyzed source, file one induction task using the standard template.
 - [ ] Archive with /research-archive (if paper/PDF)
 - [ ] Add to citation graph with /research-cite
 
+### Cheap-verification gate
+- [ ] Venue confirmed against an independent record (not a LaTeX template), or demoted to `preprint`
+- [ ] Published version fetched and archived if peer-reviewed; diff vs preprint recorded
+- [ ] Every asserted code/project/dataset URL probed
+- [ ] Retraction check run (source + date recorded, null result recorded as null)
+- [ ] Citation census run (source + date recorded)
+- [ ] Every surviving uncertainty registered as a declared check, not written as prose only
+
+### Bibliography
+- [ ] Edges taken from the compiled bibliography (`.bbl` / inline / PDF list), not the shipped `.bib`
+- [ ] Reference count states its counting method
+- [ ] Each edge's confirmation method recorded; `.bib`-only rejections recorded
+- [ ] Edge direction checked against publication dates
+
 ## Origin
 - Surfaced by: <issue-planner | manual | other>
 - Surfaced for: <objective or context>
@@ -222,6 +390,12 @@ For each analyzed source, file one induction task using the standard template.
 
 After creating each new literature note, update the broader corpus with bidirectional cross-references. This is what makes a corpus **compound** rather than just accumulate.
 
+Citation edges written here are subject to the **bibliography ground truth** rules in
+Phase 2.5: membership comes from the compiled bibliography, each edge records its
+confirmation method, `.bib`-only rejections are recorded, and direction is checked against
+publication dates. Cross-referencing is where a fabricated edge becomes bidirectional and
+therefore twice as expensive to unwind.
+
 For each newly inducted source:
 
 1. **Search existing findings** for topically related REF-XXX notes:
@@ -232,6 +406,9 @@ For each newly inducted source:
 2. **Add "Related Sources" cross-references**:
    - In the **new note**: add a `## Related Sources` section listing existing REF-XXX notes and how they relate (confirms, contradicts, extends, prerequisite)
    - In **existing notes**: append the new REF-XXX to their `## Related Sources` section with relationship type
+   - Before writing a citation edge in either direction, check the two publication dates.
+     A work cannot cite something published after it; if the dates say otherwise, the edge
+     is mis-directed or points at the wrong node.
 
 3. **Flag contradictions or confirmations**:
    - If the new source contradicts an existing finding, add a `contradiction` marker to both notes
@@ -361,12 +538,18 @@ induct-research <target>
     │   ├── PDF/paper → /research-acquire --extract-text
     │   ├── URI → WebFetch full page → /research-acquire if paper
     │   ├── Stub with URL → acquire referenced source
-    │   └── Skip analysis if acquisition fails (mark pending-acquisition)
+    │   └── Unavailability gate before any deficit status
+    │       ├── A: enumerate the host's access paths, record each result
+    │       ├── B: corpus-first — introducing source? OA companion?
+    │       └── Record a named obstacle + state, never a bare flag
     ├── Phase 2.5: Per-source analysis (on full content only)
     │   ├── PDF agent → read full text, extract claims + GRADE
     │   ├── Web agent → read full saved page, assess credibility
     │   ├── Stub agent → parse relevance summary
-    │   └── Quality gate: flag docs under 80 lines as potential stubs
+    │   ├── Quality gate: flag docs under 80 lines as potential stubs
+    │   ├── Cheap-verification gate: venue, published version, URLs, census
+    │   │   └── Residue registered as a declared check, not prose
+    │   └── Bibliography ground truth: compiled .bbl over shipped .bib
     ├── Phase 3: Induction task filing
     │   ├── File path → write .md task files
     │   ├── Gitea URI/MCP → mcp__gitea__issue_write
@@ -388,6 +571,9 @@ induct-research <target>
 - @$AIWG_ROOT/agentic/code/frameworks/research-complete/skills/research-quality/SKILL.md — GRADE scoring for inducted items
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/address-issues/SKILL.md — Analogous pattern for code issues
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/subagent-scoping.md — Parallel batch analysis constraints
+- @$AIWG_ROOT/docs/verification-contracts.md — Declared checks; prose uncertainty must be registered as one (#2523)
+- @$AIWG_ROOT/agentic/code/frameworks/research-complete/templates/citation-sidecar.md — `Confirmed by`, `Rejected Candidates`, `bibliography` and `acquisition-obstacle` fields (#2524, #2525)
+- @$AIWG_ROOT/agentic/code/frameworks/research-complete/skills/sidecar-lint/SKILL.md — Structural lint for the sidecars this skill writes
 
 ## Storage Routing (#934, #968)
 
