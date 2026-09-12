@@ -116,7 +116,7 @@ vi.mock('../../../../src/serve/shared-host-scheduler.js', () => ({
   },
 }));
 
-import { mcHandler } from '../../../../src/cli/handlers/mc.js';
+import { mcHandler, estimateMissionRunCost, SONNET_CACHE_USD } from '../../../../src/cli/handlers/mc.js';
 import { launchExternalRalph } from '../../../../src/cli/handlers/ralph-launcher.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -703,5 +703,67 @@ describe('mc run (#1439)', () => {
     const session = JSON.parse(jsonOutput!);
     expect(session.missions[0].status).toBe('queued'); // skipped, still queued
     consoleSpy.mockRestore();
+  });
+});
+
+// ── Cost estimate (#2522) ─────────────────────────────────────
+// The gate previously ignored declared `maxTotalCost` entirely. These cover the
+// three cases the fix must distinguish: no ceilings, ceilings on a provider that
+// reports spend, and ceilings on a provider that does not (#1766).
+describe('estimateMissionRunCost (#2522)', () => {
+  const mission = (maxIterations: number, maxTotalCost?: number) => ({ maxIterations, maxTotalCost });
+
+  it('falls back to the uncapped iteration floor when no ceilings are declared', () => {
+    const estimate = estimateMissionRunCost([mission(10), mission(5)], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
+    expect(estimate.iterationFloorUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
+    expect(estimate.declaredCeilingUsd).toBe(0);
+    expect(estimate.cappedMissions).toBe(0);
+    expect(estimate.inertCeilingMissions).toBe(0);
+  });
+
+  it('caps each mission at its declared ceiling when the provider reports spend', () => {
+    // Ten missions capped at $1 each: the uncapped floor is 10 x 10 x $1.60 =
+    // $160, while the enforced ceiling total is $10.
+    const missions = Array.from({ length: 10 }, () => mission(10, 1));
+    const estimate = estimateMissionRunCost(missions, 'claude');
+    expect(estimate.spendObservable).toBe(true);
+    expect(estimate.estimateUsd).toBeCloseTo(10, 5);
+    expect(estimate.iterationFloorUsd).toBeCloseTo(160, 5);
+    expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.cappedMissions).toBe(10);
+    expect(estimate.inertCeilingMissions).toBe(0);
+  });
+
+  it('never caps below the floor when a ceiling exceeds it', () => {
+    const estimate = estimateMissionRunCost([mission(2, 999)], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(2 * SONNET_CACHE_USD, 5);
+    expect(estimate.cappedMissions).toBe(1);
+  });
+
+  it('does not weaken the estimate when spend is unobservable on the provider', () => {
+    const missions = Array.from({ length: 10 }, () => mission(10, 1));
+    const estimate = estimateMissionRunCost(missions, 'codex');
+    expect(estimate.spendObservable).toBe(false);
+    // Inert ceilings must not shrink the warning — the operator has no enforced
+    // protection here, which is exactly when the gate matters most.
+    expect(estimate.estimateUsd).toBeCloseTo(160, 5);
+    expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.cappedMissions).toBe(0);
+    expect(estimate.inertCeilingMissions).toBe(10);
+  });
+
+  it('treats an unknown provider as unobservable rather than assuming cost reporting', () => {
+    const estimate = estimateMissionRunCost([mission(10, 1)], 'unknown');
+    expect(estimate.spendObservable).toBe(false);
+    expect(estimate.estimateUsd).toBeCloseTo(10 * SONNET_CACHE_USD, 5);
+    expect(estimate.inertCeilingMissions).toBe(1);
+  });
+
+  it('ignores a non-finite declared ceiling instead of poisoning the estimate', () => {
+    const estimate = estimateMissionRunCost([{ maxIterations: 4, maxTotalCost: Number.NaN }], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(4 * SONNET_CACHE_USD, 5);
+    expect(estimate.declaredCeilingUsd).toBe(0);
+    expect(estimate.cappedMissions).toBe(0);
   });
 });

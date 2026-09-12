@@ -2916,6 +2916,10 @@ aiwg mission-control <subcommand> [options]
 
 > Invalid numeric budget values are a hard usage error — `mc dispatch` refuses rather than dispatching an unbounded mission (#1770). `--flag=value` syntax is accepted.
 
+**`mc run` cost gate** (#1450, #2522). Before launching, `mc run` estimates cumulative spend as the iteration floor — `missions x --max-iterations x ~$1.60` cache cost per headless iteration. At or above `$5` it warns, and in a non-TTY context it refuses unless `--accept-cost` is passed.
+
+A mission's `--max-total-cost` caps its share of that estimate **only** when the target provider reports spend. On a provider that reports none, the ceiling is inert and never fires (#1766), so it is reported in the warning but deliberately not subtracted — capping the estimate by a ceiling that cannot fire would weaken the gate exactly where the operator has no enforced protection. Today `claude` is the only provider counted as reporting spend.
+
 **Examples:**
 
 ```bash
