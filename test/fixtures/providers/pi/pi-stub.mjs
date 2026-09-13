@@ -19,6 +19,9 @@ if (args.includes('--version')) {
   if (scenario === 'version-failure') {
     process.stderr.write('pi-stub: incompatible runtime\n');
     process.exitCode = 3;
+  } else if (scenario === 'version-drift') {
+    // A newer, unqualified Pi: exits 0, so only an explicit range check can reject it.
+    process.stdout.write('0.86.0\n');
   } else {
     process.stdout.write('0.85.0\n');
   }
@@ -68,6 +71,20 @@ if (args.includes('--version')) {
   } else if (scenario === 'ignore-stdin') {
     process.stdin.resume();
     setInterval(() => {}, 1000);
+  } else if (scenario === 'block-until-stdin-eof') {
+    // Mirrors Pi 0.85.0 `--mode json`: readPipedStdin() drains a non-TTY stdin
+    // to EOF before the prompt runs. With stdin left open the session never
+    // starts; with stdin closed ('ignore' -> /dev/null) it settles at once.
+    let input = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => { input += chunk; });
+    process.stdin.on('end', () => {
+      record({ stdinDrained: true, stdinBytes: input.length });
+      emit({ type: 'agent_end', willRetry: false });
+      emit({ type: 'agent_settled' });
+      process.exit(0);
+    });
+    process.stdin.resume();
   } else {
     emit({ type: 'agent_end', willRetry: false });
     emit({ type: 'agent_settled' });

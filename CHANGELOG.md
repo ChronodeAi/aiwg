@@ -32,6 +32,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- The external agent-loop Pi adapter no longer opens the child's stdin to send
+  an RPC-style `abort` frame. Pi 0.85.0 reads stdin commands only in
+  `--mode rpc`; in `--mode json` it drains a piped stdin to EOF before the
+  prompt runs, so the open pipe kept every real session from starting until
+  the loop timeout fired. `rpcAbort` is now `false`, cancellation is the
+  bounded TERM/KILL path, `isAvailable()` fails closed outside the qualified
+  `PI_SUPPORTED_VERSIONS` range (`0.85.0`), and the launcher's TERM/KILL
+  escalation timers are `unref`'d and cleared once the child settles, so a
+  settled loop exits promptly. `smoke:pi:live` derives its pinned version from
+  the adapter range (#2550).
 - `WatchService` now records what chokidar reported about its own lifecycle
   (`ready`, armed/missing targets, error messages, the live watched snapshot)
   and exposes it as `getDiagnostics()`; the real-filesystem watcher tests

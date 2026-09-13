@@ -6,7 +6,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PiAdapter } from '../../../tools/ralph-external/lib/pi-adapter.mjs';
+import { PiAdapter, PI_SUPPORTED_VERSIONS, isSupportedPiVersion } from '../../../tools/ralph-external/lib/pi-adapter.mjs';
 import { createProvider, ensureProvidersRegistered, listProviders } from '../../../tools/ralph-external/lib/provider-adapter.mjs';
 import { SessionLauncher } from '../../../tools/ralph-external/session-launcher.mjs';
 
@@ -26,11 +26,22 @@ function withEnv(patch, run) {
   try { const result = run(); return result?.finally ? result.finally(restore) : (restore(), result); } catch (error) { restore(); throw error; }
 }
 function scratch(prefix) { const dir = mkdtempSync(join(tmpdir(), prefix)); return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) }; }
-async function launch(scenario, options = {}) {
+/**
+ * Test double for the launcher's graceful-abort path: a Pi-shaped adapter
+ * that DOES offer a stdin abort frame. The production PiAdapter no longer
+ * does (#2550), but the launcher contract (write frame, wait the grace
+ * window, then TERM/KILL) must stay covered for adapters that support it.
+ */
+class StdinAbortAdapter extends PiAdapter {
+  getCapabilities() { return { ...super.getCapabilities(), rpcAbort: true }; }
+  getAbortInput() { return `${JSON.stringify({ type: 'abort', id: 'aiwg-abort' })}\n`; }
+}
+
+async function launch(scenario, options = {}, adapter = new PiAdapter()) {
   const { dir, cleanup } = scratch('pi-adapter-launch-');
   const receipt = join(dir, 'receipt.json');
   const launcher = new SessionLauncher();
-  launcher.setProviderAdapter(new PiAdapter());
+  launcher.setProviderAdapter(adapter);
   let started = null; let child = null;
   launcher.on('started', info => { started = info; child = launcher.currentProcess; });
   const env = { AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: scenario || undefined, AIWG_PI_STUB_RECEIPT: receipt,
@@ -59,10 +70,9 @@ test('Pi adapter builds a headless JSON invocation with tool restrictions and pa
   } finally { console.warn = warn; }
   assert.deepEqual(adapter.getEnvOverrides(), { CI: 'true', NO_COLOR: '1' });
   assert.equal(adapter.mapModel('anything/goes'), 'anything/goes');
-  assert.deepEqual(JSON.parse(adapter.getAbortInput()), { type: 'abort', id: 'aiwg-abort' });
-  assert.ok(adapter.getAbortInput().endsWith('\n'), 'abort command is a complete JSONL frame');
   assert.deepEqual(adapter.getCapabilities(), { streamJson: true, sessionResume: true, budgetControl: false,
-    systemPrompt: true, agentMode: false, mcpConfig: false, maxTurns: false, rpcAbort: true });
+    systemPrompt: true, agentMode: false, mcpConfig: false, maxTurns: false, rpcAbort: false });
+  assert.equal(adapter.getAbortInput(), null, 'json mode has no stdin command channel, so no abort frame is offered (#2550)');
 });
 
 test('Pi adapter parses strict JSONL, reports settlement, and fails closed on malformed framing', () => {
@@ -104,11 +114,24 @@ test('Pi adapter availability fails closed on incompatible Node or a failing pi 
     try { assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), false, 'Node < 22.19 is rejected before pi is probed'); }
     finally { Object.defineProperty(process, 'execPath', { value: execPath, configurable: true, writable: true }); }
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-failure' }, () => adapter.isAvailable()), false, 'non-zero pi --version is unavailable');
+    assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-drift' }, () => adapter.isAvailable()), false, 'a Pi outside the qualified range is unavailable even though --version exits 0 (#2550)');
+    assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-drift' }, () => adapter.getVersion()), '0.86.0', 'the drifted version is still observable for diagnostics');
     assert.equal(await withEnv({ AIWG_PI_BIN: join(dir, 'missing-pi') }, () => adapter.isAvailable()), false, 'missing binary is unavailable');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.isAvailable()), true);
     assert.equal(await withEnv({ AIWG_PI_BIN: stub }, () => adapter.getVersion()), manifest.upstreamVersion, 'observed version matches the pinned fixture contract');
     assert.equal(await withEnv({ AIWG_PI_BIN: stub, AIWG_PI_STUB_SCENARIO: 'version-failure' }, () => adapter.getVersion()), null);
   } finally { cleanup(); }
+});
+
+test('Pi adapter pins the qualified version range to the live-smoke and fixture contracts', () => {
+  assert.deepEqual([...PI_SUPPORTED_VERSIONS], [manifest.upstreamVersion], 'the fixture contract and the adapter range name the same qualified Pi');
+  assert.equal(isSupportedPiVersion('0.85.0'), true);
+  assert.equal(isSupportedPiVersion('v0.85.0'), true);
+  assert.equal(isSupportedPiVersion('pi 0.85.0\n'), true);
+  assert.equal(isSupportedPiVersion('0.86.0'), false);
+  assert.equal(isSupportedPiVersion('0.85'), false);
+  assert.equal(isSupportedPiVersion(''), false);
+  assert.equal(isSupportedPiVersion(null), false);
 });
 
 test('Pi adapter is registered under the external agent-loop provider registry', async () => {
@@ -148,8 +171,36 @@ test('launcher keeps Pi diagnostics on stderr and rejects malformed stdout frami
   } finally { run.cleanup(); }
 });
 
+test('production Pi adapter leaves stdin closed so a json-mode Pi that drains stdin to EOF still starts', async () => {
+  // Pi 0.85.0 --mode json blocks in readPipedStdin() until stdin EOF. With the
+  // pre-#2550 adapter the launcher opened a stdin pipe for the abort frame and
+  // never closed it, so the real session never started and every run ended in
+  // the timeout path. The stub scenario reproduces that contract.
+  const run = await launch('block-until-stdin-eof', { timeoutMs: 3000 });
+  try {
+    assert.equal(run.result.timedOut, false, 'the session settled instead of waiting for a stdin EOF that never comes');
+    assert.equal(run.result.exitCode, 0);
+    assert.deepEqual(run.receipt.stdinDrained, true);
+    assert.equal(run.receipt.stdinBytes, 0, 'nothing was written to stdin');
+    assert.ok(run.result.duration < 2000, `settled promptly (${run.result.duration}ms)`);
+    assert.equal(new PiAdapter().parseOutput(run.stdout).settled, true);
+    assert.equal(run.launcher.pendingEscalationTimers.size, 0);
+  } finally { run.cleanup(); }
+});
+
+test('an adapter that offers a stdin abort frame would hang a json-mode Pi that drains stdin to EOF', async () => {
+  // Negative control for the test above: the launcher behaviour the old
+  // adapter triggered. Kept as a contract so the regression cannot silently
+  // return by re-enabling rpcAbort without moving to --mode rpc.
+  const run = await launch('block-until-stdin-eof', { timeoutMs: 300 }, new StdinAbortAdapter());
+  try {
+    assert.equal(run.result.timedOut, true, 'the child never saw EOF, so only the timeout path ended the run');
+    assert.equal(run.receipt?.stdinDrained, undefined);
+  } finally { run.cleanup(); }
+});
+
 test('launcher propagates the abort command on timeout and the child exits without a signal', async () => {
-  const run = await launch('hang-until-abort', { timeoutMs: 150 });
+  const run = await launch('hang-until-abort', { timeoutMs: 150 }, new StdinAbortAdapter());
   try {
     assert.equal(run.result.timedOut, true);
     assert.deepEqual(run.receipt.abort, { type: 'abort', id: 'aiwg-abort' }, 'the adapter abort frame reached the child stdin');
@@ -162,11 +213,12 @@ test('launcher propagates the abort command on timeout and the child exits witho
     assert.match(run.stderr, /stderr channel only/);
     assert.doesNotMatch(run.stdout, /stderr channel/, 'stderr diagnostics never enter the JSONL stream');
     assert.equal(run.launcher.currentProcess, null);
+    assert.equal(run.launcher.pendingEscalationTimers.size, 0, 'TERM/KILL escalation timers are cleared once the child settles (#2550)');
   } finally { run.cleanup(); }
 });
 
 test('launcher tears down a Pi child that ignores the abort command', { timeout: 15000 }, async () => {
-  const run = await launch('ignore-stdin', { timeoutMs: 100 });
+  const run = await launch('ignore-stdin', { timeoutMs: 100 }, new StdinAbortAdapter());
   try {
     assert.equal(run.result.timedOut, true);
     assert.equal(run.receipt.abort, undefined);
@@ -176,6 +228,17 @@ test('launcher tears down a Pi child that ignores the abort command', { timeout:
     assert.ok(run.result.duration >= 2000 && run.result.duration < 7000, `SIGTERM after the 2s abort grace window (${run.result.duration}ms)`);
     assert.equal(new PiAdapter().parseOutput(run.stdout).settled, false);
     assert.equal(run.launcher.currentProcess, null);
+    assert.equal(run.launcher.pendingEscalationTimers.size, 0, 'the SIGKILL timer is cleared after SIGTERM reaped the child');
+  } finally { run.cleanup(); }
+});
+
+test('launcher tears down a production Pi child on timeout without an abort grace window', { timeout: 15000 }, async () => {
+  const run = await launch('ignore-stdin', { timeoutMs: 100 });
+  try {
+    assert.equal(run.result.timedOut, true);
+    assert.equal(run.child.signalCode, 'SIGTERM');
+    assert.ok(run.result.duration < 2000, `SIGTERM is immediate when no abort frame exists (${run.result.duration}ms)`);
+    assert.equal(run.launcher.pendingEscalationTimers.size, 0);
   } finally { run.cleanup(); }
 });
 

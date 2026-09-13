@@ -14,9 +14,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { PI_SUPPORTED_VERSIONS } from '../ralph-external/lib/pi-adapter.mjs';
 
 export const PI_PACKAGE = '@earendil-works/pi-coding-agent';
-export const PI_VERSION = '0.85.0';
+/** The single qualified Pi version; the adapter's accepted range is the source of truth (#2550). */
+export const PI_VERSION = PI_SUPPORTED_VERSIONS.at(-1);
 export const LIVE_GATE = 'AIWG_PI_LIVE_SMOKE';
 
 function parseArgs(argv) {
