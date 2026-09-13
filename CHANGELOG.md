@@ -7,6 +7,52 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.8] - 2026-09-13 – "Say what is actually there"
+
+### Added
+
+- Declare project data classification in `aiwg.config`. `project` accepts the historical bare
+  string or an object carrying `classification` (private | sanitized | public), `pii`, and
+  `handling.{excerptable,publishable,mirror}`. `doctor` reports the declaration and warns when it
+  contradicts the remotes — a repo declared private while a secondary remote pushes on release.
+- `aiwg repo-access add`, `remove`, and `audit`. The access manifest was mandatory and
+  default-deny with no write path, so registering a repo meant hand-editing JSON; `audit` reports
+  git subdirectories with no manifest entry and exits non-zero so it can gate CI.
+- `installation show` prints the shell step that actually resolves drift, tailored to its
+  direction. `switch` and `adopt` are declaration-only and cannot change which binary is on PATH.
+- `migrate --dry-run` reports, per source, how much operator content moves and to which scope,
+  and flags provider-named sources carrying enough content to be a scope decision.
+- A bibliographic-services reference for the research corpus: per-service operating
+  characteristics, failure modes, and the OpenAlex citation-count trap.
+
+### Changed
+
+- `aiwg version` reports the binary that is executing, not the config-declared install, and
+  surfaces drift inline when the two disagree.
+- `aiwg refresh --dry-run` lists orphaned artifacts instead of printing only "Checking for stale
+  deployments...".
+- `adopt` refuses to abandon a declared install without `--yes`, showing both sides first.
+
+### Fixed
+
+- Stop the SessionStart hook printing its usage block into every session, and stop registering
+  it twice. A no-argument invocation is now a silent no-op; help moved behind `help`/`--help`.
+- Prune orphaned rules on refresh. Rules were never in scope for the target-provider prune, so
+  long-lived projects accumulated every rule any past version deployed — enough to exceed the
+  startup-context budget on their own.
+- Stop backing up a `.claude/settings.json` AIWG created seconds earlier in the same run, and add
+  the backup artifacts to the recommended gitignore patterns.
+- Emit the stale-commands warning once per run naming the actual files, instead of once per
+  deployed unit with an unexpanded `<command>.md` placeholder.
+- `workspace-context doctor` no longer reports `unsafe-link` for relative paths inside fenced
+  code blocks or inline code spans.
+- Accept `main-only-blocked` as a deprecated alias for `own-branch-only`, naming the semantic
+  narrowing rather than rejecting configs that were valid when written.
+- Route `--help` to real usage for the `installation`, `repo-access`, and `steward permissions`
+  namespaces instead of a "no detailed help" stub.
+- Name the install root when the framework graph cannot be built, so the documented repair is
+  run where it works rather than in a consumer project.
+
 ## [2026.9.7] - 2026-09-12 – "Only what the run owns"
 
 ### Added
