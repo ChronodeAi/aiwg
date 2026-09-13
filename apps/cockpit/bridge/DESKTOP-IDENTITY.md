@@ -49,7 +49,7 @@ revocation budget. The identity module does not poll the provider itself.
 Provider revocation events must call `revoke` with an issuer-scoped selector.
 The existing terminal transport has not been converted into a desktop transport.
 
-API forwarding, worker attachment, the desktop panel, production identity
+Gateway integration, worker attachment, the desktop panel, production identity
 provider integration, and real browser/Tauri/VS Code qualification remain under
 issues #2545, #2546, and #2547. Unit and local HTTP tests do not prove those workflows.
 
@@ -100,6 +100,30 @@ They verify client authentication, server trust, hostname validation, response
 limits, redirects, and the browser-to-Bridge-to-HTTPS request path. Their
 identity provider and desktop responses are test fixtures; they do not qualify
 production identity, the Sandbox broker, or RDP.
+
+## Agent login assistance
+
+The intended workflow is an agent-driven, persistent XFCE session. An authorized
+user opens that same desktop when the agent needs help signing into the user's
+internal application, completes the login in the guest browser, and returns
+control so the agent continues in the authenticated session.
+
+The browser client in `../web/src/desktop-api.ts` provides typed capability,
+existing-session lookup, creation and explicit close operations. It uses the
+normal Cockpit cookie/CSRF bootstrap, caller-owned creation idempotency keys,
+cancellation signals and the same response validator as the Bridge. Unknown
+response fields and arbitrary backend diagnostics do not reach its consumers.
+Looking up an existing desktop performs no creation request.
+
+The assistance action must target the authoritative desktop ID associated with
+the agent task. It must not provision a second guest session. Neither
+`revoke_access` nor `sign_out` means "return control to the agent". That handoff
+needs a separate acknowledged controller transition that preserves the browser
+profile and login. A mission pause alone does not fence agent desktop input.
+
+The assistance request/task binding, fenced agent-to-human transfer,
+return-control operation, authenticated display stream and panel remain to be
+implemented. These client calls do not yet provide a user-connectable desktop.
 
 ## Verification
 
