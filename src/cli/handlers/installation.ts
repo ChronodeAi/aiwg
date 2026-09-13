@@ -67,8 +67,8 @@ export function remediation(status: ReturnType<typeof inspectInstallation>): str
   }
   if (canonicalMethod === 'npm' && actualMethod === 'source') {
     return [
-      `The declared npm install is not what runs. Restore it:`,
-      `  npm i -g aiwg`,
+      `The declared npm package is not what runs. Restore it:`,
+      `  npm install -g aiwg`,
       `If a source checkout was linked, unlink it first: npm unlink -g aiwg`,
     ];
   }

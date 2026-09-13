@@ -39,7 +39,7 @@ describe('installation remediation (#2534)', () => {
       actualMethod: 'source',
       identity: { method: 'npm', root: '/usr/local/lib/node_modules/aiwg' },
     } as Partial<Status>));
-    expect(lines?.join('\n')).toContain('npm i -g aiwg');
+    expect(lines?.join('\n')).toContain('npm install -g aiwg');
   });
 
   it('still explains the declaration-only limit for other directions', () => {
