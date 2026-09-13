@@ -262,7 +262,7 @@ examples:
       response: "Created checkpoint schema..."
       response_hash: "ghi789..."
       artifacts_created:
-        - path: "agentic/code/addons/ralph/schemas/checkpoint.yaml"
+        - path: "agentic/code/addons/agent-loop/schemas/checkpoint.yaml"
           hash: "jkl012..."
           operation: created
     metrics:
@@ -283,5 +283,5 @@ references:
     - "#115"
   related:
     - "@agentic/code/frameworks/sdlc-complete/schemas/flows/execution-mode.yaml"
-    - "@agentic/code/addons/ralph/schemas/checkpoint.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/checkpoint.yaml"
     - "@agentic/code/frameworks/sdlc-complete/schemas/provenance/prov-record.yaml"

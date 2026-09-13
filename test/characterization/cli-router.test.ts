@@ -263,12 +263,19 @@ describe('CLI Router Characterization Tests', () => {
       expect(helpOutput).toMatch(/warp/);
     });
 
-    it('should have Ralph Loop section', () => {
-      expect(helpOutput).toMatch(/(Ralph Loop|RALPH LOOP)/);
-      expect(helpOutput).toMatch(/ralph.*--completion/);
-      expect(helpOutput).toMatch(/ralph-status/);
-      expect(helpOutput).toMatch(/ralph-abort/);
-      expect(helpOutput).toMatch(/ralph-resume/);
+    it('should have Agent Loop section', () => {
+      expect(helpOutput).toMatch(/(Agent Loop|AGENT LOOP)/);
+      expect(helpOutput).toMatch(/agent-loop.*--completion/);
+      expect(helpOutput).toMatch(/agent-loop-status/);
+      expect(helpOutput).toMatch(/agent-loop-abort/);
+      expect(helpOutput).toMatch(/agent-loop-resume/);
+    });
+
+    it('should still advertise the legacy ralph* names as accepted aliases', () => {
+      // The commands were renamed to agent-loop*; the ralph* spellings stay
+      // routable so existing scripts keep working. Help must say so, or the
+      // rename reads as a removal to anyone with a ralph* command in CI.
+      expect(helpOutput).toMatch(/ralph\*? *names? +remain +accepted/i);
     });
 
     it('should have Examples section', () => {

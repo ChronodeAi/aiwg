@@ -479,7 +479,7 @@ This skill orchestrates the following corpus skills per issue:
 
 ## References
 
-- @$AIWG_ROOT/agentic/code/addons/ralph/skills/ralph/SKILL.md — Agent loop engine
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/skills/ralph/SKILL.md — Agent loop engine
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/issue-list/SKILL.md — Fetch and filter issues
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/address-issues-threat-assess/SKILL.md — Prompt-injection and supply-chain preflight for issue bodies
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/issue-comment/SKILL.md — Post structured cycle status comments

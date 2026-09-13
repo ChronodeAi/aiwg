@@ -7,6 +7,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Changed
+
+- The bounded iterative execution mode is now called the **agent loop** in
+  user-facing surfaces. CLI commands `agent-loop`, `agent-loop-status`,
+  `agent-loop-abort`, `agent-loop-resume`, `agent-loop-attach`,
+  `agent-loop-ext`, `--agent-loop-memory` and `--agent-loop-config` are the
+  primary names; every legacy `ralph*` spelling remains accepted as an alias
+  and help says so. Addon documentation, skills, schemas, hooks, plugin
+  manifests and framework agents now use the agent-loop vocabulary and the
+  `agentic/code/addons/agent-loop/` paths (#1534).
+
 ### Fixed
 
 - `aiwg init` interactive provider picker now resolves registered provider

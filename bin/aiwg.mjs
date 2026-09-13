@@ -166,11 +166,12 @@ const FAST_HELP_TEXT = `
   PROMOTE
     promote <name>               Graduate project-local bundle to upstream (--to upstream|corpus, --dry-run, --cleanup)
 
-  RALPH LOOP
-    ralph "<task>"               Execute iterative task loop (--completion, --max-iterations)
-    ralph-status                 Check current loop status
-    ralph-abort                  Abort running loop
-    ralph-resume                 Resume interrupted loop
+  AGENT LOOP
+    agent-loop "<task>"          Execute iterative task loop (--completion, --max-iterations)
+    agent-loop-status            Check current loop status
+    agent-loop-abort             Abort running loop
+    agent-loop-resume            Resume interrupted loop
+                                 (legacy ralph* names remain accepted as aliases)
 
   MAINTENANCE
     doctor                       Check installation health

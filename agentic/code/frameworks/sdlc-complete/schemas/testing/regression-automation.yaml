@@ -891,7 +891,7 @@ $defs:
 # - @agentic/code/frameworks/sdlc-complete/schemas/testing/regression.yaml
 # - @agentic/code/frameworks/sdlc-complete/schemas/testing/regression-dashboard.yaml
 # - @agentic/code/frameworks/sdlc-complete/schemas/flows/executable-feedback.yaml
-# - @agentic/code/addons/ralph/schemas/debug-memory.yaml
+# - @agentic/code/addons/agent-loop/schemas/debug-memory.yaml
 
 # Metrics
 #
@@ -1142,7 +1142,7 @@ references:
     - "@agentic/code/frameworks/sdlc-complete/schemas/testing/regression.yaml"
     - "@agentic/code/frameworks/sdlc-complete/schemas/testing/regression-dashboard.yaml"
     - "@agentic/code/frameworks/sdlc-complete/schemas/flows/executable-feedback.yaml"
-    - "@agentic/code/addons/ralph/schemas/debug-memory.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/debug-memory.yaml"
   agents:
     - "@.claude/agents/test-engineer.md"
     - "@.claude/agents/metrics-analyst.md"

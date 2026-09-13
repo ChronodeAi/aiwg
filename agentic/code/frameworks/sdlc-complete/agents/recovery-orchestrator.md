@@ -400,7 +400,7 @@ recovery_session:
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/thought-protocol.md - Thought type definitions
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/tao-loop.md - TAO loop integration
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/conversable-agent-interface.md - Agent interface specification
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/recovery-session.yaml - Recovery session schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/recovery-session.yaml - Recovery session schema
 - REF-057: Agent Laboratory (HITL effectiveness)
 - REF-015: Self-Refine (recovery importance)
 - REF-002: LLM Failures (recovery capability predictor)

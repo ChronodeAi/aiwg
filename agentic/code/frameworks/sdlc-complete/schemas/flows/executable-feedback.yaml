@@ -628,9 +628,9 @@ references:
   research:
     - "@.aiwg/research/findings/REF-013-metagpt.md"
   schemas:
-    - "@agentic/code/addons/ralph/schemas/debug-memory.yaml"
-    - "@agentic/code/addons/ralph/schemas/actionable-feedback.yaml"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/debug-memory.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"
   rules:
     - "@.claude/rules/executable-feedback.md"
   implementation:

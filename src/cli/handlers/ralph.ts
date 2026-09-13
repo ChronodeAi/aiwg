@@ -175,7 +175,7 @@ export class RalphHandler implements CommandHandler {
   name = 'Agent Loop';
   description = 'Execute iterative task loop with automatic completion detection';
   category = 'ralph' as const;
-  aliases = ['ralph', '-ralph', '--ralph'];
+  aliases = ['agent-loop', '--agent-loop', 'ralph', '-ralph', '--ralph'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const parsed = parseRalphArgs(ctx.args);
@@ -366,7 +366,7 @@ export class RalphStatusHandler implements CommandHandler {
   name = 'Ralph Status';
   description = 'Show Agent loop status and iteration history';
   category = 'ralph' as const;
-  aliases = ['ralph-status'];
+  aliases = ['agent-loop-status', 'ralph-status'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const showAll = ctx.args.includes('--all') || ctx.args.includes('-a');
@@ -446,7 +446,7 @@ export class RalphAbortHandler implements CommandHandler {
   name = 'Ralph Abort';
   description = 'Abort currently running Agent loop';
   category = 'ralph' as const;
-  aliases = ['ralph-abort'];
+  aliases = ['agent-loop-abort', 'ralph-abort'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Parse --loop-id if provided
@@ -476,7 +476,7 @@ export class RalphResumeHandler implements CommandHandler {
   name = 'Ralph Resume';
   description = 'Resume previously aborted Agent loop';
   category = 'ralph' as const;
-  aliases = ['ralph-resume'];
+  aliases = ['agent-loop-resume', 'ralph-resume'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Parse arguments
@@ -548,7 +548,7 @@ export const ralphExternalHandler: CommandHandler = {
   name: 'Agent Loop External',
   description: 'Crash-resilient external loop with state persistence and CI/CD integration',
   category: 'ralph',
-  aliases: ['ralph-external', '--ralph-external', '--agent-loop-ext'],
+  aliases: ['agent-loop-ext', '--agent-loop-ext', 'ralph-external', '--ralph-external'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -567,7 +567,7 @@ export const ralphMemoryHandler: CommandHandler = {
   name: 'Ralph Memory',
   description: 'Manage Ralph semantic memory entries (list, query, clear)',
   category: 'ralph',
-  aliases: ['--ralph-memory'],
+  aliases: ['--agent-loop-memory', '--ralph-memory'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -585,7 +585,7 @@ export const ralphConfigHandler: CommandHandler = {
   name: 'Ralph Config',
   description: 'View and configure Agent loop settings (show, set, reset, preset)',
   category: 'ralph',
-  aliases: ['--ralph-config'],
+  aliases: ['--agent-loop-config', '--ralph-config'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -604,7 +604,7 @@ export class RalphAttachHandler implements CommandHandler {
   name = 'Ralph Attach';
   description = 'Attach to a running Agent loop\'s live output stream';
   category = 'ralph' as const;
-  aliases = ['ralph-attach'];
+  aliases = ['agent-loop-attach', 'ralph-attach'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     let loopId: string | undefined;
