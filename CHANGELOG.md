@@ -32,6 +32,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `WatchService` now records what chokidar reported about its own lifecycle
+  (`ready`, armed/missing targets, error messages, the live watched snapshot)
+  and exposes it as `getDiagnostics()`; the real-filesystem watcher tests
+  print that snapshot instead of a bare "no events" when an event never
+  arrives, and the CI Test job prints disk, inode, inotify, memory and load
+  headroom (`tools/ci/runner-headroom.mjs`) before the suite so the next
+  recurrence carries its environment evidence (#2553).
 - `address-issues-threat-assess` no longer rejects or flags an issue because of
   the orchestrator's own prior AL CYCLE comments (#2549). Comments authored by
   the configured tracker actor that carry the cycle header are classified

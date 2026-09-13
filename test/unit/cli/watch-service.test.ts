@@ -59,6 +59,23 @@ function describeEvents(events: WatchEvent[]): string {
   return events.map(event => `${event.type}:${resolve(event.path)}`).join(', ');
 }
 
+/**
+ * Failure message for the real-filesystem cases: the events that did arrive
+ * plus what chokidar reported about its own lifecycle. "no events" alone
+ * cannot distinguish a watch that never armed, one that raised an error, or
+ * one whose runner had no inotify headroom (#2553).
+ */
+function describeObserved(events: WatchEvent[], service: WatchService): string {
+  const diagnostics = service.getDiagnostics();
+  return `${describeEvents(events)}; watcher ${JSON.stringify({
+    ready: diagnostics.ready,
+    armed: diagnostics.armed,
+    missingTargets: diagnostics.missingTargets,
+    errors: diagnostics.errors,
+    watched: diagnostics.watched,
+  })}`;
+}
+
 describe('WatchService', () => {
   let service: WatchService;
   let testDir: string;
@@ -182,7 +199,7 @@ describe('WatchService', () => {
         () => events.some(event => event.type === 'change'),
         FS_EVENT_TIMEOUT_MS,
         25,
-        () => describeEvents(events),
+        () => describeObserved(events, service),
       );
 
       expect(events.some(e => e.type === 'change')).toBe(true);
@@ -206,7 +223,7 @@ describe('WatchService', () => {
         () => events.some(event => event.type === 'unlink'),
         FS_EVENT_TIMEOUT_MS,
         25,
-        () => describeEvents(events),
+        () => describeObserved(events, service),
       );
 
       expect(events.some(e => e.type === 'unlink')).toBe(true);
@@ -327,6 +344,59 @@ describe('WatchService', () => {
 
       expect(service.running()).toBe(true);
       expect(Date.now() - startedAt).toBeGreaterThanOrEqual(400);
+    }, 5000);
+
+    it('reports ready, armed targets, and recorded errors through getDiagnostics()', async () => {
+      const watcher = controlledWatcher(() => ({ [testDir]: [] }));
+
+      expect(service.getDiagnostics()).toEqual({
+        ready: false,
+        readyAt: undefined,
+        armed: true,
+        missingTargets: [],
+        errors: [],
+        watched: {},
+      });
+
+      const started = service.start(config.patterns, config);
+      watcher.emit('ready');
+      await started;
+
+      const armed = service.getDiagnostics();
+      expect(armed.ready).toBe(true);
+      expect(armed.readyAt).toBeInstanceOf(Date);
+      expect(armed.armed).toBe(true);
+      expect(armed.missingTargets).toEqual([]);
+      expect(armed.errors).toEqual([]);
+      expect(armed.watched).toEqual({ [testDir]: [] });
+
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      watcher.emit('error', new Error('ENOSPC: System limit for number of file watchers reached'));
+      watcher.emit('error', 'EMFILE: too many open files');
+
+      const errored = service.getDiagnostics();
+      expect(errored.errors).toEqual([
+        'ENOSPC: System limit for number of file watchers reached',
+        'EMFILE: too many open files',
+      ]);
+      expect(service.getStats().errors).toBe(2);
+      expect(consoleError).toHaveBeenCalledTimes(2);
+      // Snapshots are copies: mutating one must not alter the service.
+      errored.errors.push('mutated');
+      expect(service.getDiagnostics().errors).toHaveLength(2);
+    }, 5000);
+
+    it('names the targets that never armed when start() gives up waiting', async () => {
+      const watcher = controlledWatcher(() => ({}));
+
+      const started = service.start(config.patterns, config);
+      watcher.emit('ready');
+      await started;
+
+      const diagnostics = service.getDiagnostics();
+      expect(diagnostics.ready).toBe(true);
+      expect(diagnostics.armed).toBe(false);
+      expect(diagnostics.missingTargets).toEqual([resolve(testDir)]);
     }, 5000);
 
     it('treats a file target listed under its parent directory as armed', async () => {

@@ -208,6 +208,14 @@ jobs:
           path: test-results/session-performance.json
           if-no-files-found: error
 
+      - name: Record runner headroom (#2553)
+        # The real-filesystem watcher test has timed out five times under CI
+        # load reporting "no events"; one of those logs also carried a
+        # "disk full" append failure. Print disk, inode, inotify, memory and
+        # load headroom into the job log before the suite so the next
+        # recurrence carries its environment evidence. Read-only; never fails.
+        run: node tools/ci/runner-headroom.mjs .
+
       - name: Run tests
         env:
           # Shared-runner policy: paired Node baselines, median of 7 samples.
