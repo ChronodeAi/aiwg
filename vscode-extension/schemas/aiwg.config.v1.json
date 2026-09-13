@@ -16,8 +16,33 @@
       "examples": ["1"]
     },
     "project": {
-      "type": "string",
-      "description": "Project name"
+      "description": "Project identity and data classification. A bare string is the project name; the object form adds classification and handling policy.",
+      "oneOf": [
+        { "type": "string", "description": "Project name" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "classification": {
+              "type": "string",
+              "enum": ["private", "sanitized", "public"],
+              "description": "What the repository holds. 'private' defaults every handling flag to false."
+            },
+            "pii": { "type": "boolean", "description": "Repository holds personally identifiable information" },
+            "handling": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "excerptable": { "type": "boolean", "description": "May content be quoted outside the repo?" },
+                "publishable": { "type": "boolean", "description": "May content be published?" },
+                "mirror": { "type": "boolean", "description": "May the repo be mirrored to a secondary remote?" }
+              }
+            }
+          }
+        }
+      ]
     },
     "installed": {
       "type": "object",

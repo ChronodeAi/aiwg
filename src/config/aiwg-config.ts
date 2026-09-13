@@ -310,6 +310,99 @@ export interface WorkspaceRepoConfig {
   notes?: string;
 }
 
+/**
+ * Project-scope data classification. Same vocabulary as the per-artifact
+ * `AiwgPrivacyClassification` used by the Fortemi index export, lifted to the
+ * repository so agents have a structured signal for what a repo holds — rather
+ * than prose in a README and a free-text `notes` string (#2535).
+ */
+export type ProjectClassification = 'private' | 'sanitized' | 'public';
+
+/** How a repository's contents may be handled. Every field defaults to permissive. */
+export interface ProjectHandling {
+  /** May content be quoted into decks, docs, or messages outside the repo? */
+  excerptable?: boolean;
+  /** May content be published, including to a public site or package? */
+  publishable?: boolean;
+  /** May the repo be mirrored to a secondary remote? */
+  mirror?: boolean;
+}
+
+/**
+ * Project metadata. Accepts a bare string (the historical shape, a name) or the
+ * object form carrying classification and handling policy.
+ */
+export interface ProjectConfig {
+  name?: string;
+  description?: string;
+  classification?: ProjectClassification;
+  /** Whether the repo holds personally identifiable information. */
+  pii?: boolean;
+  handling?: ProjectHandling;
+}
+
+export const PROJECT_CLASSIFICATIONS: readonly ProjectClassification[] = ['private', 'sanitized', 'public'];
+
+/** Normalize the string-or-object `project` field to the object form. */
+/**
+ * Validate the `project` block. Accepts the bare-string form unconditionally so
+ * existing configs keep loading (#2535).
+ */
+export function validateProjectConfig(project: unknown): string[] {
+  const errors: string[] = [];
+  if (project === undefined || typeof project === 'string') return errors;
+  if (typeof project !== 'object' || project === null || Array.isArray(project)) {
+    errors.push('project: must be a string (name) or an object');
+    return errors;
+  }
+  const value = project as Record<string, unknown>;
+  if (value.classification !== undefined
+    && !PROJECT_CLASSIFICATIONS.includes(value.classification as ProjectClassification)) {
+    errors.push(`project.classification: must be one of ${PROJECT_CLASSIFICATIONS.join(' | ')}`);
+  }
+  for (const key of ['name', 'description'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'string') {
+      errors.push(`project.${key}: must be a string`);
+    }
+  }
+  if (value.pii !== undefined && typeof value.pii !== 'boolean') {
+    errors.push('project.pii: must be a boolean');
+  }
+  if (value.handling !== undefined) {
+    if (typeof value.handling !== 'object' || value.handling === null || Array.isArray(value.handling)) {
+      errors.push('project.handling: must be an object');
+    } else {
+      const handling = value.handling as Record<string, unknown>;
+      for (const key of ['excerptable', 'publishable', 'mirror'] as const) {
+        if (handling[key] !== undefined && typeof handling[key] !== 'boolean') {
+          errors.push(`project.handling.${key}: must be a boolean`);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+export function resolveProject(project: string | ProjectConfig | undefined): ProjectConfig | undefined {
+  if (project === undefined) return undefined;
+  if (typeof project === 'string') return { name: project };
+  return project;
+}
+
+/**
+ * Handling defaults derived from the classification when not stated explicitly.
+ * A `private` repo is closed by default; anything else stays permissive, so
+ * declaring a classification never silently tightens an existing project.
+ */
+export function resolveProjectHandling(project: ProjectConfig | undefined): Required<ProjectHandling> {
+  const closed = project?.classification === 'private';
+  return {
+    excerptable: project?.handling?.excerptable ?? !closed,
+    publishable: project?.handling?.publishable ?? !closed,
+    mirror: project?.handling?.mirror ?? !closed,
+  };
+}
+
 export interface ResolvedIssueLabel extends IssueLabelDefinition {
   role: string;
   resolved_name: string;
@@ -397,6 +490,12 @@ export interface AiwgConfig {
    * @implements #1764
    */
   workspace?: WorkspaceConfig;
+
+  /**
+   * Project identity and data classification. A bare string is the project name
+   * (historical shape); the object form adds classification and handling policy.
+   */
+  project?: string | ProjectConfig;
 
   /**
    * Workspace members. Each member keeps its own `.aiwg/aiwg.config`, which is
@@ -1570,7 +1669,10 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     throw new Error(`Invalid .aiwg/aiwg.config:\n${authorizationErrors.map(item => item.message).join('\n')}`);
   }
 
-  const threatAssessmentErrors = validateThreatAssessmentConfig(parsed.security?.threatAssessment);
+  const threatAssessmentErrors = [
+    ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
+    ...validateProjectConfig(parsed.project),
+  ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }
@@ -1590,7 +1692,10 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
  * sync so split-root health remains deterministic.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
-  const threatAssessmentErrors = validateThreatAssessmentConfig(config.security?.threatAssessment);
+  const threatAssessmentErrors = [
+    ...validateThreatAssessmentConfig(config.security?.threatAssessment),
+    ...validateProjectConfig(config.project),
+  ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }

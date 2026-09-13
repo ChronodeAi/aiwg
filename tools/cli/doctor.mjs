@@ -1734,6 +1734,44 @@ async function runDoctor() {
         }
       }
 
+      // 11c-bis. Project data classification (#2535). Surface what the repo
+      // declares it holds, and flag a declaration that contradicts the remotes:
+      // a repo declared private while a secondary remote pushes on release is
+      // publishing the thing it says must not be published.
+      if (raw) {
+        const project = typeof raw.project === 'string' ? { name: raw.project } : raw.project;
+        if (!project || typeof project !== 'object') {
+          check('Data Classification', 'info',
+            'project not declared — agents have no structured signal for how this repo may be handled');
+        } else if (!project.classification) {
+          check('Data Classification', 'info',
+            `project '${project.name ?? '(unnamed)'}' declares no classification (private|sanitized|public)`);
+        } else {
+          const closed = project.classification === 'private';
+          const handling = project.handling ?? {};
+          const excerptable = handling.excerptable ?? !closed;
+          const publishable = handling.publishable ?? !closed;
+          const mirror = handling.mirror ?? !closed;
+          const summary = `classification=${project.classification}`
+            + `${project.pii ? ' pii=true' : ''}`
+            + ` excerptable=${excerptable} publishable=${publishable} mirror=${mirror}`;
+
+          const conflicts = [];
+          const releaseMirrors = (raw.remotes?.secondary ?? [])
+            .filter((entry) => entry && entry.push_on_release);
+          if (!mirror && releaseMirrors.length > 0) {
+            conflicts.push(
+              `handling.mirror=false but remotes.secondary pushes on release: ${releaseMirrors.map((entry) => entry.name ?? '(unnamed)').join(', ')}`,
+            );
+          }
+          if (!publishable && releaseMirrors.length > 0) {
+            conflicts.push('handling.publishable=false but a secondary remote pushes on release');
+          }
+          if (conflicts.length > 0) check('Data Classification', 'warn', `${summary}; ${conflicts.join('; ')}`);
+          else check('Data Classification', 'ok', summary);
+        }
+      }
+
       // 11d. Validate delivery identity / tracker actor block (#1601)
       if (raw) {
         const actor = raw.remotes?.tracker_actor;

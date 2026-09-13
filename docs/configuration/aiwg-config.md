@@ -161,6 +161,60 @@ first and records the presentation reference in artifact-output provenance.
 See [the architecture decision](../architecture/adr-artifact-output-destinations.md)
 for migration, degraded-mode, precedence, and provenance details.
 
+## Project Block — data classification
+
+`project` declares what the repository holds and how its contents may be handled.
+It accepts the historical bare string (the project name) or an object:
+
+```json
+{
+  "project": {
+    "name": "bizops",
+    "description": "Restricted storage for money and executed agreements",
+    "classification": "private",
+    "pii": true,
+    "handling": { "excerptable": false, "publishable": false, "mirror": false }
+  }
+}
+```
+
+`classification` uses the same vocabulary as the per-artifact privacy field on the
+Fortemi index export: `private`, `sanitized`, `public`.
+
+| Field | Meaning |
+|---|---|
+| `classification` | What the repo holds |
+| `pii` | Repo holds personally identifiable information |
+| `handling.excerptable` | May content be quoted outside the repo (decks, docs, messages)? |
+| `handling.publishable` | May content be published? |
+| `handling.mirror` | May the repo be mirrored to a secondary remote? |
+
+**Defaults.** When `handling` is omitted, a `private` classification defaults every
+flag to `false` and every other classification defaults them to `true`. Declaring a
+classification therefore never silently loosens a repo, and omitting one never
+silently tightens an existing project. Any flag can be set explicitly to override
+the default in either direction.
+
+**Why this exists.** Without it, the difference between a repo that is routinely
+excerpted for partners and one holding executed agreements is carried only by prose
+in a README, a free-text `notes` string, and the repo being private on the forge —
+none of which an agent can reason over. An agent asked to pull settlement terms into
+a deck has no structured signal that the source is restricted.
+
+`aiwg doctor` reports the declared classification, and warns when a declaration
+contradicts the remotes — a repo declared `private` while a `remotes.secondary[]`
+entry carries `push_on_release: true` is publishing the thing it says must not be
+published:
+
+```
+⚠ Data Classification: classification=private pii=true excerptable=false
+  publishable=false mirror=false; handling.mirror=false but remotes.secondary
+  pushes on release: github
+```
+
+An undeclared `project` is reported as `info`, not a warning: classification is
+opt-in.
+
 ## Project Local Block
 
 `projectLocal.searchPaths` lets operators add extra bundle roots for custom
