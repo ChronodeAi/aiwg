@@ -1,5 +1,12 @@
 ---
 enforcement: high
+triggers:
+  - "register a repo in the workspace manifest"
+  - "add a repo to the access manifest"
+  - "register a repo"
+  - "repo access manifest"
+  - "am I allowed to write to this repo"
+  - "is this repo authorized"
 ---
 
 # Respect Repo Access Manifest

@@ -1,5 +1,11 @@
 ---
 enforcement: critical
+triggers:
+  - "is this command destructive"
+  - "can I run this safely"
+  - "blast radius"
+  - "this needs sudo"
+  - "interactive command"
 ---
 
 # Ops Safety Rules

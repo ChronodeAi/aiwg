@@ -1,5 +1,9 @@
 ---
 enforcement: high
+triggers:
+  - "how do I pin a github action"
+  - "container image pinning"
+  - "is this workflow safe"
 ---
 
 # CI Action and Container Pinning

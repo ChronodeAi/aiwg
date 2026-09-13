@@ -129,6 +129,7 @@
     "lint:claude-context": "node tools/lint/claude-context-inventory.mjs",
     "lint:generated-artifacts": "node tools/lint/tracked-generated-artifacts.mjs",
     "lint:discovery-coverage": "node tools/manifest/check-discovery-coverage.mjs --report test-results/discovery-component-coverage.json",
+    "lint:rule-triggers": "node tools/lint/rule-triggers.mjs",
     "lint:vault-migration": "node ci/verify-vault-migration.mjs",
     "provision:vault-migration": "node ci/provision-vault-migration.mjs",
     "provision:vault-approle": "node ci/provision-vault-approle.mjs",

@@ -20,7 +20,7 @@ import {
 } from '../../../src/artifacts/index-builder.js';
 import { discoverCapability } from '../../../src/artifacts/query-engine.js';
 import type { ArtifactIndex } from '../../../src/artifacts/types.js';
-import { GRAPH_CONFIGS } from '../../../src/artifacts/types.js';
+import { GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifacts/types.js';
 
 let tmpRoot: string;
 let cwd: string;
@@ -71,6 +71,19 @@ Should be ignored.
       'start fresh project',
       'new project',
     ]);
+  });
+
+  it('is applied to rules, not only skills (#2544)', () => {
+    // `rule` is in OPERATIONAL_DISCOVERY_TYPES, so the indexer runs trigger
+    // extraction over rule bodies. A rule's name describes the policy, not the
+    // question an agent asks, so without triggers it ranks only on lexical
+    // title overlap and loses to any skill whose triggers cover a token.
+    expect(OPERATIONAL_DISCOVERY_TYPES).toContain('rule');
+    expect(extractTriggers('# Human Authorization Rules\n\nBody.', {
+      enforcement: 'high',
+      triggers: ['am I allowed to do this', 'do I need permission for this'],
+      // Extraction lowercases, so frontmatter casing does not matter.
+    })).toEqual(['am i allowed to do this', 'do i need permission for this']);
   });
 
   it('returns empty array when no Triggers section exists', () => {

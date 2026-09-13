@@ -4,6 +4,12 @@ id: delivery-policy
 severity: HIGH
 applies_to: [all-agents]
 tags: [git, workflow, project-config, branching]
+triggers:
+  - "should I open a pull request"
+  - "do I branch for this"
+  - "can I commit to main"
+  - "how does this project deliver changes"
+  - "force push policy"
 ---
 
 # Delivery Policy Rule

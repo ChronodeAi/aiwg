@@ -1,5 +1,9 @@
 ---
 enforcement: critical
+triggers:
+  - "should I add a co-authored-by line"
+  - "how do I write the commit message"
+  - "AI attribution in commits"
 ---
 
 # No AI Attribution Rules
