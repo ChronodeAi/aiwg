@@ -342,6 +342,15 @@ with the method recorded, normalises brace-escaped titles, resolves against a co
 node tools/research/bibliography-resolver.mjs <source-dir> --index <corpus-index.tsv> [--json]
 ```
 
+Per entry it reports `title`, `year`, `arxiv`, `ref`, and `confirmedBy` — one of
+`arxiv-id`, `exact-title`, or `unresolved`. An unresolved entry carries `ref: null`,
+never an empty string. When a printed title matches more than one corpus REF (the
+corpus inducts some works twice), it resolves to the lowest REF and lists the twins in
+`ambiguous` so the `Confirmed by` choice is auditable rather than silent. It reads
+acl_natbib `\href {url} {Title}`, biblatex `\field{title}`, plain natbib, ACM
+`\showarticletitle`, and brace-delimited `.bib` fields; venue strings such as
+"ArXiv preprint" are never returned as titles.
+
 It refuses to answer from a `.bib` alone. When only `.tex` + `.bib` ship it uses the cited
 keys, which is what BibTeX itself would print — the hierarchy's four levels have no answer
 for that case, and it is common: one real paper shipped 80,568 `.bib` entries and cited six

@@ -37,6 +37,18 @@ describe('normalizeTitle', () => {
       .toBe(normalizeTitle('A StrongREJECT for Empty Jailbreaks'));
   });
 
+  it('ignores a trailing corpus-editorial acronym but not an ordinary parenthetical (#2538)', () => {
+    // The corpus stores "Training Verifiers to Solve Math Word Problems (GSM8K)";
+    // the citing paper prints it without the suffix.
+    expect(normalizeTitle('Training Verifiers to Solve Math Word Problems (GSM8K)'))
+      .toBe(normalizeTitle('Training Verifiers to Solve Math Word Problems'));
+    expect(normalizeTitle('Measuring Massive Multitask Language Understanding (MMLU)'))
+      .toBe(normalizeTitle('Measuring Massive Multitask Language Understanding'));
+    // A words-in-parentheses suffix is part of the title and must NOT be dropped.
+    expect(normalizeTitle('Attention Is All You Need (Extended)'))
+      .not.toBe(normalizeTitle('Attention Is All You Need'));
+  });
+
   it('is case and punctuation insensitive but not word-order insensitive', () => {
     expect(normalizeTitle('GPT-4 Technical Report')).toBe(normalizeTitle('gpt 4 technical report'));
     expect(normalizeTitle('A B')).not.toBe(normalizeTitle('B A'));
@@ -163,7 +175,9 @@ describe('resolveBibliography', () => {
     expect(byKey.b.ref).toBe('REF-535');
     expect(byKey.b.confirmedBy).toBe('exact-title');
     expect(byKey.c.ref).toBeNull();
-    expect(byKey.c.confirmedBy).toBe('printed-entry');
+    // An entry nothing matched is unresolved — not "printed-entry", which the
+    // old code stamped on every entry including ones it failed to parse (#2538).
+    expect(byKey.c.confirmedBy).toBe('unresolved');
   });
 
   it('does not collapse an author-year collision onto the wrong node', () => {
@@ -189,5 +203,118 @@ describe('resolveBibliography', () => {
     const r = resolveBibliography(dir);
     expect(r.count).toBe(3);
     expect(r.uniqueCount).toBe(2);
+  });
+});
+
+// ── Per-dialect regression fixtures, each cut from a real e-print (#2538) ──────
+// The shipped resolver passed its own tests and still returned title: null on
+// 52 of 66 entries of a real ACL paper, 0 of 30 on a biblatex one, and 0 of 21
+// .bib fields. These fixtures are the shapes it actually met.
+
+describe('titleFromRaw dialects (#2538)', () => {
+  it('reads acl_natbib \\href {url} {Title} with spaces between groups, and takes the year from the author line', () => {
+    // arXiv 2506.00085, COSMIC.bbl, entry 1 (acl_natbib.bst)
+    write('main.bbl', [
+      '\\bibitem[{Andriushchenko et~al.(2024)Andriushchenko, Croce, and Flammarion}]{andriushchenko2024jailbreaking}',
+      'Maksym Andriushchenko, Francesco Croce, and Nicolas Flammarion. 2024.',
+      '\\newblock \\href {https://arxiv.org/abs/2404.02151} {Jailbreaking leading safety-aligned llms with simple adaptive attacks}.',
+      '\\newblock \\emph{ArXiv preprint}, abs/2404.02151.',
+      '',
+    ].join('\n'));
+    const [e] = resolveBibliography(dir, {}).entries;
+    expect(e.title).toBe('Jailbreaking leading safety-aligned llms with simple adaptive attacks');
+    expect(e.year).toBe('2024');
+    expect(e.arxiv).toBe('2404.02151');
+  });
+
+  it('never returns the venue line as the title', () => {
+    // Same style, but with the title group missing — the \emph venue must not stand in.
+    write('main.bbl', [
+      '\\bibitem[{X(2024)}]{x2024}',
+      'Some Author. 2024.',
+      '\\newblock \\emph{ArXiv preprint}, abs/2404.99999.',
+    ].join('\n'));
+    const [e] = resolveBibliography(dir, {}).entries;
+    expect(e.title).toBeNull();
+    expect(e.confirmedBy).toBe('unresolved');
+    expect(e.ref).toBeNull();
+  });
+
+  it('reads biblatex \\field{title}, double-braced, plus \\field{year} and \\verb{eprint}', () => {
+    // arXiv 2404.15255, neurips_2023.bbl, entry "ACDC"
+    write('main.bbl', [
+      '    \\entry{ACDC}{article}{}',
+      '      \\field{eprinttype}{arXiv}',
+      '      \\field{journaltitle}{arXiv e-prints}',
+      '      \\field{title}{{Towards Automated Circuit Discovery for Mechanistic Interpretability}}',
+      '      \\field{year}{2023}',
+      '      \\verb{eprint}',
+      '      \\verb 2304.14997',
+      '      \\endverb',
+      '    \\endentry',
+    ].join('\n'));
+    const [e] = resolveBibliography(dir, {}).entries;
+    expect(e.title).toBe('Towards Automated Circuit Discovery for Mechanistic Interpretability');
+    expect(e.year).toBe('2023');
+    expect(e.arxiv).toBe('2304.14997');
+  });
+
+  it('reads plain natbib with bare abs/ ids and the year on the journal line', () => {
+    // arXiv 2411.11296, main.bbl, entry 1 (plainnat-style)
+    write('main.bbl', [
+      '\\bibitem[Abdin et~al.(2024)Abdin and Zhou]{Abdin2024Phi3TR}',
+      'Abdin, M. and Zhou, X.',
+      '\\newblock Phi-3 technical report: A highly capable language model locally on your phone.',
+      '\\newblock \\emph{ArXiv}, abs/2404.14219, 2024.',
+    ].join('\n'));
+    const [e] = resolveBibliography(dir, {}).entries;
+    expect(e.title).toBe('Phi-3 technical report: A highly capable language model locally on your phone');
+    expect(e.arxiv).toBe('2404.14219');
+    expect(e.year).toBe('2024');
+  });
+});
+
+describe('parseBib fields (#2538)', () => {
+  it('reads brace-delimited fields — nearly every real .bib — with nested braces and bare values', () => {
+    // arXiv 2512.18901, references.bib, entry 1. The old parser only handled "..."
+    // and returned null for all 21 entries of this file.
+    const lib = parseBib([
+      '@article{arditi2024refusal,',
+      '  author       = {Arditi, A. and Nanda, N.},',
+      '  title        = {Refusal in {Language} Models Is Mediated by a Single Direction},',
+      '  year         = 2024,',
+      '  volume       = {arXiv:2406.11717},',
+      '  url          = {https://arxiv.org/abs/2406.11717}',
+      '}',
+    ].join('\n'));
+    const e = lib.get('arditi2024refusal');
+    expect(e.title).toBe('Refusal in {Language} Models Is Mediated by a Single Direction');
+    expect(e.year).toBe('2024');
+    expect(e.arxiv).toBe('2406.11717');
+  });
+});
+
+describe('resolution reporting (#2538)', () => {
+  it('emits ref: null (never ""), and confirmedBy: unresolved, for an entry with no title and no id', () => {
+    write('main.bbl', '\\bibitem{k}\n\\newblock \\bibinfo{journal}{something}\n');
+    writeFileSync(join(dir, 'idx.tsv'), 'REF-001\tSome Corpus Title\t\n');
+    const [e] = resolveBibliography(dir, { index: join(dir, 'idx.tsv') }).entries;
+    expect(e.ref).toBeNull();
+    expect(e.ref).not.toBe('');
+    expect(e.confirmedBy).toBe('unresolved');
+  });
+
+  it('surfaces a title that matches more than one corpus REF, resolving to the lowest deterministically', () => {
+    // The corpus inducts the same work twice (preprint + published). Last-write-wins
+    // silently made Confirmed by depend on index file order.
+    write('main.bbl', '\\bibitem{a}\n\\newblock \\showarticletitle{The Llama 3 Herd of Models}.\n');
+    writeFileSync(join(dir, 'idx.tsv'), [
+      'REF-835\tThe Llama 3 Herd of Models\t',
+      'REF-401\tThe Llama 3 Herd of Models\t',
+    ].join('\n'));
+    const [e] = resolveBibliography(dir, { index: join(dir, 'idx.tsv') }).entries;
+    expect(e.ref).toBe('REF-401');
+    expect(e.confirmedBy).toBe('exact-title');
+    expect(e.ambiguous).toEqual(['REF-401', 'REF-835']);
   });
 });

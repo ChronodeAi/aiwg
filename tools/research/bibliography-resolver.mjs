@@ -37,6 +37,10 @@ const BULK_LIBRARY_THRESHOLD = 200;
 export function normalizeTitle(raw) {
   return String(raw ?? '')
     .replace(/\\[a-zA-Z]+\s*/g, ' ')
+    // Corpus editors append the common acronym — "(GSM8K)", "(MMLU)" — which the
+    // paper itself does not print. Strip only a trailing short all-caps/digit
+    // group, so a real title ending in "(Extended)" cannot merge with another work (#2538).
+    .replace(/\s*\([A-Z0-9][A-Z0-9-]{1,9}\)\s*$/, '')
     .replace(/[{}$\\]/g, '')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
@@ -45,8 +49,22 @@ export function normalizeTitle(raw) {
 
 /** Extract an arXiv id from free text, if one is present. */
 export function extractArxivId(text) {
-  const m = String(text ?? '').match(/arxiv[:\s]*((?:\d{4}\.\d{4,5})(?:v\d+)?|[a-z-]+\/\d{7})/i);
-  return m ? m[1].replace(/v\d+$/, '') : null;
+  const t = String(text ?? '');
+  // Real .bbl output rarely writes the literal "arXiv:NNNN" this used to require.
+  // ACL and plain natbib print `abs/2404.02151` or an arxiv.org URL; biblatex
+  // prints `\verb{eprint}` with the id on the following `\verb` line (#2538).
+  const id = '((?:\\d{4}\\.\\d{4,5})(?:v\\d+)?|[a-z-]+\\/\\d{7})';
+  const attempts = [
+    new RegExp('arxiv\\.org\\/(?:abs|pdf)\\/' + id, 'i'),
+    new RegExp('(?:^|[^a-z])abs\\/' + id, 'i'),
+    new RegExp('arxiv[:\\s]*' + id, 'i'),
+    new RegExp('\\\\verb\\{eprint\\}\\s*\\\\verb\\s+' + id, 'i'),
+  ];
+  for (const re of attempts) {
+    const m = t.match(re);
+    if (m) return m[1].replace(/v\d+$/, '');
+  }
+  return null;
 }
 
 /** Entries printed by a compiled `.bbl`. Handles natbib/ACM and biblatex. */
@@ -103,8 +121,45 @@ function sliceBibEntry(text, start) {
 }
 
 function fieldOf(body, field) {
-  const m = body.match(new RegExp(`${field}\\s*=\\s*([{"])([\\s\\S]*?)\\1\\s*[,}\\n]`, 'i'));
-  return m ? m[2].replace(/\s+/g, ' ').trim() : null;
+  // The old form used the opening delimiter as its own closer, which only works
+  // for `"`. Brace-delimited fields — nearly every real .bib — never parsed (#2538).
+  const start = body.match(new RegExp(`(?:^|[,{\\s])${field}\\s*=\\s*`, 'i'));
+  if (!start) return null;
+  let i = start.index + start[0].length;
+  const open = body[i];
+  let value;
+  if (open === '{') {
+    let depth = 0, j = i;
+    for (; j < body.length; j++) {
+      if (body[j] === '{') depth++;
+      else if (body[j] === '}' && --depth === 0) break;
+    }
+    value = body.slice(i + 1, j);
+  } else if (open === '"') {
+    const j = body.indexOf('"', i + 1);
+    value = j < 0 ? null : body.slice(i + 1, j);
+  } else {
+    // Bare value: `year = 2024,`
+    const m = body.slice(i).match(/^([^,\n}]+)/);
+    value = m ? m[1] : null;
+  }
+  return value == null ? null : stripOuterBraces(value).replace(/\s+/g, ' ').trim() || null;
+}
+
+/** `{{Title}}` -> `Title`; biblatex and BibTeX both double-brace to protect case. */
+function stripOuterBraces(v) {
+  let out = String(v).trim();
+  while (out.startsWith('{') && out.endsWith('}')) {
+    // Only strip when the outer pair actually encloses the whole string.
+    let depth = 0, whole = true;
+    for (let k = 0; k < out.length - 1; k++) {
+      if (out[k] === '{') depth++;
+      else if (out[k] === '}' && --depth === 0) { whole = false; break; }
+    }
+    if (!whole) break;
+    out = out.slice(1, -1).trim();
+  }
+  return out;
 }
 
 /** Inline `\begin{thebibliography}` block, when no `.bbl` ships. */
@@ -117,14 +172,28 @@ export function parseInlineThebibliography(text) {
 export function loadCorpusIndex(file) {
   const byTitle = new Map();
   const byArxiv = new Map();
-  if (!file || !fs.existsSync(file)) return { byTitle, byArxiv };
+  // A corpus inducts the same work more than once (preprint + published, or a
+  // re-induction). Last-write-wins hid that and made `Confirmed by` depend on
+  // file order. Keep every REF a title maps to, resolve to the lowest number so
+  // the answer is deterministic, and report the collision (#2538).
+  const titleRefs = new Map();
+  if (!file || !fs.existsSync(file)) return { byTitle, byArxiv, titleRefs };
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     const [ref, title, arxiv] = line.split('\t');
-    if (!ref) continue;
-    if (title) byTitle.set(normalizeTitle(title), ref.trim());
-    if (arxiv) byArxiv.set(arxiv.trim().replace(/v\d+$/, ''), ref.trim());
+    if (!ref || !ref.trim()) continue;
+    const r = ref.trim();
+    if (title) {
+      const n = normalizeTitle(title);
+      if (!titleRefs.has(n)) titleRefs.set(n, []);
+      titleRefs.get(n).push(r);
+    }
+    if (arxiv) byArxiv.set(arxiv.trim().replace(/v\d+$/, ''), r);
   }
-  return { byTitle, byArxiv };
+  for (const [n, refs] of titleRefs) {
+    refs.sort((a, b) => (Number(a.replace(/\D/g, '')) || 0) - (Number(b.replace(/\D/g, '')) || 0));
+    byTitle.set(n, refs[0]);
+  }
+  return { byTitle, byArxiv, titleRefs };
 }
 
 /**
@@ -198,19 +267,27 @@ export function resolveBibliography(dir, { index } = {}) {
     };
   }
 
-  const { byTitle, byArxiv } = loadCorpusIndex(index);
+  const { byTitle, byArxiv, titleRefs } = loadCorpusIndex(index);
   const seen = new Set();
   const resolved = [];
   for (const e of entries) {
     const meta = bibEntries.get(e.key) ?? {};
-    const title = meta.title ?? titleFromRaw(e.raw);
-    const arxiv = meta.arxiv ?? extractArxivId(e.raw);
-    const norm = normalizeTitle(title);
-    const ref = (arxiv && byArxiv.get(arxiv)) ?? (norm && byTitle.get(norm)) ?? null;
+    const title = meta.title || titleFromRaw(e.raw);
+    const arxiv = meta.arxiv || extractArxivId(e.raw);
+    const year = meta.year || yearFromRaw(e.raw);
+    const norm = title ? normalizeTitle(title) : '';
+    // `||`, not `??`: with no title `norm` is "" and `("" && x)` is "" — which `??`
+    // treated as a found ref. That is where `ref: ""` came from (#2538).
+    const ref = (arxiv && byArxiv.get(arxiv)) || (norm && byTitle.get(norm)) || null;
     const confirmedBy = arxiv && byArxiv.get(arxiv) ? 'arxiv-id'
       : norm && byTitle.get(norm) ? 'exact-title'
-      : 'printed-entry';
-    if (!seen.has(e.key)) { seen.add(e.key); resolved.push({ key: e.key, title, year: meta.year ?? null, arxiv, ref, confirmedBy }); }
+      : 'unresolved';
+    // Title matched more than one corpus REF: the edge is real but the target is
+    // a judgement call. Surface the twins instead of hiding the choice.
+    const twins = confirmedBy === 'exact-title' ? (titleRefs.get(norm) ?? []) : [];
+    const entry = { key: e.key, title: title || null, year, arxiv, ref, confirmedBy };
+    if (twins.length > 1) entry.ambiguous = twins;
+    if (!seen.has(e.key)) { seen.add(e.key); resolved.push(entry); }
   }
 
   // Anything in the library but not in the printed list is not a citation.
@@ -252,19 +329,57 @@ export function resolveBibliography(dir, { index } = {}) {
  */
 function titleFromRaw(raw) {
   const text = String(raw ?? '');
+  const BRACED = '([^{}]*(?:\\{[^{}]*\\}[^{}]*)*)';
   const attempts = [
-    /\\showarticletitle\{([\s\S]*?)\}\s*\./,      // ACM
-    /\\showarticletitle\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/,
-    /\\bibinfo\{(?:booktitle|title)\}\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/,
-    /\\newblock\s*\\emph\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/,
-    /\\newblock\s+([^.\\\n]{8,})/,                  // plain natbib
+    /\\showarticletitle\{([\s\S]*?)\}\s*\./,                       // ACM
+    new RegExp('\\\\showarticletitle\\{' + BRACED + '\\}'),
+    new RegExp('\\\\bibinfo\\{(?:booktitle|title)\\}\\{' + BRACED + '\\}'),
+    // acl_natbib.bst: `\newblock \href {url} {Title}.` — spaces between groups (#2538)
+    new RegExp('\\\\newblock\\s*\\\\href\\s*\\{[^}]*\\}\\s*\\{' + BRACED + '\\}'),
+    // biblatex: `\field{title}{...}`, often double-braced to protect case (#2538)
+    new RegExp('\\\\field\\{title\\}\\{' + BRACED + '\\}'),
+    /\\newblock\s+([^.\\\n]{8,})/,                                   // plain natbib
+    // \emph after \newblock is a title in some styles and the VENUE in ACL
+    // ("\emph{ArXiv preprint}"). Tried last, and still venue-filtered below.
+    new RegExp('\\\\newblock\\s*\\\\emph\\{' + BRACED + '\\}'),
   ];
   for (const re of attempts) {
     const m = text.match(re);
     if (m?.[1]) {
-      const t = m[1].replace(/\s+/g, ' ').trim();
-      if (t && !/^\\/.test(t)) return t;
+      const t = stripOuterBraces(m[1]).replace(/\s+/g, ' ').trim();
+      if (t && !/^\\/.test(t) && !isVenueString(t)) return t;
     }
+  }
+  return null;
+}
+
+/**
+ * Strings that appear in title position but name a venue, not a work. Returning
+ * "ArXiv preprint" as a title (#2538) resolves nothing and pollutes the sidecar.
+ */
+function isVenueString(t) {
+  const n = t.toLowerCase().replace(/[.,:;]+$/, '').trim();
+  return /^(arxiv(\s+(preprint|e-prints))?|corr|preprint|technical report|tech\.? report|url|in\s+.*|proceedings\s+of.*|advances in .*)$/.test(n)
+    || /^(arxiv|corr)\b.*\babs\//.test(n);
+}
+
+/**
+ * Year of a printed entry. Placement differs by style: ACL ends the AUTHOR line
+ * with `. 2024.`, plain natbib ends the JOURNAL line with `, 2024.`, ACM wraps it
+ * in `\bibinfo{year}{2023}`, biblatex in `\field{year}{2023}` (#2538).
+ */
+function yearFromRaw(raw) {
+  const text = String(raw ?? '');
+  const attempts = [
+    /\\bibinfo\{year\}\{((?:19|20)\d{2})\}/,
+    /\\field\{year\}\{((?:19|20)\d{2})\}/,
+    /^[^\\\n]*\.\s+((?:19|20)\d{2})[a-z]?\.\s*$/m,     // ACL author line
+    /(?:,|\\newblock)\s*((?:19|20)\d{2})[a-z]?\.\s*$/m,   // natbib journal line
+    /\(((?:19|20)\d{2})[a-z]?\)/,                            // (2023)
+  ];
+  for (const re of attempts) {
+    const m = text.match(re);
+    if (m?.[1]) return m[1];
   }
   return null;
 }
@@ -297,7 +412,10 @@ function main() {
   for (const n of r.notes) console.log(`note:          ${n}`);
   if (withRef.length) {
     console.log('\nresolved edges:');
-    for (const e of withRef) console.log(`  ${e.ref}  [${e.confirmedBy}]  ${(e.title ?? e.key).slice(0, 80)}`);
+    for (const e of withRef) {
+      const amb = e.ambiguous ? `  (title also matches ${e.ambiguous.filter((r) => r !== e.ref).join(', ')})` : '';
+      console.log(`  ${e.ref}  [${e.confirmedBy}]  ${(e.title ?? e.key).slice(0, 80)}${amb}`);
+    }
   }
   if (r.rejectedCount) {
     console.log(`\nrejected (.bib-only, NOT citations): ${r.rejectedCount}`);
