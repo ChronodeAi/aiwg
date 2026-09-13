@@ -52,6 +52,18 @@ GTK4 work. Before the next desktop release, maintainers must either qualify an
 upstream GTK4 release that resolves `glib >=0.20` or hold the Linux bundle. A
 floating Git dependency or an audit ignore is not an accepted remediation.
 
+Re-check 2026-09-13 (roctinam/aiwg#2203): the Linux bundle hold remains in
+force. `tauri 3.0.0-alpha.0` (published 2026-09-13) is the first upstream
+release to expose a `gtk4` feature, but its `tauri-runtime-wry 3.0.0-alpha.0`
+still depends unconditionally on `gtk ^0.18` and `wry ^0.56`, and the current
+stable line (`tauri 2.11.5`, `wry 0.57.0`, `tao 0.37.0`) still declares
+`gtk ^0.18`, so every released graph resolves `glib 0.18.5` and `cargo audit`
+still reports `RUSTSEC-2024-0429`. Alpha releases are not qualification
+candidates; re-evaluate when a stable Tauri 3 line ships a GTK4 runtime. The
+same audit lists six unmaintained crates (`proc-macro-error` and the `unic-*`
+family), all reached through the GTK3 stack; they carry the same owner and
+migration decision as the `glib` line. Next scheduled review: 2026-10-05.
+
 ## Why a token file (not a socket handshake)
 
 The runtime file is the cross-platform handshake every shell shares (see
