@@ -263,6 +263,16 @@ must be recorded as a declared check with an outcome, so it lands as `incomplete
 `blocked` per [`verification-contracts.md`](../../../../../../docs/verification-contracts.md)
 instead of as narrative an automated reader cannot see.
 
+The `research/uncertainty-registered` lint rule checks this on induction output: it flags a
+clause stating an unperformed action against a verification target with no obstacle named
+nearby. It is a prose heuristic, so it runs at `warn` — on a 2,544-reference corpus it
+flagged 34 clauses, of which roughly 31 were genuine, including every gap a hand audit had
+found independently. Run it with the rest of the research ruleset:
+
+```bash
+aiwg lint <corpus-root> --ruleset research
+```
+
 **Worked example.** The same uncertainty, stated three ways:
 
 | Statement | Verdict |
@@ -312,6 +322,21 @@ Two failure modes title matching cannot catch:
 
 **4. Record rejections.** When a candidate edge is dropped because it is `.bib`-only, say so
 in the sidecar. This stops a later extraction pass silently reintroducing it.
+
+**Tooling.** `tools/research/bibliography-resolver.mjs` applies this hierarchy mechanically
+against an e-print source directory — it picks the authoritative artifact, counts entries
+with the method recorded, normalises brace-escaped titles, resolves against a corpus
+`REF<TAB>title<TAB>arxivId` index, and lists `.bib`-only rejections:
+
+```bash
+node tools/research/bibliography-resolver.mjs <source-dir> --index <corpus-index.tsv> [--json]
+```
+
+It refuses to answer from a `.bib` alone. When only `.tex` + `.bib` ship it uses the cited
+keys, which is what BibTeX itself would print — the hierarchy's four levels have no answer
+for that case, and it is common: one real paper shipped 80,568 `.bib` entries and cited six
+works. Prefer the tool over re-deriving the rules per batch, and record its `countMethod`
+verbatim.
 
 **5. Direction is a check, not an assumption.** Publication dates bound edge direction: a
 work cannot cite something published after it. Assert this explicitly — sidecars have
@@ -574,6 +599,8 @@ induct-research <target>
 - @$AIWG_ROOT/docs/verification-contracts.md — Declared checks; prose uncertainty must be registered as one (#2523)
 - @$AIWG_ROOT/agentic/code/frameworks/research-complete/templates/citation-sidecar.md — `Confirmed by`, `Rejected Candidates`, `bibliography` and `acquisition-obstacle` fields (#2524, #2525)
 - @$AIWG_ROOT/agentic/code/frameworks/research-complete/skills/sidecar-lint/SKILL.md — Structural lint for the sidecars this skill writes
+- @$AIWG_ROOT/tools/research/bibliography-resolver.mjs — Applies the bibliography hierarchy mechanically (#2525)
+- @$AIWG_ROOT/agentic/code/frameworks/research-complete/lint/uncertainty-registered.yaml — Flags uncertainty stated without an obstacle (#2523)
 
 ## Storage Routing (#934, #968)
 
