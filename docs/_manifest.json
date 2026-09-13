@@ -337,6 +337,7 @@
     "providers/omp",
     "providers/omp-verification",
     "providers/omp-sessions",
+    "providers/pi-sessions",
     "project-local/overview",
     "mcp/profiles",
     "mcp/codex-profiles",
@@ -2656,6 +2657,13 @@
       "title": "OMP Session Ingestion",
       "summary": "Authorized discovery and replay-safe import of OMP session trees",
       "file": "providers/omp-sessions.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/pi-sessions",
+      "title": "Pi Session Acquisition",
+      "summary": "Authorized discovery and fail-closed import of Pi v3 JSONL session trees",
+      "file": "providers/pi-sessions.md",
       "parent": "providers"
     },
     {

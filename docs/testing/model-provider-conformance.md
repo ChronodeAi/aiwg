@@ -46,8 +46,11 @@ Pi-specific fixture coverage lives in
 `test/unit/providers/pi-conformance-fixtures.test.ts`. Those fixtures pin the
 audited upstream version and exercise session-tree, compaction, retry,
 unknown-entry, malformed-JSONL, and redaction cases without installing or
-invoking Pi. The production Pi runtime and session adapter remain unimplemented,
-so fixture coverage must not be reported as live conformance.
+invoking Pi. The production Pi runtime adapter
+(`tools/ralph-external/lib/pi-adapter.mjs`) and session adapter
+(`src/sessions/adapters/pi.ts`) are delivered and unit-tested, but fixture
+coverage still must not be reported as live conformance; live evidence comes
+only from the opt-in smoke below.
 
 ## Opt-in live smoke
 

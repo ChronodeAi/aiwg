@@ -67,7 +67,7 @@ provider exposes the corresponding surface:
 | OpenClaw | native | native | native | native | native |
 | OpenHuman | indexed | indexed | native | indexed | indexed |
 | Oh My Pi | native | native prompts | native | native | extension bridge |
-| Pi Coding Agent | skills-as-agents | native prompts | native | AGENTS.md | reserved extensions |
+| Pi Coding Agent | skills-as-agents | native prompts | native | AGENTS.md | extension bridge |
 | Warp Terminal | aggregated | conventional | native | aggregated | - |
 | Devin Desktop | aggregated | native | native | native | - |
 

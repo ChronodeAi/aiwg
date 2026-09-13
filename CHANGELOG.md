@@ -7,6 +7,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Fixed
+
+- Pi documentation no longer describes the runtime and session adapters as
+  unimplemented: the conformance and manual provider-testing guides now state
+  what the delivered `pi` external agent-loop adapter and v3 session importer
+  do, the CLI reference, README, and cross-platform overview name the
+  trust-gated extension bridge instead of reserved extensions, and the Pi
+  session page is registered in the docs manifest with a dated official
+  source (#2154).
+
 ## [2026.9.9] - 2026-09-13 – "Say what is actually there"
 
 > v2026.9.8 was tagged but never published: its npm publish failed on a test the

@@ -19,10 +19,12 @@ authenticated.
 
 - Harness script: `tools/ralph-external/manual-provider-test.sh`
 - Loop entry point: `tools/ralph-external/index.mjs`
-- Runtime providers: `claude`, `codex`, `opencode`, `factory`
-  (registered in `tools/ralph-external/lib/*-adapter.mjs`)
-- Pi is a deployment provider but is **not yet** registered with the external
-  agent loop; do not describe resource-deployment tests as loop execution.
+- Runtime providers: `claude`, `codex`, `opencode`, `factory`, `pi`, `omp`,
+  `deepseek-harness` (registered in `tools/ralph-external/lib/*-adapter.mjs`)
+- Pi runs headless as `--provider pi` (`pi --mode json --no-approve`, Node
+  22.19+ preflight, `--model`/`--thinking`/`--tools` propagation, RPC `abort`
+  then bounded TERM/KILL). It never loads project-local Pi resources, so do not
+  describe a Pi loop run as a test of deployed prompts or skills.
 - The `stub` provider is UAT-only (registered by the test fixture, not the runtime)
 - Each run executes in an isolated scratch workspace (`mktemp -d` by default), so
   the loop's `.aiwg/ralph-external/` output never touches the AIWG repo.
@@ -88,11 +90,11 @@ Expected: all tests pass (includes the resume, stop-semantics, unknown-budget, s
 
 ## Troubleshooting
 
-- **`Unknown provider '<name>'`** — the provider CLI adapter isn't registered; valid runtime providers are `claude`, `codex`, `opencode`, `factory`. `stub` is UAT-only.
-- **`Unknown provider 'pi'`** — expected until the dedicated Pi headless/RPC
-  adapter is implemented and qualified. Follow
-  [the Pi provider reference](../agents/providers/pi.md) for direct bounded
-  Pi testing.
+- **`Unknown provider '<name>'`** — the provider CLI adapter isn't registered; valid runtime providers are `claude`, `codex`, `opencode`, `factory`, `pi`, `omp`, `deepseek-harness`. `stub` is UAT-only.
+- **Pi adapter reports unavailable** — the Pi adapter preflights Node 22.19+
+  and a `pi` executable (`AIWG_PI_BIN` overrides the binary). Fix the runtime
+  first; see [the Pi provider reference](../agents/providers/pi.md) for direct
+  bounded Pi testing outside the loop.
 - **Loop aborts at iteration 1 with a cost/auth error** — the provider CLI isn't authenticated on this workstation. Authenticate the CLI directly (e.g. `codex login`) and retry.
 - **`budget-stop-report.json` missing under the `budget` scenario** — the task completed before the ceiling was crossed; raise `--max-iterations` or lower the ceiling, or use `--scenario plain` to confirm the loop runs at all first.
 - **Token/spend ceilings never fire on a non-claude provider** — expected and now surfaced: providers that report no usage make token/spend ceilings *unobservable* (a one-time warning is printed). Use `--scenario budget` (wall-clock) for a provider-independent hard stop.
