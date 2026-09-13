@@ -53,6 +53,54 @@ API forwarding, worker attachment, the desktop panel, production identity
 provider integration, and real browser/Tauri/VS Code qualification remain under
 issues #2545, #2546, and #2547. Unit and local HTTP tests do not prove those workflows.
 
+## Desktop control API
+
+The optional `desktopBackend` Bridge setting accepts the dedicated adapter from
+`src/desktop-backend.mjs`. Configure `createDesktopBackend` with an HTTPS origin
+and `tls: { ca, cert, key }` supplied through backend custody. The client
+certificate authenticates the Bridge workload; each request also carries the
+fresh user delegation. The gateway must verify both identities. This adapter
+does not read the existing operator bearer file. TLS peer and hostname checks
+cannot be disabled through its options, and redirects are never followed.
+
+The local browser control routes use the prefix
+`/api/desktops/instances/{instance}`:
+
+| Method | Route | Required identity action |
+| --- | --- | --- |
+| GET | `/capability` | `view` |
+| POST | `/sessions` | `create` |
+| GET | `/sessions/{desktop}` | `view` |
+| POST | `/sessions/{desktop}/close` | See below |
+
+The close action is `revoke_access` or `sign_out`, from the validated body.
+Create requires a 16–128
+character `Idempotency-Key` containing letters, digits, `_` or `-`. Request
+bodies follow the proposed `rdp-cockpit.v1` contract; unknown request fields
+are rejected. Responses are whitelisted and checked against the requested
+instance and authenticated workspace. Arbitrary upstream error text is not
+returned to the browser.
+
+These routes require the browser cookie, exact local origin and mutation CSRF.
+Authorization is rechecked for each request. Browser logout and identity
+invalidation cancel pending backend calls. Limits are 4 KiB browser bodies,
+eight pending requests per browser, 64 across the Bridge, and ten seconds for
+the browser control operation. The backend defaults to 32 concurrent requests,
+64 KiB responses and a five-second deadline. Backend limits are configurable
+within fixed bounds. This is control-plane traffic, not display frames.
+
+An unconfigured backend reports unsupported. A capability lookup returning
+404 or 501 from an older executor also reports unsupported; terminal routes
+retain their existing behavior. Attach grants are available only through the
+backend adapter, with no browser route that serializes them. The authenticated
+WebSocket worker transport and desktop rendering remain unimplemented.
+
+The local TLS tests use generated test certificates and a real HTTPS server.
+They verify client authentication, server trust, hostname validation, response
+limits, redirects, and the browser-to-Bridge-to-HTTPS request path. Their
+identity provider and desktop responses are test fixtures; they do not qualify
+production identity, the Sandbox broker, or RDP.
+
 ## Verification
 
 Run the focused suites from the repository root after `npm run build:cli`:
