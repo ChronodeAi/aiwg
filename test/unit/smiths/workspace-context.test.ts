@@ -262,6 +262,39 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
       expect(codes).toContain('unsafe-link');
     });
 
+    it('surfaces a provider-named source carrying substantial operator content for scope review (#2537)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      await writeFile(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({
+        version: '1', providers: ['claude'], installed: {}, scripts: {},
+      }));
+      // The reported case: CLAUDE.md used as the project's main context file,
+      // carrying a project-neutral artifact contract rather than Claude specifics.
+      const contract = ['# Corpus contract', '', 'Induction pipeline, naming conventions, GRADE scheme.', ''].join('\n')
+        + 'Verification discipline and housekeeping cadence. '.repeat(400);
+      await writeFile(join(root, 'CLAUDE.md'), `${buildProviderBootstrapBlock('claude')}\n\n${contract}`);
+
+      const audit = await auditWorkspaceContext(root);
+      const claudeRoute = audit.plan.routing.find((entry) => entry.source === 'CLAUDE.md');
+      expect(claudeRoute).toBeDefined();
+      expect(claudeRoute?.scope).toBe('claude-only');
+      expect(claudeRoute?.destination).toContain('.aiwg/context/providers/');
+      expect(claudeRoute?.operatorBytes).toBeGreaterThan(4096);
+      expect(audit.plan.scopeReview.map((entry) => entry.source)).toContain('CLAUDE.md');
+    });
+
+    it('does not flag a small provider adapter for scope review (#2537)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      await writeFile(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({
+        version: '1', providers: ['claude'], installed: {}, scripts: {},
+      }));
+      await writeFile(join(root, 'CLAUDE.md'), `${buildProviderBootstrapBlock('claude')}\n\nPrefer the Bash tool for file edits.\n`);
+
+      const audit = await auditWorkspaceContext(root);
+      expect(audit.plan.scopeReview).toHaveLength(0);
+    });
+
     it('reports no policy drift for a freshly generated workspace', async () => {
       const root = await project();
       await ensureWorkspaceContext(root);

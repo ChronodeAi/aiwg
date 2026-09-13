@@ -46,6 +46,13 @@ const LEGACY_ROOT_FILES = [
   'AIWG.md',
 ] as const;
 
+/**
+ * Operator-content volume above which a provider-named source is surfaced for a scope
+ * decision instead of being routed on filename alone (#2537). A genuine provider adapter
+ * is a few hundred bytes; a migrated project contract is tens of KB.
+ */
+const SCOPE_REVIEW_BYTES = 4096;
+
 const GENERATED_BLOCKS: Array<[string, string]> = [
   [PROVIDER_BOOTSTRAP_START, PROVIDER_BOOTSTRAP_END],
   ['<!-- AIWG:context-hook:start -->', '<!-- AIWG:context-hook:end -->'],
@@ -103,7 +110,20 @@ export interface WorkspaceContextAudit {
     nestedSources: string[];
     projectSources: string[];
     outputs: string[];
+    /** Per-source destination and volume, so a dry run says what moves where (#2537). */
+    routing: WorkspaceContextRouting[];
+    /** Provider-named sources carrying enough operator content to warrant a scope decision (#2537). */
+    scopeReview: WorkspaceContextRouting[];
   };
+}
+
+export interface WorkspaceContextRouting {
+  source: string;
+  operatorBytes: number;
+  destination: string;
+  /** `project-neutral` is read by every provider; `<provider>-only` is read by one. */
+  scope: string;
+  provider: string | null;
 }
 
 export interface ExistingProjectContext {
@@ -816,6 +836,22 @@ export async function auditWorkspaceContext(projectPath: string): Promise<Worksp
   const providerOutputs = providerSources.map((source) => providerContextOutput(projectPath, source));
   const workspaceExists = sources.some((source) => source.path === 'WORKSPACE.md');
 
+  // Filename is the default scope signal, but a project that used CLAUDE.md as its
+  // main context file before WORKSPACE.md existed has project-neutral methodology in
+  // a provider-named file. Report volume and destination per source, and surface the
+  // substantial ones as a decision rather than routing them silently (#2537).
+  const routing: WorkspaceContextRouting[] = rootOperator.map((source) => {
+    const neutral = neutralSources.includes(source.path);
+    return {
+      source: source.path,
+      operatorBytes: Buffer.byteLength(source.operatorContent, 'utf8'),
+      destination: neutral ? 'WORKSPACE.md' : providerContextOutput(projectPath, source.path),
+      scope: neutral ? 'project-neutral' : `${source.provider ?? 'provider'}-only`,
+      provider: neutral ? null : source.provider,
+    };
+  }).sort((a, b) => b.operatorBytes - a.operatorBytes);
+  const scopeReview = routing.filter((entry) => entry.scope !== 'project-neutral' && entry.operatorBytes >= SCOPE_REVIEW_BYTES);
+
   return {
     version: 1,
     projectPath,
@@ -827,6 +863,8 @@ export async function auditWorkspaceContext(projectPath: string): Promise<Worksp
     conflicts,
     sensitiveFindings,
     plan: {
+      routing,
+      scopeReview,
       neutralSources,
       providerSources,
       nestedSources: sources.filter((source) => source.scope === 'nested').map((source) => source.path),
