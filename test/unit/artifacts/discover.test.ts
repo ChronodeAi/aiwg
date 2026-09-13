@@ -33,10 +33,19 @@ function writeSkill(slug: string, framework: string, body: string): string {
   return file;
 }
 
+let previousXdgDataHome: string | undefined;
+
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-discover-'));
   cwd = path.join(tmpRoot, 'project');
   fs.mkdirSync(cwd, { recursive: true });
+  // The framework graph is USER-GLOBAL. This file builds it 18 times from
+  // two-artifact fixtures; unsandboxed, each one overwrites the developer's real
+  // ~/.local/share/aiwg/index/framework and silently breaks `aiwg discover`
+  // host-wide until the next full rebuild. Pin it here rather than per call so
+  // new tests inherit the sandbox instead of having to remember it (#2544).
+  previousXdgDataHome = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = path.join(tmpRoot, 'xdg');
   // Clear any user-defined graphs leaked from earlier tests
   for (const k of Object.keys(GRAPH_CONFIGS)) {
     if (!['framework', 'project', 'codebase', 'source', 'user'].includes(k)) {
@@ -46,6 +55,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = previousXdgDataHome;
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -242,9 +253,7 @@ describe('buildIndex → type inference', () => {
     consoleSpy.mockRestore();
     consoleErrSpy.mockRestore();
 
-    const indexDir = process.env.XDG_DATA_HOME
-      ? path.join(process.env.XDG_DATA_HOME, 'aiwg', 'index', 'framework')
-      : path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'framework');
+    const indexDir = path.join(process.env.XDG_DATA_HOME as string, 'aiwg', 'index', 'framework');
     const metadataPath = path.join(indexDir, 'metadata.json');
     if (!fs.existsSync(metadataPath)) {
       // Test environment may have a different writer; skip the rest
