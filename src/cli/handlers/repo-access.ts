@@ -14,8 +14,8 @@ function valueAfter(args: string[], flag: string): string | null {
   return args[index + 1] ?? null;
 }
 
-function printHelp(): void {
-  console.log(`
+function usage(): string {
+  return `
   aiwg repo-access — repo authorization manifest preflight
 
   Usage:
@@ -28,7 +28,11 @@ function printHelp(): void {
     .aiwg/aiwg.config workspace + repos blocks (preferred)
     .aiwg/ops/security/repo-access.manifest.yaml
     .aiwg/security/repo-access.manifest.yaml (fallback)
-`);
+`;
+}
+
+function printHelp(): void {
+  console.log(usage());
 }
 
 async function handleRepoAccess(ctx: HandlerContext): Promise<HandlerResult> {
@@ -115,6 +119,10 @@ export const repoAccessHandler: CommandHandler = {
   description: 'Validate and query repo access manifest permissions',
   category: 'utility',
   aliases: [],
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: usage(), rawOutput: true };
+  },
+
   execute: handleRepoAccess,
 };
 

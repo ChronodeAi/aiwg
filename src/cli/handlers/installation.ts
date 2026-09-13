@@ -39,6 +39,29 @@ function display(status: ReturnType<typeof inspectInstallation>, json: boolean):
   console.log('');
 }
 
+function usage(): string {
+  return `
+  aiwg installation — inspect, adopt, or switch the canonical global installation
+
+  Usage:
+    aiwg installation show [--json]
+    aiwg installation adopt --method <npm|web|source> [--run-mode <normal|development>]
+    aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]
+
+  Options:
+    --json            Machine-readable output
+    --config-dir      Override the installation config directory
+    --manager         Absolute path to the package manager executable
+    --channel         Release channel (stable|edge)
+    --run-mode        normal|development (derived from --method when omitted)
+
+  Notes:
+    These commands are declaration-only: they record which installation is
+    canonical, they do not change which binary is on PATH. When \`show\` reports
+    State: mismatch, it prints the concrete command that resolves it.
+`;
+}
+
 export const installationHandler: CommandHandler = {
   id: 'installation',
   name: 'Installation',
@@ -46,8 +69,13 @@ export const installationHandler: CommandHandler = {
   category: 'maintenance',
   aliases: [],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: usage(), rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const [action = 'show'] = ctx.args;
+    if (action === 'help') return { exitCode: 0, message: usage(), rawOutput: true };
     const json = ctx.args.includes('--json');
     const actualRoot = getPackageRoot();
     const common = {
@@ -76,7 +104,7 @@ export const installationHandler: CommandHandler = {
       const root = valueAfter(ctx.args, '--root');
       const method = valueAfter(ctx.args, '--method');
       if (!root || !method) {
-        return { exitCode: 2, message: 'Usage: aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]' };
+        return { exitCode: 2, message: `switch requires --root and --method\n${usage()}`, rawOutput: true };
       }
       const status = switchInstallation({
         ...common,
@@ -87,6 +115,6 @@ export const installationHandler: CommandHandler = {
       display(status, json);
       return { exitCode: 0 };
     }
-    return { exitCode: 2, message: 'Usage: aiwg installation <show|adopt|switch> [options]' };
+    return { exitCode: 2, message: `Unknown installation action: ${action}\n${usage()}`, rawOutput: true };
   },
 };

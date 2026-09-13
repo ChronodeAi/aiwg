@@ -241,6 +241,19 @@ function printFullMatrix(matrix: CapabilityMatrix): void {
 
 // ── Main execution ─────────────────────────────────────────────────────────────
 
+function permissionsUsage(): string {
+  return `
+  aiwg steward permissions — authorization model audit and normalization
+
+  Usage:
+    aiwg steward permissions audit                 Find normalized-model errors and legacy grants
+    aiwg steward permissions migrate --dry-run     Preview legacy permission normalization
+    aiwg steward permissions migrate --apply       Back up and atomically normalize config
+
+  Reads .aiwg/aiwg.config authorization block. Migration backs up before writing.
+`;
+}
+
 async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void> {
   const subcommand = args[0];
 
@@ -279,6 +292,11 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
 
   if (subcommand === 'permissions') {
     const operation = args[1];
+    // `<namespace> --help` must reach the same usage block bare invocation prints (#2533).
+    if (!operation || operation === 'help' || operation === '--help' || operation === '-h') {
+      console.log(permissionsUsage());
+      return;
+    }
     const projectDir = ctx ? getProjectDir(ctx, args) : process.cwd();
     const config = await readAiwgConfig(projectDir);
     if (!config) throw new AiwgError({
@@ -325,7 +343,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     }
     throw new AiwgError({
       code: 'ERR_USAGE_UNKNOWN_PERMISSION_OPERATION',
-      message: `Unknown permissions operation: ${operation ?? '(missing)'}`,
+      message: `Unknown permissions operation: ${operation}`,
       hint: 'Use audit or migrate --dry-run|--apply.',
       exitCode: EXIT_CODES.USAGE,
     });
@@ -659,6 +677,19 @@ export const stewardHandler: CommandHandler = {
   description: 'Provider capability routing and permission normalization',
   category: 'maintenance',
   aliases: [],
+
+  // The router intercepts --help before execute(), so a handler without this
+  // property gets the generic "no detailed help" stub even when its own usage
+  // text exists. Route to the same block bare invocation prints, and keep
+  // sub-namespace help reachable, without executing anything (#2533).
+  async help(ctx: HandlerContext): Promise<HandlerResult> {
+    const positional = ctx.args.filter((arg) => !arg.startsWith('-'));
+    if (positional[0] === 'permissions') {
+      return { exitCode: 0, message: permissionsUsage(), rawOutput: true };
+    }
+    await handleSteward([], ctx);
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
