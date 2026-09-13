@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, basename, extname, resolve, sep, isAbsolute, parse } from 'node:path';
 import { storeCockpitToken } from '../../shell-core/keychain.mjs';
 import { assertActivityEvent } from './activity-contract.mjs';
+import { createDesktopHttpHandler } from './desktop-http.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 // Primary seam for roctinam/aiwg#1589: Cockpit talks to a real agentic-sandbox
@@ -2941,11 +2942,13 @@ export function createBridge({
   contributionDirs,
   // Trusted embedding seam; no default verifier and no operator-token fallback.
   desktopIdentity,
+  desktopBackend,
 } = {}) {
   if (desktopIdentity !== undefined && (!desktopIdentity ||
-      ['bind', 'status', 'authorize', 'withDelegation', 'logout'].some((method) => typeof desktopIdentity[method] !== 'function'))) {
+      ['bind', 'status', 'authorize', 'withDelegation', 'logout', 'onInvalidate'].some((method) => typeof desktopIdentity[method] !== 'function'))) {
     throw new TypeError('desktopIdentity must implement authoritative desktop identity operations');
   }
+  if (desktopBackend !== undefined && (!desktopBackend || typeof desktopBackend.request !== 'function')) throw new TypeError('desktopBackend must implement desktop requests');
   if (typeof mcpTokenFile !== 'string') throw new TypeError('mcpTokenFile must be a string');
   if (typeof localDockerFallback !== 'boolean' || (localLibvirtFallback !== undefined && typeof localLibvirtFallback !== 'boolean')) {
     throw new TypeError('local fallback options must be booleans');
@@ -3108,6 +3111,7 @@ export function createBridge({
           });
         }
       }
+      if (await desktopHttp.handle(req, res, url)) return;
       if (url.pathname.startsWith('/api/') && !validBrowserOrigin(req)) {
         return json(res, 403, { error: 'forbidden_origin' });
       }
@@ -3647,6 +3651,8 @@ export function createBridge({
     },
   ));
   server.cockpitToken = TOKEN; // exposed for shells/tests
+  const desktopHttp = createDesktopHttpHandler({ identity: desktopIdentity, backend: desktopBackend,
+    getAuth: sessionAuth, validOrigin: validDesktopBrowserOrigin, validCsrf, json });
   server.issueBootstrapNonce = issueBootstrapNonce;
   // Called by a trusted organizational login adapter after code/device-flow
   // completion. No public request route accepts raw identity binding fields.
@@ -3672,6 +3678,7 @@ export function createBridge({
   }, 1000) : null;
   expireDesktopSessions?.unref();
   server.once('close', () => {
+    desktopHttp.close();
     if (expireDesktopSessions) clearInterval(expireDesktopSessions);
     for (const id of browserSessions.keys()) desktopIdentity?.logout(id);
     browserSessions.clear();
