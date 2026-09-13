@@ -9,6 +9,19 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- `llm-model-archivist`, a media-curator agent that discovers, evaluates,
+  ranks, and preserves open-weight language models in original-precision
+  weights (#2554). It reuses `find-sources`, `archive-acquisition`/`acquire`,
+  `integrity-verification`, `verify-archive`, `provenance-tracking`, and
+  `check-completeness`; the model-specific pieces ship as
+  `tools/media-curator/llm-model-archive.mjs` (self-verifying
+  `CHECKSUMS.sha256`, PROV-O + PREMIS `PROVENANCE.jsonld`, a verify pass that
+  fails on a missing or corrupted shard) and
+  `tools/media-curator/llm-model-report.mjs` (inventory validation and
+  rendering, report rendering, and a lint that rejects unsourced benchmark
+  figures and hub credentials). Quantized-only candidates are flagged, not
+  archived. Registered in the framework manifest, the quickref discovery
+  phrases, and the media-curator docs.
 - `tools/release/publish-github-release-discussion.mjs` creates the stable-release
   GitHub Announcements discussion from a drafted body: it refuses to run before
   the GitHub release is published, validates the four required links and the
