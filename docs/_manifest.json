@@ -1291,6 +1291,13 @@
       "parent": "development"
     },
     {
+      "id": "development/rule-creation-guide",
+      "title": "Creating Rules",
+      "summary": "Write rules agents can actually find",
+      "file": "development/rule-creation-guide.md",
+      "parent": "development"
+    },
+    {
       "id": "development/walkthrough-create-addon",
       "title": "Addon Walkthrough",
       "summary": "Step-by-step addon tutorial",
@@ -3905,6 +3912,13 @@
       "title": "Packet Evidence",
       "summary": "packet-evidence is a first-class source type for governed observations from a",
       "file": "frameworks/research-complete/packet-evidence.md",
+      "parent": "frameworks/research-complete"
+    },
+    {
+      "id": "frameworks/research-complete/bibliographic-services",
+      "title": "Bibliographic Services",
+      "summary": "What each citation and retraction service is good for, and where each will mislead you",
+      "file": "frameworks/research-complete/bibliographic-services.md",
       "parent": "frameworks/research-complete"
     },
     {
