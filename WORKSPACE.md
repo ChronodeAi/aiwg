@@ -50,6 +50,40 @@ When a directive and an AIWG rule conflict, follow the rule and say plainly that
 
 <!-- AIWG:workspace-operator:start -->
 
+## Project Context
+
+### Release publication authority
+
+**npmjs.org publication is a GitHub Actions job, not a Gitea job.** The two
+`npm-publish.yml` workflows are not mirrors of each other:
+
+| Workflow | Publishes to | Authoritative for |
+|---|---|---|
+| `.github/workflows/npm-publish.yml` | **npmjs.org** (public) | release publication, provenance, cosign signatures, SBOM, and the GitHub release assets |
+| `.gitea/workflows/npm-publish.yml` | Gitea's bundled npm registry | local package mirror only |
+
+A green Gitea `npm-publish` run means the Gitea registry mirror succeeded. It
+says nothing about whether the release published. When verifying a release,
+check the GitHub run:
+
+```bash
+gh run list --repo jmagly/aiwg --limit 5
+gh run view <run-id> --repo jmagly/aiwg
+```
+
+The GitHub job also owns everything after publication — `@next` dist-tag
+advance, cosign signing, SBOM generation, and uploading `SHA256SUMS`,
+`aiwg-*.tgz`, and `install.sh` to the GitHub release. A failure anywhere in
+that job leaves the packages on npm but the release without assets, which is
+what `publication_verify` in the release config checks for.
+
+Recovery for a partial publish is `workflow_dispatch` on the GitHub workflow
+with `--ref <tag> -f tag_to_publish=<tag>`; the publish steps treat an
+already-published version as success and continue into the skipped work.
+
+Source of record: `docs/contributing/versioning.md` ("Publication surfaces").
+
+
 <!-- AIWG:project-extraction:start -->
 
 ## Existing Project Snapshot
