@@ -36,6 +36,15 @@ async function fixture(backend, { subject = 'user-a', authorizedInstance = insta
 }
 
 describe('desktop browser control HTTP', () => {
+  it('advertises the desktop feature on /api/health only when identity and backend are both configured (#2547)', async () => {
+    const off = await fixture(undefined, { identityEnabled: false });
+    expect((await (await fetch(`${off.base}/api/health`, { headers: off.headers })).json()).desktop).toEqual({ configured: false });
+    const identityOnly = await fixture(undefined);
+    expect((await (await fetch(`${identityOnly.base}/api/health`, { headers: identityOnly.headers })).json()).desktop).toEqual({ configured: false });
+    const on = await fixture({ request: async () => ({ state: 'unsupported', reason: 'desktop_not_supported' }) });
+    expect((await (await fetch(`${on.base}/api/health`, { headers: on.headers })).json()).desktop).toEqual({ configured: true });
+  });
+
   it('keeps unsupported explicit and rejects native bearer and foreign origins', async () => {
     const b = await fixture(undefined, { identityEnabled: false });
     expect(await (await b.call('capability')).json()).toEqual({ state: 'unsupported', reason: 'desktop_backend_not_configured' });

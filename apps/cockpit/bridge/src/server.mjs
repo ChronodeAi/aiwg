@@ -3594,6 +3594,10 @@ export function createBridge({
           fallback_enabled: Boolean(allowA2AProtocolFallback),
         },
         executor: await getExecutorCapabilities(upstreamUrl),
+        // Runtime feature gate for the desktop panel (#2547): the browser shows
+        // desktop controls only when both the identity verifier and the
+        // dedicated desktop backend are configured on this Bridge.
+        desktop: { configured: Boolean(desktopIdentity && desktopBackend) },
       });
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const distIndex = join(WEB_DIST, 'index.html');

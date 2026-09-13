@@ -418,6 +418,8 @@ describe('cockpit Bridge — control surface', () => {
     expect(h).toMatchObject({ status: 'ok' });
     expect(h.executor_url).toMatch(/^http:\/\/127\.0\.0\.1:/);
     expect(h).not.toHaveProperty('mock');
+    // Desktop panel gate (#2547): off without both desktop adapters.
+    expect(h.desktop).toEqual({ configured: false });
   });
 
   it('loads declarative contributions whose actions inject commands (no Bridge CLI run)', async () => {

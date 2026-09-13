@@ -9,6 +9,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Cockpit desktop panel and inventory entry, control-API-backed (#2547).
+  `/api/health` advertises `desktop.configured` only when both the identity
+  verifier and the dedicated desktop backend are configured, and the web
+  app lists a Desktop tab only on that runtime gate (or
+  `VITE_COCKPIT_DESKTOP=1` for local dev). Inventory shows Open Desktop on
+  running instances, enabled only when the backend capability reports
+  supported and ready and otherwise disabled with the backend's reason. The
+  panel drives a guest session through `desktop-api` (capability, Connect
+  with the backend-granted mode and a caller-owned idempotency key,
+  polling) and shows loading, live, reconnecting with backoff, disconnected,
+  expired, denied, guest-ended, failed, stale-incarnation, handoff-waiting
+  and closing states plus cleanup status; Disconnect, Revoke access and
+  Sign out guest are distinct actions; effective capabilities render from
+  the backend policy only, and Observe/Take Control appear only when
+  granted and stay disabled until a display transport exists. No renderer
+  is embedded and no live qualification is claimed.
 - `apps/cockpit/bridge/src/desktop-identity-keycloak.mjs`: a Keycloak (OIDC)
   verifier for the desktop identity boundary against the internal section9
   realm (#2545). Login evidence is signature-checked against the realm JWKS

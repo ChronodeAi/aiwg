@@ -173,3 +173,62 @@ describe('Inventory provider-aware fast-start controls', () => {
     expect(banner.textContent).not.toMatch(/BEGIN CERTIFICATE|PRIVATE KEY|secret-token/i);
   });
 });
+
+describe('Inventory Open Desktop entry (#2547)', () => {
+  const gatewayId = '11111111-1111-4111-8111-111111111111';
+  const policy = { observe: false, control: true, sharing: false, clipboard_copy: false, clipboard_paste: false, file_transfer: false, audio: false, recording: false, isolation_tier: 'cooperative', generation: 1 };
+  const capability = { schema_version: 'rdp-cockpit.v1', instance_id: gatewayId, incarnation: 'boot-1', policy, supported: true, readiness: 'ready', reason_codes: [] };
+  const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+  function stub(capabilityBody: unknown, instances = [{ ...VM_INSTANCE, id: gatewayId }]) {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inventory')) return ok({ count: instances.length, fetched_at: '2026-09-13T00:00:00Z', instances });
+      if (url.endsWith('/capability')) return ok(capabilityBody);
+      return new Response('{}', { status: 404 });
+    }) as unknown as typeof fetch;
+    globalThis.fetch = fetchMock;
+    return fetchMock;
+  }
+
+  it('renders no Open Desktop button without an onOpenDesktop handler and never probes capability', async () => {
+    const fetchMock = stub(capability);
+    render(<Inventory refreshMs={60_000} />);
+    await screen.findByRole('button', { name: /stop instance/i });
+    expect(screen.queryByRole('button', { name: /open desktop/i })).toBeNull();
+    expect((fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls.some((call) => String(call[0]).endsWith('/capability'))).toBe(false);
+  });
+
+  it('enables Open Desktop for a supported, ready instance and opens it', async () => {
+    stub(capability);
+    const onOpenDesktop = vi.fn();
+    render(<Inventory refreshMs={60_000} onOpenDesktop={onOpenDesktop} />);
+    const button = await screen.findByRole('button', { name: `Open desktop for ${gatewayId.slice(0, 8)}…` }) as HTMLButtonElement;
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(button);
+    expect(onOpenDesktop).toHaveBeenCalledWith(gatewayId);
+  });
+
+  it('disables Open Desktop with the backend reason when unsupported or not ready', async () => {
+    stub({ state: 'unsupported', reason: 'desktop_backend_not_configured' });
+    render(<Inventory refreshMs={60_000} onOpenDesktop={() => {}} />);
+    let button = await screen.findByRole('button', { name: /open desktop/i }) as HTMLButtonElement;
+    await waitFor(() => expect(button.title).toBe('Desktop backend is not configured'));
+    expect(button.disabled).toBe(true);
+    cleanup();
+    stub({ ...capability, readiness: 'not_ready', reason_codes: ['desktop_not_ready'] });
+    render(<Inventory refreshMs={60_000} onOpenDesktop={() => {}} />);
+    button = await screen.findByRole('button', { name: /open desktop/i }) as HTMLButtonElement;
+    await waitFor(() => expect(button.title).toBe('Desktop is still getting ready: desktop_not_ready'));
+    expect(button.disabled).toBe(true);
+  });
+
+  it('disables Open Desktop for a non-gateway instance id without calling the desktop API', async () => {
+    const fetchMock = stub(capability, [VM_INSTANCE]);
+    render(<Inventory refreshMs={60_000} onOpenDesktop={() => {}} />);
+    const button = await screen.findByRole('button', { name: /open desktop for vm-1/i }) as HTMLButtonElement;
+    await waitFor(() => expect(button.title).toBe('Desktop requires a gateway instance id'));
+    expect(button.disabled).toBe(true);
+    expect((fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls.some((call) => String(call[0]).endsWith('/capability'))).toBe(false);
+  });
+});
+
