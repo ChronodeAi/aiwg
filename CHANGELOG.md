@@ -24,6 +24,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   and flags provider-named sources carrying enough content to be a scope decision.
 - A bibliographic-services reference for the research corpus: per-service operating
   characteristics, failure modes, and the OpenAlex citation-count trap.
+- Discovery triggers on the 16 rules an agent most needs mid-task, phrased as the question
+  being asked rather than the policy name — so `aiwg discover "can I commit to main"` reaches
+  `delivery-policy` instead of an unrelated skill. Rules have always supported triggers; 2 of
+  168 used them. `docs/development/rule-creation-guide.md` documents the mechanism and
+  `npm run lint:rule-triggers` reports coverage.
 
 ### Changed
 
@@ -52,6 +57,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   namespaces instead of a "no detailed help" stub.
 - Name the install root when the framework graph cannot be built, so the documented repair is
   run where it works rather than in a consumer project.
+- Keep rule discovery triggers out of deployed startup context. Deployed rules retain their
+  frontmatter, so trigger phrases would have shipped into every project — index metadata the
+  reading agent has no use for, against the budget the prune above defends.
+- Stop `test/unit/artifacts/discover.test.ts` overwriting the developer's user-global framework
+  index. It built that graph 18 times from two-artifact fixtures with only 4 calls sandboxed,
+  replacing a 4,130-artifact index with a 2-artifact one and silently breaking `aiwg discover`
+  host-wide until the next rebuild.
 
 ## [2026.9.7] - 2026-09-12 – "Only what the run owns"
 
