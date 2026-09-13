@@ -476,6 +476,41 @@ export function injectPlatformInContent(content, targetPlatform) {
  * copies destined for such providers must drop the field entirely. An
  * absent field is the documented "compatible with all platforms" default.
  */
+/**
+ * Remove the `triggers:` field from a deployed rule's frontmatter.
+ *
+ * Rules declare trigger phrases so `aiwg discover` can reach them by the
+ * question an agent asks rather than by their policy name (#2544). That is
+ * index-time metadata: no provider matches a *rule* by trigger, and the agent
+ * reading the deployed rule gains nothing from the list. Shipping it spends
+ * startup context on noise, which is exactly the budget #2540 is defending —
+ * ~2KB across the 16 rules covered today, and ~16KB if every rule adopts.
+ *
+ * Skills are untouched: several providers do match skills by trigger.
+ */
+export function stripTriggersFromContent(content) {
+  const fmMatch = content.match(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))([\s\S]*)$/);
+  if (!fmMatch) return content;
+
+  const [, open, fm, close, body] = fmMatch;
+  // Block list form:
+  //   triggers:
+  //     - "am I allowed to do this"
+  let updated = fm.replace(
+    /^triggers:[ \t]*\r?\n(?:[ \t]+-[ \t]+\S[^\r\n]*(?:\r?\n|$))*/m,
+    '',
+  );
+  // Inline form: triggers: ["a", "b"]
+  if (updated === fm) updated = fm.replace(/^triggers:[^\r\n]*(?:\r?\n|$)/m, '');
+
+  if (updated === fm) return content;
+  // An otherwise-empty frontmatter block is dropped rather than left as `---\n---`.
+  if (updated.trim().length === 0) return body.replace(/^\r?\n/, '');
+  // Removing a block mid-frontmatter can leave a trailing blank line before the
+  // closing fence; the deployed file should not carry it.
+  return open + updated.replace(/\s+$/, '') + close + body;
+}
+
 export function stripPlatformsFromContent(content) {
   const fmMatch = content.match(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))([\s\S]*)$/);
   if (!fmMatch) return content;
@@ -706,6 +741,13 @@ export function deployFiles(files, destDir, opts, transformFn) {
     // and the collision-vs-duplicate distinction)
     const srcContent = fs.readFileSync(f, 'utf8');
     let transformedContent = transformFn ? transformFn(f, srcContent, opts) : srcContent;
+
+    // Rule triggers are index metadata, not something the reading agent needs.
+    // Keyed on the source path so every provider's rule deploy gets it without
+    // eight call sites opting in, and so skill triggers are never touched (#2544).
+    if (/(?:^|[\\/])rules[\\/][^\\/]+$/.test(f)) {
+      transformedContent = stripTriggersFromContent(transformedContent);
+    }
 
     // Inject target platform into agent .md files that use platforms: [all]
     if (injectPlatform && provider && /platforms:\s*\[all\]/.test(transformedContent)) {
