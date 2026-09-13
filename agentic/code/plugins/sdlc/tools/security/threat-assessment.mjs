@@ -471,7 +471,7 @@ export const SUPPRESSED_CONTEXTS = Object.freeze([
 const IMPERATIVE_VERBS = 'run|execute|invoke|install|add|update|edit|modify|change|replace|use|set|export|fetch|curl|wget|download|paste|print|dump|echo|cat|read|show|reveal|disclose|leak|send|upload|post|enable|configure|copy|migrate|move|include|write|commit|push|deploy|apply|grant|open|create|remove|delete|disable|ignore|treat|tell|inform|notify|ask|provision';
 const IMPERATIVE_LEAD = new RegExp(`^(?:please\\s+|now\\s+|just\\s+|also\\s+)*(?:${IMPERATIVE_VERBS})\\b`, 'i');
 const REQUEST_CUE = /\b(?:please|you (?:should|must|need to|have to|can)|we (?:should|must|need to|have to)|make sure|be sure|so that (?:you|it) can|in order to)\b/i;
-const DESCRIPTIVE_CUE = /\b(?:added|implemented|delivered|documented|recorded|verified|tested|passed|failed|opened|landed|merged|shipped|fixed|removed|renamed|introduced|wired|gated|configured|trialed|reviewed|observed|checked|confirmed|reconciled|mapped|covered|installed|proceeded|contains?|preserves?|keeps?|remains?|names?|describ(?:es|ed|ing)|declares?|records?|reports?|states?|lists?|carries|existing|currently|already|was|were|has been|have been)\b/i;
+const DESCRIPTIVE_CUE = /\b(?:added|implemented|delivered|documented|recorded|verified|tested|passed|failed|opened|landed|merged|shipped|fixed|removed|renamed|introduced|wired|gated|configured|trialed|reviewed|observed|checked|confirmed|reconciled|mapped|covered|installed|proceeded|returned|classified|assessed|scored|flagged|contains?|preserves?|keeps?|remains?|names?|describ(?:es|ed|ing)|declares?|records?|reports?|states?|lists?|carries|existing|currently|already|was|were|has been|have been)\b/i;
 const SENTENCE_LEAD_MARKERS = /^(?:[\s|>]|[-*+]\s|\d+[.)]\s|\[[ xX]\]\s|\*\*|`)+/;
 
 /**
@@ -512,13 +512,31 @@ function insideFence(text, index) {
  *   already exists (an AL CYCLE status line, a reconciliation note). These
  *   mention credentials, env gates, or launchers without asking for anything.
  */
+/**
+ * True when the match is glued to a hyphenated identifier on either side
+ * (`credential-or-env-probing`, `launch-cookie`). `\\b` treats the hyphen as
+ * a boundary, but a request names "the cookies", never "launch-cookie".
+ */
+function insideHyphenatedIdentifier(text, index, length) {
+  const before = text[index - 1];
+  const after = text[index + length];
+  const wordBefore = index >= 2 && before === '-' && /\w/.test(text[index - 2]);
+  const wordAfter = after === '-' && /\w/.test(text[index + length + 1] ?? '');
+  return wordBefore || wordAfter;
+}
+
 function inferContext(text, index, explicit, length = 0) {
   if (explicit) return explicit;
   if (insideFence(text, index)) return 'quoted';
+  if (length > 0 && insideHyphenatedIdentifier(text, index, length)) return 'documentation';
   const before = text.slice(Math.max(0, index - 120), index).toLowerCase();
+  const wider = text.slice(Math.max(0, index - 400), index);
   const lineStart = text.lastIndexOf('\n', index) + 1;
   const line = text.slice(lineStart, index).trimStart();
   if (/^(>|```)/.test(line) || /(?:quoted|example|evidence|documentation)\s*[:\-]?\s*$/i.test(before)) return 'quoted';
+  // An evidence cue followed by a quotation mark that has not closed yet:
+  //   evidence: "Run X with current cookies; ..."  -> the match sits inside the quote.
+  if (/(?:quoted|quote|example|evidence)\s*[:\-]?\s*["\u201c][^"\u201d]*$/i.test(wider)) return 'quoted';
   if (/(?:must not|do not|don't|never|avoid|prevent|forbid|out[- ]of[- ]scope|warning against|without)\b[^.!?\n]{0,100}$/i.test(before)
     || /\bno\s+(?:[\w-]+\s+){0,3}$/i.test(before)) {
     // "no model credentials needed", "no secret was accessed": a bare "no"
