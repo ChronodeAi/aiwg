@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg init` interactive provider picker now resolves registered provider
+  aliases such as `dsh` to their canonical id instead of warning "Unknown
+  provider"; the DeepSeek Harness guide and quickstart publish the upstream
+  Node engine requirement and launcher and record the 0.1.5-rc.x upstream
+  drift as fail-closed pending the release-age window (#2161).
 - Pi documentation no longer describes the runtime and session adapters as
   unimplemented: the conformance and manual provider-testing guides now state
   what the delivered `pi` external agent-loop adapter and v3 session importer

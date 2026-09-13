@@ -26,6 +26,7 @@ import {
 } from '../../config/aiwg-config.js';
 import * as ui from '../ui.js';
 import { askString as sharedAskString, askYesNo as sharedAskYesNo } from '../prompt-utils.js';
+import { normalizeProviderDefinitionId } from '../../providers/provider-definitions.js';
 import { writeNormalizedAiwgMd } from '../../smiths/context-pipeline/finalization.js';
 import { ensureWorkspaceContext } from '../../smiths/context-pipeline/workspace-context.js';
 
@@ -82,8 +83,13 @@ async function askProviders(rl: readline.Interface, signal?: AbortSignal): Promi
     const num = parseInt(part, 10);
     if (!isNaN(num) && num >= 1 && num <= VALID_PROVIDERS.length) {
       selected.push(VALID_PROVIDERS[num - 1]);
-    } else if (VALID_PROVIDERS.includes(part as typeof VALID_PROVIDERS[number])) {
-      selected.push(part);
+      continue;
+    }
+    // Accept canonical ids and registered aliases (e.g. `dsh` for
+    // `deepseek-harness`) so the picker honours the same names as `--provider`.
+    const canonical = normalizeProviderDefinitionId(part);
+    if (canonical && VALID_PROVIDERS.includes(canonical as typeof VALID_PROVIDERS[number])) {
+      selected.push(canonical);
     } else {
       ui.warn(`  Unknown provider '${part}' — skipped`);
     }
