@@ -19,6 +19,8 @@ import {
   resolveRemotes,
   resolveRemoteProvider,
   resolveDelivery,
+  normalizeForcePushPolicy,
+  FORCE_PUSH_POLICY_ALIAS_NOTE,
   resolveParallelism,
   resolveIssueLabels,
   validateExternalLinks,
@@ -631,6 +633,23 @@ describe('aiwg-config', () => {
   // ── resolveDelivery (#995) ─────────────────────────────────────────────────
 
   describe('resolveDelivery', () => {
+    it('normalizes the deprecated main-only-blocked force-push alias (#2532)', () => {
+      expect(resolveDelivery({ force_push_policy: 'main-only-blocked' } as never).force_push_policy)
+        .toBe('own-branch-only');
+      const normalized = normalizeForcePushPolicy('main-only-blocked');
+      expect(normalized.policy).toBe('own-branch-only');
+      expect(normalized.deprecatedFrom).toBe('main-only-blocked');
+      // The rename narrowed the permission, so the note must say so.
+      expect(FORCE_PUSH_POLICY_ALIAS_NOTE).toContain('narrowed');
+    });
+
+    it('passes current force-push values through unchanged (#2532)', () => {
+      for (const policy of ['never', 'own-branch-only', 'allowed'] as const) {
+        expect(normalizeForcePushPolicy(policy)).toEqual({ policy });
+      }
+      expect(normalizeForcePushPolicy(undefined).policy).toBeUndefined();
+    });
+
     it('returns conservative defaults when delivery is undefined', () => {
       const r = resolveDelivery(undefined);
       expect(r.mode).toBe('pr-required');

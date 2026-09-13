@@ -1678,9 +1678,19 @@ async function runDoctor() {
           issues.push(`merge_style=${d.merge_style} (must be one of ${validMergeStyles.join(', ')})`);
         }
 
-        // force_push_policy validation
+        // force_push_policy validation. `main-only-blocked` is the pre-rename spelling;
+        // accept it as a deprecated alias and name the semantic narrowing, rather than
+        // rejecting a config that was valid when it was written (#2532).
         const validForcePush = ['never', 'own-branch-only', 'allowed'];
-        if (d.force_push_policy && !validForcePush.includes(d.force_push_policy)) {
+        const forcePushAliases = { 'main-only-blocked': 'own-branch-only' };
+        if (d.force_push_policy && forcePushAliases[d.force_push_policy]) {
+          const current = forcePushAliases[d.force_push_policy];
+          issues.push(
+            `force_push_policy=${d.force_push_policy} is a deprecated alias for '${current}' and will be removed; `
+            + 'the permission also narrowed (old: any feature branch, new: the agent\'s own branch only). '
+            + `Run "aiwg config set --project delivery.force_push_policy ${current}"`,
+          );
+        } else if (d.force_push_policy && !validForcePush.includes(d.force_push_policy)) {
           issues.push(`force_push_policy=${d.force_push_policy} (must be one of ${validForcePush.join(', ')})`);
         }
 
