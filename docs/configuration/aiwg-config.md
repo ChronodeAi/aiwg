@@ -440,6 +440,19 @@ with the per-field defaults below.
 - `own-branch-only` — OK on the agent's own feature branch, never to default branch
 - `allowed` — escape hatch for tooling that needs it
 
+`main-only-blocked` is accepted as a **deprecated alias** for `own-branch-only`.
+`resolveDelivery` normalizes it, `aiwg config set` writes the current spelling, and
+`doctor` reports the deprecation with the remedy rather than rejecting the config.
+
+The permission narrowed with the rename: `main-only-blocked` allowed force-push on
+*any* feature branch, `own-branch-only` only on the agent's own. That is why the alias
+is surfaced rather than migrated silently — accepting it quietly would change what an
+agent is permitted to do. Update with:
+
+```bash
+aiwg config set --project delivery.force_push_policy own-branch-only
+```
+
 ### `branch_naming` defaults
 
 ```json

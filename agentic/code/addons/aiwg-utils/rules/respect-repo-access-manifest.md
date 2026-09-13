@@ -10,6 +10,11 @@ workspace manifest is `.aiwg/aiwg.config` `workspace` + `repos`. Legacy
 `.aiwg/ops/security/repo-access.manifest.yaml` and
 `.aiwg/security/repo-access.manifest.yaml` remain compatibility fallbacks.
 
+To **register a repo in the workspace manifest**, add a repo to the access manifest,
+or list repositories that are unlisted and therefore denied, use
+`aiwg repo-access add | remove | audit`. Registration is an operator decision:
+propose the command, do not run it on your own authority.
+
 ## Rule
 
 Before reading deeply, editing, committing, pushing, commenting on issues, or taking service actions against a repo path, run or mentally apply:
