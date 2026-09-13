@@ -16,10 +16,22 @@ Before reading deeply, editing, committing, pushing, commenting on issues, or ta
 
 ```bash
 aiwg repo-access check --path <repo-or-file> --action <read|write|commit|push|issue-comment|service-action|destructive>
+# register a repo in the workspace manifest / add a repo to the access manifest:
+aiwg repo-access add --path <p> --name <n> --allow read,write
 ```
 
 If the repo/path is unlisted, deny by default. Ask the operator to add or update
-the manifest before proceeding. For every listed member, load that member's own
+the manifest before proceeding — the registration command is:
+
+```bash
+aiwg repo-access add --path <repo-or-file> --name <name> \
+  --allow read,write,commit,push[,issue-comment,service-action] [--notes "..."]
+aiwg repo-access remove --name <name>
+aiwg repo-access audit   # git repos under the workspace root with no manifest entry
+```
+
+Registration is the operator's decision: propose the exact command, do not run it
+on your own authority. For every listed member, load that member's own
 `.aiwg/aiwg.config`; never reuse the workspace root's delivery, remotes, tracker
 actor, or signing policy.
 
@@ -76,7 +88,8 @@ If asked to edit an adjacent repo that is not listed:
 
 1. Stop before editing.
 2. Explain that the manifest denies unlisted repo work.
-3. Ask for a manifest update or explicit operator instruction to add the repo.
+3. Ask for a manifest update or explicit operator instruction to add the repo,
+   quoting the `aiwg repo-access add` command that would register it.
 
 If asked to comment on an issue in a handoff-only repo:
 
