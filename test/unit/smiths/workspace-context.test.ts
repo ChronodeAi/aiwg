@@ -221,6 +221,47 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
       expect(codes).toContain('authority-missing');
     });
 
+    it('ignores relative paths inside fenced code blocks and inline code spans (#2536)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      const workspacePath = join(root, 'WORKSPACE.md');
+      const current = await readFile(workspacePath, 'utf8');
+      await writeFile(workspacePath, current.replace(WORKSPACE_OPERATOR_END, [
+        'Add the citation network link to the analysis document:',
+        '',
+        '```',
+        'Citation network: [REF-XXX-citations.md](../citations/REF-XXX-citations.md)',
+        '```',
+        '',
+        '~~~markdown',
+        'Sidecar: [REF-YYY.md](../../elsewhere/REF-YYY.md)',
+        '~~~',
+        '',
+        'Inline example: `[escaped](../inline/escape.md)` stays documentation.',
+        '',
+        WORKSPACE_OPERATOR_END,
+      ].join('\n')));
+
+      const diagnostics = await diagnoseWorkspaceContext(root);
+      expect(diagnostics.map((item) => item.code)).not.toContain('unsafe-link');
+      expect(diagnostics.some((item) => item.severity === 'error')).toBe(false);
+    });
+
+    it('still flags an unfenced relative path that escapes the project (#2536)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      const workspacePath = join(root, 'WORKSPACE.md');
+      const current = await readFile(workspacePath, 'utf8');
+      await writeFile(workspacePath, current.replace(WORKSPACE_OPERATOR_END, [
+        'Real link: [outside](../outside/escape.md)',
+        '',
+        WORKSPACE_OPERATOR_END,
+      ].join('\n')));
+
+      const codes = (await diagnoseWorkspaceContext(root)).map((item) => item.code);
+      expect(codes).toContain('unsafe-link');
+    });
+
     it('reports no policy drift for a freshly generated workspace', async () => {
       const root = await project();
       await ensureWorkspaceContext(root);
