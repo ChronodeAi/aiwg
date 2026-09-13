@@ -453,20 +453,28 @@ async function checkStartupContextBudget(provName, label) {
     `~${k(startup.totalTokens)} tok of ${k(startup.budgetTokens)} standard window ` +
     `(memory + .claude/rules); top: ${top}`;
 
+  // Long-lived projects carry artifacts from deploy models that no longer write
+  // them. The budget warning describes the symptom; name the likely cause and the
+  // command that reports it, so the operator is not left with a number (#2540).
+  const orphanHint =
+    ` Projects deployed under older versions accumulate agents/rules current AIWG no longer writes; ` +
+    `run \`aiwg refresh --dry-run\` to list orphaned artifacts before pruning.`;
+
   if (startup.status === 'over') {
     check(
       `${label} Startup Context`,
       'warn',
       `OVER budget — ${headline}. Exceeds the standard Sonnet window before any prompt; ` +
         `forces the credit-gated 1M tier or immediate exhaustion. Reduce always-on rules ` +
-        `(see the enforcement-tiered deployment ADR / #1673) or narrow the install.`,
+        `(see the enforcement-tiered deployment ADR / #1673) or narrow the install.` + orphanHint,
     );
   } else if (startup.status === 'warn') {
     check(
       `${label} Startup Context`,
       'warn',
       `tight — ${headline}. Limited headroom for real work on standard Sonnet. ` +
-        `Run \`aiwg context-firewall scan --provider claude\` for the attributed breakdown (#1673).`,
+        `Run \`aiwg context-firewall scan --provider claude\` for the attributed breakdown (#1673).` +
+        orphanHint,
     );
   } else {
     check(`${label} Startup Context`, 'ok', headline);

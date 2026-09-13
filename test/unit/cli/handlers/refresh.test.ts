@@ -427,6 +427,103 @@ describe('syncHandler.execute — stale deployment detection', () => {
   });
 });
 
+describe('orphaned rule cleanup (#2540)', () => {
+  it('removes bundled rules the current package no longer ships', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-rule-orphan-'));
+    return (async () => {
+      try {
+        const frameworkRoot = join(root, 'framework-root');
+        const projectRoot = join(root, 'project');
+        mkdirSync(join(frameworkRoot, 'agentic/code/addons/aiwg-utils/rules'), { recursive: true });
+        mkdirSync(join(projectRoot, '.claude/rules'), { recursive: true });
+        writeFileSync(join(frameworkRoot, 'package.json'), '{"version":"2026.9.7"}\n');
+        writeFileSync(
+          join(frameworkRoot, 'agentic/code/addons/aiwg-utils/rules/still-shipped.md'),
+          '# Still shipped\n',
+        );
+        // Deployed under a model that wrote bundled rules; no longer in sources.
+        writeFileSync(
+          join(projectRoot, '.claude/rules/legacy-rule.md'),
+          '<!-- aiwg:managed v2026.1.0 bundled -->\n# Legacy\n',
+        );
+        writeFileSync(
+          join(projectRoot, '.claude/rules/still-shipped.md'),
+          '<!-- aiwg:managed v2026.1.0 bundled -->\n# Still shipped\n',
+        );
+
+        const { removals } = await pruneStaleManagedAgentFiles({
+          projectRoot,
+          frameworkRoot,
+          provider: 'claude',
+        });
+
+        const paths = removals.flatMap((entry) => entry.paths);
+        expect(paths.some((p) => p.endsWith('legacy-rule.md'))).toBe(true);
+        expect(existsSync(join(projectRoot, '.claude/rules/legacy-rule.md'))).toBe(false);
+        // A rule current sources still ship must survive.
+        expect(existsSync(join(projectRoot, '.claude/rules/still-shipped.md'))).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    })();
+  });
+
+  it('never removes an operator-authored rule', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-rule-operator-'));
+    return (async () => {
+      try {
+        const frameworkRoot = join(root, 'framework-root');
+        const projectRoot = join(root, 'project');
+        mkdirSync(join(frameworkRoot, 'agentic/code/addons/aiwg-utils/rules'), { recursive: true });
+        mkdirSync(join(projectRoot, '.claude/rules'), { recursive: true });
+        writeFileSync(join(frameworkRoot, 'package.json'), '{"version":"2026.9.7"}\n');
+        // No managed marker — the operator wrote this.
+        writeFileSync(join(projectRoot, '.claude/rules/house-style.md'), '# Our own rule\n');
+
+        const { removals } = await pruneStaleManagedAgentFiles({
+          projectRoot,
+          frameworkRoot,
+          provider: 'claude',
+        });
+
+        expect(removals).toEqual([]);
+        expect(existsSync(join(projectRoot, '.claude/rules/house-style.md'))).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    })();
+  });
+
+  it('reports without deleting under dryRun', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-rule-dryrun-'));
+    return (async () => {
+      try {
+        const frameworkRoot = join(root, 'framework-root');
+        const projectRoot = join(root, 'project');
+        mkdirSync(join(frameworkRoot, 'agentic/code/addons/aiwg-utils/rules'), { recursive: true });
+        mkdirSync(join(projectRoot, '.claude/rules'), { recursive: true });
+        writeFileSync(join(frameworkRoot, 'package.json'), '{"version":"2026.9.7"}\n');
+        writeFileSync(
+          join(projectRoot, '.claude/rules/legacy-rule.md'),
+          '<!-- aiwg:managed v2026.1.0 bundled -->\n# Legacy\n',
+        );
+
+        const { removals } = await pruneStaleManagedAgentFiles({
+          projectRoot,
+          frameworkRoot,
+          provider: 'claude',
+          dryRun: true,
+        });
+
+        expect(removals.flatMap((entry) => entry.paths).some((p) => p.endsWith('legacy-rule.md'))).toBe(true);
+        expect(existsSync(join(projectRoot, '.claude/rules/legacy-rule.md'))).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    })();
+  });
+});
+
 describe('refreshHandler stale AIWG-managed agent cleanup (#1460)', () => {
   it('preserves desired addon-version agents for the provider just refreshed', async () => {
     const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-addon-version-'));
