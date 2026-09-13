@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const THREAT_ASSESSMENT_SCHEMA_VERSION = '1';
-export const THREAT_ASSESSMENT_ENGINE_VERSION = '1.0.1';
+export const THREAT_ASSESSMENT_ENGINE_VERSION = '1.1.0';
 
 export const THREAT_SURFACES = [
   'issue-title',
@@ -442,6 +442,7 @@ function normalizeParts(input) {
       id: part.id ?? `part-${index + 1}`,
       text: String(part.text ?? ''),
       context: part.context,
+      source: part.source,
     }));
   }
   return [{ id: 'content', text: String(input.content ?? ''), context: input.semanticContext }];
@@ -455,15 +456,75 @@ function paragraphAt(text, index, length) {
   return { text: text.slice(start, end).replace(/\s+/g, ' ').trim(), start, end };
 }
 
-function inferContext(text, index, explicit) {
+/**
+ * Contexts that describe content rather than request an action. Findings in
+ * these contexts stay in the report as evidence but never drive the decision.
+ */
+export const SUPPRESSED_CONTEXTS = Object.freeze([
+  'negative',
+  'quoted',
+  'documentation',
+  'descriptive',
+  'orchestrator-status',
+]);
+
+const IMPERATIVE_VERBS = 'run|execute|invoke|install|add|update|edit|modify|change|replace|use|set|export|fetch|curl|wget|download|paste|print|dump|echo|cat|read|show|reveal|disclose|leak|send|upload|post|enable|configure|copy|migrate|move|include|write|commit|push|deploy|apply|grant|open|create|remove|delete|disable|ignore|treat|tell|inform|notify|ask|provision';
+const IMPERATIVE_LEAD = new RegExp(`^(?:please\\s+|now\\s+|just\\s+|also\\s+)*(?:${IMPERATIVE_VERBS})\\b`, 'i');
+const REQUEST_CUE = /\b(?:please|you (?:should|must|need to|have to|can)|we (?:should|must|need to|have to)|make sure|be sure|so that (?:you|it) can|in order to)\b/i;
+const DESCRIPTIVE_CUE = /\b(?:added|implemented|delivered|documented|recorded|verified|tested|passed|failed|opened|landed|merged|shipped|fixed|removed|renamed|introduced|wired|gated|configured|trialed|reviewed|observed|checked|confirmed|reconciled|mapped|covered|contains?|preserves?|keeps?|remains?|names?|describ(?:es|ed|ing)|declares?|records?|reports?|states?|lists?|carries|existing|currently|already|was|were|has been|have been)\b/i;
+const SENTENCE_LEAD_MARKERS = /^(?:[\s|>]|[-*+]\s|\d+[.)]\s|\[[ xX]\]\s|\*\*|`)+/;
+
+/**
+ * Locate the sentence that contains a match. Markdown line breaks, list
+ * markers, and sentence punctuation all bound a sentence so that one bullet
+ * describing delivered work is never read together with the next.
+ */
+function sentenceAt(text, index, length) {
+  const before = text.slice(0, index);
+  const start = Math.max(
+    before.lastIndexOf('\n'),
+    before.lastIndexOf('. '),
+    before.lastIndexOf('! '),
+    before.lastIndexOf('? '),
+    before.lastIndexOf('; '),
+  ) + 1;
+  const after = text.slice(index + length);
+  const endMatch = /[.!?;](?:\s|$)|\n/.exec(after);
+  const end = endMatch ? index + length + endMatch.index : text.length;
+  const leading = text.slice(start, index).replace(SENTENCE_LEAD_MARKERS, '').trimStart();
+  return { text: text.slice(start, end), leading };
+}
+
+/** True when the match sits inside a fenced code block (``` or ~~~). */
+function insideFence(text, index) {
+  const fences = text.slice(0, index).match(/^[ \t]*(?:```|~~~)/gm) ?? [];
+  return fences.length % 2 === 1;
+}
+
+/**
+ * Classify what the surrounding text does with a matched phrase.
+ *
+ * - `quoted`: block quotes, fenced code, or text introduced as evidence.
+ * - `negative`: a prohibition or boundary statement.
+ * - `requested`: an imperative or request that names the phrase as something
+ *   to do (the only context that drives the decision).
+ * - `descriptive`: a report about work that already happened or state that
+ *   already exists (an AL CYCLE status line, a reconciliation note). These
+ *   mention credentials, env gates, or launchers without asking for anything.
+ */
+function inferContext(text, index, explicit, length = 0) {
   if (explicit) return explicit;
+  if (insideFence(text, index)) return 'quoted';
   const before = text.slice(Math.max(0, index - 120), index).toLowerCase();
   const lineStart = text.lastIndexOf('\n', index) + 1;
   const line = text.slice(lineStart, index).trimStart();
   if (/^(>|```)/.test(line) || /(?:quoted|example|evidence|documentation)\s*[:\-]?\s*$/i.test(before)) return 'quoted';
-  if (/(?:must not|do not|never|avoid|prevent|forbid|out[- ]of[- ]scope|warning against|without)\b[^.!?\n]{0,100}$/i.test(before)) {
+  if (/(?:must not|do not|don't|never|avoid|prevent|forbid|out[- ]of[- ]scope|warning against|without)\b[^.!?\n]{0,100}$/i.test(before)) {
     return 'negative';
   }
+  const sentence = sentenceAt(text, index, length);
+  if (IMPERATIVE_LEAD.test(sentence.leading) || REQUEST_CUE.test(sentence.leading)) return 'requested';
+  if (DESCRIPTIVE_CUE.test(sentence.text)) return 'descriptive';
   return 'requested';
 }
 
@@ -592,7 +653,8 @@ export function assessThreat(input, rawConfig) {
         const match = pattern.exec(part.text);
         if (!match) continue;
         const paragraph = paragraphAt(part.text, match.index, match[0].length);
-        const context = inferContext(part.text, match.index, part.context);
+        const context = inferContext(part.text, match.index, part.context, match[0].length);
+        const suppressed = SUPPRESSED_CONTEXTS.includes(context);
         findings.push({
           ruleId: rule.id,
           ruleProvenance: rule.provenance ?? 'aiwg:builtin',
@@ -601,11 +663,14 @@ export function assessThreat(input, rawConfig) {
           impact: rule.impact,
           taxonomy: rule.taxonomy ?? [],
           partId: part.id,
+          ...(part.source ? { source: part.source } : {}),
           context,
           evidence: paragraph.text,
-          suppressed: ['negative', 'quoted', 'documentation'].includes(context),
-          suppressionReason: ['negative', 'quoted', 'documentation'].includes(context)
-            ? `balanced contextual suppression: ${context} content is evidence/documentation, not a requested action`
+          suppressed,
+          suppressionReason: suppressed
+            ? context === 'orchestrator-status'
+              ? 'orchestrator-authored status comment: the loop reporting its own delivered work is not untrusted input'
+              : `balanced contextual suppression: ${context} content is evidence/documentation, not a requested action`
             : undefined,
           matchedStatements: [],
         });
@@ -643,6 +708,15 @@ export function assessThreat(input, rawConfig) {
   };
 }
 
+function describeSource(finding) {
+  const source = finding.source;
+  if (!source || typeof source !== 'object') return '';
+  const bits = [];
+  if (source.author) bits.push(`by ${source.author}`);
+  if (source.commentId !== undefined) bits.push(`comment ${source.commentId}`);
+  return bits.length ? `; ${bits.join(', ')}` : '';
+}
+
 export function formatThreatAssessment(report) {
   const active = report.findings.filter(finding => !finding.suppressed);
   const suppressed = report.findings.filter(finding => finding.suppressed);
@@ -656,13 +730,13 @@ export function formatThreatAssessment(report) {
   if (active.length) {
     lines.push('', '**Active findings:**');
     for (const finding of active) {
-      lines.push(`- \`${finding.ruleId}\` (${finding.severity}; ${finding.context}): ${finding.evidence}`);
+      lines.push(`- \`${finding.ruleId}\` (${finding.severity}; ${finding.context}${describeSource(finding)}): ${finding.evidence}`);
     }
   }
   if (suppressed.length) {
     lines.push('', '**Contextual findings (non-blocking):**');
     for (const finding of suppressed) {
-      lines.push(`- \`${finding.ruleId}\` (${finding.context}): ${finding.evidence}`);
+      lines.push(`- \`${finding.ruleId}\` (${finding.context}${describeSource(finding)}): ${finding.evidence}`);
     }
   }
   lines.push('', '_AIWG policy selection does not disable or replace independent provider, platform, authorization, secret-scanning, or repository-action safeguards._');

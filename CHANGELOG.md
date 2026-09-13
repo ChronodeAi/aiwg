@@ -32,6 +32,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `address-issues-threat-assess` no longer rejects or flags an issue because of
+  the orchestrator's own prior AL CYCLE comments (#2549). Comments authored by
+  the configured tracker actor that carry the cycle header are classified
+  `orchestrator-status`, status prose about delivered work is classified
+  `descriptive` rather than `requested`, fenced code blocks count as quoted
+  evidence, and every finding and signal now carries `source` (author, comment
+  id). `assess.mjs` gains `--surface` for outbound cycle comments and
+  `--trusted-actor`; trusted logins resolve from `remotes.tracker_actor`. The
+  corpus evaluation and every existing true-positive fixture are unchanged.
+
 - Releases 2026.9.7 and 2026.9.9 shipped without their GitHub Announcements
   discussions because the post-release action was prose the agent was expected
   to perform by hand, left no evidence, and nothing gated completion on the
