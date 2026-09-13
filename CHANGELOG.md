@@ -9,6 +9,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- `apps/cockpit/bridge/src/desktop-identity-keycloak.mjs`: a Keycloak (OIDC)
+  verifier for the desktop identity boundary against the internal section9
+  realm (#2545). Login evidence is signature-checked against the realm JWKS
+  with issuer and exact audience pinned; every bind, status and authorization
+  re-introspects the Keycloak session with the confidential client; a lapsed
+  access token is refreshed once; section9 groups and `desktop:<action>`
+  roles map to desktop rights; the gateway delegation is minted by RFC 8693
+  token exchange; the client secret is read from a mode-0600 file at point of
+  use. Back-channel logout tokens convert to issuer-scoped revoke selectors.
+  Covered by an in-memory Keycloak suite; live realm and gateway
+  qualification remain open.
 - `llm-model-archivist`, a media-curator agent that discovers, evaluates,
   ranks, and preserves open-weight language models in original-precision
   weights (#2554). It reuses `find-sources`, `archive-acquisition`/`acquire`,

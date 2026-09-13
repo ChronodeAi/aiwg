@@ -24,6 +24,56 @@ browser request. The Bridge derives the browser binding and audience from its
 HttpOnly session cookie. There is no public endpoint accepting identity claims.
 Browser expiration or logout racing verification prevents binding or disclosure.
 
+## Keycloak provider adapter (section9 realm)
+
+`src/desktop-identity-keycloak.mjs` implements the verifier contract against
+the internal Keycloak realm (`https://auth.s9.internal/realms/section9`,
+matching `itops:config/matric-user-secrets.yaml` and
+`itops:configs/keycloak/realms/section9.json`). It is the production issuer
+decision for #2545; the Bridge itself still receives the adapter as the
+trusted `desktopIdentity` seam.
+
+```js
+import { createDesktopIdentity } from './src/desktop-identity.mjs';
+import { createKeycloakDesktopVerifier } from './src/desktop-identity-keycloak.mjs';
+
+const keycloak = createKeycloakDesktopVerifier({
+  issuer: 'https://auth.s9.internal/realms/section9',   // default
+  audience: 'cockpit-bridge',          // exact `aud` on the login token
+  clientId: 'cockpit-bridge',          // confidential client; introspection + exchange
+  clientSecretFile: process.env.AIWG_COCKPIT_KEYCLOAK_SECRET_FILE, // mode 0600, OpenBao handoff
+  delegationAudience: 'agentic-sandbox-desktop',  // gateway client the delegation is minted for
+});
+const desktopIdentity = createDesktopIdentity({ verify: keycloak.verify });
+```
+
+Per call the adapter: verifies the login evidence signature against the realm
+JWKS (cached five minutes) and pins `iss` and the exact `aud` (bind only, the
+token is retained backend-only afterwards); introspects the retained access
+token with the confidential client so every bind, status and authorization is
+a fresh Keycloak session check (`active`, `sid`, `aud`, `exp`); refreshes a
+lapsed access token once through the refresh grant when the login supplied
+one; maps claims to the binding (`workspace_id` or `tenant_id`; groups
+`admins`/`operators` → all desktop actions, `viewers` → `view`, `observe`;
+`desktop:<action>` realm or client roles add actions; `desktop_instances`
+claim or a `resolveInstances({ subject, workspaceId, claims })` hook supplies
+the instance scope); and mints the delegation by RFC 8693 token exchange for
+`delegationAudience`, cached until it expires. The client secret is read from
+the mode-0600 file at point of use and never logged or returned; unreadable
+secrets and Keycloak errors surface as `identity_unavailable`, mismatches as
+`denied`. `expiresAt` is bounded by `auth_time + sessionMaxMs` (ten hours,
+the realm SSO maximum) so authorization never extends a login.
+
+Still required outside this repository: a `cockpit-bridge` confidential
+client and the gateway client in the section9 realm (itops), token-exchange
+permission between them, an OpenBao path for the client secret, and the
+gateway-side verification of the exchanged token (roctinam/agentic-sandbox#853).
+The embedder must call `keycloak.forget(browserSessionId)` on Bridge logout and
+route Keycloak back-channel logout tokens through
+`keycloak.logoutSelector(token)` into `desktopIdentity.revoke(selector)`.
+`test/integration/cockpit-desktop-identity-keycloak.test.js` exercises the
+adapter against an in-memory Keycloak; it does not qualify the live realm.
+
 ## Browser boundary
 
 `GET /api/desktop-identity` requires the browser session and an exact local
