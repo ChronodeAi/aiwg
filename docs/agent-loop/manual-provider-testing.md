@@ -22,9 +22,18 @@ authenticated.
 - Runtime providers: `claude`, `codex`, `opencode`, `factory`, `pi`, `omp`,
   `deepseek-harness` (registered in `tools/ralph-external/lib/*-adapter.mjs`)
 - Pi runs headless as `--provider pi` (`pi --mode json --no-approve`, Node
-  22.19+ preflight, `--model`/`--thinking`/`--tools` propagation, RPC `abort`
-  then bounded TERM/KILL). It never loads project-local Pi resources, so do not
-  describe a Pi loop run as a test of deployed prompts or skills.
+  22.19+ preflight, `--model`/`--thinking`/`--tools` propagation, an RPC-style
+  `abort` frame on stdin, then bounded TERM/KILL). It never loads project-local
+  Pi resources, so do not describe a Pi loop run as a test of deployed prompts
+  or skills. Pi documents stdin commands for `--mode rpc`, so whether the
+  `abort` frame is honoured in `--mode json` is unverified; the TERM/KILL
+  fallback is the tested cancellation path (#2550).
+- **Pi status: experimental.** Required for experimental status: the adapter
+  contract tests in `test/unit/ralph/pi-adapter.test.mjs` (`npm run test:node`)
+  and the vitest Pi suites (`test/unit/providers/pi-*.test.ts`,
+  `test/unit/sessions/pi-adapter.test.ts`) green in CI. Required for stable:
+  the above plus a passing `npm run smoke:pi:live` against the pinned Pi
+  version recorded per release, and a resolved #2550.
 - The `stub` provider is UAT-only (registered by the test fixture, not the runtime)
 - Each run executes in an isolated scratch workspace (`mktemp -d` by default), so
   the loop's `.aiwg/ralph-external/` output never touches the AIWG repo.

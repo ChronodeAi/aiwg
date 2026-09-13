@@ -48,9 +48,15 @@ audited upstream version and exercise session-tree, compaction, retry,
 unknown-entry, malformed-JSONL, and redaction cases without installing or
 invoking Pi. The production Pi runtime adapter
 (`tools/ralph-external/lib/pi-adapter.mjs`) and session adapter
-(`src/sessions/adapters/pi.ts`) are delivered and unit-tested, but fixture
-coverage still must not be reported as live conformance; live evidence comes
-only from the opt-in smoke below.
+(`src/sessions/adapters/pi.ts`) are delivered and covered by adapter contract
+tests (`test/unit/ralph/pi-adapter.test.mjs`,
+`test/unit/sessions/pi-adapter.test.ts`): settlement, abort frame and bounded
+TERM/KILL teardown, tool restrictions, stdout/stderr separation, strict JSONL
+framing, version fail-closed, and branch/compaction/retry/unknown-entry/
+redaction import. That offline coverage is the **experimental** gate and must
+not be reported as live conformance. **Stable** additionally requires the
+opt-in smoke below with the Pi version captured in its evidence, and a
+resolved #2550 (stdin abort in `--mode json` is unverified).
 
 ## Opt-in live smoke
 

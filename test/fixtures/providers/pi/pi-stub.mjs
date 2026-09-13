@@ -1,7 +1,27 @@
 #!/usr/bin/env node
+// Offline Pi CLI stand-in. Default invocations mirror a healthy pinned Pi 0.85.0.
+// AIWG_PI_STUB_SCENARIO selects a negative or long-running path for adapter
+// contract tests; AIWG_PI_STUB_RECEIPT records what the stub observed.
+import { readFileSync, writeFileSync } from 'node:fs';
+
 const args = process.argv.slice(2);
+const scenario = process.env.AIWG_PI_STUB_SCENARIO || '';
+const receipt = process.env.AIWG_PI_STUB_RECEIPT;
+const emit = event => process.stdout.write(`${JSON.stringify(event)}\n`);
+const record = patch => {
+  if (!receipt) return;
+  let current = {};
+  try { current = JSON.parse(readFileSync(receipt, 'utf8')); } catch { /* first write */ }
+  writeFileSync(receipt, JSON.stringify({ ...current, ...patch }));
+};
+
 if (args.includes('--version')) {
-  process.stdout.write('0.85.0\n');
+  if (scenario === 'version-failure') {
+    process.stderr.write('pi-stub: incompatible runtime\n');
+    process.exitCode = 3;
+  } else {
+    process.stdout.write('0.85.0\n');
+  }
 } else if (args.includes('--list-models')) {
   process.stdout.write('provider    model                 context  max-out\nopenrouter  fixture/model:free    32K      4K\n');
 } else if (args.includes('--mode') && args[args.indexOf('--mode') + 1] === 'rpc') {
@@ -21,10 +41,37 @@ if (args.includes('--version')) {
     }
   });
 } else if (args.includes('--mode') && args[args.indexOf('--mode') + 1] === 'json') {
-  process.stdout.write('{"type":"session","version":3}\n');
-  process.stdout.write('{"type":"agent_start"}\n');
-  process.stdout.write('{"type":"agent_end","willRetry":false}\n');
-  process.stdout.write('{"type":"agent_settled"}\n');
+  record({ argv: args, env: { CI: process.env.CI, NO_COLOR: process.env.NO_COLOR } });
+  emit({ type: 'session', version: 3 });
+  emit({ type: 'agent_start' });
+  if (scenario) process.stderr.write('pi-stub diagnostic: stderr channel only\n');
+  if (scenario === 'malformed') {
+    process.stdout.write('not-json diagnostic leaked into stdout\n');
+    emit({ type: 'agent_end', willRetry: false });
+    emit({ type: 'agent_settled' });
+  } else if (scenario === 'hang-until-abort') {
+    let buffered = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => {
+      buffered += chunk;
+      for (const line of buffered.split('\n').filter(Boolean)) {
+        let command;
+        try { command = JSON.parse(line); } catch { continue; }
+        if (command.type !== 'abort') continue;
+        record({ abort: command });
+        emit({ type: 'agent_end', willRetry: false, stopReason: 'aborted' });
+        emit({ type: 'agent_settled' });
+        process.exit(0);
+      }
+    });
+    setInterval(() => {}, 1000);
+  } else if (scenario === 'ignore-stdin') {
+    process.stdin.resume();
+    setInterval(() => {}, 1000);
+  } else {
+    emit({ type: 'agent_end', willRetry: false });
+    emit({ type: 'agent_settled' });
+  }
 } else {
   process.stderr.write('unsupported fixture invocation\n');
   process.exitCode = 2;
