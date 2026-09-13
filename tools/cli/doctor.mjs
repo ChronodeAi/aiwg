@@ -1408,6 +1408,7 @@ async function runDoctor() {
   ];
 
   let discoverOk = false;
+  let discoveryDegraded = false;
   for (const probe of discoveryProbes) {
     const r = probeCommand(probe.label, probe.args, null, probe.validateStdout);
     if (probe.args[0] === 'discover') discoverOk = r.ok;
@@ -1421,8 +1422,21 @@ async function runDoctor() {
       check(probe.label, 'ok', 'no project-local index (global context) — discovery uses the framework index from the install root; run `aiwg index build` inside a project for project-scoped queries');
     } else {
       // Warn (not error) — discovery is degraded but doctor itself still works.
+      discoveryDegraded = true;
       check(probe.label, 'warn', `${probe.hint} — ${r.detail}`);
     }
+  }
+
+  // An install-root change (npm link) invalidates the framework graph for every
+  // consumer project, and the two-command repair runs in two different working
+  // directories — which is what made it hard to act on (#2530).
+  if (discoveryDegraded) {
+    const installRoot = AIWG_ROOT;
+    check('Discovery: repair', 'info',
+      `Rebuild the framework graph at the install root, then sync here: `
+      + `\`cd ${installRoot} && aiwg index build --graph framework --force\` then `
+      + `\`cd ${process.cwd()} && aiwg index sync --backend fortemi-core --graph framework\`. `
+      + `Immediate workaround: \`aiwg discover --backend local\`.`);
   }
 
   // 8d. Component-to-driver coverage (#1958).

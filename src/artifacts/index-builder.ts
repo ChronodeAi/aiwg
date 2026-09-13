@@ -785,6 +785,30 @@ export function parseFlowDoc(
   };
 }
 
+/**
+ * Best-effort absolute path to the AIWG install root, for error text that must
+ * name where the framework graph can actually be built (#2530).
+ */
+function resolveInstallRootHint(): string {
+  try {
+    // The running module lives under the install root; walk up to the package.
+    let dir = path.dirname(new URL(import.meta.url).pathname);
+    for (let i = 0; i < 10; i += 1) {
+      const pkg = path.join(dir, 'package.json');
+      if (fs.existsSync(pkg)) {
+        try {
+          const content = JSON.parse(fs.readFileSync(pkg, 'utf8')) as { name?: string };
+          if (content.name === 'aiwg' || content.name === '@aiwg/cli') return dir;
+        } catch { /* keep walking */ }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* fall through */ }
+  return '<aiwg install root>';
+}
+
 export async function buildIndex(
   cwd: string,
   options: BuildOptions = {}
@@ -826,7 +850,21 @@ export async function buildIndex(
       return;
     }
     console.error(`Error: No scan directories found: ${scanDirs.join(', ')}`);
-    console.log('Run this command from a project with the required directories.');
+    // The framework graph scans the AIWG corpus, which only exists at the install
+    // root — never in a consumer project. Saying "run from a project with the
+    // required directories" sends the operator looking in the wrong place (#2530).
+    if (graph === 'framework') {
+      const installRoot = resolveInstallRootHint();
+      console.log('The framework graph indexes the AIWG corpus and can only be built at the');
+      console.log('install root, not in a consumer project. Build it there, then sync here:');
+      console.log('');
+      console.log(`  cd ${installRoot} && aiwg index build --graph framework --force`);
+      console.log(`  cd ${cwd} && aiwg index sync --backend fortemi-core --graph framework`);
+      console.log('');
+      console.log("As an immediate workaround, discovery also works with '--backend local'.");
+    } else {
+      console.log('Run this command from a project with the required directories.');
+    }
     process.exit(1);
   }
 
