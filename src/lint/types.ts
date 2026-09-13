@@ -30,7 +30,8 @@ export interface LintCheck {
     | 'file-exists'
     | 'id-unique'
     | 'id-format'
-    | 'cross-ref-bidirectional';
+    | 'cross-ref-bidirectional'
+    | 'unregistered-uncertainty';
 
   /** Fields to check (for frontmatter checks) */
   fields?: string[];
@@ -49,6 +50,39 @@ export interface LintCheck {
 
   /** Section name that should contain cross-references */
   section?: string;
+
+  /**
+   * Phrases that state an unperformed check, for `unregistered-uncertainty`.
+   * Matched case-insensitively. Defaults to the induction set when omitted.
+   */
+  uncertaintyPatterns?: string[];
+
+  /**
+   * Things the agent could have checked (OpenReview, camera-ready, PDF, census,
+   * code URL, venue...). Required on the same line as the uncertainty phrase, so
+   * a paper's own unverified claim is not mistaken for a skipped check.
+   */
+  verificationTargets?: string[];
+
+  /**
+   * Patterns that discharge an uncertainty by naming a specific obstacle or
+   * recording an outcome (HTTP status, credential requirement, rate limit,
+   * paywall, or a declared check with evidence). Defaults to a general set.
+   */
+  obstaclePatterns?: string[];
+
+  /**
+   * Maximum character distance between the uncertainty phrase and its
+   * verification target. Markdown keeps whole paragraphs on one line, so
+   * same-line co-occurrence alone relates unrelated clauses. Default 80.
+   */
+  targetProximity?: number;
+
+  /**
+   * How many lines after an uncertainty may carry its obstacle. Default 2 —
+   * the obstacle normally sits in the same sentence or the next one.
+   */
+  obstacleWithinLines?: number;
 }
 
 /**

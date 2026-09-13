@@ -275,6 +275,130 @@ describe('reference-resolves check', () => {
   });
 });
 
+describe('unregistered-uncertainty check (#2523)', () => {
+  // Every string below is real prose from a 2,544-reference corpus. The point of
+  // the check is to separate "the agent skipped a cheap check" from "the paper's
+  // own claim is unverified" — flagging the second would discourage exactly the
+  // honest limitation sections #2523 says to keep.
+  const rule: LintRule = {
+    id: 'test/uncertainty',
+    name: 'Uncertainty must name an obstacle',
+    description: 'test',
+    severity: 'warn',
+    appliesTo: { glob: 'findings/REF-*.md' },
+    checks: [{ type: 'unregistered-uncertainty' }],
+  } as unknown as LintRule;
+
+  async function lint(body: string) {
+    writeFileSync(join(TEST_DIR, 'findings', 'REF-001.md'), body);
+    const res = await runLint(TEST_DIR, [makeRuleset([rule])], { recursive: true });
+    return res.diagnostics.filter((d) => d.ruleId === 'test/uncertainty');
+  }
+
+  it('flags a skipped cheap check stated without an obstacle', async () => {
+    const ds = await lint([
+      '# REF-001',
+      '',
+      '6. **Acceptance not independently verified.** Recorded here from the arXiv comment',
+      'and the LaTeX template; no OpenReview or proceedings query was run (radar §4, §7).',
+      '',
+      '- The ACL Anthology camera-ready (`2025.findings-acl.1310`) was not retrieved.',
+      '',
+      'Incoming scholarly citation count unknown, not zero — no citation census performed.',
+      '',
+    ].join('\n'));
+    expect(ds.length).toBe(3);
+    expect(ds.map((d) => d.message).join(' ')).toMatch(/OpenReview/);
+    expect(ds.every((d) => typeof d.line === 'number')).toBe(true);
+    expect(ds[0].fix).toMatch(/name the specific obstacle/);
+  });
+
+  it('accepts the same uncertainty once an obstacle is named', async () => {
+    const ds = await lint([
+      '# REF-001',
+      '',
+      'Citations are deferred: the eprint PDF is Cloudflare-gated (HTTP 403) and was not retrieved.',
+      '',
+      '> **ACQUISITION DEFICIT**: PDF acquisition not attempted (green OA per OpenAlex but',
+      'the PMC link returns proof-of-work).',
+      '',
+      '- **Limitations**: OpenReview API/PDF endpoints returned challenge artifacts.',
+      '',
+      'Venue confirmed: OpenReview queried 2026-09-12; accepted as ICLR 2024 poster.',
+      '',
+    ].join('\n'));
+    expect(ds).toEqual([]);
+  });
+
+  it("leaves the paper's own unverified claims alone", async () => {
+    // None of these is a check the agent could have run. Flagging them would
+    // push agents to stop writing accurate limitations about the source.
+    const ds = await lint([
+      '# REF-001',
+      '',
+      '- Evaluated only up to 7B parameters; scaling behavior above 7B is unverified',
+      '- Transferability to mixture-of-experts architectures is unverified',
+      '- Potential solutions discussed but not validated: alternative SAE architectures',
+      '| H3 | Humans outperform o3 | **Confirmed** (29% vs 5%) | Not confirmed (34% vs 51%) |',
+      '- Unconfirmed predictions underlined to signal uncertainty',
+      '- **Method**: Black-box (no access to LLM internals required). Easy to implement.',
+      '',
+    ].join('\n'));
+    expect(ds).toEqual([]);
+  });
+
+  it('scopes matching to a clause, not a whole line', async () => {
+    // Corpus changelog rows and long GRADE paragraphs sit on one line. Line-scoped
+    // matching related an unperformed action to an unrelated target far away.
+    const ds = await lint([
+      '# REF-001',
+      '',
+      '| 2026-07-03 | claude-opus-4-8 | Induction: PDF archived (sha256 17ba0e96), 15-section analysis + sidecars; edges wired: OUT→REF-033. Conceptual lineage unconfirmed for two candidates. |',
+      '',
+    ].join('\n'));
+    expect(ds).toEqual([]);
+  });
+
+  it('does not treat a scope declaration as a skipped check', async () => {
+    const ds = await lint([
+      '# REF-001',
+      '',
+      'No complete external incoming-citation census is asserted.',
+      'Incoming citation coverage is limited to verified in-corpus REF-002; no exhaustive citation census is claimed.',
+      '',
+    ].join('\n'));
+    expect(ds).toEqual([]);
+  });
+
+  it('honours custom pattern sets, and the obstacle window is bounded', async () => {
+    const custom: LintRule = {
+      ...rule,
+      checks: [{
+        type: 'unregistered-uncertainty',
+        uncertaintyPatterns: ['was not sniffed'],
+        verificationTargets: ['widget'],
+        obstaclePatterns: ['teapot'],
+      }],
+    } as unknown as LintRule;
+    writeFileSync(join(TEST_DIR, 'findings', 'REF-002.md'), [
+      'the widget was not sniffed',
+      '',
+      '',
+      '',
+      'the other widget was not sniffed because the server is a teapot',
+      '',
+    ].join('\n'));
+    const res = await runLint(TEST_DIR, [makeRuleset([custom])], { recursive: true });
+    const ds = res.diagnostics.filter((d) => d.ruleId === 'test/uncertainty');
+    expect(ds.length).toBe(1);
+    // Only the first is flagged: the second names its obstacle. The blank lines
+    // matter — obstacleWithinLines defaults to 2, so an obstacle sitting right
+    // below an unrelated statement would discharge it too.
+    expect(ds[0].message).toMatch(/the widget was not sniffed/);
+    expect(ds[0].line).toBe(1);
+  });
+});
+
 describe('summary and pass/fail', () => {
   it('reports passed when no errors', async () => {
     writeFileSync(join(TEST_DIR, 'findings', 'REF-050.md'), `---

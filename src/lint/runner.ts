@@ -42,6 +42,104 @@ function parseFrontmatter(content: string): Record<string, string> {
 const DEFAULT_REFERENCE_PATTERN = '\\bREF-\\d{3,}\\b';
 
 /**
+ * Verification targets — things the inducting agent could have checked.
+ *
+ * Requiring one of these is what separates "the agent skipped a cheap check"
+ * from "the paper's own claim is unverified". Only the first is a provenance
+ * gap; the second is legitimate analysis, and #2523 explicitly does not ask
+ * agents to stop declaring limitations. Validated against a 2,544-reference
+ * corpus, where grammar-only matching made ~45% of hits paper-claim prose
+ * ("scaling behavior above 7B is unverified", "Not confirmed (34% vs 51%)").
+ */
+/**
+ * Split a markdown line into clauses.
+ *
+ * Corpus prose keeps whole paragraphs, bullet bodies and changelog table rows on
+ * a single line, so "same line" is far too coarse a scope for relating an
+ * unperformed action to its target. Sentence and cell boundaries are the unit
+ * that actually corresponds to one statement.
+ */
+function splitClauses(line: string): string[] {
+  return line
+    .split(/(?<=[.;:!?])\s+|\s+\u2014\s+|\s+--\s+|\|/g)
+    .map((c) => c.trim())
+    .filter(Boolean);
+}
+
+export const DEFAULT_VERIFICATION_TARGETS = [
+  'openreview',
+  '(?:acl )?anthology',
+  'proceedings',
+  'camera[- ]ready',
+  'published version',
+  '\\bPMLR\\b',
+  '\\bDBLP\\b',
+  '\\bOpenAlex\\b',
+  'semantic scholar',
+  '\\bpubpeer\\b',
+  '\\bunpaywall\\b',
+  'retraction|correction notice|expression of concern',
+  'citation (?:census|count)',
+  'influential citation',
+  '\\bPDF\\b',
+  'full[- ]text',
+  '\\be-?print\\b',
+  '(?:code|project|dataset|repository|repo)\\s+(?:page|url|link|release|availability)',
+  '\\bvenue\\b',
+  '\\bacceptance\\b',
+  'source[_ ]type',
+];
+
+/**
+ * Phrases that assert a check was not performed. Drawn from real induction
+ * output — each of these has appeared in a corpus reference doc (#2523).
+ * Only counted when a verification target appears on the same line.
+ */
+export const DEFAULT_UNCERTAINTY_PATTERNS = [
+  '(?:was|were|is|are) not (?:retrieved|run|performed|attempted|fetched|queried|checked|acquired|probed|verified|confirmed)',
+  'not (?:retrieved|run|performed|attempted|fetched|queried|checked|acquired|probed|verified|confirmed)\\b',
+  // Requires the action to be stated as unperformed. Without the trailing verb
+  // this matched bare "no search" in unrelated prose and scope statements like
+  // "no exhaustive census is claimed", neither of which is a skipped check.
+  'no (?:\\w+[ -]){0,4}(?:quer(?:y|ies)|search|census|fetch|check|lookup|probe)(?:es|s)?\\s+(?:was |were )?(?:performed|run|attempted|made|conducted|executed)',
+  '\\b(?:is|remains) unverified\\b',
+  '\\bunconfirmed\\b',
+  'rests on .{0,60} rather than an independent',
+];
+
+export const DEFAULT_OBSTACLE_PATTERNS = [
+  '\\bHTTP\\s?[45]\\d{2}\\b',
+  '\\b(?:401|403|404|429|451|503)\\b',
+  'paywall',
+  'closed[- ]access',
+  'requires? (?:a )?(?:credential|token|API key|subscription|login|account)',
+  '\\b(?:HF_TOKEN|API[_ ]KEY)\\b',
+  'rate[- ]limit',
+  'anti[- ]bot',
+  'cloudflare',
+  'captcha',
+  'endpoint unknown',
+  'no (?:known )?endpoint',
+  // Obstacle vocabulary observed in a real corpus: these are named obstacles,
+  // so the statement is already a real outcome rather than a silent skip.
+  'proof[- ]of[- ]work',
+  'challenge (?:artifact|page|response)',
+  'returned challenge',
+  '\\bgated\\b',
+  'did not render',
+  'green OA',
+  // Explicit scope declarations: saying what is deliberately not claimed is an
+  // outcome, unlike omitting the check and not saying so.
+  'is not (?:claimed|asserted)',
+  'NOT (?:recorded|asserted) as',
+  'evidence boundary',
+  'completion_evidence',
+  'status:\\s*(?:incomplete|blocked)',
+  '\\b(?:queried|fetched|checked|probed|confirmed|resolved)\\s+(?:on\\s+)?\\d{4}-\\d{2}-\\d{2}',
+  '\\bdeferred\\b.{0,40}\\b(?:because|since|due to)\\b',
+];
+
+/**
  * Build a target-wide artifact ID index once per lint run.
  *
  * Reference documents may use either an exact filename (`REF-001.md`) or the
@@ -159,6 +257,51 @@ function runCheck(
             });
           }
         }
+      }
+      break;
+    }
+
+    case 'unregistered-uncertainty': {
+      // An uncertainty written only into prose is invisible to the verification
+      // contract: it was never a declared check, so it never surfaces as
+      // `incomplete` and the "never report skipped verification as success" rule
+      // is never violated. Flag the bare form; accept it once a specific
+      // obstacle is named or an outcome is recorded (#2523).
+      const uncertainty = (check.uncertaintyPatterns ?? DEFAULT_UNCERTAINTY_PATTERNS)
+        .map((p) => new RegExp(p, 'i'));
+      const targets = (check.verificationTargets ?? DEFAULT_VERIFICATION_TARGETS)
+        .map((p) => new RegExp(p, 'i'));
+      const obstacle = (check.obstaclePatterns ?? DEFAULT_OBSTACLE_PATTERNS)
+        .map((p) => new RegExp(p, 'i'));
+      const within = check.obstacleWithinLines ?? 2;
+      const lines = content.split('\n');
+
+      for (let i = 0; i < lines.length; i++) {
+        // Both conditions must hold in the SAME CLAUSE: an unperformed action
+        // AND something the agent could have acted on. Without the target, the
+        // match is as likely to be the paper's own limitation, which must stay
+        // untouched. Without clause scoping, a long markdown line relates two
+        // unrelated clauses — real corpus prose puts whole paragraphs and
+        // changelog tables on one line, which produced most false positives.
+        const clause = splitClauses(lines[i]).find((c) =>
+          uncertainty.some((re) => re.test(c)) && targets.some((re) => re.test(c)));
+        if (!clause) continue;
+        // Look in the matching line and the following `within` lines: the
+        // obstacle normally sits in the same sentence or the next one.
+        const window = lines.slice(i, i + within + 1).join(' ');
+        if (obstacle.some((re) => re.test(window))) continue;
+        diagnostics.push({
+          ruleId: '',
+          ruleName: '',
+          // Left unset so the rule's declared severity applies (see runRule).
+          // This is a prose heuristic, so the shipped rule declares `warn`; an
+          // operator can raise it to error once a corpus is clean.
+          severity: undefined as unknown as LintSeverity,
+          file: filePath,
+          line: i + 1,
+          message: `Uncertainty stated without a named obstacle or recorded outcome: ${clause.trim().slice(0, 160)}`,
+          fix: 'Resolve it if it costs about one request against a known endpoint, or name the specific obstacle (HTTP status, credential required, rate limited, paywalled) so it lands as incomplete/blocked rather than narrative.',
+        });
       }
       break;
     }
