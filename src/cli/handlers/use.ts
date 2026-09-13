@@ -1496,7 +1496,9 @@ async function deployOneProjectLocalBundle(opts: {
     if (quiet && !verbose) args.push('--quiet');
     // Project-local bundles are addon-shaped — never trigger the legacy commands
     // migration prompt (which is only relevant for full-framework deploys).
-    args.push('--skip-commands-migration');
+    // This is a structural opt-out, not the operator declining, so suppress the
+    // duplicate-commands warning too: it fired once per bundle (#2541).
+    args.push('--skip-commands-migration', '--no-commands-warning');
 
     const captureOpts = quiet && !verbose ? { capture: true } : {};
     // Inject AIWG_ROOT so the deploy subprocess can resolve the upstream AIWG

@@ -505,6 +505,7 @@ function parseArgs() {
     asPlugin: false,        // Generate .factory-plugin/ bundle (Factory provider only)
     deployBehaviors: false, // Deploy behaviors in addition to agents
     skipCommandsMigration: false, // Skip commands → skills migration (warns about duplicates)
+    warnOnSkippedCommandsMigration: true, // Emit the duplicate warning when the migration is skipped
     // Managed-marker provenance (#2502). Deployers that are not shipping the
     // bundled framework corpus (project-local bundles, in particular) must
     // override these so `aiwg refresh` does not mistake their artifacts for
@@ -544,6 +545,8 @@ function parseArgs() {
     else if (a === '--quiet' || a === '-q') cfg.quiet = true;
     else if (a === '--as-plugin') cfg.asPlugin = true;
     else if (a === '--skip-commands-migration') cfg.skipCommandsMigration = true;
+    // Structural opt-out: skip the migration without claiming the operator declined it (#2541).
+    else if (a === '--no-commands-warning') cfg.warnOnSkippedCommandsMigration = false;
     else if (a === '--copy-all' || a === '--copy-standard-skills') cfg.copyStandardSkills = true;
     else if (a === '--deploy-source' && args[i + 1]) cfg.deploySource = String(args[++i]);
     else if (a === '--deploy-version' && args[i + 1]) cfg.deployVersion = String(args[++i]);
@@ -1010,6 +1013,7 @@ export async function main() {
     asPlugin: cfg.asPlugin,
     deployBehaviors: cfg.kernelOnly ? false : cfg.deployBehaviors,
     skipCommandsMigration: cfg.skipCommandsMigration,
+    warnOnSkip: cfg.warnOnSkippedCommandsMigration !== false,
     // #1217 / #1219: --copy-all flag forces legacy per-project mirror
     // for the standard tier. Default is no-copy + index-driven discovery.
     // Replaces the legacy AIWG_COPY_STANDARD_SKILLS env var (removed rc.30).

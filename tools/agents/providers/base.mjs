@@ -2932,8 +2932,47 @@ export function cleanupOldRuleFiles(rulesDir, opts = {}) {
  * @param {boolean} opts.skipCommandsMigration - User opted out; warn about duplicates instead
  * @returns {boolean} true if any AIWG command file was removed (or would be in dry-run)
  */
+/**
+ * Commands directories already warned about this process. The stale-command
+ * condition belongs to the directory, not to each deployed framework/addon, so
+ * `aiwg use all` must not repeat it once per unit (#2541).
+ */
+const warnedCommandsDirs = new Set();
+
+/**
+ * AIWG-managed command filenames in a directory — sidecar entries or files
+ * carrying the managed marker. Operator-authored commands and current
+ * skill-command wrappers are excluded.
+ */
+function listManagedCommandFiles(commandsDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(commandsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const sidecar = readSidecarManifest(commandsDir) || { managed: {} };
+  const managed = sidecar.managed || {};
+  const names = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.toLowerCase().endsWith('.md')) continue;
+    if (managed[entry.name]?.kind === 'skill-command') continue;
+    let owned = Object.prototype.hasOwnProperty.call(managed, entry.name);
+    if (!owned) {
+      try {
+        owned = MANAGED_MARKER_RE.test(fs.readFileSync(path.join(commandsDir, entry.name), 'utf8'));
+      } catch {
+        owned = false;
+      }
+    }
+    if (owned) names.push(entry.name);
+  }
+  return names;
+}
+
 export function migrateCommandsDirectory(commandsDir, opts = {}) {
-  const { dryRun = false, skipCommandsMigration = false, verbose = false } = opts;
+  const { dryRun = false, skipCommandsMigration = false, verbose = false, warnOnSkip = true } = opts;
 
   if (!fs.existsSync(commandsDir)) return false;
 
@@ -2941,11 +2980,27 @@ export function migrateCommandsDirectory(commandsDir, opts = {}) {
   if (entries.length === 0) return false;
 
   if (skipCommandsMigration) {
+    // Structural opt-outs (project-local addon bundles) skip the migration because
+    // it does not apply to them, not because the operator declined it. Warning
+    // there is noise, and it fired once per bundle (#2541).
+    if (!warnOnSkip) return false;
+
     const rel = path.relative(process.cwd(), commandsDir);
+    // The condition is a property of the directory, not of each deployed unit;
+    // emit it once per run no matter how many units pass through.
+    if (warnedCommandsDirs.has(commandsDir)) return false;
+    warnedCommandsDirs.add(commandsDir);
+
+    const stale = listManagedCommandFiles(commandsDir);
+    if (stale.length === 0) return false;
+
     console.warn(`\nWarning: commands migration skipped for ${rel}`);
-    console.warn('  Duplicate entries may appear in the command palette because old command');
-    console.warn('  files overlap with newly deployed skills. Remove AIWG command files manually');
-    console.warn(`  to fix: rm ${rel}/<command>.md`);
+    console.warn('  Duplicate entries may appear in the command palette because these old');
+    console.warn('  AIWG command files overlap with newly deployed skills:');
+    for (const name of stale) console.warn(`    ${path.join(rel, name)}`);
+    console.warn('  Resolve automatically by re-running without --skip-commands-migration,');
+    console.warn('  or remove them directly:');
+    console.warn(`    rm ${stale.map((name) => path.join(rel, name)).join(' ')}`);
     return false;
   }
 
