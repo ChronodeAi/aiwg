@@ -7,7 +7,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
-## [2026.9.8] - 2026-09-13 – "Say what is actually there"
+## [2026.9.9] - 2026-09-13 – "Say what is actually there"
+
+> v2026.9.8 was tagged but never published: its npm publish failed on a test the
+> release itself exposed, and the fix landed after the tag. This release supersedes it.
+> The tag remains on both remotes and carries nothing.
 
 ### Added
 
@@ -24,6 +28,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   and flags provider-named sources carrying enough content to be a scope decision.
 - A bibliographic-services reference for the research corpus: per-service operating
   characteristics, failure modes, and the OpenAlex citation-count trap.
+- The bibliography resolver now extracts what it counts. Checked against real e-prints it
+  returned no title on 52 of 66 entries of an ACL paper, none on a biblatex one, and "ArXiv
+  preprint" as a title; it now reads acl_natbib `\href {url} {Title}`, biblatex `\field`,
+  plain natbib, and — the gap the report missed — brace-delimited `.bib` fields, which had
+  never parsed. Unresolved entries say so (`confirmedBy: unresolved`, `ref: null`); a title
+  that matches more than one corpus REF is resolved deterministically and the twins reported
+  in `ambiguous`. Titles 204/205 and years 204/205 across four dialect cases; 57 of 60
+  hand-resolved sidecar edges recovered, the rest corpus-side duplicates.
 - Discovery triggers on the 16 rules an agent most needs mid-task, phrased as the question
   being asked rather than the policy name — so `aiwg discover "can I commit to main"` reaches
   `delivery-policy` instead of an unrelated skill. Rules have always supported triggers; 2 of
