@@ -58,15 +58,21 @@ export async function currentBundledAgentBasenames(frameworkRoot: string): Promi
 /**
  * Basenames of every rule the current package can deploy.
  *
- * Symmetric to {@link currentBundledAgentBasenames}. Rules live in named
- * `rules/` directories under frameworks, addons, and plugins; a rule absent from
- * this set is residue from a deploy model that no longer writes it (#2540).
+ * Symmetric to {@link currentBundledAgentBasenames}. A rule absent from this set
+ * is residue from a deploy model that no longer writes it (#2540).
+ *
+ * Every group that can ship a `rules/` directory must be listed here: the set is
+ * the prune's definition of "still shipped", so a missed group makes live rules
+ * look orphaned and deletes them. `extensions` ships 22 rules and was the group
+ * this nearly lost.
  */
+export const BUNDLED_RULE_SOURCE_GROUPS = ['frameworks', 'addons', 'plugins', 'extensions'] as const;
+
 export async function currentBundledRuleBasenames(frameworkRoot: string): Promise<Set<string>> {
   const names = new Set<string>();
   const codeRoot = path.join(frameworkRoot, 'agentic', 'code');
 
-  for (const group of ['frameworks', 'addons', 'plugins']) {
+  for (const group of BUNDLED_RULE_SOURCE_GROUPS) {
     let units;
     try {
       units = await fs.readdir(path.join(codeRoot, group), { withFileTypes: true });

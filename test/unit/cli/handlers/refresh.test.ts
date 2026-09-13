@@ -72,6 +72,7 @@ vi.mock('../../../../src/cli/ui.js', () => ({
 
 import {
   collectModelDeployArgs, refreshHandler, pruneStaleManagedAgentFiles, detectStaleProviderTrees,
+  BUNDLED_RULE_SOURCE_GROUPS,
   allowsTrackedDeletes,
 } from '../../../../src/cli/handlers/refresh.js';
 import * as ui from '../../../../src/cli/ui.js';
@@ -428,6 +429,54 @@ describe('syncHandler.execute — stale deployment detection', () => {
 });
 
 describe('orphaned rule cleanup (#2540)', () => {
+  it('covers every corpus group that ships rules', async () => {
+    // The desired set IS the prune's definition of "still shipped". A group
+    // missing here makes live rules look orphaned and deletes them, which is the
+    // same shape as the empty-desired-set bug fixed in 2026.9.7.
+    const { readdirSync, existsSync } = await import('node:fs');
+    const codeRoot = join(process.cwd(), 'agentic', 'code');
+    const groupsShippingRules = readdirSync(codeRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => readdirSync(join(codeRoot, entry.name), { withFileTypes: true })
+        .some((unit) => unit.isDirectory() && existsSync(join(codeRoot, entry.name, unit.name, 'rules'))))
+      .map((entry) => entry.name)
+      .sort();
+
+    expect([...BUNDLED_RULE_SOURCE_GROUPS].sort()).toEqual(groupsShippingRules);
+  });
+
+  it('keeps a rule shipped by an extension (#2540)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-rule-extension-'));
+    return (async () => {
+      try {
+        const frameworkRoot = join(root, 'framework-root');
+        const projectRoot = join(root, 'project');
+        mkdirSync(join(frameworkRoot, 'agentic/code/extensions/dev/rules'), { recursive: true });
+        mkdirSync(join(projectRoot, '.claude/rules'), { recursive: true });
+        writeFileSync(join(frameworkRoot, 'package.json'), '{"version":"2026.9.8"}\n');
+        writeFileSync(
+          join(frameworkRoot, 'agentic/code/extensions/dev/rules/dev-secret-hygiene.md'),
+          '# Extension rule\n',
+        );
+        writeFileSync(
+          join(projectRoot, '.claude/rules/dev-secret-hygiene.md'),
+          '<!-- aiwg:managed v2026.9.0 bundled -->\n# Extension rule\n',
+        );
+
+        const { removals } = await pruneStaleManagedAgentFiles({
+          projectRoot,
+          frameworkRoot,
+          provider: 'claude',
+        });
+
+        expect(removals).toEqual([]);
+        expect(existsSync(join(projectRoot, '.claude/rules/dev-secret-hygiene.md'))).toBe(true);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    })();
+  });
+
   it('removes bundled rules the current package no longer ships', () => {
     const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-rule-orphan-'));
     return (async () => {
