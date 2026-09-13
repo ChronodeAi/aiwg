@@ -216,6 +216,7 @@ describe('release plan sidecars', () => {
             skip_when_flag: string;
             links: string[];
             style: string;
+            run: string;
           };
         }>;
       }>;
@@ -232,6 +233,7 @@ describe('release plan sidecars', () => {
       skip_when_flag: '--no-mirror',
       links: ['github_release', 'npm_version', 'release_notes', 'changelog'],
       style: 'conversational-impact-guidance',
+      run: 'node tools/release/publish-github-release-discussion.mjs --version {version} --body {evidence_dir}/discussion.md --evidence-dir {evidence_dir}',
     });
   });
 

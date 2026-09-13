@@ -236,6 +236,14 @@ properties:
                     type: string
                     enum: [conversational-impact-guidance]
                     description: Explain user impact and invite conversation instead of repeating release notes.
+                  run:
+                    type: string
+                    description: >-
+                      Executable that performs this action (creates or idempotently reuses the
+                      discussion, records evidence, then verifies it). `{version}` and
+                      `{evidence_dir}` are interpolated. AIWG's reference is
+                      tools/release/publish-github-release-discussion.mjs. Prose-only execution
+                      of this action is not acceptable for stable releases.
                   voice_sources:
                     type: array
                     items: { type: string }

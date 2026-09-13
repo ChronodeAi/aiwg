@@ -7,6 +7,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- `tools/release/publish-github-release-discussion.mjs` creates the stable-release
+  GitHub Announcements discussion from a drafted body: it refuses to run before
+  the GitHub release is published, validates the four required links and the
+  no-attribution policy, reuses an existing discussion for the version instead
+  of duplicating it, records preflight/request/result evidence, and finishes by
+  running the verifier. The release config's
+  `create_github_announcement_discussion` action now carries a `run` field
+  naming it, and the `flow-release` skill treats the sidecar's
+  `post_release_verification` commands as a completion gate.
+
 ### Changed
 
 - The bounded iterative execution mode is now called the **agent loop** in
@@ -20,6 +32,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Releases 2026.9.7 and 2026.9.9 shipped without their GitHub Announcements
+  discussions because the post-release action was prose the agent was expected
+  to perform by hand, left no evidence, and nothing gated completion on the
+  verifier. Both discussions are now published (#198, #199); the action is
+  tool-backed and verification is mandatory before a stable release is reported
+  complete.
 - `aiwg init` interactive provider picker now resolves registered provider
   aliases such as `dsh` to their canonical id instead of warning "Unknown
   provider"; the DeepSeek Harness guide and quickstart publish the upstream
