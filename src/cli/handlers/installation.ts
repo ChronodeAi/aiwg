@@ -36,7 +36,47 @@ function display(status: ReturnType<typeof inspectInstallation>, json: boolean):
     console.log('Drift:');
     for (const item of status.drift) console.log(`  - ${item}`);
   }
+  const remedy = remediation(status);
+  if (remedy) {
+    console.log('');
+    console.log('Resolve:');
+    for (const line of remedy) console.log(`  ${line}`);
+  }
   console.log('');
+}
+
+/**
+ * `switch` and `adopt` only write installation.json — they cannot change which
+ * binary is on PATH. So when the declaration and reality disagree, neither command
+ * resolves it and the operator needs a shell step this output never mentioned.
+ * Print it, tailored to the direction of the drift (#2534).
+ */
+export function remediation(status: ReturnType<typeof inspectInstallation>): string[] | null {
+  if (status.state !== 'mismatch') return null;
+  const canonicalMethod = status.identity?.method;
+  const canonicalRoot = status.identity?.root;
+  const actualMethod = status.actualMethod;
+
+  if (canonicalMethod === 'source' && canonicalRoot && actualMethod !== 'source') {
+    return [
+      `The declared source install is not what runs. Put it on PATH:`,
+      `  cd ${canonicalRoot} && npm link`,
+      `Then re-run 'aiwg installation show' to confirm State: aligned.`,
+      `('aiwg installation switch' would only rewrite the declaration, which already says source.)`,
+    ];
+  }
+  if (canonicalMethod === 'npm' && actualMethod === 'source') {
+    return [
+      `The declared npm install is not what runs. Restore it:`,
+      `  npm i -g aiwg`,
+      `If a source checkout was linked, unlink it first: npm unlink -g aiwg`,
+    ];
+  }
+  return [
+    `Declaration and reality disagree (${canonicalMethod ?? 'unrecorded'} vs ${actualMethod}).`,
+    `'switch' and 'adopt' are declaration-only and cannot change PATH.`,
+    `Install or link the intended root, then re-run 'aiwg installation show'.`,
+  ];
 }
 
 function usage(): string {
@@ -45,7 +85,7 @@ function usage(): string {
 
   Usage:
     aiwg installation show [--json]
-    aiwg installation adopt --method <npm|web|source> [--run-mode <normal|development>]
+    aiwg installation adopt --method <npm|web|source> [--run-mode <normal|development>] [--yes]
     aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]
 
   Options:
@@ -54,6 +94,7 @@ function usage(): string {
     --manager         Absolute path to the package manager executable
     --channel         Release channel (stable|edge)
     --run-mode        normal|development (derived from --method when omitted)
+    --yes             Confirm an adopt that abandons the declared install
 
   Notes:
     These commands are declaration-only: they record which installation is
@@ -92,11 +133,43 @@ export const installationHandler: CommandHandler = {
     }
     if (action === 'adopt') {
       const method = valueAfter(ctx.args, '--method');
+      // adopt resolves a mismatch by rewriting canonical to match whatever is
+      // running — i.e. by abandoning the declared install. That is the opposite
+      // of what an operator standardizing on a source checkout wants, so make it
+      // a deliberate choice rather than a silent capitulation (#2534).
+      const before = inspectInstallation({
+        ...common,
+        identity: loadInstallationIdentity({ ...common, createIfMissing: true }),
+      });
+      const declaredMethod = before.identity?.method;
+      const abandoning = before.state === 'mismatch'
+        && declaredMethod
+        && declaredMethod !== before.actualMethod;
+      if (abandoning && !ctx.args.includes('--yes')) {
+        return {
+          exitCode: 2,
+          rawOutput: true,
+          message: [
+            `Refusing to adopt: this would abandon the declared ${declaredMethod} install.`,
+            ``,
+            `  declared: ${declaredMethod} at ${before.identity?.root ?? '(unrecorded)'}`,
+            `  running:  ${before.actualMethod} at ${before.actualRoot}`,
+            ``,
+            `adopt rewrites the declaration to match what is running; it does not change`,
+            `which binary is on PATH. If you meant to keep the declared install, run`,
+            `'aiwg installation show' for the command that puts it back on PATH.`,
+            `If you really mean to abandon it, re-run with --yes.`,
+          ].join('\n'),
+        };
+      }
       const status = adoptInstallation({
         ...common,
         method,
         runMode: valueAfter(ctx.args, '--run-mode'),
       });
+      if (abandoning) {
+        console.log(`Warning: adopted the running ${status.actualMethod} install; the previously declared ${declaredMethod} install is no longer canonical.`);
+      }
       display(status, json);
       return { exitCode: 0 };
     }
