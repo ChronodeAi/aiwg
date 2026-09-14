@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createDesktopIdentity } from '../../apps/cockpit/bridge/src/desktop-identity.mjs';
 import {
   DESKTOP_ACTIONS,
+  desktopBrowserAudience,
   SECTION9_ISSUER,
   createKeycloakDesktopVerifier,
   mapSection9Claims,
@@ -15,6 +16,7 @@ import {
 const ISSUER = SECTION9_ISSUER;
 const AUDIENCE = 'cockpit-bridge';
 const GATEWAY = 'agentic-sandbox-desktop';
+const THUMBPRINT = 'a'.repeat(43);
 const SECRET = 'bridge-client-secret-value';
 const b64 = (value) => Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64url');
 
@@ -59,7 +61,11 @@ function fakeKeycloak(pair, overrides = {}) {
       if (params.get('grant_type') === 'urn:ietf:params:oauth:grant-type:token-exchange') {
         if (params.get('audience') !== GATEWAY || !state.active.has(params.get('subject_token'))) return json({ error: 'invalid_grant' }, 400);
         state.exchanges = (state.exchanges ?? 0) + 1;
-        return json({ access_token: `delegation-${state.exchanges}`, expires_in: state.exchangeTtl, token_type: 'Bearer' });
+        const source = state.active.get(params.get('subject_token'));
+        const payload = { ...source, aud: GATEWAY, azp: AUDIENCE,
+          desktop_browser_session_audience: params.get('desktop_browser_session_audience'),
+          cnf: { 'x5t#S256': THUMBPRINT }, ...state.exchangeClaims };
+        return json({ access_token: state.exchangeToken ?? jwt(pair, payload), expires_in: state.exchangeTtl, token_type: 'Bearer' });
       }
     }
     return json({ error: 'not_found' }, 404);
@@ -89,7 +95,7 @@ describe('Keycloak desktop identity verifier (#2545, section9 realm)', () => {
 
   function verifier(kc, options = {}) {
     return createKeycloakDesktopVerifier({ audience: AUDIENCE, clientId: AUDIENCE, clientSecretFile: secretFile,
-      delegationAudience: GATEWAY, fetch: kc.fetch, now: () => clock, ...options });
+      delegationAudience: GATEWAY, workloadCertificateThumbprint: THUMBPRINT, fetch: kc.fetch, now: () => clock, ...options });
   }
 
   it('rejects unusable configuration up front', () => {
@@ -118,7 +124,7 @@ describe('Keycloak desktop identity verifier (#2545, section9 realm)', () => {
     expect(exchange.get('audience')).toBe(GATEWAY);
     expect(exchange.get('subject_token')).toBe(token);
     await identity.withDelegation('browser-1', { action: 'create', instanceId: '11111111-1111-4111-8111-111111111111' }, async ({ delegation }) => {
-      expect(delegation).toBe('delegation-1');
+      expect(verifyJws(delegation, [pair.jwk])).toMatchObject({ aud: GATEWAY, azp: AUDIENCE, cnf: { 'x5t#S256': THUMBPRINT } });
     });
     expect(JSON.stringify(kc.state.calls)).not.toContain('client-secret-value');
     identity.close();
@@ -242,6 +248,51 @@ describe('Keycloak desktop identity verifier (#2545, section9 realm)', () => {
     await expect(v.logoutSelector(jwt(pair, { iss: ISSUER, aud: AUDIENCE, sub: 'user-a' }))).rejects.toMatchObject({ code: 'denied' });
     await expect(v.logoutSelector(jwt(pair, { iss: 'https://other.example/realms/x', aud: AUDIENCE, sub: 'user-a', events: { 'http://schemas.openid.net/event/backchannel-logout': {} } }))).rejects.toMatchObject({ code: 'denied' });
     identity.close();
+  });
+
+  it.each([
+    ['missing browser binding', { desktop_browser_session_audience: undefined }],
+    ['different browser binding', { desktop_browser_session_audience: 'desktop-browser-v1:' + 'b'.repeat(64) }],
+    ['wrong subject', { sub: 'other-user' }], ['wrong session', { sid: 'other-session' }],
+    ['wrong workspace', { workspace_id: 'other-workspace' }], ['wrong client', { azp: 'other-client' }],
+    ['multiple audiences', { aud: [GATEWAY, 'other'] }], ['wrong audience', { aud: 'other' }],
+    ['wrong issuer', { iss: 'https://other.invalid/realms/x' }], ['missing certificate', { cnf: undefined }],
+    ['wrong certificate', { cnf: { 'x5t#S256': 'b'.repeat(43) } }],
+    ['missing expiry', { exp: undefined }], ['expired token', { exp: 1 }], ['not yet valid', { nbf: 9e12 }],
+  ])('rejects a correctly signed delegation with %s', async (_name, exchangeClaims) => {
+    const kc = fakeKeycloak(pair, { exchangeClaims });
+    const token = login(); kc.state.active.set(token, claims());
+    await expect(verifier(kc).verify({ operation: 'bind',
+      expected: { browserSessionId: 'b', audience: 'a', workspaceId: 'workspace-a' },
+      evidence: { accessToken: token } })).rejects.toMatchObject({ code: 'denied' });
+  });
+
+  it('rejects unsigned delegation and a changed authoritative subject before reusing cached delegation', async () => {
+    const kc = fakeKeycloak(pair, { exchangeToken: 'opaque-unverified-token' });
+    const token = login(); kc.state.active.set(token, claims());
+    const expected = { browserSessionId: 'b', audience: 'a', workspaceId: 'workspace-a' };
+    const v = verifier(kc);
+    await expect(v.verify({ operation: 'bind', expected, evidence: { accessToken: token } })).rejects.toMatchObject({ code: 'denied' });
+    delete kc.state.exchangeToken;
+    await v.verify({ operation: 'bind', expected, evidence: { accessToken: token } });
+    kc.state.active.set(token, claims({ sub: 'other-user' }));
+    await expect(v.verify({ operation: 'status', expected })).rejects.toMatchObject({ code: 'denied' });
+  });
+
+  it('derives distinct immutable browser bindings and caps delegation at signed expiry', async () => {
+    const kc = fakeKeycloak(pair, { exchangeTtl: 900 });
+    const token = login(); kc.state.active.set(token, claims());
+    const v = verifier(kc);
+    const expected = { browserSessionId: 'b', audience: 'a', workspaceId: 'workspace-a' };
+    const bound = await v.verify({ operation: 'bind', expected, evidence: { accessToken: token } });
+    expect(bound.delegationExpiresAt).toBe(clock + 300_000);
+    const digest = desktopBrowserAudience(expected);
+    expect(digest).toMatch(/^desktop-browser-v1:[a-f0-9]{64}$/);
+    expect(verifyJws(bound.delegation, [pair.jwk]).desktop_browser_session_audience).toBe(digest);
+    const second = { ...expected, browserSessionId: 'second-browser' };
+    const other = await v.verify({ operation: 'bind', expected: second, evidence: { accessToken: token } });
+    expect(verifyJws(other.delegation, [pair.jwk]).desktop_browser_session_audience).not.toBe(digest);
+    await expect(v.verify({ operation: 'status', expected: { ...expected, audience: 'changed' } })).rejects.toMatchObject({ code: 'denied' });
   });
 
   it('verifies compact JWS strictly: unknown kid, wrong algorithm, tampered payload', () => {

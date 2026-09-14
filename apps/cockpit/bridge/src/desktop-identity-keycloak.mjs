@@ -9,8 +9,9 @@
 // use and never logged or returned. Section9 realm defaults come from itops
 // (`config/matric-user-secrets.yaml`, `configs/keycloak/realms/section9.json`).
 
-import { createPublicKey, verify as cryptoVerify } from 'node:crypto';
+import { createHash, createPublicKey, verify as cryptoVerify } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
+import { createDesktopIssuerTransport } from './desktop-issuer-transport.mjs';
 
 export const SECTION9_ISSUER = 'https://auth.s9.internal/realms/section9';
 export const DESKTOP_ACTIONS = Object.freeze(['view', 'create', 'close', 'attach', 'control', 'observe']);
@@ -27,6 +28,14 @@ const ACCESS_TOKEN_TYPE = 'urn:ietf:params:oauth:token-type:access_token';
 const denied = (code = 'denied') => Object.assign(new Error(code), { code });
 const text = (value) => typeof value === 'string' && value.length > 0 && value.length <= 4096;
 const b64url = (value) => Buffer.from(value, 'base64url');
+
+/** Input comes only from the authenticated backend browser binding. */
+export function desktopBrowserAudience({ browserSessionId, audience, workspaceId }) {
+  if (![browserSessionId, audience, workspaceId].every(text)) throw denied();
+  return `desktop-browser-v1:${createHash('sha256').update(JSON.stringify([
+    'desktop-browser-v1', browserSessionId, audience, workspaceId,
+  ])).digest('hex')}`;
+}
 
 function decodeJwt(token) {
   if (!text(token)) throw denied();
@@ -117,7 +126,9 @@ export function createKeycloakDesktopVerifier({
   clientId,
   clientSecretFile,
   delegationAudience,
-  fetch: fetchImpl = globalThis.fetch,
+  fetch: suppliedFetch,
+  issuerTls,
+  workloadCertificateThumbprint,
   now = Date.now,
   timeoutMs = 5000,
   jwksTtlMs = 300_000,
@@ -129,10 +140,12 @@ export function createKeycloakDesktopVerifier({
 } = {}) {
   let base;
   try { base = new URL(issuer); } catch { throw new TypeError('Keycloak issuer must be an HTTPS realm URL'); }
-  if (base.protocol !== 'https:' || base.search || base.hash || !/\/realms\/[^/]+$/.test(base.pathname)) throw new TypeError('Keycloak issuer must be an HTTPS realm URL');
+  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash || !/\/realms\/[^/]+$/.test(base.pathname)) throw new TypeError('Keycloak issuer must be an HTTPS realm URL');
   for (const [name, value] of Object.entries({ audience, clientId, clientSecretFile, delegationAudience })) {
     if (!text(value)) throw new TypeError(`Keycloak desktop verifier requires ${name}`);
   }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(workloadCertificateThumbprint)) throw new TypeError('Workload certificate thumbprint required');
+  const fetchImpl = suppliedFetch ?? createDesktopIssuerTransport({ ...issuerTls, issuer, thumbprint: workloadCertificateThumbprint, timeoutMs });
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation required');
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000) throw new TypeError('Invalid Keycloak deadline');
   const realm = issuer.replace(/\/$/, '');
@@ -224,16 +237,26 @@ export function createKeycloakDesktopVerifier({
     return claims;
   }
 
-  async function delegation(entry, signal) {
+  async function delegation(entry, claims, expected, signal) {
+    const browserAudience = desktopBrowserAudience(expected);
     const skew = clockSkewMs;
     if (entry.delegation && entry.delegationExpiresAt - skew > now()) return { delegation: entry.delegation, delegationExpiresAt: entry.delegationExpiresAt };
     const exchanged = await grant({
       grant_type: TOKEN_EXCHANGE, subject_token: entry.accessToken, subject_token_type: ACCESS_TOKEN_TYPE,
       requested_token_type: ACCESS_TOKEN_TYPE, audience: delegationAudience,
+      desktop_browser_session_audience: browserAudience,
     }, signal);
     if (!text(exchanged?.access_token) || !Number.isFinite(exchanged.expires_in) || exchanged.expires_in <= 0) throw denied('identity_unavailable');
+    const payload = verifyJws(exchanged.access_token, await keys(signal));
+    const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (payload.iss !== realm || aud.length !== 1 || aud[0] !== delegationAudience ||
+        payload.azp !== clientId || payload.sub !== claims.sub || payload.sid !== (claims.sid ?? claims.session_state) ||
+        payload.workspace_id !== expected.workspaceId || payload.desktop_browser_session_audience !== browserAudience ||
+        payload.cnf?.['x5t#S256'] !== workloadCertificateThumbprint ||
+        !Number.isFinite(payload.exp) || payload.exp * 1000 <= now() ||
+        payload.nbf !== undefined && (!Number.isFinite(payload.nbf) || payload.nbf * 1000 > now())) throw denied();
     entry.delegation = exchanged.access_token;
-    entry.delegationExpiresAt = now() + exchanged.expires_in * 1000;
+    entry.delegationExpiresAt = Math.min(now() + exchanged.expires_in * 1000, payload.exp * 1000);
     return { delegation: entry.delegation, delegationExpiresAt: entry.delegationExpiresAt };
   }
 
@@ -245,11 +268,16 @@ export function createKeycloakDesktopVerifier({
       const payload = verifyJws(evidence.accessToken, await keys(signal));
       if (payload.iss !== realm || !audienceMatches(payload.aud, audience)) throw denied();
       entry = { accessToken: evidence.accessToken, refreshToken: text(evidence.refreshToken) ? evidence.refreshToken : undefined,
+        subject: payload.sub, userSessionId: payload.sid ?? payload.session_state, browserAudience: desktopBrowserAudience(expected),
         authTime: Number.isFinite(payload.auth_time) ? payload.auth_time * 1000 : now() };
-    } else if (!entry) throw denied();
+    } else if (!entry || entry.browserAudience !== desktopBrowserAudience(expected)) throw denied();
     let claims;
     try { claims = await freshClaims(entry, signal); }
     catch (error) { sessions.delete(expected.browserSessionId); throw error; }
+    if (claims.sub !== entry.subject || (claims.sid ?? claims.session_state) !== entry.userSessionId) {
+      sessions.delete(expected.browserSessionId);
+      throw denied();
+    }
     const checkedAt = now();
     const mapped = mapClaims(claims) ?? {};
     const instanceIds = typeof resolveInstances === 'function'
@@ -262,7 +290,7 @@ export function createKeycloakDesktopVerifier({
       sessions.delete(expected.browserSessionId);
       throw denied();
     }
-    const { delegation: token, delegationExpiresAt } = await delegation(entry, signal);
+    const { delegation: token, delegationExpiresAt } = await delegation(entry, claims, expected, signal);
     const expiresAt = Math.min(entry.authTime + sessionMaxMs, checkedAt + sessionMaxMs);
     if (operation === 'bind') sessions.set(expected.browserSessionId, entry);
     return {
