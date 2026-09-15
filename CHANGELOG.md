@@ -7,6 +7,29 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.11] - 2026-09-14 – "A release waits until the evidence arrives"
+
+### Fixed
+
+- GitHub release publication now retries npm provenance lookups for up to three
+  minutes after an accepted publish. Large packages can remain in npm's
+  processing state after smaller workspace packages are visible; the old
+  single lookup after ten seconds failed the job and skipped cosign signatures,
+  the SBOM, checksums, installer, and GitHub release assets. Lookup failures are
+  now retained through the retry loop so the final diagnostic explains which
+  package or attestation remained unavailable.
+- The OMP native conformance workflow now pins checkout, Bun setup, and artifact
+  upload actions to immutable commits, closing the remaining floating action
+  references found by the release-cut CI supply-chain audit.
+- Cockpit's in-process Bridge integration now supplies a deterministic artifact
+  index command seam. The test no longer inherits whichever global `aiwg`
+  installation happens to be on the runner, which previously produced a 502
+  when that installation was absent or identity-gated.
+- The steward delivery helper's signal-cleanup regression test now allows the
+  terminated shell's filesystem cleanup to become observable before asserting
+  that its temporary directory is gone, removing a runner-dependent race at
+  process close.
+
 ## [2026.9.10] - 2026-09-14 – "Nothing that looks clean is quietly empty"
 
 ### Added
@@ -4297,7 +4320,8 @@ The 2026.5.0 stable tag. The 2026.4.0 stable tag was never cut — the rc series
 - New unit tests: 7 for `aiwg skill-lint` rubric (perfect/stub/no-triggers/agent-only/broken-YAML fixtures + threshold modes). Behavior-loader and concierge integration tests updated for canonical metadata.* shape.
 - `.agents/` deployment directory is now gitignored, mirroring `.claude/` and `.codex/` (#949). 395 generated files removed from the index; regenerable via `aiwg use`.
 
-[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.8.26...HEAD
+[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.9.11...HEAD
+[2026.9.11]: https://github.com/jmagly/aiwg/compare/v2026.9.10...v2026.9.11
 [2026.8.26]: https://github.com/jmagly/aiwg/compare/v2026.8.25...v2026.8.26
 [2026.8.25]: https://github.com/jmagly/aiwg/compare/v2026.8.20...v2026.8.25
 [2026.8.20]: https://github.com/jmagly/aiwg/compare/v2026.8.19...v2026.8.20

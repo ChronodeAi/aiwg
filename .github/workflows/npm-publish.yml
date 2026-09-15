@@ -487,38 +487,39 @@ jobs:
         run: |
           set -o pipefail
           VERSION='${{ steps.version.outputs.version }}'
-          echo "Waiting 10s for npmjs.org propagation..."
-          sleep 10
-          # `npm view` returns JSON; `.dist.attestations` is non-null when
-          # provenance is present. A missing attestations field means the
-          # publish landed but provenance did not — a configuration
-          # regression we must catch here, not at audit time.
-          ATTESTATIONS=$(npm view "aiwg@${VERSION}" --json 2>/dev/null | jq -r '.dist.attestations // empty')
-          if [ -z "$ATTESTATIONS" ]; then
-            echo "✗ No provenance attestation found for aiwg@${VERSION} on npmjs.org"
-            echo "  The publish step reported success, but the provenance"
-            echo "  flag did not produce an attestation. This usually means"
-            echo "  OIDC trusted publishing is mis-configured upstream."
-            exit 1
-          fi
-          echo "✓ Provenance attestation present for aiwg@${VERSION}"
-          ATTESTATION_PREVIEW=$(mktemp)
-          printf '%s\n' "$ATTESTATIONS" | jq '.' > "$ATTESTATION_PREVIEW"
-          head -40 "$ATTESTATION_PREVIEW"
+          # npm may accept a publish and keep a large package in processing
+          # after smaller workspace packages are already queryable. Retry the
+          # registry lookup so that normal processing latency does not skip all
+          # signing, SBOM, and release-asset steps. Keep npm-view failures out
+          # of errexit command substitutions so the final error is actionable.
+          verify_attestations() {
+            local package="$1"
+            local attestations=""
+            local attempt
+            for attempt in $(seq 1 18); do
+              attestations=$(npm view "${package}@${VERSION}" --json 2>/dev/null \
+                | jq -r '.dist.attestations // empty' || true)
+              if [ -n "$attestations" ]; then
+                echo "✓ Provenance attestation present for ${package}@${VERSION}"
+                if [ "$package" = "aiwg" ]; then
+                  local preview
+                  preview=$(mktemp)
+                  printf '%s\n' "$attestations" | jq '.' > "$preview"
+                  head -40 "$preview"
+                fi
+                return 0
+              fi
+              echo "Attempt ${attempt}/18: ${package}@${VERSION} or its provenance is not visible; retrying in 10s..."
+              sleep 10
+            done
+            echo "✗ No provenance attestation found for ${package}@${VERSION} on npmjs.org after 3 minutes"
+            echo "  The publish was accepted but the package or attestation did not become queryable."
+            return 1
+          }
 
-          COCKPIT_ATTESTATIONS=$(npm view "@aiwg/cockpit@${VERSION}" --json 2>/dev/null | jq -r '.dist.attestations // empty')
-          if [ -z "$COCKPIT_ATTESTATIONS" ]; then
-            echo "✗ No provenance attestation found for @aiwg/cockpit@${VERSION} on npmjs.org"
-            exit 1
-          fi
-          echo "✓ Provenance attestation present for @aiwg/cockpit@${VERSION}"
-
-          CLI_ATTESTATIONS=$(npm view "@aiwg/cli@${VERSION}" --json 2>/dev/null | jq -r '.dist.attestations // empty')
-          if [ -z "$CLI_ATTESTATIONS" ]; then
-            echo "✗ No provenance attestation found for @aiwg/cli@${VERSION} on npmjs.org"
-            exit 1
-          fi
-          echo "✓ Provenance attestation present for @aiwg/cli@${VERSION}"
+          verify_attestations aiwg
+          verify_attestations @aiwg/cockpit
+          verify_attestations @aiwg/cli
 
       - name: Verify dist-tag points at this version
         # Defense-in-depth against the dist-tag drift the Gitea workflow

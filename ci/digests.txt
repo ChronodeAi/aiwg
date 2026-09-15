@@ -47,6 +47,7 @@ action  actions/checkout            93cb6efe18208431cddfb8368fd83d5badbf9bfd  v5
 action  actions/upload-artifact     c24449f33cd45d4826c6702db7e49f7cdb9b551d  v3.2.1-node20  2026-07-27  Gitea-compatible artifact protocol for .gitea/workflows/ci.yml (#1932)
 action  actions/upload-artifact     ea165f8d65b6e75b540449e92b4886f43607fa02  v4.6.2   2026-05-12  initial pin (Wave 2 of #1278)
 action  actions/setup-node          a0853c24544627f65ddf259abe73b1d18a591444  v5.0.0   2026-05-12  bump for GH Actions Node 24 transition (rc.1 retag #5 — used by .github/workflows/npm-publish.yml)
+action  oven-sh/setup-bun           0c5077e51419868618aeaa5fe8019c62421857d6  v2       2026-09-14  OMP native conformance Bun runtime setup
 
 # Notes on action pinning:
 # - Pin is the 40-character commit SHA of the *immutable* patch tag (v4.X.Y),

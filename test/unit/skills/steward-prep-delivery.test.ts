@@ -148,8 +148,14 @@ describe('steward-prep-delivery duplicate helper', () => {
 
       expect(exit.code === 143 || exit.signal === 'SIGTERM').toBe(true);
 
-      const tempEntries = await fs.readdir(tempRoot);
-      expect(tempEntries.filter((entry) => entry.startsWith('steward-prep-discover.'))).toEqual([]);
+      let leakedEntries: string[] = [];
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const tempEntries = await fs.readdir(tempRoot);
+        leakedEntries = tempEntries.filter((entry) => entry.startsWith('steward-prep-discover.'));
+        if (leakedEntries.length === 0) break;
+        await delay(20);
+      }
+      expect(leakedEntries).toEqual([]);
     } finally {
       child.kill('SIGKILL');
     }
