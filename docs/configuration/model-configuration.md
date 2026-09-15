@@ -111,6 +111,16 @@ filters do not silently include it in the coding population, and provider
 transforms preserve it instead of rewriting it as a coding model. Omitted model
 metadata retains the legacy coding default during deployment.
 
+Claude deployments compile bare aliases by default. A source agent that says
+`model: sonnet` deploys to `.claude/agents/` as `model: claude-sonnet-4-6` (the
+`claude.coding.model` tier in `models.json`; `opus` → `claude-opus-4-7`,
+`haiku` → `claude-haiku-4-5`). A bare alias would otherwise inherit the parent
+session's variant, and under a 1M-context parent every subagent dispatch then
+hits the usage-credit gate (#1442, #2563). Source frontmatter stays
+provider-neutral; already-pinned ids, `inherit`, and explicit `sonnet[1m]` /
+`opus[1m]` opt-ins are deployed unchanged, and `--coding-model` /
+`--reasoning-model` / `--efficiency-model` overrides still win.
+
 ## Provider compilation examples
 
 Codex agents compile to standalone `.codex/agents/*.toml` files. Every file has

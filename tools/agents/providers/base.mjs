@@ -281,10 +281,14 @@ export function extractFrameworkSlug(srcPath) {
  * Priority: Project models.json > User ~/.config/aiwg/models.json > AIWG defaults
  */
 export function loadModelConfig(srcRoot) {
+  // An addon/framework/bundle `--source` is not the AIWG root, so resolve the
+  // shipped defaults through the corpus root; otherwise addon deploys fell
+  // through to the hardcoded fallback and deployed bare aliases (#2563).
+  const aiwgRoot = (srcRoot && resolveAiwgRoot(srcRoot)) || srcRoot;
   const locations = [
     { path: path.join(process.cwd(), 'models.json'), label: 'project' },
     { path: path.join(process.env.HOME || process.env.USERPROFILE, '.config', 'aiwg', 'models.json'), label: 'user' },
-    { path: path.join(srcRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'config', 'models.json'), label: 'AIWG defaults' }
+    { path: path.join(aiwgRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'config', 'models.json'), label: 'AIWG defaults' }
   ];
 
   for (const loc of locations) {
@@ -302,9 +306,9 @@ export function loadModelConfig(srcRoot) {
   // Fallback to hardcoded defaults if no config found
   return {
     claude: {
-      reasoning: { model: 'opus' },
-      coding: { model: 'sonnet' },
-      efficiency: { model: 'haiku' }
+      reasoning: { model: 'claude-opus-4-7' },
+      coding: { model: 'claude-sonnet-4-6' },
+      efficiency: { model: 'claude-haiku-4-5' }
     },
     factory: {
       reasoning: { model: 'heavy' },
@@ -312,9 +316,9 @@ export function loadModelConfig(srcRoot) {
       efficiency: { model: 'light' }
     },
     shorthand: {
-      'opus': 'claude-opus-4-6',
+      'opus': 'claude-opus-4-7',
       'sonnet': 'claude-sonnet-4-6',
-      'haiku': 'claude-haiku-4-5-20251001',
+      'haiku': 'claude-haiku-4-5',
       'inherit': 'inherit'
     },
     claude_shorthand: {

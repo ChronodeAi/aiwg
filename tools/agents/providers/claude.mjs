@@ -172,7 +172,40 @@ export function transformAgent(srcPath, content, opts) {
     return replaceModelFrontmatter(content, models);
   }
 
-  return content;
+  // Default compilation (#2563): a bare alias in source frontmatter is
+  // provider-neutral intent, not a deployable pin. Deployed Claude agents get
+  // the pinned variant from the models.json `claude` tiers so subagent
+  // dispatch never inherits a 1M-context parent (#1442). Already-pinned
+  // values, `inherit`, and explicit `[1m]` opt-ins are left untouched.
+  const tiers = opts.modelsConfig?.claude;
+  if (!tiers) return content;
+  return pinBareModelAlias(content, {
+    reasoning: tiers.reasoning?.model,
+    coding: tiers.coding?.model,
+    efficiency: tiers.efficiency?.model,
+  });
+}
+
+const BARE_MODEL_ALIAS_ROLE = { opus: 'reasoning', sonnet: 'coding', haiku: 'efficiency' };
+
+/**
+ * Replace a bare `model: opus|sonnet|haiku` frontmatter alias with the pinned
+ * variant for its role. Anything else (pinned ids, `inherit`, `sonnet[1m]`,
+ * placeholders) is returned unchanged.
+ */
+export function pinBareModelAlias(content, pinned) {
+  if (!content.startsWith('---')) return content;
+  const fmEnd = content.indexOf('\n---', 3);
+  if (fmEnd === -1) return content;
+  const header = content.slice(0, fmEnd + 4);
+  const body = content.slice(fmEnd + 4);
+  const match = header.match(/^model:[ \t]*['"]?([A-Za-z]+)['"]?[ \t]*$/m);
+  if (!match) return content;
+  const alias = match[1].toLowerCase();
+  const role = BARE_MODEL_ALIAS_ROLE[alias];
+  const target = role ? pinned?.[role] : null;
+  if (!target || target === alias) return content;
+  return header.replace(match[0], `model: ${target}`) + body;
 }
 
 /**
@@ -700,6 +733,7 @@ export default {
   transformAgent,
   transformCommand,
   mapModel,
+  pinBareModelAlias,
   deployAgents,
   deployCommands,
   deploySkills,

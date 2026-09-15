@@ -330,7 +330,14 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
         return;
       }
       const diagnostics = await auditLegacyPermissions(projectDir, config);
-      console.log(`  ${dryRun ? 'Would normalize' : 'Normalizing'} ${diagnostics.filter(d => d.code.startsWith('legacy-')).length} legacy permission source(s).`);
+      const legacyCount = diagnostics.filter(d => d.code.startsWith('legacy-')).length;
+      if (legacyCount === 0 && !config.authorization) {
+        // Nothing legacy to convert: the only work is writing the initial
+        // default-deny block, which is what clears doctor's warning (#2563).
+        console.log(`  ${dryRun ? 'Would write' : 'Writing'} an initial default-deny authorization block (no legacy permission sources found).`);
+      } else {
+        console.log(`  ${dryRun ? 'Would normalize' : 'Normalizing'} ${legacyCount} legacy permission source(s).`);
+      }
       console.log(`  Result: ${Object.keys(normalized.authorization?.permissions ?? {}).length} permissions, ${Object.keys(normalized.authorization?.roles ?? {}).length} roles, ${normalized.authorization?.assignments.length ?? 0} assignments; default deny.`);
       if (apply) {
         const backup = await backupConfig(projectDir);

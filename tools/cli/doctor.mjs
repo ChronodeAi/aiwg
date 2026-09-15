@@ -1915,12 +1915,27 @@ async function runDoctor() {
       } else {
         const errors = diagnostics.filter(item => item.severity === 'error');
         const legacy = diagnostics.filter(item => item.code.startsWith('legacy-'));
-        const status = errors.length ? 'error' : 'warn';
-        check(
-          'Permissions',
-          status,
-          `${errors.length} error(s), ${legacy.length} legacy source(s) — run "aiwg steward permissions audit"`,
-        );
+        const missingOnly = diagnostics.length === 1 && diagnostics[0].code === 'authorization-missing';
+        if (missingOnly) {
+          // A project that never had legacy permissions has nothing to audit;
+          // pointing it at `audit` just re-emits this warning. The one action
+          // that clears it is writing the initial block (#2563).
+          check(
+            'Permissions',
+            'info',
+            'no authorization block yet (default deny applies) — write one with "aiwg steward permissions migrate --apply"',
+          );
+        } else {
+          const status = errors.length ? 'error' : 'warn';
+          const fix = errors.length
+            ? 'run "aiwg steward permissions audit" for the failing references'
+            : 'run "aiwg steward permissions migrate --dry-run" then "--apply" to normalize them';
+          check(
+            'Permissions',
+            status,
+            `${errors.length} error(s), ${legacy.length} legacy source(s) — ${fix}`,
+          );
+        }
       }
     }
   } catch (err) {
