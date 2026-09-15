@@ -44,7 +44,7 @@ on:
         type: string
 
 concurrency:
-  group: release
+  group: npm-publish
   cancel-in-progress: false
 
 env:

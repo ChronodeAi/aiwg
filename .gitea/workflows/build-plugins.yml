@@ -18,7 +18,7 @@ on:
         type: boolean
 
 concurrency:
-  group: release
+  group: build-plugins
   cancel-in-progress: false
 
 jobs:

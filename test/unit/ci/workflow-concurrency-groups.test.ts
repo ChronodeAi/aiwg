@@ -2,7 +2,16 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-const workflows = ['ci.yml', 'docsite-build.yml', 'metadata-validation.yml'];
+const workflows = [
+  'ci.yml',
+  'docsite-build.yml',
+  'metadata-validation.yml',
+  'gitea-release.yml',
+  'build-plugins.yml',
+  'npm-publish.yml',
+  'notify-site.yml',
+];
+const staleRunCancellationWorkflows = new Set(['ci.yml', 'docsite-build.yml', 'metadata-validation.yml']);
 
 describe('independent push workflow concurrency', () => {
   it('does not let required workflows cancel one another for the same ref', () => {
@@ -10,7 +19,9 @@ describe('independent push workflow concurrency', () => {
       const source = readFileSync(resolve('.gitea/workflows', file), 'utf8');
       const match = source.match(/concurrency:\s*\n\s*group:\s*([^\n]+)/);
       expect(match, `${file} must declare a concurrency group`).not.toBeNull();
-      expect(source, `${file} must cancel stale runs only within its own workflow`).toContain('cancel-in-progress: true');
+      if (staleRunCancellationWorkflows.has(file)) {
+        expect(source, `${file} must cancel stale runs only within its own workflow`).toContain('cancel-in-progress: true');
+      }
       return match![1].trim();
     });
 

@@ -55,7 +55,7 @@ on:
         type: string
 
 concurrency:
-  group: release
+  group: notify-site
   cancel-in-progress: false
 
 jobs:
