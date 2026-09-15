@@ -86,6 +86,57 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Installation identity drift no longer blocks the read-only recovery
+  commands (#2559). `version`, `status` (including `--probe --json`),
+  `doctor`, `runtime-info`, `discover`, `show`, and `index query|deps|stats`
+  run under a recorded/actual mismatch and print the drift on stderr first;
+  `version` reports a same-root method mismatch and the status probe carries
+  an `installation` block with `mutations_blocked`. `update`, `refresh`,
+  `use`, deployment, channel switches, and `index build` stay fail-closed.
+  `aiwg discover --backend local "<phrase>"` (flag-first, as the steward
+  documents it) no longer fails with "requires a search phrase". Launcher
+  integration tests cover both mismatch directions.
+- `aiwg doctor` no longer reports every project-local artifact as drifted
+  after a clean `aiwg use` (#2560). "Deployed file differs from source" is
+  now judged against the source: a deployed copy that equals its source plus
+  the managed marker matches whichever of the recorded deployed hash, the
+  recorded source hash, or the current source file it agrees with.
+- Codex deploys respect the 8,000-char startup skill-listing cap by default
+  (#2561). When a bundle's skills would push `.agents/skills/` over the cap,
+  the largest non-kernel entries are placed on the standard tier
+  (`.codex/.aiwg/skills/`, reachable through `aiwg discover`/`aiwg show`)
+  and named in the deploy output; a plain redeploy re-places an over-cap
+  deployment without `--force`. `aiwg doctor` and the post-deploy
+  verification stop recommending `--force` as the budget fix; the
+  unmanaged-file advisory lists up to ten files and points at a
+  `--force --dry-run` preview. Override with `AIWG_CODEX_LISTING_CAP`
+  (`0` disables).
+- Rule deployment budgets for subagent dispatch (#2562). The always-on
+  `.claude/rules/` set is reconciled against a 64K-token inline budget after
+  every deploy pass: the largest HIGH rules beyond it move on demand (never
+  CRITICAL), are recorded in `.claude/rules/.aiwg-rules-budget.json`, and are
+  listed as binding rules in `RULES-ONDEMAND.md` with their fetch hint
+  (`AIWG_RULES_INLINE_BUDGET_TOKENS` overrides; `0` disables). The startup
+  scan now counts ancestor directories' `CLAUDE.md` and `.claude/rules`,
+  which Claude Code inlines too, and doctor adds a `Subagent Dispatch` check
+  that fails when the inlined surface leaves no room for a Task dispatch.
+- `aiwg doctor`'s Permissions warning has a resolution path (#2563): a
+  project with no legacy permission sources gets an informational line
+  pointing at `aiwg steward permissions migrate --apply`, which now says it
+  writes the initial default-deny block. Claude deploys compile bare model
+  aliases to pinned variants (`sonnet` → `claude-sonnet-4-6`, `opus` →
+  `claude-opus-4-7`, `haiku` → `claude-haiku-4-5`) so subagent dispatch never
+  inherits a 1M-context parent; addon deploys resolve `models.json` through
+  the corpus root instead of the hardcoded fallback. Source frontmatter stays
+  provider-neutral; pinned ids, `inherit`, and `[1m]` opt-ins deploy unchanged.
+- `aiwg regenerate --existing-project` ports operator content from provider
+  startup files into the WORKSPACE.md operator block, verbatim and attributed,
+  instead of writing it to `.aiwg/context/providers/` where no bootstrap
+  loaded it (#2558). Links to previously migrated provider files survive
+  `aiwg use` and `aiwg regenerate`, doctor reports such files as
+  `provider-context-not-loaded`, and identical directives shared by two
+  files are reported once per file pair (informational when the files are
+  identical stubs) rather than once per line.
 - The external agent-loop Pi adapter no longer opens the child's stdin to send
   an RPC-style `abort` frame. Pi 0.85.0 reads stdin commands only in
   `--mode rpc`; in `--mode json` it drains a piped stdin to EOF before the
