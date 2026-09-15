@@ -49,7 +49,7 @@ Models are defined in `models.json` files with the following priority:
 
   "claude": {
     "reasoning": {
-      "model": "claude-opus-4-6",
+      "model": "claude-opus-4-7",
       "description": "Best for complex reasoning, architecture design"
     },
     "coding": {
@@ -57,20 +57,20 @@ Models are defined in `models.json` files with the following priority:
       "description": "Best for code generation, implementation"
     },
     "efficiency": {
-      "model": "claude-haiku-3-5",
+      "model": "claude-haiku-4-5",
       "description": "Best for quick tasks, simple edits"
     }
   },
 
   "factory": {
     "reasoning": {
-      "model": "claude-opus-4-6"
+      "model": "heavy"
     },
     "coding": {
-      "model": "claude-sonnet-4-6"
+      "model": "medium"
     },
     "efficiency": {
-      "model": "claude-haiku-3-5"
+      "model": "light"
     }
   },
 
@@ -87,9 +87,9 @@ Models are defined in `models.json` files with the following priority:
   },
 
   "shorthand": {
-    "opus": "claude-opus-4-6",
+    "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-3-5",
+    "haiku": "claude-haiku-4-5",
     "inherit": "inherit"
   }
 }
@@ -242,7 +242,7 @@ Create `models.json` in your project root:
   "factory": {
     "reasoning": { "model": "claude-opus-custom-finetuned" },
     "coding": { "model": "claude-sonnet-4-6" },
-    "efficiency": { "model": "claude-haiku-3-5" }
+    "efficiency": { "model": "claude-haiku-4-5" }
   }
 }
 ```
@@ -271,14 +271,14 @@ mkdir -p ~/.config/aiwg
 cat > ~/.config/aiwg/models.json <<'EOF'
 {
   "factory": {
-    "reasoning": { "model": "claude-opus-4-6" },
+    "reasoning": { "model": "claude-opus-4-7" },
     "coding": { "model": "claude-sonnet-4-6" },
-    "efficiency": { "model": "claude-haiku-3-5" }
+    "efficiency": { "model": "claude-haiku-4-5" }
   },
   "shorthand": {
-    "opus": "claude-opus-4-6",
+    "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-3-5"
+    "haiku": "claude-haiku-4-5"
   }
 }
 EOF

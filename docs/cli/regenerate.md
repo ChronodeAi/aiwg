@@ -73,8 +73,10 @@ The snapshot is placed inside its own managed block in the protected
 `WORKSPACE.md` operator region. Reruns replace only that block. Existing manual
 context remains outside it.
 
-Provider-only startup content moves to source-attributed files under
-`.aiwg/context/providers/`. Generated AIWG bodies, legacy inline blocks, and
+Operator content from provider startup files ports into the protected Project
+Context block in `WORKSPACE.md`, verbatim and attributed with the source path
+and checksum, because that block is what every provider bootstrap loads.
+Generated AIWG bodies, legacy inline blocks, and
 managed `AGENTS.override.md` spillover are excluded from project extraction.
 Possible credentials and ambiguous directive conflicts stop the operation
 before any write.

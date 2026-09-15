@@ -285,6 +285,14 @@ aiwg doctor [--provider <name>] [--all-providers] [--project-local] [--quiet]
 - System dependencies (git, jq, etc.)
 - `memory.topology` contracts — runs `validateMemoryTopology()` against every installed framework/addon manifest; flags missing required fields, invalid `crossRefStyle` values (must be `at-mention | wikilink | markdown-link | yaml-ref`), namespaces not under `.aiwg/`, empty `derivedPages`, and wrong array shapes for `lintRules`/`ingestRequires` (per ADR-021)
 - **Provider context/memory firewall** — separately measures memory, rules, skills, agents, generated bridges, and project-local context; reports deployed/package drift, trust labels, changed reviewed files, and poisoning signals. See the [operator guide](../security/context-memory-firewall.md).
+- **Subagent Dispatch** (Claude Code) — measures whether the context inlined at
+  session start, including each ancestor directory's `CLAUDE.md` and
+  `.claude/rules`, leaves room for a Task dispatch after its agent definition and
+  the harness baseline. Fails when a dispatch cannot fit (the `Prompt is too long`
+  condition), warns below 40K tokens of working room, and names the ancestor
+  contribution when one applies. Remedy: redeploy so HIGH rules beyond the inline
+  budget move to `RULES-ONDEMAND.md`, lower `AIWG_RULES_INLINE_BUDGET_TOKENS`, or
+  prune ancestor rule deployments.
 - **Project-local artifacts** ([design](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/design-doctor-log-promote.md)) — per-type counts, manifest validation, active shadows (informational vs blocking), denylist violations, deploy-state drift (deployed file hash vs registered `artifactHashes`), provider deployment matrix. Section is suppressed entirely when no project-local content exists.
 
 **Doctor exits 0 when:** no validation errors, no denylist violations, no drift. Shadows alone do not fail doctor — they're informational by design.
@@ -2342,6 +2350,7 @@ Lint AIWG artifacts against declarative rule sets discovered from installed fram
 ```bash
 aiwg lint <target> [--ruleset <name>] [--format full|summary|json]
                    [--ci] [--fail-on error|warn|info] [--dry-run]
+                   [--no-gitignore]
 aiwg lint --list-rulesets
 aiwg lint --list-rules <ruleset>
 ```
@@ -2359,6 +2368,15 @@ aiwg lint --list-rules <ruleset>
 - `--dry-run` - Report what would run without executing rules
 - `--list-rulesets` - List all discovered rulesets
 - `--list-rules <name>` - List rules contained in a ruleset
+- `--no-gitignore` - Lint files git ignores too. By default they are skipped, so
+  regenerated trees do not produce findings about their own generated text
+
+**Output:**
+
+A run reports `Rules applied: N of M` and names any rule whose glob matched no
+file in the target. When no rule applies, the run says so explicitly — a target
+that excludes every rule is not a clean result, and rule globs are written from
+the project root, so lint a parent directory or check `--ruleset` (#2555).
 
 **Capabilities:** cli, lint, validation, quality
 **Tools:** Bash, Read, Glob, Grep

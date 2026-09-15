@@ -45,8 +45,11 @@ Manual content around that block is preserved.
 
 Audit reports exact duplicates separately from ambiguous positive/negative
 conflicts and identifies root versus nested scope. Apply refuses possible
-credential values and unresolved conflicts by default. Provider-only material
-moves to `.aiwg/context/providers/` with source path and checksum attribution.
+credential values and unresolved conflicts by default. Operator content from
+provider startup files ports into the `WORKSPACE.md` Project Context block with
+source path and checksum attribution; nothing auto-loads
+`.aiwg/context/providers/`, so files kept there are reference material and
+`aiwg doctor` reports them as `provider-context-not-loaded`.
 Transactions and recoverable preimages live under
 `.aiwg/context-migrations/`. Reapplying a completed migration is a no-op.
 
