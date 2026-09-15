@@ -1,8 +1,9 @@
 import {
-  existsSync, mkdirSync, realpathSync, statSync,
+  existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import {
-  dirname, isAbsolute, resolve,
+  dirname, isAbsolute, join, resolve,
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -62,6 +63,11 @@ import {
   sha256,
   parseTimelineGap,
   writeDiscoveryManifest,
+  buildSessionExportPlan,
+  reverifySessionExportPlan,
+  buildSessionAiwgFortemiIndexExport,
+  SESSION_EXPORT_PLAN_SCHEMA_VERSION,
+  type SessionExportPlan,
   type SessionProviderId,
   type SessionAuthorizationContext,
   type SessionAnalyticsCategory,
@@ -130,6 +136,10 @@ Commands:
   show <session-id>               Show a session with events and tags
   search <query> --workspace <id> Search authorized normalized content
   extract [session-id] --workspace <id> Extract structural candidates
+  export plan --workspace <id> --out <file> <session-id...>  Select sessions into a reviewable plan
+  export build --plan <file> --out <dir>  Build a Fortemi Knowledge Shard from a plan
+  export verify --input <shard>   Validate a shard and its receipt
+  export unpack --input <shard> --out <dir>  Recover a shard's records to disk
   candidates [--state <state>]    List the candidate review queue
   review <id> <version> <state>   Record an explicit review transition
   promote <id> <version>          Preview promotion; use --confirm to write
@@ -541,6 +551,7 @@ async function executeCommand(
           ? preview(command, { items, count: items.length, durableMemoryWrites: 0, scan })
           : ok(command, { items, count: items.length, durableMemoryWrites: 0, scan });
       }
+      case 'export': return exportCommand(ctx, args, repository);
       case 'candidates': {
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
         const state = candidateState(args.values.get('--state'));
@@ -993,6 +1004,185 @@ async function importSource(
   }
 }
 
+/**
+ * `aiwg sessions export {plan,build,verify,unpack}` (#2564). Sub-verb after
+ * `export`, matching the issue's proposed shape:
+ *   export plan --workspace ID --out selection.json SESSION_ID...
+ *   export build --plan selection.json --out DIRECTORY
+ *   export verify --input evidence.shard
+ *   export unpack --input evidence.shard --out DIRECTORY
+ */
+async function exportCommand(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  repository: SessionRepository,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const subVerb = requiredPositional(args, 0, 'export sub-command (plan|build|verify|unpack)');
+  const command = `export.${subVerb}`;
+  if (subVerb === 'plan') return exportPlan(ctx, args, repository, command);
+  if (subVerb === 'build') return exportBuild(ctx, args, repository, command);
+  if (subVerb === 'verify') return exportVerify(ctx, args, command);
+  if (subVerb === 'unpack') return exportUnpack(ctx, args, command);
+  throw new CliError('UNKNOWN_COMMAND', `unknown export sub-command: ${subVerb}`, EXIT.usage);
+}
+
+function exportPlan(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  repository: SessionRepository,
+  command: string,
+): { envelope: Envelope; exitCode: number } {
+  const workspaceId = normalizeWorkspaceId(ctx.cwd, requiredValue(args, '--workspace'));
+  const out = resolve(ctx.cwd, requiredValue(args, '--out'));
+  const flagSelection = args.values.get('--session')?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
+  const sessionIds = [...new Set([...flagSelection, ...args.positionals.slice(1)])];
+  const { plan } = buildSessionExportPlan(repository, { workspaceId, sessionIds });
+  mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
+  writeFileSync(out, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+  return ok(command, { plan: out, totals: plan.totals, sessions: plan.sessions.map((entry) => entry.sessionId) });
+}
+
+async function exportBuild(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  repository: SessionRepository,
+  command: string,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const planPath = resolve(ctx.cwd, requiredValue(args, '--plan'));
+  const outDirectory = resolve(ctx.cwd, requiredValue(args, '--out'));
+  const shardName = args.values.get('--shard-name') ?? 'evidence.shard';
+  let plan: SessionExportPlan;
+  try {
+    plan = JSON.parse(readFileSync(planPath, 'utf8')) as SessionExportPlan;
+  } catch {
+    throw new CliError('MALFORMED_SOURCE', `plan file is not readable JSON: ${planPath}`, EXIT.usage);
+  }
+  if (plan.schemaVersion !== SESSION_EXPORT_PLAN_SCHEMA_VERSION) {
+    throw new CliError(
+      'UNKNOWN_SCHEMA_MAJOR',
+      `plan schemaVersion ${plan.schemaVersion} is not supported by this build (expected ${SESSION_EXPORT_PLAN_SCHEMA_VERSION})`,
+      EXIT.contract,
+    );
+  }
+  // Recheck source changes before writing (#2564 acceptance criteria):
+  // re-select from the live repository and reject on any digest drift.
+  const { sessions, eventsBySessionId } = reverifySessionExportPlan(repository, plan);
+  const index = buildSessionAiwgFortemiIndexExport(plan.workspaceId, sessions, eventsBySessionId);
+  // aiwgFortemiIndexToKnowledgeShard targets a fixed 2.0.0/full-v1 archive
+  // contract internally (confirmed against @fortemi/core's own conversion
+  // report on the WithReport sibling); it takes no profile/schemaVersion
+  // override, so none is passed here.
+  const { aiwgFortemiIndexToKnowledgeShard } = await import('@fortemi/core');
+  const bytes = await aiwgFortemiIndexToKnowledgeShard(index);
+  mkdirSync(outDirectory, { recursive: true, mode: 0o700 });
+  const finalPath = join(outDirectory, shardName);
+  // Interrupted writes must never be mistaken for a completed export: write
+  // to a sibling temp file, then rename (atomic on the same filesystem), and
+  // only then write the receipt -- the receipt's existence is the completion
+  // signal, not the shard file's.
+  const tempPath = join(outDirectory, `.${shardName}.${randomUUID()}.tmp`);
+  writeFileSync(tempPath, bytes, { mode: 0o600 });
+  renameSync(tempPath, finalPath);
+  const readBack = readFileSync(finalPath);
+  const shardDigest = sha256(readBack);
+  if (readBack.length !== bytes.length) {
+    throw new CliError('IMPORT_INTERRUPTED', 'shard readback size did not match the written archive', EXIT.storage);
+  }
+  const receipt = {
+    schemaVersion: '1.0.0',
+    generatedAt: new Date().toISOString(),
+    workspaceId: plan.workspaceId,
+    planGeneratedAt: plan.generatedAt,
+    sessionIds: plan.sessions.map((entry) => entry.sessionId),
+    totals: plan.totals,
+    indexSchemaVersion: index.schema_version,
+    archiveProfile: 'full-v1',
+    archiveSchemaVersion: '2.0.0',
+    shardFile: shardName,
+    shardDigest,
+    shardBytes: readBack.length,
+  };
+  writeFileSync(`${finalPath}.receipt.json`, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  return ok(command, { shard: finalPath, receipt: `${finalPath}.receipt.json`, ...receipt });
+}
+
+async function exportVerify(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  command: string,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const input = resolve(ctx.cwd, requiredValue(args, '--input'));
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(input);
+  } catch {
+    throw new CliError('SOURCE_NOT_AUTHORIZED', `shard file is not readable: ${input}`, EXIT.usage);
+  }
+  const { aiwgFortemiIndexFromKnowledgeShard } = await import('@fortemi/core');
+  let recovered;
+  try {
+    recovered = aiwgFortemiIndexFromKnowledgeShard(bytes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);
+  }
+  const shardDigest = sha256(bytes);
+  const receiptPath = `${input}.receipt.json`;
+  let receiptMatches: boolean | null = null;
+  if (existsSync(receiptPath)) {
+    try {
+      const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { shardDigest?: string; shardBytes?: number };
+      receiptMatches = receipt.shardDigest === shardDigest && receipt.shardBytes === bytes.length;
+    } catch {
+      receiptMatches = false;
+    }
+  }
+  return ok(command, {
+    valid: true,
+    schemaVersion: recovered.schema_version,
+    itemCount: recovered.items.length,
+    shardDigest,
+    shardBytes: bytes.length,
+    receiptChecked: existsSync(receiptPath),
+    receiptMatches,
+  });
+}
+
+async function exportUnpack(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  command: string,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const input = resolve(ctx.cwd, requiredValue(args, '--input'));
+  const outDirectory = resolve(ctx.cwd, requiredValue(args, '--out'));
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(input);
+  } catch {
+    throw new CliError('SOURCE_NOT_AUTHORIZED', `shard file is not readable: ${input}`, EXIT.usage);
+  }
+  const { aiwgFortemiIndexFromKnowledgeShard } = await import('@fortemi/core');
+  let recovered;
+  try {
+    recovered = aiwgFortemiIndexFromKnowledgeShard(bytes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);
+  }
+  mkdirSync(outDirectory, { recursive: true, mode: 0o700 });
+  const finalPath = join(outDirectory, 'index.json');
+  const tempPath = join(outDirectory, `.index.json.${randomUUID()}.tmp`);
+  writeFileSync(tempPath, `${JSON.stringify(recovered, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tempPath, finalPath);
+  return ok(command, {
+    index: finalPath,
+    schemaVersion: recovered.schema_version,
+    itemCount: recovered.items.length,
+    sessionRecordCount: recovered.items.filter((item) => item.type === 'aiwg.session').length,
+    eventRecordCount: recovered.items.filter((item) => item.type === 'aiwg.session-event').length,
+  });
+}
+
 async function discoverWorkspace(
   ctx: HandlerContext,
   args: ParsedArgs,
@@ -1385,6 +1575,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--inactivity-threshold',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',
+    '--out', '--plan', '--input', '--shard-name',
   ]);
   let command: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {

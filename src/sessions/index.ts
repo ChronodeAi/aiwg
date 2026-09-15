@@ -7,6 +7,8 @@ export * from './repository.js';
 export * from './ports.js';
 export * from './optional-backends.js';
 export * from './knowledge-shard.js';
+export * from './fortemi-export-mapping.js';
+export * from './export-plan.js';
 export * from './candidates.js';
 export * from './promotion.js';
 export * from './output-registration.js';
