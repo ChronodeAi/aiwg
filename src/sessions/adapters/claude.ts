@@ -15,12 +15,15 @@ import {
 } from '../contracts.js';
 import { redactSourceLocator } from '../discovery.js';
 import {
-  readBoundedJsonLines, streamBoundedJsonLines,
+  readBoundedJson, readBoundedJsonLines, streamBoundedJsonLines,
   type BoundedJsonRecord, type ReaderLimits,
 } from '../readers.js';
 
-export const CLAUDE_ADAPTER_VERSION = '1.0.0';
+export const CLAUDE_ADAPTER_VERSION = '1.1.0';
 export const CLAUDE_TRANSCRIPT_SCHEMA_VERSION = '1.0.0';
+/** AIWG's own understanding of the layout it supports; Claude web/account
+ *  exports carry no in-band schema version to read instead. */
+export const CLAUDE_WEB_EXPORT_SCHEMA_VERSION = '1.0.0';
 
 const ClaudeRecordSchema = z.object({
   type: z.string().min(1),
@@ -61,12 +64,57 @@ const ClaudeHookSchema = z.object({
 type ClaudeRecord = z.infer<typeof ClaudeRecordSchema>;
 type ClaudeHook = z.infer<typeof ClaudeHookSchema>;
 
+/**
+ * Claude.ai web/account data export (`conversations.json`): a JSON array of
+ * conversations, each carrying its own `chat_messages`. This is a distinct
+ * source format from local JSONL transcripts/hooks -- renaming the file does
+ * not make it one (#2565). Unrecognized fields are captured via unknownFields
+ * rather than dropped, and content the export marks as an attachment/file is
+ * recorded as a reference (bytes are not embedded in this export format).
+ */
+const ClaudeWebExportAttachmentSchema = z.object({
+  file_name: z.string().optional(),
+  file_type: z.string().optional(),
+  file_size: z.number().optional(),
+  extracted_content: z.string().optional(),
+}).passthrough();
+
+const ClaudeWebExportContentBlockSchema = z.object({
+  type: z.string().optional(),
+  text: z.string().optional(),
+}).passthrough();
+
+const ClaudeWebExportMessageSchema = z.object({
+  uuid: z.string().min(1),
+  text: z.string().optional(),
+  sender: z.enum(['human', 'assistant']),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  content: z.array(ClaudeWebExportContentBlockSchema).optional(),
+  attachments: z.array(ClaudeWebExportAttachmentSchema).optional(),
+  files: z.array(ClaudeWebExportAttachmentSchema).optional(),
+}).passthrough();
+
+const ClaudeWebExportConversationSchema = z.object({
+  uuid: z.string().min(1),
+  name: z.string().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  account: z.object({ uuid: z.string().optional() }).passthrough().optional(),
+  chat_messages: z.array(ClaudeWebExportMessageSchema),
+}).passthrough();
+
+const ClaudeWebExportSchema = z.array(ClaudeWebExportConversationSchema);
+
+type ClaudeWebExportMessage = z.infer<typeof ClaudeWebExportMessageSchema>;
+type ClaudeWebExportConversation = z.infer<typeof ClaudeWebExportConversationSchema>;
+
 export class ClaudeSessionAdapter implements SessionSourceAdapter {
   readonly provider = 'claude' as const;
   readonly adapterVersion = CLAUDE_ADAPTER_VERSION;
   readonly disposition = 'implemented' as const;
   readonly supportedOperations = ['discover', 'inspect', 'stream'] as const;
-  readonly acquisitionModes = ['jsonl', 'hook'] as const;
+  readonly acquisitionModes = ['jsonl', 'hook', 'manual-export'] as const;
 
   constructor(
     private readonly limits?: Partial<ReaderLimits>,
@@ -109,6 +157,12 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
   }
 
   async *stream(source: SelectedSource, cursor?: ImportCursor): AsyncIterable<ProviderRecord> {
+    if (source.locatorClass === 'claude-web-export-json') {
+      const parsed = await this.readWebExportSource(source);
+      const start = parseRecordCursor(cursor?.value);
+      for (const record of parsed.records.slice(start)) yield record;
+      return;
+    }
     const start = parseRecordCursor(cursor?.value);
     const input = await streamBoundedJsonLines(
       {
@@ -148,6 +202,9 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
     schemaVersion: string;
     consistency: 'provisional' | 'complete';
   }> {
+    if (source.locatorClass === 'claude-web-export-json') {
+      return this.readWebExportSource(source);
+    }
     const result = await readBoundedJsonLines(
       {
         selectedPath: source.locator,
@@ -171,7 +228,92 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
       consistency: normalized.complete ? 'complete' : 'provisional',
     };
   }
+
+  private async readWebExportSource(source: SelectedSource): Promise<{
+    records: ProviderRecord[];
+    schemaVersion: string;
+    consistency: 'provisional' | 'complete';
+  }> {
+    const { value } = await readBoundedJson(
+      { selectedPath: source.locator, allowedRoots: source.authorizedScope.allowedRoots },
+      this.limits,
+    );
+    const parsed = ClaudeWebExportSchema.safeParse(value);
+    if (!parsed.success) {
+      throw new SessionContractError(
+        'MALFORMED_SOURCE',
+        'Claude web/account export is not a recognized conversations.json layout',
+      );
+    }
+    if (parsed.data.length === 0) {
+      throw new SessionContractError('MALFORMED_SOURCE', 'Claude web/account export is empty');
+    }
+    return {
+      records: normalizeWebExport(parsed.data),
+      schemaVersion: CLAUDE_WEB_EXPORT_SCHEMA_VERSION,
+      // The export is a completed snapshot at request time, not a live tail.
+      consistency: 'complete',
+    };
+  }
 }
+
+function normalizeWebExport(conversations: ClaudeWebExportConversation[]): ProviderRecord[] {
+  const output: ProviderRecord[] = [];
+  for (const conversation of conversations) {
+    for (const [index, message] of conversation.chat_messages.entries()) {
+      output.push(webExportProviderRecord(conversation, message, index));
+    }
+  }
+  return output;
+}
+
+function webExportProviderRecord(
+  conversation: ClaudeWebExportConversation,
+  message: ClaudeWebExportMessage,
+  sequence: number,
+): ProviderRecord {
+  const text = message.text && message.text.length > 0
+    ? message.text
+    : (message.content ?? []).map((block) => block.text ?? '').filter(Boolean).join('\n');
+  const attachments = [...(message.attachments ?? []), ...(message.files ?? [])];
+  return {
+    nativeSessionId: conversation.uuid,
+    nativeEventId: message.uuid,
+    sequence,
+    kind: 'message',
+    role: message.sender,
+    participant: message.sender,
+    occurredAt: message.created_at,
+    text,
+    rawReference: { locatorClass: 'claude-web-export-json', sequence },
+    extensions: {
+      conversationName: conversation.name,
+      conversationCreatedAt: conversation.created_at,
+      conversationUpdatedAt: conversation.updated_at,
+      provenance: { acquisition: 'claude-web-export-json', schema: CLAUDE_WEB_EXPORT_SCHEMA_VERSION },
+      // Web/account exports reference attachments/files by metadata only; the
+      // export format does not embed original bytes, so this is a coverage
+      // note (#2565 acceptance criteria), not a loss AIWG introduced.
+      ...(attachments.length > 0 ? {
+        attachmentReferences: attachments.map((attachment) => ({
+          fileName: attachment.file_name,
+          fileType: attachment.file_type,
+          fileSize: attachment.file_size,
+          extractedContentAvailable: typeof attachment.extracted_content === 'string',
+        })),
+        metadataLoss: ['attachment bytes unavailable in web/account export format'],
+      } : {}),
+      unknownFields: unknownFields(
+        message as unknown as Record<string, unknown>,
+        WEB_EXPORT_MESSAGE_KEYS,
+      ),
+    },
+  };
+}
+
+const WEB_EXPORT_MESSAGE_KEYS = new Set([
+  'uuid', 'text', 'sender', 'created_at', 'updated_at', 'content', 'attachments', 'files',
+]);
 
 function normalizeTranscript(
   records: BoundedJsonRecord[],

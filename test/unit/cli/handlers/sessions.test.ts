@@ -55,7 +55,7 @@ describe('sessions CLI contracts', () => {
       .toMatchObject({
         disposition: 'implemented',
         supportedOperations: ['discover', 'inspect', 'stream'],
-        acquisitionModes: ['jsonl', 'hook'],
+        acquisitionModes: ['jsonl', 'hook', 'manual-export'],
       });
     expect(output.data.providers.find((item: any) => item.provider === 'codex'))
       .toMatchObject({

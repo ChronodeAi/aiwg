@@ -841,7 +841,7 @@ async function importSource(
                         ? new DevinDesktopSessionAdapter()
                         : new GenericSessionInterchangeAdapter();
   const locatorClass = isDsh ? 'deepseek-harness-session-v2-jsonl' : isOmp ? 'omp-session-v3-jsonl' : isClaude
-    ? (input.endsWith('.hooks.jsonl') ? 'claude-hook-jsonl' : 'claude-transcript-jsonl')
+    ? claudeLocatorClass(input)
     : isCodex
       ? (input.endsWith('.app-server.jsonl') ? 'codex-app-server-jsonl' : 'codex-rollout-jsonl')
       : isCopilot
@@ -873,7 +873,7 @@ async function importSource(
   const source = SessionSourceSchema.parse({
     contractVersion: SESSION_CONTRACT_VERSION, sourceId, provider,
     providerProfile: isDsh ? 'native-session-v2-jsonl' : isOmp ? 'native-title-slot-v3' : isClaude
-      ? 'documented-local-jsonl'
+      ? claudeProviderProfile(locatorClass)
       : isCodex
         ? 'app-server-v2-rollout-fallback'
         : isCopilot
@@ -1120,12 +1120,13 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
     return {
       provider, disposition: 'implemented', operationalState: 'available',
       supportedOperations: ['discover', 'inspect', 'stream'],
-      acquisitionModes: ['jsonl', 'hook'],
+      acquisitionModes: ['jsonl', 'hook', 'manual-export'],
       reasonCode: null,
-      remediation: 'Authorize a Claude projects or hook root, then import an explicit JSONL file.',
+      remediation: 'Authorize a Claude projects or hook root and import a JSONL file, '
+        + 'or import an explicitly selected Claude web/account conversations.json export.',
       evidence: {
         adapterVersion: CLAUDE_ADAPTER_VERSION,
-        verifiedAt: '2026-07-27',
+        verifiedAt: '2026-09-15',
         documentation: 'https://code.claude.com/docs/en/sessions',
       },
     };
@@ -1315,6 +1316,17 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
     remediation: 'Use the generic interchange until the provider adapter milestone is delivered.',
     evidence: { adapterVersion: null, verifiedAt: '2026-07-26' },
   };
+}
+
+function claudeLocatorClass(input: string): string {
+  if (input.endsWith('.hooks.jsonl') || input.endsWith('.hook.jsonl')) return 'claude-hook-jsonl';
+  if (input.endsWith('.json')) return 'claude-web-export-json';
+  return 'claude-transcript-jsonl';
+}
+
+function claudeProviderProfile(locatorClass: string): string {
+  if (locatorClass === 'claude-web-export-json') return 'web-account-export-conversations-json';
+  return 'documented-local-jsonl';
 }
 
 function cursorLocatorClass(input: string): string {
