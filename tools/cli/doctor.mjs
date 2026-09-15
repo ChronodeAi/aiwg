@@ -12,7 +12,12 @@ import { pathToFileURL } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
-import { scanStartupContext } from '../lint/claude-context-inventory.mjs';
+import { scanStartupContext,
+  subagentDispatchHeadroom,
+  SUBAGENT_AGENT_DEF_TOKENS,
+  SUBAGENT_SYSTEM_PROMPT_TOKENS,
+  SUBAGENT_MIN_WORKING_TOKENS,
+} from '../lint/claude-context-inventory.mjs';
 import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
 
 const { getFrameworkRoot, getPackageRoot, getVersionInfo } = await importImpl(
@@ -423,6 +428,46 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
   } else {
     check(`${label} Skill Budget`, 'ok', `${ratio < 0.5 ? 'OK' : 'tight'} (${ratio.toFixed(2)}×) — ${summary}`);
   }
+}
+
+// Subagent dispatch headroom (#2562). A Task/subagent dispatch inherits the
+// same inlined startup context as the main session — the project's rules,
+// every ancestor directory's rules and CLAUDE.md — plus the agent definition
+// and the base system prompt, and it still needs room to work. When the
+// inlined surface leaves less than that, dispatch fails immediately with
+// "Prompt is too long" and the self-maintenance entry points (aiwg-steward,
+// aiwg-doctor, aiwg-refresh) become unreachable in exactly the projects that
+// need them. This is a real failure, so it is reported as an error; the
+// startup-context check above stays advisory.
+async function checkSubagentDispatchHeadroom(provName, label) {
+  if (provName !== 'claude') return;
+  let startup;
+  try {
+    startup = await scanStartupContext({ rootDir: process.cwd() });
+  } catch {
+    return;
+  }
+  if (!startup || startup.components.length === 0) return;
+  const k = (n) => `${Math.round(n / 1000)}K`;
+  const { headroom, status } = subagentDispatchHeadroom(startup);
+  const ancestors = startup.components.filter((c) => c.ancestor);
+  const ancestorNote = ancestors.length > 0
+    ? ` Ancestor directories contribute ~${k(startup.ancestorTokens)} of that (${[...new Set(ancestors.map((c) => c.ancestor))].join(', ')}); Claude Code inlines their CLAUDE.md and .claude/rules too.`
+    : '';
+  const detail = `~${k(startup.totalTokens)} tok inlined at startup leaves ~${k(Math.max(headroom, 0))} tok for a subagent ` +
+    `after a ${k(SUBAGENT_AGENT_DEF_TOKENS)} agent def and ~${k(SUBAGENT_SYSTEM_PROMPT_TOKENS)} system prompt (needs ≥${k(SUBAGENT_MIN_WORKING_TOKENS)}).`;
+  if (status === 'ok') {
+    check(`${label} Subagent Dispatch`, 'ok', detail);
+    return;
+  }
+  check(
+    `${label} Subagent Dispatch`,
+    status === 'fails' ? 'error' : 'warn',
+    `${status === 'fails' ? 'WILL FAIL' : 'AT RISK'} — ${detail}${ancestorNote} ` +
+      'Task dispatch to aiwg-steward/aiwg-doctor/aiwg-refresh fails with "Prompt is too long" until the inlined rule surface shrinks: ' +
+      'redeploy so HIGH rules beyond the inline budget move to RULES-ONDEMAND.md (`aiwg use all --provider claude`), ' +
+      'lower AIWG_RULES_INLINE_BUDGET_TOKENS, or prune ancestor rule deployments. Run `aiwg context-firewall scan --provider claude` for the attributed breakdown.',
+  );
 }
 
 // Startup-context budget (#1673). The skill-listing budget above covers skill

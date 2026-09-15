@@ -49,6 +49,9 @@ import {
   getAddonRuleFiles,
   listOnDemandRuleFiles,
   writeOnDemandRuleIndex,
+  readRuleBudgetSidecar,
+  reconcileInlineRuleBudget,
+  resolveRulesInlineBudgetTokens,
   assembleRulesIndex,
   normalizeDeploymentMode,
   collectFrameworkArtifacts,
@@ -162,7 +165,7 @@ export function mapModel(shorthand, modelCfg, modelsConfig) {
 export function transformAgent(srcPath, content, opts) {
   const { reasoningModel, codingModel, efficiencyModel } = opts;
 
-  // Only transform if model overrides specified
+  // Explicit overrides re-map every classified model, pinned or not.
   if (reasoningModel || codingModel || efficiencyModel) {
     const models = {
       reasoning: reasoningModel || 'opus',
@@ -543,7 +546,7 @@ export async function deploy(opts) {
   const agentFiles = [];
   const commandFiles = [];
   const skillDirs = [];
-  const ruleFiles = [];
+  let ruleFiles = [];
 
   // Check for addon-style directory structure (direct agents/, commands/, skills/ subdirs)
   // This handles deployment when --source points to an addon directory
@@ -661,7 +664,17 @@ export async function deploy(opts) {
     pruneStaleAiwgSkills(kernelDestDir, computeAllKernelNames(srcRoot), opts);
   }
 
+  const inlineBudgetTokens = resolveRulesInlineBudgetTokens();
+  let demotedRuleNames = [];
   if (shouldDeployRules || rulesOnly) {
+    // Inline budget (#2562): rules a previous pass already moved on demand are
+    // not re-inlined; the directory is reconciled against the budget after
+    // this pass deploys (see below).
+    const sidecar = readRuleBudgetSidecar(path.join(target, paths.rules));
+    if (sidecar && sidecar.budgetTokens === inlineBudgetTokens && sidecar.demoted.length > 0) {
+      const skip = new Set(sidecar.demoted);
+      ruleFiles = ruleFiles.filter((f) => !skip.has(path.basename(f).replace(/\.md$/, '')));
+    }
     // Try assembled rules index (combines all component indexes)
     const assembled = assembleRulesIndex(srcRoot);
     if (assembled) {
@@ -694,7 +707,17 @@ export async function deploy(opts) {
     // On-demand index (#1673): list the MEDIUM/LOW rules that were tier-gated
     // out of the always-on set so agents can fetch them via `aiwg show rule`.
     const rulesDestDir = path.join(target, paths.rules);
-    const onDemandCount = writeOnDemandRuleIndex(rulesDestDir, listOnDemandRuleFiles(srcRoot), opts);
+    // Keep the always-on directory small enough that a subagent dispatch
+    // still fits (#2562). Demoted HIGH rules remain binding and are listed
+    // in RULES-ONDEMAND.md with their fetch hint.
+    const budget = reconcileInlineRuleBudget(rulesDestDir, inlineBudgetTokens, opts);
+    demotedRuleNames = budget.demoted;
+    if (budget.removed.length > 0 && !opts.quiet) {
+      console.log(`  Inline rule budget: ${budget.removed.length} HIGH rule(s) moved on demand to fit ${inlineBudgetTokens.toLocaleString()} tokens: ${budget.removed.join(', ')} (see RULES-ONDEMAND.md)`);
+    }
+    const onDemandCount = writeOnDemandRuleIndex(rulesDestDir, listOnDemandRuleFiles(srcRoot), {
+      ...opts, demotedNames: demotedRuleNames, inlineBudgetTokens,
+    });
     if (verbose && onDemandCount > 0) {
       console.log(`  On-demand rules (not inlined): ${onDemandCount} → RULES-ONDEMAND.md`);
     }

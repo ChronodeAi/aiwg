@@ -2358,9 +2358,137 @@ export function getAddonSkillDirs(srcRoot, excludeAddons = []) {
  */
 export function ruleEnforcementLevel(content) {
   const m = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!m) return null;
-  const e = m[1].match(/^enforcement:\s*([A-Za-z]+)/m);
-  return e ? e[1].toLowerCase() : null;
+  if (m) {
+    const e = m[1].match(/^enforcement:\s*([A-Za-z]+)/m);
+    if (e) return e[1].toLowerCase();
+  }
+  // Rules without frontmatter declare the level in the body header.
+  const body = content.match(/^\*\*Enforcement Level\*\*:\s*([A-Za-z]+)/m);
+  return body ? body[1].toLowerCase() : null;
+}
+
+/**
+ * Default inline rule budget (#2562). Every inlined rule is loaded into every
+ * session AND every subagent dispatch, so the always-on set must leave room
+ * for the agent definition, the system prompt, and the task itself inside the
+ * standard 200K window. 64K tokens (~256 KB) keeps a full CRITICAL+HIGH
+ * deployment dispatchable; `AIWG_RULES_INLINE_BUDGET_TOKENS=0` disables the
+ * budget, any other value overrides it.
+ */
+export const DEFAULT_RULES_INLINE_BUDGET_TOKENS = 64_000;
+const RULE_CHARS_PER_TOKEN = 4;
+
+export function resolveRulesInlineBudgetTokens(env = process.env) {
+  const raw = env.AIWG_RULES_INLINE_BUDGET_TOKENS;
+  if (raw === undefined || raw === '') return DEFAULT_RULES_INLINE_BUDGET_TOKENS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_RULES_INLINE_BUDGET_TOKENS;
+  return parsed;
+}
+
+/** Sidecar recording which rules the inline budget moved on demand (#2562). */
+export const RULE_BUDGET_SIDECAR = '.aiwg-rules-budget.json';
+
+export function readRuleBudgetSidecar(destDir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(destDir, RULE_BUDGET_SIDECAR), 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.demoted)) return null;
+    return { budgetTokens: Number(parsed.budgetTokens) || 0, demoted: parsed.demoted.map(String) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Keep a provider rule directory under the inline budget (#2562).
+ *
+ * Rules reach the directory over several deploy passes (the framework pass,
+ * then one per addon), so the budget is enforced against what is actually on
+ * disk after each pass rather than against any single pass's file list. When
+ * the inlined set exceeds the budget, the largest HIGH rules (then unlabelled
+ * ones; never CRITICAL or the indexes) are removed from the directory and
+ * recorded in the sidecar; the next pass skips re-deploying them and the
+ * on-demand index lists them as binding rules fetched via `aiwg show rule`.
+ * A changed budget invalidates the sidecar so the set is recomputed.
+ *
+ * Returns `{ demoted, removed }` — all demoted stems (sidecar state) and the
+ * stems removed by this call.
+ */
+export function reconcileInlineRuleBudget(destDir, budgetTokens = resolveRulesInlineBudgetTokens(), opts = {}) {
+  const sidecarPath = path.join(destDir, RULE_BUDGET_SIDECAR);
+  if (!budgetTokens || budgetTokens <= 0) {
+    if (fs.existsSync(sidecarPath) && !opts.dryRun) fs.rmSync(sidecarPath, { force: true });
+    return { demoted: [], removed: [] };
+  }
+  const previous = readRuleBudgetSidecar(destDir);
+  const carried = previous && previous.budgetTokens === budgetTokens ? previous.demoted : [];
+  let files = [];
+  try {
+    files = fs.readdirSync(destDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .map((entry) => path.join(destDir, entry.name))
+      .filter((file) => {
+        const base = path.basename(file);
+        if (base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md') return false;
+        try { return MANAGED_MARKER_RE.test(fs.readFileSync(file, 'utf8')); } catch { return false; }
+      });
+  } catch {
+    return { demoted: carried, removed: [] };
+  }
+  const { demoted } = applyInlineRuleBudget(files, budgetTokens);
+  const removed = demoted.map((file) => artifactStem(path.basename(file)));
+  if (!opts.dryRun) {
+    for (const file of demoted) fs.rmSync(file, { force: true });
+  }
+  const all = [...new Set([...carried, ...removed])].sort();
+  if (!opts.dryRun) {
+    if (all.length > 0) {
+      fs.writeFileSync(sidecarPath, `${JSON.stringify({ budgetTokens, demoted: all }, null, 2)}\n`, 'utf8');
+    } else if (fs.existsSync(sidecarPath)) {
+      fs.rmSync(sidecarPath, { force: true });
+    }
+  }
+  return { demoted: all, removed };
+}
+
+/**
+ * Fit an always-on rule set under the inline budget (#2562).
+ *
+ * CRITICAL rules and the generated indexes are never demoted. When the
+ * remaining set still exceeds the budget, HIGH rules are demoted largest-first
+ * (fewest rules leave the always-on set), then rules with no declared level.
+ * Demoted rules stay reachable via `aiwg show rule <name>` and are listed in
+ * RULES-ONDEMAND.md under their own heading. Returns `{ inline, demoted }`
+ * with the original order preserved for `inline`.
+ */
+export function applyInlineRuleBudget(ruleFiles, budgetTokens = resolveRulesInlineBudgetTokens()) {
+  const files = [...(ruleFiles || [])];
+  if (!budgetTokens || budgetTokens <= 0) return { inline: files, demoted: [] };
+  const sized = files.map((file) => {
+    const base = path.basename(file);
+    let content = '';
+    try { content = fs.readFileSync(file, 'utf8'); } catch { /* unreadable → keep inline */ }
+    const level = base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md' ? 'critical' : ruleEnforcementLevel(content);
+    return { file, tokens: Math.ceil(Buffer.byteLength(content, 'utf8') / RULE_CHARS_PER_TOKEN), level };
+  });
+  let total = sized.reduce((sum, item) => sum + item.tokens, 0);
+  if (total <= budgetTokens) return { inline: files, demoted: [] };
+  const demotable = sized
+    .filter((item) => item.level !== 'critical')
+    .sort((a, b) => {
+      const rank = (level) => (level === 'high' ? 0 : level === null ? 1 : 2);
+      return rank(a.level) - rank(b.level) || b.tokens - a.tokens;
+    });
+  const demoted = new Set();
+  for (const item of demotable) {
+    if (total <= budgetTokens) break;
+    demoted.add(item.file);
+    total -= item.tokens;
+  }
+  return {
+    inline: files.filter((file) => !demoted.has(file)),
+    demoted: files.filter((file) => demoted.has(file)),
+  };
 }
 
 /**
@@ -2458,8 +2586,9 @@ export function renderOnDemandRuleSection(onDemandFiles, opts = {}) {
  */
 export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
   const indexPath = path.join(destDir, 'RULES-ONDEMAND.md');
-  const names = onDemandRuleNames(onDemandFiles);
-  if (names.length === 0) {
+  const demotedNames = [...new Set([...onDemandRuleNames(opts.demotedFiles || []), ...(opts.demotedNames || [])])].sort();
+  const names = onDemandRuleNames(onDemandFiles, demotedNames);
+  if (names.length === 0 && demotedNames.length === 0) {
     try {
       if (fs.existsSync(indexPath) && !opts.dryRun) fs.rmSync(indexPath);
     } catch { /* ignore */ }
@@ -2479,10 +2608,25 @@ export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
     ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
     '',
   ];
+  if (demotedNames.length > 0) {
+    // HIGH rules that did not fit the inline budget (#2562). They remain
+    // binding; they are fetched on demand so subagent dispatch keeps working.
+    lines.push(
+      '## Binding rules moved on demand to fit the inline budget',
+      '',
+      'These HIGH-enforcement rules still apply in full. They are not inlined because the',
+      `always-on rule set would otherwise exceed the ${(opts.inlineBudgetTokens ?? DEFAULT_RULES_INLINE_BUDGET_TOKENS).toLocaleString()}-token inline budget`,
+      '(AIWG_RULES_INLINE_BUDGET_TOKENS) and break subagent dispatch with "Prompt is too long".',
+      'Fetch any of them before work they govern:',
+      '',
+      ...demotedNames.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
+      '',
+    );
+  }
   let content = lines.join('\n');
   content = addManagedMarker(content, opts.deployVersion || 'unknown', opts.deploySource || 'bundled');
   if (!opts.dryRun) fs.writeFileSync(indexPath, content, 'utf8');
-  return names.length;
+  return names.length + demotedNames.length;
 }
 
 export function getAddonRuleFiles(srcRoot, excludeAddons = []) {
