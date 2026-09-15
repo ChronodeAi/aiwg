@@ -67,10 +67,20 @@ interface VersionFingerprint {
  * describing, and names the command that explains the rest (#2529).
  */
 function printDrift(fp: VersionFingerprint): void {
-  if (!fp.drift) return;
-  const method = fp.installation?.identity?.method ?? 'unrecorded';
-  const declared = fp.drift.canonicalVersion ? ` (${fp.drift.canonicalVersion})` : '';
-  ui.dim(`    ! canonical install declares ${method} at ${fp.drift.canonicalRoot}${declared} — run \`aiwg installation show\``);
+  if (fp.drift) {
+    const method = fp.installation?.identity?.method ?? 'unrecorded';
+    const declared = fp.drift.canonicalVersion ? ` (${fp.drift.canonicalVersion})` : '';
+    ui.dim(`    ! canonical install declares ${method} at ${fp.drift.canonicalRoot}${declared} — run \`aiwg installation show\``);
+    return;
+  }
+  // Same root, different method (a source checkout recorded as npm, or the
+  // reverse) is drift too; `version` is the first recovery command an operator
+  // reaches for, so it must say so instead of looking aligned (#2559).
+  const state = fp.installation?.state;
+  if (state && state !== 'aligned' && state !== 'unrecorded') {
+    const reasons = Array.isArray(fp.installation?.drift) ? fp.installation.drift : [];
+    ui.dim(`    ! installation identity ${state}: ${reasons.join('; ') || 'see aiwg installation show'} — run \`aiwg installation show\``);
+  }
 }
 
 function collectFingerprint(versionInfo: Awaited<ReturnType<typeof getVersionInfo>>): VersionFingerprint {

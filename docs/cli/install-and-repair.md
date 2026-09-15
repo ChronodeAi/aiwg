@@ -55,6 +55,15 @@ aiwg installation show
   the package-manager executable used for updates, the currently executing
   installation, and any drift between them.
 
+When the recorded installation and the executing one disagree, the read-only
+diagnostics keep working and print the drift on stderr first: `version`,
+`status` (including `--probe --json`), `doctor`, `runtime-info`, `discover`,
+`show`, and `index query|deps|stats`. Everything that writes — `update`,
+`refresh`, `use`, deployment, channel switching, `index build` — stays blocked
+until you run `aiwg installation adopt` or `aiwg installation switch`. So a
+drifted install still answers `aiwg doctor` and
+`aiwg discover --backend local "<need>"`; it just refuses to change anything.
+
 ## Canonical installation and recovery
 
 AIWG records the first resolved global installation in `installation.json`

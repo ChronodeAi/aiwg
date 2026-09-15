@@ -5,6 +5,8 @@ import { loadGraphIndexFile } from '../../artifacts/index-reader.js';
 import type { ArtifactIndex, IndexStats } from '../../artifacts/types.js';
 import { readAiwgConfig, type DeployedArtifactCounts } from '../../config/aiwg-config.js';
 import { readUserRegistry } from '../../config/user-registry.js';
+import { inspectInstallation } from '../../installation/manager.mjs';
+import { getPackageRoot } from '../../channel/manager.mjs';
 import {
   getProviderDefinition,
   normalizeProviderDefinitionId,
@@ -983,6 +985,26 @@ export async function verifyConfiguredDeployments(
   return aggregateUseDeploymentResult({ projectRoot, frameworkRoot, scope: filters.scope ?? 'project', requestedBundles: bundles, providers: results });
 }
 
+/**
+ * Installation identity as the probe sees it. Read-only commands keep running
+ * under recorded/actual drift (#2559); the probe names that drift so an agent
+ * reading only the JSON does not treat a blocked installation as healthy.
+ */
+function probeInstallationIdentity(): Record<string, unknown> {
+  try {
+    const status = inspectInstallation({ actualRoot: getPackageRoot(), createIfMissing: false });
+    return {
+      state: status.state,
+      canonical: status.identity ? { method: status.identity.method, root: status.identity.root } : null,
+      actual: { method: status.actualMethod, root: status.actualRoot },
+      drift: status.drift,
+      mutations_blocked: status.state !== 'aligned' && status.state !== 'unrecorded',
+    };
+  } catch (error) {
+    return { state: 'unknown', drift: [error instanceof Error ? error.message : String(error)], mutations_blocked: true };
+  }
+}
+
 export async function buildDeploymentStatusProbe(
   projectRoot: string,
   frameworkRoot = process.env.AIWG_ROOT || projectRoot,
@@ -998,6 +1020,7 @@ export async function buildDeploymentStatusProbe(
     generated_at: result.generatedAt,
     project_root: result.projectRoot,
     engaged,
+    installation: probeInstallationIdentity(),
     status: notConfigured ? 'not-configured' : result.outcome === 'failed' ? 'needs-repair' : result.outcome,
     checks: {
       workspace_exists: await exists(path.join(projectRoot, '.aiwg')),

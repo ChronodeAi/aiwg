@@ -383,6 +383,29 @@ async function applyVerbosityFromArgs(args, routerPath) {
   return level;
 }
 
+/**
+ * Commands that only read state and therefore stay available while the
+ * recorded installation identity disagrees with the executing checkout
+ * (#2559). Everything else fails closed until the operator adopts or
+ * switches the identity. `index` is limited to its inspection subcommands;
+ * `index build` rewrites the capability index and is treated as a write.
+ */
+const RECOVERY_SAFE_COMMANDS = new Set([
+  'version', 'status', 'doctor', 'runtime-info', 'discover', 'show', 'help',
+]);
+const RECOVERY_SAFE_INDEX_SUBCOMMANDS = new Set(['query', 'deps', 'stats']);
+
+function isRecoverySafeCommand(args) {
+  const command = args.find((arg) => !arg.startsWith('-'));
+  if (!command) return false;
+  if (RECOVERY_SAFE_COMMANDS.has(command)) return true;
+  if (command === 'index') {
+    const sub = args.slice(args.indexOf(command) + 1).find((arg) => !arg.startsWith('-'));
+    return sub !== undefined && RECOVERY_SAFE_INDEX_SUBCOMMANDS.has(sub);
+  }
+  return false;
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -424,11 +447,32 @@ async function main() {
     }
     const { assertCanonicalInstallation } = await import(pathToFileURL(identityPath).href);
     const readOnlyPreview = args.includes('--dry-run');
-    assertCanonicalInstallation({
-      actualRoot: activePackageRoot,
-      createIfMissing: !readOnlyPreview,
-      allowUnrecorded: readOnlyPreview,
-    });
+    try {
+      assertCanonicalInstallation({
+        actualRoot: activePackageRoot,
+        createIfMissing: !readOnlyPreview,
+        allowUnrecorded: readOnlyPreview,
+      });
+    } catch (error) {
+      if (error?.code !== 'AIWG_INSTALLATION_DRIFT' || !isRecoverySafeCommand(args)) throw error;
+      // Read-only diagnostics stay reachable under drift so the documented
+      // recovery ladder (status → doctor → runtime-info → version → local
+      // discover) can run before the identity is repaired. Every mutating
+      // command still fails closed above (#2559).
+      const drift = Array.isArray(error.status?.drift) ? error.status.drift : [];
+      process.env['AIWG_INSTALLATION_DRIFT'] = JSON.stringify({
+        state: error.status?.state ?? 'mismatch',
+        drift,
+      });
+      process.stderr.write(
+        `aiwg: warning: installation identity drift detected; \`${args[0]}\` is read-only and continues, ` +
+        'but update, refresh, and deployment stay blocked until the identity is repaired.\n' +
+        drift.map((item) => `- ${item}\n`).join('') +
+        'Inspect: aiwg installation show\n' +
+        'Adopt this installation: aiwg installation adopt\n' +
+        'Switch deliberately: aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]\n',
+      );
+    }
   }
 
   // Wire up the logger level from -v/-vv/--quiet/AIWG_LOG_LEVEL before any
