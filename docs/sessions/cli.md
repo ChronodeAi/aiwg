@@ -391,8 +391,8 @@ is not a claim of parity.
 ## Native session-to-Fortemi shard export
 
 `aiwg sessions export` produces a real, portable `.shard` archive built by
-`@fortemi/core`'s `aiwgFortemiIndexToKnowledgeShard` -- a different, later
-capability from the in-memory helper above. It is a four-step, plan-then-build
+`@fortemi/core`'s `aiwgFortemiIndexToKnowledgeShardWithReport` -- a different,
+later capability from the in-memory helper above. It is a four-step, plan-then-build
 workflow so a selection is reviewable before any archive is written, and a
 plan generated today is rejected at build time if the underlying session data
 has changed since (`SCHEMA_DRIFT`), rather than silently exporting stale data.
