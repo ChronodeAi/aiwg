@@ -107,6 +107,58 @@
       "digest": "sha256:ef99ec0fb7cde6b59746c61ed80a308a25fe1a54fb3052f0f4af97798ee0af5c"
     },
     {
+      "logicalName": "dataset.fortemi-capability-validation",
+      "id": "https://fortemi.dev/schemas/dataset-execution-capabilities/validation/1.0.1.schema.json",
+      "version": "1.0.1",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "preview",
+      "owner": {
+        "id": "Fortemi/fortemi-react"
+      },
+      "authority": {
+        "kind": "external",
+        "path": "schemas/dataset/fortemi-capability-validation/1.0.1/capability.schema.json",
+        "uri": "https://fortemi.dev/schemas/dataset-execution-capabilities/validation/1.0.1.schema.json"
+      },
+      "compatibility": {
+        "mode": "none"
+      },
+      "consumers": [
+        {
+          "id": "fortemi-dataset-execution-client",
+          "boundary": "independent validation of the advertised capability descriptor and negotiation binding",
+          "path": "src/dataset/fortemi-capability.ts"
+        }
+      ],
+      "fixtures": {
+        "valid": [
+          "test/fixtures/dataset/fortemi-capability/server-descriptor.json"
+        ],
+        "invalid": [
+          "test/fixtures/dataset/fortemi-capability/invalid-descriptor.json"
+        ]
+      },
+      "projections": [
+        {
+          "kind": "mirror",
+          "path": "schemas/dataset/fortemi-capability-validation/1.0.1/capability.schema.json",
+          "digest": "sha256:a4e9b427da669a02e83db00d39f48c2e106770d6cd2ec1b717938c57793b754c",
+          "generated": true
+        },
+        {
+          "kind": "validator",
+          "path": "src/dataset/fortemi-capability.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      },
+      "digest": "sha256:a4e9b427da669a02e83db00d39f48c2e106770d6cd2ec1b717938c57793b754c"
+    },
+    {
       "logicalName": "dataset.fortemi-live-qualification-receipt",
       "id": "https://aiwg.io/schemas/dataset/fortemi-live-qualification-receipt.v1.schema.json",
       "version": "1.0.0",

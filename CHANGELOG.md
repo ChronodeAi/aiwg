@@ -9,6 +9,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Fortemi dataset execution now validates the advertised capability descriptor
+  and binds negotiation to it (#2242; Fortemi #1128, Fortemi React #422). AIWG
+  pins the Core capability-validation 1.0.1 schema and its shared SemVer and
+  wire vectors under `schemas/dataset/fortemi-capability-validation/1.0.1/`
+  and reimplements the rules independently, so agreement with the producer is
+  established by shared vectors rather than shared code. The execution client
+  rejects an invalid or absent descriptor before preview, refuses a requirement
+  the descriptor cannot satisfy without dispatching preview, rejects a reported
+  decision or runtime that disagrees with the advertised descriptor, and binds
+  the receipt's capability decision to the independently negotiated one. The
+  live qualification report records the capability authority revision, commit,
+  manifest digest, and the decision AIWG negotiated. Scope is unchanged: this
+  is source-consumer adoption, not clean-installed, released, or live session
+  evidence, and the suite audit remains NO-GO.
 - Cockpit desktop panel and inventory entry, control-API-backed (#2547).
   `/api/health` advertises `desktop.configured` only when both the identity
   verifier and the dedicated desktop backend are configured, and the web
