@@ -350,7 +350,7 @@ async function checkTotalDeployedSkillBudgetForProvider(provName, label, provide
     check(
       `${label} Deployed Skill Count`,
       'warn',
-      `${stats.count} startup-visible skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's default listing cap (${CODEX_LISTING_CHAR_CAP.toLocaleString()} chars). Run \`aiwg use all --provider codex --force\` to restore the kernel-only deployment, or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
+      `${stats.count} startup-visible skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's default listing cap (${CODEX_LISTING_CHAR_CAP.toLocaleString()} chars). Re-run \`aiwg use <bundle> --provider codex\` (no --force) to move bundle skills over the cap to the standard tier, or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
     );
   }
 }
@@ -402,7 +402,11 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
     usageUnit = 'chars';
     budgetSource = `${CODEX_LISTING_CHAR_CAP.toLocaleString()}-char built-in cap`;
     if (usage > budget) {
-      recommendations.push('run `aiwg use all --provider codex --force` to restore the kernel-only deployment');
+      // `--force` overwrites unmanaged files and is not a budget lever (#2561).
+      // The startup listing is the kernel dir; bundle skills that landed there
+      // are what push it over, and a plain redeploy re-places them under the cap.
+      recommendations.push('re-run `aiwg use <bundle> --provider codex` (no --force) so bundle skills over the cap move to the standard tier (`.codex/.aiwg/skills`, reachable via `aiwg discover`)');
+      recommendations.push('or run `aiwg use all --provider codex` to redeploy the kernel set without touching unmanaged files');
       recommendations.push('use `aiwg list --deployed` to inspect include/exclude reasons');
     }
   } else {
@@ -1058,6 +1062,7 @@ async function runDoctor() {
       await checkSkillBudgetForProvider(provName, label, budgetPath);
       await checkTotalDeployedSkillBudgetForProvider(provName, label, provider);
       await checkStartupContextBudget(provName, label);
+      await checkSubagentDispatchHeadroom(provName, label);
     }
 
     if (provName === 'openhuman') {

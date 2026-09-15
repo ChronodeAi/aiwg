@@ -390,10 +390,18 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Codex Integration', () => {
         '--deploy-skills',
         '--target', TEST_PROJECT_DIR,
       ]);
-      const content = await fs.readFile(
+      // A `--copy-all` deploy exceeds Codex's startup listing cap, so the
+      // deployer places overflow on the standard tier (#2561); the model
+      // policy contract holds wherever the skill landed.
+      const candidates = [
         path.join(TEST_PROJECT_DIR, '.agents', 'skills', 'flow-deploy-to-production', 'SKILL.md'),
-        'utf8',
-      );
+        path.join(TEST_PROJECT_DIR, '.codex', '.aiwg', 'skills', 'flow-deploy-to-production', 'SKILL.md'),
+      ];
+      let content = '';
+      for (const candidate of candidates) {
+        try { content = await fs.readFile(candidate, 'utf8'); break; } catch { /* try the other tier */ }
+      }
+      expect(content, `flow-deploy-to-production deployed to neither tier: ${candidates.join(', ')}`).not.toBe('');
       expect(content).toContain(
         '<!-- aiwg:model-policy role=reasoning tier=premium outcome=unsupported rationale=',
       );

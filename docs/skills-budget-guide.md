@@ -89,6 +89,15 @@ When the AGENTS.md size limit is hit, **Codex stops adding files silently** ([op
 1. **Nest AGENTS.md per subdirectory** rather than one giant root file. Codex respects nearest-ancestor first.
 2. **Don't blindly raise `project_doc_max_bytes`** — it lifts the cap but doesn't help if descriptions are bloated.
 3. **Reduce framework count** if you see truncation (see below).
+4. **Let the deployer place overflow on the standard tier.** `aiwg use` keeps the
+   startup listing (`.agents/skills/`) under the 8,000-char cap by default: when a
+   bundle's skills would push it over, the largest non-kernel entries are written
+   to `.codex/.aiwg/skills/` instead and named in the deploy output. They stay
+   reachable through `aiwg discover` / `aiwg show`. Re-running
+   `aiwg use <bundle> --provider codex` (no `--force`) re-places an existing
+   over-cap deployment the same way; `--force` only overwrites unmanaged files and
+   is never the budget fix. Override with `AIWG_CODEX_LISTING_CAP=<chars>` (`0`
+   disables).
 
 ---
 

@@ -202,10 +202,13 @@ describe('doctor: deployed skill budget warning', () => {
     expect(content).toContain('aiwg list --deployed');
   });
 
-  it('offers an actionable Codex repair without counting hidden standard skills', () => {
+  it('offers a non-destructive Codex repair without counting hidden standard skills (#2561)', () => {
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
-    expect(content).toContain('aiwg use all --provider codex --force');
+    // `--force` overwrites unmanaged files; it is never the budget remediation.
+    expect(content).not.toContain('aiwg use all --provider codex --force');
+    expect(content).toContain('aiwg use <bundle> --provider codex');
+    expect(content).toContain('standard tier');
     expect(content).toContain("provName !== 'codex' && provider?.paths?.skills");
     expect(content).toContain('startup-visible skills');
   });

@@ -600,8 +600,12 @@ export async function verifyProviderDeployment(
       if (!tally) continue;
       counts[flatKind] = tally.deployed;
       if (tally.unmanaged.length === 0) continue;
-      const shown = tally.unmanaged.slice(0, 3).join(', ');
-      const remainder = tally.unmanaged.length - 3;
+      // Name enough of the set that the operator can judge it, and make the
+      // overwrite previewable: `--force` replaces every listed file, so it is
+      // never the answer to an unrelated budget or listing warning (#2561).
+      const shown = tally.unmanaged.slice(0, 10).join(', ');
+      const remainder = tally.unmanaged.length - 10;
+      const bundle = options.requestedBundles[0] ?? 'all';
       findings.push(finding(
         normalized,
         `unmanaged-artifacts:${flatKind}`,
@@ -609,8 +613,9 @@ export async function verifyProviderDeployment(
         `${tally.unmanaged.length} unmanaged ${FLAT_ARTIFACT_NOUNS[flatKind]} file(s) left in place at ${artifactPaths[flatKind]}: `
         + `${shown}${remainder > 0 ? `, and ${remainder} more` : ''}. `
         + 'They are not managed by AIWG and were not counted as deployed.',
-        `Re-run aiwg use ${options.requestedBundles[0] ?? 'all'} --provider ${normalized} --force to replace them, `
-        + `or delete ${artifactPaths[flatKind]} so AIWG can reclaim the directory.`,
+        `Preview the overwrite set with aiwg use ${bundle} --provider ${normalized} --force --dry-run; `
+        + `then re-run aiwg use ${bundle} --provider ${normalized} --force to replace exactly those ${tally.unmanaged.length} file(s), `
+        + `or delete ${artifactPaths[flatKind]} so AIWG can reclaim the directory. Leave them in place if they are yours.`,
         { kind: flatKind, unmanaged: tally.unmanaged },
       ));
     }

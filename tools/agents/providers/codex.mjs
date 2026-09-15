@@ -302,6 +302,9 @@ export async function deploySkills(targetDir, srcRoot, opts) {
 
   await new Promise((resolve, reject) => {
     const args = ['--source', srcRoot, '--target', crossAgentSkillsDir];
+    // Overflow past Codex's startup listing cap lands here instead of being
+    // deployed over the cap (#2561); the index still reaches these skills.
+    args.push('--standard-target', path.join(targetDir, ...paths.skills.split('/').filter(Boolean)));
     if (opts.dryRun) args.push('--dry-run');
     if (opts.force) args.push('--force');
     if (opts.mode) args.push('--mode', opts.mode);
