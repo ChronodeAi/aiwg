@@ -29,6 +29,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `provenance_events` mechanism every other record uses, closing the one gap
   a full-v1 archive otherwise has no native place to carry.
 
+### Fixed
+
+- `test-conformance inventory` no longer flags a `.py` test file as a
+  runner mismatch just for importing `unittest.mock`; the classifier now
+  requires actual unittest-runner usage (`unittest.TestCase`, `unittest.main()`,
+  a real `import unittest`) (#202).
+- `test-conformance collect --mode controls` accepts a `--control <id>`
+  selector so negative controls can be collected one at a time, keeping any
+  single receipt from growing with every control declared on a lane and
+  avoiding the 16 MiB evidence-document ceiling (#201).
+
 ### Documentation
 
 - `docs/sessions/cli.md` — worked guide for the full
@@ -36,6 +47,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   matrix listing only combinations backed by an actual test run.
 - `docs/providers/claude-code-sessions.md` — acquisition prerequisites and
   known limitations for the Claude web/account export adapter.
+- `agentic/code/addons/testing-quality/docs/conformance-workflow.md` —
+  documents the controls-receipt size ceiling and the `--control` selector
+  workaround.
 
 ## [2026.9.12] - 2026-09-15 – "Release workflows get their own lanes"
 
