@@ -78,9 +78,14 @@ describe('session -> AiwgFortemiRecord mapping (#2564)', () => {
         generated: true,
         checksum: session().sourceDigest,
       },
-      facets: { provider: ['claude'], lifecycle: ['complete'] },
+      facets: {},
+      tags: ['provider:claude', 'lifecycle:complete'],
       privacy: { classification: 'public', pii: false },
-      compatibility: { nativeSessionId: 'native-session-1', sourceId: 'source-1', workspaceId: 'workspace-fixture' },
+      provenance_events: [{
+        activity: 'aiwg.session',
+        agent: 'claude',
+        attributes: { nativeSessionId: 'native-session-1', sourceId: 'source-1', workspaceId: 'workspace-fixture' },
+      }],
     });
     expect(record.title).toBeTruthy();
     expect(record.text).toBeTruthy();
@@ -113,7 +118,10 @@ describe('session -> AiwgFortemiRecord mapping (#2564)', () => {
         type: 'parent-session', target_id: 'session-1', direction: 'upstream', privacy: 'private',
       }],
       privacy: { classification: 'private', pii: true },
-      compatibility: { sessionId: 'session-1', sourceId: 'source-1', nativeId: 'native-event-1', sequence: 0 },
+      provenance_events: [{
+        activity: 'aiwg.session-event.message',
+        attributes: { sessionId: 'session-1', sourceId: 'source-1', nativeId: 'native-event-1', sequence: 0 },
+      }],
     });
   });
 

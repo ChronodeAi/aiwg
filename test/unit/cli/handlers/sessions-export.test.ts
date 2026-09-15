@@ -74,7 +74,7 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     expect(buildResult.exitCode).toBe(0);
     const buildData = jsonOutput(log).data;
     expect(buildData).toMatchObject({
-      archiveProfile: 'core-v1', archiveSchemaVersion: '1.2.0',
+      archiveProfile: 'full-v1', archiveSchemaVersion: '2.0.0', lossless: true, losses: [],
       totals: { sessionCount: 2, eventCount: 3, recordCount: 5 },
     });
     log.mockClear();
@@ -183,9 +183,13 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     const outputRecord = recovered.items.find((item: any) => item.type === 'aiwg.session-output');
     expect(outputRecord).toBeDefined();
     expect(outputRecord.source.repo_relative_path).toBe('output/reports/result.md');
-    expect(outputRecord.compatibility).toMatchObject({
-      sessionId: sessionIds[0], outputLocator: 'output/reports/result.md', bytesEmbedded: false,
-    });
+    expect(outputRecord.tags).toEqual(expect.arrayContaining(['mediaType:text/markdown', 'lineage:registered']));
+    expect(outputRecord.provenance_events).toContainEqual(expect.objectContaining({
+      activity: 'aiwg.session-output',
+      attributes: expect.objectContaining({
+        sessionId: sessionIds[0], outputLocator: 'output/reports/result.md', bytesEmbedded: false,
+      }),
+    }));
   });
 
   it('exports a non-Claude provider (Codex) through the same plan/build pipeline, proving the mapping is provider-agnostic', async () => {
@@ -215,7 +219,7 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
       'export', 'build', '--db', codexDb, '--plan', planPath, '--out', buildDir, '--json',
     ]));
     expect(buildResult.exitCode).toBe(0);
-    expect(jsonOutput(log).data).toMatchObject({ archiveProfile: 'core-v1', archiveSchemaVersion: '1.2.0' });
+    expect(jsonOutput(log).data).toMatchObject({ archiveProfile: 'full-v1', archiveSchemaVersion: '2.0.0', lossless: true });
     log.mockClear();
 
     const verifyResult = await sessionsHandler.execute(context([

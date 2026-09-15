@@ -66,6 +66,7 @@ import {
   buildSessionExportPlan,
   reverifySessionExportPlan,
   buildSessionAiwgFortemiIndexExport,
+  recoverAiwgFortemiIndexFromFullV1Shard,
   SESSION_EXPORT_PLAN_SCHEMA_VERSION,
   type SessionExportPlan,
   type SessionProviderId,
@@ -1073,20 +1074,24 @@ async function exportBuild(
   // re-select from the live repository and reject on any digest drift.
   const { sessions, eventsBySessionId } = reverifySessionExportPlan(repository, plan);
   const index = buildSessionAiwgFortemiIndexExport(plan.workspaceId, sessions, eventsBySessionId, plan.outputs);
-  // aiwgFortemiIndexToKnowledgeShard takes no profile/schemaVersion override
-  // -- it has a fixed internal target. Read the produced manifest back out
-  // of the archive itself for the receipt rather than asserting a value:
-  // an earlier version of this code hardcoded "full-v1"/"2.0.0" by analogy
-  // with the sibling WithReport function's documented target, which was
-  // wrong -- the actual manifest declares 1.2.0/core-v1. Never assert what
-  // can be read.
-  const { aiwgFortemiIndexToKnowledgeShard, unpackTarGz } = await import('@fortemi/core');
-  const bytes = await aiwgFortemiIndexToKnowledgeShard(index);
-  const manifestEntry = unpackTarGz(bytes).get('manifest.json');
-  if (!manifestEntry) {
-    throw new CliError('MALFORMED_SOURCE', 'built shard archive has no manifest.json', EXIT.contract);
+  // aiwgFortemiIndexToKnowledgeShardWithReport targets the declared
+  // full-v1/2.0.0 archive contract and validates losslessness -- unlike the
+  // plain aiwgFortemiIndexToKnowledgeShard (core-v1), which silently embeds
+  // the whole input record as opaque note metadata regardless of whether it
+  // maps to any native component. The mapping in fortemi-export-mapping.ts
+  // was built specifically so every AIWG-specific field lands in a real
+  // full-v1 component (tags, provenance_events) rather than being smuggled
+  // through as an unmapped blob.
+  const { aiwgFortemiIndexToKnowledgeShardWithReport } = await import('@fortemi/core');
+  const result = await aiwgFortemiIndexToKnowledgeShardWithReport(index);
+  if (!result.success || !result.archive) {
+    throw new CliError(
+      'MALFORMED_SOURCE',
+      `full-v1 shard conversion failed: ${JSON.stringify(result.losses)}`,
+      EXIT.contract,
+    );
   }
-  const manifest = JSON.parse(new TextDecoder().decode(manifestEntry)) as { version: string; profile: string };
+  const bytes = result.archive;
   mkdirSync(outDirectory, { recursive: true, mode: 0o700 });
   const finalPath = join(outDirectory, shardName);
   // Interrupted writes must never be mistaken for a completed export: write
@@ -1109,8 +1114,11 @@ async function exportBuild(
     sessionIds: plan.sessions.map((entry) => entry.sessionId),
     totals: plan.totals,
     indexSchemaVersion: index.schema_version,
-    archiveProfile: manifest.profile,
-    archiveSchemaVersion: manifest.version,
+    archiveProfile: result.profile,
+    archiveSchemaVersion: result.schema_version,
+    lossless: result.lossless,
+    losses: result.losses,
+    fortemiReceipt: result.receipt,
     shardFile: shardName,
     shardDigest,
     shardBytes: readBack.length,
@@ -1131,10 +1139,9 @@ async function exportVerify(
   } catch {
     throw new CliError('SOURCE_NOT_AUTHORIZED', `shard file is not readable: ${input}`, EXIT.usage);
   }
-  const { aiwgFortemiIndexFromKnowledgeShard } = await import('@fortemi/core');
   let recovered;
   try {
-    recovered = aiwgFortemiIndexFromKnowledgeShard(bytes);
+    recovered = recoverAiwgFortemiIndexFromFullV1Shard(bytes);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);
@@ -1174,10 +1181,9 @@ async function exportUnpack(
   } catch {
     throw new CliError('SOURCE_NOT_AUTHORIZED', `shard file is not readable: ${input}`, EXIT.usage);
   }
-  const { aiwgFortemiIndexFromKnowledgeShard } = await import('@fortemi/core');
   let recovered;
   try {
-    recovered = aiwgFortemiIndexFromKnowledgeShard(bytes);
+    recovered = recoverAiwgFortemiIndexFromFullV1Shard(bytes);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);

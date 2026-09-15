@@ -1,18 +1,31 @@
 /**
  * Maps AIWG session-catalog records onto the generic Fortemi Core record
  * graph (`AiwgFortemiRecord` / `AiwgFortemiIndexExport`) so session evidence
- * can be built into a real Knowledge Shard via `aiwgFortemiIndexToKnowledgeShard`
- * (#2564) instead of a hand-rolled archive format.
+ * can be built into a real, canonical `full-v1`/`2.0.0` Knowledge Shard via
+ * `aiwgFortemiIndexToKnowledgeShardWithReport` (#2564) instead of a
+ * hand-rolled archive format.
  *
  * Sessions and events have no on-disk repo path of their own -- they live in
  * the session catalog's SQLite store -- so `source.path`/`locator` use a
  * synthetic `aiwg-session://` scheme rather than claiming a real file. This
  * is deliberate, not a shortcut: it keeps the mapping honest about where the
  * data actually came from.
+ *
+ * Every AIWG-specific bit of bookkeeping (provider, lifecycle, kind, role,
+ * tool name, native ids, model, sequence, ...) is represented through native
+ * full-v1 shard components -- `tags` and `provenance_events` -- not through
+ * an ad-hoc `facets`/`compatibility` bag. This was verified empirically: the
+ * strict `...WithReport` converter refuses to produce an archive at all
+ * (`success: false`) when a record carries fields it doesn't recognize as a
+ * native component (reported as "unmapped fields not hidden in note
+ * metadata"), so anything AIWG wants preserved has to go through a field the
+ * converter actually understands. `tags`/`provenance_events` do; the earlier
+ * `facets`/`compatibility` shape didn't.
  */
 import type {
   AiwgFortemiIndexExport,
   AiwgFortemiProvenance,
+  AiwgFortemiProvenanceEvent,
   AiwgFortemiRecord,
   AiwgFortemiRelationship,
 } from '@fortemi/core';
@@ -21,13 +34,17 @@ import type { Session, SessionEvent } from './contracts.js';
 /**
  * `record.v1`/`export.v1` forbid exactly the fields this mapping needs
  * (`source.origin`/`generated`/`checksum`/`updated_at`, relationship
- * `direction`/`privacy`, and any `compatibility` bag at all -- verified
- * empirically against @fortemi/core's bundled AJV schema, since the type
- * declarations alone don't encode this v1/v2 split). Use v2 throughout.
+ * `direction`/`confidence`/`privacy`) -- verified empirically against
+ * @fortemi/core's bundled AJV schema, since the type declarations alone
+ * don't encode this v1/v2 split. Use v2 throughout.
  */
 export const SESSION_EXPORT_RECORD_SCHEMA_VERSION = 'aiwg.fortemi.index.record.v2' as const;
 export const SESSION_EXPORT_INDEX_SCHEMA_VERSION = 'aiwg.fortemi.index.export.v2' as const;
 const INDEX_GRAPH_ID = 'aiwg-sessions' as const;
+
+function tag(key: string, value: string): string {
+  return `${key}:${value}`;
+}
 
 export function sessionRecordLocator(session: Pick<Session, 'provider' | 'sessionId'>): string {
   return `aiwg-session://${session.provider}/${session.sessionId}`;
@@ -61,8 +78,8 @@ export function sessionToAiwgFortemiRecord(session: Session): AiwgFortemiRecord 
     // deterministic fallback rather than an empty/undefined value.
     title: session.intent.title ?? `${session.provider} session ${session.nativeSessionId}`,
     text: session.intent.summary ?? `AIWG session ${session.sessionId} (${session.provider}, ${session.lifecycle})`,
-    facets: { provider: [session.provider], lifecycle: [session.lifecycle] },
-    tags: [],
+    facets: {},
+    tags: [tag('provider', session.provider), tag('lifecycle', session.lifecycle)],
     concepts: [],
     relationships: [],
     provenance: [{
@@ -72,14 +89,26 @@ export function sessionToAiwgFortemiRecord(session: Session): AiwgFortemiRecord 
       confidence: 'source',
       privacy: 'private',
     }],
+    // Structural identifiers this export exists to preserve, carried as a
+    // native provenance_events attribute bag rather than an unmapped
+    // `compatibility` field the full-v1 converter would refuse to archive.
+    provenance_events: [{
+      activity: 'aiwg.session',
+      agent: session.provider,
+      started_at: session.startedAt ?? updatedAt,
+      source: 'aiwg-session-catalog',
+      path: locator,
+      confidence: 'source',
+      privacy: 'private',
+      attributes: {
+        nativeSessionId: session.nativeSessionId,
+        sourceId: session.sourceId,
+        workspaceId: session.workspaceId,
+        consistency: session.consistency,
+      },
+    }],
     privacy: { classification: 'public', pii: false },
     updated_at: updatedAt,
-    compatibility: {
-      nativeSessionId: session.nativeSessionId,
-      sourceId: session.sourceId,
-      workspaceId: session.workspaceId,
-      consistency: session.consistency,
-    },
   };
 }
 
@@ -107,6 +136,28 @@ export function sessionEventToAiwgFortemiRecord(
     confidence: 'source',
     privacy: event.sensitivity.classification === 'sensitive' ? 'private' : 'public',
   }];
+  const provenanceEvents: AiwgFortemiProvenanceEvent[] = [{
+    activity: `aiwg.session-event.${event.kind}`,
+    agent: event.model ?? session.provider,
+    started_at: event.occurredAt ?? updatedAt,
+    source: 'aiwg-session-catalog',
+    path: locator,
+    confidence: 'source',
+    privacy: event.sensitivity.classification === 'sensitive' ? 'private' : 'public',
+    attributes: {
+      sessionId: event.sessionId,
+      sourceId: event.sourceId,
+      nativeId: event.nativeId,
+      sequence: event.sequence,
+      toolCallId: event.toolCallId,
+    },
+  }];
+  const tags = [
+    tag('kind', event.kind),
+    ...(event.role ? [tag('role', event.role)] : []),
+    ...(event.toolName ? [tag('tool', event.toolName)] : []),
+    ...(event.entities ?? []).map((entity) => tag('entity', entity)),
+  ];
   return {
     schema_version: SESSION_EXPORT_RECORD_SCHEMA_VERSION,
     id: event.eventId,
@@ -122,28 +173,21 @@ export function sessionEventToAiwgFortemiRecord(
     },
     title: `${event.kind}${event.role ? ` (${event.role})` : ''} -- ${session.sessionId}`,
     text: event.searchableText.length > 0 ? event.searchableText : `[${event.kind}: no text content]`,
-    facets: {
-      kind: [event.kind],
-      ...(event.role ? { role: [event.role] } : {}),
-      ...(event.toolName ? { tool: [event.toolName] } : {}),
-    },
-    tags: [],
-    concepts: event.entities ?? [],
+    facets: {},
+    tags,
+    // Entities are AIWG-extracted strings, not real SKOS taxonomy concepts
+    // with definitions -- represented as `entity:` tags above, not as
+    // `concepts` (which the full-v1 converter treats as SKOS references and
+    // refuses to archive without SKOS metadata backing them).
+    concepts: [],
     relationships,
     provenance,
+    provenance_events: provenanceEvents,
     privacy: {
       classification: event.sensitivity.classification === 'sensitive' ? 'private' : 'public',
       pii: event.sensitivity.classes.length > 0,
     },
     updated_at: updatedAt,
-    compatibility: {
-      sessionId: event.sessionId,
-      sourceId: event.sourceId,
-      nativeId: event.nativeId,
-      sequence: event.sequence,
-      model: event.model,
-      toolCallId: event.toolCallId,
-    },
   };
 }
 
@@ -188,8 +232,8 @@ export function sessionOutputToAiwgFortemiRecord(
     title: `registered output for ${session.sessionId}`,
     text: `${output.mediaType} output registered at ${output.outputLocator} (${output.matchReason}); `
       + 'bytes not embedded -- reference and digest only.',
-    facets: { mediaType: [output.mediaType], lineage: ['registered'] },
-    tags: [],
+    facets: {},
+    tags: [tag('mediaType', output.mediaType), tag('lineage', 'registered')],
     concepts: [],
     relationships: [{
       type: 'parent-session',
@@ -206,15 +250,24 @@ export function sessionOutputToAiwgFortemiRecord(
       confidence: 'source',
       privacy: 'private',
     }],
+    provenance_events: [{
+      activity: 'aiwg.session-output',
+      agent: 'aiwg-output-registration',
+      started_at: now,
+      source: 'aiwg-output-registration',
+      path: locator,
+      confidence: 'source',
+      privacy: 'private',
+      attributes: {
+        sessionId: output.sessionId,
+        registrationId: output.registrationId,
+        outputLocator: output.outputLocator,
+        matchReason: output.matchReason,
+        bytesEmbedded: false,
+      },
+    }],
     privacy: { classification: 'private', pii: false },
     updated_at: now,
-    compatibility: {
-      sessionId: output.sessionId,
-      registrationId: output.registrationId,
-      outputLocator: output.outputLocator,
-      matchReason: output.matchReason,
-      bytesEmbedded: false,
-    },
   };
 }
 

@@ -439,20 +439,43 @@ registered-output files. Both are recorded as reference metadata (locator,
 digest, media type) with an explicit note, not silently dropped -- embedding
 original bytes needs a blob-store integration that has not landed.
 
-### Archive profile: core-v1/1.2.0, not full-v1/2.0.0
+### Archive profile: full-v1/2.0.0
 
-The built archive's manifest declares `profile: "core-v1"`, `version:
-"1.2.0"` -- read directly out of the archive after every build, never
-asserted. `@fortemi/core` also exposes a stricter `full-v1`/`2.0.0` path
-(`aiwgFortemiIndexToKnowledgeShardWithReport`, the same function AIWG's own
-artifact-index shard export in `src/artifacts/fortemi-shard-export.ts` uses
-for its `full-v1` tuple) that maps records into the native note-taking
-schema. That path was tried against this session/event mapping and refused
-to produce an archive (`success: false`) because AIWG-specific fields
-(`facets`, `compatibility`, relationship metadata) have no native full-v1
-component. Reaching full-v1/2.0.0 would mean dropping the session/event
-identifiers this export exists to preserve. `core-v1` was kept deliberately;
-see AIWG issue #2564 for the open question this raises.
+The built archive's manifest declares `profile: "full-v1"`, `version:
+"2.0.0"` -- the same declared target #2564 asked for, and the same function
+AIWG's own artifact-index shard export (`src/artifacts/fortemi-shard-export.ts`)
+uses for its `full-v1` tuple (`aiwgFortemiIndexToKnowledgeShardWithReport`).
+
+An earlier version of this mapping used ad-hoc `facets`/`compatibility`
+fields to carry AIWG-specific bookkeeping (provider, lifecycle, kind, role,
+native ids, model, sequence, ...). The strict full-v1 converter refuses to
+produce an archive at all (`success: false`) for fields it doesn't recognize
+as a native component -- so that shape only ever built against the more
+permissive `core-v1` path, which silently embeds the whole input record
+verbatim as opaque note metadata regardless of whether it maps to anything.
+
+The mapping now represents that same bookkeeping through fields the
+converter genuinely understands: `tags` (`provider:claude`, `kind:message`,
+`entity:<name>`, ...) and `provenance_events` (native ids, model, sequence,
+etc. carried in each event's `attributes` bag). Every build reports
+`lossless`/`losses` directly from `@fortemi/core`'s own conversion report
+(`result.lossless`, `result.losses`) in the receipt -- not asserted, read.
+
+**Recovery caveat**: `@fortemi/core`'s own `aiwgFortemiIndexFromKnowledgeShard`
+only recovers archives built by the plain (`core-v1`) converter -- it looks
+for the opaque `aiwg_fortemi_index` metadata blob that converter embeds,
+which the strict full-v1 converter deliberately does not write (even AIWG's
+own artifact-shard-export test round-trips through that function using
+`profile: "core-v1"` specifically). `export verify`/`export unpack` use a
+purpose-built reader (`src/sessions/fortemi-shard-recovery.ts`) that inverts
+this module's own mapping directly from the shard's native `notes.jsonl`,
+`links.jsonl`, and `provenance_activities.jsonl` files instead. One thing
+this reader cannot recover: the index-level wrapper's `source.repo`/`privacy`
+fields aren't preserved anywhere in a full-v1 archive (no per-archive AIWG
+metadata sidecar exists), so `export unpack` reports a fixed, clearly-labeled
+placeholder for them rather than inventing a value. Every record's own
+identity, source, privacy, tags, relationships, and provenance round-trip
+exactly -- verified by `test/unit/sessions/fortemi-shard-recovery.test.ts`.
 
 ### Support matrix
 
@@ -464,7 +487,8 @@ as supported; everything else is unverified, not assumed to work.
 | Claude local JSONL/hook -> `export plan/build/verify/unpack` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`; manual CLI smoke test against a rebuilt `dist/` |
 | Claude web/account `manual-export` -> `export plan/build/verify/unpack` | Verified | same test file, using the `web-export.json` fixture |
 | Registered output lineage (#2566) included in the built shard | Verified | `test/unit/sessions/output-lineage.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts` |
-| Built shard round-trips through `@fortemi/core`'s own `aiwgFortemiIndexFromKnowledgeShard` | Verified | `test/unit/sessions/fortemi-export-mapping.test.ts` |
+| Built shard is a genuine, lossless `full-v1`/`2.0.0` archive (`@fortemi/core`'s own conversion report) | Verified | `test/unit/sessions/fortemi-export-mapping.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts` |
+| Built shard recovers exactly via the purpose-built full-v1 reader (not `aiwgFortemiIndexFromKnowledgeShard`, which only supports `core-v1`) | Verified | `test/unit/sessions/fortemi-shard-recovery.test.ts` |
 | Codex -> `export plan/build/verify` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `codex/threads.app-server.jsonl` fixture |
 | Remaining provider sources (Copilot, Cursor, Hermes, OpenCode, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
 | A real external Fortemi consumer application importing the built shard | Unverified | No test exercises this; AIWG's own artifact-index shard export has a Docker/Postgres-based producer-consumer conformance job (`.gitea/workflows/fortemi-shard-conformance.yml`) that could be extended to cover session shards, but that has not been done |
