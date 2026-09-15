@@ -74,7 +74,7 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     expect(buildResult.exitCode).toBe(0);
     const buildData = jsonOutput(log).data;
     expect(buildData).toMatchObject({
-      archiveProfile: 'full-v1', archiveSchemaVersion: '2.0.0',
+      archiveProfile: 'core-v1', archiveSchemaVersion: '1.2.0',
       totals: { sessionCount: 2, eventCount: 3, recordCount: 5 },
     });
     log.mockClear();
