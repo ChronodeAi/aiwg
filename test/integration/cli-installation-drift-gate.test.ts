@@ -149,7 +149,9 @@ describe('installation drift gate (#2559)', () => {
     const configDir = npmRecordedSourceActual();
     const stats = runCli(['index', 'stats', '--json'], configDir);
     expect(stats.stderr).toContain(DRIFT_WARNING);
-    expect(stats.exitCode).toBe(0);
+    // The gate lets the command run; whether an index exists in this checkout
+    // (it does not on a fresh CI runner) is the command's own concern.
+    expect(stats.stderr).not.toContain('update and refresh are blocked');
 
     const build = runCli(['index', 'build', '--dry-run'], configDir);
     expect(build.exitCode).toBe(1);

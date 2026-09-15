@@ -122,6 +122,7 @@ function parseArgs() {
     // selected skill to the target. 0 disables the budget.
     listingCap: resolveCodexListingCap(),
     listingCapExplicit: false,
+    listingBudget: false,
     standardTarget: null,
   };
 
@@ -135,6 +136,7 @@ function parseArgs() {
     else if (a === '--copy-all' || a === '--copy-standard-skills') cfg.copyStandardSkills = true;
     else if (a === '--listing-cap' && args[i + 1]) { cfg.listingCap = Math.max(0, Number(args[++i]) || 0); cfg.listingCapExplicit = true; }
     else if (a === '--standard-target' && args[i + 1]) cfg.standardTarget = path.resolve(args[++i]);
+    else if (a === '--listing-budget') cfg.listingBudget = true;
   }
 
   cfg.mode = normalizeDeploymentMode(cfg.mode);
@@ -593,7 +595,14 @@ function isFullAiwgSourceRoot(srcRoot) {
 
   const standardTarget = cfg.standardTarget
     || path.join(path.dirname(path.dirname(target)), '.codex', '.aiwg', 'skills');
-  const budgetActive = Boolean(cfg.standardTarget) || cfg.listingCapExplicit;
+  // An operator `--copy-all` asks for every standard skill in the listing;
+  // honoring the cap there would silently undo the request and break the
+  // documented kernel/standard contract. `--listing-budget` is how the caller
+  // says the copy-all was its own doing (project-local bundles force it so
+  // their skills are reachable at all) and the cap still applies (#2561).
+  const budgetActive = cfg.listingCapExplicit
+    || cfg.listingBudget
+    || (Boolean(cfg.standardTarget) && !copyStandardSkills);
   const budget = planCodexListingBudget(planned, target, budgetActive ? cfg.listingCap : 0);
   for (const item of planned) {
     if (budget.demoted.has(item)) continue;

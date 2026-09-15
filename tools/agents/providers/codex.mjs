@@ -263,6 +263,9 @@ export async function deployCommands(targetDir, srcRoot, opts) {
     if (opts.force) args.push('--force');
     if (opts.mode) args.push('--mode', opts.mode);
     if (opts.copyStandardSkills === true) args.push('--copy-all');
+    // A copy-all the deployer forced on the caller's behalf (project-local
+    // bundles) still honors the startup listing cap (#2561).
+    if (opts.listingBudget === true) args.push('--listing-budget');
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
@@ -309,6 +312,9 @@ export async function deploySkills(targetDir, srcRoot, opts) {
     if (opts.force) args.push('--force');
     if (opts.mode) args.push('--mode', opts.mode);
     if (opts.copyStandardSkills === true) args.push('--copy-all');
+    // A copy-all the deployer forced on the caller's behalf (project-local
+    // bundles) still honors the startup listing cap (#2561).
+    if (opts.listingBudget === true) args.push('--listing-budget');
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',

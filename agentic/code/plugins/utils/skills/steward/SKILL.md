@@ -104,6 +104,13 @@ Use this recovery ladder:
    work and ask the operator to choose `aiwg installation adopt` or the
    explicit `aiwg installation switch --root ... --method ...` recovery path.
 
+   These read-only commands — `version`, `status`, `doctor`, `runtime-info`,
+   `discover`, `show`, and `index query|deps|stats` — keep running under drift
+   and print the drift warning on stderr first. Mutating commands (`update`,
+   `refresh`, `use`, `regenerate`, `index build`, channel switches) fail closed
+   with `AIWG_INSTALLATION_DRIFT` until the identity is repaired, so do not
+   retry them; repair the identity, then continue the ladder.
+
 3. Preview cleanup before changing files:
 
    ```bash

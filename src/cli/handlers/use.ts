@@ -1483,6 +1483,10 @@ async function deployOneProjectLocalBundle(opts: {
       // never reach <provider>/.aiwg/skills/, leaving them invisible to
       // both the platform and the index.
       '--copy-all',
+      // That copy-all is the deployer's doing, not the operator's, so the
+      // provider's startup listing cap still applies; overflow lands on the
+      // standard tier instead of over the cap (#2561).
+      '--listing-budget',
       // Provenance for the managed marker (#2502). Without this the deployer
       // stamps `bundled`/`unknown`, and `aiwg refresh`'s stale-artifact prune —
       // whose desired set is the packaged framework corpus — deletes every
