@@ -259,8 +259,24 @@ export class ClaudeSessionAdapter implements SessionSourceAdapter {
 
 function normalizeWebExport(conversations: ClaudeWebExportConversation[]): ProviderRecord[] {
   const output: ProviderRecord[] = [];
+  const seenConversationIds = new Set<string>();
   for (const conversation of conversations) {
+    if (seenConversationIds.has(conversation.uuid)) {
+      throw new SessionContractError(
+        'DUPLICATE_NATIVE_ID',
+        `Claude web export declares the same conversation uuid twice: ${conversation.uuid}`,
+      );
+    }
+    seenConversationIds.add(conversation.uuid);
+    const seenMessageIds = new Set<string>();
     for (const [index, message] of conversation.chat_messages.entries()) {
+      if (seenMessageIds.has(message.uuid)) {
+        throw new SessionContractError(
+          'DUPLICATE_NATIVE_ID',
+          `Claude web export conversation ${conversation.uuid} declares the same message uuid twice: ${message.uuid}`,
+        );
+      }
+      seenMessageIds.add(message.uuid);
       output.push(webExportProviderRecord(conversation, message, index));
     }
   }

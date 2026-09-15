@@ -273,8 +273,35 @@ describe('Claude web/account export adapter (#2565)', () => {
   it.each([
     ['web-export-malformed.json', 'a JSONL transcript renamed to .json, or any non-array root'],
     ['web-export-empty.json', 'an export with zero conversations'],
+    ['web-export-malformed-message.json', 'one message in an otherwise valid conversation has an invalid sender'],
   ])('fails closed with MALFORMED_SOURCE for %s (%s)', async (name) => {
     await expect(adapter.inspect(selectedWebExport(name))).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
+  });
+
+  it('rejects a repeated message uuid within the same conversation', async () => {
+    await expect(adapter.inspect(selectedWebExport('web-export-duplicate-message.json')))
+      .rejects.toMatchObject({ code: 'DUPLICATE_NATIVE_ID' });
+  });
+
+  it('rejects a repeated conversation uuid within the same export', async () => {
+    await expect(adapter.inspect(selectedWebExport('web-export-duplicate-conversation.json')))
+      .rejects.toMatchObject({ code: 'DUPLICATE_NATIVE_ID' });
+  });
+
+  it('accepts a conversation with zero messages without crashing, contributing no records', async () => {
+    const records = await collect(adapter.stream(selectedWebExport('web-export-empty-conversation.json')));
+    expect(records).toHaveLength(1);
+    expect(records[0].nativeSessionId).toBe('web-conversation-nonempty');
+  });
+
+  it('preserves Unicode content across scripts and emoji without corruption', async () => {
+    const records = await collect(adapter.stream(selectedWebExport('web-export-unicode.json')));
+    expect(records).toHaveLength(2);
+    expect(records[0].text).toContain('こんにちは');
+    expect(records[0].text).toContain('🚀');
+    expect(records[0].text).toContain('مرحبا');
+    expect(records[1].text).toContain('你好');
+    expect(records[1].text).toContain('🎉');
   });
 });
 
