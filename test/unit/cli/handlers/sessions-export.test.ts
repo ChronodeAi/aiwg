@@ -63,7 +63,7 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     expect(planResult.exitCode).toBe(0);
     expect(jsonOutput(log)).toMatchObject({
       status: 'ok', command: 'sessions.export.plan',
-      data: { totals: { sessionCount: 2, eventCount: 3, recordCount: 5 } },
+      data: { totals: { sessionCount: 2, eventCount: 3, recordCount: 6 } },
     });
     log.mockClear();
 
@@ -75,7 +75,9 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     const buildData = jsonOutput(log).data;
     expect(buildData).toMatchObject({
       archiveProfile: 'full-v1', archiveSchemaVersion: '2.0.0', lossless: true, losses: [],
-      totals: { sessionCount: 2, eventCount: 3, recordCount: 5 },
+      // recordCount here includes the synthetic export-manifest record (#2564);
+      // verify/unpack below exclude it again since it isn't a session/event/output.
+      totals: { sessionCount: 2, eventCount: 3, recordCount: 6 },
     });
     log.mockClear();
 
@@ -99,6 +101,10 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     });
     const recovered = JSON.parse(readFileSync(resolve(unpackDir, 'index.json'), 'utf8'));
     expect(recovered.items).toHaveLength(5);
+    // Index-level source is recovered via the export-manifest record (#2564),
+    // not the placeholder -- confirms the fix actually round-trips.
+    expect(recovered.source).toEqual({ repo: 'default', privacy: 'private' });
+    expect(recovered.items.some((item: any) => item.type === 'aiwg.session-catalog-export-manifest')).toBe(false);
   });
 
   it('rejects a build whose plan is stale because the plan file was tampered with', async () => {

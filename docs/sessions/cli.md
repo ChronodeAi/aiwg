@@ -469,13 +469,21 @@ own artifact-shard-export test round-trips through that function using
 `profile: "core-v1"` specifically). `export verify`/`export unpack` use a
 purpose-built reader (`src/sessions/fortemi-shard-recovery.ts`) that inverts
 this module's own mapping directly from the shard's native `notes.jsonl`,
-`links.jsonl`, and `provenance_activities.jsonl` files instead. One thing
-this reader cannot recover: the index-level wrapper's `source.repo`/`privacy`
-fields aren't preserved anywhere in a full-v1 archive (no per-archive AIWG
-metadata sidecar exists), so `export unpack` reports a fixed, clearly-labeled
-placeholder for them rather than inventing a value. Every record's own
-identity, source, privacy, tags, relationships, and provenance round-trip
-exactly -- verified by `test/unit/sessions/fortemi-shard-recovery.test.ts`.
+`links.jsonl`, and `provenance_activities.jsonl` files instead.
+
+A `full-v1` archive has no per-archive AIWG metadata sidecar, so there is no
+native place to carry the index-level wrapper's `source.repo`/`privacy`
+fields. The mapping closes that gap with a synthetic
+`aiwg.session-catalog-export-manifest` record (`EXPORT_MANIFEST_RECORD_ID`,
+sorts last as `zzz-...` so it never collides with real session/event ids)
+that carries `source.repo`/`privacy`/`generatedAt` through the same
+`provenance_events[].attributes` mechanism every other record uses. The
+recovery reader extracts that record, restores the index-level wrapper from
+it, and excludes it from the recovered `items` -- it is bookkeeping, not a
+session, event, or output. Every record's own identity, source, privacy,
+tags, relationships, and provenance round-trip exactly -- verified by
+`test/unit/sessions/fortemi-shard-recovery.test.ts` and a full CLI
+`plan -> build -> verify -> unpack` smoke test against a rebuilt `dist/`.
 
 ### Support matrix
 
@@ -489,6 +497,7 @@ as supported; everything else is unverified, not assumed to work.
 | Registered output lineage (#2566) included in the built shard | Verified | `test/unit/sessions/output-lineage.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts` |
 | Built shard is a genuine, lossless `full-v1`/`2.0.0` archive (`@fortemi/core`'s own conversion report) | Verified | `test/unit/sessions/fortemi-export-mapping.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts` |
 | Built shard recovers exactly via the purpose-built full-v1 reader (not `aiwgFortemiIndexFromKnowledgeShard`, which only supports `core-v1`) | Verified | `test/unit/sessions/fortemi-shard-recovery.test.ts` |
+| Index-level wrapper (`source.repo`/`privacy`) recovered from a `full-v1` archive via the synthetic export-manifest record | Verified | `test/unit/sessions/fortemi-shard-recovery.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts`; manual CLI smoke test against a rebuilt `dist/` |
 | Codex -> `export plan/build/verify` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `codex/threads.app-server.jsonl` fixture |
 | Remaining provider sources (Copilot, Cursor, Hermes, OpenCode, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
 | A real external Fortemi consumer application importing the built shard | Unverified | No test exercises this; AIWG's own artifact-index shard export has a Docker/Postgres-based producer-consumer conformance job (`.gitea/workflows/fortemi-shard-conformance.yml`) that could be extended to cover session shards, but that has not been done |

@@ -157,7 +157,11 @@ describe('session -> AiwgFortemiRecord mapping (#2564)', () => {
     expect(bytes).toBeInstanceOf(Uint8Array);
     expect(bytes.length).toBeGreaterThan(0);
     const recovered = aiwgFortemiIndexFromKnowledgeShard(bytes);
-    expect(recovered.items).toHaveLength(3);
-    expect(recovered.items.map((item) => item.id).sort()).toEqual(['event-1', 'event-2', 'session-1']);
+    // core-v1's own recovery reads the whole index back verbatim, so the
+    // synthetic export-manifest record (#2564) round-trips through it too.
+    expect(recovered.items).toHaveLength(4);
+    expect(recovered.items.map((item) => item.id).sort()).toEqual([
+      'event-1', 'event-2', 'session-1', 'zzz-aiwg-session-catalog-export-manifest',
+    ]);
   });
 });

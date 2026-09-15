@@ -39,6 +39,7 @@ import type {
   AiwgFortemiRelationship,
 } from '@fortemi/core';
 import {
+  EXPORT_MANIFEST_RECORD_TYPE,
   SESSION_EXPORT_INDEX_SCHEMA_VERSION,
   SESSION_EXPORT_RECORD_SCHEMA_VERSION,
 } from './fortemi-export-mapping.js';
@@ -173,12 +174,27 @@ export function recoverAiwgFortemiIndexFromFullV1Shard(bytes: Uint8Array): AiwgF
   });
   items.sort((left, right) => left.id.localeCompare(right.id));
 
+  // The export-manifest record (see fortemi-export-mapping.ts) carries the
+  // index-level wrapper fields through the same provenance_events mechanism
+  // as everything else. Extract it and exclude it from the recovered items
+  // -- it isn't a session, event, or output record.
+  const manifestIndex = items.findIndex((item) => item.type === EXPORT_MANIFEST_RECORD_TYPE);
+  const manifestAttributes = manifestIndex >= 0
+    ? (items[manifestIndex].provenance_events?.[0]?.attributes as
+        { repo?: string; privacy?: AiwgFortemiIndexExport['source']['privacy']; generatedAt?: string } | undefined)
+    : undefined;
+  const recoveredItems = manifestIndex >= 0
+    ? items.filter((_, index) => index !== manifestIndex)
+    : items;
+
   return {
     schema_version: SESSION_EXPORT_INDEX_SCHEMA_VERSION,
-    // Not preserved anywhere in a full-v1 archive (see module doc) --
-    // labeled honestly rather than invented.
-    generated_at: new Date(0).toISOString(),
-    source: { repo: 'recovered-from-full-v1-shard', privacy: 'private' },
-    items,
+    generated_at: manifestAttributes?.generatedAt ?? new Date(0).toISOString(),
+    source: manifestAttributes
+      ? { repo: manifestAttributes.repo ?? 'unknown', privacy: manifestAttributes.privacy ?? 'private' }
+      // No manifest record present (e.g. an archive built before this record
+      // existed) -- labeled honestly rather than invented.
+      : { repo: 'recovered-from-full-v1-shard', privacy: 'private' },
+    items: recoveredItems,
   };
 }

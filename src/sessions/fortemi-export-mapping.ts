@@ -272,6 +272,60 @@ export function sessionOutputToAiwgFortemiRecord(
 }
 
 /**
+ * A full-v1 archive has no per-archive metadata sidecar -- only the
+ * `aiwg_source` embedded on each individual note. Without this record, the
+ * index-level wrapper (`source.repo`/`privacy`/`graph`, `generated_at`)
+ * would be a real, disclosed recovery gap. Representing it as one more
+ * ordinary record closes that gap using the exact mechanism already built
+ * for every other field (`provenance_events[0].attributes`), rather than
+ * inventing a second, parallel embedding path.
+ *
+ * The id is prefixed to sort after every `event_`/`output_`/`session_` id
+ * (deterministic regardless of content), and the type is namespaced so
+ * recovery can find and exclude it from the recovered `items` unambiguously.
+ */
+export const EXPORT_MANIFEST_RECORD_TYPE = 'aiwg.session-catalog-export-manifest' as const;
+export const EXPORT_MANIFEST_RECORD_ID = 'zzz-aiwg-session-catalog-export-manifest' as const;
+
+function exportManifestRecord(repoRef: string, generatedAt: string): AiwgFortemiRecord {
+  const locator = `aiwg-session-catalog://export-manifest/${repoRef}`;
+  return {
+    schema_version: SESSION_EXPORT_RECORD_SCHEMA_VERSION,
+    id: EXPORT_MANIFEST_RECORD_ID,
+    type: EXPORT_MANIFEST_RECORD_TYPE,
+    source: {
+      path: locator,
+      repo_relative_path: locator,
+      locator,
+      origin: 'aiwg-session-catalog',
+      generated: true,
+      updated_at: generatedAt,
+    },
+    title: 'AIWG session export manifest',
+    text: `Index-level metadata for this session export (${repoRef}). Not a session, event, or output record.`,
+    facets: {},
+    tags: [tag('graph', INDEX_GRAPH_ID)],
+    concepts: [],
+    relationships: [],
+    provenance: [{
+      field: 'source', source: 'aiwg-session-catalog', path: locator, confidence: 'source', privacy: 'private',
+    }],
+    provenance_events: [{
+      activity: EXPORT_MANIFEST_RECORD_TYPE,
+      agent: 'aiwg-session-catalog',
+      started_at: generatedAt,
+      source: 'aiwg-session-catalog',
+      path: locator,
+      confidence: 'source',
+      privacy: 'private',
+      attributes: { repo: repoRef, privacy: 'private', graph: INDEX_GRAPH_ID, generatedAt },
+    }],
+    privacy: { classification: 'private', pii: false },
+    updated_at: generatedAt,
+  };
+}
+
+/**
  * Builds the full record graph for a selected set of sessions. `repoRef` is
  * a caller-supplied identity for `AiwgFortemiIndexExport.source.repo` (the
  * session catalog's workspace id, not a git repo -- the field is repurposed
@@ -283,7 +337,8 @@ export function buildSessionAiwgFortemiIndexExport(
   eventsBySessionId: ReadonlyMap<string, SessionEvent[]>,
   outputs: readonly SessionOutputRecordInput[] = [],
 ): AiwgFortemiIndexExport {
-  const items: AiwgFortemiRecord[] = [];
+  const generatedAt = new Date().toISOString();
+  const items: AiwgFortemiRecord[] = [exportManifestRecord(repoRef, generatedAt)];
   for (const session of sessions) {
     items.push(sessionToAiwgFortemiRecord(session));
     for (const event of eventsBySessionId.get(session.sessionId) ?? []) {
@@ -297,7 +352,7 @@ export function buildSessionAiwgFortemiIndexExport(
   items.sort((left, right) => left.id.localeCompare(right.id));
   return {
     schema_version: SESSION_EXPORT_INDEX_SCHEMA_VERSION,
-    generated_at: new Date().toISOString(),
+    generated_at: generatedAt,
     source: { repo: repoRef, privacy: 'private', graph: INDEX_GRAPH_ID },
     compatibility: { previous_schema_version: 'aiwg.fortemi.index.export.v1', strategy: 'supported' },
     items,
