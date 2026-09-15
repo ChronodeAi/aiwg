@@ -187,4 +187,41 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
       sessionId: sessionIds[0], outputLocator: 'output/reports/result.md', bytesEmbedded: false,
     });
   });
+
+  it('exports a non-Claude provider (Codex) through the same plan/build pipeline, proving the mapping is provider-agnostic', async () => {
+    const codexDb = resolve(root, 'codex-catalog.sqlite');
+    const fixture = resolve('test/fixtures/sessions/codex/threads.app-server.jsonl');
+    const imported = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'codex', '--source-id', 'codex-export-fixture',
+      '--workspace', 'default', '--db', codexDb, '--json',
+    ]));
+    expect(imported.exitCode).toBe(0);
+    log.mockClear();
+
+    const listed = await sessionsHandler.execute(context(['list', '--workspace', 'default', '--db', codexDb, '--json']));
+    const codexSessionIds = jsonOutput(log).data.items.map((item: any) => item.sessionId);
+    expect(codexSessionIds.length).toBeGreaterThan(0);
+    log.mockClear();
+
+    const planPath = resolve(root, 'codex-selection.json');
+    const planResult = await sessionsHandler.execute(context([
+      'export', 'plan', '--workspace', 'default', '--db', codexDb, '--out', planPath, ...codexSessionIds, '--json',
+    ]));
+    expect(planResult.exitCode).toBe(0);
+    log.mockClear();
+
+    const buildDir = resolve(root, 'codex-export-out');
+    const buildResult = await sessionsHandler.execute(context([
+      'export', 'build', '--db', codexDb, '--plan', planPath, '--out', buildDir, '--json',
+    ]));
+    expect(buildResult.exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({ archiveProfile: 'core-v1', archiveSchemaVersion: '1.2.0' });
+    log.mockClear();
+
+    const verifyResult = await sessionsHandler.execute(context([
+      'export', 'verify', '--input', resolve(buildDir, 'evidence.shard'), '--json',
+    ]));
+    expect(verifyResult.exitCode).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({ valid: true, receiptMatches: true });
+  });
 });

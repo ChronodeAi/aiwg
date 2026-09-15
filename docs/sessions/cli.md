@@ -56,6 +56,12 @@ aiwg sessions search <query> --workspace <id>
 aiwg sessions extract [session-id] --workspace <id>
                       [--policy-version <semver>] [--min-confidence <0..1>]
                       [--dry-run] [--json]
+aiwg sessions export plan --workspace <id> --out <selection.json>
+                          <session-id...> [--json]
+aiwg sessions export build --plan <selection.json> --out <directory>
+                           [--shard-name <name.shard>] [--json]
+aiwg sessions export verify --input <evidence.shard> [--json]
+aiwg sessions export unpack --input <evidence.shard> --out <directory> [--json]
 aiwg sessions candidates [--state <state>] [--json]
 aiwg sessions review <candidate-id> <version> <state>
                      --reviewer <id> --reason <text>
@@ -374,10 +380,97 @@ Its injected client boundary supports conformance tests without starting a
 service.
 
 `convertSessionEventsToKnowledgeShard()` exports approved event text and stable
-evidence metadata through the Knowledge Shard v1 boundary. Its conversion
-report includes typed losses for provider-native extensions and raw byte or
-sequence locators that v1 cannot represent. Callers must inspect `lossless` and
-`losses`; a record count match is not a claim of parity.
+evidence metadata through the internal Knowledge Shard v1 boundary. This is an
+in-memory, differently-versioned helper (`knowledge-shard-v1`, contract
+`1.0.0`) that never calls `@fortemi/core` -- it does not produce a real
+`.shard` archive. Its conversion report includes typed losses for
+provider-native extensions and raw byte or sequence locators that v1 cannot
+represent. Callers must inspect `lossless` and `losses`; a record count match
+is not a claim of parity.
+
+## Native session-to-Fortemi shard export
+
+`aiwg sessions export` produces a real, portable `.shard` archive built by
+`@fortemi/core`'s `aiwgFortemiIndexToKnowledgeShard` -- a different, later
+capability from the in-memory helper above. It is a four-step, plan-then-build
+workflow so a selection is reviewable before any archive is written, and a
+plan generated today is rejected at build time if the underlying session data
+has changed since (`SCHEMA_DRIFT`), rather than silently exporting stale data.
+
+```sh
+# 1. Import a source (see "Discover and import a workspace history" above,
+#    or a Claude web/account export -- docs/providers/claude-code-sessions.md).
+aiwg sessions import ./transcript.jsonl --provider claude --source-id my-project
+
+# 2. Find the session ids to export.
+aiwg sessions list --workspace default --json
+
+# 3. Plan the export: binds an exact selection to source/event digests, and
+#    discovers any registered analysis outputs (aiwg.output-registration.v1)
+#    associated with the selected sessions.
+aiwg sessions export plan --workspace default \
+  --out selection.json \
+  session_<id-1> session_<id-2>
+
+# 4. Build the archive. Written atomically (temp file + rename) with a
+#    receipt written only after a successful readback, so an interrupted
+#    write can never be mistaken for a completed export.
+aiwg sessions export build --plan selection.json --out ./export
+
+# 5. Verify -- cross-checks the shard against its receipt.json when present.
+aiwg sessions export verify --input ./export/evidence.shard
+
+# 6. Recover -- writes the shard's full record graph back out as JSON.
+#    This does not re-import into a session catalog; it recovers the
+#    portable record graph to disk for inspection or downstream tooling.
+aiwg sessions export unpack --input ./export/evidence.shard --out ./recovered
+```
+
+What the archive contains: one `aiwg.session` record per selected session,
+one `aiwg.session-event` record per event (linked to its parent session via a
+`parent-session` relationship), and one `aiwg.session-output` record per
+registered analysis output matched to a selected session (#2566). Session
+event text, identifiers (native session/event id, source id, provider,
+model, tool-call id), and timestamps are preserved and verified lossless by a
+build/recover round-trip test against the real `@fortemi/core` library.
+
+What is not yet included: original bytes for session-event attachments or
+registered-output files. Both are recorded as reference metadata (locator,
+digest, media type) with an explicit note, not silently dropped -- embedding
+original bytes needs a blob-store integration that has not landed.
+
+### Archive profile: core-v1/1.2.0, not full-v1/2.0.0
+
+The built archive's manifest declares `profile: "core-v1"`, `version:
+"1.2.0"` -- read directly out of the archive after every build, never
+asserted. `@fortemi/core` also exposes a stricter `full-v1`/`2.0.0` path
+(`aiwgFortemiIndexToKnowledgeShardWithReport`, the same function AIWG's own
+artifact-index shard export in `src/artifacts/fortemi-shard-export.ts` uses
+for its `full-v1` tuple) that maps records into the native note-taking
+schema. That path was tried against this session/event mapping and refused
+to produce an archive (`success: false`) because AIWG-specific fields
+(`facets`, `compatibility`, relationship metadata) have no native full-v1
+component. Reaching full-v1/2.0.0 would mean dropping the session/event
+identifiers this export exists to preserve. `core-v1` was kept deliberately;
+see AIWG issue #2564 for the open question this raises.
+
+### Support matrix
+
+Only combinations backed by an actual test run in this codebase are listed
+as supported; everything else is unverified, not assumed to work.
+
+| Combination | Status | Evidence |
+|---|---|---|
+| Claude local JSONL/hook -> `export plan/build/verify/unpack` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`; manual CLI smoke test against a rebuilt `dist/` |
+| Claude web/account `manual-export` -> `export plan/build/verify/unpack` | Verified | same test file, using the `web-export.json` fixture |
+| Registered output lineage (#2566) included in the built shard | Verified | `test/unit/sessions/output-lineage.test.ts`, `test/unit/cli/handlers/sessions-export.test.ts` |
+| Built shard round-trips through `@fortemi/core`'s own `aiwgFortemiIndexFromKnowledgeShard` | Verified | `test/unit/sessions/fortemi-export-mapping.test.ts` |
+| Codex -> `export plan/build/verify` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `codex/threads.app-server.jsonl` fixture |
+| Remaining provider sources (Copilot, Cursor, Hermes, OpenCode, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
+| A real external Fortemi consumer application importing the built shard | Unverified | No test exercises this; AIWG's own artifact-index shard export has a Docker/Postgres-based producer-consumer conformance job (`.gitea/workflows/fortemi-shard-conformance.yml`) that could be extended to cover session shards, but that has not been done |
+| Original session-event or registered-output byte attachments recovered from the shard | Not supported | Explicitly reference-only; see above |
+| Edited or branched Claude web-export conversations | Unverified | No fixture represents this; see `docs/providers/claude-code-sessions.md` known limitations |
+| `export unpack` re-importing recovered records back into a session catalog | Not implemented | `unpack` writes the recovered record graph to `index.json`; it does not reconstruct catalog rows |
 
 ## Reference performance
 
