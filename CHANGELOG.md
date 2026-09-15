@@ -7,6 +7,36 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.14] - 2026-09-15 – "Session evidence leaves the repository"
+
+### Added
+
+- `aiwg sessions export plan/build/verify/unpack` packages selected catalog
+  sessions into portable, lossless `full-v1`/`2.0.0` Fortemi Knowledge Shards
+  using `@fortemi/core`'s real conversion APIs, with a reviewable plan bound
+  to exact session/event digests that rejects stale or cross-workspace
+  selections before writing.
+- Claude web/account exports (`conversations.json`) import through a new
+  `manual-export` acquisition mode on the Claude adapter, matching the
+  existing Copilot/Cursor pattern -- distinct from the local JSONL/hook
+  session source, with explicit format detection and duplicate-id rejection.
+- Registered analysis outputs (#2003) are discovered and matched to selected
+  sessions by explicit source reference and carried through the export
+  pipeline as `aiwg.session-output` shard records, never inferred from a
+  filename.
+- A synthetic export-manifest record preserves the shard's index-level
+  `source.repo`/`privacy` metadata through the same native `tags`/
+  `provenance_events` mechanism every other record uses, closing the one gap
+  a full-v1 archive otherwise has no native place to carry.
+
+### Documentation
+
+- `docs/sessions/cli.md` — worked guide for the full
+  import → select → export → verify → recover workflow, with a support
+  matrix listing only combinations backed by an actual test run.
+- `docs/providers/claude-code-sessions.md` — acquisition prerequisites and
+  known limitations for the Claude web/account export adapter.
+
 ## [2026.9.12] - 2026-09-15 – "Release workflows get their own lanes"
 
 ### Fixed
