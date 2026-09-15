@@ -1,11 +1,14 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   buildSessionExportPlan,
   ClaudeSessionAdapter,
+  FilesystemDerivedOutputIndex,
+  FilesystemOutputRegistrationStore,
   IncrementalSessionImporter,
+  OutputRegistrationCoordinator,
   reverifySessionExportPlan,
   SESSION_CONTRACT_VERSION,
   SessionRepository,
@@ -71,7 +74,8 @@ describeWithSqlite('session export plan (#2564)', () => {
       const { plan } = buildSessionExportPlan(repository, {
         workspaceId: 'workspace-fixture', sessionIds,
       });
-      expect(plan.totals).toEqual({ sessionCount: 2, eventCount: 3, recordCount: 5 });
+      expect(plan.totals).toEqual({ sessionCount: 2, eventCount: 3, outputCount: 0, recordCount: 5 });
+      expect(plan.outputs).toEqual([]);
       expect(plan.sessions).toHaveLength(2);
       expect(plan.sessions[0].eventCount + plan.sessions[1].eventCount).toBe(3);
       expect(plan.preview.recordCount).toBe(5);
@@ -145,6 +149,62 @@ describeWithSqlite('session export plan (#2564)', () => {
         sessions: plan.sessions.map((entry, index) => index === 0 ? { ...entry, sourceDigest: 'sha256:' + '0'.repeat(64) } : entry),
       };
       expect(() => reverifySessionExportPlan(repository, forged)).toThrow(/source changed since the plan/);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('discovers a registered output associated with a selected session (#2566)', async () => {
+    const { repository, sessionIds } = await seedRepository();
+    const projectRoot = await mkdtemp(resolve(tmpdir(), 'aiwg-export-plan-outputs-'));
+    temporaryRoots.push(projectRoot);
+    try {
+      await mkdir(resolve(projectRoot, 'output/reports'), { recursive: true });
+      await writeFile(resolve(projectRoot, 'output/reports/result.md'), '# Derived analysis\n');
+      const coordinator = new OutputRegistrationCoordinator(
+        projectRoot,
+        new FilesystemOutputRegistrationStore(projectRoot),
+        new FilesystemDerivedOutputIndex(projectRoot),
+      );
+      const request = {
+        outputPath: 'output/reports/result.md',
+        mediaType: 'text/markdown',
+        contextPack: {
+          id: 'context-pack:test-1',
+          digest: 'sha256:' + '1'.repeat(64),
+          sources: [{ kind: 'session' as const, ref: sessionIds[0], digest: null, span: null }],
+        },
+        supersedes: [], conflictsWith: [],
+      };
+      const preview = coordinator.preview(request);
+      await coordinator.register({ request, operationId: preview.operationId });
+
+      const { plan } = buildSessionExportPlan(repository, {
+        workspaceId: 'workspace-fixture', sessionIds, projectRoot,
+      });
+      expect(plan.outputs).toHaveLength(1);
+      expect(plan.outputs[0]).toMatchObject({
+        sessionId: sessionIds[0],
+        outputLocator: 'output/reports/result.md',
+        mediaType: 'text/markdown',
+        lineage: 'registered',
+        matchReason: 'ref equals the stable session id',
+      });
+      expect(plan.totals.outputCount).toBe(1);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('finds no outputs when the project has none registered', async () => {
+    const { repository, sessionIds } = await seedRepository();
+    const projectRoot = await mkdtemp(resolve(tmpdir(), 'aiwg-export-plan-no-outputs-'));
+    temporaryRoots.push(projectRoot);
+    try {
+      const { plan } = buildSessionExportPlan(repository, {
+        workspaceId: 'workspace-fixture', sessionIds, projectRoot,
+      });
+      expect(plan.outputs).toEqual([]);
     } finally {
       repository.close();
     }

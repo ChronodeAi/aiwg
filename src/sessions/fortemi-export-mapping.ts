@@ -147,6 +147,77 @@ export function sessionEventToAiwgFortemiRecord(
   };
 }
 
+export interface SessionOutputRecordInput {
+  sessionId: string;
+  registrationId: string;
+  outputLocator: string;
+  outputDigest: string;
+  mediaType: string;
+  matchReason: string;
+}
+
+/**
+ * A registered analysis output associated with a session (#2566), mapped as
+ * a reference record. Like session-event attachments (#2565), this does not
+ * embed the output's original bytes -- only its registration metadata and
+ * digest, which is enough for a consumer to locate and verify the output
+ * against the original registration, not to recover it from the shard
+ * alone. Full byte embedding needs a blob-store integration that neither
+ * #2564 nor #2566 has landed yet; that limitation is shared and explicit,
+ * not silently dropped.
+ */
+export function sessionOutputToAiwgFortemiRecord(
+  session: Pick<Session, 'provider' | 'sessionId'>,
+  output: SessionOutputRecordInput,
+): AiwgFortemiRecord {
+  const locator = `${sessionRecordLocator(session)}/output/${output.registrationId}`;
+  const now = new Date().toISOString();
+  return {
+    schema_version: SESSION_EXPORT_RECORD_SCHEMA_VERSION,
+    id: `output_${output.registrationId}`,
+    type: 'aiwg.session-output',
+    source: {
+      path: locator,
+      repo_relative_path: output.outputLocator,
+      locator,
+      origin: 'aiwg-output-registration',
+      generated: true,
+      checksum: output.outputDigest,
+      updated_at: now,
+    },
+    title: `registered output for ${session.sessionId}`,
+    text: `${output.mediaType} output registered at ${output.outputLocator} (${output.matchReason}); `
+      + 'bytes not embedded -- reference and digest only.',
+    facets: { mediaType: [output.mediaType], lineage: ['registered'] },
+    tags: [],
+    concepts: [],
+    relationships: [{
+      type: 'parent-session',
+      target_id: session.sessionId,
+      target_path: sessionRecordLocator(session),
+      direction: 'upstream',
+      confidence: 1,
+      privacy: 'private',
+    }],
+    provenance: [{
+      field: 'source',
+      source: 'aiwg-output-registration',
+      path: locator,
+      confidence: 'source',
+      privacy: 'private',
+    }],
+    privacy: { classification: 'private', pii: false },
+    updated_at: now,
+    compatibility: {
+      sessionId: output.sessionId,
+      registrationId: output.registrationId,
+      outputLocator: output.outputLocator,
+      matchReason: output.matchReason,
+      bytesEmbedded: false,
+    },
+  };
+}
+
 /**
  * Builds the full record graph for a selected set of sessions. `repoRef` is
  * a caller-supplied identity for `AiwgFortemiIndexExport.source.repo` (the
@@ -157,12 +228,16 @@ export function buildSessionAiwgFortemiIndexExport(
   repoRef: string,
   sessions: Session[],
   eventsBySessionId: ReadonlyMap<string, SessionEvent[]>,
+  outputs: readonly SessionOutputRecordInput[] = [],
 ): AiwgFortemiIndexExport {
   const items: AiwgFortemiRecord[] = [];
   for (const session of sessions) {
     items.push(sessionToAiwgFortemiRecord(session));
     for (const event of eventsBySessionId.get(session.sessionId) ?? []) {
       items.push(sessionEventToAiwgFortemiRecord(session, event));
+    }
+    for (const output of outputs.filter((entry) => entry.sessionId === session.sessionId)) {
+      items.push(sessionOutputToAiwgFortemiRecord(session, output));
     }
   }
   // Deterministic ordering: reproducible archives, easier diffing.

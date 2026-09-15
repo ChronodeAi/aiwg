@@ -1036,10 +1036,15 @@ function exportPlan(
   const out = resolve(ctx.cwd, requiredValue(args, '--out'));
   const flagSelection = args.values.get('--session')?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
   const sessionIds = [...new Set([...flagSelection, ...args.positionals.slice(1)])];
-  const { plan } = buildSessionExportPlan(repository, { workspaceId, sessionIds });
+  const { plan } = buildSessionExportPlan(repository, { workspaceId, sessionIds, projectRoot: ctx.cwd });
   mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
   writeFileSync(out, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
-  return ok(command, { plan: out, totals: plan.totals, sessions: plan.sessions.map((entry) => entry.sessionId) });
+  return ok(command, {
+    plan: out,
+    totals: plan.totals,
+    sessions: plan.sessions.map((entry) => entry.sessionId),
+    outputs: plan.outputs.length,
+  });
 }
 
 async function exportBuild(
@@ -1067,7 +1072,7 @@ async function exportBuild(
   // Recheck source changes before writing (#2564 acceptance criteria):
   // re-select from the live repository and reject on any digest drift.
   const { sessions, eventsBySessionId } = reverifySessionExportPlan(repository, plan);
-  const index = buildSessionAiwgFortemiIndexExport(plan.workspaceId, sessions, eventsBySessionId);
+  const index = buildSessionAiwgFortemiIndexExport(plan.workspaceId, sessions, eventsBySessionId, plan.outputs);
   // aiwgFortemiIndexToKnowledgeShard targets a fixed 2.0.0/full-v1 archive
   // contract internally (confirmed against @fortemi/core's own conversion
   // report on the WithReport sibling); it takes no profile/schemaVersion

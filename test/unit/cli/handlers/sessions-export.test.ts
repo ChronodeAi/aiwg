@@ -1,5 +1,5 @@
 import {
-  mkdtempSync, readFileSync, rmSync, writeFileSync,
+  mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -8,6 +8,11 @@ import {
 } from 'vitest';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
+import {
+  FilesystemDerivedOutputIndex,
+  FilesystemOutputRegistrationStore,
+  OutputRegistrationCoordinator,
+} from '../../../../src/sessions/index.js';
 import { describeWithSqlite } from '../../../helpers/sqlite.js';
 
 function context(args: string[], cwd = process.cwd()): HandlerContext {
@@ -131,5 +136,55 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     const result = await sessionsHandler.execute(context(['export', 'verify', '--input', badShard, '--json']));
     expect(result.exitCode).not.toBe(0);
     expect(jsonOutput(log)).toMatchObject({ status: 'error', error: { code: 'MALFORMED_SOURCE' } });
+  });
+
+  it('carries a registered output through plan -> build -> unpack as a session-output record (#2566)', async () => {
+    mkdirSync(resolve(root, 'output/reports'), { recursive: true });
+    writeFileSync(resolve(root, 'output/reports/result.md'), '# Derived analysis\n');
+    const coordinator = new OutputRegistrationCoordinator(
+      root,
+      new FilesystemOutputRegistrationStore(root),
+      new FilesystemDerivedOutputIndex(root),
+    );
+    const request = {
+      outputPath: 'output/reports/result.md',
+      mediaType: 'text/markdown',
+      contextPack: {
+        id: 'context-pack:cli-test-1',
+        digest: `sha256:${'2'.repeat(64)}`,
+        sources: [{ kind: 'session' as const, ref: sessionIds[0], digest: null, span: null }],
+      },
+      supersedes: [], conflictsWith: [],
+    };
+    const preview = coordinator.preview(request);
+    await coordinator.register({ request, operationId: preview.operationId });
+
+    const planPath = resolve(root, 'selection-with-output.json');
+    const planResult = await sessionsHandler.execute(context([
+      'export', 'plan', '--workspace', 'default', '--db', db, '--out', planPath, ...sessionIds, '--json',
+    ], root));
+    expect(planResult.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({ status: 'ok', data: { outputs: 1 } });
+    log.mockClear();
+
+    const buildDir = resolve(root, 'export-out-with-output');
+    const buildResult = await sessionsHandler.execute(context([
+      'export', 'build', '--db', db, '--plan', planPath, '--out', buildDir, '--json',
+    ], root));
+    expect(buildResult.exitCode).toBe(0);
+    expect(jsonOutput(log).data.totals).toMatchObject({ outputCount: 1 });
+    log.mockClear();
+
+    const unpackDir = resolve(root, 'unpacked-with-output');
+    await sessionsHandler.execute(context([
+      'export', 'unpack', '--input', resolve(buildDir, 'evidence.shard'), '--out', unpackDir, '--json',
+    ], root));
+    const recovered = JSON.parse(readFileSync(resolve(unpackDir, 'index.json'), 'utf8'));
+    const outputRecord = recovered.items.find((item: any) => item.type === 'aiwg.session-output');
+    expect(outputRecord).toBeDefined();
+    expect(outputRecord.source.repo_relative_path).toBe('output/reports/result.md');
+    expect(outputRecord.compatibility).toMatchObject({
+      sessionId: sessionIds[0], outputLocator: 'output/reports/result.md', bytesEmbedded: false,
+    });
   });
 });

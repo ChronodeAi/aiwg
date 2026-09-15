@@ -12,6 +12,8 @@ import {
   buildSessionAiwgFortemiIndexExport,
   SESSION_EXPORT_INDEX_SCHEMA_VERSION,
 } from './fortemi-export-mapping.js';
+import { discoverSessionOutputCandidates, type SessionOutputCandidate } from './output-lineage.js';
+import { FilesystemDerivedOutputIndex } from './output-registration.js';
 import type { SessionRepository } from './repository.js';
 
 export const SESSION_EXPORT_PLAN_SCHEMA_VERSION = '1.0.0' as const;
@@ -26,6 +28,17 @@ export interface SessionExportPlanEntry {
   eventDigestSummary: string;
 }
 
+/** #2566: a registered analysis output selected alongside its session. */
+export interface SessionExportPlanOutputEntry {
+  sessionId: string;
+  registrationId: string;
+  outputLocator: string;
+  outputDigest: string;
+  mediaType: string;
+  lineage: 'registered';
+  matchReason: string;
+}
+
 export interface SessionExportPlanPreview {
   recordCount: number;
   sampleRecordIds: string[];
@@ -37,7 +50,9 @@ export interface SessionExportPlan {
   generatedAt: string;
   workspaceId: string;
   sessions: SessionExportPlanEntry[];
-  totals: { sessionCount: number; eventCount: number; recordCount: number };
+  /** Registered outputs discovered for the selected sessions (#2566). Absent projectRoot -> empty, never a partial/best-effort scan. */
+  outputs: SessionExportPlanOutputEntry[];
+  totals: { sessionCount: number; eventCount: number; outputCount: number; recordCount: number };
   preview: SessionExportPlanPreview;
 }
 
@@ -55,7 +70,13 @@ function eventDigestSummary(events: SessionEvent[]): string {
  */
 export function buildSessionExportPlan(
   repository: SessionRepository,
-  options: { workspaceId: string; sessionIds: readonly string[]; previewSampleSize?: number },
+  options: {
+    workspaceId: string;
+    sessionIds: readonly string[];
+    previewSampleSize?: number;
+    /** Project root to scan for registered output lineage (#2566). Omit to skip output discovery entirely. */
+    projectRoot?: string;
+  },
 ): { plan: SessionExportPlan; sessions: Session[]; eventsBySessionId: Map<string, SessionEvent[]> } {
   const requested = [...new Set(options.sessionIds)];
   if (requested.length === 0) {
@@ -88,17 +109,34 @@ export function buildSessionExportPlan(
       eventDigestSummary: eventDigestSummary(events),
     });
   }
-  const index = buildSessionAiwgFortemiIndexExport(options.workspaceId, sessions, eventsBySessionId);
   const sampleSize = options.previewSampleSize ?? 5;
+  const outputCandidates: SessionOutputCandidate[] = options.projectRoot
+    ? discoverSessionOutputCandidates(
+        new FilesystemDerivedOutputIndex(options.projectRoot).registrations(),
+        sessions,
+      )
+    : [];
+  const outputs: SessionExportPlanOutputEntry[] = outputCandidates.map((candidate) => ({
+    sessionId: candidate.sessionId,
+    registrationId: candidate.registration.registrationId,
+    outputLocator: candidate.registration.output.locator,
+    outputDigest: candidate.registration.output.digest,
+    mediaType: candidate.registration.output.mediaType,
+    lineage: candidate.lineage,
+    matchReason: candidate.matchReason,
+  }));
+  const index = buildSessionAiwgFortemiIndexExport(options.workspaceId, sessions, eventsBySessionId, outputs);
   const plan: SessionExportPlan = {
     schemaVersion: SESSION_EXPORT_PLAN_SCHEMA_VERSION,
     indexSchemaVersion: SESSION_EXPORT_INDEX_SCHEMA_VERSION,
     generatedAt: new Date().toISOString(),
     workspaceId: options.workspaceId,
     sessions: entries,
+    outputs,
     totals: {
       sessionCount: sessions.length,
       eventCount: entries.reduce((sum, entry) => sum + entry.eventCount, 0),
+      outputCount: outputs.length,
       recordCount: index.items.length,
     },
     preview: {
