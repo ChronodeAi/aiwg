@@ -10,6 +10,8 @@ import { collectEvidence } from '../../../agentic/code/addons/testing-quality/li
 import { createPlan } from '../../../agentic/code/addons/testing-quality/lib/normalization.mjs';
 // @ts-expect-error Shipped addon MJS.
 import { digest } from '../../../agentic/code/addons/testing-quality/lib/contracts.mjs';
+// @ts-expect-error Shipped addon MJS.
+import { assessConformance } from '../../../agentic/code/addons/testing-quality/lib/assessment.mjs';
 let root:string;
 beforeEach(async()=>{root=await fs.mkdtemp(path.join(os.tmpdir(),'aiwg-controls-'));});
 afterEach(async()=>{await fs.rm(root,{recursive:true,force:true});});
@@ -150,6 +152,32 @@ describe('attributable negative test controls',()=>{
       expect(receipt.spec.controls[0].partialRollbackReceipt.spec.status).toBe('partial');
       expect(await fs.readFile(path.join(root,'src/value.txt'),'utf8')).toBe('valid');
     }finally{spy.mockRestore();}
+  });
+  it('collects one control at a time so no single receipt scales with every control in the lane, and assess aggregates the separate receipts',async()=>{
+    const {protocol}=await fixture();
+    protocol.spec.lanes[0].negativeControls.push({...protocol.spec.lanes[0].negativeControls[0],id:'second-control'});
+    const evidence=await collectEvidence(root,protocol);
+    const first=await collectControls(root,protocol,{evidence,controlId:'wrong-value'});
+    expect(first.spec.controls).toHaveLength(1);
+    expect(first.spec.controls[0].controlId).toBe('wrong-value');
+    expect(first.spec.controls[0].status).toBe('killed');
+    expect(await fs.readFile(path.join(root,'src/value.txt'),'utf8')).toBe('valid');
+    const second=await collectControls(root,protocol,{evidence,controlId:'second-control'});
+    expect(second.spec.controls).toHaveLength(1);
+    expect(second.spec.controls[0].controlId).toBe('second-control');
+    expect(second.spec.controls[0].status).toBe('killed');
+    expect(await fs.readFile(path.join(root,'src/value.txt'),'utf8')).toBe('valid');
+    expect(await verifyControls(root,protocol,first)).toEqual([]);
+    expect(await verifyControls(root,protocol,second)).toEqual([]);
+    const assessment=await assessConformance(root,protocol,{evidence:[evidence,first,second]});
+    const gate=(id:string)=>assessment.spec.gates.find((g:any)=>g.id===id);
+    expect(gate('control:default:wrong-value').status).toBe('passed');
+    expect(gate('control:default:second-control').status).toBe('passed');
+  });
+  it('rejects an unknown control id for the selected lane without touching source',async()=>{
+    const {protocol,evidence}=await fixture();
+    await expect(collectControls(root,protocol,{evidence,controlId:'does-not-exist'})).rejects.toThrow('Unknown control');
+    expect(await fs.readFile(path.join(root,'src/value.txt'),'utf8')).toBe('valid');
   });
 
 });
