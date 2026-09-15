@@ -151,6 +151,7 @@
     "test:packaging": "vitest run --config config/vitest.packaging.config.js",
     "test:conformance:example": "node tools/testing/run-conformance-example.mjs",
     "lint:test-registration": "node tools/testing/check-test-registration.mjs",
+    "lint:test-process-timeouts": "node tools/testing/check-sync-child-process-timeouts.mjs",
     "test:coverage:testing-quality": "vitest run --config config/vitest.testing-quality-coverage.config.js",
     "test:coverage:audit-foundations": "vitest run --config config/vitest.audit-foundations-coverage.config.js",
     "test:coverage:enforcement": "node tools/testing/verify-coverage-enforcement.mjs",

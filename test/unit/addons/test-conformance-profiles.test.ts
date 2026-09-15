@@ -82,7 +82,7 @@ describe('platform scaffolds', () => {
         const file = path.join(addonRoot, template.source);
         const text = await fs.readFile(file, 'utf8');
         if (file.endsWith('.json')) await validateContract(JSON.parse(text), 'conformance-protocol.v1');
-        if (file.endsWith('.mjs')) expect(spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' }).status).toBe(0);
+        if (file.endsWith('.mjs')) expect(spawnSync(process.execPath, ['--check', file], { timeout: 60_000, encoding: 'utf8' }).status).toBe(0);
       }
     }
     profiles[0].protocolSpec.system = 'mutated';

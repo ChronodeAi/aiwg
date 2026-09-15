@@ -9,14 +9,14 @@ import { emptyConfig, getConfigPath, writeAiwgConfig } from '../../../src/config
 function makeTmpDir(name: string): string {
   const dir = join(tmpdir(), `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
-  execFileSync('git', ['init', '-q'], { cwd: dir });
-  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+  execFileSync('git', ['init', '-q'], { timeout: 60_000, cwd: dir });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { timeout: 60_000, cwd: dir });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { timeout: 60_000, cwd: dir });
   return dir;
 }
 
 function addRemote(dir: string, name: string, url: string): void {
-  execFileSync('git', ['remote', 'add', name, url], { cwd: dir });
+  execFileSync('git', ['remote', 'add', name, url], { timeout: 60_000, cwd: dir });
 }
 
 function readConfig(dir: string): Record<string, unknown> {

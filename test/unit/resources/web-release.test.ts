@@ -647,7 +647,7 @@ describe("signed web release resolver", () => {
       if (!swapped && path.resolve(String(candidate)) === pathname) {
         swapped = true;
         fs.rmSync(pathname);
-        const result = spawnSync("mkfifo", [pathname]);
+        const result = spawnSync("mkfifo", [pathname], { timeout: 60_000 });
         if (result.status !== 0) {
           throw new Error(`mkfifo failed: ${result.stderr.toString("utf8")}`);
         }

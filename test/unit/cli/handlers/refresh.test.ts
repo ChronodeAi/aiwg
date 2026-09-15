@@ -922,11 +922,11 @@ describe('#2514 tracked deletion is its own decision, not a consequence of --for
 
 describe('#2509 cross-provider prune defers to VCS state', () => {
   function initGitRepo(root: string): void {
-    execFileSync('git', ['init', '-q', '.'], { cwd: root });
-    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
-    execFileSync('git', ['config', 'user.name', 'test'], { cwd: root });
-    execFileSync('git', ['add', '-A'], { cwd: root });
-    execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: root });
+    execFileSync('git', ['init', '-q', '.'], { timeout: 60_000, cwd: root });
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { timeout: 60_000, cwd: root });
+    execFileSync('git', ['config', 'user.name', 'test'], { timeout: 60_000, cwd: root });
+    execFileSync('git', ['add', '-A'], { timeout: 60_000, cwd: root });
+    execFileSync('git', ['commit', '-qm', 'baseline'], { timeout: 60_000, cwd: root });
   }
 
   it('leaves git-tracked artifacts in place and reports them', async () => {
@@ -949,7 +949,7 @@ describe('#2509 cross-provider prune defers to VCS state', () => {
       expect(existsSync(join(codexAgents, 'stale-agent-01.md'))).toBe(true);
       expect(existsSync(join(codexRules, 'stale-rule.md'))).toBe(true);
       // Nothing was staged for deletion in a tree the run was not asked to touch.
-      const status = execFileSync('git', ['status', '--short'], { cwd: projectRoot }).toString();
+      const status = execFileSync('git', ['status', '--short'], { timeout: 60_000, cwd: projectRoot }).toString();
       expect(status.split('\n').filter((line) => line.startsWith(' D'))).toHaveLength(0);
     } finally {
       rmSync(root, { recursive: true, force: true });

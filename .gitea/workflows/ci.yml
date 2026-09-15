@@ -99,6 +99,9 @@ jobs:
       - name: Verify test runner ownership
         run: npm run lint:test-registration
 
+      - name: Verify test child-process timeouts
+        run: npm run lint:test-process-timeouts
+
       - name: Enforce measured testing-quality and audit-foundation coverage
         run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement
 

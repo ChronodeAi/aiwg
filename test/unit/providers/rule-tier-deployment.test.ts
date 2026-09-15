@@ -235,7 +235,7 @@ describe('on-demand index propagation (#1675)', () => {
             '--rules-only', '--mode', 'all',
             '--provider', provider, '--force',
           ],
-          { cwd: REPO_ROOT, stdio: 'ignore' },
+          { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
         );
         const indexPath = join(target, ruleDir, 'RULES-ONDEMAND.md');
         expect(existsSync(indexPath)).toBe(true);
@@ -259,7 +259,7 @@ describe('on-demand index propagation (#1675)', () => {
           '--rules-only', '--mode', 'all',
           '--provider', 'codex', '--force',
         ],
-        { cwd: REPO_ROOT, stdio: 'ignore' },
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
       execFileSync(
         'node',
@@ -270,7 +270,7 @@ describe('on-demand index propagation (#1675)', () => {
           '--deploy-rules',
           '--provider', 'codex', '--force',
         ],
-        { cwd: REPO_ROOT, stdio: 'ignore' },
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
 
       const body = await readFile(join(target, '.codex/rules/RULES-ONDEMAND.md'), 'utf8');
@@ -332,7 +332,7 @@ describe('on-demand index propagation (#1675)', () => {
           '--force',
           '--quiet',
         ],
-        { cwd: REPO_ROOT, stdio: 'ignore' },
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
       const body = await readFile(join(target, 'AGENTS.md'), 'utf8');
       expect(body).toContain('OpenHuman');
@@ -347,7 +347,7 @@ describe('on-demand index propagation (#1675)', () => {
       execFileSync(
         'node',
         ['tools/warp/setup-warp.mjs', '--source', REPO_ROOT, '--target', target, '--mode', 'all', '--force'],
-        { cwd: REPO_ROOT, stdio: 'ignore' },
+        { timeout: 60_000, cwd: REPO_ROOT, stdio: 'ignore' },
       );
       const body = await readFile(join(target, 'WARP.md'), 'utf8');
       expect(body).toContain('## On-Demand Rules');

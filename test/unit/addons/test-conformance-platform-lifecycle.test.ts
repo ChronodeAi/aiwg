@@ -16,7 +16,7 @@ import { collectControls, verifyControls } from '../../../agentic/code/addons/te
 import { createPlan } from '../../../agentic/code/addons/testing-quality/lib/normalization.mjs';
 
 const python = process.env.TEST_CONFORMANCE_PYTHON || 'python3';
-const pythonReady = spawnSync(python, ['-c', 'import pytest'], { encoding: 'utf8' }).status === 0;
+const pythonReady = spawnSync(python, ['-c', 'import pytest'], { timeout: 60_000, encoding: 'utf8' }).status === 0;
 let root: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'conformance-lifecycle-')); });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });

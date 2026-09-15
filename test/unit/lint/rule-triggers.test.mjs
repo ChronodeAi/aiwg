@@ -13,7 +13,7 @@ import path from 'node:path';
 const ROOT = process.cwd();
 
 function lint(args = []) {
-  const out = execFileSync('node', [path.join(ROOT, 'tools/lint/rule-triggers.mjs'), ...args], {
+  const out = execFileSync('node', [path.join(ROOT, 'tools/lint/rule-triggers.mjs'), ...args], { timeout: 60_000,
     cwd: ROOT, encoding: 'utf8',
   });
   return out;

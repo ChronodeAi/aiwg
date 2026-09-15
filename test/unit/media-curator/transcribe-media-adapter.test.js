@@ -118,7 +118,7 @@ describe('transcribe-media WhisperX adapter', () => {
         '--plan-output', plan,
         '--diarize',
         '--credential-provider', 'env:HF_TOKEN',
-      ], {
+      ], { timeout: 60_000,
         cwd: resolve('.'),
         env: { ...process.env, PATH: `${fake.binDir}:${process.env.PATH}`, HF_TOKEN: '' },
         encoding: 'utf8',
@@ -152,7 +152,7 @@ describe('transcribe-media WhisperX adapter', () => {
         '--credential-provider', 'env:HF_TOKEN',
         '--min-speakers', '2',
         '--max-speakers', '2',
-      ], {
+      ], { timeout: 60_000,
         cwd: resolve('.'),
         env: { ...process.env, PATH: `${fake.binDir}:${process.env.PATH}`, HF_TOKEN: 'top-secret-token' },
         encoding: 'utf8',
@@ -185,7 +185,7 @@ describe('transcribe-media WhisperX adapter', () => {
         '--work-dir', join(dir, 'native'),
         '--diarize',
         '--credential-provider', 'env:HF_TOKEN',
-      ], {
+      ], { timeout: 60_000,
         cwd: resolve('.'),
         env: {
           ...process.env,

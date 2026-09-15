@@ -28,7 +28,7 @@ import type {
 } from '../../../src/marketplace/provenance-types.js';
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { timeout: 60_000, cwd, encoding: 'utf8' }).trim();
 }
 
 function keyPair() {

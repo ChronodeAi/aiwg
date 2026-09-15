@@ -84,7 +84,7 @@ function runAiwgWithEnv(
 function canInitGit(): boolean {
   const tmp = mkdtempSync(path.join(os.tmpdir(), 'aiwg-git-check-'));
   try {
-    execFileSync('git', ['init'], { cwd: tmp, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: tmp, stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -120,7 +120,7 @@ const TESTING_QUALITY_SKILLS = [
 async function makeProject(): Promise<string> {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-'));
   if (GIT_AVAILABLE) {
-    execFileSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: dir, stdio: 'pipe' });
   }
   return dir;
 }

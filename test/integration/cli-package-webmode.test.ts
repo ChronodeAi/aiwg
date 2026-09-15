@@ -207,7 +207,7 @@ describe('@aiwg/cli packaged web distribution', () => {
     const pack = spawnSync(
       process.platform === 'win32' ? 'npm.cmd' : 'npm',
       ['pack', stage, '--ignore-scripts', '--json', '--pack-destination', tempRoot],
-      { cwd: PROJECT_ROOT, env: isolatedNpmEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+      { timeout: 60_000, cwd: PROJECT_ROOT, env: isolatedNpmEnv(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
     );
     if (pack.status !== 0) throw new Error(pack.stderr || pack.stdout);
     const packed = JSON.parse(pack.stdout) as Array<typeof packMetadata & { filename: string }>;

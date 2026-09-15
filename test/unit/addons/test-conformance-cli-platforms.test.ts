@@ -7,7 +7,7 @@ const cli = path.resolve('agentic/code/addons/testing-quality/commands/test-conf
 const adapter = path.resolve('agentic/code/addons/testing-quality/adapters/pytest_reporter.py');
 const nodeModules = path.resolve('node_modules');
 const python = process.env.TEST_CONFORMANCE_PYTHON || 'python3';
-const pythonReady = spawnSync(python, ['-c', 'import pytest']).status === 0;
+const pythonReady = spawnSync(python, ['-c', 'import pytest'], { timeout: 60_000 }).status === 0;
 let root: string, external: string;
 beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'conformance-cli-target-')); external = await fs.mkdtemp(path.join(os.tmpdir(), 'conformance-cli-cwd-')); });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(external, { recursive: true, force: true }); });

@@ -567,7 +567,7 @@ describe('generated trees and documented gaps (#2555)', () => {
     const { execFileSync } = await import('child_process');
     const repo = join(TEST_DIR, 'repo');
     mkdirSync(join(repo, 'indices'), { recursive: true });
-    execFileSync('git', ['init', '-q'], { cwd: repo });
+    execFileSync('git', ['init', '-q'], { timeout: 60_000, cwd: repo });
     writeFileSync(join(repo, '.gitignore'), 'indices/\n');
     writeFileSync(join(repo, 'indices', 'generated.md'), 'REF-9999 is cited here.\n');
     writeFileSync(join(repo, 'authored.md'), '# Authored\n');

@@ -113,7 +113,7 @@ function deploy(
     '--quiet',
     ...(options.copyAll ? ['--copy-all'] : []),
     ...(options.dryRun ? ['--dry-run'] : []),
-  ], {
+  ], { timeout: 60_000,
     cwd: REPO_ROOT,
     // #2119: pin HERMES_HOME to the fake home too. Without this, a HERMES_HOME
     // inherited from the developer's environment (e.g. a per-role Hermes home)

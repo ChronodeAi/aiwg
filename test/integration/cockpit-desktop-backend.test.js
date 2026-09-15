@@ -18,7 +18,7 @@ const capability = { schema_version: 'rdp-cockpit.v1', supported: true, readines
 const request = { operation: 'capability', id, delegation: 'user-delegation' };
 beforeAll(() => {
   directory = mkdtempSync(join(tmpdir(), 'cockpit-desktop-tls-'));
-  const openssl = (...args) => execFileSync('openssl', args, { cwd: directory, stdio: 'pipe' });
+  const openssl = (...args) => execFileSync('openssl', args, { timeout: 60_000, cwd: directory, stdio: 'pipe' });
   const root = (name) => openssl('req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes',
     '-keyout', `${name}.key`, '-out', `${name}.crt`, '-days', '1', '-subj', `/CN=${name}`);
   root('ca'); root('foreign');

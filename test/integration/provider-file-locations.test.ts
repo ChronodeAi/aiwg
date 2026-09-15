@@ -29,7 +29,7 @@ const REPO_ROOT = path.resolve(__dirname, '../..');
 function canInitGit(): boolean {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-provider-git-check-'));
   try {
-    execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: tmpDir, stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -140,7 +140,7 @@ async function createTestEnv(provider: string): Promise<{ projectDir: string; ho
   await fs.mkdir(homeDir, { recursive: true });
 
   // Initialize git (some providers require it)
-  execFileSync('git', ['init'], { cwd: projectDir, stdio: 'pipe' });
+  execFileSync('git', ['init'], { timeout: 60_000, cwd: projectDir, stdio: 'pipe' });
 
   return { projectDir, homeDir };
 }
@@ -182,7 +182,7 @@ function runDeploy(
   return execFileSync(
     process.execPath,
     [path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs'), ...args],
-    { cwd: REPO_ROOT, env, encoding: 'utf-8' }
+    { timeout: 60_000, cwd: REPO_ROOT, env, encoding: 'utf-8' }
   );
 }
 
@@ -394,7 +394,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
         execFileSync(
           process.execPath,
           [path.join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'sdlc', '--provider', 'codex', '--target', projectDir],
-          { cwd: REPO_ROOT, env, encoding: 'utf-8' }
+          { timeout: 60_000, cwd: REPO_ROOT, env, encoding: 'utf-8' }
         );
 
         // Should have .codex directory

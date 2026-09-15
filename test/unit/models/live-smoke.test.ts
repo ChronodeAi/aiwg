@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 describe('model live smoke gate', () => {
   it('is cost-free and disabled in normal CI', () => {
     const output = JSON.parse(execFileSync(
-      process.execPath, ['tools/models/live-smoke.mjs', '--check'], { encoding: 'utf8' },
+      process.execPath, ['tools/models/live-smoke.mjs', '--check'], { timeout: 60_000, encoding: 'utf8' },
     ));
     expect(output.live).toBe(false);
     expect(output.normalCiCostUsd).toBe(0);
@@ -18,7 +18,7 @@ describe('model live smoke gate', () => {
       '--command', 'exit 0',
       '--output', '/tmp/should-not-exist.json',
       '--budget-usd', '0.01',
-    ], { encoding: 'utf8', env: { ...process.env, AIWG_MODEL_LIVE_SMOKE: '' } });
+    ], { timeout: 60_000, encoding: 'utf8', env: { ...process.env, AIWG_MODEL_LIVE_SMOKE: '' } });
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('Live model smoke is disabled');
   });

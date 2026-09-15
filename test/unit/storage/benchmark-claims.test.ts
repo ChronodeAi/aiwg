@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe('storage benchmark claim gate (#2191)', () => {
   it('accepts the checked-in current evidence and rendered claim', () => {
-    const result = JSON.parse(execFileSync(process.execPath, [verifier, root], { encoding: 'utf8' }));
+    const result = JSON.parse(execFileSync(process.execPath, [verifier, root], { timeout: 60_000, encoding: 'utf8' }));
     expect(result).toEqual({
       schemaVersion: 'aiwg.storage-benchmark-claims/v1',
       valid: true,
@@ -29,13 +29,13 @@ describe('storage benchmark claim gate (#2191)', () => {
   it('rejects stale source evidence and documentation drift', () => {
     const stale = fixtureRoot();
     writeFileSync(join(stale, 'src/artifacts/backends/sqlite-backend.ts'), 'changed\n');
-    expect(() => execFileSync(process.execPath, [verifier, stale], { encoding: 'utf8', stdio: 'pipe' }))
+    expect(() => execFileSync(process.execPath, [verifier, stale], { timeout: 60_000, encoding: 'utf8', stdio: 'pipe' }))
       .toThrow(/evidence is stale/);
 
     const drifted = fixtureRoot();
     const document = join(drifted, 'docs/extensions/graph-backends.md');
     writeFileSync(document, readFileSync(document, 'utf8').replace('ops/s', 'records/s'));
-    expect(() => execFileSync(process.execPath, [verifier, drifted], { encoding: 'utf8', stdio: 'pipe' }))
+    expect(() => execFileSync(process.execPath, [verifier, drifted], { timeout: 60_000, encoding: 'utf8', stdio: 'pipe' }))
       .toThrow(/documented measurements do not match/);
   });
 
@@ -45,7 +45,7 @@ describe('storage benchmark claim gate (#2191)', () => {
     const direct = JSON.parse(readFileSync(directPath, 'utf8'));
     direct.qualification.resources.walBytes = null;
     writeFileSync(directPath, `${JSON.stringify(direct, null, 2)}\n`);
-    expect(() => execFileSync(process.execPath, [verifier, incomplete], { encoding: 'utf8', stdio: 'pipe' }))
+    expect(() => execFileSync(process.execPath, [verifier, incomplete], { timeout: 60_000, encoding: 'utf8', stdio: 'pipe' }))
       .toThrow(/required metric walBytes is unavailable/);
 
     const drifted = fixtureRoot();
@@ -53,7 +53,7 @@ describe('storage benchmark claim gate (#2191)', () => {
     const postgrest = JSON.parse(readFileSync(postgrestPath, 'utf8'));
     postgrest.qualification.scope.observedOperations -= 1;
     writeFileSync(postgrestPath, `${JSON.stringify(postgrest, null, 2)}\n`);
-    expect(() => execFileSync(process.execPath, [verifier, drifted], { encoding: 'utf8', stdio: 'pipe' }))
+    expect(() => execFileSync(process.execPath, [verifier, drifted], { timeout: 60_000, encoding: 'utf8', stdio: 'pipe' }))
       .toThrow(/operation scope mismatch/);
   });
 
