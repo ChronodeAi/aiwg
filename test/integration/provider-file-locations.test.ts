@@ -390,11 +390,19 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
           USERPROFILE: homeDir,
         };
 
-        // Run aiwg use with provider
+        // Run aiwg use with provider. This is the only call in this file that
+        // goes through the full bin/aiwg.mjs router → tsx cold-compile path
+        // (other calls here invoke deploy-agents.mjs directly, or git); under
+        // CPU contention from adjacent heavy integration suites (use-all-
+        // deployment.test.ts, mixed-addon-deployment.test.ts) on a
+        // resource-constrained CI runner, 60s was measured too tight and
+        // produced a deterministic spawnSync ETIMEDOUT (3/3 GitHub Actions
+        // npm-publish runs for v2026.9.14, never observed on self-hosted
+        // Gitea runners).
         execFileSync(
           process.execPath,
           [path.join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'sdlc', '--provider', 'codex', '--target', projectDir],
-          { timeout: 60_000, cwd: REPO_ROOT, env, encoding: 'utf-8' }
+          { timeout: 150_000, cwd: REPO_ROOT, env, encoding: 'utf-8' }
         );
 
         // Should have .codex directory
@@ -408,7 +416,7 @@ describe.skipIf(!GIT_INIT_AVAILABLE)('Provider File Locations', () => {
       } finally {
         await cleanupTestEnv(projectDir, homeDir);
       }
-    }, 120_000);
+    }, 180_000);
   });
 });
 

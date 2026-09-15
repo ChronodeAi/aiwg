@@ -7,6 +7,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.15] - 2026-09-15 – "Give the slow path room to finish"
+
+### Fixed
+
+- The npm-publish provider-integration test's full `bin/aiwg.mjs use sdlc
+  --provider codex` invocation now allows 150s (test timeout 180s) instead of
+  60s. That call is the only one in the file that goes through the router's
+  cold `tsx` compile path rather than invoking `deploy-agents.mjs` directly;
+  under CPU contention from adjacent heavy integration suites on the
+  npm-publish GitHub Actions runner, 60s was measured too tight and produced a
+  deterministic `spawnSync ETIMEDOUT`, blocking npm publication of 2026.9.14
+  three times in a row with no code-level regression (the identical commit's
+  full suite passed cleanly on the project's own CI). This release carries no
+  functional changes beyond that timeout and the version bump; see 2026.9.14
+  below for the actual release contents.
+
 ## [2026.9.14] - 2026-09-15 – "Session evidence leaves the repository"
 
 ### Added
