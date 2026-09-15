@@ -110,7 +110,7 @@ jobs:
     # Policy"). Same discipline as the Gitea workflows — no mutable tags.
     # Row in ci/digests.txt.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
-    timeout-minutes: 25
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -497,7 +497,7 @@ jobs:
             local attestations=""
             local attempt
             for attempt in $(seq 1 90); do
-              attestations=$(npm view "${package}@${VERSION}" --json 2>/dev/null \
+              attestations=$(npm view "${package}@${VERSION}" --json --prefer-online 2>/dev/null \
                 | jq -r '.dist.attestations // empty' || true)
               if [ -n "$attestations" ]; then
                 echo "✓ Provenance attestation present for ${package}@${VERSION}"

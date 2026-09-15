@@ -7,6 +7,19 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.12] - 2026-09-15 – "Release workflows get their own lanes"
+
+### Fixed
+
+- Gitea release, plugin packaging, npm, and site-notification workflows now
+  use distinct concurrency groups. A tag push previously placed unrelated
+  workflows in the same literal `release` group, causing Gitea to cancel
+  release creation and plugin packaging while another release workflow ran.
+- npm provenance verification now waits up to fifteen minutes for the large
+  root package to leave npm's processing state. The publication job timeout
+  increased to forty-five minutes so artifact signing, SBOM generation,
+  checksums, and release upload still have time after the bounded wait.
+
 ## [2026.9.11] - 2026-09-14 – "A release waits until the evidence arrives"
 
 ### Fixed
@@ -4320,7 +4333,8 @@ The 2026.5.0 stable tag. The 2026.4.0 stable tag was never cut — the rc series
 - New unit tests: 7 for `aiwg skill-lint` rubric (perfect/stub/no-triggers/agent-only/broken-YAML fixtures + threshold modes). Behavior-loader and concierge integration tests updated for canonical metadata.* shape.
 - `.agents/` deployment directory is now gitignored, mirroring `.claude/` and `.codex/` (#949). 395 generated files removed from the index; regenerable via `aiwg use`.
 
-[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.9.11...HEAD
+[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.9.12...HEAD
+[2026.9.12]: https://github.com/jmagly/aiwg/compare/v2026.9.11...v2026.9.12
 [2026.9.11]: https://github.com/jmagly/aiwg/compare/v2026.9.10...v2026.9.11
 [2026.8.26]: https://github.com/jmagly/aiwg/compare/v2026.8.25...v2026.8.26
 [2026.8.25]: https://github.com/jmagly/aiwg/compare/v2026.8.20...v2026.8.25
