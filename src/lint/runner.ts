@@ -8,6 +8,7 @@
  */
 
 import fs from 'fs';
+import { spawnSync } from 'child_process';
 import fsp from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
@@ -40,6 +41,24 @@ function parseFrontmatter(content: string): Record<string, string> {
 }
 
 const DEFAULT_REFERENCE_PATTERN = '\\bREF-\\d{3,}\\b';
+
+/**
+ * Phrases that mark an identifier as deliberately absent (#2555). A mention
+ * next to one of these documents a gap rather than pointing at a document, so
+ * it is not an unresolved reference.
+ */
+export const DEFAULT_ABSENCE_MARKERS = [
+  '\\bunallocated\\b',
+  '\\bnot in corpus\\b',
+  '\\bskipped\\b',
+  '\\bretired\\b',
+  '\\bwithdrawn\\b',
+  '\\bdeliberately (?:absent|unallocated|skipped)\\b',
+  '\\bnever (?:allocated|assigned)\\b',
+  '\\bdoes not exist\\b',
+  '\\bno longer (?:exists|allocated)\\b',
+  '\\bdeduplicat',
+];
 
 /**
  * Verification targets — things the inducting agent could have checked.
@@ -107,6 +126,54 @@ export const DEFAULT_UNCERTAINTY_PATTERNS = [
   'rests on .{0,60} rather than an independent',
 ];
 
+/**
+ * A dated outcome closes an uncertainty (#2523's "records an outcome with a
+ * date"). The vocabulary is deliberately wider than a verb+date pair: the
+ * retraction convention recommended alongside this rule writes
+ * `~~<limitation>~~ **Done YYYY-MM-DD (<what closed it>).**`, which no
+ * verb+date pattern matches, so a correctly dated retraction was rejected for
+ * its shape (#2556).
+ */
+export const DATED_OUTCOME_PATTERN =
+  '(?:\\b(?:done|resolved|completed|closed|addressed|fixed|verified|retrieved|archived|queried|fetched|checked|probed|confirmed)\\b[^\\n]{0,60}?\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}[^\\n]{0,30}?\\b(?:done|resolved|completed|closed|addressed|fixed)\\b)';
+
+/**
+ * The closure half of {@link DATED_OUTCOME_PATTERN}. Only explicit closure
+ * verbs count outside a struck span: a date sitting anywhere near an action
+ * verb ("...was not retrieved at induction. Induction ran 2026-09-01.") is not
+ * an outcome, and treating it as one would discharge the very statements this
+ * rule exists to catch.
+ */
+export const CLOSURE_OUTCOME_PATTERN =
+  '(?:\\b(?:done|resolved|completed|closed|addressed|fixed)\\b[^\\n]{0,60}?\\d{4}-\\d{2}-\\d{2}|\\d{4}-\\d{2}-\\d{2}[^\\n]{0,30}?\\b(?:done|resolved|completed|closed|addressed|fixed)\\b)';
+
+/**
+ * Spans struck through with `~~…~~` are, by the markup's own meaning, no longer
+ * asserted. When a dated outcome follows the span on the same line, the pair is
+ * a completed retraction however long the struck text is — the length of the
+ * struck span was the hidden variable behind #2556.
+ */
+function retractedWithDatedOutcome(line: string): boolean {
+  const dated = new RegExp(DATED_OUTCOME_PATTERN, 'i');
+  const strikethrough = /~~([\s\S]*?)~~/g;
+  let match: RegExpExecArray | null;
+  while ((match = strikethrough.exec(line)) !== null) {
+    if (dated.test(line.slice(match.index + match[0].length))) return true;
+  }
+  return false;
+}
+
+/** Character offsets of every `~~…~~` span on a line. */
+function strikethroughSpans(line: string): Array<{ start: number; end: number }> {
+  const spans: Array<{ start: number; end: number }> = [];
+  const strikethrough = /~~([\s\S]*?)~~/g;
+  let match: RegExpExecArray | null;
+  while ((match = strikethrough.exec(line)) !== null) {
+    spans.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return spans;
+}
+
 export const DEFAULT_OBSTACLE_PATTERNS = [
   '\\bHTTP\\s?[45]\\d{2}\\b',
   '\\b(?:401|403|404|429|451|503)\\b',
@@ -137,6 +204,9 @@ export const DEFAULT_OBSTACLE_PATTERNS = [
   'status:\\s*(?:incomplete|blocked)',
   '\\b(?:queried|fetched|checked|probed|confirmed|resolved)\\s+(?:on\\s+)?\\d{4}-\\d{2}-\\d{2}',
   '\\bdeferred\\b.{0,40}\\b(?:because|since|due to)\\b',
+  // An explicit dated closure ("**Done 2026-09-12 (post-induction audit).**"),
+  // which the verb+date pattern above does not match (#2556).
+  CLOSURE_OUTCOME_PATTERN,
 ];
 
 /**
@@ -239,12 +309,19 @@ function runCheck(
       const refPattern = check.referencePattern || DEFAULT_REFERENCE_PATTERN;
       const regex = new RegExp(refPattern, 'g');
       const lines = content.split('\n');
+      const absence = (check.absenceMarkers ?? DEFAULT_ABSENCE_MARKERS).map((p) => new RegExp(p, 'i'));
 
       for (let i = 0; i < lines.length; i++) {
         let match;
         while ((match = regex.exec(lines[i])) !== null) {
           const refId = match[0];
           const basePath = check.basePath || '.aiwg/research/findings';
+          // A corpus documents its deliberate gaps ("REF-2464 remains
+          // unallocated after deduplication"). Reading that sentence as a
+          // dangling reference left only two ways to silence an error: delete
+          // accurate documentation, or allocate a REF that is deliberately
+          // absent (#2555).
+          if (absence.some((re) => re.test(lines[i]))) continue;
 
           if (!referenceIndex.has(refId) && !resolvesFromBasePath(refId, targetDir, basePath)) {
             diagnostics.push({
@@ -286,6 +363,14 @@ function runCheck(
         const clause = splitClauses(lines[i]).find((c) =>
           uncertainty.some((re) => re.test(c)) && targets.some((re) => re.test(c)));
         if (!clause) continue;
+        // A struck span followed by a dated outcome is a completed retraction,
+        // whatever its length. Clause scoping otherwise ends the window before
+        // the `**Done <date>**` that closes it, so the recommended convention
+        // failed for two-sentence struck text and passed for one (#2556).
+        const clauseAt = lines[i].indexOf(clause);
+        const struck = clauseAt >= 0 && strikethroughSpans(lines[i])
+          .some((span) => clauseAt >= span.start && clauseAt < span.end);
+        if (struck && retractedWithDatedOutcome(lines[i])) continue;
         // Look in the matching line and the following `within` lines: the
         // obstacle normally sits in the same sentence or the next one.
         const window = lines.slice(i, i + within + 1).join(' ');
@@ -300,7 +385,7 @@ function runCheck(
           file: filePath,
           line: i + 1,
           message: `Uncertainty stated without a named obstacle or recorded outcome: ${clause.trim().slice(0, 160)}`,
-          fix: 'Resolve it if it costs about one request against a known endpoint, or name the specific obstacle (HTTP status, credential required, rate limited, paywalled) so it lands as incomplete/blocked rather than narrative.',
+          fix: 'Resolve it if it costs about one request against a known endpoint, or name the specific obstacle (HTTP status, credential required, rate limited, paywalled) so it lands as incomplete/blocked rather than narrative. If the check has since been done, retract the statement with the dated form — `~~<original limitation>~~ **Done YYYY-MM-DD (<what closed it>).** <evidence>` — which closes it whatever the length of the struck text.',
         });
       }
       break;
@@ -396,6 +481,34 @@ function runCheck(
 }
 
 /**
+ * Candidate paths a rule glob may be written against (#2555).
+ *
+ * `collectFiles` walks with `cwd: targetDir`, so files arrive target-relative
+ * (`REF-001.md`) while rule globs are written repo-relative
+ * (`documentation/references/**\/*.md`). Narrowing the target to the very
+ * directory a rule names therefore matched nothing, and the run reported PASS
+ * with every finding unreported. Matching against the target-relative path and
+ * each ancestor-prefixed form makes a glob resolve the same way wherever the
+ * walk is rooted.
+ */
+export function ruleMatchCandidates(file: string, targetDir: string): string[] {
+  const normalizedFile = file.replace(/\\/g, '/');
+  const candidates = [normalizedFile];
+  const segments = path.resolve(targetDir).replace(/\\/g, '/').split('/').filter(Boolean);
+  let prefix = '';
+  for (let i = segments.length - 1; i >= 0 && segments.length - i <= 12; i -= 1) {
+    prefix = prefix ? `${segments[i]}/${prefix}` : `${segments[i]}/`;
+    candidates.push(`${prefix}${normalizedFile}`);
+  }
+  return candidates;
+}
+
+/** True when a rule's glob selects this file, wherever the walk was rooted. */
+export function ruleAppliesToFile(ruleGlob: string, file: string, targetDir: string): boolean {
+  return ruleMatchCandidates(file, targetDir).some((candidate) => minimatch(candidate, ruleGlob));
+}
+
+/**
  * Run a single rule against all matching files in the target
  */
 async function runRule(
@@ -405,12 +518,14 @@ async function runRule(
   referenceIndex: Set<string>
 ): Promise<LintDiagnostic[]> {
   const diagnostics: LintDiagnostic[] = [];
+  RULE_APPLIED.delete(rule.id);
 
   // Filter files matching the rule's glob
   const ruleGlob = rule.appliesTo.glob;
-  const matchingFiles = allFiles.filter(f => minimatch(f, ruleGlob));
+  const matchingFiles = allFiles.filter(f => ruleAppliesToFile(ruleGlob, f, targetDir));
 
   if (matchingFiles.length === 0) return diagnostics;
+  RULE_APPLIED.add(rule.id);
 
   // Handle id-unique check at the ruleset level
   const uniqueCheck = rule.checks.find(c => c.type === 'id-unique');
@@ -468,10 +583,17 @@ async function runRule(
   return diagnostics;
 }
 
+/** Rule ids that selected at least one file in the current run (#2555). */
+const RULE_APPLIED = new Set<string>();
+
 /**
  * Collect all files under a target directory
  */
-async function collectFiles(targetDir: string, recursive: boolean): Promise<string[]> {
+async function collectFiles(
+  targetDir: string,
+  recursive: boolean,
+  respectGitignore = true,
+): Promise<string[]> {
   const pattern = recursive ? '**/*' : '*';
   try {
     const files = await glob(pattern, {
@@ -479,9 +601,40 @@ async function collectFiles(targetDir: string, recursive: boolean): Promise<stri
       nodir: true,
       dot: false,
     });
-    return files.filter(f => f.endsWith('.md') || f.endsWith('.yaml') || f.endsWith('.yml') || f.endsWith('.json'));
+    const linted = files.filter(f => f.endsWith('.md') || f.endsWith('.yaml') || f.endsWith('.yml') || f.endsWith('.json'));
+    return respectGitignore ? dropGitignored(targetDir, linted) : linted;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Drop files git ignores (#2555).
+ *
+ * Generated trees are regenerated, not authored: linting `indices/` reported an
+ * error in text that documents a deliberate gap. `git check-ignore` is asked
+ * once for the whole set so the semantics are git's own (negations, nested
+ * `.gitignore`, `core.excludesFile`) rather than a re-implementation. Outside a
+ * repository, or without git, every file is kept.
+ */
+function dropGitignored(targetDir: string, files: string[]): string[] {
+  if (files.length === 0) return files;
+  try {
+    const result = spawnSync('git', ['check-ignore', '--stdin'], {
+      cwd: targetDir,
+      input: `${files.join('\n')}\n`,
+      encoding: 'utf8',
+    });
+    // 0 = some paths ignored, 1 = none ignored, anything else = not a repo or
+    // git unavailable, in which case nothing is filtered.
+    if (result.error || (result.status !== 0 && result.status !== 1)) return files;
+    const ignored = new Set(
+      (result.stdout ?? '').split('\n').map((line) => line.trim()).filter(Boolean),
+    );
+    if (ignored.size === 0) return files;
+    return files.filter((file) => !ignored.has(file));
+  } catch {
+    return files;
   }
 }
 
@@ -521,16 +674,20 @@ function autoDetectRulesets(target: string, available: LintRuleset[]): LintRules
 export async function runLint(
   targetDir: string,
   rulesets: LintRuleset[],
-  options: { recursive?: boolean; failOn?: LintSeverity } = {}
+  options: { recursive?: boolean; failOn?: LintSeverity; respectGitignore?: boolean } = {}
 ): Promise<LintResult> {
   const recursive = options.recursive ?? true;
-  const allFiles = await collectFiles(targetDir, recursive);
+  const allFiles = await collectFiles(targetDir, recursive, options.respectGitignore ?? true);
   const referenceIndex = buildReferenceIndex(allFiles);
   const allDiagnostics: LintDiagnostic[] = [];
+  const inapplicableRules: string[] = [];
+  let rulesSelected = 0;
 
   for (const ruleset of rulesets) {
     for (const rule of ruleset.rules) {
+      rulesSelected += 1;
       const diagnostics = await runRule(rule, targetDir, allFiles, referenceIndex);
+      if (!RULE_APPLIED.has(rule.id)) inapplicableRules.push(rule.id);
       allDiagnostics.push(...diagnostics);
     }
   }
@@ -555,6 +712,11 @@ export async function runLint(
       warnings,
       infos,
       passed,
+      // A run where no rule selected a file must never read the same as a clean
+      // run (#2555). Reporters surface this; callers can gate on it.
+      rulesSelected,
+      rulesApplied: rulesSelected - inapplicableRules.length,
+      inapplicableRules,
     },
     timestamp: new Date().toISOString(),
   };

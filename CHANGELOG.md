@@ -86,6 +86,27 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- `aiwg lint` no longer silently disables a rule when the target is the
+  directory the rule's glob names (#2555). Rule globs are written from the
+  project root while the walk is rooted at the target, so
+  `aiwg lint documentation/references --ruleset research` matched nothing and
+  reported PASS while the same rules found 34 findings from the repo root. Globs
+  now resolve against the target-relative path and each ancestor-prefixed form,
+  so a rule selects the same files wherever the walk starts. Output names how
+  many of the selected rules applied and says plainly that a run where none
+  applied is not a clean result. Files git ignores are skipped by default
+  (`--no-gitignore` opts back in) so regenerated trees stop producing findings,
+  and `research/citation-resolves` treats a reference beside an absence marker
+  (unallocated, not in corpus, skipped, retired, withdrawn, deduplication) as
+  documentation of a deliberate gap rather than a dangling reference.
+- `research/uncertainty-registered` accepts the recommended dated retraction
+  whatever the length of the struck text (#2556). A struck span followed by a
+  dated outcome on the same line is a completed retraction, so
+  `~~<limitation>~~ **Done YYYY-MM-DD (<what closed it>).** <evidence>` no longer
+  fails when the struck text carries a bold lead-in and a second sentence. An
+  explicit dated closure now discharges an uncertainty outside a struck span
+  too, and the fix hint names the retraction form instead of only listing
+  obstacles.
 - Installation identity drift no longer blocks the read-only recovery
   commands (#2559). `version`, `status` (including `--probe --json`),
   `doctor`, `runtime-info`, `discover`, `show`, and `index query|deps|stats`

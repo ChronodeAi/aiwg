@@ -48,6 +48,13 @@ export interface LintCheck {
   /** Base directory for resolving references */
   basePath?: string;
 
+  /**
+   * Phrases marking an identifier as deliberately absent, for
+   * `reference-resolves`. A mention beside one of these is documentation of a
+   * gap, not a dangling reference (#2555). Defaults to the corpus set.
+   */
+  absenceMarkers?: string[];
+
   /** Section name that should contain cross-references */
   section?: string;
 
@@ -180,6 +187,12 @@ export interface LintResult {
     warnings: number;
     infos: number;
     passed: boolean;
+    /** Rules in the selected rulesets (#2555). */
+    rulesSelected: number;
+    /** Rules that selected at least one file in this target (#2555). */
+    rulesApplied: number;
+    /** Rule ids whose glob matched no file in this target (#2555). */
+    inapplicableRules: string[];
   };
 
   /** Timestamp */
@@ -190,6 +203,9 @@ export interface LintResult {
  * CLI options for the lint command
  */
 export interface LintOptions {
+  /** Lint files git ignores too (default: false — generated trees are skipped, #2555). */
+  respectGitignore?: boolean;
+
   /** Target path to lint */
   target: string;
 

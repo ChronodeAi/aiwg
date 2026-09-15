@@ -14,6 +14,12 @@ description: >
   rate limit, paywall, anti-bot wall, unknown endpoint — or records an outcome with a
   date, which is what turns "I did not check" into "I could not check, because".
 
+  A struck span followed by a dated outcome on the same line is a completed retraction,
+  accepted whatever the length of the struck text:
+  `~~<original limitation>~~ **Done YYYY-MM-DD (<what closed it>).** <evidence>`. Before
+  #2556 the accepting window ended at the clause, so the recommended convention passed
+  for one struck sentence and failed for two.
+
   Matching is scoped to a clause, not a line: corpus prose keeps whole paragraphs and
   changelog table rows on one line, and line-scoped matching related unrelated clauses.
   A verification target is required precisely so the paper's own unverified claims are

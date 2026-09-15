@@ -508,3 +508,160 @@ describe('autoDetectRulesets', () => {
     expect(result).toHaveLength(2);
   });
 });
+
+describe('rule glob resolution is independent of the walk root (#2555)', () => {
+  const rule: LintRule = {
+    id: 'research/uncertainty-registered',
+    name: 'Uncertainty must name an obstacle',
+    description: 'test',
+    severity: 'warn',
+    appliesTo: { glob: 'documentation/references/**/*.md' },
+    checks: [{ type: 'unregistered-uncertainty' }],
+  } as unknown as LintRule;
+
+  const FLAGGED = [
+    '# REF-001',
+    '',
+    'The ACL Anthology camera-ready was not retrieved at induction.',
+    '',
+  ].join('\n');
+
+  beforeEach(() => {
+    mkdirSync(join(TEST_DIR, 'documentation', 'references'), { recursive: true });
+    writeFileSync(join(TEST_DIR, 'documentation', 'references', 'REF-001.md'), FLAGGED);
+  });
+
+  it('finds the same findings whether the target is the repo root or the glob directory', async () => {
+    const fromRoot = await runLint(TEST_DIR, [makeRuleset([rule])], { recursive: true });
+    const fromGlobDir = await runLint(join(TEST_DIR, 'documentation', 'references'), [makeRuleset([rule])], { recursive: true });
+
+    expect(fromRoot.diagnostics.length).toBe(1);
+    // The reported shape: narrowing to the directory the glob names silently
+    // disabled the rule and reported PASS.
+    expect(fromGlobDir.diagnostics.length).toBe(1);
+    expect(fromGlobDir.summary.rulesApplied).toBe(1);
+    expect(fromGlobDir.summary.passed).toBe(fromRoot.summary.passed);
+  });
+
+  it('reports how many rules applied, and none applying is visible in the result', async () => {
+    mkdirSync(join(TEST_DIR, 'elsewhere'), { recursive: true });
+    writeFileSync(join(TEST_DIR, 'elsewhere', 'NOTE.md'), '# Note\n');
+
+    const applied = await runLint(join(TEST_DIR, 'documentation', 'references'), [makeRuleset([rule])], { recursive: true });
+    expect(applied.summary).toMatchObject({ rulesSelected: 1, rulesApplied: 1, inapplicableRules: [] });
+
+    const inapplicable = await runLint(join(TEST_DIR, 'elsewhere'), [makeRuleset([rule])], { recursive: true });
+    expect(inapplicable.summary).toMatchObject({ rulesSelected: 1, rulesApplied: 0 });
+    expect(inapplicable.summary.inapplicableRules).toEqual(['research/uncertainty-registered']);
+  });
+
+  it('does not let an unrelated ancestor segment widen a glob', async () => {
+    const rootOnly: LintRule = { ...rule, id: 'test/root-only', appliesTo: { glob: 'findings/*.md' } } as LintRule;
+    const res = await runLint(join(TEST_DIR, 'documentation', 'references'), [makeRuleset([rootOnly])], { recursive: true });
+    expect(res.summary.rulesApplied).toBe(0);
+  });
+});
+
+describe('generated trees and documented gaps (#2555)', () => {
+  it('skips files git ignores unless --no-gitignore is given', async () => {
+    const { execFileSync } = await import('child_process');
+    const repo = join(TEST_DIR, 'repo');
+    mkdirSync(join(repo, 'indices'), { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    writeFileSync(join(repo, '.gitignore'), 'indices/\n');
+    writeFileSync(join(repo, 'indices', 'generated.md'), 'REF-9999 is cited here.\n');
+    writeFileSync(join(repo, 'authored.md'), '# Authored\n');
+
+    const rule: LintRule = {
+      id: 'test/citation-resolves', name: 'c', description: 't', severity: 'error',
+      appliesTo: { glob: '**/*.md' }, checks: [{ type: 'reference-resolves' }],
+    } as unknown as LintRule;
+
+    const ignored = await runLint(repo, [makeRuleset([rule])], { recursive: true });
+    expect(ignored.diagnostics).toHaveLength(0);
+
+    const included = await runLint(repo, [makeRuleset([rule])], { recursive: true, respectGitignore: false });
+    expect(included.diagnostics.map((d) => d.file)).toContain(join('indices', 'generated.md'));
+  });
+
+  it('treats a mention beside an absence marker as documentation, not a dangling reference', async () => {
+    const rule: LintRule = {
+      id: 'test/citation-resolves', name: 'c', description: 't', severity: 'error',
+      appliesTo: { glob: '**/*.md' }, checks: [{ type: 'reference-resolves' }],
+    } as unknown as LintRule;
+
+    writeFileSync(join(TEST_DIR, 'findings', 'INDEX.md'), [
+      '# Index',
+      '',
+      'REF-449 is refreshed in place; REF-2464 remains unallocated after deduplication.',
+      '',
+      'REF-7777 is cited without any such note.',
+      '',
+    ].join('\n'));
+
+    const res = await runLint(TEST_DIR, [makeRuleset([rule])], { recursive: true });
+    const messages = res.diagnostics.map((d) => d.message);
+    expect(messages.some((m) => m.includes('REF-2464'))).toBe(false);
+    expect(messages.some((m) => m.includes('REF-449'))).toBe(false);
+    expect(messages.some((m) => m.includes('REF-7777'))).toBe(true);
+  });
+});
+
+describe('retraction convention (#2556)', () => {
+  const rule: LintRule = {
+    id: 'test/uncertainty', name: 'u', description: 't', severity: 'warn',
+    appliesTo: { glob: 'findings/REF-*.md' }, checks: [{ type: 'unregistered-uncertainty' }],
+  } as unknown as LintRule;
+
+  async function lint(body: string) {
+    writeFileSync(join(TEST_DIR, 'findings', 'REF-002.md'), body);
+    const res = await runLint(TEST_DIR, [makeRuleset([rule])], { recursive: true });
+    return res.diagnostics.filter((d) => d.ruleId === 'test/uncertainty');
+  }
+
+  it('accepts a dated retraction whose struck text runs past one sentence', async () => {
+    // The reported shape: bold lead-in plus a second sentence inside `~~…~~`.
+    const ds = await lint([
+      '# REF-002',
+      '',
+      '6. ~~**Archived artifact is the preprint, not the camera-ready.** The ACL Anthology version was not retrieved at induction, so any reviewer-driven change is unverified here.~~ **Done 2026-09-12 (post-induction audit).** The ACL Anthology camera-ready was retrieved, archived and diffed.',
+      '',
+    ].join('\n'));
+    expect(ds).toHaveLength(0);
+  });
+
+  it('still accepts the one-sentence form that already worked', async () => {
+    const ds = await lint([
+      '# REF-002',
+      '',
+      '- ~~The PMLR camera-ready was not retrieved.~~ **Done 2026-09-12 (post-induction audit).** The PMLR v267 camera-ready was archived.',
+      '',
+    ].join('\n'));
+    expect(ds).toHaveLength(0);
+  });
+
+  it('still flags a struck statement with no dated outcome after it', async () => {
+    const ds = await lint([
+      '# REF-002',
+      '',
+      '- ~~The ACL Anthology camera-ready was not retrieved at induction.~~ Superseded.',
+      '',
+    ].join('\n'));
+    expect(ds).toHaveLength(1);
+  });
+
+  it('still flags an unstruck statement even when a date appears elsewhere on the line', async () => {
+    const ds = await lint([
+      '# REF-002',
+      '',
+      '- The ACL Anthology camera-ready was not retrieved at induction. Induction ran 2026-09-01.',
+      '',
+    ].join('\n'));
+    expect(ds).toHaveLength(1);
+  });
+
+  it('names the dated retraction form in the fix hint', async () => {
+    const ds = await lint('# REF-002\n\nThe camera-ready was not retrieved.\n');
+    expect(ds[0]?.fix).toContain('**Done YYYY-MM-DD');
+  });
+});

@@ -46,7 +46,20 @@ function formatFull(result: LintResult): string {
   lines.push(`Target: ${result.target}`);
   lines.push(`Rulesets: ${result.rulesets.join(', ')}`);
   lines.push(`Files checked: ${result.summary.filesChecked}`);
+  lines.push(`Rules applied: ${result.summary.rulesApplied} of ${result.summary.rulesSelected}`);
   lines.push('');
+
+  // A target that excludes every rule produces the same clean output as a
+  // target that passes them, which is how 34 findings stayed invisible across a
+  // long session (#2555). Say so before the verdict.
+  if (result.summary.rulesSelected > 0 && result.summary.rulesApplied === 0) {
+    lines.push(`\x1b[33m! No rule applies to this target — 0 of ${result.summary.rulesSelected} selected rules matched any file here.\x1b[0m`);
+    lines.push(`  This is not a clean result. Lint a parent directory (the rules' globs are written from the project root), or check --ruleset.`);
+    lines.push('');
+  } else if (result.summary.inapplicableRules.length > 0) {
+    lines.push(`\x1b[33m! ${result.summary.inapplicableRules.length} rule(s) matched no file here: ${result.summary.inapplicableRules.join(', ')}\x1b[0m`);
+    lines.push('');
+  }
 
   if (result.diagnostics.length === 0) {
     lines.push('\x1b[32m\u2714 No issues found\x1b[0m');
@@ -95,6 +108,10 @@ function formatFull(result: LintResult): string {
 function formatSummary(result: LintResult): string {
   const lines: string[] = [];
   lines.push(`Lint: ${result.summary.filesChecked} files, ${result.summary.errors} errors, ${result.summary.warnings} warnings, ${result.summary.infos} info`);
+  lines.push(`Rules applied: ${result.summary.rulesApplied} of ${result.summary.rulesSelected}`);
+  if (result.summary.rulesSelected > 0 && result.summary.rulesApplied === 0) {
+    lines.push(`! No rule applies to this target — this is not a clean result (#2555).`);
+  }
   const statusIcon = result.summary.passed ? '\u2714 PASS' : '\u2718 FAIL';
   lines.push(`Result: ${statusIcon}`);
   return lines.join('\n');
