@@ -1,8 +1,10 @@
 id: research/citation-resolves
 name: Citation reference integrity
 # A mention beside an explicit absence marker (unallocated, not in corpus, skipped,
-# retired, withdrawn, deduplication) documents a deliberate gap rather than pointing at
-# a document, and is not reported (#2555). Corpora leave REF numbers unallocated on
+# retired, withdrawn, deliberately absent, never allocated, deduplication) documents a
+# deliberate gap rather than pointing at a document, and is not reported (#2555).
+# "does not exist" and similar are NOT markers — that is how a broken reference is
+# described, and suppressing it would defeat the check. Corpora leave REF numbers unallocated on
 # purpose; before that, silencing the error meant deleting accurate documentation or
 # allocating a REF that is deliberately absent.
 description: Every REF reference in body text points to an existing note, unless it sits beside an explicit absence marker

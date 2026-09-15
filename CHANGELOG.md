@@ -97,8 +97,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   applied is not a clean result. Files git ignores are skipped by default
   (`--no-gitignore` opts back in) so regenerated trees stop producing findings,
   and `research/citation-resolves` treats a reference beside an absence marker
-  (unallocated, not in corpus, skipped, retired, withdrawn, deduplication) as
-  documentation of a deliberate gap rather than a dangling reference.
+  (unallocated, not in corpus, skipped, retired, withdrawn, deliberately absent,
+  never allocated, deduplication) as documentation of a deliberate gap rather
+  than a dangling reference. Phrases that describe a broken reference, such as
+  "does not exist", are not markers.
 - `research/uncertainty-registered` accepts the recommended dated retraction
   whatever the length of the struck text (#2556). A struck span followed by a
   dated outcome on the same line is a completed retraction, so

@@ -55,10 +55,12 @@ export const DEFAULT_ABSENCE_MARKERS = [
   '\\bwithdrawn\\b',
   '\\bdeliberately (?:absent|unallocated|skipped)\\b',
   '\\bnever (?:allocated|assigned)\\b',
-  '\\bdoes not exist\\b',
-  '\\bno longer (?:exists|allocated)\\b',
   '\\bdeduplicat',
 ];
+// Deliberately NOT markers: "does not exist", "missing", "no longer exists".
+// Those are how a broken reference is described, not how a corpus records an
+// intentional gap, and treating them as markers would suppress the finding this
+// check exists for.
 
 /**
  * Verification targets — things the inducting agent could have checked.

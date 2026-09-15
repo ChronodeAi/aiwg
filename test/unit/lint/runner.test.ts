@@ -605,6 +605,21 @@ describe('generated trees and documented gaps (#2555)', () => {
     expect(messages.some((m) => m.includes('REF-449'))).toBe(false);
     expect(messages.some((m) => m.includes('REF-7777'))).toBe(true);
   });
+
+  it('still reports a broken reference described as not existing', async () => {
+    const rule: LintRule = {
+      id: 'test/citation-resolves', name: 'c', description: 't', severity: 'error',
+      appliesTo: { glob: '**/*.md' }, checks: [{ type: 'reference-resolves' }],
+    } as unknown as LintRule;
+
+    // "does not exist" is how a broken reference is described, not how a corpus
+    // records a deliberate gap; treating it as a marker would suppress the very
+    // finding this check exists for.
+    writeFileSync(join(TEST_DIR, 'findings', 'REF-005.md'), 'This references REF-999 which does not exist.\n');
+
+    const res = await runLint(TEST_DIR, [makeRuleset([rule])], { recursive: true });
+    expect(res.diagnostics.some((d) => d.message.includes('REF-999'))).toBe(true);
+  });
 });
 
 describe('retraction convention (#2556)', () => {
