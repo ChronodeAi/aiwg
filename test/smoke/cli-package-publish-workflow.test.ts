@@ -11,9 +11,9 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('npm run package:cli');
     expect(workflow).toContain('npm publish ./dist/packages/cli --provenance --access public');
     expect(workflow).toContain('verify_attestations @aiwg/cli');
-    expect(workflow).toContain('for attempt in $(seq 1 18)');
+    expect(workflow).toContain('for attempt in $(seq 1 90)');
     expect(workflow).toContain("| jq -r '.dist.attestations // empty' || true");
-    expect(workflow).toContain('after 3 minutes');
+    expect(workflow).toContain('after 15 minutes');
     expect(workflow).toContain('npm view "@aiwg/cli@${NPM_TAG}" version');
     expect(workflow).toContain('GIT_CONFIG_KEY_0: safe.directory');
     expect(workflow).toContain('GIT_CONFIG_VALUE_0: ${{ github.workspace }}');

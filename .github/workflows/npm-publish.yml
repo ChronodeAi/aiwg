@@ -496,7 +496,7 @@ jobs:
             local package="$1"
             local attestations=""
             local attempt
-            for attempt in $(seq 1 18); do
+            for attempt in $(seq 1 90); do
               attestations=$(npm view "${package}@${VERSION}" --json 2>/dev/null \
                 | jq -r '.dist.attestations // empty' || true)
               if [ -n "$attestations" ]; then
@@ -509,10 +509,10 @@ jobs:
                 fi
                 return 0
               fi
-              echo "Attempt ${attempt}/18: ${package}@${VERSION} or its provenance is not visible; retrying in 10s..."
-              sleep 10
+              echo "Attempt ${attempt}/90: ${package}@${VERSION} or its provenance is not visible."
+              if [ "$attempt" -lt 90 ]; then sleep 10; fi
             done
-            echo "✗ No provenance attestation found for ${package}@${VERSION} on npmjs.org after 3 minutes"
+            echo "✗ No provenance attestation found for ${package}@${VERSION} on npmjs.org after 15 minutes"
             echo "  The publish was accepted but the package or attestation did not become queryable."
             return 1
           }
