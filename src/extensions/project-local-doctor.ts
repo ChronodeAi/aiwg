@@ -210,7 +210,19 @@ export async function buildProjectLocalDoctorSection(
             // Missing — not drift, deploy is just absent
             continue;
           }
-          if (actualHash.normalized !== expectedHash && actualHash.raw !== expectedHash) {
+          // "Differs from source" must be judged against the source, not only
+          // against whichever rendering the registry recorded. A bundle can be
+          // (re)deployed through a path that writes the source verbatim plus
+          // the managed marker after the registry captured a transformed copy;
+          // the deployed file then matches its source line-for-line while the
+          // recorded hash never will (#2560). Accept the recorded deployed
+          // hash, the recorded source hash, or the current source file.
+          const accepted = new Set<string>([expectedHash]);
+          const recordedSourceHash = entry.artifactHashes?.[sourceRel];
+          if (recordedSourceHash) accepted.add(recordedSourceHash);
+          const currentSourceHash = await hashDeployed(join(bundle.artifactPath, sourceRel));
+          if (currentSourceHash) accepted.add(currentSourceHash.normalized);
+          if (!accepted.has(actualHash.normalized) && !accepted.has(actualHash.raw)) {
             driftCount++;
             driftLines.push(`    ✗ ${bundle.id} :: ${sourceRel} @ ${provider}  (deployed file differs from source)`);
           }
