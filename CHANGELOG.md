@@ -7,6 +7,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.10] - 2026-09-14 – "Nothing that looks clean is quietly empty"
+
 ### Added
 
 - Fortemi dataset execution now validates the advertised capability descriptor
