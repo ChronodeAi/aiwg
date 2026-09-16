@@ -1,9 +1,9 @@
 import {
-  existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync,
+  existsSync, linkSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import {
-  dirname, isAbsolute, join, resolve,
+  basename, dirname, isAbsolute, join, resolve,
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -67,6 +67,8 @@ import {
   reverifySessionExportPlan,
   buildSessionAiwgFortemiIndexExport,
   recoverAiwgFortemiIndexFromFullV1Shard,
+  embedAttachmentsInFullV1Shard,
+  recoverEmbeddedAttachments,
   SESSION_EXPORT_PLAN_SCHEMA_VERSION,
   type SessionExportPlan,
   type SessionProviderId,
@@ -173,6 +175,9 @@ Options:
   --workspace <id>, --tag <tag>, --limit <n>, --cursor <n>
   --page-size <n>  Extraction scan page size (default 250, maximum 500)
   --max-documents <n>  Explicit extraction safety limit; returns a partial receipt
+  --include-bytes  Embed registered-output bytes in session export shards
+  --max-attachment-bytes <n>  Maximum bytes per embedded output (default 67108864)
+  --force         Permit replacing an existing export or recovery output
 
 Search filters:
   --date-from <rfc3339>, --date-to <rfc3339>
@@ -1057,6 +1062,18 @@ async function exportBuild(
   const planPath = resolve(ctx.cwd, requiredValue(args, '--plan'));
   const outDirectory = resolve(ctx.cwd, requiredValue(args, '--out'));
   const shardName = args.values.get('--shard-name') ?? 'evidence.shard';
+  if (basename(shardName) !== shardName) {
+    throw new CliError('INVALID_ARGUMENT', '--shard-name must be a filename, not a path', EXIT.usage);
+  }
+  const finalPath = join(outDirectory, shardName);
+  const receiptPath = `${finalPath}.receipt.json`;
+  if (!args.flags.has('--force') && (existsSync(finalPath) || existsSync(receiptPath))) {
+    throw new CliError(
+      'OUTPUT_EXISTS',
+      `refusing to overwrite an existing shard or receipt: ${finalPath} (use --force to replace)`,
+      EXIT.usage,
+    );
+  }
   let plan: SessionExportPlan;
   try {
     plan = JSON.parse(readFileSync(planPath, 'utf8')) as SessionExportPlan;
@@ -1072,8 +1089,17 @@ async function exportBuild(
   }
   // Recheck source changes before writing (#2564 acceptance criteria):
   // re-select from the live repository and reject on any digest drift.
-  const { sessions, eventsBySessionId } = reverifySessionExportPlan(repository, plan);
-  const index = buildSessionAiwgFortemiIndexExport(plan.workspaceId, sessions, eventsBySessionId, plan.outputs);
+  const {
+    sessions, eventsBySessionId, catalogTagsBySessionId, outputBytesByRegistrationId, attachmentBytesByEventId,
+  } = reverifySessionExportPlan(repository, plan, { projectRoot: ctx.cwd });
+  const includeBytes = args.flags.has('--include-bytes');
+  const outputs = plan.outputs.map((output) => ({
+    ...output,
+    bytesEmbedded: includeBytes && outputBytesByRegistrationId.has(output.registrationId),
+  }));
+  const index = buildSessionAiwgFortemiIndexExport(
+    plan.workspaceId, sessions, eventsBySessionId, outputs, catalogTagsBySessionId,
+  );
   // aiwgFortemiIndexToKnowledgeShardWithReport targets the declared
   // full-v1/2.0.0 archive contract and validates losslessness -- unlike the
   // plain aiwgFortemiIndexToKnowledgeShard (core-v1), which silently embeds
@@ -1091,16 +1117,69 @@ async function exportBuild(
       EXIT.contract,
     );
   }
-  const bytes = result.archive;
+  let bytes = result.archive;
+  let embeddedAttachmentCount = 0;
+  let embeddedAttachmentBytes = 0;
+  if (includeBytes) {
+    const maximum = Number(args.values.get('--max-attachment-bytes') ?? 64 * 1024 * 1024);
+    if (!Number.isSafeInteger(maximum) || maximum <= 0) {
+      throw new CliError('INVALID_ARGUMENT', '--max-attachment-bytes must be a positive integer', EXIT.usage);
+    }
+    const attachments = plan.outputs.map((output) => {
+      const content = outputBytesByRegistrationId.get(output.registrationId)!;
+      if (content.length > maximum) {
+        throw new CliError(
+          'SOURCE_TOO_LARGE',
+          `registered output exceeds --max-attachment-bytes: ${output.outputLocator}`,
+          EXIT.contract,
+        );
+      }
+      return {
+        recordId: `output_${output.registrationId}`,
+        attachmentId: randomUUID(),
+        filename: basename(output.outputLocator),
+        mimeType: output.mediaType,
+        bytes: content,
+      };
+    });
+    for (const attachment of plan.attachments ?? []) {
+      const content = attachmentBytesByEventId.get(attachment.eventId)!;
+      if (content.length > maximum) {
+        throw new CliError(
+          'SOURCE_TOO_LARGE',
+          `session attachment exceeds --max-attachment-bytes: ${attachment.filename}`,
+          EXIT.contract,
+        );
+      }
+      attachments.push({
+        recordId: attachment.eventId,
+        attachmentId: randomUUID(),
+        filename: basename(attachment.filename),
+        mimeType: attachment.mediaType,
+        bytes: content,
+      });
+    }
+    embeddedAttachmentCount = attachments.length;
+    embeddedAttachmentBytes = attachments.reduce((sum, attachment) => sum + attachment.bytes.length, 0);
+    bytes = await embedAttachmentsInFullV1Shard(bytes, attachments);
+  }
   mkdirSync(outDirectory, { recursive: true, mode: 0o700 });
-  const finalPath = join(outDirectory, shardName);
   // Interrupted writes must never be mistaken for a completed export: write
   // to a sibling temp file, then rename (atomic on the same filesystem), and
   // only then write the receipt -- the receipt's existence is the completion
   // signal, not the shard file's.
   const tempPath = join(outDirectory, `.${shardName}.${randomUUID()}.tmp`);
   writeFileSync(tempPath, bytes, { mode: 0o600 });
-  renameSync(tempPath, finalPath);
+  if (args.flags.has('--force')) renameSync(tempPath, finalPath);
+  else {
+    try {
+      linkSync(tempPath, finalPath);
+      unlinkSync(tempPath);
+    } catch (error) {
+      if (existsSync(tempPath)) unlinkSync(tempPath);
+      throw new CliError('OUTPUT_EXISTS', `refusing to overwrite an existing shard: ${finalPath}`, EXIT.usage, error);
+    }
+  }
   const readBack = readFileSync(finalPath);
   const shardDigest = sha256(readBack);
   if (readBack.length !== bytes.length) {
@@ -1122,9 +1201,14 @@ async function exportBuild(
     shardFile: shardName,
     shardDigest,
     shardBytes: readBack.length,
+    embeddedAttachmentCount,
+    embeddedAttachmentBytes,
   };
-  writeFileSync(`${finalPath}.receipt.json`, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
-  return ok(command, { shard: finalPath, receipt: `${finalPath}.receipt.json`, ...receipt });
+  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, {
+    mode: 0o600,
+    flag: args.flags.has('--force') ? 'w' : 'wx',
+  });
+  return ok(command, { shard: finalPath, receipt: receiptPath, ...receipt });
 }
 
 async function exportVerify(
@@ -1140,8 +1224,10 @@ async function exportVerify(
     throw new CliError('SOURCE_NOT_AUTHORIZED', `shard file is not readable: ${input}`, EXIT.usage);
   }
   let recovered;
+  let embeddedAttachments;
   try {
     recovered = recoverAiwgFortemiIndexFromFullV1Shard(bytes);
+    embeddedAttachments = recoverEmbeddedAttachments(bytes);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);
@@ -1165,6 +1251,7 @@ async function exportVerify(
     shardBytes: bytes.length,
     receiptChecked: existsSync(receiptPath),
     receiptMatches,
+    embeddedAttachmentCount: embeddedAttachments.length,
   });
 }
 
@@ -1188,17 +1275,35 @@ async function exportUnpack(
     const message = error instanceof Error ? error.message : String(error);
     throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);
   }
+  const attachments = recoverEmbeddedAttachments(bytes);
   mkdirSync(outDirectory, { recursive: true, mode: 0o700 });
   const finalPath = join(outDirectory, 'index.json');
+  if (!args.flags.has('--force') && existsSync(finalPath)) {
+    throw new CliError('OUTPUT_EXISTS', `refusing to overwrite recovered output: ${finalPath}`, EXIT.usage);
+  }
+  const attachmentPaths = attachments.map((attachment) => join(
+    outDirectory, 'attachments', attachment.recordId, basename(attachment.filename),
+  ));
+  if (!args.flags.has('--force')) {
+    const conflict = attachmentPaths.find((attachmentPath) => existsSync(attachmentPath));
+    if (conflict) throw new CliError('OUTPUT_EXISTS', `refusing to overwrite recovered attachment: ${conflict}`, EXIT.usage);
+  }
   const tempPath = join(outDirectory, `.index.json.${randomUUID()}.tmp`);
   writeFileSync(tempPath, `${JSON.stringify(recovered, null, 2)}\n`, { mode: 0o600 });
   renameSync(tempPath, finalPath);
+  for (const [index, attachment] of attachments.entries()) {
+    const attachmentDirectory = join(outDirectory, 'attachments', attachment.recordId);
+    mkdirSync(attachmentDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(attachmentPaths[index], attachment.bytes, { mode: 0o600 });
+  }
   return ok(command, {
     index: finalPath,
     schemaVersion: recovered.schema_version,
     itemCount: recovered.items.length,
     sessionRecordCount: recovered.items.filter((item) => item.type === 'aiwg.session').length,
     eventRecordCount: recovered.items.filter((item) => item.type === 'aiwg.session-event').length,
+    recoveredAttachmentCount: attachments.length,
+    recoveredAttachmentBytes: attachments.reduce((sum, attachment) => sum + attachment.bytes.length, 0),
   });
 }
 
@@ -1594,7 +1699,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--inactivity-threshold',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',
-    '--out', '--plan', '--input', '--shard-name',
+    '--out', '--plan', '--input', '--shard-name', '--max-attachment-bytes',
   ]);
   let command: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {

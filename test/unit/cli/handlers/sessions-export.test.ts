@@ -1,5 +1,5 @@
 import {
-  mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -56,6 +56,10 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
   });
 
   it('runs plan -> build -> verify -> unpack and recovers the exact session/event count', async () => {
+    await sessionsHandler.execute(context([
+      'tag', sessionIds[0], 'reviewed-selection', '--workspace', 'default', '--db', db, '--json',
+    ]));
+    log.mockClear();
     const planPath = resolve(root, 'selection.json');
     const planResult = await sessionsHandler.execute(context([
       'export', 'plan', '--workspace', 'default', '--db', db, '--out', planPath, ...sessionIds, '--json',
@@ -105,6 +109,8 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     // not the placeholder -- confirms the fix actually round-trips.
     expect(recovered.source).toEqual({ repo: 'default', privacy: 'private' });
     expect(recovered.items.some((item: any) => item.type === 'aiwg.session-catalog-export-manifest')).toBe(false);
+    expect(recovered.items.find((item: any) => item.id === sessionIds[0]).tags)
+      .toContain('catalogTag:reviewed-selection');
   });
 
   it('rejects a build whose plan is stale because the plan file was tampered with', async () => {
@@ -125,6 +131,38 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     expect(jsonOutput(log)).toMatchObject({
       status: 'error', error: { code: 'SCHEMA_DRIFT' },
     });
+  });
+
+  it('refuses to overwrite an existing shard and receipt unless --force is explicit', async () => {
+    const planPath = resolve(root, 'selection-overwrite.json');
+    await sessionsHandler.execute(context([
+      'export', 'plan', '--workspace', 'default', '--db', db, '--out', planPath, ...sessionIds, '--json',
+    ]));
+    const buildDir = resolve(root, 'export-overwrite');
+    const command = ['export', 'build', '--db', db, '--plan', planPath, '--out', buildDir, '--json'];
+    expect((await sessionsHandler.execute(context(command))).exitCode).toBe(0);
+    log.mockClear();
+    const refused = await sessionsHandler.execute(context(command));
+    expect(refused.exitCode).not.toBe(0);
+    expect(jsonOutput(log)).toMatchObject({ status: 'error', error: { code: 'OUTPUT_EXISTS' } });
+    log.mockClear();
+    expect((await sessionsHandler.execute(context([...command, '--force']))).exitCode).toBe(0);
+  });
+
+  it('rejects a plan after selected session tags change', async () => {
+    const planPath = resolve(root, 'selection-tag-drift.json');
+    await sessionsHandler.execute(context([
+      'export', 'plan', '--workspace', 'default', '--db', db, '--out', planPath, sessionIds[0], '--json',
+    ]));
+    await sessionsHandler.execute(context([
+      'tag', sessionIds[0], 'changed-after-plan', '--workspace', 'default', '--db', db, '--json',
+    ]));
+    log.mockClear();
+    const result = await sessionsHandler.execute(context([
+      'export', 'build', '--db', db, '--plan', planPath, '--out', resolve(root, 'tag-drift'), '--json',
+    ]));
+    expect(result.exitCode).not.toBe(0);
+    expect(jsonOutput(log)).toMatchObject({ status: 'error', error: { code: 'SCHEMA_DRIFT' } });
   });
 
   it('rejects an export plan with no session ids', async () => {
@@ -198,6 +236,60 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     }));
   });
 
+  it('rejects changed registered-output bytes and opt-in embedding recovers exact bytes (#2569)', async () => {
+    const original = Buffer.from('exact registered analysis bytes\n\0binary-safe', 'utf8');
+    mkdirSync(resolve(root, 'output/reports'), { recursive: true });
+    const outputPath = resolve(root, 'output/reports/exact.bin');
+    writeFileSync(outputPath, original);
+    const coordinator = new OutputRegistrationCoordinator(
+      root,
+      new FilesystemOutputRegistrationStore(root),
+      new FilesystemDerivedOutputIndex(root),
+    );
+    const request = {
+      outputPath: 'output/reports/exact.bin', mediaType: 'application/octet-stream',
+      contextPack: {
+        id: 'context-pack:bytes-test', digest: `sha256:${'3'.repeat(64)}`,
+        sources: [{ kind: 'session' as const, ref: sessionIds[0], digest: null, span: null }],
+      },
+      supersedes: [], conflictsWith: [],
+    };
+    const preview = coordinator.preview(request);
+    await coordinator.register({ request, operationId: preview.operationId });
+    const planPath = resolve(root, 'selection-bytes.json');
+    await sessionsHandler.execute(context([
+      'export', 'plan', '--workspace', 'default', '--db', db, '--out', planPath, sessionIds[0], '--json',
+    ], root));
+
+    writeFileSync(outputPath, 'changed after planning');
+    log.mockClear();
+    const drift = await sessionsHandler.execute(context([
+      'export', 'build', '--db', db, '--plan', planPath, '--out', resolve(root, 'drifted-output'), '--json',
+    ], root));
+    expect(drift.exitCode).not.toBe(0);
+    expect(jsonOutput(log)).toMatchObject({ status: 'error', error: { code: 'SCHEMA_DRIFT' } });
+
+    writeFileSync(outputPath, original);
+    log.mockClear();
+    const buildDir = resolve(root, 'embedded-output');
+    const built = await sessionsHandler.execute(context([
+      'export', 'build', '--db', db, '--plan', planPath, '--out', buildDir, '--include-bytes', '--json',
+    ], root));
+    expect(built.exitCode, JSON.stringify(jsonOutput(log))).toBe(0);
+    expect(jsonOutput(log).data).toMatchObject({ embeddedAttachmentCount: 1, embeddedAttachmentBytes: original.length });
+    log.mockClear();
+    const unpackDir = resolve(root, 'embedded-output-unpacked');
+    const unpacked = await sessionsHandler.execute(context([
+      'export', 'unpack', '--input', resolve(buildDir, 'evidence.shard'), '--out', unpackDir, '--json',
+    ], root));
+    expect(unpacked.exitCode).toBe(0);
+    const attachmentRoot = resolve(unpackDir, 'attachments');
+    const recordDirectory = (await import('node:fs')).readdirSync(attachmentRoot)[0];
+    const recoveredPath = resolve(attachmentRoot, recordDirectory, 'exact.bin');
+    expect(existsSync(recoveredPath)).toBe(true);
+    expect(readFileSync(recoveredPath)).toEqual(original);
+  });
+
   it('exports a non-Claude provider (Codex) through the same plan/build pipeline, proving the mapping is provider-agnostic', async () => {
     const codexDb = resolve(root, 'codex-catalog.sqlite');
     const fixture = resolve('test/fixtures/sessions/codex/threads.app-server.jsonl');
@@ -233,5 +325,40 @@ describeWithSqlite('sessions export CLI (#2564)', () => {
     ]));
     expect(verifyResult.exitCode).toBe(0);
     expect(jsonOutput(log).data).toMatchObject({ valid: true, receiptMatches: true });
+  });
+
+  it('embeds and exactly recovers locally present session-event attachment bytes (#2569)', async () => {
+    const attachmentDb = resolve(root, 'opencode-attachment.sqlite');
+    const fixture = resolve('test/fixtures/sessions/opencode/complete.json');
+    expect((await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'opencode', '--source-id', 'opencode-attachment-fixture',
+      '--workspace', 'default', '--db', attachmentDb, '--json',
+    ]))).exitCode).toBe(0);
+    log.mockClear();
+    await sessionsHandler.execute(context(['list', '--workspace', 'default', '--db', attachmentDb, '--json']));
+    const attachmentSessionId = jsonOutput(log).data.items[0].sessionId;
+    log.mockClear();
+    const planPath = resolve(root, 'opencode-attachment-plan.json');
+    const plannedAttachment = await sessionsHandler.execute(context([
+      'export', 'plan', '--workspace', 'default', '--db', attachmentDb, '--out', planPath,
+      attachmentSessionId, '--json',
+    ], root));
+    expect(plannedAttachment.exitCode, JSON.stringify(jsonOutput(log))).toBe(0);
+    const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+    expect(plan.attachments).toHaveLength(1);
+    expect(plan.attachments[0]).toMatchObject({ filename: 'synthetic.txt', byteLength: 9 });
+    log.mockClear();
+    const buildDir = resolve(root, 'opencode-attachment-export');
+    expect((await sessionsHandler.execute(context([
+      'export', 'build', '--db', attachmentDb, '--plan', planPath, '--out', buildDir,
+      '--include-bytes', '--json',
+    ], root))).exitCode).toBe(0);
+    const unpackDir = resolve(root, 'opencode-attachment-unpacked');
+    expect((await sessionsHandler.execute(context([
+      'export', 'unpack', '--input', resolve(buildDir, 'evidence.shard'), '--out', unpackDir, '--json',
+    ], root))).exitCode).toBe(0);
+    const attachmentRoot = resolve(unpackDir, 'attachments');
+    const recordDirectory = (await import('node:fs')).readdirSync(attachmentRoot)[0];
+    expect(readFileSync(resolve(attachmentRoot, recordDirectory, 'synthetic.txt'), 'utf8')).toBe('Synthetic');
   });
 });

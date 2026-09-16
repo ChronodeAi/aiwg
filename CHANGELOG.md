@@ -7,6 +7,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- `aiwg sessions export build --include-bytes` now embeds locally available
+  session-event attachments and registered-output files as native Fortemi
+  BLAKE3 blob sidecars; `export unpack` verifies and recovers their exact bytes.
+
+### Fixed
+
+- Session export refuses to overwrite an existing shard or receipt unless
+  `--force` is explicit, binds catalog tags and full session metadata into the
+  reviewed plan, and rejects post-plan registered-output or attachment drift.
+
 ## [2026.9.15] - 2026-09-15 – "Give the slow path room to finish"
 
 ### Fixed

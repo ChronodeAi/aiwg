@@ -74,7 +74,7 @@ describeWithSqlite('session export plan (#2564)', () => {
       const { plan } = buildSessionExportPlan(repository, {
         workspaceId: 'workspace-fixture', sessionIds,
       });
-      expect(plan.totals).toEqual({ sessionCount: 2, eventCount: 3, outputCount: 0, recordCount: 6 });
+      expect(plan.totals).toEqual({ sessionCount: 2, eventCount: 3, outputCount: 0, attachmentCount: 0, recordCount: 6 });
       expect(plan.outputs).toEqual([]);
       expect(plan.sessions).toHaveLength(2);
       expect(plan.sessions[0].eventCount + plan.sessions[1].eventCount).toBe(3);

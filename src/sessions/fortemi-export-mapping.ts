@@ -57,7 +57,10 @@ export function sessionEventRecordLocator(
   return `${sessionRecordLocator(session)}/event/${event.eventId}`;
 }
 
-export function sessionToAiwgFortemiRecord(session: Session): AiwgFortemiRecord {
+export function sessionToAiwgFortemiRecord(
+  session: Session,
+  catalogTags: readonly string[] = [],
+): AiwgFortemiRecord {
   const locator = sessionRecordLocator(session);
   const updatedAt = session.updatedAt ?? session.startedAt ?? new Date(0).toISOString();
   return {
@@ -79,7 +82,11 @@ export function sessionToAiwgFortemiRecord(session: Session): AiwgFortemiRecord 
     title: session.intent.title ?? `${session.provider} session ${session.nativeSessionId}`,
     text: session.intent.summary ?? `AIWG session ${session.sessionId} (${session.provider}, ${session.lifecycle})`,
     facets: {},
-    tags: [tag('provider', session.provider), tag('lifecycle', session.lifecycle)],
+    tags: [
+      tag('provider', session.provider),
+      tag('lifecycle', session.lifecycle),
+      ...catalogTags.map((value) => tag('catalogTag', value)),
+    ],
     concepts: [],
     relationships: [],
     provenance: [{
@@ -198,6 +205,7 @@ export interface SessionOutputRecordInput {
   outputDigest: string;
   mediaType: string;
   matchReason: string;
+  bytesEmbedded?: boolean;
 }
 
 /**
@@ -231,7 +239,7 @@ export function sessionOutputToAiwgFortemiRecord(
     },
     title: `registered output for ${session.sessionId}`,
     text: `${output.mediaType} output registered at ${output.outputLocator} (${output.matchReason}); `
-      + 'bytes not embedded -- reference and digest only.',
+      + (output.bytesEmbedded ? 'original bytes embedded as a native attachment.' : 'bytes not embedded -- reference and digest only.'),
     facets: {},
     tags: [tag('mediaType', output.mediaType), tag('lineage', 'registered')],
     concepts: [],
@@ -263,7 +271,7 @@ export function sessionOutputToAiwgFortemiRecord(
         registrationId: output.registrationId,
         outputLocator: output.outputLocator,
         matchReason: output.matchReason,
-        bytesEmbedded: false,
+        bytesEmbedded: output.bytesEmbedded === true,
       },
     }],
     privacy: { classification: 'private', pii: false },
@@ -336,11 +344,12 @@ export function buildSessionAiwgFortemiIndexExport(
   sessions: Session[],
   eventsBySessionId: ReadonlyMap<string, SessionEvent[]>,
   outputs: readonly SessionOutputRecordInput[] = [],
+  catalogTagsBySessionId: ReadonlyMap<string, readonly string[]> = new Map(),
 ): AiwgFortemiIndexExport {
   const generatedAt = new Date().toISOString();
   const items: AiwgFortemiRecord[] = [exportManifestRecord(repoRef, generatedAt)];
   for (const session of sessions) {
-    items.push(sessionToAiwgFortemiRecord(session));
+    items.push(sessionToAiwgFortemiRecord(session, catalogTagsBySessionId.get(session.sessionId) ?? []));
     for (const event of eventsBySessionId.get(session.sessionId) ?? []) {
       items.push(sessionEventToAiwgFortemiRecord(session, event));
     }

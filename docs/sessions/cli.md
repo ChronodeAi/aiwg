@@ -417,6 +417,11 @@ aiwg sessions export plan --workspace default \
 #    write can never be mistaken for a completed export.
 aiwg sessions export build --plan selection.json --out ./export
 
+# Opt in when locally available attachment and registered-output bytes must be
+# portable too. Each attachment is bounded to 64 MiB by default.
+aiwg sessions export build --plan selection.json --out ./export-with-bytes \
+  --include-bytes --max-attachment-bytes 67108864
+
 # 5. Verify -- cross-checks the shard against its receipt.json when present.
 aiwg sessions export verify --input ./export/evidence.shard
 
@@ -434,10 +439,21 @@ event text, identifiers (native session/event id, source id, provider,
 model, tool-call id), and timestamps are preserved and verified lossless by a
 build/recover round-trip test against the real `@fortemi/core` library.
 
-What is not yet included: original bytes for session-event attachments or
-registered-output files. Both are recorded as reference metadata (locator,
-digest, media type) with an explicit note, not silently dropped -- embedding
-original bytes needs a blob-store integration that has not landed.
+Byte embedding is explicit rather than automatic. Without `--include-bytes`,
+session-event attachments and registered outputs remain reference records with
+their locator, digest, and media type. With `--include-bytes`, locally present
+OpenCode data-URL attachments and registered-output files are packed into the
+native `blobs/<blake3>` sidecar and linked from the owning Fortemi note.
+Remote URLs are never fetched. Build re-hashes every selected output and local
+attachment against the reviewed plan, rejects drift, rejects symlinks and
+paths outside the project, and enforces `--max-attachment-bytes` (64 MiB by
+default). `export unpack` verifies each sidecar's size and BLAKE3 digest and
+recovers it beneath `attachments/<record-id>/`.
+
+Export destinations are non-overwriting by default. Repeating a build against
+an existing shard or receipt fails with `OUTPUT_EXISTS`; `--force` is required
+to replace them. The same rule applies to recovered `index.json` and attachment
+files during unpack.
 
 ### Archive profile: full-v1/2.0.0
 
@@ -501,7 +517,8 @@ as supported; everything else is unverified, not assumed to work.
 | Codex -> `export plan/build/verify` | Verified | `test/unit/cli/handlers/sessions-export.test.ts`, using the `codex/threads.app-server.jsonl` fixture |
 | Remaining provider sources (Copilot, Cursor, Hermes, OpenCode, etc.) -> `export plan/build` | Unverified but expected to work | The mapping in `src/sessions/fortemi-export-mapping.ts` reads only the normalized `Session`/`SessionEvent` catalog, not provider-specific fields -- Claude and Codex both pass through it unmodified, but no dedicated test exercises the remaining providers through the export pipeline yet |
 | A real external Fortemi consumer application importing the built shard | Unverified | No test exercises this; AIWG's own artifact-index shard export has a Docker/Postgres-based producer-consumer conformance job (`.gitea/workflows/fortemi-shard-conformance.yml`) that could be extended to cover session shards, but that has not been done |
-| Original session-event or registered-output byte attachments recovered from the shard | Not supported | Explicitly reference-only; see above |
+| Locally present OpenCode data-URL and registered-output bytes embedded and recovered exactly | Verified with `--include-bytes` | `test/unit/cli/handlers/sessions-export.test.ts`; native BLAKE3 blob sidecars validated by `@fortemi/core` |
+| Remote or provider-reference-only attachment bytes | Not available | Never fetched; providers such as Claude web exports expose metadata/extracted text rather than original bytes |
 | Edited or branched Claude web-export conversations | Unverified | No fixture represents this; see `docs/providers/claude-code-sessions.md` known limitations |
 | `export unpack` re-importing recovered records back into a session catalog | Not implemented | `unpack` writes the recovered record graph to `index.json`; it does not reconstruct catalog rows |
 
