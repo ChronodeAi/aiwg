@@ -1601,7 +1601,7 @@ See [cross-platform overview](docs/integrations/cross-platform-overview.md) for 
 | GitHub Copilot | `aiwg use all --provider copilot` | `.github` assets | Prompts, instructions, agents, MCP config | Uses `.github/prompts/*.prompt.md`, `.github/instructions/*.instructions.md`, and `.github/agents/*.agent.md`. |
 | Devin | `aiwg use all --provider devin` | Devin-compatible context | Compatibility packaging | Uses compatibility paths where Devin can read project instructions. |
 | Factory | `aiwg use all --provider factory` | Factory context | Agents and commands where supported | Provider behavior depends on the installed Factory environment. |
-| Grok Bot | `aiwg use all --provider grokbot` | `AGENTS.md` | Discover-first skills when `AIWG_GROKBOT_SKILLS_DIR` is set | Experimental; not Cursor / not xAI Grok Build. See [Grok Bot reference](docs/agents/providers/grokbot.md). |
+| Grok Bot | `aiwg use all --provider grokbot` | `AGENTS.md` | Discover-first skills when `AIWG_GROKBOT_SKILLS_DIR` is set | Stable; not Cursor / not xAI Grok Build. See [Grok Bot reference](docs/agents/providers/grokbot.md). |
 | Oh My Pi | `aiwg use all --provider omp` | `.omp/AGENTS.md` | Agents, prompts, rules, skills | Dedicated OMP quickstart: [Oh My Pi quickstart](docs/providers/omp.md). |
 | Pi Coding Agent | `aiwg use all --provider pi` | `AGENTS.md` | Agent Skills, prompt templates, trust-gated extension bridge | Experimental; see [Pi quickstart](docs/integrations/pi-quickstart.md). |
 | Antigravity | `aiwg use all --provider antigravity` | `AGENTS.md` and `.agents/` | Agents, skills, indexed commands, MCP config when enabled | See [Antigravity provider docs](docs/providers/antigravity.md). |

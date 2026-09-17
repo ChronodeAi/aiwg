@@ -68,6 +68,8 @@
     "integrations/warp-terminal-quickstart",
     "integrations/windsurf-quickstart",
     "integrations/grokbot-quickstart",
+    "integrations/grokbot-cloud-session-global-install",
+    "integrations/grokbot-native-surfaces-evidence",
     "integrations/grokbot-linux-puw",
     "migration/grokbot-from-cursor-workaround",
     "integrations/hermes-quickstart",
@@ -767,8 +769,22 @@
     {
       "id": "integrations/grokbot-quickstart",
       "title": "Grok Bot",
-      "summary": "Connect AIWG to Grok Bot (experimental, fail-closed skill root)",
+      "summary": "Connect AIWG to Grok Bot (stable, fail-closed skill root)",
       "file": "integrations/grokbot-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-cloud-session-global-install",
+      "title": "Grok Bot Cloud Session Global Install",
+      "summary": "Install AIWG on the Grok Bot shared cloud computer without inventing native paths",
+      "file": "integrations/grokbot-cloud-session-global-install.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-native-surfaces-evidence",
+      "title": "Grok Bot Native Surfaces Evidence",
+      "summary": "Evidence and automation gates for optional Grok Bot native integrations",
+      "file": "integrations/grokbot-native-surfaces-evidence.md",
       "parent": "integrations"
     },
     {
