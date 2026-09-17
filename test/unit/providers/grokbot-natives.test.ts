@@ -114,6 +114,19 @@ describe('grokbot natives — enable without contract still fail-closed', () => 
     expect(rejected.wrote).toBe(false);
   });
 
+  it('#245 rejects multiline summaries before whitespace normalize (blocked, not proposed)', () => {
+    const env = { [GROKBOT_NATIVE_MEMORY_REF_ENV]: 'true' };
+    const multiline = memoryReferenceHelper(
+      {
+        summaries: ['Line one of a body dump\nLine two that must not collapse into a proposal'],
+      },
+      { env },
+    );
+    expect(multiline.status).toBe('blocked');
+    expect(multiline.proposals).toBeUndefined();
+    expect(multiline.wrote).toBe(false);
+  });
+
   it('#241 routines stub refuses to write even with dry-run proposal', () => {
     const result = generateRoutinesImportStub(
       {

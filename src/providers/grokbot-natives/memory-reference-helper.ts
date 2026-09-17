@@ -54,11 +54,11 @@ function looksSecretish(value: string): boolean {
 }
 
 function sanitizeRef(raw: string, kind: MemoryReferenceProposal['kind']): MemoryReferenceProposal | null {
+  // Reject multi-line / full-body dumps before whitespace normalization collapses CR/LF.
+  if (raw.includes('\n') || raw.includes('\r')) return null;
   const text = raw.trim().replace(/\s+/g, ' ');
   if (!text || text.length > MAX_REF_LEN) return null;
   if (looksSecretish(text)) return null;
-  // Reject multi-paragraph / full-body dumps.
-  if (text.includes('\n') || text.includes('\r')) return null;
   return { text, kind };
 }
 
