@@ -15,6 +15,7 @@ import {
   readAiwgConfig,
   writeAiwgConfig,
   updateInstalled,
+  ensureProviderListed,
   hashManifest,
   resolveRemotes,
   resolveRemoteProvider,
@@ -375,6 +376,32 @@ describe('aiwg-config', () => {
 
       // Should keep original since new opts didn't provide one
       expect(updated.installed['sdlc'].manifestHash).toBe('sha256:original');
+    });
+
+
+    it('appends a missing provider to providers[] (#247)', () => {
+      const cfg = emptyConfig(['cursor']);
+      const updated = updateInstalled(cfg, 'sdlc', 'grokbot', { agents: 1, commands: 0, skills: 2, rules: 0 }, {
+        version: '2026.9.16',
+        source: 'bundled',
+      });
+      expect(updated.providers).toEqual(['cursor', 'grokbot']);
+    });
+
+    it('promotes explicit provider to primary without wiping others (#247)', () => {
+      const cfg = emptyConfig(['cursor', 'claude']);
+      const updated = updateInstalled(cfg, 'sdlc', 'grokbot', { agents: 1, commands: 0, skills: 2, rules: 0 }, {
+        version: '2026.9.16',
+        source: 'bundled',
+        asPrimary: true,
+      });
+      expect(updated.providers).toEqual(['grokbot', 'cursor', 'claude']);
+    });
+
+    it('ensureProviderListed is idempotent when already primary', () => {
+      const cfg = emptyConfig(['grokbot', 'cursor']);
+      ensureProviderListed(cfg, 'grokbot', { asPrimary: true });
+      expect(cfg.providers).toEqual(['grokbot', 'cursor']);
     });
 
     // Project-local (#1035)
@@ -865,6 +892,11 @@ describe('aiwg-config', () => {
 
     it('getProviderParallelismDefaults returns fallback for unknown', () => {
       const r = getProviderParallelismDefaults('totally-unknown');
+      expect(r.max_parallel_subagents).toBe(4);
+    });
+
+    it('getProviderParallelismDefaults returns grokbot=4 (#249)', () => {
+      const r = getProviderParallelismDefaults('grokbot');
       expect(r.max_parallel_subagents).toBe(4);
     });
   });
