@@ -86,6 +86,6 @@ On the Grok Bot shared computer, install AIWG globally like other harnesses:
 3. In each repo/policy workspace: `aiwg use all --provider grokbot`
 4. Start a new agent chat (or re-read skills) — AIWG does not claim live refresh.
 
-Operator runbook: [grokbot-cloud-session-global-install.md](../integrations/grokbot-cloud-session-global-install.md).
+Operator runbook: [grokbot-cloud-session-global-install.md](../../integrations/grokbot-cloud-session-global-install.md).
 
 Optional natives (routines / CreateAgent / connectors) remain [#209](https://github.com/jmagly/aiwg/issues/209) and are **not** required for loading.
