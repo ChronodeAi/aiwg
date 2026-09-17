@@ -290,3 +290,11 @@ are true:
    **prompt/handoff pack** generator that only emits operator instructions
    under `AIWG_GROKBOT_SKILLS_DIR` / dry-run?
 2. Which child surface should go first once a contract exists?
+
+## Related: baseline loading (not #209 writers)
+
+Default path for AIWG on a Grok Bot cloud computer is **global install**, not a Steward Bot:
+
+See [grokbot-cloud-session-global-install.md](./grokbot-cloud-session-global-install.md).
+
+`AIWG_GROKBOT_SKILLS_DIR` + `aiwg use all --provider grokbot` (+ project `use` in repos). Steward Bot only when mutating Grok-native routines/teammates/connectors.

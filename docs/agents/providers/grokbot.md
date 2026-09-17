@@ -76,3 +76,16 @@ document UX (2026-09) but not an import/API/reload contract. Catalog:
 Does **not** block stable promotion.
 
 - macOS / Windows PUW: **waived** by maintainer for #210 (Linux-only validation sufficient)
+
+## Cloud session global install
+
+On the Grok Bot shared computer, install AIWG globally like other harnesses:
+
+1. Set absolute `AIWG_GROKBOT_SKILLS_DIR` (required for user-scope skill deploy).
+2. `aiwg use all --provider grokbot --scope user`
+3. In each repo/policy workspace: `aiwg use all --provider grokbot`
+4. Start a new agent chat (or re-read skills) — AIWG does not claim live refresh.
+
+Operator runbook: [grokbot-cloud-session-global-install.md](../integrations/grokbot-cloud-session-global-install.md).
+
+Optional natives (routines / CreateAgent / connectors) remain [#209](https://github.com/jmagly/aiwg/issues/209) and are **not** required for loading.
