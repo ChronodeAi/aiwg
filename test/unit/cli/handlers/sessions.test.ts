@@ -45,7 +45,7 @@ describe('sessions CLI contracts', () => {
       command: 'sessions.sources',
       status: 'ok',
       error: null,
-      data: { count: 15 },
+      data: { count: 16 },
     });
     expect(output.data.providers.map((item: any) => item.provider))
       .toEqual([...output.data.providers.map((item: any) => item.provider)].sort());
@@ -104,6 +104,13 @@ describe('sessions CLI contracts', () => {
         disposition: 'implemented',
         supportedOperations: ['inspect', 'stream'],
         acquisitionModes: ['jsonl'],
+      });
+    expect(output.data.providers.find((item: any) => item.provider === 'grokbot'))
+      .toMatchObject({
+        disposition: 'manual-only',
+        supportedOperations: ['inspect', 'stream'],
+        acquisitionModes: ['manual-export'],
+        reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
       });
     expect(output.data.providers.find((item: any) => item.provider === 'pi'))
       .toMatchObject({ disposition: 'implemented', supportedOperations: ['discover', 'inspect', 'stream'], acquisitionModes: ['jsonl'] });
@@ -398,6 +405,32 @@ describe('sessions CLI contracts', () => {
           sourceSchemaVersion: '1.0.0',
           disposition: 'manual-only',
           consistency: 'complete',
+        },
+        wouldInspect: true,
+        wouldPersist: false,
+      },
+    });
+  });
+
+  it('previews a Grok Bot manual-export interchange import without UNSUPPORTED_OPERATION', async () => {
+    const fixture = resolve('test/fixtures/sessions/grokbot/valid-v1.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'grokbot', '--source-id', 'grokbot-fixture-v1',
+      '--workspace', 'workspace-fixture', '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'preview',
+      data: {
+        source: {
+          provider: 'grokbot',
+          providerProfile: 'manual-interchange',
+          locatorClass: 'manual-export',
+          adapterVersion: '1.0.0',
+          sourceSchemaVersion: '1.0.0',
+          disposition: 'manual-only',
+          consistency: 'complete',
+          extensions: { 'native.grokbot': {} },
         },
         wouldInspect: true,
         wouldPersist: false,
