@@ -11,7 +11,7 @@ describe('desktop issuer HTTPS transport', () => {
   let dir; let server; let issuer; let config; let hits; let behavior;
   beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'desktop-issuer-tls-'));
-    const openssl = (...args) => execFileSync('openssl', args, { cwd: dir, stdio: 'ignore' });
+    const openssl = (...args) => execFileSync('openssl', args, { cwd: dir, stdio: 'ignore', timeout: 10_000 });
     openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=issuer-fixture',
       '-addext', 'subjectAltName=IP:127.0.0.1', '-keyout', 'server.key', '-out', 'server.pem');
     openssl('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=bridge-fixture',

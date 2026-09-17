@@ -4,7 +4,7 @@
 **Date:** 2026-09-16  
 **Parent:** [#209](https://github.com/jmagly/aiwg/issues/209)  
 **ADR:** [`docs/architecture/adr-grokbot-provider-target.md`](../architecture/adr-grokbot-provider-target.md)  
-**Provider reference:** [`docs/agents/providers/grokbot.md`](../agents/providers/grokbot.md)
+**Provider guide:** [`docs/integrations/grokbot-quickstart.md`](./grokbot-quickstart.md)
 
 ## Purpose
 
