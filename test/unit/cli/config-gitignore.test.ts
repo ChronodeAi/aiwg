@@ -11,6 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = resolve(__dirname, '../../../tools/cli/config-gitignore.mjs');
 const RUNTIME_PATTERNS = [
   '.aiwg/working/',
+  '.aiwg/backups/',
   '.aiwg/.index/',
   '.aiwg/ralph/',
   '.aiwg/ralph-external/',
@@ -86,4 +87,14 @@ describe('config-gitignore resolved Git coverage', () => {
 
     expect(stdout).toContain('AIWG runtime paths are gitignored');
   });
+
+  it('adds .aiwg/backups/ on --fix when missing (#248)', async () => {
+    await writeFile(join(tempDir, '.gitignore'), '.aiwg/working/\n', 'utf-8');
+
+    await execFileAsync(process.execPath, [SCRIPT, '--fix'], { cwd: tempDir });
+
+    const content = await readFile(join(tempDir, '.gitignore'), 'utf-8');
+    expect(content).toContain('.aiwg/backups/');
+  });
+
 });
