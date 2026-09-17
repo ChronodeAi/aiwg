@@ -15,6 +15,18 @@ issue decomposition only. It does **not** invent filesystem writers, silent
 installs, or capability-matrix claims that AIWG installs routines / MCP /
 CreateAgent profiles / memory / machines.
 
+## Child issues (one surface each)
+
+| # | Surface |
+|---|---|
+| [#241](https://github.com/jmagly/aiwg/issues/241) | Routines/cron import generator |
+| [#242](https://github.com/jmagly/aiwg/issues/242) | CreateAgent/teammate template projection |
+| [#243](https://github.com/jmagly/aiwg/issues/243) | Connector/MCP install profile |
+| [#244](https://github.com/jmagly/aiwg/issues/244) | Registered-machine health probe (read-only) |
+| [#245](https://github.com/jmagly/aiwg/issues/245) | Memory reference helper (no secret scrape) |
+
+Evidence PR: [#240](https://github.com/jmagly/aiwg/pull/240).
+
 ## Product evidence sources (2026-09)
 
 | Doc | URL | Relevance |
@@ -52,7 +64,7 @@ Until a surface is unblocked by explicit product import/API evidence:
 
 | Field | Value |
 |---|---|
-| Child tracking | Routines/cron import generator (child of #209) |
+| Child tracking | [#241](https://github.com/jmagly/aiwg/issues/241) routines/cron import generator |
 | Product doc | https://docs.x.ai/grok-bot/skills-routines-and-automations |
 | Related | FAQ skill-vs-routine; Settings timezone; chat `@` routines |
 
@@ -95,7 +107,7 @@ Feature flag / env kill-switch; removing the adapter must leave baseline
 
 | Field | Value |
 |---|---|
-| Child tracking | CreateAgent/teammate template projection (child of #209) |
+| Child tracking | [#242](https://github.com/jmagly/aiwg/issues/242) CreateAgent/teammate template projection |
 | Product doc | https://docs.x.ai/grok-bot/bots |
 | Related | Overview; chat-and-collaboration group chats / handoffs |
 
@@ -138,7 +150,7 @@ install in status/matrix.
 
 | Field | Value |
 |---|---|
-| Child tracking | Connector/MCP install profile (child of #209) |
+| Child tracking | [#243](https://github.com/jmagly/aiwg/issues/243) connector/MCP install profile |
 | Product doc | https://docs.x.ai/grok-bot/computer-and-apps |
 | Related | Skills/Plugins (`Settings → Plugins`); overview connectors mention |
 
@@ -176,7 +188,7 @@ connectors for `grokbot`.
 
 | Field | Value |
 |---|---|
-| Child tracking | Registered-machine health probe (read-only) (child of #209) |
+| Child tracking | [#244](https://github.com/jmagly/aiwg/issues/244) registered-machine health probe (read-only) |
 | Product doc | https://docs.x.ai/grok-bot/computer-and-apps |
 | Related | Approvals (Execution on Local Computer); FAQ; Settings |
 
@@ -218,7 +230,7 @@ Probe must be skippable; failures must not fail baseline `aiwg use`.
 
 | Field | Value |
 |---|---|
-| Child tracking | Memory reference helper (no secret scrape) (child of #209) |
+| Child tracking | [#245](https://github.com/jmagly/aiwg/issues/245) memory reference helper (no secret scrape) |
 | Product doc | https://docs.x.ai/grok-bot/bots (What a Bot remembers); FAQ; overview |
 | Related | ADR discover-first: store references/summaries — never full bodies |
 
