@@ -367,7 +367,7 @@ providers:
     # AIWG_GROKBOT_SKILLS_DIR (fail-closed; no invented ~/.grokbot).
     # ADR: docs/architecture/adr-grokbot-provider-target.md · epic #196.
     # Optional natives (routines/CreateAgent/connectors) deferred #209.
-    # Stable promotion deferred #210 pending PUW evidence.
+    # Stable promotion deferred #210 — Linux PUW+security landed; macOS/WSL pending before status flip.
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:

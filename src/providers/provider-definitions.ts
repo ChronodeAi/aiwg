@@ -3,6 +3,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import type { Platform } from '../agents/types.js';
 import { resolveHermesHomePath } from './hermes-home.js';
+import { resolveGrokbotSkillsDir } from './grokbot-paths.js';
 import {
   getProviderCapabilities,
   type DeployTarget,
@@ -735,6 +736,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     id: 'grokbot',
     displayName: 'Grok Bot',
     aliases: [],
+    // Keep experimental until #210 multi-platform PUW completes (Linux evidence exists).
     status: 'experimental',
     builtIn: true,
     surfaces: {
@@ -1375,10 +1377,18 @@ export function expandProviderHomePath(providerPath: string | null): string {
 export function getProviderArtifactPathStrings(provider: string | null | undefined): ProviderArtifactPathStrings | undefined {
   const definition = getProviderDefinition(provider);
   if (!definition) return undefined;
+  const normalized = normalizeProviderDefinitionId(provider);
+  // Grok Bot skills are env-gated (AIWG_GROKBOT_SKILLS_DIR). Resolve dynamically so
+  // deploy counting / user-scope same-path inventory can see the configured root
+  // without inventing ~/.grokbot (#210).
+  let skills = expandProviderHomePath(definition.paths.artifacts.skills);
+  if (normalized === 'grokbot' && !skills) {
+    skills = resolveGrokbotSkillsDir() ?? '';
+  }
   return {
     agents: expandProviderHomePath(definition.paths.artifacts.agents),
     commands: expandProviderHomePath(definition.paths.artifacts.commands),
-    skills: expandProviderHomePath(definition.paths.artifacts.skills),
+    skills,
     rules: expandProviderHomePath(definition.paths.artifacts.rules),
     behaviors: expandProviderHomePath(definition.paths.artifacts.behaviors),
   };

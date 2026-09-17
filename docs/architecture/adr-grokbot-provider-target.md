@@ -79,10 +79,18 @@ Until product reload behavior is verified, verification must **not** default
 to a silent `live-refresh` claim. Prefer: start a new agent chat or re-read
 skills. Never emit Cursor reload wording for `grokbot`.
 
-### Stable promotion (#210 deferred)
+### Stable promotion (#210)
 
 Remain `experimental` until Linux PUW (plus macOS/Windows as applicable),
 security review, and docs/matrix flip land under #210.
+
+**2026-09-16 update:** Linux PUW + path security review + migration/draft release
+notes landed on branch `chore/210-promote-grokbot-stable` (see
+`docs/security/grokbot-path-security-review.md`,
+`docs/migration/grokbot-from-cursor-workaround.md`). macOS / Windows-WSL PUW
+were not available this cycle — **do not flip matrix/definition status to
+`stable` until those platforms are evidenced as applicable (or explicitly
+waived by maintainers).**
 
 ## Consequences
 

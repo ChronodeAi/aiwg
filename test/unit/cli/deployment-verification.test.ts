@@ -706,3 +706,100 @@ describe('grokbot deployment verification (#208)', () => {
   });
 });
 
+describe('grokbot deployment verification (#210)', () => {
+  beforeEach(async () => {
+    delete process.env.AIWG_GROKBOT_SKILLS_DIR;
+    previousXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = await tempRoot('aiwg-grokbot-verify-xdg-');
+    previousUserRegistryPath = process.env.AIWG_USER_REGISTRY_PATH;
+    process.env.AIWG_USER_REGISTRY_PATH = path.join(
+      await tempRoot('aiwg-grokbot-verify-user-registry-'),
+      'installed.json',
+    );
+  });
+
+  afterEach(async () => {
+    delete process.env.AIWG_GROKBOT_SKILLS_DIR;
+    if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previousXdgDataHome;
+    if (previousUserRegistryPath === undefined) delete process.env.AIWG_USER_REGISTRY_PATH;
+    else process.env.AIWG_USER_REGISTRY_PATH = previousUserRegistryPath;
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it('accepts bridge-only project deploy without inventing skill roots', async () => {
+    const projectRoot = await tempRoot('aiwg-grokbot-bridge-');
+    const frameworkRoot = await tempRoot('aiwg-grokbot-fw-');
+    await writeFrameworkIndex(frameworkRoot);
+    await generateContextFiles({
+      provider: 'grokbot',
+      projectPath: projectRoot,
+      sections: [],
+      detectExistingFiles: true,
+      force: true,
+    });
+    await writeFile(path.join(projectRoot, 'AGENTS.md'), '# Grok Bot bridge\n');
+    const config = updateInstalled(
+      emptyConfig(['grokbot']),
+      'all',
+      'grokbot',
+      { agents: 0, commands: 0, skills: 0, rules: 0 },
+      { version: 'test', source: 'bundled' },
+    );
+    await writeAiwgConfig(projectRoot, config);
+
+    const result = await verifyProviderDeployment({
+      projectRoot,
+      frameworkRoot,
+      provider: 'grokbot',
+      scope: 'project',
+      requestedBundles: ['all'],
+    });
+
+    expect(result.findings.some((item) => item.id === 'provider-artifacts-missing')).toBe(false);
+    expect(result.findings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'provider-bridge-only', severity: 'info' }),
+    ]));
+    expect(result.findings.filter((item) => item.severity === 'blocking')).toHaveLength(0);
+  });
+
+  it('counts configured AIWG_GROKBOT_SKILLS_DIR skills for project verification', async () => {
+    const projectRoot = await tempRoot('aiwg-grokbot-skills-project-');
+    const frameworkRoot = await tempRoot('aiwg-grokbot-skills-fw-');
+    const skillsRoot = await tempRoot('aiwg-grokbot-skills-root-');
+    process.env.AIWG_GROKBOT_SKILLS_DIR = skillsRoot;
+    await writeFrameworkIndex(frameworkRoot);
+    await generateContextFiles({
+      provider: 'grokbot',
+      projectPath: projectRoot,
+      sections: [],
+      detectExistingFiles: true,
+      force: true,
+    });
+    await writeFile(path.join(projectRoot, 'AGENTS.md'), '# Grok Bot bridge\n');
+    await mkdir(path.join(skillsRoot, 'aiwg-doctor'), { recursive: true });
+    await writeFile(path.join(skillsRoot, 'aiwg-doctor', 'SKILL.md'), '# doctor\n');
+    await writeFile(path.join(skillsRoot, 'aiwg-doctor', '.aiwg-managed'), 'aiwg\n');
+    const config = updateInstalled(
+      emptyConfig(['grokbot']),
+      'all',
+      'grokbot',
+      { agents: 0, commands: 0, skills: 1, rules: 0 },
+      { version: 'test', source: 'bundled' },
+    );
+    await writeAiwgConfig(projectRoot, config);
+
+    const result = await verifyProviderDeployment({
+      projectRoot,
+      frameworkRoot,
+      provider: 'grokbot',
+      scope: 'project',
+      requestedBundles: ['all'],
+    });
+
+    expect(result.counts.skills).toBeGreaterThanOrEqual(1);
+    expect(result.findings.some((item) => item.id === 'provider-artifacts-missing')).toBe(false);
+    expect(result.findings.filter((item) => item.severity === 'blocking')).toHaveLength(0);
+  });
+});
+

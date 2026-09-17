@@ -68,6 +68,8 @@
     "integrations/warp-terminal-quickstart",
     "integrations/windsurf-quickstart",
     "integrations/grokbot-quickstart",
+    "integrations/grokbot-linux-puw",
+    "migration/grokbot-from-cursor-workaround",
     "integrations/hermes-quickstart",
     "integrations/openhuman-quickstart",
     "integrations/openclaw-quickstart",
@@ -107,6 +109,7 @@
     "skills-budget-guide",
     "security/threat-assessment-policy",
     "security/context-memory-firewall",
+    "security/grokbot-path-security-review",
     "security/repo-access-manifest",
     "fortemi-core-prebuilt-indices",
     "user-level-indices",
@@ -528,7 +531,8 @@
     "addons/network-analysis/offline-analysis",
     "addons/network-analysis/operator-guide",
     "addons/network-analysis/release-checklist",
-    "addons/network-analysis/termshark-handoff"
+    "addons/network-analysis/termshark-handoff",
+    "releases/draft-grokbot-stable-promotion-notes"
   ],
   "sections": [
     {
@@ -4028,6 +4032,34 @@
       "summary": "Design background from external research, separate from AIWG performance claims",
       "file": "overview/reading-list.md",
       "parent": "getting-started"
+    },
+    {
+      "id": "security/grokbot-path-security-review",
+      "title": "Grok Bot Path Security Review",
+      "summary": "Fail-closed skill-root policy, containment, and #210 verification fixes",
+      "file": "security/grokbot-path-security-review.md",
+      "parent": "reference"
+    },
+    {
+      "id": "migration/grokbot-from-cursor-workaround",
+      "title": "Migrate Grok Bot from Cursor Workaround",
+      "summary": "Move Grok fleets to --provider grokbot; keep Cursor IDE on cursor",
+      "file": "migration/grokbot-from-cursor-workaround.md",
+      "parent": "reference"
+    },
+    {
+      "id": "releases/draft-grokbot-stable-promotion-notes",
+      "title": "Draft Grok Bot Stable Promotion Notes",
+      "summary": "Draft release blurb; publish only after stable status flip",
+      "file": "releases/draft-grokbot-stable-promotion-notes.md",
+      "parent": "reference"
+    },
+    {
+      "id": "integrations/grokbot-linux-puw",
+      "title": "Grok Bot Linux PUW (#210)",
+      "summary": "Repeatable Linux proof-of-use-workflow evidence for grokbot promotion",
+      "file": "integrations/grokbot-linux-puw.md",
+      "parent": "reference"
     }
   ],
   "pages": [
