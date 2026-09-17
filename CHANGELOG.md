@@ -7,9 +7,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.16] - 2026-09-17 – "Grok Bot goes stable"
+
 ### Added
 
-- `aiwg sessions export build --include-bytes` now embeds locally available
+- Native **grokbot** provider (stable): Agent Skills deploy with a fail-closed
+  skills root, wizard/schema allowlists, model policy, manual-export session
+  import, quickstart docs, and a cloud-session global-install path so Grok Bot
+  loads AIWG like other harnesses (#196, #210, #211, #209 evidence track).
+- `aiwg sessions export build --include-bytes` embeds locally available
   session-event attachments and registered-output files as native Fortemi
   BLAKE3 blob sidecars; `export unpack` verifies and recovers their exact bytes.
 
@@ -18,6 +24,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Session export refuses to overwrite an existing shard or receipt unless
   `--force` is explicit, binds catalog tags and full session metadata into the
   reviewed plan, and rejects post-plan registered-output or attachment drift.
+- Hermes JSONL session exports are accepted by the current importer shape.
+- Grok Bot clean-install steward gaps: registry-path warning, `providers[]`
+  update on `aiwg use --provider`, doctor parallelism sync, and
+  `.aiwg/backups/` gitignore (#246–#249).
+- Cockpit verifies browser-bound desktop delegation over mTLS (issuer binding).
+
+### Documentation
+
+- Grok Bot provider docs, evidence catalog for optional natives (#209), and
+  cloud-session global AIWG install runbook notes.
 
 ## [2026.9.15] - 2026-09-15 – "Give the slow path room to finish"
 
