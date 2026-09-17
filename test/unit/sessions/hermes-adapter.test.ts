@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   HERMES_ADAPTER_VERSION,
   HERMES_EXPORT_SCHEMA_VERSION,
+  HERMES_NATIVE_SCHEMA_VERSION,
   HermesSessionAdapter,
   IncrementalSessionImporter,
   SESSION_CONTRACT_VERSION,
@@ -101,6 +102,35 @@ describe('Hermes session adapter', () => {
       kind: 'tool-result',
       text: 'opaque tool output',
       extensions: { opaqueContent: true },
+    });
+  });
+
+  it('accepts current native exports with an implicit schema, numeric flags, and nullable message fields', async () => {
+    await expect(adapter.inspect(selected('current-native.jsonl'))).resolves.toEqual({
+      sourceSchemaVersion: HERMES_EXPORT_SCHEMA_VERSION,
+      consistency: 'complete',
+      operationalState: 'available',
+    });
+    const records = await collect(adapter.stream(selected('current-native.jsonl')));
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      nativeSessionId: 'hermes-current-native',
+      extensions: {
+        lifecycle: 'complete',
+        provenance: { schema: HERMES_NATIVE_SCHEMA_VERSION },
+      },
+    });
+    expect(records[1]).toMatchObject({
+      nativeEventId: 'message:1',
+      kind: 'message',
+      text: 'Synthetic native export',
+      extensions: {
+        toolCallId: undefined,
+        toolName: undefined,
+        tokenCount: undefined,
+        finishReason: undefined,
+        reasoning: { text: undefined, content: undefined },
+      },
     });
   });
 

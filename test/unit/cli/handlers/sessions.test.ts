@@ -316,6 +316,29 @@ describe('sessions CLI contracts', () => {
     });
   });
 
+  it('previews the current Hermes CLI JSONL representation without transformation', async () => {
+    const fixture = resolve('test/fixtures/sessions/hermes/current-native.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'hermes', '--source-id', 'hermes-current-native',
+      '--workspace', 'workspace-fixture', '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'preview',
+      data: {
+        source: {
+          provider: 'hermes',
+          providerProfile: 'native-schema-23-export',
+          locatorClass: 'hermes-export-jsonl',
+          sourceSchemaVersion: '1.0.0',
+          consistency: 'complete',
+        },
+        wouldInspect: true,
+        wouldPersist: false,
+      },
+    });
+  });
+
   it('previews a sanitized OpenCode JSON export without persisting it', async () => {
     const fixture = resolve('test/fixtures/sessions/opencode/complete.json');
     const result = await sessionsHandler.execute(context([
