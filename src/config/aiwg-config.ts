@@ -879,6 +879,7 @@ export interface ResolvedParallelism {
  *     less aggressive at small fan-outs (10 is a safe middle ground)
  *   - hermes: MCP sidecar; rate-limit depends on upstream provider, operator
  *     should tune. Conservative 10 default.
+ *   - grokbot: desktop multi-agent; conservative 4 until native evidence.
  *   - unknown: conservative 4 default.
  */
 export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> = {
@@ -893,6 +894,13 @@ export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> 
   windsurf: { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   openclaw: { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   hermes:   { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
+  // Desktop multi-agent; conservative until native concurrency evidence exists.
+  grokbot:  { max_parallel_subagents: 4,  max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  // Conservative defaults for remaining stable/experimental harnesses (#249).
+  openhuman: { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  omp:      { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  pi:       { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  'deepseek-harness': { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
 };
 
 const UNKNOWN_PROVIDER_PARALLELISM: ResolvedParallelism = {
@@ -1740,6 +1748,37 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   }
 }
 
+
+/**
+ * Ensure `provider` appears in `config.providers` without wiping others (#247).
+ * First entry is the primary provider for parallelism/doctor labels.
+ * When `asPrimary` is true (explicit `--provider` deploy), move the provider to the front.
+ */
+export function ensureProviderListed(
+  config: AiwgConfig,
+  provider: string,
+  opts: { asPrimary?: boolean } = {},
+): AiwgConfig {
+  const normalized = provider.trim();
+  if (!normalized) return config;
+  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
+  const idx = providers.indexOf(normalized);
+  if (opts.asPrimary) {
+    if (idx === 0) {
+      config.providers = providers;
+      return config;
+    }
+    if (idx > 0) providers.splice(idx, 1);
+    providers.unshift(normalized);
+  } else if (idx < 0) {
+    providers.push(normalized);
+  } else {
+    return config;
+  }
+  config.providers = providers;
+  return config;
+}
+
 /**
  * Update the `installed` record for a framework after a successful deployment.
  * Returns the updated config (does not write to disk — caller must call writeAiwgConfig).
@@ -1763,6 +1802,11 @@ export function updateInstalled(
     artifactHashes?: Record<string, string>;
     /** Provider-specific hashes captured from the deployed files (#1998). */
     deployedArtifactHashes?: Record<string, string>;
+    /**
+     * When true (explicit `--provider` deploy), move this provider to the front
+     * of `providers[]` so doctor/parallelism treat it as primary (#247).
+     */
+    asPrimary?: boolean;
   }
 ): AiwgConfig {
   // Project-local invariant: `source: 'project-local'` requires localPath + localType
@@ -1809,6 +1853,8 @@ export function updateInstalled(
   }
 
   config.installed[name] = existing;
+  // Keep providers[] aligned with deployedTo so doctor/parallelism see the right primary (#247).
+  ensureProviderListed(config, provider, { asPrimary: opts.asPrimary === true });
   return config;
 }
 

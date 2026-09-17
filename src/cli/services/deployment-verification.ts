@@ -12,6 +12,7 @@ import {
   normalizeProviderDefinitionId,
   resolveProviderPathValue,
 } from '../../providers/provider-definitions.js';
+import { resolveGrokbotSkillsDir } from '../../providers/grokbot-paths.js';
 import { diagnoseIntegratedProviderTransformationReceipt } from '../../providers/transformation-receipt-integration.js';
 import type { ProviderDriftKind } from '../../providers/transformation-receipt.js';
 import {
@@ -143,6 +144,11 @@ const RESTART_NOTICES: Readonly<Record<string, ReloadNotice>> = {
     policy: 'restart-required',
     action: 'Reload the Cursor workspace so it reloads agents and rules.',
     reason: 'Cursor reads workspace agents and rules when the workspace opens.',
+  },
+  grokbot: {
+    policy: 'restart-required',
+    action: 'Start a new Grok Bot agent chat (or re-read skills) so deployed AIWG context and skills are visible.',
+    reason: 'Grok Bot skill/context reload behavior is not yet verified; AIWG does not claim live refresh.',
   },
   factory: {
     policy: 'restart-required',
@@ -584,7 +590,16 @@ export async function verifyProviderDeployment(
     const deploymentRoot = options.outputRoot ?? options.projectRoot;
     const artifactPaths = options.scope === 'user'
       ? USER_SCOPE_PATHS[normalized] ?? definition.paths.artifacts
-      : definition.paths.artifacts;
+      : { ...definition.paths.artifacts };
+    // Grok Bot: project-scope definition keeps skills null (fail-closed sentinel).
+    // When the operator configured AIWG_GROKBOT_SKILLS_DIR, count that absolute
+    // root so verification matches the deployer (#210 PUW).
+    if (normalized === 'grokbot') {
+      const configuredSkills = resolveGrokbotSkillsDir();
+      if (configuredSkills) {
+        (artifactPaths as { skills: string | null }).skills = configuredSkills;
+      }
+    }
     const writtenSince = options.invocationStartedAt
       ? Date.parse(options.invocationStartedAt)
       : Number.NaN;
@@ -627,14 +642,38 @@ export async function verifyProviderDeployment(
     if (kernelPath && kernelPath !== resolvedSkillsPath) counts.skills += kernelCount;
     const artifactTotal = Object.values(counts).reduce((sum, value) => sum + value, 0);
     if (artifactTotal === 0) {
-      findings.push(finding(
-        normalized,
-        'provider-artifacts-missing',
-        'blocking',
-        `No deployed provider or kernel artifacts were found for ${normalized}.`,
-        `Re-run aiwg use ${options.requestedBundles[0] ?? 'all'} --provider ${normalized}.`,
-        { kernelPath, kernelCount, counts },
-      ));
+      // Bridge-only providers (e.g. grokbot project scope without skills env)
+      // intentionally have null native artifact dirs and land AGENTS.md instead.
+      const bridgeName = definition.paths.configFile || definition.paths.contextFiles?.contextFile;
+      const bridgePath = bridgeName ? path.join(options.projectRoot, bridgeName) : '';
+      const bridgePresent = bridgePath ? await exists(bridgePath) : false;
+      const expectsNoNativeArtifacts = (
+        !definition.paths.artifacts.agents
+        && !definition.paths.artifacts.commands
+        && !definition.paths.artifacts.skills
+        && !definition.paths.artifacts.rules
+        && !definition.paths.artifacts.behaviors
+        && !definition.paths.kernelSkills
+      );
+      if (expectsNoNativeArtifacts && bridgePresent) {
+        findings.push(finding(
+          normalized,
+          'provider-bridge-only',
+          'info',
+          `No native artifact directories for ${normalized}; discover-first bridge ${bridgeName} is present.`,
+          'Set AIWG_GROKBOT_SKILLS_DIR (absolute) before --scope user / --global when native skill copies are required.',
+          { bridgePath, counts },
+        ));
+      } else {
+        findings.push(finding(
+          normalized,
+          'provider-artifacts-missing',
+          'blocking',
+          `No deployed provider or kernel artifacts were found for ${normalized}.`,
+          `Re-run aiwg use ${options.requestedBundles[0] ?? 'all'} --provider ${normalized}.`,
+          { kernelPath, kernelCount, counts },
+        ));
+      }
     }
   }
 

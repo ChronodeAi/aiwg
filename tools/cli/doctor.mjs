@@ -57,7 +57,7 @@ const { auditLegacyPermissions } = await importImpl(
   import.meta.url,
   'policy/authorization.js'
 );
-const { readAiwgConfig } = await importImpl(
+const { readAiwgConfig, getProviderParallelismDefaults } = await importImpl(
   import.meta.url,
   'config/aiwg-config.js'
 );
@@ -108,6 +108,7 @@ const PROVIDER_LABELS = {
   openhuman: 'OpenHuman',
   omp: 'Oh My Pi',
   hermes:   'Hermes',
+  grokbot:  'Grok Bot',
 };
 
 // Quick-detect dirs (agents-only) — used when no --provider flag is given.
@@ -711,6 +712,16 @@ async function runDoctor() {
     installation.state === 'aligned' ? installationDetail : `${installationDetail}. ${installation.drift.join('; ')}`,
   );
 
+  // 1a. Warn when test-only user-registry override is active (#246)
+  if (process.env.AIWG_USER_REGISTRY_PATH && String(process.env.AIWG_USER_REGISTRY_PATH).trim()) {
+    check(
+      'User Registry Path',
+      'warn',
+      'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json'
+        + ` (active: ${process.env.AIWG_USER_REGISTRY_PATH})`,
+    );
+  }
+
   // 1b. Build state — surface a missing/incomplete dist/ as a clear error with
   // remediation instead of letting consumers hit cryptic MODULE_NOT_FOUND at
   // CLI runtime. The `.mjs`/JSON/YAML files (incl. dist/src/update/notifier.mjs)
@@ -1078,7 +1089,7 @@ async function runDoctor() {
   if (!noBudgetCheck) {
     try {
       const supported = providersToCheck.filter((name) =>
-        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman'].includes(name),
+        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot'].includes(name),
       );
       const firewall = await scanContextMemoryFirewall({
         rootDir: process.cwd(),
@@ -1891,21 +1902,9 @@ async function runDoctor() {
         checkRange('max_parallel_ralph_loops', 1, 20);
         checkRange('max_parallel_mc_missions', 1, 20);
 
-        // Detect operator override vs provider default
+        // Detect operator override vs provider default — use shared map (#249)
         const primary = Array.isArray(raw.providers) ? raw.providers[0] : undefined;
-        const PROVIDER_DEFAULTS = {
-          claude:   { max_parallel_subagents: 4 },
-          codex:    { max_parallel_subagents: 10 },
-          copilot:  { max_parallel_subagents: 10 },
-          cursor:   { max_parallel_subagents: 10 },
-          factory:  { max_parallel_subagents: 10 },
-          opencode: { max_parallel_subagents: 10 },
-          warp:     { max_parallel_subagents: 10 },
-          windsurf: { max_parallel_subagents: 10 },
-          openclaw: { max_parallel_subagents: 10 },
-          hermes:   { max_parallel_subagents: 10 },
-        };
-        const expectedDefault = PROVIDER_DEFAULTS[primary]?.max_parallel_subagents ?? 4;
+        const expectedDefault = getProviderParallelismDefaults(primary).max_parallel_subagents;
         const isOverride =
           p.max_parallel_subagents !== undefined &&
           p.max_parallel_subagents !== expectedDefault;

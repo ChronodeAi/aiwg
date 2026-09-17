@@ -3,6 +3,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import type { Platform } from '../agents/types.js';
 import { resolveHermesHomePath } from './hermes-home.js';
+import { resolveGrokbotSkillsDir } from './grokbot-paths.js';
 import {
   getProviderCapabilities,
   type DeployTarget,
@@ -167,6 +168,7 @@ const ProviderDefinitionSchema = z.object({
     'cursor',
     'deepseek-harness',
     'factory',
+    'grokbot',
     'hermes',
     'opencode',
     'openclaw',
@@ -289,6 +291,7 @@ export const PROVIDER_IDS: readonly Platform[] = [
   'cursor',
   'deepseek-harness',
   'factory',
+  'grokbot',
   'hermes',
   'opencode',
   'openclaw',
@@ -364,6 +367,17 @@ const CONTEXT_CONTRACTS: Record<Platform, ProviderContextContract> = {
     loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
     bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: 150, nestedContext: true, support: 'supported',
     verification: { method: 'official Factory AGENTS.md discovery hierarchy', source: 'https://docs.factory.ai/cli/configuration/agents-md', lastVerified: VERIFIED_ON },
+  },
+  grokbot: {
+    startupFiles: ['AGENTS.md'],
+    precedence: ['provider/system', 'project AGENTS.md when the host exposes it', 'explicit aiwg discover/show'],
+    loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
+    bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: false, support: 'degraded',
+    verification: {
+      method: 'AIWG discover-first adapter contract; native Grok Bot startup/include path not yet verified — explicit-read guidance only',
+      source: 'docs/architecture/adr-grokbot-provider-target.md',
+      lastVerified: '2026-09-15',
+    },
   },
   hermes: {
     startupFiles: ['.hermes.md', 'AGENTS.md'], precedence: ['provider/system', '.hermes.md', 'AGENTS.md'],
@@ -717,6 +731,68 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       ruleFormat: 'markdown',
     },
     matrixRef: 'factory',
+  },
+  {
+    id: 'grokbot',
+    displayName: 'Grok Bot',
+    aliases: [],
+    // #210: promoted stable — Linux PUW + security + migration + maintainer Linux-only waiver 2026-09-16.
+    status: 'stable',
+    builtIn: true,
+    surfaces: {
+      primary: 'grokbot',
+      compatibility: [],
+      precedence: ['AGENTS.md', 'AIWG_GROKBOT_SKILLS_DIR when configured'],
+      related: [],
+    },
+    // Do not treat xAI API keys or generic GROK_* model env as Grok Bot evidence.
+    detection: { env: [], process: [], capabilityId: 'grokbot' },
+    paths: {
+      deployTarget: 'mixed',
+      artifacts: {
+        agents: null,
+        commands: null,
+        // Native skill copies only when AIWG_GROKBOT_SKILLS_DIR is set at deploy time.
+        skills: null,
+        rules: null,
+        behaviors: null,
+      },
+      kernelSkills: null,
+      contextDiscovery: {
+        agents: '.agents/agents',
+        skills: null,
+        rules: null,
+        behaviors: null,
+      },
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: null,
+      commands: null,
+      skills: null,
+      rules: null,
+      fileExtension: '.md',
+      configFile: 'AGENTS.md',
+      aggregated: false,
+    },
+    // Skills root is env-gated (AIWG_GROKBOT_SKILLS_DIR). skillsBaseDir is a
+    // documentation sentinel only — deployer resolves via resolveGrokbotSkillsDir
+    // and never joins ~/grokbot-skills.
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'home-dir',
+      skillsBaseDir: 'AIWG_GROKBOT_SKILLS_DIR',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'agents-md',
+      hookBridge: null,
+      mcpInjection: null,
+      contextAggregation: 'agents-md',
+      ruleFormat: 'agents-md-section',
+    },
+    matrixRef: 'grokbot',
   },
   {
     id: 'hermes',
@@ -1301,10 +1377,18 @@ export function expandProviderHomePath(providerPath: string | null): string {
 export function getProviderArtifactPathStrings(provider: string | null | undefined): ProviderArtifactPathStrings | undefined {
   const definition = getProviderDefinition(provider);
   if (!definition) return undefined;
+  const normalized = normalizeProviderDefinitionId(provider);
+  // Grok Bot skills are env-gated (AIWG_GROKBOT_SKILLS_DIR). Resolve dynamically so
+  // deploy counting / user-scope same-path inventory can see the configured root
+  // without inventing ~/.grokbot (#210).
+  let skills = expandProviderHomePath(definition.paths.artifacts.skills);
+  if (normalized === 'grokbot' && !skills) {
+    skills = resolveGrokbotSkillsDir() ?? '';
+  }
   return {
     agents: expandProviderHomePath(definition.paths.artifacts.agents),
     commands: expandProviderHomePath(definition.paths.artifacts.commands),
-    skills: expandProviderHomePath(definition.paths.artifacts.skills),
+    skills,
     rules: expandProviderHomePath(definition.paths.artifacts.rules),
     behaviors: expandProviderHomePath(definition.paths.artifacts.behaviors),
   };

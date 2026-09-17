@@ -377,6 +377,7 @@ describe('doctor: provider awareness (regression)', () => {
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
     expect(content).toMatch(/openhuman:\s*'OpenHuman'/);
+    expect(content).toMatch(/grokbot:\s*'Grok Bot'/);
     expect(content).toContain('checkOpenHumanHarnessTier2');
     expect(content).toContain('OpenHuman Tier-2 harness');
     expect(content).toContain("'agent', 'prompts'");
@@ -625,5 +626,41 @@ describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
     expect(content).toContain('firewall.trust.stale');
     expect(content).toContain('firewall.trust.quarantined');
     expect(content).toContain("record.reviewStatus === 'changed-review-required'");
+  });
+});
+
+// ── User registry override + shared parallelism defaults (#246 / #249) ──
+
+describe('doctor: user registry override warn (#246)', () => {
+  it('warns when AIWG_USER_REGISTRY_PATH is set', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain("AIWG_USER_REGISTRY_PATH");
+    expect(content).toContain('test override active');
+    expect(content).toContain('User Registry Path');
+    expect(content).toContain('not writing to default ~/.aiwg/installed.json');
+  });
+});
+
+describe('doctor: parallelism defaults use shared map (#249)', () => {
+  it('imports getProviderParallelismDefaults instead of a hardcoded subset', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain('getProviderParallelismDefaults');
+    expect(content).not.toContain('const PROVIDER_DEFAULTS = {');
+  });
+
+  it('labels primary=grokbot with shared default of 4', async () => {
+    const { getProviderParallelismDefaults } = await import('../../../src/config/aiwg-config.js');
+    const primary = 'grokbot';
+    const expectedDefault = getProviderParallelismDefaults(primary).max_parallel_subagents;
+    expect(expectedDefault).toBe(4);
+    const p = { max_parallel_subagents: 4 };
+    const isOverride =
+      p.max_parallel_subagents !== undefined &&
+      p.max_parallel_subagents !== expectedDefault;
+    const label = isOverride
+      ? `max_parallel_subagents=${p.max_parallel_subagents} (operator override; provider default for ${primary} = ${expectedDefault})`
+      : `max_parallel_subagents=${p.max_parallel_subagents} (provider default for ${primary})`;
+    expect(isOverride).toBe(false);
+    expect(label).toBe('max_parallel_subagents=4 (provider default for grokbot)');
   });
 });

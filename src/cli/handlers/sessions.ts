@@ -25,6 +25,8 @@ import {
   OpenClawSessionAdapter,
   OPENHUMAN_ADAPTER_VERSION,
   OpenHumanSessionAdapter,
+  GROKBOT_ADAPTER_VERSION,
+  GrokbotSessionAdapter,
   PI_ADAPTER_VERSION,
   PiSessionAdapter,
   DEEPSEEK_HARNESS_ADAPTER_VERSION,
@@ -811,7 +813,7 @@ async function importSource(
   if (provider !== 'generic' && provider !== 'claude' && provider !== 'codex'
     && provider !== 'copilot' && provider !== 'cursor' && provider !== 'factory'
     && provider !== 'hermes' && provider !== 'opencode' && provider !== 'openclaw'
-    && provider !== 'openhuman' && provider !== 'pi' && provider !== 'omp' && provider !== 'deepseek-harness' && provider !== 'warp' && provider !== 'devin-desktop') {
+    && provider !== 'openhuman' && provider !== 'grokbot' && provider !== 'pi' && provider !== 'omp' && provider !== 'deepseek-harness' && provider !== 'warp' && provider !== 'devin-desktop') {
     throw new CliError('UNSUPPORTED_OPERATION', `session import is not implemented for ${provider}`, EXIT.unsupported);
   }
   const sourceId = requiredValue(args, '--source-id');
@@ -827,6 +829,7 @@ async function importSource(
   const isOpenCode = provider === 'opencode';
   const isOpenClaw = provider === 'openclaw';
   const isOpenHuman = provider === 'openhuman';
+  const isGrokbot = provider === 'grokbot';
   const isPi = provider === 'pi';
   const isOmp = provider === 'omp';
   const isDsh = provider === 'deepseek-harness';
@@ -850,8 +853,10 @@ async function importSource(
                   ? new OpenClawSessionAdapter()
                   : isOpenHuman
                     ? new OpenHumanSessionAdapter()
-                    : isPi
-                      ? new PiSessionAdapter()
+                    : isGrokbot
+                      ? new GrokbotSessionAdapter()
+                      : isPi
+                        ? new PiSessionAdapter()
                     : isWarp
                       ? new WarpSessionAdapter()
                       : isDevinDesktop
@@ -875,8 +880,10 @@ async function importSource(
                   ? 'openclaw-consistent-snapshot-jsonl'
                   : isOpenHuman
                     ? 'openhuman-enriched-jsonl'
-                    : isPi
-                      ? 'pi-session-v3-jsonl'
+                    : isGrokbot
+                      ? 'manual-export'
+                      : isPi
+                        ? 'pi-session-v3-jsonl'
                     : isWarp
                       ? 'warp-markdown-export'
                       : isDevinDesktop
@@ -907,8 +914,10 @@ async function importSource(
                     ? 'schema-16-event-v3-consistent-snapshot'
                     : isOpenHuman
                       ? 'schema-1-session-raw-enriched'
-                      : isWarp
-                        ? 'manual-lossy-markdown-export'
+                      : isGrokbot
+                        ? 'manual-interchange'
+                        : isWarp
+                          ? 'manual-lossy-markdown-export'
                         : isDevinDesktop
                           ? 'opt-in-cascade-transcript-hook'
                           : 'manual-interchange',
@@ -931,13 +940,15 @@ async function importSource(
                     ? OPENCLAW_ADAPTER_VERSION
                     : isOpenHuman
                       ? OPENHUMAN_ADAPTER_VERSION
-                      : isWarp
-                        ? WARP_ADAPTER_VERSION
+                      : isGrokbot
+                        ? GROKBOT_ADAPTER_VERSION
+                        : isWarp
+                          ? WARP_ADAPTER_VERSION
                         : isDevinDesktop
                           ? DEVIN_DESKTOP_ADAPTER_VERSION
                           : GENERIC_ADAPTER_VERSION,
     sourceSchemaVersion: probe.sourceSchemaVersion,
-    disposition: isWarp
+    disposition: isWarp || isGrokbot
       ? 'manual-only'
       : isClaude || isCodex || isCopilot || isCursor || isFactory || isHermes
         || isOpenCode || isOpenClaw || isOpenHuman || isDevinDesktop || isOmp || isDsh || isPi
@@ -962,8 +973,10 @@ async function importSource(
                     ? { 'native.openclaw': {} }
                     : isOpenHuman
                       ? { 'native.openhuman': {} }
-                      : isWarp
-                        ? { 'native.warp': {} }
+                      : isGrokbot
+                        ? { 'native.grokbot': {} }
+                        : isWarp
+                          ? { 'native.warp': {} }
                         : isDevinDesktop
                           ? { 'native.devin-desktop': {
                               product: 'Devin Desktop',
@@ -1579,6 +1592,20 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
         adapterVersion: PI_ADAPTER_VERSION,
         verifiedAt: '2026-09-04',
         documentation: 'https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/session-manager.ts',
+      },
+    };
+  }
+  if (provider === 'grokbot') {
+    return {
+      provider, disposition: 'manual-only', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['manual-export'],
+      reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
+      remediation: 'Select an authorized AIWG session interchange export; Grok Bot auto-discover is unsupported until a native locator exists.',
+      evidence: {
+        adapterVersion: GROKBOT_ADAPTER_VERSION,
+        verifiedAt: '2026-09-15',
+        documentation: 'docs/providers/grokbot-sessions.md',
       },
     };
   }
