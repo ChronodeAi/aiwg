@@ -1,6 +1,6 @@
 # ADR: First-class Grok Bot (`grokbot`) provider target
 
-**Status:** Accepted (experimental implementation)  
+**Status:** Accepted (stable implementation as of #210)  
 **Date:** 2026-09-15  
 **Parent:** [#196](https://github.com/jmagly/aiwg/issues/196)  
 **Children:** #203–#210  
@@ -81,16 +81,17 @@ skills. Never emit Cursor reload wording for `grokbot`.
 
 ### Stable promotion (#210)
 
-Remain `experimental` until Linux PUW (plus macOS/Windows as applicable),
-security review, and docs/matrix flip land under #210.
+**Satisfied 2026-09-16.** Evidence and gate decision:
 
-**2026-09-16 update:** Linux PUW + path security review + migration/draft release
-notes landed on branch `chore/210-promote-grokbot-stable` (see
-`docs/security/grokbot-path-security-review.md`,
-`docs/migration/grokbot-from-cursor-workaround.md`). macOS / Windows-WSL PUW
-were not available this cycle — **do not flip matrix/definition status to
-`stable` until those platforms are evidenced as applicable (or explicitly
-waived by maintainers).**
+| Gate | Result |
+|---|---|
+| Linux PUW (required) | Done — `docs/integrations/grokbot-linux-puw.md` |
+| Path security review | Done — `docs/security/grokbot-path-security-review.md` |
+| Migration + release notes | Done — migration guide + `docs/releases/grokbot-stable-promotion-notes.md` |
+| macOS / Windows PUW | **Waived** by maintainer (jmagly/Manitcor), 2026-09-16: Linux verification is sufficient for release/stable promotion |
+| Capability-matrix + definition flip | `status: stable` |
+
+Optional natives (#209) remain out of scope and do **not** block stable.
 
 ## Consequences
 
@@ -105,4 +106,4 @@ waived by maintainers).**
 
 - Peers: Hermes, OpenHuman, OpenClaw, Pi / deepseek-harness (skills-first).
 - Anti-pattern: Cursor (`.cursor/`, MDC rules, Cursor reload copy).
-- Plan verification: experimental cut covers #203–#208; #209/#210 deferred.
+- Plan verification: experimental cut covered #203–#208; #210 stable promotion landed; #209 optional natives remain deferred.

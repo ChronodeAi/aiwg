@@ -532,7 +532,7 @@
     "addons/network-analysis/operator-guide",
     "addons/network-analysis/release-checklist",
     "addons/network-analysis/termshark-handoff",
-    "releases/draft-grokbot-stable-promotion-notes"
+    "releases/grokbot-stable-promotion-notes"
   ],
   "sections": [
     {
@@ -4048,16 +4048,16 @@
       "parent": "reference"
     },
     {
-      "id": "releases/draft-grokbot-stable-promotion-notes",
-      "title": "Draft Grok Bot Stable Promotion Notes",
-      "summary": "Draft release blurb; publish only after stable status flip",
-      "file": "releases/draft-grokbot-stable-promotion-notes.md",
+      "id": "releases/grokbot-stable-promotion-notes",
+      "title": "Grok Bot Stable Promotion Notes",
+      "summary": "Release notes for grokbot experimental \u2192 stable (#210)",
+      "file": "releases/grokbot-stable-promotion-notes.md",
       "parent": "reference"
     },
     {
       "id": "integrations/grokbot-linux-puw",
       "title": "Grok Bot Linux PUW (#210)",
-      "summary": "Repeatable Linux proof-of-use-workflow evidence for grokbot promotion",
+      "summary": "Linux PUW evidence for grokbot stable; macOS/Windows waived by maintainer",
       "file": "integrations/grokbot-linux-puw.md",
       "parent": "reference"
     }

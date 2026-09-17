@@ -736,8 +736,8 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     id: 'grokbot',
     displayName: 'Grok Bot',
     aliases: [],
-    // Keep experimental until #210 multi-platform PUW completes (Linux evidence exists).
-    status: 'experimental',
+    // #210: promoted stable — Linux PUW + security + migration + maintainer Linux-only waiver 2026-09-16.
+    status: 'stable',
     builtIn: true,
     surfaces: {
       primary: 'grokbot',

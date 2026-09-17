@@ -43,7 +43,11 @@ Artifact root on the box: `/workspace/aiwg-210-puw/` (logs/, artifacts/).
 ## Platform coverage note
 
 **Linux required evidence: attached.**  
-macOS and Windows/WSL PUW were **not** run this cycle (Cloud Agents unavailable; this box is Linux only). Provider status remains **experimental** until those platforms are evidenced as applicable per ADR / #210.
+macOS and Windows/WSL PUW were **not** run this cycle (Cloud Agents unavailable; this box is Linux only).
+
+### Maintainer waiver (2026-09-16)
+
+**Authoritative operator guidance (jmagly/Manitcor):** Do **not** require macOS/Windows PUW. **Linux verification is sufficient** for release/stable promotion. Provider status is therefore promoted to **`stable`** under #210 without macOS/Windows gates. Optional natives (#209) remain deferred and do not block this flip.
 
 ## Log index
 

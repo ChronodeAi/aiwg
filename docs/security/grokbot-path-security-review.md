@@ -33,9 +33,9 @@
 ## Residual / out of scope
 
 - Native Grok Bot filesystem layout remains **unverified** product fact — AIWG must not invent it.
-- macOS / Windows path semantics not exercised this cycle (see #210 blockers).
+- macOS / Windows path semantics not exercised this cycle; **waived** by maintainer for #210 stable promotion (Linux-only validation sufficient).
 - Optional natives (routines / CreateAgent / connectors) remain #209.
 
 ## Conclusion
 
-Path policy matches the ADR fail-closed contract on Linux evidence. No path-traversal or secret-scrape defects found in the reviewed surfaces beyond the verification/registry accounting bugs fixed above. **Stable promotion still waits on multi-platform PUW as applicable.**
+Path policy matches the ADR fail-closed contract on Linux evidence. No path-traversal or secret-scrape defects found in the reviewed surfaces beyond the verification/registry accounting bugs fixed above. **Stable promotion approved under maintainer Linux-only waiver (2026-09-16); macOS/Windows PUW not required for #210.**

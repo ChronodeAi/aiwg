@@ -14,7 +14,7 @@ The Cursor workaround deployed into `.cursor/` paths Grok Bot does not auto-load
 
 ## Migration steps (Grok fleets)
 
-1. Confirm AIWG ≥ the release that includes the experimental `grokbot` provider (landed via #211 on `main`).
+1. Confirm AIWG ≥ the release that includes the `grokbot` provider (experimental via #211; stable via #210).
 2. From each project:
 
    ```bash
@@ -47,4 +47,4 @@ aiwg doctor --provider grokbot
 aiwg status --probe
 ```
 
-Provider status may still be `experimental` until #210 stable promotion evidence (cross-platform PUW) lands.
+Provider status is **`stable`** as of #210 (Linux PUW + security + migration + maintainer Linux-only waiver). Optional natives remain [#209](https://github.com/jmagly/aiwg/issues/209).

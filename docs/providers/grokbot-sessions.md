@@ -23,8 +23,8 @@ DB path, or export command comparable to Hermes/OpenHuman JSONL or Warp
 `/export-to-file`. Cursor session locators must not be reused for Grok Bot
 fleets.
 
-When product evidence lands, a follow-on change may add a native locator class
-without flipping this experimental provider to stable (#210).
+When product evidence lands, a follow-on change may add a native locator class.
+Provider status is already **stable** (#210); session auto-discover remains unsupported until verified product contracts land (related honesty; optional natives #209).
 
 ## Tested contract
 
