@@ -6,7 +6,7 @@ stable_id: aiwg.agent-reference.provider.grokbot
 
 # Grok Bot Operational Reference
 
-> **AIWG provider status:** Experimental (`grokbot`). Stable promotion is tracked in [#210](https://github.com/jmagly/aiwg/issues/210).
+> **AIWG provider status:** Stable (`grokbot`). Promoted under [#210](https://github.com/jmagly/aiwg/issues/210) with Linux PUW, path security review, migration docs, and **maintainer guidance (2026-09-16) that Linux verification is sufficient** — macOS/Windows PUW is not required for release. Optional natives remain [#209](https://github.com/jmagly/aiwg/issues/209) and do not block stable.
 
 > **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed.
 
@@ -61,7 +61,13 @@ aiwg status --probe --json   # Grok Bot restart copy — never Cursor wording
 aiwg doctor --provider grokbot
 ```
 
+## Migration from Cursor workaround
+
+Grok Bot fleets that used `--provider cursor` should move to `--provider grokbot`.
+Cursor IDE fleets stay on `cursor`. See
+[`docs/migration/grokbot-from-cursor-workaround.md`](../../migration/grokbot-from-cursor-workaround.md).
+
 ## Deferred
 
-- Optional native adapters (routines, CreateAgent, connectors): [#209](https://github.com/jmagly/aiwg/issues/209)
-- Experimental → stable promotion: [#210](https://github.com/jmagly/aiwg/issues/210)
+- Optional native adapters (routines, CreateAgent, connectors): [#209](https://github.com/jmagly/aiwg/issues/209) — does **not** block stable promotion
+- macOS / Windows PUW: **waived** by maintainer for #210 (Linux-only validation sufficient)

@@ -361,13 +361,13 @@ providers:
 
   grokbot:
     display_name: Grok Bot
-    status: experimental
+    status: stable
     # Multi-agent desktop assistant runtime. Distinct from Cursor IDE and from
     # xAI Grok Build / API. Native skill root is operator-configured via
     # AIWG_GROKBOT_SKILLS_DIR (fail-closed; no invented ~/.grokbot).
     # ADR: docs/architecture/adr-grokbot-provider-target.md · epic #196.
-    # Optional natives (routines/CreateAgent/connectors) deferred #209.
-    # Stable promotion deferred #210 pending PUW evidence.
+    # Optional natives (routines/CreateAgent/connectors) deferred #209 — does not block stable.
+    # #210: stable via Linux PUW + security + migration + maintainer waiver (no macOS/Windows gate).
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:

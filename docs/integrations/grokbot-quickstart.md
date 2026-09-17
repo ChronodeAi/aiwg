@@ -1,6 +1,10 @@
 # Connect AIWG to Grok Bot
 
-> **Status:** Experimental.
+> **Status:** Stable.
+
+Migrating from `--provider cursor` for Grok Bot fleets? See
+[Migrate Grok Bot fleets from the Cursor workaround](../migration/grokbot-from-cursor-workaround.md).
+Cursor IDE fleets remain on `--provider cursor`.
 
 For the complete first-time journey, start with [Install, Connect, and Verify](../getting-started/install-connect-verify.md).
 

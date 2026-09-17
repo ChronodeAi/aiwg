@@ -72,7 +72,7 @@ describe('grokbot provider definition', () => {
     expect(normalizeProviderDefinitionId('grok')).toBeNull();
     const def = getProviderDefinition('grokbot');
     expect(def?.displayName).toBe('Grok Bot');
-    expect(def?.status).toBe('experimental');
+    expect(def?.status).toBe('stable');
     expect(def?.aliases).toEqual([]);
   });
 });

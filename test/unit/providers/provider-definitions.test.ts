@@ -74,11 +74,11 @@ describe('provider definition registry', () => {
     expect(pi?.adapters.mcpInjection).toBeNull();
   });
 
-  it('registers experimental grokbot without a bare grok alias', () => {
+  it('registers stable grokbot without a bare grok alias', () => {
     const grokbot = getProviderDefinition('grokbot');
     expect(grokbot).toBeDefined();
     expect(grokbot?.displayName).toBe('Grok Bot');
-    expect(grokbot?.status).toBe('experimental');
+    expect(grokbot?.status).toBe('stable');
     expect(grokbot?.aliases).toEqual([]);
     expect(normalizeProviderDefinitionId('grokbot')).toBe('grokbot');
     expect(normalizeProviderDefinitionId('grok')).toBeNull();
