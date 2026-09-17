@@ -3464,6 +3464,7 @@ export class UseHandler implements CommandHandler {
             version: manifest.version ?? (await getVersionInfo()).version,
             source: 'bundled',
             manifestHash: await hashManifest(manifestPath),
+            asPrimary: Boolean(explicitAddonProvider),
           });
           await writeAiwgConfig(projectDir, updated);
           config = updated;
@@ -3601,6 +3602,12 @@ export class UseHandler implements CommandHandler {
     }
     if (scope === 'user' && verbose) {
       ui.dim(`  --scope user: deploy targets mirror to home-rooted paths per ADR-4 §2`);
+      if (process.env.AIWG_USER_REGISTRY_PATH?.trim()) {
+        ui.warn(
+          'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json'
+          + ` (active: ${process.env.AIWG_USER_REGISTRY_PATH})`,
+        );
+      }
     }
     const filteredArgs = deployArgs.filter(
       a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--force' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
@@ -4240,7 +4247,12 @@ export class UseHandler implements CommandHandler {
           commands: counts.commands,
           skills: counts.skills,
           rules: counts.rules,
-        }, { version: versionInfo.version, source: 'bundled', manifestHash: mHash });
+        }, {
+          version: versionInfo.version,
+          source: 'bundled',
+          manifestHash: mHash,
+          asPrimary: Boolean(explicitProvider),
+        });
         await writeAiwgConfig(projectDir, updatedConfig);
       } catch {
         // Non-fatal: config tracking failure must not block deployment
