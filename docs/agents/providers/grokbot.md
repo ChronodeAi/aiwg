@@ -22,7 +22,7 @@ Deploy AIWG into **Grok Bot** (multi-agent desktop assistant). This provider is
 | Agents / commands / rules | AIWG index | `aiwg discover` / `aiwg show` — no native CreateAgent claim |
 | Skills (kernel) | `$AIWG_GROKBOT_SKILLS_DIR/` when configured | Fail-closed without the env override |
 | Skills (standard) | Index/discovery; optional `$AIWG_GROKBOT_SKILLS_DIR/.aiwg/skills` with `--copy-all` | Preserves operator-owned skills |
-| Routines / connectors / teammates | Grok-owned | Optional AIWG adapters deferred ([#209](https://github.com/jmagly/aiwg/issues/209)) |
+| Routines / connectors / teammates / memory / local machine | Grok-owned | Optional AIWG adapters evidence-gated ([#209](https://github.com/jmagly/aiwg/issues/209); [catalog](../../integrations/grokbot-native-surfaces-evidence.md)) |
 
 AIWG never writes `.cursor/**` for this provider and never invents `~/.grokbot`.
 
@@ -67,7 +67,12 @@ Grok Bot fleets that used `--provider cursor` should move to `--provider grokbot
 Cursor IDE fleets stay on `cursor`. See
 [`docs/migration/grokbot-from-cursor-workaround.md`](../../migration/grokbot-from-cursor-workaround.md).
 
-## Deferred
+## Deferred / evidence-gated natives (#209)
 
-- Optional native adapters (routines, CreateAgent, connectors): [#209](https://github.com/jmagly/aiwg/issues/209) — does **not** block stable promotion
+Optional adapters (routines, CreateAgent/teammates, connectors/MCP, registered-machine
+probe, memory reference helper) remain **blocked** for AIWG writers: product docs
+document UX (2026-09) but not an import/API/reload contract. Catalog:
+[`docs/integrations/grokbot-native-surfaces-evidence.md`](../../integrations/grokbot-native-surfaces-evidence.md).
+Does **not** block stable promotion.
+
 - macOS / Windows PUW: **waived** by maintainer for #210 (Linux-only validation sufficient)

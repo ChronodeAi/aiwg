@@ -66,12 +66,20 @@ in this repository. Until product evidence documents them:
   native startup/include contract is confirmed. Do not claim auto-load of
   unverified paths.
 
-### Native surfaces (Grok-owned in v1)
+### Native surfaces (Grok-owned; #209 evidence-gated)
 
 Routines (≈cron), CreateAgent teammates (≈agent_teams), connectors (≈mcp),
-and registered-machine bridge remain **Grok-owned**. AIWG does not invent
-writers for those surfaces in the experimental cut (#209 deferred). Matrix
-flags may note native *capability* without claiming AIWG installers.
+registered-machine / local-computer bridge, and memory helpers remain
+**Grok-owned**. AIWG does not invent writers for those surfaces.
+
+**Product UX documented (2026-09):** public docs at docs.x.ai describe operator
+flows (ask the Bot; Settings → Plugins; Create new agent / Edit Profile;
+Routines UI; local-computer execution policy). See the evidence catalog:
+[`docs/integrations/grokbot-native-surfaces-evidence.md`](../integrations/grokbot-native-surfaces-evidence.md).
+
+**AIWG writers still blocked** pending a published import/API/reload contract
+consumable by automation. Matrix flags may note native *capability* without
+claiming AIWG installers. Optional natives (#209) do **not** block stable.
 
 ### Reload / status honesty
 
@@ -91,7 +99,7 @@ skills. Never emit Cursor reload wording for `grokbot`.
 | macOS / Windows PUW | **Waived** by maintainer (jmagly/Manitcor), 2026-09-16: Linux verification is sufficient for release/stable promotion |
 | Capability-matrix + definition flip | `status: stable` |
 
-Optional natives (#209) remain out of scope and do **not** block stable.
+Optional natives (#209) remain evidence-gated (see catalog linked above) and do **not** block stable.
 
 ## Consequences
 
@@ -106,4 +114,4 @@ Optional natives (#209) remain out of scope and do **not** block stable.
 
 - Peers: Hermes, OpenHuman, OpenClaw, Pi / deepseek-harness (skills-first).
 - Anti-pattern: Cursor (`.cursor/`, MDC rules, Cursor reload copy).
-- Plan verification: experimental cut covered #203–#208; #210 stable promotion landed; #209 optional natives remain deferred.
+- Plan verification: experimental cut covered #203–#208; #210 stable promotion landed; #209 optional natives evidence-gated — [`grokbot-native-surfaces-evidence.md`](../integrations/grokbot-native-surfaces-evidence.md).
