@@ -6,10 +6,19 @@ stable_id: aiwg.integration.grokbot-native-adapters-scaffolding
 
 # Grok Bot optional native adapters — fail-closed scaffolding
 
-**Status:** Evidence-gated scaffolding (writers blocked)  
-**Modules:** `src/providers/grokbot-natives/`  
-**Evidence catalog:** [grokbot-native-surfaces-evidence.md](./grokbot-native-surfaces-evidence.md)  
-**Tracking:** [#241](https://github.com/jmagly/aiwg/issues/241) [#242](https://github.com/jmagly/aiwg/issues/242) [#243](https://github.com/jmagly/aiwg/issues/243) [#244](https://github.com/jmagly/aiwg/issues/244) [#245](https://github.com/jmagly/aiwg/issues/245) (children of [#209](https://github.com/jmagly/aiwg/issues/209))
+**Status:** Evidence-gated scaffolding (writers blocked)
+
+**Modules:** `src/providers/grokbot-natives/`
+
+**Evidence catalog:** [grokbot-native-surfaces-evidence.md](./grokbot-native-surfaces-evidence.md)
+
+**Tracking:** children of [#209](https://github.com/jmagly/aiwg/issues/209):
+
+- [#241](https://github.com/jmagly/aiwg/issues/241)
+- [#242](https://github.com/jmagly/aiwg/issues/242)
+- [#243](https://github.com/jmagly/aiwg/issues/243)
+- [#244](https://github.com/jmagly/aiwg/issues/244)
+- [#245](https://github.com/jmagly/aiwg/issues/245)
 
 ## Purpose
 
@@ -31,7 +40,7 @@ or machines.
 ## Kill-switches (default OFF)
 
 | Surface | Issue | Env flag | Entry |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Registered-machine health probe | #244 | `AIWG_GROKBOT_NATIVE_MACHINE_PROBE` | `registeredMachineHealthProbe()` |
 | Memory reference helper | #245 | `AIWG_GROKBOT_NATIVE_MEMORY_REF` | `memoryReferenceHelper()` |
 | Routines / cron generator stub | #241 | `AIWG_GROKBOT_NATIVE_ROUTINES` | `generateRoutinesImportStub()` |
@@ -47,7 +56,7 @@ Enabling a flag does **not** unlock writers. Entry functions still return
 ## Result statuses
 
 | Status | Meaning |
-|---|---|
+| --- | --- |
 | `disabled` | Kill-switch off (default) |
 | `blocked` | Enabled but product import/API/reload evidence missing |
 | `unavailable` | Reserved for reachable-but-unimplemented future paths |
@@ -57,7 +66,7 @@ Every result sets `wrote: false`.
 
 ## Module layout
 
-```
+```text
 src/providers/grokbot-natives/
   index.ts                      # re-exports + skippable optional status helper
   types.ts                      # shared contracts / statuses
