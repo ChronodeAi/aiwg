@@ -27,6 +27,23 @@ CreateAgent profiles / memory / machines.
 
 Evidence PR: [#240](https://github.com/jmagly/aiwg/pull/240).
 
+## Scaffolding modules (fail-closed)
+
+Typed contracts + kill-switches live under
+[`src/providers/grokbot-natives/`](../../src/providers/grokbot-natives/)
+(see [grokbot-native-adapters-scaffolding.md](./grokbot-native-adapters-scaffolding.md)).
+**Status remains evidence-gated** — scaffolding refuses writers until the
+Decision gate below is satisfied. Default OFF; baseline `aiwg use --provider grokbot`
+is unchanged.
+
+| Child | Module entry |
+|---|---|
+| [#244](https://github.com/jmagly/aiwg/issues/244) | `registeredMachineHealthProbe` |
+| [#245](https://github.com/jmagly/aiwg/issues/245) | `memoryReferenceHelper` |
+| [#241](https://github.com/jmagly/aiwg/issues/241) | `generateRoutinesImportStub` |
+| [#242](https://github.com/jmagly/aiwg/issues/242) | `projectCreateAgentStub` |
+| [#243](https://github.com/jmagly/aiwg/issues/243) | `buildConnectorInstallProfileStub` |
+
 ## Product evidence sources (2026-09)
 
 | Doc | URL | Relevance |
@@ -89,6 +106,7 @@ Until a surface is unblocked by explicit product import/API evidence:
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/routines.ts` (`generateRoutinesImportStub`) — fail-closed; flag `AIWG_GROKBOT_NATIVE_ROUTINES`.
 - **Generator only after import contract exists:** map AIWG scheduled intents →
   product import payload; dry-run by default; write only with explicit
   confirmation and a disable flag (e.g. `AIWG_GROKBOT_ROUTINES=0`).
@@ -133,6 +151,7 @@ Feature flag / env kill-switch; removing the adapter must leave baseline
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/create-agent.ts` (`projectCreateAgentStub`) — fail-closed; flag `AIWG_GROKBOT_NATIVE_CREATE_AGENT`.
 - Project curated AIWG agent templates → product profile import (or API),
   opt-in per agent, with ownership markers and “never overwrite operator
   description” rules.
@@ -172,6 +191,7 @@ install in status/matrix.
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/connector-install-profile.ts` (`buildConnectorInstallProfileStub`) — recommend-only; flag `AIWG_GROKBOT_NATIVE_CONNECTORS`.
 - Emit an **install profile** (declarative list of recommended connectors +
   operator steps) and, only if product documents it, a non-secret config
   fragment applied via documented import/reload.
@@ -214,6 +234,7 @@ connectors for `grokbot`.
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/registered-machine-health.ts` (`registeredMachineHealthProbe`) — read-only; flag `AIWG_GROKBOT_NATIVE_MACHINE_PROBE`.
 - **Read-only** probe: report reachability / policy mode if product exposes a
   safe status surface; never enable local execution, never register machines,
   never write credentials.
@@ -253,6 +274,7 @@ Probe must be skippable; failures must not fail baseline `aiwg use`.
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/memory-reference-helper.ts` (`memoryReferenceHelper`) — proposals only; flag `AIWG_GROKBOT_NATIVE_MEMORY_REF`.
 - Helper that proposes **operator-approved** short references/summaries (paths,
   issue URLs, `aiwg show` pointers) for the operator to paste or approve —
   never scrape clipboard, cookies, credentials, or full artifact bodies.
