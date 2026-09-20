@@ -54,7 +54,7 @@ jobs:
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 20
     env:
-      FORTEMI_COMMIT: 7e3f379f6dc140fb922bf2ef45a51ce2b6dffbd3
+      FORTEMI_COMMIT: ef446477cfd3c05e2fc01253a15647e5e25d594c
       FORTEMI_CHECKOUT: /tmp/dataset-fortemi-core
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
