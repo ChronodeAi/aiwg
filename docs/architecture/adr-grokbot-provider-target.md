@@ -25,8 +25,7 @@ API surface.
 | Initial status | `experimental` |
 
 Bare `grok` is deliberately **not** an alias: it collides with the xAI model/API
-family and would make `AIWG_PROVIDER=grok` ambiguous. A future xAI Grok Build
-adapter, if ever added, must use a separately reviewed ID (likely `grok-build`).
+family and would make `AIWG_PROVIDER=grok` ambiguous. xAI Grok Build is a separate experimental provider ID (`grok-build`); this ADR remains the Grok Bot boundary.
 
 ### Scope semantics
 

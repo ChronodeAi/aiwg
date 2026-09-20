@@ -3,15 +3,15 @@
 AIWG gives your AI assistant reusable project context and specialist workflows
 inside the AI tools you already use. The provider integration decides where
 that context, skills, commands, rules, and agents are written so the selected
-tool can read them. AIWG has 16 named provider integrations plus a separate
+tool can read them. AIWG has 17 named provider integrations plus a separate
 provider-neutral `generic` fallback adapter.
 
 ---
 
 ## Quick Comparison
 
-The technical registry currently covers **16 named provider integrations**,
-including Google Antigravity CLI, Grok Bot, Oh My Pi, and Pi Coding Agent, plus a
+The technical registry currently covers **17 named provider integrations**,
+including Google Antigravity CLI, Grok Bot, Grok Build, Oh My Pi, and Pi Coding Agent, plus a
 provider-neutral `generic` fallback adapter. Start with [Install, Connect, and
 Verify](../getting-started/install-connect-verify.md), then use the row below
 for provider-specific deployment details. The commands in this table are
