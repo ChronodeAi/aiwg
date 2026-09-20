@@ -234,9 +234,11 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
     };
   },
   get 'grok-build'() {
+    // Skills mirror to $GROK_HOME/skills. Agents/rules writers deferred #2577 —
+    // leave those user paths empty so mirroring does not invent empty trees.
     const home = resolveGrokHome();
     return {
-      agents: home ? path.join(home, 'agents') : '',
+      agents: '',
       skills: home ? path.join(home, 'skills') : '',
       commands: '',
       rules: '',
