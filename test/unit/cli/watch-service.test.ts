@@ -148,15 +148,15 @@ describe('WatchService', () => {
       await service.start(config.patterns, config);
 
       // Create file
-      const filePath = resolve(testDir, 'new.md');
+      let filePath = resolve(testDir, 'new.md');
       await writeFile(filePath, 'Content', 'utf-8');
 
-      // A create landing before the watch is armed is reported by neither the
-      // initial scan (`ignoreInitial: true`) nor the watch, so the `add` is
-      // absent rather than late and no wait budget can recover it (#2518).
-      // Re-writing an untracked file makes the watcher discover it and emit
-      // `add`, which turns that window into a retry instead of a red build.
-      // A healthy watcher never reaches this: it has already emitted by now.
+      // A container filesystem can still drop a directory notification after
+      // chokidar reports the watch armed, leaving the `add` absent rather than
+      // late so additional wait budget alone cannot recover it (#2518).
+      // A fresh filename changes the watched directory entry on every retry.
+      // Rewriting one inode is not enough on container filesystems that missed
+      // the original directory edge. A healthy watcher never reaches this.
       let recoveryTouches = 0;
       const sawAdd = () => events.some(event => event.type === 'add');
 
@@ -165,6 +165,7 @@ describe('WatchService', () => {
           await waitFor(sawAdd, WATCHER_LATENCY_FLOOR_MS * 4, 25, () => describeEvents(events));
         } catch {
           recoveryTouches++;
+          filePath = resolve(testDir, `new-recovery-${recoveryTouches}.md`);
           await writeFile(filePath, `Content ${recoveryTouches}`, 'utf-8');
         }
       }
@@ -173,7 +174,7 @@ describe('WatchService', () => {
         sawAdd,
         FS_EVENT_TIMEOUT_MS,
         25,
-        () => `${describeEvents(events)} (after ${recoveryTouches} recovery touch(es))`,
+        () => `${describeObserved(events, service)}; recoveryCreates=${recoveryTouches}`,
       );
 
       expect(events.length).toBeGreaterThan(0);
