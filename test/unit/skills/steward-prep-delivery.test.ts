@@ -50,6 +50,7 @@ describe('steward-prep-delivery duplicate helper', () => {
     expect(source).toContain('mktemp -d');
     expect(source).toContain('DISCOVER_JSON');
     expect(source).not.toContain('/tmp/.steward-prep-discover.json');
+    expect(source.indexOf('trap cleanup_discover_tmp EXIT')).toBeLessThan(source.indexOf('mktemp -d'));
   });
 
   it('runs concurrent duplicate checks without parse errors or leaked discovery temp dirs', async () => {
