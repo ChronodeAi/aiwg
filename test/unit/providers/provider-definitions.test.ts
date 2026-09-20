@@ -16,6 +16,7 @@ const CURRENT_PLATFORM_IDS = [
   'deepseek-harness',
   'factory',
   'grokbot',
+  'grok-build',
   'hermes',
   'opencode',
   'openclaw',
@@ -82,7 +83,8 @@ describe('provider definition registry', () => {
     expect(grokbot?.aliases).toEqual([]);
     expect(normalizeProviderDefinitionId('grokbot')).toBe('grokbot');
     expect(normalizeProviderDefinitionId('grok')).toBeNull();
-    expect(normalizeProviderDefinitionId('grok-build')).toBeNull();
+    expect(normalizeProviderDefinitionId('grok-build')).toBe('grok-build');
+    expect(normalizeProviderDefinitionId('grok')).toBeNull();
     expect(grokbot?.detection).toMatchObject({ env: [], process: [], capabilityId: 'grokbot' });
     expect(grokbot?.paths.contextFiles.agentsMd).toBe(true);
     expect(grokbot?.context.loadMode).toBe('prose-directive');

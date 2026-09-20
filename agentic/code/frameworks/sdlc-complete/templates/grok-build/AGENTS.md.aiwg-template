@@ -1,0 +1,23 @@
+# AGENTS.md — Grok Build + AIWG
+
+This project uses AIWG with the experimental `grok-build` provider.
+
+## Discover AIWG capabilities
+
+```bash
+export PATH="$(npm prefix -g)/bin:$PATH"
+aiwg discover "<need>"
+aiwg show skill <name>
+```
+
+Grok Build does not claim that the host auto-loads the full AIWG corpus. Prefer
+explicit `aiwg discover` / `aiwg show` for framework artifacts.
+
+## Native paths
+
+- Project skills: `.grok/skills/`
+- Project agents: `.grok/agents/`
+- Project rules/hooks/config: `.grok/rules/`, `.grok/hooks/`, `.grok/config.toml`
+- User home: `$GROK_HOME` (default `~/.grok`) — skills under `$GROK_HOME/skills/`
+
+This bridge is distinct from Grok Bot (`grokbot` / `AIWG_GROKBOT_SKILLS_DIR`).
