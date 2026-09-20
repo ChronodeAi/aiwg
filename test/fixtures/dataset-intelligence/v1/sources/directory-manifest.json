@@ -1,0 +1,12 @@
+{
+  "files": [
+    {
+      "path": "one.json",
+      "sha256": "5c6e8d8cd05a59ebf3874e6e3e6c160e46053d1fa7f262032ffe1ff49e587db3"
+    },
+    {
+      "path": "two.json",
+      "sha256": "db5d19d7662144eb09791072230ed35b926b5d09c8f7c42ae811a5b241097980"
+    }
+  ]
+}
