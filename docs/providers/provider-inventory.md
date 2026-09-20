@@ -14,7 +14,7 @@ AIWG has **17 named provider integrations**. The source-of-truth registry is
 | `deepseek-harness` | [DeepSeek Harness](deepseek-harness.md) | Experimental | Project |
 | `factory` | Factory AI | Stable | Project |
 | `grokbot` | [Grok Bot](../integrations/grokbot-quickstart.md) | Stable | Mixed project/user (skills fail-closed until `AIWG_GROKBOT_SKILLS_DIR`) |
-| `grok-build` | [Grok Build](../architecture/adr-grokbot-provider-target.md) | Experimental | Mixed project/user |
+| `grok-build` | [Grok Build](../architecture/adr-grokbot-provider-target.md) | Experimental | Mixed project/user (`$GROK_HOME`; kernel skills + AGENTS.md; agents/rules indexed until #2577) |
 | `hermes` | Hermes | Stable | Mixed project/user |
 | `opencode` | OpenCode | Stable | Project |
 | `openclaw` | OpenClaw | Stable | User |
@@ -31,7 +31,7 @@ the separate LLM/API vendor category.
 `oh-my-pi` is an alias for `omp`; OMP is distinct from the original `pi` provider.
 The `pi` provider targets Pi Coding Agent, the minimal agent harness published
 at [pi.dev](https://pi.dev/); it remains one provider identity.
-`devin` is an alias for `windsurf`, not an additional provider. Bare `grok` is deliberately not an AIWG provider alias because it names the xAI model/API category; use `grokbot` for Grok Bot or the distinct `grok-build` selector for the experimental Grok Build adapter.
+`devin` is an alias for `windsurf`, not an additional provider. Bare `grok` is deliberately not an AIWG provider alias because it names the xAI model/API category; use `grokbot` for Grok Bot and `grok-build` for the xAI Grok Build CLI/TUI.
 
 The `generic`
 adapter is an eighteenth registry entry used to emit portable files for custom

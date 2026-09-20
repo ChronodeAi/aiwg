@@ -187,7 +187,10 @@ const ProviderDefinitionSchema = z.object({
   upstream: z.object({
     source: z.string().url(),
     version: z.string().min(1),
-    revision: z.string().regex(/^[0-9a-f]{40}$/),
+    revision: z.string().regex(/^[0-9a-f]{40}$/).refine(
+      (value) => value !== '0'.repeat(40),
+      { message: 'upstream.revision must be a real reviewed SHA, not all-zero' },
+    ),
     runtime: z.string().min(1),
     lastVerified: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   }).optional(),
@@ -382,14 +385,21 @@ const CONTEXT_CONTRACTS: Record<Platform, ProviderContextContract> = {
     },
   },
   'grok-build': {
-    startupFiles: ['AGENTS.md', '.grok/config.toml'],
-    precedence: ['provider/system', 'project AGENTS.md', '.grok/config.toml', '$GROK_HOME overrides'],
+    // config.toml is configuration (MCP/plugins/permissions), not a startup/context file.
+    // Hierarchical instructions: AGENTS.md + .grok/rules/*.md, root-to-cwd, deeper wins.
+    startupFiles: ['AGENTS.md', '.grok/rules/*.md'],
+    precedence: [
+      'provider/system',
+      'global ~/.grok instruction sources',
+      'root-to-cwd AGENTS.md and .grok/rules/*.md (deeper files win on conflicts)',
+      '$GROK_HOME for user skills and user config',
+    ],
     loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
-    bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: false, support: 'degraded',
+    bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: true, support: 'supported',
     verification: {
-      method: 'grok inspect when installed; presence-only remediation when binary absent',
-      source: 'https://docs.x.ai/build/settings',
-      lastVerified: '2026-09-19',
+      method: 'xAI project-rules docs (AGENTS.md + .grok/rules hierarchical discovery); grok inspect when installed',
+      source: 'https://docs.x.ai/build/features/project-rules',
+      lastVerified: '2026-09-20',
     },
   },
   hermes: {
@@ -815,25 +825,28 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     builtIn: true,
     upstream: {
       source: 'https://github.com/xai-org/grok-build',
-      version: 'docs-2026-09',
-      revision: '0000000000000000000000000000000000000000',
+      version: '1.0.38',
+      // Reviewed public tree (docs + inspect schema), not an all-zero placeholder.
+      revision: '4247f661689354b831191f11eeeac8424993fe3d',
       runtime: 'Grok Build CLI',
-      lastVerified: '2026-09-19',
+      lastVerified: '2026-09-20',
     },
     surfaces: {
       primary: 'grok-build',
       compatibility: [],
-      precedence: ['AGENTS.md', '.grok/skills/', '.grok/agents/', '.grok/config.toml', '$GROK_HOME'],
+      // Agents/rules native writers deferred #2577; host still discovers those dirs.
+      precedence: ['AGENTS.md', '.grok/skills/', '.grok/rules/ (host; AIWG writer deferred #2577)', '.grok/config.toml (config only)', '$GROK_HOME'],
       related: [],
     },
     detection: { env: ['GROK_HOME'], process: ['grok'], capabilityId: 'grok-build' },
     paths: {
       deployTarget: 'mixed',
       artifacts: {
-        agents: '.grok/agents',
+        // Wave 1 writes skills + AGENTS.md only; agents/rules indexed until #2577.
+        agents: null,
         commands: null,
         skills: '.grok/skills',
-        rules: '.grok/rules',
+        rules: null,
         behaviors: null,
       },
       kernelSkills: '.grok/skills',
@@ -847,10 +860,10 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
     },
     smithPaths: {
-      agents: '.grok/agents',
+      agents: null,
       commands: null,
       skills: '.grok/skills',
-      rules: '.grok/rules',
+      rules: null,
       fileExtension: '.md',
       configFile: '.grok/config.toml',
       aggregated: false,

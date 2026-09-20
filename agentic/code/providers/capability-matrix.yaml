@@ -404,13 +404,16 @@ providers:
   grok-build:
     display_name: Grok Build
     status: experimental
+    # xAI Grok Build CLI/TUI. Distinct from Grok Bot (`grokbot`).
+    # Wave 1 (#2575): native kernel skills + AGENTS.md. Agents/rules writers deferred #2577.
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
-      agents: .grok/agents/
+      agents: "Indexed: aiwg discover / aiwg show agent (native .grok/agents writer deferred #2577)"
       commands: null
       skills: .grok/skills/
-      rules: .grok/rules/
+      skills_cross_agent: .grok/.aiwg/skills/  # --copy-all opt-in mirror
+      rules: "Indexed: aiwg show rule + AGENTS.md / host .grok/rules (AIWG writer deferred #2577)"
       behaviors: null
     native_features:
       cron: false
@@ -428,6 +431,13 @@ providers:
       behaviors: aiwg-mc
       mission_control: aiwg-mc
       daemon: null
+    hook_wiring:
+      at_link_support: false
+      hook_file: null
+      fallback: full-inject
+      context_file: AGENTS.md
+    deploy_target: mixed
+    aggregated_output: false
 
   hermes:
     display_name: Hermes

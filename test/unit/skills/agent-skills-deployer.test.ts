@@ -231,6 +231,8 @@ describe('managed Agent Skills provider matrix', () => {
       .toBe(path.join(homeDir, '.hermes', 'skills', name));
     expect(results.find((item) => item.provider === 'grokbot')?.path)
       .toBe(path.join(homeDir, 'configured-grokbot-skills', name));
+    expect(results.find((item) => item.provider === 'grok-build')?.path)
+      .toBe(path.join(projectDir, '.grok', 'skills', name));
     expect(fs.existsSync(path.join(projectDir, '.openhuman'))).toBe(false);
     expect(fs.existsSync(path.join(projectDir, '.hermes'))).toBe(false);
   });
