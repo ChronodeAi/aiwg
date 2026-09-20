@@ -63,11 +63,26 @@ Live Fortemi Server work begins with the read-only contract preflight:
 npm run qualify:dataset:fortemi-live
 ```
 
+After a separately authorized execution window has produced both the sanitized
+qualification wrapper and its canonical run receipt, bind them into the matrix:
+
+```bash
+npm run qualify:dataset -- --mode live \
+  --fortemi-server-commit <40-hex-server-source> \
+  --live-qualification /path/to/qualification.json \
+  --live-run-receipt /path/to/run-receipt.json \
+  --report test-results/dataset-live.json
+```
+
+Live mode rejects incomplete cleanup, altered receipt digests, source mismatch,
+retained source content or connection details, outbound-network permission, and
+missing replay/archive checks. It consumes existing sanitized evidence; it does
+not itself authorize or start a mutating service run.
+
 The durable execution procedure and Community/Enterprise boundary are defined
 in the [Fortemi live dataset UAT plan](uat/fortemi-live-dataset-uat-plan.md).
-The authority contract is available in released Fortemi `v2026.9.10`. The
-generic local/cross-repository runner still reports its live-server cell as
-pending unless a separately authorized execution receipt is supplied; source
+The authority contract is available in released Fortemi `v2026.9.10`. Local and
+cross-repository modes still report the live-server cell as pending; source
 availability alone is not live evidence.
 
 The repository-local cells execute all five built-in adapter lifecycles and the

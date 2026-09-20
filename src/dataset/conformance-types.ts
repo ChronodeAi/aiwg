@@ -29,6 +29,7 @@ export interface DatasetConformanceManifest {
 export interface DatasetConformanceBinding {
   aiwgCommit: string
   fortemiCommit?: string
+  fortemiServerCommit?: string
   packageDigests: Record<string, string>
   schemaDigests: Record<string, string>
   fixtureDigest: string

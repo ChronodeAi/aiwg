@@ -52,6 +52,15 @@ discovery v1 receipts remain verifiable; new discovery emits v2 receipts for the
 implemented tool and its lifecycle actions. Discovery remains distinct from
 execution evidence and does not attest persistence.
 
+Once the bounded run and cleanup are complete, the matrix consumes the
+sanitized qualification wrapper and its separately persisted canonical run
+receipt with `qualify:dataset -- --mode live`. The exact Fortemi source commit
+is mandatory. The importer independently verifies receipt structure and digest,
+single-record limits, redaction, replay/archive outcomes, process and scratch
+cleanup, and source identity before marking `parity.fortemi-server-live` passed.
+Importing evidence does not authorize a mutation or replace the execution
+window's containment controls.
+
 Discovery must also advertise a capability descriptor. AIWG validates that
 descriptor before any preview or execute call, negotiates the request against it
 independently, and refuses to continue when the server reports a decision the
