@@ -1,6 +1,6 @@
 {
   "name": "aiwg",
-  "version": "2026.9.16",
+  "version": "2026.9.17",
   "description": "Reusable project context and specialist workflows for the AI tools you already use. AIWG places agents, skills, commands, and rules in provider-readable locations, with optional utilities for artifact memory, workflow orchestration, recovery, and discovery.",
   "type": "module",
   "bin": {
@@ -24,6 +24,11 @@
       "types": "./dist/src/governance/index.d.ts",
       "import": "./dist/src/governance/index.js",
       "default": "./dist/src/governance/index.js"
+    },
+    "./dataset": {
+      "types": "./dist/src/dataset/index.d.ts",
+      "import": "./dist/src/dataset/index.js",
+      "default": "./dist/src/dataset/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -212,6 +217,7 @@
     "schemas/policy/",
     "schemas/storage/",
     "schemas/network-analysis/",
+    "test/fixtures/dataset/fortemi-capability/",
     "test/fixtures/network-analysis/manifest.v1.json",
     "test/fixtures/network-analysis/conformance-report.v1.json",
     "test/conformance/activity-v1/fixtures/",
