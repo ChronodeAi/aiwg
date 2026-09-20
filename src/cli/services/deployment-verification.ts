@@ -154,7 +154,7 @@ const RESTART_NOTICES: Readonly<Record<string, ReloadNotice>> = {
   },
   'grok-build': {
     policy: 'restart-required',
-    action: 'Restart the Grok Build session so it reloads .grok skills, agents, and AGENTS.md.',
+    action: 'Restart the Grok Build session so it reloads .grok skills and AGENTS.md.',
     reason: 'Grok Build reload semantics are not yet verified for live refresh; treat deploys as restart-required.',
   },
   factory: {
@@ -684,7 +684,28 @@ export async function verifyProviderDeployment(
     }
 
     if (normalized === 'grok-build') {
-      const inspect = runGrokInspect();
+      const expectedSkillNames: string[] = [];
+      // Prefer validating against kernel skills actually present under .grok/skills.
+      try {
+        const { readdirSync, existsSync: existsSyncFs } = await import('node:fs');
+        const skillsDir = path.resolve(options.projectRoot, '.grok', 'skills');
+        if (existsSyncFs(skillsDir)) {
+          for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+            if (entry.isDirectory() && existsSyncFs(path.resolve(skillsDir, entry.name, 'SKILL.md'))) {
+              expectedSkillNames.push(entry.name);
+            }
+          }
+        }
+      } catch {
+        // best-effort expected set
+      }
+      const inspect = runGrokInspect({
+        cwd: options.projectRoot,
+        expected: {
+          instructionPaths: ['AGENTS.md'],
+          skillNames: expectedSkillNames.slice(0, 32),
+        },
+      });
       if (inspect.status === 'absent') {
         findings.push(finding(
           normalized,
@@ -692,27 +713,40 @@ export async function verifyProviderDeployment(
           'advisory',
           'Grok Build CLI (`grok`) is not on PATH; skipped `grok inspect`.',
           inspect.remediation,
-          { grokHome: resolveGrokHome() },
+          { grokHome: resolveGrokHome(), cwd: options.projectRoot },
         ));
       } else if (inspect.status === 'failed') {
+        const mismatchSummary = (inspect.mismatches ?? [])
+          .slice(0, 8)
+          .map((item) => `${item.kind}:${item.expected}`)
+          .join('; ');
         findings.push(finding(
           normalized,
           'grok-inspect-failed',
           'advisory',
-          `\`grok inspect\` exited ${inspect.exitCode ?? 'unknown'}.`,
-          'Fix the Grok Build installation, then re-run aiwg status --probe or aiwg use for grok-build.',
-          { exitCode: inspect.exitCode, stderr: inspect.stderr.slice(0, 500) },
+          mismatchSummary
+            ? `\`grok inspect\` did not confirm expected AIWG artifacts (${mismatchSummary}).`
+            : `\`grok inspect\` exited ${inspect.exitCode ?? 'unknown'}.`,
+          'Fix the Grok Build installation or redeploy, then re-run aiwg status --probe or aiwg use for grok-build.',
+          {
+            exitCode: inspect.exitCode,
+            stderr: inspect.stderr.slice(0, 500),
+            cwd: inspect.cwd,
+            mismatches: inspect.mismatches?.slice(0, 12),
+          },
         ));
       } else {
         findings.push(finding(
           normalized,
           'grok-inspect-ok',
           'info',
-          '`grok inspect` succeeded.',
+          '`grok inspect` confirmed expected AIWG artifacts in the deployment target.',
           'No action required; restart the Grok Build session if newly deployed skills are not visible.',
           {
             binary: inspect.binary,
-            parsedKeys: inspect.parsed ? Object.keys(inspect.parsed).slice(0, 20) : [],
+            cwd: inspect.cwd,
+            parsedKeys: Object.keys(inspect.parsed).slice(0, 20),
+            checkedSkills: expectedSkillNames.slice(0, 32),
           },
         ));
       }
