@@ -25,6 +25,11 @@
       "import": "./dist/src/governance/index.js",
       "default": "./dist/src/governance/index.js"
     },
+    "./dataset": {
+      "types": "./dist/src/dataset/index.d.ts",
+      "import": "./dist/src/dataset/index.js",
+      "default": "./dist/src/dataset/index.js"
+    },
     "./package.json": "./package.json"
   },
   "engines": {
@@ -212,6 +217,7 @@
     "schemas/policy/",
     "schemas/storage/",
     "schemas/network-analysis/",
+    "test/fixtures/dataset/fortemi-capability/",
     "test/fixtures/network-analysis/manifest.v1.json",
     "test/fixtures/network-analysis/conformance-report.v1.json",
     "test/conformance/activity-v1/fixtures/",
