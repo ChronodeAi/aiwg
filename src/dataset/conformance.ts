@@ -74,7 +74,13 @@ export function verifyConformanceReceipt(manifest: DatasetConformanceManifest, r
   if (receipt.resultDigest !== resultDigest(receipt.results)) diagnostics.push({ code: 'CONFORMANCE_RESULT_DIGEST_MISMATCH', path: '/resultDigest', message: 'Result digest does not match canonical results.' })
   if (!SHA256.test(receipt.bindings.aiwgCommit) && !/^[0-9a-f]{40}$/u.test(receipt.bindings.aiwgCommit)) diagnostics.push({ code: 'CONFORMANCE_RECEIPT_UNVERIFIABLE', path: '/bindings/aiwgCommit', message: 'AIWG commit binding is invalid.' })
   if (Object.keys(receipt.bindings.packageDigests).length === 0 || Object.keys(receipt.bindings.schemaDigests).length === 0) diagnostics.push({ code: 'CONFORMANCE_RECEIPT_UNVERIFIABLE', path: '/bindings', message: 'Package and schema digest bindings are required.' })
-  const resultById = new Map(receipt.results.map(result => [result.cellId, result]))
+  const expectedIds = new Set(manifest.cells.map(cell => cell.id))
+  const resultById = new Map<string, DatasetConformanceCellResult>()
+  receipt.results.forEach((result, index) => {
+    if (resultById.has(result.cellId)) diagnostics.push({ code: 'CONFORMANCE_RESULT_DUPLICATE', path: `/results/${index}/cellId`, message: `Cell ${result.cellId} occurs more than once.` })
+    else resultById.set(result.cellId, result)
+    if (!expectedIds.has(result.cellId)) diagnostics.push({ code: 'CONFORMANCE_RESULT_UNEXPECTED', path: `/results/${index}/cellId`, message: `Cell ${result.cellId} is not declared by the manifest.` })
+  })
   manifest.cells.forEach(cell => {
     const result = resultById.get(cell.id)
     if (!result) diagnostics.push({ code: 'CONFORMANCE_REQUIRED_CELL_MISSING', path: `/results/${cell.id}`, message: `Required cell ${cell.id} is missing.` })

@@ -9,6 +9,7 @@ on:
       - 'test/conformance/dataset/**'
       - 'test/fixtures/dataset-intelligence/**'
       - 'tools/qualification/dataset-conformance.ts'
+      - 'tools/qualification/dataset-local-cells.ts'
       - '.gitea/workflows/dataset-intelligence-conformance.yml'
   pull_request:
     branches: [main, develop]
@@ -18,6 +19,7 @@ on:
       - 'test/conformance/dataset/**'
       - 'test/fixtures/dataset-intelligence/**'
       - 'tools/qualification/dataset-conformance.ts'
+      - 'tools/qualification/dataset-local-cells.ts'
       - '.gitea/workflows/dataset-intelligence-conformance.yml'
   workflow_dispatch:
 
@@ -54,7 +56,7 @@ jobs:
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 20
     env:
-      FORTEMI_COMMIT: ef446477cfd3c05e2fc01253a15647e5e25d594c
+      FORTEMI_COMMIT: 2a4e80d4a827ad4db53ece6bf28e91cece678f23
       FORTEMI_CHECKOUT: /tmp/dataset-fortemi-core
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

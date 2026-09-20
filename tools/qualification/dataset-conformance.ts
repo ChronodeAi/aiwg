@@ -10,7 +10,7 @@ import {
   type DatasetConformanceReceipt,
 } from '../../src/dataset/conformance-types.js'
 import { conformanceDigest, resultDigest, summarizeConformance, verifyConformanceReceipt } from '../../src/dataset/conformance.js'
-import { CsvAdapter, JsonlAdapter } from '../../src/dataset/adapters.js'
+import { CsvAdapter, DirectoryAdapter, FileAdapter, HttpAdapter, JsonlAdapter } from '../../src/dataset/adapters.js'
 import { request, sha256Digest } from '../../src/dataset/adapter-sdk.js'
 import { qualifyAdversarialAdapters, qualifyCapabilityBinding, qualifyCheckpointBoundaries, qualifyOfflineMatrix, qualifyProvenanceBinding, qualifyReplay, qualifyStandardsGoldens } from './dataset-local-cells.js'
 
@@ -33,19 +33,44 @@ async function fixtureEvidence(cell: DatasetConformanceCell) {
 
 async function runAdapter(cell: DatasetConformanceCell): Promise<DatasetConformanceCellResult> {
   const evidence = await fixtureEvidence(cell)
-  const Adapter = cell.sourceClass === 'jsonl' ? JsonlAdapter : CsvAdapter
-  const adapter = new Adapter()
-  const configured = await adapter.configure({ path: resolve(cell.fixture.path) })
+  const sourceRoot = resolve('test/fixtures/dataset-intelligence/v1/sources')
+  const body = cell.sourceClass === 'http' ? await readFile(cell.fixture.path, 'utf8') : ''
+  let fetchAttempts = 0
+  const controlledFetch: typeof fetch = async input => {
+    fetchAttempts += 1
+    return new URL(String(input)).pathname === '/source'
+      ? new Response('', { status: 307, headers: { location: '/v2' } })
+      : new Response(body, { status: 200, headers: { 'content-length': String(Buffer.byteLength(body)) } })
+  }
+  const adapter = cell.sourceClass === 'jsonl' ? new JsonlAdapter()
+    : cell.sourceClass === 'csv' ? new CsvAdapter()
+      : cell.sourceClass === 'file' ? new FileAdapter()
+        : cell.sourceClass === 'directory' ? new DirectoryAdapter()
+          : cell.sourceClass === 'http' ? new HttpAdapter(
+            controlledFetch,
+            async () => [{ address: '203.0.113.10' }],
+          ) : undefined
+  if (!adapter) throw new Error(`CONFORMANCE_ADAPTER_UNSUPPORTED: ${cell.sourceClass}`)
+  const config = cell.sourceClass === 'directory' ? { path: resolve(sourceRoot, 'directory'), recursive: true }
+    : cell.sourceClass === 'http' ? { url: 'https://dataset.example.test/source' }
+      : { path: resolve(cell.fixture.path) }
+  const policy = cell.sourceClass === 'http'
+    ? { offline: false, allowedHosts: ['dataset.example.test'] }
+    : { offline: true, allowedRoot: sourceRoot }
+  const configured = await adapter.configure(config)
   if (!configured.ok || !configured.config) throw new Error(configured.diagnostics[0]?.code ?? 'ADAPTER_INVALID_CONFIGURATION')
-  const adapterRequest = request(cell.id, configured.config, { offline: true, allowedRoot: process.cwd() }, cell.resourceEnvelope)
+  const adapterRequest = request(cell.id, configured.config, policy, cell.resourceEnvelope)
   const checked = await adapter.check(adapterRequest)
   const discovered = await adapter.discover(adapterRequest)
   const previewed = await adapter.preview({ ...adapterRequest, count: 2 })
   let records = 0
   for await (const event of adapter.read(adapterRequest)) if (event.kind === 'record') records += 1
-  const expectedRecords = cell.sourceClass === 'csv' ? 4 : 3
+  const expectedRecords = cell.sourceClass === 'jsonl' ? 3 : cell.sourceClass === 'csv' ? 4 : cell.sourceClass === 'directory' ? 2 : 1
   if (!checked.ok || !discovered.ok || !previewed.ok || records !== expectedRecords) throw new Error('CONFORMANCE_ADAPTER_LIFECYCLE_FAILED')
-  return { cellId: cell.id, status: 'passed', evidence: [evidence, { kind: 'real-source', reference: resolve(cell.fixture.path), digest: evidence.digest }], observed: { records, bytes: (await stat(cell.fixture.path)).size, durationMs: 0, networkAttempts: 0 } }
+  const sourceEvidence = cell.evidence.includes('real-source')
+    ? [{ kind: 'real-source' as const, reference: cell.sourceClass === 'directory' ? resolve(sourceRoot, 'directory') : resolve(cell.fixture.path), digest: evidence.digest }]
+    : []
+  return { cellId: cell.id, status: 'passed', evidence: [evidence, ...sourceEvidence], observed: { records, bytes: (await stat(cell.fixture.path)).size, durationMs: 0, networkAttempts: fetchAttempts } }
 }
 
 async function runBoundCell(cell: DatasetConformanceCell, qualify: () => Promise<void>): Promise<DatasetConformanceCellResult> {

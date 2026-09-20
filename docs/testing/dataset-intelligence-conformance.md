@@ -17,6 +17,9 @@ from the canonical result digest.
 Fixtures contain only synthetic data. Tests must not enumerate environment
 variables, resolve real credentials, contact public SSRF targets, or record
 credential material. Controlled HTTP cases use injected fetch and DNS behavior.
+The matrix executes file, directory, JSONL, CSV, and HTTP adapter lifecycles.
+File, directory, JSONL, and CSV cells use committed real source files; the HTTP
+cell remains fixture-qualified and does not claim live network maturity.
 Fortemi Server recovery and load cells require the independent authorization,
 isolated tenant, endpoint, server version, and resource envelope tracked by
 #2194.
@@ -62,15 +65,17 @@ npm run qualify:dataset:fortemi-live
 
 The durable execution procedure and Community/Enterprise boundary are defined
 in the [Fortemi live dataset UAT plan](uat/fortemi-live-dataset-uat-plan.md).
-Until the authority contract tracked by Fortemi Server issue #1128 is
-available, the live dataset cell remains pending rather than passing or being
-skipped.
+The authority contract is available in released Fortemi `v2026.9.10`. The
+generic local/cross-repository runner still reports its live-server cell as
+pending unless a separately authorized execution receipt is supplied; source
+availability alone is not live evidence.
 
-The repository-local cells execute the canonical Dataset Orchestration Service
-for capability negotiation, replay, checkpoint boundaries, verified offline
-cache behavior, and provenance. Cross-repository mode executes the focused
-Fortemi capability, ingest, lineage, and materialization suites from an exact
-clean commit and binds that commit and lockfile digest into the receipt.
+The repository-local cells execute all five built-in adapter lifecycles and the
+canonical Dataset Orchestration Service for capability negotiation, replay,
+checkpoint boundaries, verified offline cache behavior, and provenance.
+Cross-repository mode executes the focused Fortemi capability, ingest, lineage,
+and materialization suites from the exact released React/Core source and binds
+that commit and lockfile digest into the receipt.
 Prior-version migration remains pending until a stable predecessor exists, and
 Fortemi Server remains pending without the separately authorized execution
 window and controlled infrastructure. Neither pending cell is silently skipped.

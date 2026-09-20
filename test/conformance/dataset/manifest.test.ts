@@ -14,6 +14,8 @@ describe('dataset conformance manifest', () => {
     expect(validateConformanceManifest(manifest)).toEqual([])
     expect(conformanceDigest(manifest)).toMatch(/^sha256:[0-9a-f]{64}$/u)
     expect(new Set(manifest.cells.map(cell => cell.area))).toEqual(new Set(['adapter', 'capability', 'replay', 'checkpoint', 'security', 'offline', 'provenance', 'standards', 'migration', 'parity']))
+    expect(new Set(manifest.cells.filter(cell => cell.area === 'adapter').map(cell => cell.sourceClass)))
+      .toEqual(new Set(['file', 'directory', 'jsonl', 'csv', 'http']))
     const schema = JSON.parse(await readFile('schemas/dataset/conformance-manifest.v1.schema.json', 'utf8'))
     const ajv = new Ajv2020({ strict: true, allErrors: true }); addFormats(ajv)
     expect(ajv.compile(schema)(manifest)).toBe(true)
@@ -33,5 +35,15 @@ describe('dataset conformance manifest', () => {
     for (const [path, digest] of Object.entries(digestManifest.files)) {
       expect(createHash('sha256').update(await readFile(`test/fixtures/dataset-intelligence/v1/${path}`)).digest('hex'), path).toBe(digest)
     }
+    const directory = JSON.parse(await readFile('test/fixtures/dataset-intelligence/v1/sources/directory-manifest.json', 'utf8')) as { files: Array<{ path: string; sha256: string }> }
+    for (const file of directory.files) {
+      expect(createHash('sha256').update(await readFile(`test/fixtures/dataset-intelligence/v1/sources/directory/${file.path}`)).digest('hex'), file.path).toBe(file.sha256)
+    }
+  })
+
+  it('triggers on both runner modules and pins the released Core source', async () => {
+    const workflow = await readFile('.gitea/workflows/dataset-intelligence-conformance.yml', 'utf8')
+    expect(workflow.match(/tools\/qualification\/dataset-local-cells\.ts/gu)).toHaveLength(2)
+    expect(workflow).toContain('FORTEMI_COMMIT: 2a4e80d4a827ad4db53ece6bf28e91cece678f23')
   })
 })
