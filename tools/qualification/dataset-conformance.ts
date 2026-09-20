@@ -12,15 +12,16 @@ import {
 import { conformanceDigest, resultDigest, summarizeConformance, verifyConformanceReceipt } from '../../src/dataset/conformance.js'
 import { CsvAdapter, DirectoryAdapter, FileAdapter, HttpAdapter, JsonlAdapter } from '../../src/dataset/adapters.js'
 import { request, sha256Digest } from '../../src/dataset/adapter-sdk.js'
+import { verifyFortemiDatasetExecutionQualification } from '../../src/dataset/fortemi-live-qualification.js'
 import { qualifyAdversarialAdapters, qualifyCapabilityBinding, qualifyCheckpointBoundaries, qualifyOfflineMatrix, qualifyProvenanceBinding, qualifyReplay, qualifyStandardsGoldens } from './dataset-local-cells.js'
 
-interface Arguments { manifest: string; report?: string; mode: 'local' | 'cross-repo' | 'live'; fortemiCheckout?: string; fortemiCommit?: string; verify?: string }
+interface Arguments { manifest: string; report?: string; mode: 'local' | 'cross-repo' | 'live'; fortemiCheckout?: string; fortemiCommit?: string; fortemiServerCommit?: string; liveQualification?: string; liveRunReceipt?: string; verify?: string }
 
 function argumentsFrom(argv: string[]): Arguments {
   const value = (name: string) => { const at = argv.indexOf(name); return at >= 0 ? argv[at + 1] : undefined }
   const mode = (value('--mode') ?? 'local') as Arguments['mode']
   if (!['local', 'cross-repo', 'live'].includes(mode)) throw new Error(`Unsupported mode ${mode}`)
-  return { manifest: value('--manifest') ?? 'test/fixtures/dataset-intelligence/v1/manifest.json', report: value('--report'), mode, fortemiCheckout: value('--fortemi-checkout'), fortemiCommit: value('--fortemi-commit'), verify: value('--verify') }
+  return { manifest: value('--manifest') ?? 'test/fixtures/dataset-intelligence/v1/manifest.json', report: value('--report'), mode, fortemiCheckout: value('--fortemi-checkout'), fortemiCommit: value('--fortemi-commit'), fortemiServerCommit: value('--fortemi-server-commit'), liveQualification: value('--live-qualification'), liveRunReceipt: value('--live-run-receipt'), verify: value('--verify') }
 }
 
 async function digestFile(path: string): Promise<string> { return `sha256:${sha256Digest(await readFile(path)).value}` }
@@ -94,6 +95,25 @@ async function runFortemiParity(cell: DatasetConformanceCell, checkout: string, 
   return { cellId: cell.id, status: 'passed', evidence: [fixture, { kind: 'cross-repo', reference: `${checkout}@${commit}`, digest: lockDigest }], observed: { records: 0, bytes: (await stat(cell.fixture.path)).size, durationMs: 0, networkAttempts: 0 } }
 }
 
+async function runFortemiLive(cell: DatasetConformanceCell, qualificationPath: string, runReceiptPath: string, commit: string): Promise<DatasetConformanceCellResult> {
+  const fixture = await fixtureEvidence(cell)
+  const qualification = JSON.parse(await readFile(qualificationPath, 'utf8')) as unknown
+  const runReceipt = JSON.parse(await readFile(runReceiptPath, 'utf8')) as unknown
+  const diagnostics = verifyFortemiDatasetExecutionQualification({ qualification, runReceipt, expectedFortemiCommit: commit })
+  if (diagnostics.length) throw new Error(diagnostics.join(','))
+  const receipt = runReceipt as { counts: { committed: number }, resourceEnvelope: { maxInputBytes: number } }
+  return {
+    cellId: cell.id,
+    status: 'passed',
+    evidence: [
+      fixture,
+      { kind: 'live-qualification', reference: resolve(qualificationPath), digest: await digestFile(qualificationPath) },
+      { kind: 'live-qualification', reference: resolve(runReceiptPath), digest: await digestFile(runReceiptPath) },
+    ],
+    observed: { records: receipt.counts.committed, bytes: receipt.resourceEnvelope.maxInputBytes, networkAttempts: 1 },
+  }
+}
+
 async function main() {
   const args = argumentsFrom(process.argv.slice(2))
   const manifest = JSON.parse(await readFile(args.manifest, 'utf8')) as DatasetConformanceManifest
@@ -104,11 +124,19 @@ async function main() {
     process.exitCode = diagnostics.length === 0 ? 0 : 1
     return
   }
-  if (args.mode === 'live') throw new Error('CONFORMANCE_LIVE_AUTHORIZATION_REQUIRED: live qualification is owned by #2194')
-  if (args.mode === 'cross-repo') {
+  const aiwgDirty = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim()
+  if (aiwgDirty) throw new Error('CONFORMANCE_AIWG_CHECKOUT_DIRTY')
+  if (args.mode === 'live') {
+    if (!args.liveQualification || !args.liveRunReceipt || !args.fortemiServerCommit || !/^[0-9a-f]{40}$/u.test(args.fortemiServerCommit)) {
+      throw new Error('CONFORMANCE_LIVE_AUTHORIZATION_REQUIRED: --live-qualification, --live-run-receipt, and --fortemi-server-commit are required')
+    }
+  }
+  if (args.mode === 'cross-repo' || (args.mode === 'live' && args.fortemiCheckout)) {
     if (!args.fortemiCheckout || !args.fortemiCommit || !/^[0-9a-f]{40}$/u.test(args.fortemiCommit)) throw new Error('CONFORMANCE_PINNED_FORTEMI_REQUIRED')
     const actual = execFileSync('git', ['-C', args.fortemiCheckout, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
     if (actual !== args.fortemiCommit) throw new Error(`CONFORMANCE_FORTEMI_COMMIT_MISMATCH: expected ${args.fortemiCommit}, received ${actual}`)
+    const dirty = execFileSync('git', ['-C', args.fortemiCheckout, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim()
+    if (dirty) throw new Error('CONFORMANCE_FORTEMI_CHECKOUT_DIRTY')
   }
   const startedAt = new Date().toISOString()
   const results: DatasetConformanceCellResult[] = []
@@ -122,7 +150,8 @@ async function main() {
       else if (cell.id === 'offline.cache-matrix') results.push(await runBoundCell(cell, qualifyOfflineMatrix))
       else if (cell.id === 'provenance.complete') results.push(await runBoundCell(cell, qualifyProvenanceBinding))
       else if (cell.id === 'standards.prov-openlineage') results.push(await runBoundCell(cell, qualifyStandardsGoldens))
-      else if (cell.id === 'parity.fortemi-core' && args.mode === 'cross-repo' && args.fortemiCheckout && args.fortemiCommit) results.push(await runFortemiParity(cell, args.fortemiCheckout, args.fortemiCommit))
+      else if (cell.id === 'parity.fortemi-core' && args.mode !== 'local' && args.fortemiCheckout && args.fortemiCommit) results.push(await runFortemiParity(cell, args.fortemiCheckout, args.fortemiCommit))
+      else if (cell.id === 'parity.fortemi-server-live' && args.mode === 'live' && args.liveQualification && args.liveRunReceipt && args.fortemiServerCommit) results.push(await runFortemiLive(cell, args.liveQualification, args.liveRunReceipt, args.fortemiServerCommit))
       else results.push(await pending(cell))
     } catch (error) {
       results.push({ cellId: cell.id, status: 'failed', diagnostic: error instanceof Error ? error.message : 'CONFORMANCE_UNKNOWN_FAILURE', evidence: [], observed: { networkAttempts: 0 } })
@@ -134,11 +163,12 @@ async function main() {
     manifestDigest: conformanceDigest(manifest), resultDigest: resultDigest(results),
     bindings: {
       aiwgCommit: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-      ...(args.mode === 'cross-repo' ? { fortemiCommit: args.fortemiCommit } : {}),
+      ...(args.fortemiCheckout ? { fortemiCommit: args.fortemiCommit } : {}),
+      ...(args.mode === 'live' ? { fortemiServerCommit: args.fortemiServerCommit } : {}),
       packageDigests: { aiwg: await digestFile('package-lock.json'), ...(args.fortemiCheckout ? { fortemi: await digestFile(resolve(args.fortemiCheckout, 'pnpm-lock.yaml')) } : {}) },
       schemaDigests: Object.fromEntries(await Promise.all(schemaPaths.map(async path => [path, await digestFile(path)]))),
       fixtureDigest: await digestFile('test/fixtures/dataset-intelligence/v1/digest-manifest.json'),
-      configurationDigest: conformanceDigest({ mode: args.mode }),
+      configurationDigest: conformanceDigest({ mode: args.mode, fortemiCommit: args.fortemiCommit, fortemiServerCommit: args.fortemiServerCommit }),
     },
     startedAt, endedAt: new Date().toISOString(), results, summary: summarizeConformance(manifest, results),
   }
