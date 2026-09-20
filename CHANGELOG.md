@@ -21,6 +21,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Dataset conformance CI installs and exercises the packed package, validates
   all 20 version and 11 wire vectors, and pins cross-repository qualification
   to the final signed Fortemi React Lane B source.
+- The public provider inventory, Agent Skills matrix, and context bridge
+  expectations include the experimental Grok Build provider added immediately
+  before this release.
+
+### Fixed
+
+- The clean-install dataset packaging gate seeds the exact lockfile-bound
+  `@fortemi/core` archive from the offline npm cache instead of requiring an
+  unavailable registry packument.
+- Provider indexed-access tests distinguish an explicitly unsupported surface
+  from a missing indexed artifact.
 
 ## [2026.9.16] - 2026-09-17 – "Grok Bot goes stable"
 

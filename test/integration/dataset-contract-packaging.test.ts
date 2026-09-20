@@ -6,6 +6,13 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
+const ROOT_PACKAGE = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
+  dependencies: Record<string, string>;
+};
+const ROOT_LOCK = JSON.parse(readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')) as {
+  packages: Record<string, { version?: string; resolved?: string; integrity?: string }>;
+};
+const FORTEMI_CORE_LOCK = ROOT_LOCK.packages['node_modules/@fortemi/core'];
 
 /**
  * Pinned producer contracts the dataset runtime reads from disk at import time.
@@ -84,6 +91,9 @@ describe('dataset producer contracts ship with the package (packaging lane)', ()
   });
 
   it('runs every shared capability vector through a clean-installed public entry', () => {
+    expect(FORTEMI_CORE_LOCK.version).toBe(ROOT_PACKAGE.dependencies['@fortemi/core']);
+    expect(FORTEMI_CORE_LOCK.resolved).toMatch(/^https:\/\/registry\.npmjs\.org\/@fortemi\/core\/-\/core-[0-9.]+\.tgz$/);
+    expect(FORTEMI_CORE_LOCK.integrity).toMatch(/^sha512-[A-Za-z0-9+/]+=*$/);
     const scratch = mkdtempSync(path.join(tmpdir(), 'aiwg-dataset-installed-'));
     try {
       writeFileSync(path.join(scratch, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
@@ -93,9 +103,12 @@ describe('dataset producer contracts ship with the package (packaging lane)', ()
       expect(pack.status, pack.stderr).toBe(0);
       const tarball = path.join(scratch, parsePackResult(pack.stdout)[0].filename);
       const install = spawnSync('npm', [
-        'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', tarball,
+        'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
+        FORTEMI_CORE_LOCK.resolved!, tarball,
       ], { cwd: scratch, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 120_000 });
       expect(install.status, install.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path.join(scratch, 'node_modules/@fortemi/core/package.json'), 'utf8')).version)
+        .toBe(FORTEMI_CORE_LOCK.version);
 
       const probe = path.join(scratch, 'probe.mjs');
       writeFileSync(probe, `

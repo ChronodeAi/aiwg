@@ -135,6 +135,7 @@ describe('managed Agent Skills provider matrix', () => {
       ['deepseek-harness', 'native'],
       ['factory', 'projected'],
       ['grokbot', 'native'],
+      ['grok-build', 'native'],
       ['hermes', 'native'],
       ['opencode', 'native'],
       ['openclaw', 'native'],
@@ -509,4 +510,3 @@ describe('grokbot Agent Skills fail-closed deploy (#212)', () => {
     expect(fs.existsSync(path.join(homeDir, 'relative-skills'))).toBe(false);
   });
 });
-
