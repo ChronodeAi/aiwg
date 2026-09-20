@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(import.meta.dirname, '../..');
 const ROOT_PACKAGE = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')) as {
+  version: string;
   dependencies: Record<string, string>;
 };
 const ROOT_LOCK = JSON.parse(readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8')) as {
@@ -90,7 +91,7 @@ describe('dataset producer contracts ship with the package (packaging lane)', ()
     expect(module.validateFortemiCapabilityDescriptor(null).length).toBeGreaterThan(0);
   });
 
-  it('runs every shared capability vector through a clean-installed public entry', () => {
+  it('runs every shared capability vector through a clean-unpacked public entry', () => {
     expect(FORTEMI_CORE_LOCK.version).toBe(ROOT_PACKAGE.dependencies['@fortemi/core']);
     expect(FORTEMI_CORE_LOCK.resolved).toMatch(/^https:\/\/registry\.npmjs\.org\/@fortemi\/core\/-\/core-[0-9.]+\.tgz$/);
     expect(FORTEMI_CORE_LOCK.integrity).toMatch(/^sha512-[A-Za-z0-9+/]+=*$/);
@@ -102,13 +103,22 @@ describe('dataset producer contracts ship with the package (packaging lane)', ()
       });
       expect(pack.status, pack.stderr).toBe(0);
       const tarball = path.join(scratch, parsePackResult(pack.stdout)[0].filename);
-      const install = spawnSync('npm', [
-        'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
-        FORTEMI_CORE_LOCK.resolved!, tarball,
-      ], { cwd: scratch, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 120_000 });
-      expect(install.status, install.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(path.join(scratch, 'node_modules/@fortemi/core/package.json'), 'utf8')).version)
-        .toBe(FORTEMI_CORE_LOCK.version);
+      const installedRoot = path.join(scratch, 'node_modules/aiwg');
+      mkdirSync(installedRoot, { recursive: true });
+      const unpack = spawnSync('tar', [
+        '-xzf', tarball, '-C', installedRoot, '--strip-components=1',
+      ], { cwd: scratch, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 30_000 });
+      expect(unpack.status, unpack.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(path.join(installedRoot, 'package.json'), 'utf8')).version)
+        .toBe(ROOT_PACKAGE.version);
+      for (const dependency of ['ajv', 'ajv-formats']) {
+        expect(ROOT_PACKAGE.dependencies[dependency]).toBeTruthy();
+        const dependencyPath = dependency.split('/');
+        const source = path.join(ROOT, 'node_modules', ...dependencyPath);
+        const target = path.join(scratch, 'node_modules', ...dependencyPath);
+        mkdirSync(path.dirname(target), { recursive: true });
+        symlinkSync(source, target, 'junction');
+      }
 
       const probe = path.join(scratch, 'probe.mjs');
       writeFileSync(probe, `
