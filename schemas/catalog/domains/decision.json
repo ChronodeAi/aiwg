@@ -1,0 +1,84 @@
+{
+  "$schema": "../domain-manifest.v1.schema.json",
+  "schemaVersion": "1",
+  "domain": "decision",
+  "owner": { "id": "decision-engine" },
+  "policy": {
+    "strict": true,
+    "remoteReferences": "deny",
+    "compatibility": "backward",
+    "requireFixtures": false
+  },
+  "artifacts": [
+    {
+      "logicalName": "decision.definition",
+      "id": "https://aiwg.io/schemas/decision/DecisionDefinition.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionDefinition.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-runtime", "boundary": "Portable decision definitions", "path": "src/decision/validate.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.ruleset",
+      "id": "https://aiwg.io/schemas/decision/DecisionRuleset.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionRuleset.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-runtime", "boundary": "Portable rules and deterministic composition", "path": "src/decision/compose.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.binding",
+      "id": "https://aiwg.io/schemas/decision/DecisionBinding.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionBinding.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-runtime", "boundary": "Adapter selection and execution budgets", "path": "src/decision/evaluate.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.result",
+      "id": "https://aiwg.io/schemas/decision/DecisionResult.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionResult.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-runtime", "boundary": "Normalized adapter observations and attempt lineage", "path": "src/decision/types.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.ruleset-result",
+      "id": "https://aiwg.io/schemas/decision/RulesetResult.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/RulesetResult.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-runtime", "boundary": "Normalized workflow-facing outcomes", "path": "src/decision/evaluate.ts" }],
+      "publication": { "public": true }
+    }
+  ]
+}

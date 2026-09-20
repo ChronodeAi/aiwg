@@ -1,0 +1,56 @@
+{
+  "apiVersion": "decision.aiwg.io/v1alpha1",
+  "kind": "DecisionResult",
+  "metadata": {
+    "id": "example-llm-result-category",
+    "version": "1.0.0",
+    "description": "example result category"
+  },
+  "spec": {
+    "decision": {
+      "id": "example-category",
+      "version": "1.0.0",
+      "digest": "sha256:161af95ce387331720fe1ded3a45cdf90f6d3feb32f24c74f0745714cd0d6b2e"
+    },
+    "ruleset": {
+      "id": "example-triage",
+      "version": "1.0.0",
+      "digest": "sha256:8619b985cd193f223caa35092e9ca44d4afc2e5fd7be53ae99277f8f55071b0c"
+    },
+    "binding": {
+      "id": "example-binding-llm-subagent",
+      "version": "1.0.0",
+      "digest": "sha256:5369e969adf739e577931490a9540dead98798769bb9d637c7db5fa90f0f137e"
+    },
+    "alias": "category",
+    "runId": "example-design-run",
+    "invocationId": "example-invocation",
+    "status": "success",
+    "value": "documentation",
+    "reason": "none",
+    "uncertainty": null,
+    "attempts": [
+      {
+        "ordinal": 1,
+        "adapter": "llm-subagent",
+        "adapterVersion": "1.0.0-design",
+        "requestedModel": "operator-selected-model",
+        "actualModel": "fixture-model",
+        "subagent": {
+          "id": "example-decision-worker",
+          "version": "1.0.0",
+          "digest": "sha256:6d042bcfb6902e20b9b7394455576928bf6e520613bb66b52e6ab2751c1d7eeb"
+        },
+        "status": "success",
+        "reason": "none",
+        "durationMs": 10,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "costUsd": null
+        },
+        "requestId": null
+      }
+    ]
+  }
+}

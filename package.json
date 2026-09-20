@@ -30,6 +30,11 @@
       "import": "./dist/src/dataset/index.js",
       "default": "./dist/src/dataset/index.js"
     },
+    "./decision": {
+      "types": "./dist/src/decision/index.d.ts",
+      "import": "./dist/src/decision/index.js",
+      "default": "./dist/src/decision/index.js"
+    },
     "./package.json": "./package.json"
   },
   "engines": {
@@ -56,6 +61,7 @@
     "smoke:antigravity:live": "node tools/providers/antigravity-live-smoke.mjs",
     "smoke:deepseek-harness:live": "node tools/providers/deepseek-harness-live-smoke.mjs",
     "smoke:grokbot:live": "node tools/providers/grokbot-live-smoke.mjs",
+    "smoke:decision:jev:live": "npm run build:cli && node tools/decision/jev-live-smoke.mjs",
     "validate-metadata": "aiwg validate-metadata",
     "package-plugins": "node tools/plugin/package-plugins.mjs --all",
     "package-plugins:clean": "node tools/plugin/package-plugins.mjs --all --clean",
@@ -170,6 +176,7 @@
     "!dist/**/*.d.ts",
     "!dist/**/*.map",
     "dist/src/api/index.d.ts",
+    "dist/src/decision/**/*.d.ts",
     "dist/src/writing/contextual-diagnostics.d.ts",
     "dist/src/writing/writer-profile.d.ts",
     "dist/src/writing/channel-packs.d.ts",
@@ -209,6 +216,7 @@
     "schemas/activity/",
     "schemas/dataset/",
     "schemas/deploy/",
+    "schemas/decision/",
     "schemas/flow/",
     "schemas/uhp/",
     "schemas/mission-v1.schema.json",

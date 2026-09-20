@@ -1,0 +1,309 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionBinding.v1alpha1.schema.json",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "const": "decision.aiwg.io/v1alpha1"
+    },
+    "kind": {
+      "const": "DecisionBinding"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "ruleset": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "additionalProperties": false
+        },
+        "totalTimeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "evaluations": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "targets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "adapter": {
+                      "enum": [
+                        "jev",
+                        "llm-subagent"
+                      ]
+                    },
+                    "adapterVersion": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "model": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "subagent": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "version": {
+                          "type": "string",
+                          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                        },
+                        "digest": {
+                          "type": "string",
+                          "pattern": "^sha256:[0-9a-f]{64}$"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "version",
+                        "digest"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "credentialRef": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9.-]+$"
+                    },
+                    "requiredCapabilities": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "minItems": 0
+                    },
+                    "acceptance": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "const": "typed-value"
+                            }
+                          },
+                          "required": [
+                            "mode"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "mode": {
+                              "const": "confidence-threshold"
+                            },
+                            "profile": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "minimumBps": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000
+                            }
+                          },
+                          "required": [
+                            "mode",
+                            "profile",
+                            "minimumBps"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "timeoutMs": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "retry": {
+                      "type": "object",
+                      "properties": {
+                        "maxRetries": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10
+                        },
+                        "initialDelayMs": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "maxDelayMs": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "maxRetries",
+                        "initialDelayMs",
+                        "maxDelayMs"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "adapter",
+                    "adapterVersion",
+                    "model",
+                    "requiredCapabilities",
+                    "acceptance",
+                    "timeoutMs",
+                    "retry"
+                  ],
+                  "additionalProperties": false,
+                  "allOf": [
+                    {
+                      "if": {
+                        "properties": {
+                          "adapter": {
+                            "const": "jev"
+                          }
+                        }
+                      },
+                      "then": {
+                        "properties": {
+                          "credentialRef": {}
+                        },
+                        "required": [
+                          "credentialRef"
+                        ],
+                        "not": {
+                          "properties": {
+                            "subagent": {}
+                          },
+                          "required": [
+                            "subagent"
+                          ]
+                        }
+                      },
+                      "else": {
+                        "properties": {
+                          "subagent": {}
+                        },
+                        "required": [
+                          "subagent"
+                        ],
+                        "not": {
+                          "properties": {
+                            "credentialRef": {}
+                          },
+                          "required": [
+                            "credentialRef"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                "minItems": 1
+              },
+              "fallbackOn": {
+                "type": "array",
+                "items": {
+                  "enum": [
+                    "unsupported-capability",
+                    "executor-unavailable",
+                    "invalid-output",
+                    "low-confidence",
+                    "missing-confidence",
+                    "confidence-profile-mismatch",
+                    "insufficient-information",
+                    "timeout",
+                    "network-transient",
+                    "rate-limited",
+                    "overloaded",
+                    "service-error",
+                    "authentication",
+                    "invalid-request"
+                  ]
+                },
+                "minItems": 0
+              }
+            },
+            "required": [
+              "targets",
+              "fallbackOn"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "ruleset",
+        "totalTimeoutMs",
+        "maxAttempts",
+        "concurrency",
+        "evaluations"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "additionalProperties": false
+}

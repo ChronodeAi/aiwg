@@ -1,0 +1,690 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/RulesetResult.v1alpha1.schema.json",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "const": "decision.aiwg.io/v1alpha1"
+    },
+    "kind": {
+      "const": "RulesetResult"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "ruleset": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "additionalProperties": false
+        },
+        "binding": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "additionalProperties": false
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "invocationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "defaulted",
+            "review",
+            "error",
+            "cancelled"
+          ]
+        },
+        "reason": {
+          "enum": [
+            "none",
+            "invalid-input",
+            "invalid-definition",
+            "digest-mismatch",
+            "unauthorized",
+            "data-boundary-denied",
+            "unsupported-capability",
+            "executor-unavailable",
+            "invalid-output",
+            "low-confidence",
+            "missing-confidence",
+            "confidence-profile-mismatch",
+            "insufficient-information",
+            "timeout",
+            "network-transient",
+            "rate-limited",
+            "overloaded",
+            "service-error",
+            "authentication",
+            "invalid-request",
+            "budget-exhausted",
+            "cancelled",
+            "persistence-error",
+            "replay-mismatch",
+            "execution-uncertain",
+            "no-match",
+            "conflicting-outcomes",
+            "evaluation-failed"
+          ]
+        },
+        "outcome": {},
+        "matchedRules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        },
+        "evaluations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "apiVersion": {
+                "const": "decision.aiwg.io/v1alpha1"
+              },
+              "kind": {
+                "const": "DecisionResult"
+              },
+              "metadata": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "id",
+                  "version",
+                  "description"
+                ],
+                "additionalProperties": false
+              },
+              "spec": {
+                "type": "object",
+                "properties": {
+                  "decision": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "version": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "ruleset": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "version": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "binding": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "version": {
+                        "type": "string",
+                        "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                      },
+                      "digest": {
+                        "type": "string",
+                        "pattern": "^sha256:[0-9a-f]{64}$"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "version",
+                      "digest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "alias": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "runId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "invocationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "enum": [
+                      "success",
+                      "abstained",
+                      "error",
+                      "unsupported",
+                      "cancelled"
+                    ]
+                  },
+                  "value": {
+                    "anyOf": [
+                      { "type": "number" },
+                      { "type": "string" }
+                    ]
+                  },
+                  "reason": {
+                    "enum": [
+                      "none",
+                      "invalid-input",
+                      "invalid-definition",
+                      "digest-mismatch",
+                      "unauthorized",
+                      "data-boundary-denied",
+                      "unsupported-capability",
+                      "executor-unavailable",
+                      "invalid-output",
+                      "low-confidence",
+                      "missing-confidence",
+                      "confidence-profile-mismatch",
+                      "insufficient-information",
+                      "timeout",
+                      "network-transient",
+                      "rate-limited",
+                      "overloaded",
+                      "service-error",
+                      "authentication",
+                      "invalid-request",
+                      "budget-exhausted",
+                      "cancelled",
+                      "persistence-error",
+                      "replay-mismatch",
+                      "execution-uncertain",
+                      "no-match",
+                      "conflicting-outcomes",
+                      "evaluation-failed"
+                    ]
+                  },
+                  "uncertainty": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "source": {
+                            "enum": [
+                              "provider",
+                              "model-self-report",
+                              "derived"
+                            ]
+                          },
+                          "profile": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "calibration": {
+                            "enum": [
+                              "vendor-claimed",
+                              "uncalibrated",
+                              "measured"
+                            ]
+                          },
+                          "confidence": {
+                            "anyOf": [
+                              {
+                                "type": "number",
+                                "minimum": 0,
+                                "maximum": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "distribution": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "minProperties": 2,
+                                "additionalProperties": {
+                                  "type": "number",
+                                  "minimum": 0,
+                                  "maximum": 1
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "calibrationRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "profile",
+                          "calibration",
+                          "confidence",
+                          "distribution",
+                          "calibrationRef"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "attempts": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "ordinal": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "adapter": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "adapterVersion": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "requestedModel": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "actualModel": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "subagent": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "version": {
+                                  "type": "string",
+                                  "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                                },
+                                "digest": {
+                                  "type": "string",
+                                  "pattern": "^sha256:[0-9a-f]{64}$"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "version",
+                                "digest"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "status": {
+                          "enum": [
+                            "success",
+                            "abstained",
+                            "error",
+                            "unsupported",
+                            "cancelled"
+                          ]
+                        },
+                        "reason": {
+                          "enum": [
+                            "none",
+                            "invalid-input",
+                            "invalid-definition",
+                            "digest-mismatch",
+                            "unauthorized",
+                            "data-boundary-denied",
+                            "unsupported-capability",
+                            "executor-unavailable",
+                            "invalid-output",
+                            "low-confidence",
+                            "missing-confidence",
+                            "confidence-profile-mismatch",
+                            "insufficient-information",
+                            "timeout",
+                            "network-transient",
+                            "rate-limited",
+                            "overloaded",
+                            "service-error",
+                            "authentication",
+                            "invalid-request",
+                            "budget-exhausted",
+                            "cancelled",
+                            "persistence-error",
+                            "replay-mismatch",
+                            "execution-uncertain",
+                            "no-match",
+                            "conflicting-outcomes",
+                            "evaluation-failed"
+                          ]
+                        },
+                        "durationMs": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "usage": {
+                          "type": "object",
+                          "properties": {
+                            "inputTokens": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "outputTokens": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "costUsd": {
+                              "anyOf": [
+                                {
+                                  "type": "number",
+                                  "minimum": 0
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "inputTokens",
+                            "outputTokens",
+                            "costUsd"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "requestId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "ordinal",
+                        "adapter",
+                        "adapterVersion",
+                        "requestedModel",
+                        "actualModel",
+                        "subagent",
+                        "status",
+                        "reason",
+                        "durationMs",
+                        "usage",
+                        "requestId"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "minItems": 0
+                  }
+                },
+                "required": [
+                  "decision",
+                  "ruleset",
+                  "binding",
+                  "alias",
+                  "runId",
+                  "invocationId",
+                  "status",
+                  "reason",
+                  "uncertainty",
+                  "attempts"
+                ],
+                "additionalProperties": false,
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "status": {
+                          "const": "success"
+                        }
+                      }
+                    },
+                    "then": {
+                      "required": [
+                        "value"
+                      ],
+                      "properties": {
+                        "value": {},
+                        "reason": {
+                          "const": "none"
+                        },
+                        "attempts": {
+                          "type": "array",
+                          "minItems": 1
+                        }
+                      }
+                    },
+                    "else": {
+                      "not": {
+                        "properties": {
+                          "value": {}
+                        },
+                        "required": [
+                          "value"
+                        ]
+                      },
+                      "properties": {
+                        "reason": {
+                          "not": {
+                            "const": "none"
+                          }
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            "required": [
+              "apiVersion",
+              "kind",
+              "metadata",
+              "spec"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "ruleset",
+        "binding",
+        "runId",
+        "invocationId",
+        "status",
+        "reason",
+        "matchedRules",
+        "evaluations"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "completed",
+                  "defaulted",
+                  "review"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "outcome": {}
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "else": {
+            "not": {
+              "properties": {
+                "outcome": {}
+              },
+              "required": [
+                "outcome"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "additionalProperties": false
+}

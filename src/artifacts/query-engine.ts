@@ -1751,7 +1751,7 @@ async function findCorpusArtifact(
   ];
 
   // (subdir, type, layout) — 'flat' = `<name>.md`, 'slug' = `<name>/SKILL.md`
-  const tries: Array<{ sub: string; type: string; layout: 'flat' | 'slug' }> = [
+  const tries: Array<{ sub: string; type: string; layout: 'flat' | 'slug'; extension?: '.md' | '.json' | '.yaml' }> = [
     { sub: 'skills', type: 'skill', layout: 'slug' },
     { sub: 'skills', type: 'skill', layout: 'flat' },
     { sub: 'agents', type: 'agent', layout: 'flat' },
@@ -1761,6 +1761,9 @@ async function findCorpusArtifact(
     { sub: 'behaviors', type: 'behavior', layout: 'flat' },
     { sub: 'flows', type: 'flow', layout: 'flat' },
     { sub: 'runbooks', type: 'runbook', layout: 'flat' },
+    { sub: 'decisions', type: 'decision-definition', layout: 'flat', extension: '.json' },
+    { sub: 'rulesets', type: 'decision-ruleset', layout: 'flat', extension: '.json' },
+    { sub: 'bindings', type: 'decision-binding', layout: 'flat', extension: '.json' },
   ];
 
   for (const group of groups) {
@@ -1777,7 +1780,7 @@ async function findCorpusArtifact(
         if (typeFilter.length > 0 && !typeFilter.includes(t.type)) continue;
         const candidate = t.layout === 'slug'
           ? path.join(group.dir, bundle, t.sub, name, 'SKILL.md')
-          : path.join(group.dir, bundle, t.sub, `${name}.md`);
+          : path.join(group.dir, bundle, t.sub, `${name}${t.extension ?? '.md'}`);
         try {
           const stat = await fsp.stat(candidate);
           if (stat.isFile()) {

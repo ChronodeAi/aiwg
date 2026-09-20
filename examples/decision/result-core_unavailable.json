@@ -1,0 +1,59 @@
+{
+  "apiVersion": "decision.aiwg.io/v1alpha1",
+  "kind": "DecisionResult",
+  "metadata": {
+    "id": "example-result-core_unavailable",
+    "version": "1.0.0",
+    "description": "example result core_unavailable"
+  },
+  "spec": {
+    "decision": {
+      "id": "example-core_unavailable",
+      "version": "1.0.0",
+      "digest": "sha256:409f1441f515ae6dd144cc603246943e680c686fd608491215aa61718fab9e32"
+    },
+    "ruleset": {
+      "id": "example-triage",
+      "version": "1.0.0",
+      "digest": "sha256:8619b985cd193f223caa35092e9ca44d4afc2e5fd7be53ae99277f8f55071b0c"
+    },
+    "binding": {
+      "id": "example-binding-jev",
+      "version": "1.0.0",
+      "digest": "sha256:88f28d679f0603fd61049f65d743018c88dead613534d83324c85719b9e18b1f"
+    },
+    "alias": "core_unavailable",
+    "runId": "example-design-run",
+    "invocationId": "example-invocation",
+    "status": "success",
+    "value": 0.05,
+    "reason": "none",
+    "uncertainty": {
+      "source": "provider",
+      "profile": "typesafe-truth-v1",
+      "calibration": "vendor-claimed",
+      "confidence": null,
+      "distribution": null,
+      "calibrationRef": null
+    },
+    "attempts": [
+      {
+        "ordinal": 1,
+        "adapter": "jev",
+        "adapterVersion": "1.0.0-design",
+        "requestedModel": "jev-latest",
+        "actualModel": "jev-1.13.0",
+        "subagent": null,
+        "status": "success",
+        "reason": "none",
+        "durationMs": 560,
+        "usage": {
+          "inputTokens": null,
+          "outputTokens": null,
+          "costUsd": null
+        },
+        "requestId": null
+      }
+    ]
+  }
+}
