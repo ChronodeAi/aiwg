@@ -880,6 +880,7 @@ export interface ResolvedParallelism {
  *   - hermes: MCP sidecar; rate-limit depends on upstream provider, operator
  *     should tune. Conservative 10 default.
  *   - grokbot: desktop multi-agent; conservative 4 until native evidence.
+*   - grok-build: experimental; conservative 4 until Wave 2/3 evidence.
  *   - unknown: conservative 4 default.
  */
 export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> = {
@@ -896,6 +897,7 @@ export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> 
   hermes:   { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   // Desktop multi-agent; conservative until native concurrency evidence exists.
   grokbot:  { max_parallel_subagents: 4,  max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  'grok-build': { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
   // Conservative defaults for remaining stable/experimental harnesses (#249).
   openhuman: { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
   omp:      { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },

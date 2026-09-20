@@ -13,6 +13,8 @@ import {
   resolveProviderPathValue,
 } from '../../providers/provider-definitions.js';
 import { resolveGrokbotSkillsDir } from '../../providers/grokbot-paths.js';
+import { resolveGrokHome } from '../../providers/grok-build-paths.js';
+import { runGrokInspect } from '../../providers/grok-build-inspect.js';
 import { diagnoseIntegratedProviderTransformationReceipt } from '../../providers/transformation-receipt-integration.js';
 import type { ProviderDriftKind } from '../../providers/transformation-receipt.js';
 import {
@@ -149,6 +151,11 @@ const RESTART_NOTICES: Readonly<Record<string, ReloadNotice>> = {
     policy: 'restart-required',
     action: 'Start a new Grok Bot agent chat (or re-read skills) so deployed AIWG context and skills are visible.',
     reason: 'Grok Bot skill/context reload behavior is not yet verified; AIWG does not claim live refresh.',
+  },
+  'grok-build': {
+    policy: 'restart-required',
+    action: 'Restart the Grok Build session so it reloads .grok skills, agents, and AGENTS.md.',
+    reason: 'Grok Build reload semantics are not yet verified for live refresh; treat deploys as restart-required.',
   },
   factory: {
     policy: 'restart-required',
@@ -672,6 +679,41 @@ export async function verifyProviderDeployment(
           `No deployed provider or kernel artifacts were found for ${normalized}.`,
           `Re-run aiwg use ${options.requestedBundles[0] ?? 'all'} --provider ${normalized}.`,
           { kernelPath, kernelCount, counts },
+        ));
+      }
+    }
+
+    if (normalized === 'grok-build') {
+      const inspect = runGrokInspect();
+      if (inspect.status === 'absent') {
+        findings.push(finding(
+          normalized,
+          'grok-inspect-absent',
+          'advisory',
+          'Grok Build CLI (`grok`) is not on PATH; skipped `grok inspect`.',
+          inspect.remediation,
+          { grokHome: resolveGrokHome() },
+        ));
+      } else if (inspect.status === 'failed') {
+        findings.push(finding(
+          normalized,
+          'grok-inspect-failed',
+          'advisory',
+          `\`grok inspect\` exited ${inspect.exitCode ?? 'unknown'}.`,
+          'Fix the Grok Build installation, then re-run aiwg status --probe or aiwg use for grok-build.',
+          { exitCode: inspect.exitCode, stderr: inspect.stderr.slice(0, 500) },
+        ));
+      } else {
+        findings.push(finding(
+          normalized,
+          'grok-inspect-ok',
+          'info',
+          '`grok inspect` succeeded.',
+          'No action required; restart the Grok Build session if newly deployed skills are not visible.',
+          {
+            binary: inspect.binary,
+            parsedKeys: inspect.parsed ? Object.keys(inspect.parsed).slice(0, 20) : [],
+          },
         ));
       }
     }

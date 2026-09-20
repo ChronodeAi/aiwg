@@ -15,6 +15,7 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { resolveHermesHome, resolveHermesHomePath } from '../providers/hermes-home.js';
 import { resolveGrokbotSkillsDir } from '../providers/grokbot-paths.js';
+import { resolveGrokHome } from '../providers/grok-build-paths.js';
 
 export const hermesHome = resolveHermesHome;
 
@@ -227,6 +228,16 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
     return {
       agents: '',
       skills,
+      commands: '',
+      rules: '',
+      behaviors: '',
+    };
+  },
+  get 'grok-build'() {
+    const home = resolveGrokHome();
+    return {
+      agents: home ? path.join(home, 'agents') : '',
+      skills: home ? path.join(home, 'skills') : '',
       commands: '',
       rules: '',
       behaviors: '',
