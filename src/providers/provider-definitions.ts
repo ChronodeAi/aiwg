@@ -169,6 +169,7 @@ const ProviderDefinitionSchema = z.object({
     'deepseek-harness',
     'factory',
     'grokbot',
+    'grok-build',
     'hermes',
     'opencode',
     'openclaw',
@@ -186,7 +187,10 @@ const ProviderDefinitionSchema = z.object({
   upstream: z.object({
     source: z.string().url(),
     version: z.string().min(1),
-    revision: z.string().regex(/^[0-9a-f]{40}$/),
+    revision: z.string().regex(/^[0-9a-f]{40}$/).refine(
+      (value) => value !== '0'.repeat(40),
+      { message: 'upstream.revision must be a real reviewed SHA, not all-zero' },
+    ),
     runtime: z.string().min(1),
     lastVerified: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   }).optional(),
@@ -292,6 +296,7 @@ export const PROVIDER_IDS: readonly Platform[] = [
   'deepseek-harness',
   'factory',
   'grokbot',
+  'grok-build',
   'hermes',
   'opencode',
   'openclaw',
@@ -377,6 +382,24 @@ const CONTEXT_CONTRACTS: Record<Platform, ProviderContextContract> = {
       method: 'AIWG discover-first adapter contract; native Grok Bot startup/include path not yet verified — explicit-read guidance only',
       source: 'docs/architecture/adr-grokbot-provider-target.md',
       lastVerified: '2026-09-15',
+    },
+  },
+  'grok-build': {
+    // config.toml is configuration (MCP/plugins/permissions), not a startup/context file.
+    // Hierarchical instructions: AGENTS.md + .grok/rules/*.md, root-to-cwd, deeper wins.
+    startupFiles: ['AGENTS.md', '.grok/rules/*.md'],
+    precedence: [
+      'provider/system',
+      'global ~/.grok instruction sources',
+      'root-to-cwd AGENTS.md and .grok/rules/*.md (deeper files win on conflicts)',
+      '$GROK_HOME for user skills and user config',
+    ],
+    loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
+    bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: true, support: 'supported',
+    verification: {
+      method: 'xAI project-rules docs (AGENTS.md + .grok/rules hierarchical discovery); grok inspect when installed',
+      source: 'https://docs.x.ai/build/features/project-rules',
+      lastVerified: '2026-09-20',
     },
   },
   hermes: {
@@ -793,6 +816,72 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
       ruleFormat: 'agents-md-section',
     },
     matrixRef: 'grokbot',
+  },
+  {
+    id: 'grok-build',
+    displayName: 'Grok Build',
+    aliases: [],
+    status: 'experimental',
+    builtIn: true,
+    upstream: {
+      source: 'https://github.com/xai-org/grok-build',
+      version: '1.0.38',
+      // Reviewed public tree (docs + inspect schema), not an all-zero placeholder.
+      revision: '4247f661689354b831191f11eeeac8424993fe3d',
+      runtime: 'Grok Build CLI',
+      lastVerified: '2026-09-20',
+    },
+    surfaces: {
+      primary: 'grok-build',
+      compatibility: [],
+      // Agents/rules native writers deferred #2577; host still discovers those dirs.
+      precedence: ['AGENTS.md', '.grok/skills/', '.grok/rules/ (host; AIWG writer deferred #2577)', '.grok/config.toml (config only)', '$GROK_HOME'],
+      related: [],
+    },
+    detection: { env: ['GROK_HOME'], process: ['grok'], capabilityId: 'grok-build' },
+    paths: {
+      deployTarget: 'mixed',
+      artifacts: {
+        // Wave 1 writes skills + AGENTS.md only; agents/rules indexed until #2577.
+        agents: null,
+        commands: null,
+        skills: '.grok/skills',
+        rules: null,
+        behaviors: null,
+      },
+      kernelSkills: '.grok/skills',
+      contextDiscovery: {
+        agents: '.grok/agents',
+        skills: '.grok/skills',
+        rules: '.grok/rules',
+        behaviors: null,
+      },
+      configFile: '.grok/config.toml',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: null,
+      commands: null,
+      skills: '.grok/skills',
+      rules: null,
+      fileExtension: '.md',
+      configFile: '.grok/config.toml',
+      aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'project',
+      skillsBaseDir: '.grok/skills',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'agents-md',
+      hookBridge: null,
+      mcpInjection: null,
+      contextAggregation: 'agents-md',
+      ruleFormat: 'agents-md-section',
+    },
+    matrixRef: 'grok-build',
   },
   {
     id: 'hermes',
