@@ -20,6 +20,13 @@ export type GrokHomeResolution =
   | { ok: true; path: string; source: 'env' | 'default' }
   | { ok: false; reason: 'not-absolute' | 'traversal' | 'empty' | 'root'; message: string };
 
+export function isGrokFilesystemRoot(
+  resolved: string,
+  pathFlavor: Pick<typeof path, 'parse'> = path,
+): boolean {
+  return pathFlavor.parse(resolved).root === resolved;
+}
+
 function expandHomePrefix(raw: string, userHome = homedir()): string {
   if (raw === '~') return raw;
   if (raw.startsWith('~/')) return path.join(userHome, raw.slice(2));
@@ -64,7 +71,7 @@ export function resolveGrokHomeResult(
   }
 
   const resolved = path.resolve(expanded);
-  if (!resolved || resolved === path.sep) {
+  if (!resolved || isGrokFilesystemRoot(resolved)) {
     return {
       ok: false,
       reason: 'root',

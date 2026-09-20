@@ -1,8 +1,8 @@
 /**
  * Practical end-to-end coverage for `aiwg use --provider grok-build`.
  * Project deploy, $GROK_HOME user mirroring, registry record, and receipts.
- * Full remove + live `grok inspect` binary verification remain gaps when the
- * CLI is absent (documented in the PR reply).
+ * Full remove + live `grok inspect` binary verification remain separate from
+ * this deterministic absent-binary integration path.
  *
  * @issue #2575
  */
@@ -83,8 +83,8 @@ describe('aiwg use grok-build e2e (#2575)', () => {
       AIWG_USER_REGISTRY_PATH: userRegistry,
       AIWG_TEST_PROJECT_ROOT: project,
       GROK_HOME: grokHome,
-      // Keep PATH without a real grok so inspect stays advisory-absent.
-      PATH: path.join(home, 'empty-bin') + path.delimiter + (process.env.PATH ?? ''),
+      // Keep the runner's Node executable available without normal Grok install roots.
+      PATH: path.dirname(process.execPath),
     }, project);
 
     expect(use.status, use.stderr || use.stdout).toBe(0);
@@ -110,27 +110,41 @@ describe('aiwg use grok-build e2e (#2575)', () => {
       existsSync(path.join(grokHome, 'skills', name, 'SKILL.md')));
     expect(userSkills.length).toBeGreaterThan(0);
 
-    // Registry + receipt evidence (project and/or user)
-    const projectConfig = path.join(project, '.aiwg', 'aiwg.config');
-    const hasProjectConfig = existsSync(projectConfig);
-    const hasUserRegistry = existsSync(userRegistry);
-    expect(hasProjectConfig || hasUserRegistry).toBe(true);
+    // The user registry must record the actual provider deployment and entries.
+    expect(existsSync(userRegistry)).toBe(true);
+    const registry = JSON.parse(readFileSync(userRegistry, 'utf8')) as {
+      installed?: Record<string, { deployedTo?: Record<string, {
+        skills?: number;
+        entries?: { skills?: string[] };
+      }> }>;
+    };
+    const recorded = registry.installed?.sdlc?.deployedTo?.['grok-build'];
+    expect(recorded?.skills).toBeGreaterThan(0);
+    expect(recorded?.entries?.skills?.length).toBeGreaterThan(0);
 
-    const receiptCandidates = [
-      path.join(project, '.aiwg', 'receipts', 'providers', 'grok-build.user.evidence.json'),
-      path.join(project, '.aiwg', 'receipts', 'providers', 'grok-build.project.evidence.json'),
-      path.join(project, '.aiwg', 'receipts', 'providers', 'grok-build.evidence.json'),
-    ];
-    const receipt = receiptCandidates.find((candidate) => existsSync(candidate));
-    // Receipts are preferred; if the local-source path skips them, registry presence still counts.
-    if (receipt) {
-      const body = JSON.parse(readFileSync(receipt, 'utf8')) as Record<string, unknown>;
-      expect(String(body.provider ?? body.id ?? '')).toMatch(/grok-build/);
-    } else {
-      expect(hasProjectConfig || hasUserRegistry).toBe(true);
-    }
+    // Local-source delivery deterministically emits the policy-exempt evidence state.
+    const evidencePath = path.join(
+      project,
+      '.aiwg',
+      'receipts',
+      'providers',
+      'grok-build.user.evidence.json',
+    );
+    expect(existsSync(evidencePath)).toBe(true);
+    expect(JSON.parse(readFileSync(evidencePath, 'utf8'))).toMatchObject({
+      schemaVersion: 'aiwg.provider-transformation-evidence-state.v1',
+      provider: 'grok-build',
+      scope: 'user',
+      disposition: 'local-source',
+    });
 
-    const findings = JSON.stringify(use.json);
-    expect(findings).toMatch(/grok-inspect-absent|grok-inspect-ok|grok-inspect-failed|ready|degraded/);
+    expect(use.json).toMatchObject({
+      providers: [expect.objectContaining({
+        provider: 'grok-build',
+        findings: expect.arrayContaining([
+          expect.objectContaining({ id: 'grok-inspect-absent', severity: 'advisory' }),
+        ]),
+      })],
+    });
   }, 180_000);
 });

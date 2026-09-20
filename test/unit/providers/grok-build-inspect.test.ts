@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  grokExecutableCandidates,
   runGrokInspect,
   validateGrokInspectReport,
 } from '../../../src/providers/grok-build-inspect.js';
@@ -58,6 +59,34 @@ exit 2`,
     if (result.status === 'ok') {
       expect(result.binary).toBe(join(binDir, 'grok'));
     }
+  });
+
+  it('resolves relative PATH entries against the deployment target cwd', () => {
+    const root = temporaryRoot('aiwg-grok-inspect-relative-path-');
+    const binDir = join(root, 'bin');
+    writeFakeGrok(
+      binDir,
+      `printf '%s\n' '{"projectInstructions":[{"path":"AGENTS.md"}],"skills":[],"agents":[],"configSources":{"layers":[]}}'
+exit 0`,
+    );
+    const result = runGrokInspect({
+      env: { ...process.env, PATH: 'bin' },
+      cwd: root,
+      expected: { instructionPaths: ['AGENTS.md'] },
+    });
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') expect(result.binary).toBe(join(binDir, 'grok'));
+  });
+
+  it('enumerates PATHEXT candidates for Windows installs', () => {
+    const candidates = grokExecutableCandidates(
+      { PATH: 'C:\\Tools;bin', PATHEXT: '.EXE;.CMD' },
+      'C:\\workspace',
+      'win32',
+    );
+    expect(candidates).toContain('C:\\Tools\\grok.EXE');
+    expect(candidates).toContain('C:\\Tools\\grok.CMD');
+    expect(candidates).toContain('C:\\workspace\\bin\\grok.EXE');
   });
 
   it('runs inspect with the deployment target cwd', () => {

@@ -6,7 +6,7 @@
  */
 
 import { accessSync, constants as fsConstants } from 'node:fs';
-import { delimiter, isAbsolute, join } from 'node:path';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 export type GrokInspectExpectedArtifacts = {
@@ -55,16 +55,36 @@ export type RunGrokInspectOptions = {
   expected?: GrokInspectExpectedArtifacts;
 };
 
-function whichGrok(env: NodeJS.ProcessEnv): string | null {
-  // Resolve `grok` from env.PATH without spawning a shell under a restricted PATH
-  // (a PATH that only contains the fake bin dir cannot find `sh`).
-  const pathDirs = (env.PATH ?? process.env.PATH ?? '').split(delimiter).filter(Boolean);
+export function grokExecutableCandidates(
+  env: NodeJS.ProcessEnv,
+  cwd: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const pathDelimiter = platform === 'win32' ? ';' : ':';
+  const pathDirs = (env.PATH ?? env.Path ?? process.env.PATH ?? '')
+    .split(pathDelimiter)
+    // An empty PATH segment means the child cwd on POSIX and Windows.
+    .map((entry) => entry || '.');
+  const suffixes = platform === 'win32'
+    ? [...(env.PATHEXT || env.Pathext || '.COM;.EXE;.BAT;.CMD')
+      .split(';')
+      .map((entry) => entry.trim())
+      .filter(Boolean), '']
+    : [''];
+  const candidates = new Set<string>();
   for (const dir of pathDirs) {
-    const candidate = isAbsolute(dir) && dir.endsWith(`${delimiter}grok`)
-      ? dir
-      : join(dir, 'grok');
+    const absoluteDir = pathApi.isAbsolute(dir) ? dir : pathApi.resolve(cwd, dir);
+    for (const suffix of suffixes) candidates.add(pathApi.join(absoluteDir, `grok${suffix}`));
+  }
+  return [...candidates];
+}
+
+function whichGrok(env: NodeJS.ProcessEnv, cwd: string): string | null {
+  // Resolve from the supplied environment and deployment cwd without a shell.
+  for (const candidate of grokExecutableCandidates(env, cwd)) {
     try {
-      accessSync(candidate, fsConstants.X_OK);
+      accessSync(candidate, process.platform === 'win32' ? fsConstants.F_OK : fsConstants.X_OK);
       return candidate;
     } catch {
       // try next
@@ -207,7 +227,7 @@ export function runGrokInspect(
 
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
-  const binary = whichGrok(env);
+  const binary = whichGrok(env, cwd);
   if (!binary) {
     return { status: 'absent', remediation: ABSENT_REMEDIATION };
   }
@@ -228,6 +248,9 @@ export function runGrokInspect(
       cwd,
       timeout: 15_000,
       maxBuffer: 2_000_000,
+      // npm exposes Grok through a .cmd shim on Windows; Node requires a shell
+      // for .cmd/.bat launchers. Native .exe installs stay shell-free.
+      shell: process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(binary),
     });
     if (result.error && (result.error as NodeJS.ErrnoException).code === 'ENOENT') {
       return { status: 'absent', remediation: ABSENT_REMEDIATION };

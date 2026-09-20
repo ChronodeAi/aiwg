@@ -1,11 +1,12 @@
 import { mkdtempSync, mkdirSync, existsSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
 
 import {
   GROK_HOME_ENV,
+  isGrokFilesystemRoot,
   resolveGrokHome,
   resolveGrokHomeResult,
   grokBuildProjectPaths,
@@ -68,6 +69,12 @@ describe('grok-build path resolver', () => {
   it('rejects relative GROK_HOME overrides', () => {
     process.env[GROK_HOME_ENV] = 'relative/grok';
     expect(resolveGrokHomeResult().ok).toBe(false);
+  });
+
+  it('recognizes Windows drive and UNC roots as unsafe deployment roots', () => {
+    expect(isGrokFilesystemRoot('C:\\', win32)).toBe(true);
+    expect(isGrokFilesystemRoot('\\\\server\\share\\', win32)).toBe(true);
+    expect(isGrokFilesystemRoot('C:\\Users\\operator\\.grok', win32)).toBe(false);
   });
 
   it('exposes verified project path shape', () => {

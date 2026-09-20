@@ -37,7 +37,7 @@ export const standardSkillsPath = '.grok/.aiwg/skills';
 
 export const support = {
   agents: 'indexed', // deferred native writer until #2577
-  commands: false,
+  commands: 'indexed', // discoverable through the AIWG index; no native command writer
   skills: 'native',
   rules: 'indexed', // deferred native writer until #2577; host still loads AGENTS.md + .grok/rules hierarchically
 };
@@ -61,7 +61,7 @@ export function resolveGrokHome(env = process.env, userHome = os.homedir()) {
   if (candidate.startsWith('~/')) expanded = path.join(userHome, candidate.slice(2));
   if (!path.isAbsolute(expanded)) return null;
   const resolved = path.resolve(expanded);
-  if (!resolved || resolved === path.sep) return null;
+  if (!resolved || path.parse(resolved).root === resolved) return null;
   return resolved;
 }
 
