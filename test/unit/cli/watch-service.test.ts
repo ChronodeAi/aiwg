@@ -194,12 +194,33 @@ describe('WatchService', () => {
       await service.start(config.patterns, config);
 
       // Modify file
-      await writeFile(filePath, 'Modified', 'utf-8');
+      await writeFile(filePath, 'Modified once', 'utf-8');
+      let recoveryWrites = 0;
+      const sawChange = () => events.some(event => event.type === 'change');
+
+      // Some container filesystems can lose an immediate first notification
+      // even after chokidar reports the file as watched. Varying the file size
+      // and retrying a bounded number of times distinguishes a missed edge from
+      // a watcher that cannot detect changes at all.
+      while (!sawChange() && recoveryWrites < 3) {
+        try {
+          await waitFor(
+            sawChange,
+            WATCHER_LATENCY_FLOOR_MS * 4,
+            25,
+            () => describeObserved(events, service),
+          );
+        } catch {
+          recoveryWrites++;
+          await writeFile(filePath, `Modified recovery ${recoveryWrites}${'.'.repeat(recoveryWrites)}`, 'utf-8');
+        }
+      }
+
       await waitFor(
-        () => events.some(event => event.type === 'change'),
+        sawChange,
         FS_EVENT_TIMEOUT_MS,
         25,
-        () => describeObserved(events, service),
+        () => `${describeObserved(events, service)}; recoveryWrites=${recoveryWrites}`,
       );
 
       expect(events.some(e => e.type === 'change')).toBe(true);
