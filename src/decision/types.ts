@@ -5,6 +5,7 @@ export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 /** Portable, bounded JSON semantic entry. Admission limits are enforced at runtime. */
 export type EntryType = JsonValue;
+export type EntryInstruction = string | EntryType[] | { [key: string]: EntryType };
 export type JsonSchema = Record<string, unknown>;
 
 export interface ArtifactMetadata {
@@ -31,7 +32,7 @@ export interface DecisionDefinition {
   spec: {
     purpose: string;
     inputSchema: JsonSchema;
-    question: Exclude<EntryType, null>;
+    question: EntryInstruction;
     answer: DecisionAnswer;
     requiredCapabilities: string[];
   };

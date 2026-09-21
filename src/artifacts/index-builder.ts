@@ -15,7 +15,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { load as loadYaml } from 'js-yaml';
 import { validateDecisionDocument } from '../decision/validate.js';
-import { parseDecisionJson } from '../decision/entry.js';
+import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
 import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
 import {
   DEFAULT_INDEX_EXTENSIONS,
@@ -223,7 +223,7 @@ export function parseDecisionDoc(content: string, relativePath: string): Decisio
   if (Buffer.byteLength(content, 'utf8') > 262_144) return null;
   let document: unknown;
   try {
-    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : loadYaml(content);
+    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : parseDecisionYaml(content);
     validateDecisionDocument(document);
   } catch {
     return null;

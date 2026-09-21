@@ -52,13 +52,15 @@
               "type": "object",
               "additionalProperties": {
                 "$ref": "#/$defs/entry"
-              }
+              },
+              "minProperties": 1
             },
             {
               "type": "array",
               "items": {
                 "$ref": "#/$defs/entry"
-              }
+              },
+              "minItems": 1
             }
           ]
         },

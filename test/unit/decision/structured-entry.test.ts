@@ -3,8 +3,8 @@ import { gzipSync } from 'node:zlib';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  admitEntry, artifactPin, convertDecisionDefinitionV1Alpha1, DEFAULT_ENTRY_LIMITS,
-  EntryAdmissionError, evaluateDecisionRuleset, JevDecisionAdapter, LlmSubagentDecisionAdapter, MemoryDecisionReceiptStore, parseCompressedDecisionJson, parseDecisionJson, validateDefinition, validateDecisionDocument,
+  admitEntry, artifactPin, assertDecisionWriterVersion, convertDecisionDefinitionV1Alpha1, DECISION_CHANGED_SEMANTICS, DEFAULT_ENTRY_LIMITS,
+  EntryAdmissionError, evaluateDecisionRuleset, JevDecisionAdapter, LlmSubagentDecisionAdapter, MemoryDecisionReceiptStore, parseCompressedDecisionJson, parseDecisionJson, parseDecisionYaml, readDecisionDocumentForRollback, validateDefinition, validateDecisionDocument,
   type DecisionAdapter, type DecisionBinding, type DecisionRuleset,
   type DecisionDefinition, type DecisionAdapterRequest,
 } from '../../../src/decision/index.js';
@@ -85,12 +85,33 @@ describe('decision structured entry contract', () => {
     expect(() => validateDefinition(value)).toThrow();
   });
 
+  it('rejects YAML non-string keys, duplicates, and aliases before discovery', () => {
+    expect(() => parseDecisionYaml('1: value\n')).toThrow(/non-string-key/);
+    expect(() => parseDecisionYaml('entry: first\nentry: second\n')).toThrow(/duplicate/);
+    expect(() => parseDecisionYaml('entry: &a value\nother: *a\n')).toThrow(/yaml-alias/);
+    expect(parseDecisionDoc('1: value\n', 'decision.yaml')).toBeNull();
+  });
+
+  it('requires a nonempty explicit instruction at v1alpha2', () => {
+    for (const question of [{}, [], null, true, 1]) {
+      const value = structured();
+      value.spec.question = question as DecisionDefinition['spec']['question'];
+      expect(() => validateDefinition(value)).toThrow();
+    }
+  });
+
+  it('rejects unsupported embedded schema keywords before execution', () => {
+    const value = structured();
+    value.spec.inputSchema = { type: 'object', executeExpression: 'state.admin = true' };
+    expect(() => validateDefinition(value)).toThrow(/unsupported schema construct/);
+  });
+
   it('keeps the structured Jev instruction and criteria as JSON values', async () => {
     const definition = structured();
     let body: Record<string, unknown> | undefined;
     const adapter = new JevDecisionAdapter({ fetch: vi.fn(async (_url, options) => {
       body = JSON.parse(String(options?.body)) as Record<string, unknown>;
-      return new Response(JSON.stringify({ answers: { category: { type: 'choice', choice: 'documentation', probabilities: { documentation: 1, code: 0, configuration: 0 }, confidence: 1 } }, model: 'fixture' }), { status: 200 });
+      return new Response(JSON.stringify({ answers: { category: { type: 'choice', choice: 'documentation', probabilities: { documentation: 1, runtime: 0, other: 0 }, confidence: 1 } }, model: 'fixture' }), { status: 200 });
     }) as typeof fetch });
     await adapter.evaluate(request(definition));
     const question = (body?.questions as Record<string, Record<string, unknown>>).category;
@@ -130,6 +151,33 @@ describe('decision structured entry contract', () => {
       expect(String(error)).not.toContain('4096');
     }
     expect(() => admitEntry({ entry: 'safe' }, { ...DEFAULT_ENTRY_LIMITS, timeMs: -1 })).toThrow(/time-budget/);
+    expect(() => admitEntry({ entry: 'safe' }, { ...DEFAULT_ENTRY_LIMITS, memoryBytes: 1 })).toThrow(/memory-budget/);
+  });
+
+  it('bounds canonicalization of many small properties and ignores author insertion order', () => {
+    const properties = Object.fromEntries(Array.from({ length: 4090 }, (_, i) => [`k${i}`, i]));
+    const reversed = Object.fromEntries(Object.entries(properties).reverse());
+    expect(artifactPin({ metadata: { id: 'many', version: '1.0.0' }, properties }).digest)
+      .toBe(artifactPin({ metadata: { id: 'many', version: '1.0.0' }, properties: reversed }).digest);
+  });
+
+  it('gates all changed-semantic writers and permits frozen rollback inspection', () => {
+    const oldDefinition = old();
+    const newDefinition = structured();
+    for (const semantic of DECISION_CHANGED_SEMANTICS) {
+      expect(() => assertDecisionWriterVersion(oldDefinition, semantic)).toThrow(/v1alpha2/);
+      expect(() => assertDecisionWriterVersion(newDefinition, semantic)).not.toThrow();
+    }
+    const oldDigest = artifactPin(oldDefinition).digest;
+    const newDigest = artifactPin(newDefinition).digest;
+    expect(readDecisionDocumentForRollback(oldDefinition, 'execute').writable).toBe(true);
+    expect(() => readDecisionDocumentForRollback(newDefinition, 'execute')).toThrow(/cannot execute/);
+    const inspection = readDecisionDocumentForRollback(newDefinition, 'read-only');
+    expect(inspection.writable).toBe(false);
+    expect(Object.isFrozen(inspection.document)).toBe(true);
+    expect(Object.isFrozen(inspection.document.spec)).toBe(true);
+    expect(artifactPin(oldDefinition).digest).toBe(oldDigest);
+    expect(artifactPin(newDefinition).digest).toBe(newDigest);
   });
 
   it('keeps v1alpha1 strict while dual readers accept v1alpha2 artifacts', () => {
@@ -231,6 +279,75 @@ describe('decision structured entry contract', () => {
     expect(input).toEqual(originalInput);
     expect(binding.spec.evaluations.category?.targets[0]?.model).toBe('jev-latest');
     expect(result.spec.evaluations.category?.spec.attempts[0]?.requestedModel).toBe('jev-latest');
+  });
+
+
+  it.each(['jev', 'llm-subagent'] as const)('executes nested v1alpha2 definitions through %s with pinned receipts', async backend => {
+    const category = structured();
+    const severity = convertDecisionDefinitionV1Alpha1(JSON.parse(readFileSync('examples/decision/decision-severity.json', 'utf8')) as DecisionDefinition).definition;
+    if (severity.spec.answer.kind === 'ordinal-score') severity.spec.answer.levels = [{ label: 'cosmetic' }, ['workaround', null], 'unavailable'];
+    const core = convertDecisionDefinitionV1Alpha1(JSON.parse(readFileSync('examples/decision/decision-core_unavailable.json', 'utf8')) as DecisionDefinition).definition;
+    if (core.spec.answer.kind === 'truth-probability') { core.spec.answer.trueDescription = { meaning: 'down' }; core.spec.answer.falseDescription = null; }
+    const ruleset = JSON.parse(readFileSync('examples/decision/ruleset.json', 'utf8')) as DecisionRuleset;
+    for (const [alias, definition] of [['category', category], ['severity', severity], ['core_unavailable', core]] as const) {
+      ruleset.spec.evaluations.find(item => item.alias === alias)!.decision = artifactPin(definition);
+    }
+    const binding = JSON.parse(readFileSync(`examples/decision/binding-${backend === 'jev' ? 'jev' : 'llm-subagent'}.json`, 'utf8')) as DecisionBinding;
+    binding.spec.ruleset = artifactPin(ruleset);
+    const seen: Record<string, unknown>[] = [];
+    const worker = JSON.parse(readFileSync('examples/decision/worker-fixture.json', 'utf8')) as { metadata: { id: string; version: string } };
+    if (backend === 'llm-subagent') {
+      for (const evaluation of Object.values(binding.spec.evaluations)) evaluation.targets[0]!.subagent = artifactPin(worker);
+    }
+    const adapters: Record<string, DecisionAdapter> = backend === 'jev'
+      ? { jev: new JevDecisionAdapter({ fetch: vi.fn(async (_url, options) => {
+        const body = JSON.parse(String(options?.body)) as Record<string, unknown>;
+        seen.push(body);
+        const alias = Object.keys(body.questions as object)[0]!;
+        const answer = alias === 'category'
+          ? { type: 'choice', choice: 'documentation', probabilities: { documentation: 1, runtime: 0, other: 0 }, confidence: 1 }
+          : alias === 'severity'
+            ? { type: 'score', score: 0, probabilities: { 0: 1, 1: 0, 2: 0 }, legend: Object.fromEntries((severity.spec.answer.kind === 'ordinal-score' ? severity.spec.answer.levels : []).map((level, index) => [index, level])), confidence: 1 }
+            : { type: 'noul', noul: 0.1 };
+        return new Response(JSON.stringify({ answers: { [alias]: answer }, model: 'fixture', usage: {} }), { status: 200 });
+      }) as typeof fetch }) }
+      : { 'llm-subagent': new LlmSubagentDecisionAdapter({
+        resolveWorker: async () => worker,
+        runWorker: async task => {
+          const prompt = JSON.parse(task.prompt) as Record<string, unknown>;
+          seen.push(prompt);
+          const answer = prompt.answer as { kind: string };
+          const output = answer.kind === 'choice'
+            ? { status: 'success', value: 'documentation' }
+            : answer.kind === 'ordinal-score'
+              ? { status: 'success', distribution: { 0: 1, 1: 0, 2: 0 } }
+              : { status: 'success', value: 0.1 };
+          return { started: true, terminal: true, output, actualModel: 'fixture' };
+        },
+      }) };
+    const store = new MemoryDecisionReceiptStore();
+    const result = await evaluateDecisionRuleset({
+      ruleset, binding, definitions: { category, severity, core },
+      input: JSON.parse(readFileSync('examples/decision/input.json', 'utf8')),
+      runId: 'structured-run', invocationId: `structured-${backend}`, adapters, receiptStore: store,
+      resolveCredential: async () => new TextEncoder().encode('fixture-token'),
+    });
+    expect(result.apiVersion).toBe('decision.aiwg.io/v1alpha2');
+    expect(result.spec.evaluations.category?.spec.status).toBe('success');
+    expect(result.spec.evaluations.severity?.spec.status).toBe('success');
+    expect(result.spec.evaluations.core_unavailable?.spec.status).toBe('success');
+    expect(result.spec.evaluations.category?.spec.decision.digest).toBe(artifactPin(category).digest);
+    expect((await store.read(`structured-${backend}`))?.result).toEqual(result);
+    expect(seen).toHaveLength(3);
+    if (backend === 'jev') {
+      const question = (seen[0]!.questions as Record<string, Record<string, unknown>>).category;
+      expect(question.instructions).toEqual(category.spec.question);
+      expect((seen[1]!.questions as Record<string, Record<string, unknown>>).severity.criteria).toEqual(severity.spec.answer.kind === 'ordinal-score' ? severity.spec.answer.levels : null);
+    } else {
+      expect(seen[0]!.question).toEqual(category.spec.question);
+      expect(seen[1]!.answer).toEqual(severity.spec.answer);
+    }
+    validateDecisionDocument(result);
   });
 
 });

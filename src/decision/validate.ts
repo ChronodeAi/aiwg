@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { admitEntry, EntryAdmissionError } from './entry.js';
+import { DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED } from './types.js';
 import type {
   ArtifactPin,
   DecisionBinding,
@@ -67,8 +68,13 @@ function getValidators(): Map<string, ValidateFunction> {
 }
 
 export function artifactDigest(value: unknown): ArtifactPin['digest'] {
+  const started = performance.now();
   admitEntry(value);
-  return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
+  const canonical = canonicalJson(value);
+  if (performance.now() - started > 1000) {
+    throw new EntryAdmissionError('time-budget', { bytes: Buffer.byteLength(canonical), entries: 0 });
+  }
+  return `sha256:${createHash('sha256').update(canonical).digest('hex')}`;
 }
 
 export function artifactPin(value: { metadata: { id: string; version: string } }): ArtifactPin {
@@ -100,6 +106,39 @@ export function validateDecisionDocument(value: unknown): asserts value is
   if (!validate(value)) {
     throw new DecisionValidationError(`${kind} schema validation failed: ${ajvMessage(validate.errors)}`, validate.errors ?? []);
   }
+}
+
+export const DECISION_CHANGED_SEMANTICS = [
+  'structured-entry', 'batch-receipt', 'acceptance-uncertainty', 'calibration-pin', 'trust-projection',
+] as const;
+export type DecisionChangedSemantic = typeof DECISION_CHANGED_SEMANTICS[number];
+
+/** Writer gate shared by D02 and future D07-D10 emitters. */
+export function assertDecisionWriterVersion(value: unknown, semantic: DecisionChangedSemantic): void {
+  validateDecisionDocument(value);
+  if (value.apiVersion !== DECISION_API_VERSION_STRUCTURED) {
+    throw new DecisionValidationError(`${semantic} requires ${DECISION_API_VERSION_STRUCTURED}`);
+  }
+}
+
+/** A rollback reader may inspect v1alpha2, but cannot execute or rewrite it. */
+export function readDecisionDocumentForRollback(value: unknown, mode: 'read-only' | 'execute'): {
+  document: Readonly<DecisionDefinition | DecisionRuleset | DecisionBinding | DecisionResult | RulesetResult>;
+  writable: boolean;
+} {
+  validateDecisionDocument(value);
+  if (mode === 'execute' && value.apiVersion !== DECISION_API_VERSION) {
+    throw new DecisionValidationError('Rollback executor cannot execute v1alpha2 artifacts');
+  }
+  const document = structuredClone(value);
+  if (mode === 'read-only') deepFreeze(document);
+  return { document, writable: mode === 'execute' };
+}
+
+function deepFreeze(value: unknown): void {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return;
+  for (const child of Object.values(value)) deepFreeze(child);
+  Object.freeze(value);
 }
 
 export function validateAgainstSchema(schema: JsonSchema, value: unknown, label: string): void {
@@ -238,6 +277,12 @@ function assertLocalSchema(schema: JsonSchema, label: string): void {
     stack.delete(value);
   };
   visit(schema, new Set(), 0);
+  try {
+    new Ajv2020({ strictSchema: true, strictTypes: false, strictTuples: false,
+      strictRequired: false, validateFormats: false }).compile(schema);
+  } catch (error) {
+    throw new DecisionValidationError(`${label} uses an unsupported schema construct: ${errorMessage(error)}`);
+  }
 }
 
 function assertPredicateAliases(predicate: DecisionPredicate, aliases: Set<string>): void {

@@ -1,6 +1,6 @@
 import { TextEncoder, types as utilTypes } from 'node:util';
 import { gunzipSync } from 'node:zlib';
-import { parseDocument } from 'yaml';
+import { isAlias, isMap, isScalar, isSeq, parseDocument } from 'yaml';
 
 export interface EntryLimits {
   serializedBytes: number;
@@ -10,11 +10,13 @@ export interface EntryLimits {
   stringLength: number;
   entries: number;
   timeMs: number;
+  memoryBytes: number;
 }
 
 export const DEFAULT_ENTRY_LIMITS: Readonly<EntryLimits> = Object.freeze({
   serializedBytes: 262_144, depth: 32, properties: 4096,
   arrayLength: 4096, stringLength: 65_536, entries: 8192, timeMs: 1000,
+  memoryBytes: 4_194_304,
 });
 
 export class EntryAdmissionError extends Error {
@@ -26,7 +28,7 @@ export class EntryAdmissionError extends Error {
 
 /** Check the object graph before JSON serialization, schema validation or digesting. */
 export function admitEntry(value: unknown, limits: Readonly<EntryLimits> = DEFAULT_ENTRY_LIMITS): void {
-  const counts = { entries: 0, properties: 0, bytes: 0 };
+  const counts = { entries: 0, properties: 0, bytes: 0, estimatedMemoryBytes: 0 };
   const started = performance.now();
   const encoder = new TextEncoder();
   const stack = new Set<object>();
@@ -34,10 +36,13 @@ export function admitEntry(value: unknown, limits: Readonly<EntryLimits> = DEFAU
   const add = (text: string): void => {
     counts.bytes += encoder.encode(text).byteLength;
     if (counts.bytes > limits.serializedBytes) fail('serialized-bytes');
+    counts.estimatedMemoryBytes = counts.bytes + counts.entries * 64 + counts.properties * 48;
+    if (counts.estimatedMemoryBytes > limits.memoryBytes) fail('memory-budget');
   };
   const visit = (item: unknown, depth: number): void => {
     if (performance.now() - started > limits.timeMs) fail('time-budget');
     if (++counts.entries > limits.entries) fail('entry-count');
+    if (counts.bytes + counts.entries * 64 + counts.properties * 48 > limits.memoryBytes) fail('memory-budget');
     if (depth > limits.depth) fail('nesting-depth');
     if (item === null || typeof item === 'boolean') return add(String(item));
     if (typeof item === 'number') {
@@ -87,6 +92,7 @@ export function admitEntry(value: unknown, limits: Readonly<EntryLimits> = DEFAU
 export function parseDecisionJson(source: string, limits: Readonly<EntryLimits> = DEFAULT_ENTRY_LIMITS): unknown {
   const bytes = Buffer.byteLength(source, 'utf8');
   if (bytes > limits.serializedBytes) throw new EntryAdmissionError('serialized-bytes', { bytes });
+  if (bytes * 4 > limits.memoryBytes) throw new EntryAdmissionError('memory-budget', { bytes });
   const started = performance.now();
   let value: unknown;
   try { value = JSON.parse(source) as unknown; }
@@ -94,6 +100,39 @@ export function parseDecisionJson(source: string, limits: Readonly<EntryLimits> 
   const document = parseDocument(source, { uniqueKeys: true });
   if (document.errors.length) throw new EntryAdmissionError('duplicate-or-invalid-key', { bytes });
   if (performance.now() - started > limits.timeMs) throw new EntryAdmissionError('time-budget', { bytes });
+  admitEntry(value, limits);
+  return value;
+}
+
+/** Parse YAML decision documents while rejecting aliases and non-string mapping keys. */
+export function parseDecisionYaml(source: string, limits: Readonly<EntryLimits> = DEFAULT_ENTRY_LIMITS): unknown {
+  const bytes = Buffer.byteLength(source, 'utf8');
+  if (bytes > limits.serializedBytes) throw new EntryAdmissionError('serialized-bytes', { bytes });
+  if (bytes * 4 > limits.memoryBytes) throw new EntryAdmissionError('memory-budget', { bytes });
+  const started = performance.now();
+  const document = parseDocument(source, { uniqueKeys: true });
+  if (document.errors.length) throw new EntryAdmissionError('duplicate-or-invalid-key', { bytes });
+  let entries = 0;
+  const inspect = (node: unknown, depth: number): void => {
+    if (++entries > limits.entries) throw new EntryAdmissionError('entry-count', { bytes, entries });
+    if (depth > limits.depth) throw new EntryAdmissionError('nesting-depth', { bytes, entries });
+    if (isAlias(node)) throw new EntryAdmissionError('yaml-alias', { bytes, entries });
+    if (isMap(node)) {
+      if (node.items.length > limits.properties) throw new EntryAdmissionError('property-count', { bytes, entries });
+      for (const pair of node.items) {
+        if (!isScalar(pair.key) || typeof pair.key.value !== 'string') {
+          throw new EntryAdmissionError('non-string-key', { bytes, entries });
+        }
+        inspect(pair.value, depth + 1);
+      }
+    } else if (isSeq(node)) {
+      if (node.items.length > limits.arrayLength) throw new EntryAdmissionError('array-length', { bytes, entries });
+      for (const child of node.items) inspect(child, depth + 1);
+    }
+  };
+  inspect(document.contents, 0);
+  if (performance.now() - started > limits.timeMs) throw new EntryAdmissionError('time-budget', { bytes, entries });
+  const value = document.toJS();
   admitEntry(value, limits);
   return value;
 }
