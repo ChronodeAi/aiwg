@@ -46,14 +46,14 @@ test('Socket uses exact call inputs instead of default-branch workflow_run', () 
   assert.match(socketWorkflow, /workflow_call:/);
   assert.doesNotMatch(socketWorkflow, /workflow_run:/);
   assert.match(socketWorkflow, /workflow_dispatch:/);
-  assert.match(socketWorkflow, /ref: \$\{\{ github\.ref \}\}/);
+  assert.match(socketWorkflow, /ref: \$\{\{ inputs\.tag \|\| github\.ref \}\}/);
   assert.match(
     socketWorkflow,
-    /if \[ "\$GITHUB_REF" != "refs\/tags\/v\$\{VERSION\}" \]; then/,
+    /if \[ "\$RELEASE_REF" != "refs\/tags\/v\$\{VERSION\}" \]; then/,
   );
   assert.match(
     socketWorkflow,
-    /TAG_COMMIT="\$\(git rev-parse "\$\{GITHUB_REF\}\^\{commit\}"\)"/,
+    /TAG_COMMIT="\$\(git -c safe\.directory="\$GITHUB_WORKSPACE" rev-parse "\$\{RELEASE_REF\}\^\{commit\}"\)"/,
   );
   assert.match(
     socketWorkflow,
