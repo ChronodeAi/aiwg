@@ -39,10 +39,10 @@ The orchestration CLI exposes thirteen actions through this shared boundary:
 --help` rather than deriving command names from task prose.
 
 Conformance evidence qualifies local orchestration, offline behavior,
-provenance, and the PROV/OpenLineage profiles. The pre-stable migration cell is
-pending because no stable predecessor exists. Fortemi Core parity is pending a
-pinned compatible dependency, and live Fortemi Server persistence is pending
-separately authorized live qualification.
+provenance, the PROV/OpenLineage profiles, and migration from the exact
+`v2026.9.17` stable contract fixture. Fortemi Core parity requires the pinned
+compatible dependency, and live Fortemi Server persistence requires separately
+authorized, receipt-bound qualification.
 
 Canonical source material remains distinct from derived indexes, embeddings,
 graphs, caches, portable projections, and Fortemi shards. A successful search
