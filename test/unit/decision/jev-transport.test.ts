@@ -96,6 +96,13 @@ describe('Jev transport contract', () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
   });
 
+  it('SEC-REDIRECT-LOOP: does not follow a same-origin redirect loop', async () => {
+    const fetchMock = vi.fn(async () => reply(302, { location: 'https://api.typesafe.ai/v1/systemone' }));
+    const adapter = new JevDecisionAdapter({ fetch: fetchMock });
+    expect((await adapter.evaluate(request())).reason).toBe('data-boundary-denied');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('SEC-DNS: pins an approved public custom origin across a public-to-private DNS rebind', async () => {
     const credentials = vi.fn(async () => new TextEncoder().encode('synthetic-token'));
     const fetchMock = vi.fn(async () => reply());
