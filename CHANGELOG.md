@@ -7,6 +7,31 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.18] - 2026-09-21 - "Dataset conformance binds prior stable evidence"
+
+### Added
+
+- The Dataset Intelligence matrix executes adversarial, replay, checkpoint,
+  provenance, privacy, offline, standards, and parity corpus cases instead of
+  accepting fixture presence as evidence.
+- A digest-bound copy of the v2026.9.17 dataset contract now drives an
+  executable prior-stable migration cell covering schema validation,
+  capability negotiation, plan and receipt integrity, and checkpoint upgrade.
+
+### Changed
+
+- Dataset Intelligence documentation reports the mode-specific matrix totals:
+  13 local passes with two controlled cells pending, and 14 cross-repository
+  passes with the live-server cell still pending.
+- The million-record discovery-reader memory assertion runs in an isolated
+  garbage-collected process and measures retained memory rather than transient
+  full-suite allocation pressure.
+
+### Fixed
+
+- JSONL discovery rejects records that exceed the configured nesting limit,
+  including adversarially deep arrays and objects.
+
 ## [2026.9.17] - 2026-09-20 - "Dataset contracts ship with the runtime"
 
 ### Added
