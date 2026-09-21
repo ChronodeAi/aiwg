@@ -32,7 +32,27 @@ Configure these values in the GitHub repository:
 - secret `SOCKET_API_TOKEN`, restricted to Socket's `packages:list` scope;
 - variable `SOCKET_ORG_SLUG`, containing the Socket organization slug.
 
-The workflow uses Socket's organization-scoped batch PURL endpoint with polling enabled. Maintainers can rerun it manually for a published version after service recovery or review remediation.
+The tag-bound npm publication workflow invokes the Socket workflow directly as
+a reusable workflow after publication succeeds. This avoids relying on a
+default-branch `workflow_run` listener when the public mirror's `main` history
+differs from the signed release tag. The call passes the exact published version
+and release source commit; the audit rejects a version, tag ref, or commit
+mismatch before querying Socket.
+
+The workflow uses Socket's organization-scoped batch PURL endpoint with polling
+enabled. After service recovery or review remediation, rerun it against the
+immutable release tag rather than the public mirror's default branch:
+
+```bash
+gh workflow run socket-post-publish.yml \
+  --repo jmagly/aiwg \
+  --ref v2026.9.19 \
+  -f version=2026.9.19
+```
+
+The selected `--ref` must be `v<version>`. The workflow resolves its commit from
+that tag and fails before scanning if the checked-out package version, tag ref,
+and source commit do not agree.
 
 ## Local fixture or operator run
 

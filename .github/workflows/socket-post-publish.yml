@@ -1,9 +1,19 @@
 name: Socket post-publish evidence
 
 on:
-  workflow_run:
-    workflows: ['Publish to npmjs.org (OIDC + provenance)']
-    types: [completed]
+  workflow_call:
+    inputs:
+      version:
+        description: Published AIWG version to audit
+        required: true
+        type: string
+      commit:
+        description: Release source commit to audit
+        required: true
+        type: string
+    secrets:
+      SOCKET_API_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       version:
@@ -15,12 +25,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: socket-post-publish-${{ github.event.workflow_run.head_sha || inputs.version }}
+  group: socket-post-publish-${{ inputs.commit || github.sha }}
   cancel-in-progress: false
 
 jobs:
   audit:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 15
@@ -31,15 +40,29 @@ jobs:
       - name: Checkout audited release source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.commit || github.sha }}
 
-      - name: Resolve published version
+      - name: Verify exact release binding
         id: release
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          EXPECTED_COMMIT: ${{ inputs.commit || github.sha }}
         run: |
           set -euo pipefail
-          VERSION="${INPUT_VERSION:-$(node -p "require('./package.json').version")}" 
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$INPUT_VERSION" != "$VERSION" ]; then
+            echo "Requested version $INPUT_VERSION does not match checked-out package version $VERSION" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/tags/v${VERSION}" ]; then
+            echo "Socket audit must be bound to refs/tags/v${VERSION}; observed $GITHUB_REF" >&2
+            exit 1
+          fi
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo "Checked-out commit $ACTUAL_COMMIT does not match expected release source $EXPECTED_COMMIT" >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build published dependency inventory
@@ -69,7 +92,7 @@ jobs:
             --dependency-lock agentic/code/plugins/droid-bridge/package-lock.json \
             --dependency-lock tools/eval/package-lock.json \
             --dependency-lock apps/cockpit/desktop/src-tauri/Cargo.lock \
-            --commit "${{ github.event.workflow_run.head_sha || github.sha }}" \
+            --commit "${{ inputs.commit || github.sha }}" \
             --organization "${SOCKET_ORG_SLUG}" \
             --output-dir test-results/socket-post-publish
 
