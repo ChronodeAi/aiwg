@@ -56,6 +56,7 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
     calibration: request.calibrationPin,
   });
   let receipt: DecisionReceipt | undefined;
+  let reconciled: AdapterObservation | null = null;
   const projectId = request.receiptProjectId ?? 'default';
   if (request.receiptStore) {
     try {
@@ -72,23 +73,27 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
           try {
             const pending = await request.receiptStore.read(request.invocationId, projectId);
             if (pending?.state === 'completed') return structuredClone(pending.result!);
-            if (pending && pending.fingerprint === fingerprint && pending.remoteHandles.length && request.reconcileRemote) {
-              for (const handle of pending.remoteHandles) await request.reconcileRemote(handle, request.signal ?? new AbortController().signal);
+            if (pending && pending.fingerprint === fingerprint && (pending.state === 'remote-handle-known' || pending.state === 'observation-received')
+              && pending.pending && pending.remoteHandles.length && request.reconcileRemote) {
+              reconciled = await request.reconcileRemote(pending.remoteHandles.at(-1)!, request.signal ?? new AbortController().signal);
+              if (reconciled?.status === 'success') {
+                receipt = pending;
+              }
             }
-            if (pending && pending.fingerprint === fingerprint && pending.state !== 'execution-uncertain' && pending.state !== 'failed') {
+            if (!receipt && pending && pending.fingerprint === fingerprint && pending.state !== 'execution-uncertain' && pending.state !== 'failed') {
               await request.receiptStore.compareAndSwap(request.invocationId, projectId, pending.revision, nextReceipt(pending, 'execution-uncertain'));
             }
           } catch { return failureResult(base, 'persistence-error'); }
-          return failureResult(base, 'execution-uncertain');
+          if (!receipt) return failureResult(base, 'execution-uncertain');
         }
       }
-      receipt = acquisition.receipt;
+      if (acquisition.owner) receipt = acquisition.receipt;
     } catch {
       return failureResult(base, 'persistence-error');
     }
   }
 
-  const advance = async (state: DecisionReceipt['state'], extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles'>> = {}): Promise<void> => {
+  const advance = async (state: DecisionReceipt['state'], extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending'>> = {}): Promise<void> => {
     if (!request.receiptStore || !receipt) return;
     try {
       const next = nextReceipt(receipt, state, extra);
@@ -107,11 +112,28 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
     request.signal ?? new AbortController().signal,
     AbortSignal.timeout(request.binding.spec.totalTimeoutMs),
   ]);
-  const evaluations: Record<string, DecisionResult> = {};
-  let attemptsUsed = 0;
+  const evaluations: Record<string, DecisionResult> = structuredClone(receipt?.evaluations ?? {});
+  let attemptsUsed = Object.values(evaluations).reduce((sum, result) => sum + result.spec.attempts.length, 0);
 
   try {
+  if (reconciled && receipt?.pending) {
+    const pending = receipt.pending;
+    const item = resolved.find(candidate => candidate.alias === pending.alias);
+    const target = request.binding.spec.evaluations[pending.alias]?.targets[pending.targetIndex];
+    if (!item || !target) throw new RemoteUncertainError();
+    let observation: AdapterObservation;
+    try { observation = normalizeObservation(item.definition, target, reconciled); }
+    catch { throw new RemoteUncertainError(); }
+    if (observation.status !== 'success') throw new RemoteUncertainError();
+    const context: OneContext = { request, item, rulesetPin, bindingPin, totalDeadline, signal: totalAbort,
+      attemptsAvailable: request.binding.spec.maxAttempts, now, advance };
+    const attempts = [...pending.attempts, toAttempt(target, pending.ordinal, observation, 0)];
+    evaluations[item.alias] = decisionResult(context, observation, attempts);
+    attemptsUsed += attempts.length;
+    await advance('observation-received', { evaluations, pending: null });
+  }
   for (const item of resolved) {
+    if (evaluations[item.alias]) continue;
     if (totalAbort.aborted) {
       evaluations[item.alias] = emptyDecisionResult(request, item, rulesetPin, bindingPin, 'cancelled', 'cancelled');
       continue;
@@ -129,6 +151,7 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
     });
     attemptsUsed += execution.spec.attempts.length;
     evaluations[item.alias] = execution;
+    await advance('observation-received', { evaluations, pending: null });
   }
 
   if (receipt?.state === 'execution-uncertain') return failureResult(base, 'execution-uncertain', evaluations);
@@ -179,7 +202,7 @@ interface OneContext {
   signal: AbortSignal;
   attemptsAvailable: number;
   now: () => number;
-  advance: (state: DecisionReceipt['state'], extra?: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles'>>) => Promise<void>;
+  advance: (state: DecisionReceipt['state'], extra?: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending'>>) => Promise<void>;
 }
 
 async function evaluateOne(context: OneContext): Promise<DecisionResult> {
@@ -207,7 +230,7 @@ async function evaluateOne(context: OneContext): Promise<DecisionResult> {
         const started = context.now();
         const attemptDeadline = Math.min(context.totalDeadline, started + target.timeoutMs);
         try {
-          await context.advance('dispatched');
+          await context.advance('dispatched', { pending: { alias: context.item.alias, targetIndex, ordinal: attempts.length + 1, attempts } });
           final = await invokeWithDeadline(context, adapter!, target, attemptDeadline, attempts.length + 1);
           if (context.request.receiptStore && (final.reason === 'timeout' || final.reason === 'execution-uncertain')) throw new RemoteUncertainError();
           await context.advance('observation-received');

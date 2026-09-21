@@ -63,6 +63,7 @@ export class LlmSubagentDecisionAdapter implements DecisionAdapter {
       return failure('invalid-definition');
     }
     let worker: DecisionWorkerResponse;
+    let handlePersistenceFailed = false;
     try {
       worker = await this.options.runWorker({
         invocationId: request.invocationId,
@@ -73,9 +74,13 @@ export class LlmSubagentDecisionAdapter implements DecisionAdapter {
         tools: [],
         signal: request.signal,
         deadlineEpochMs: request.deadlineEpochMs,
-        onHandle: request.onRemoteHandle,
+        onHandle: request.onRemoteHandle ? async handle => {
+          try { await request.onRemoteHandle!(handle); }
+          catch (error) { handlePersistenceFailed = true; throw error; }
+        } : undefined,
       });
     } catch (error) {
+      if (handlePersistenceFailed) throw error;
       return failure(request.signal.aborted || isAbort(error) ? 'timeout' : 'executor-unavailable');
     }
     if (worker.started && worker.requestId && request.onRemoteHandle) await request.onRemoteHandle(worker.requestId);

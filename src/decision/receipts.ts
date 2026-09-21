@@ -22,10 +22,10 @@ export function decisionInvocationFingerprint(input: {
 
 const terminal = new Set<DecisionReceiptState>(['completed', 'failed', 'execution-uncertain']);
 const allowed: Record<DecisionReceiptState, DecisionReceiptState[]> = {
-  acquired: ['dispatched', 'composed', 'failed', 'execution-uncertain'],
+  acquired: ['dispatched', 'observation-received', 'composed', 'failed', 'execution-uncertain'],
   dispatched: ['remote-handle-known', 'observation-received', 'execution-uncertain'],
   'remote-handle-known': ['observation-received', 'execution-uncertain'],
-  'observation-received': ['dispatched', 'composed', 'failed', 'execution-uncertain'],
+  'observation-received': ['observation-received', 'dispatched', 'composed', 'failed', 'execution-uncertain'],
   composed: ['completed', 'failed'],
   completed: [], failed: [], 'execution-uncertain': [],
 };
@@ -39,6 +39,12 @@ export function validateReceipt(receipt: DecisionReceipt, invocationId: string, 
     || !/^sha256:[a-f0-9]{64}$/.test(receipt.fingerprint)
     || !Object.hasOwn(allowed, receipt.state) || !Array.isArray(receipt.remoteHandles)
     || receipt.remoteHandles.some(handle => typeof handle !== 'string' || !handle.length)
+    || !receipt.evaluations || typeof receipt.evaluations !== 'object' || Array.isArray(receipt.evaluations)
+    || Object.entries(receipt.evaluations).some(([alias, result]) => result.spec.alias !== alias || result.spec.invocationId !== invocationId)
+    || (receipt.pending !== null && (!receipt.pending || typeof receipt.pending.alias !== 'string'
+      || !Number.isSafeInteger(receipt.pending.targetIndex) || receipt.pending.targetIndex < 0
+      || !Number.isSafeInteger(receipt.pending.ordinal) || receipt.pending.ordinal < 1
+      || !Array.isArray(receipt.pending.attempts)))
     || (receipt.state === 'completed' && (!receipt.result || receipt.result.spec.invocationId !== invocationId
       || receipt.result.spec.status === 'error' && receipt.result.spec.reason === 'execution-uncertain'))
     || (receipt.state !== 'completed' && receipt.result !== undefined)) {
@@ -46,18 +52,21 @@ export function validateReceipt(receipt: DecisionReceipt, invocationId: string, 
   }
 }
 
-export function nextReceipt(previous: DecisionReceipt, state: DecisionReceiptState, extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles'>> = {}): DecisionReceipt {
+export function nextReceipt(previous: DecisionReceipt, state: DecisionReceiptState, extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending'>> = {}): DecisionReceipt {
   if (!allowed[previous.state].includes(state)) throw new DecisionReceiptIntegrityError('Illegal receipt transition');
   const next = { ...structuredClone(previous), ...structuredClone(extra), state, revision: previous.revision + 1 };
   if (next.remoteHandles.length < previous.remoteHandles.length || previous.remoteHandles.some((handle, index) => next.remoteHandles[index] !== handle)) {
     throw new DecisionReceiptIntegrityError('Remote handle lineage changed');
+  }
+  if (Object.entries(previous.evaluations).some(([alias, result]) => canonicalJson(next.evaluations[alias]) !== canonicalJson(result))) {
+    throw new DecisionReceiptIntegrityError('Completed evaluation lineage changed');
   }
   validateReceipt(next, previous.invocationId, previous.projectId);
   return next;
 }
 
 function initial(invocationId: string, projectId: string, fingerprint: string): DecisionReceipt {
-  const receipt: DecisionReceipt = { schema: 'decision-receipt/v2', revision: 1, projectId, invocationId, fingerprint, state: 'acquired', remoteHandles: [] };
+  const receipt: DecisionReceipt = { schema: 'decision-receipt/v2', revision: 1, projectId, invocationId, fingerprint, state: 'acquired', remoteHandles: [], evaluations: {}, pending: null };
   validateReceipt(receipt, invocationId, projectId);
   return receipt;
 }
@@ -65,6 +74,7 @@ function initial(invocationId: string, projectId: string, fingerprint: string): 
 function assertTransition(previous: DecisionReceipt, next: DecisionReceipt): void {
   const expected = nextReceipt(previous, next.state, {
     ...(next.result !== undefined ? { result: next.result } : {}), remoteHandles: next.remoteHandles,
+    evaluations: next.evaluations, pending: next.pending,
   });
   if (canonicalJson(expected) !== canonicalJson(next)) throw new DecisionReceiptIntegrityError('Receipt mutation outside legal transition');
 }

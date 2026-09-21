@@ -224,6 +224,8 @@ export interface DecisionReceipt {
   state: DecisionReceiptState;
   result?: RulesetResult;
   remoteHandles: string[];
+  evaluations: Record<string, DecisionResult>;
+  pending: { alias: string; targetIndex: number; ordinal: number; attempts: DecisionAttempt[] } | null;
 }
 
 export interface DecisionReceiptStore {

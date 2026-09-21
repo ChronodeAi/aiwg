@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FileDecisionReceiptStore, MemoryDecisionReceiptStore, decisionInvocationFingerprint, nextReceipt } from '../../../src/decision/receipts.js';
 import { evaluateDecisionRuleset } from '../../../src/decision/evaluate.js';
-import type { AdapterObservation, DecisionAdapter, DecisionBinding, DecisionDefinition, DecisionRuleset, DecisionReceiptStore } from '../../../src/decision/types.js';
+import { artifactPin } from '../../../src/decision/validate.js';
+import type { AdapterObservation, DecisionAdapter, DecisionBinding, DecisionDefinition, DecisionRuleset, DecisionReceiptStore, RulesetResult } from '../../../src/decision/types.js';
 import { readFileSync } from 'node:fs';
 
 const fixture = <T>(name: string): T => JSON.parse(readFileSync(`examples/decision/${name}`, 'utf8')) as T;
@@ -115,6 +116,34 @@ describe('REC-ATOMIC store conformance', () => {
     expect(results.map(result => result.revision)).toEqual([1, 1]);
   });
 
+  it('retains a dispatched receipt after its owner process is killed', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-crash-'));
+    temp.push(directory);
+    const key = randomBytes(32);
+    const child = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/decision/receipt-process.mjs', directory, key.toString('hex'), 'crash', 'dispatch'],
+      { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    let output = '';
+    let ready!: () => void;
+    let dispatched!: () => void;
+    const isReady = new Promise<void>(resolve => { ready = resolve; });
+    const didDispatch = new Promise<void>(resolve => { dispatched = resolve; });
+    child.stdout.on('data', chunk => {
+      output += String(chunk);
+      if (output.includes('ready\n')) ready();
+      if (output.includes('dispatched\n')) dispatched();
+    });
+    await isReady;
+    child.stdin.write('go\n');
+    await didDispatch;
+    child.kill('SIGKILL');
+    await new Promise<void>(resolve => child.once('exit', () => resolve()));
+    const restarted = new FileDecisionReceiptStore(directory, { integrityKey: key });
+    const receipt = await restarted.acquire('crash', 'project', `sha256:${'a'.repeat(64)}`);
+    expect(receipt.owner).toBe(false);
+    expect(receipt.receipt.state).toBe('dispatched');
+    expect(receipt.receipt.revision).toBe(2);
+  });
+
   it('canonicalizes input keys and binds ordered pins', () => {
     const pin = { id: 'x', version: '1', digest: `sha256:${'a'.repeat(64)}` as const };
     const base = { invocationId: 'x', ruleset: pin, binding: pin, definitions: [pin], value: { é: 1.5, a: -0 } };
@@ -167,5 +196,54 @@ describe('REC-ATOMIC store conformance', () => {
       expect(second.spec.reason).toBe('execution-uncertain');
       expect(vi.mocked(worker.evaluate)).not.toHaveBeenCalled();
     }
+  });
+
+  it('reconciles a known successful handle and composes without redispatching that evaluation', async () => {
+    for (const store of await stores()) {
+      const worker = adapter();
+      const base = request(store, worker, 'reconcile');
+      const fingerprint = decisionInvocationFingerprint({ invocationId: base.invocationId, value: base.input,
+        definitions: base.ruleset.spec.evaluations.map(item => item.decision),
+        ruleset: artifactPin(base.ruleset), binding: artifactPin(base.binding) });
+      let receipt = (await store.acquire(base.invocationId, 'default', fingerprint)).receipt;
+      let next = nextReceipt(receipt, 'dispatched', { pending: { alias: 'category', targetIndex: 0, ordinal: 1, attempts: [] } });
+      expect(await store.compareAndSwap(base.invocationId, 'default', receipt.revision, next)).toBe(true);
+      receipt = next;
+      next = nextReceipt(receipt, 'remote-handle-known', { remoteHandles: ['remote-1'] });
+      expect(await store.compareAndSwap(base.invocationId, 'default', receipt.revision, next)).toBe(true);
+      const restarted: DecisionReceiptStore = { read: store.read.bind(store), acquire: store.acquire.bind(store),
+        compareAndSwap: store.compareAndSwap.bind(store), waitForTerminal: async () => { throw new Error('owner process stopped'); } };
+      const reconciler = vi.fn(async () => ({ status: 'success', reason: 'none', value: 'documentation',
+        uncertainty: { source: 'provider', profile: 'typesafe-distribution-v1', calibration: 'vendor-claimed', confidence: 0.9, distribution: null, calibrationRef: null },
+        actualModel: 'model', usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 }, requestId: 'remote-1' } satisfies AdapterObservation));
+      const result = await evaluateDecisionRuleset({ ...base, receiptStore: restarted, reconcileRemote: reconciler });
+      expect(result.spec.status).toBe('completed');
+      expect(result.spec.outcome).toBe('docs-review');
+      expect(reconciler).toHaveBeenCalledWith('remote-1', expect.any(AbortSignal));
+      expect(vi.mocked(worker.evaluate).mock.calls.map(([call]) => call.alias)).toEqual(['severity', 'core_unavailable']);
+      expect((await store.read(base.invocationId, 'default'))?.result).toEqual(result);
+    }
+  });
+
+  it('survives a store restart after every transition and preserves terminal immutability', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-transitions-'));
+    temp.push(directory);
+    const key = randomBytes(32);
+    const reopen = () => new FileDecisionReceiptStore(directory, { integrityKey: key });
+    const invocationId = 'transitions';
+    let current = (await reopen().acquire(invocationId, 'project', `sha256:${'a'.repeat(64)}`)).receipt;
+    for (const state of ['dispatched', 'remote-handle-known', 'observation-received', 'dispatched', 'observation-received', 'composed'] as const) {
+      const extra = state === 'remote-handle-known' ? { remoteHandles: ['handle-1'] } : {};
+      const next = nextReceipt(current, state, extra);
+      expect(await reopen().compareAndSwap(invocationId, 'project', current.revision, next)).toBe(true);
+      current = (await reopen().read(invocationId, 'project'))!;
+      expect(current).toEqual(next);
+    }
+    const result = fixture<RulesetResult>('ruleset-result.json');
+    result.spec.invocationId = invocationId;
+    const completed = nextReceipt(current, 'completed', { result });
+    expect(await reopen().compareAndSwap(invocationId, 'project', current.revision, completed)).toBe(true);
+    expect((await reopen().acquire(invocationId, 'project', current.fingerprint)).receipt).toEqual(completed);
+    expect(() => nextReceipt(completed, 'dispatched')).toThrow(/Illegal receipt transition/);
   });
 });
