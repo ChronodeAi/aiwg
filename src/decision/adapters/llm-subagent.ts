@@ -17,6 +17,8 @@ export interface DecisionWorkerRequest {
   tools: [];
   signal: AbortSignal;
   deadlineEpochMs: number;
+  /** Worker transport must call this when it obtains a durable handle. */
+  onHandle?: (handle: string) => Promise<void>;
 }
 
 export interface DecisionWorkerResponse {
@@ -71,10 +73,12 @@ export class LlmSubagentDecisionAdapter implements DecisionAdapter {
         tools: [],
         signal: request.signal,
         deadlineEpochMs: request.deadlineEpochMs,
+        onHandle: request.onRemoteHandle,
       });
     } catch (error) {
       return failure(request.signal.aborted || isAbort(error) ? 'timeout' : 'executor-unavailable');
     }
+    if (worker.started && worker.requestId && request.onRemoteHandle) await request.onRemoteHandle(worker.requestId);
     if (!worker.started || !worker.terminal || worker.output === undefined) return failure('executor-unavailable');
     try {
       const parsed = typeof worker.output === 'string' ? JSON.parse(worker.output) as unknown : worker.output;

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { composeRuleset } from './compose.js';
-import { decisionInvocationFingerprint } from './receipts.js';
+import { decisionInvocationFingerprint, nextReceipt } from './receipts.js';
 import type {
   AdapterObservation,
   ArtifactPin,
@@ -10,6 +10,7 @@ import type {
   DecisionEvaluationRequest,
   DecisionFailureReason,
   DecisionResult,
+  DecisionReceipt,
   DecisionStatus,
   ExecutionTarget,
   RulesetResult,
@@ -51,20 +52,54 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
     definitions: resolved.map(item => item.pin),
     ruleset: rulesetPin,
     binding: bindingPin,
+    policy: request.policyPin,
+    calibration: request.calibrationPin,
   });
+  let receipt: DecisionReceipt | undefined;
+  const projectId = request.receiptProjectId ?? 'default';
   if (request.receiptStore) {
     try {
-      const previous = await request.receiptStore.read(request.invocationId);
-      if (previous) {
-        if (previous.fingerprint !== fingerprint) return failureResult(base, 'replay-mismatch');
-        if (previous.state === 'completed' && previous.result) return structuredClone(previous.result);
-        return failureResult(base, 'execution-uncertain');
+      const acquisition = await request.receiptStore.acquire(request.invocationId, projectId, fingerprint);
+      if (!acquisition.owner) {
+        if (acquisition.receipt.fingerprint !== fingerprint) return failureResult(base, 'replay-mismatch');
+        if (acquisition.receipt.state === 'completed') return structuredClone(acquisition.receipt.result!);
+        if (acquisition.receipt.state === 'failed' || acquisition.receipt.state === 'execution-uncertain') return failureResult(base, 'execution-uncertain');
+        try {
+          const terminal = await request.receiptStore.waitForTerminal(request.invocationId, projectId, fingerprint,
+            AbortSignal.timeout(request.binding.spec.totalTimeoutMs + 1000));
+          return terminal.state === 'completed' ? structuredClone(terminal.result!) : failureResult(base, 'execution-uncertain');
+        } catch {
+          try {
+            const pending = await request.receiptStore.read(request.invocationId, projectId);
+            if (pending?.state === 'completed') return structuredClone(pending.result!);
+            if (pending && pending.fingerprint === fingerprint && pending.remoteHandles.length && request.reconcileRemote) {
+              for (const handle of pending.remoteHandles) await request.reconcileRemote(handle, request.signal ?? new AbortController().signal);
+            }
+            if (pending && pending.fingerprint === fingerprint && pending.state !== 'execution-uncertain' && pending.state !== 'failed') {
+              await request.receiptStore.compareAndSwap(request.invocationId, projectId, pending.revision, nextReceipt(pending, 'execution-uncertain'));
+            }
+          } catch { return failureResult(base, 'persistence-error'); }
+          return failureResult(base, 'execution-uncertain');
+        }
       }
-      await request.receiptStore.write(request.invocationId, { fingerprint, state: 'incomplete' });
+      receipt = acquisition.receipt;
     } catch {
       return failureResult(base, 'persistence-error');
     }
   }
+
+  const advance = async (state: DecisionReceipt['state'], extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles'>> = {}): Promise<void> => {
+    if (!request.receiptStore || !receipt) return;
+    try {
+      const next = nextReceipt(receipt, state, extra);
+      if (!await request.receiptStore.compareAndSwap(request.invocationId, projectId, receipt.revision, next)) {
+        throw new ReceiptPersistenceError();
+      }
+      receipt = next;
+    } catch {
+      throw new ReceiptPersistenceError();
+    }
+  };
 
   const now = request.now ?? Date.now;
   const totalDeadline = now() + request.binding.spec.totalTimeoutMs;
@@ -75,6 +110,7 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
   const evaluations: Record<string, DecisionResult> = {};
   let attemptsUsed = 0;
 
+  try {
   for (const item of resolved) {
     if (totalAbort.aborted) {
       evaluations[item.alias] = emptyDecisionResult(request, item, rulesetPin, bindingPin, 'cancelled', 'cancelled');
@@ -89,10 +125,13 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
       signal: totalAbort,
       attemptsAvailable: request.binding.spec.maxAttempts - attemptsUsed,
       now,
+      advance,
     });
     attemptsUsed += execution.spec.attempts.length;
     evaluations[item.alias] = execution;
   }
+
+  if (receipt?.state === 'execution-uncertain') return failureResult(base, 'execution-uncertain', evaluations);
 
   let result: RulesetResult;
   if (totalAbort.aborted) {
@@ -116,15 +155,20 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
     }
   }
 
-  if (request.receiptStore) {
-    try {
-      await request.receiptStore.write(request.invocationId, { fingerprint, state: 'completed', result });
-    } catch {
-      return failureResult(base, 'persistence-error', evaluations);
-    }
-  }
+  await advance('composed');
+  await advance('completed', { result });
   return result;
+  } catch (error) {
+    if (error instanceof RemoteUncertainError) {
+      try { await advance('execution-uncertain'); } catch { return failureResult(base, 'persistence-error', evaluations); }
+      return failureResult(base, 'execution-uncertain', evaluations);
+    }
+    return failureResult(base, 'persistence-error', evaluations);
+  }
 }
+
+class ReceiptPersistenceError extends Error {}
+class RemoteUncertainError extends Error {}
 
 interface OneContext {
   request: DecisionEvaluationRequest;
@@ -135,6 +179,7 @@ interface OneContext {
   signal: AbortSignal;
   attemptsAvailable: number;
   now: () => number;
+  advance: (state: DecisionReceipt['state'], extra?: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles'>>) => Promise<void>;
 }
 
 async function evaluateOne(context: OneContext): Promise<DecisionResult> {
@@ -162,9 +207,13 @@ async function evaluateOne(context: OneContext): Promise<DecisionResult> {
         const started = context.now();
         const attemptDeadline = Math.min(context.totalDeadline, started + target.timeoutMs);
         try {
+          await context.advance('dispatched');
           final = await invokeWithDeadline(context, adapter!, target, attemptDeadline, attempts.length + 1);
+          if (context.request.receiptStore && (final.reason === 'timeout' || final.reason === 'execution-uncertain')) throw new RemoteUncertainError();
+          await context.advance('observation-received');
           final = normalizeObservation(context.item.definition, target, final);
         } catch (error) {
+          if (error instanceof ReceiptPersistenceError || error instanceof RemoteUncertainError) throw error;
           final = observationFailure(error instanceof DecisionValidationError ? 'invalid-output' : 'service-error');
         }
         attempts.push(toAttempt(target, attempts.length + 1, final, Math.max(0, context.now() - started)));
@@ -226,6 +275,12 @@ async function invokeWithDeadline(
         deadlineEpochMs,
         signal,
         resolveCredential: context.request.resolveCredential ?? unauthorizedCredential,
+        onRemoteHandle: async handle => {
+          try {
+            const previous = await context.request.receiptStore?.read(context.request.invocationId, context.request.receiptProjectId ?? 'default');
+            if (previous && !previous.remoteHandles.includes(handle)) await context.advance('remote-handle-known', { remoteHandles: [...previous.remoteHandles, handle] });
+          } catch { throw new ReceiptPersistenceError(); }
+        },
       }),
       boundary,
     ]);
@@ -304,7 +359,7 @@ function emptyDecisionResult(
   status: DecisionStatus,
   reason: DecisionFailureReason,
 ): DecisionResult {
-  return decisionResult({ request, item, rulesetPin, bindingPin, totalDeadline: 0, signal: new AbortController().signal, attemptsAvailable: 0, now: Date.now }, observationFailure(reason, status), []);
+  return decisionResult({ request, item, rulesetPin, bindingPin, totalDeadline: 0, signal: new AbortController().signal, attemptsAvailable: 0, now: Date.now, advance: async () => undefined }, observationFailure(reason, status), []);
 }
 
 function resultBase(request: DecisionEvaluationRequest, ruleset: ArtifactPin, binding: ArtifactPin): RulesetResult {

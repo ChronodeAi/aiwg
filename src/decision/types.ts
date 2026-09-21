@@ -199,6 +199,8 @@ export interface DecisionAdapterRequest {
   deadlineEpochMs: number;
   signal: AbortSignal;
   resolveCredential: (logicalRef: string) => Promise<Uint8Array>;
+  /** Persist an opaque remote handle before the adapter reports completion. */
+  onRemoteHandle?: (handle: string) => Promise<void>;
 }
 
 export interface DecisionAdapter {
@@ -208,16 +210,24 @@ export interface DecisionAdapter {
   evaluate(request: DecisionAdapterRequest): Promise<AdapterObservation>;
 }
 
+export type DecisionReceiptState = 'acquired' | 'dispatched' | 'remote-handle-known' | 'observation-received' | 'composed' | 'completed' | 'failed' | 'execution-uncertain';
+
 export interface DecisionReceipt {
+  schema: 'decision-receipt/v2';
+  revision: number;
+  projectId: string;
+  invocationId: string;
   fingerprint: string;
-  state: 'incomplete' | 'completed';
+  state: DecisionReceiptState;
   result?: RulesetResult;
-  remoteHandles?: string[];
+  remoteHandles: string[];
 }
 
 export interface DecisionReceiptStore {
-  read(invocationId: string): Promise<DecisionReceipt | null>;
-  write(invocationId: string, receipt: DecisionReceipt): Promise<void>;
+  read(invocationId: string, projectId?: string): Promise<DecisionReceipt | null>;
+  acquire(invocationId: string, projectId: string, fingerprint: string): Promise<{ owner: boolean; receipt: DecisionReceipt }>;
+  compareAndSwap(invocationId: string, projectId: string, expectedRevision: number, next: DecisionReceipt): Promise<boolean>;
+  waitForTerminal(invocationId: string, projectId: string, fingerprint: string, signal?: AbortSignal): Promise<DecisionReceipt>;
 }
 
 export interface DecisionEvaluationRequest {
@@ -230,6 +240,11 @@ export interface DecisionEvaluationRequest {
   adapters: Record<string, DecisionAdapter>;
   resolveCredential?: (logicalRef: string) => Promise<Uint8Array>;
   receiptStore?: DecisionReceiptStore;
+  receiptProjectId?: string;
+  policyPin?: ArtifactPin | null;
+  calibrationPin?: ArtifactPin | null;
+  /** Resolve a persisted handle without starting another remote operation. */
+  reconcileRemote?: (handle: string, signal: AbortSignal) => Promise<AdapterObservation | null>;
   signal?: AbortSignal;
   now?: () => number;
   delay?: (ms: number, signal: AbortSignal) => Promise<void>;
