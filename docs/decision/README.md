@@ -1,6 +1,6 @@
 # Normalized decisions and rulesets
 
-AIWG implements `decision.aiwg.io/v1alpha1` as an opt-in shared runtime. The
+AIWG reads both `decision.aiwg.io/v1alpha1` and `decision.aiwg.io/v1alpha2` definitions as an opt-in shared runtime. The
 same immutable decision definitions, ruleset, workflow input, and consumer can
 run through a Jev binding or an ordinary LLM-subagent binding. Only the binding
 changes; probabilistic values and confidence scales are not assumed equal.
@@ -22,6 +22,9 @@ gated by `AIWG_DECISION_JEV_LIVE_SMOKE=1` and
 Read the [normative specification](specification.md), [architecture](architecture.md),
 [implementation and migration plan](implementation-plan.md), and addon
 [operations guide](../../agentic/code/addons/decision-engine/docs/operations.md).
+
+Structured entry fields, version migration, and rollback rules are described in
+[structured entries](structured-entries.md).
 
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

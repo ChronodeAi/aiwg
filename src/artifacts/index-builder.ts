@@ -15,6 +15,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import { load as loadYaml } from 'js-yaml';
 import { validateDecisionDocument } from '../decision/validate.js';
+import { parseDecisionJson } from '../decision/entry.js';
 import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
 import {
   DEFAULT_INDEX_EXTENSIONS,
@@ -219,9 +220,10 @@ interface DecisionDocMetadata {
 /** Classify and schema-check authored decision-system documents. */
 export function parseDecisionDoc(content: string, relativePath: string): DecisionDocMetadata | null {
   if (!/\.(json|ya?ml)$/i.test(relativePath)) return null;
+  if (Buffer.byteLength(content, 'utf8') > 262_144) return null;
   let document: unknown;
   try {
-    document = /\.json$/i.test(relativePath) ? JSON.parse(content) : loadYaml(content);
+    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : loadYaml(content);
     validateDecisionDocument(document);
   } catch {
     return null;

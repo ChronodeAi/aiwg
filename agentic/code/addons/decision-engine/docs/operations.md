@@ -23,3 +23,9 @@ a new binding pin and invocation. Existing receipts are never reinterpreted.
 
 Outcomes are data. Any downstream action goes through the ordinary AIWG policy
 and authorization gates independently.
+
+To explicitly upgrade a string-only definition, build the package and run
+`node agentic/code/addons/decision-engine/skills/decision-evaluate/scripts/decision-convert-definition.mjs <old.json> <new.json>`.
+The command refuses to overwrite an existing output, prints the old/new digests,
+and leaves ruleset pin updates to the author. Structured fields require
+`decision.aiwg.io/v1alpha2`; historical v1alpha1 artifacts remain readable.

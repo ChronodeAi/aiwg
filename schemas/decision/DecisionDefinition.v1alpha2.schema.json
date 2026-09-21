@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aiwg.io/schemas/decision/DecisionDefinition.v1alpha1.schema.json",
+  "$id": "https://aiwg.io/schemas/decision/DecisionDefinition.v1alpha2.schema.json",
   "type": "object",
   "properties": {
     "apiVersion": {
-      "const": "decision.aiwg.io/v1alpha1"
+      "const": "decision.aiwg.io/v1alpha2"
     },
     "kind": {
       "const": "DecisionDefinition"
@@ -43,8 +43,24 @@
           "type": "object"
         },
         "question": {
-          "type": "string",
-          "minLength": 1
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/entry"
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/entry"
+              }
+            }
+          ]
         },
         "answer": {
           "oneOf": [
@@ -64,8 +80,7 @@
                         "minLength": 1
                       },
                       "description": {
-                        "type": "string",
-                        "minLength": 1
+                        "$ref": "#/$defs/entry"
                       }
                     },
                     "required": [
@@ -93,8 +108,7 @@
                 "levels": {
                   "type": "array",
                   "items": {
-                    "type": "string",
-                    "minLength": 1
+                    "$ref": "#/$defs/entry"
                   },
                   "minItems": 2,
                   "maxItems": 10
@@ -113,12 +127,10 @@
                   "const": "truth-probability"
                 },
                 "trueDescription": {
-                  "type": "string",
-                  "minLength": 1
+                  "$ref": "#/$defs/entry"
                 },
                 "falseDescription": {
-                  "type": "string",
-                  "minLength": 1
+                  "$ref": "#/$defs/entry"
                 }
               },
               "required": [
@@ -155,5 +167,35 @@
     "metadata",
     "spec"
   ],
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "entry": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/entry"
+          }
+        }
+      ]
+    }
+  }
 }

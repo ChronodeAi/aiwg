@@ -1,7 +1,10 @@
 export const DECISION_API_VERSION = 'decision.aiwg.io/v1alpha1' as const;
+export const DECISION_API_VERSION_STRUCTURED = 'decision.aiwg.io/v1alpha2' as const;
 
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+/** Portable, bounded JSON semantic entry. Admission limits are enforced at runtime. */
+export type EntryType = JsonValue;
 export type JsonSchema = Record<string, unknown>;
 
 export interface ArtifactMetadata {
@@ -17,18 +20,18 @@ export interface ArtifactPin {
 }
 
 export type DecisionAnswer =
-  | { kind: 'choice'; options: Array<{ id: string; description: string }> }
-  | { kind: 'ordinal-score'; levels: string[] }
-  | { kind: 'truth-probability'; trueDescription: string; falseDescription: string };
+  | { kind: 'choice'; options: Array<{ id: string; description: EntryType }> }
+  | { kind: 'ordinal-score'; levels: EntryType[] }
+  | { kind: 'truth-probability'; trueDescription: EntryType; falseDescription: EntryType };
 
 export interface DecisionDefinition {
-  apiVersion: typeof DECISION_API_VERSION;
+  apiVersion: typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED;
   kind: 'DecisionDefinition';
   metadata: ArtifactMetadata;
   spec: {
     purpose: string;
     inputSchema: JsonSchema;
-    question: string;
+    question: Exclude<EntryType, null>;
     answer: DecisionAnswer;
     requiredCapabilities: string[];
   };
@@ -134,7 +137,7 @@ export interface DecisionAttempt {
 export type DecisionStatus = 'success' | 'abstained' | 'error' | 'unsupported' | 'cancelled';
 
 export interface DecisionResult {
-  apiVersion: typeof DECISION_API_VERSION;
+  apiVersion: typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED;
   kind: 'DecisionResult';
   metadata: ArtifactMetadata;
   spec: {
@@ -153,7 +156,7 @@ export interface DecisionResult {
 }
 
 export interface RulesetResult {
-  apiVersion: typeof DECISION_API_VERSION;
+  apiVersion: typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED;
   kind: 'RulesetResult';
   metadata: ArtifactMetadata;
   spec: {

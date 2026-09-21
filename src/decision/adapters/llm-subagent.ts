@@ -46,7 +46,7 @@ export class LlmSubagentDecisionAdapter implements DecisionAdapter {
   async capabilities(): Promise<AdapterCapabilities> {
     return {
       answerKinds: ['choice', 'ordinal-score', 'truth-probability'],
-      features: ['structured-output', 'tool-disabled'],
+      features: ['structured-output', 'structured-entries', 'tool-disabled'],
       maxOptions: null,
       maxLevels: null,
       confidenceProfiles: ['llm-self-report-v1'],

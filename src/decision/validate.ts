@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
 import { canonicalJson } from '../security/artifact-trust.js';
+import { admitEntry, EntryAdmissionError } from './entry.js';
 import type {
   ArtifactPin,
   DecisionBinding,
@@ -23,6 +24,11 @@ const schemaFiles = {
   DecisionRuleset: 'DecisionRuleset.schema.json',
   RulesetResult: 'RulesetResult.schema.json',
 } as const;
+const structuredSchemaFiles = {
+  DecisionDefinition: 'DecisionDefinition.v1alpha2.schema.json',
+  DecisionResult: 'DecisionResult.v1alpha2.schema.json',
+  RulesetResult: 'RulesetResult.v1alpha2.schema.json',
+} as const;
 
 type DecisionKind = keyof typeof schemaFiles;
 
@@ -33,7 +39,7 @@ export class DecisionValidationError extends Error {
   }
 }
 
-let validators: Map<DecisionKind, ValidateFunction> | null = null;
+let validators: Map<string, ValidateFunction> | null = null;
 
 function schemaRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -43,18 +49,23 @@ function schemaRoot(): string {
   return found;
 }
 
-function getValidators(): Map<DecisionKind, ValidateFunction> {
+function getValidators(): Map<string, ValidateFunction> {
   if (validators) return validators;
   const ajv = new Ajv2020({ strict: false, allErrors: true, validateFormats: false });
   validators = new Map();
   for (const [kind, filename] of Object.entries(schemaFiles) as Array<[DecisionKind, string]>) {
     const schema = JSON.parse(readFileSync(resolve(schemaRoot(), filename), 'utf8')) as JsonSchema;
-    validators.set(kind, ajv.compile(schema));
+    validators.set(`decision.aiwg.io/v1alpha1:${kind}`, ajv.compile(schema));
+  }
+  for (const [kind, filename] of Object.entries(structuredSchemaFiles)) {
+    const schema = JSON.parse(readFileSync(resolve(schemaRoot(), filename), 'utf8')) as JsonSchema;
+    validators.set(`decision.aiwg.io/v1alpha2:${kind}`, ajv.compile(schema));
   }
   return validators;
 }
 
 export function artifactDigest(value: unknown): ArtifactPin['digest'] {
+  admitEntry(value);
   return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
 }
 
@@ -74,9 +85,16 @@ export function validateDecisionDocument(value: unknown): asserts value is
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new DecisionValidationError('Decision document must be an object');
   }
+  try { admitEntry(value); }
+  catch (error) {
+    if (error instanceof EntryAdmissionError) throw new DecisionValidationError(error.message);
+    throw error;
+  }
   const kind = (value as { kind?: string }).kind as DecisionKind | undefined;
-  if (!kind || !getValidators().has(kind)) throw new DecisionValidationError(`Unsupported decision kind '${kind ?? ''}'`);
-  const validate = getValidators().get(kind)!;
+  const version = (value as { apiVersion?: string }).apiVersion;
+  const key = `${version}:${kind}`;
+  if (!kind || !getValidators().has(key)) throw new DecisionValidationError(`Unsupported decision kind/version '${key}'`);
+  const validate = getValidators().get(key)!;
   if (!validate(value)) {
     throw new DecisionValidationError(`${kind} schema validation failed: ${ajvMessage(validate.errors)}`, validate.errors ?? []);
   }
@@ -100,7 +118,10 @@ export function validateDefinition(definition: DecisionDefinition): void {
   if (definition.spec.answer.kind === 'choice') {
     assertUnique(definition.spec.answer.options.map(option => option.id), 'choice option IDs');
   }
-  if (definition.spec.answer.kind === 'ordinal-score') assertUnique(definition.spec.answer.levels, 'ordinal levels');
+  if (definition.spec.answer.kind === 'ordinal-score') {
+    const keys = definition.spec.answer.levels.map(level => canonicalJson(level));
+    assertUnique(keys, 'ordinal levels');
+  }
 }
 
 export function validateRuleset(ruleset: DecisionRuleset): void {

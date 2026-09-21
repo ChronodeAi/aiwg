@@ -7,6 +7,7 @@ import type {
   DecisionUsage,
 } from '../types.js';
 import { DecisionValidationError, validateDecisionValue, validateDistribution } from '../validate.js';
+import { canonicalJson } from '../../security/artifact-trust.js';
 
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
@@ -29,7 +30,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
   async capabilities(): Promise<AdapterCapabilities> {
     return {
       answerKinds: ['choice', 'ordinal-score', 'truth-probability'],
-      features: ['typed-output', 'probability-distribution'],
+      features: ['typed-output', 'probability-distribution', 'structured-entries'],
       maxOptions: 255,
       maxLevels: 10,
       confidenceProfiles: ['typesafe-distribution-v1', 'typesafe-truth-v1'],
@@ -120,7 +121,7 @@ function normalizeResponse(request: DecisionAdapterRequest, value: unknown): Ada
     validateDistribution(request.definition, distribution);
     const legend = asRecord(answer.legend);
     request.definition.spec.answer.levels.forEach((level, index) => {
-      if (legend[String(index)] !== level) throw new DecisionValidationError('Score legend does not match declared levels');
+      if (canonicalJson(legend[String(index)]) !== canonicalJson(level)) throw new DecisionValidationError('Score legend does not match declared levels');
     });
     const mean = Object.entries(distribution).reduce((sum, [index, probability]) => sum + Number(index) * probability, 0);
     if (Math.abs(mean - answer.score) > 0.02) throw new DecisionValidationError('Score is not the distribution weighted mean');

@@ -1,5 +1,7 @@
 export * from './types.js';
 export * from './validate.js';
+export * from './entry.js';
+export * from './convert.js';
 export * from './predicates.js';
 export * from './compose.js';
 export * from './receipts.js';

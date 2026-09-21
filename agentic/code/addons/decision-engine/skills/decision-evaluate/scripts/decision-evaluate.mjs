@@ -17,9 +17,9 @@ if (process.env.AIWG_DECISION_ENABLED !== '1') {
 const packageRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../../../../../');
 const runtime = await import(pathToFileURL(path.join(packageRoot, 'dist/src/decision/index.js')).href);
 const requestPath = path.resolve(args[requestIndex + 1]);
-const config = JSON.parse(await readFile(requestPath, 'utf8'));
+const config = runtime.parseDecisionJson(await readFile(requestPath, 'utf8'));
 const base = path.dirname(requestPath);
-const loadJson = async file => JSON.parse(await readFile(path.resolve(base, file), 'utf8'));
+const loadJson = async file => runtime.parseDecisionJson(await readFile(path.resolve(base, file), 'utf8'));
 
 const ruleset = await loadJson(config.rulesetPath);
 const binding = await loadJson(config.bindingPath);
