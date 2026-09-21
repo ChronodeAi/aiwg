@@ -50,8 +50,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 ### Fixed
 
 - Tag-bound npm publication invokes the fail-closed Socket audit directly as a
-  reusable workflow, binding the exact version and source commit without
-  depending on the public mirror's divergent default branch (#2635).
+  reusable workflow instead of depending on the public mirror's divergent
+  default branch. The v2026.9.19 run exposed an annotated-tag versus peeled-
+  commit binding defect corrected in v2026.9.20 (#2635).
 
 ### Documentation
 

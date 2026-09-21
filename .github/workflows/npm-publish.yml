@@ -515,52 +515,18 @@ jobs:
           verify_attestations @aiwg/cockpit
           verify_attestations @aiwg/cli
 
-      - name: Verify dist-tag points at this version
-        # Confirm the tag used by OIDC publication resolves to this version.
-        # The release flow also checks that the retired `next` alias is absent.
+      - name: Verify stable dist-tag policy
+        # Confirm every published package resolves through `latest` and that the
+        # retired `next` alias has not been recreated.
         run: |
-          set -o pipefail
+          set -euo pipefail
           VERSION='${{ steps.version.outputs.version }}'
           NPM_TAG='${{ steps.version.outputs.npm_tag }}'
-          for i in 1 2 3 4 5; do
-            CURRENT=$(npm view "aiwg@${NPM_TAG}" version 2>/dev/null || echo "")
-            if [ "$CURRENT" = "$VERSION" ]; then
-              echo "✓ aiwg@${NPM_TAG} = ${VERSION} on npmjs.org"
-              break
-            fi
-            echo "Attempt $i: aiwg@${NPM_TAG} = ${CURRENT:-<missing>}, expected ${VERSION}; retrying in 10s..."
-            sleep 10
-            if [ "$i" = "5" ]; then
-              echo "✗ dist-tag verification exhausted retries (aiwg@${NPM_TAG} did not resolve to ${VERSION})"
-              exit 1
-            fi
-          done
-          for i in 1 2 3 4 5; do
-            CURRENT=$(npm view "@aiwg/cockpit@${NPM_TAG}" version 2>/dev/null || echo "")
-            if [ "$CURRENT" = "$VERSION" ]; then
-              echo "✓ @aiwg/cockpit@${NPM_TAG} = ${VERSION} on npmjs.org"
-              break
-            fi
-            echo "Attempt $i: @aiwg/cockpit@${NPM_TAG} = ${CURRENT:-<missing>}, expected ${VERSION}; retrying in 10s..."
-            sleep 10
-            if [ "$i" = "5" ]; then
-              echo "✗ dist-tag verification exhausted retries (@aiwg/cockpit@${NPM_TAG} did not resolve to ${VERSION})"
-              exit 1
-            fi
-          done
-          for i in 1 2 3 4 5; do
-            CURRENT=$(npm view "@aiwg/cli@${NPM_TAG}" version 2>/dev/null || echo "")
-            if [ "$CURRENT" = "$VERSION" ]; then
-              echo "✓ @aiwg/cli@${NPM_TAG} = ${VERSION} on npmjs.org"
-              break
-            fi
-            echo "Attempt $i: @aiwg/cli@${NPM_TAG} = ${CURRENT:-<missing>}, expected ${VERSION}; retrying in 10s..."
-            sleep 10
-            if [ "$i" = "5" ]; then
-              echo "✗ dist-tag verification exhausted retries (@aiwg/cli@${NPM_TAG} did not resolve to ${VERSION})"
-              exit 1
-            fi
-          done
+          [ "$NPM_TAG" = latest ] || {
+            echo "Stable publication must use the latest dist-tag; observed $NPM_TAG" >&2
+            exit 1
+          }
+          bash tools/release/verify-npm-dist-tags.sh "$VERSION"
 
       # ============================================================
       # Tarball Sigstore signing — #1287 / A8 (Wave 5 of #1278)

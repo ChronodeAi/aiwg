@@ -389,7 +389,8 @@ for package in aiwg @aiwg/cli @aiwg/cockpit; do
   npm dist-tag rm "$package" next --registry=https://registry.npmjs.org
 done
 # After CI publishes the new version:
-bash tools/release/verify-npm-dist-tags.sh 2026.9.19
+VERSION="$(node -p "require('./package.json').version")"
+bash tools/release/verify-npm-dist-tags.sh "$VERSION"
 ```
 
 Use source checkouts and ordinary test/CI branches for work that needs to be

@@ -15,7 +15,8 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('--json --prefer-online');
     expect(workflow).toContain("| jq -r '.dist.attestations // empty' || true");
     expect(workflow).toContain('after 15 minutes');
-    expect(workflow).toContain('npm view "@aiwg/cli@${NPM_TAG}" version');
+    expect(workflow).toContain('bash tools/release/verify-npm-dist-tags.sh "$VERSION"');
+    expect(workflow).toContain('[ "$NPM_TAG" = latest ]');
     expect(workflow).toContain('GIT_CONFIG_KEY_0: safe.directory');
     expect(workflow).toContain('GIT_CONFIG_VALUE_0: ${{ github.workspace }}');
     expect(workflow).toContain('Verify workflow identity is tag-bound');

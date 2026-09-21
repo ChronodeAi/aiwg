@@ -44,15 +44,21 @@ enabled. After service recovery or review remediation, rerun it against the
 immutable release tag rather than the public mirror's default branch:
 
 ```bash
+VERSION=2026.9.20
+TAG="v${VERSION}"
+COMMIT="$(git rev-parse "${TAG}^{commit}")"
 gh workflow run socket-post-publish.yml \
   --repo jmagly/aiwg \
-  --ref v2026.9.19 \
-  -f version=2026.9.19
+  --ref "$TAG" \
+  -f version="$VERSION" \
+  -f tag="$TAG" \
+  -f commit="$COMMIT"
 ```
 
-The selected `--ref` must be `v<version>`. The workflow resolves its commit from
-that tag and fails before scanning if the checked-out package version, tag ref,
-and source commit do not agree.
+The selected `--ref` and `tag` input must both identify `v<version>`. The
+operator supplies the peeled commit from that immutable tag; the workflow fails
+before scanning if the checked-out package version, tag ref, and source commit
+do not agree.
 
 ## Local fixture or operator run
 

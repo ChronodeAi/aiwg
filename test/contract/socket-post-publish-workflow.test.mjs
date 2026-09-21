@@ -13,6 +13,10 @@ const socketWorkflow = readFileSync(
   path.join(ROOT, '.github/workflows/socket-post-publish.yml'),
   'utf8',
 );
+const socketRunbook = readFileSync(
+  path.join(ROOT, 'docs/contributing/socket-post-publish-audit.md'),
+  'utf8',
+);
 
 test('npm publication invokes the release-tag Socket workflow', () => {
   assert.match(
@@ -76,4 +80,12 @@ test('Socket scanner evidence remains fail closed', () => {
     socketWorkflow,
     /if \[ "\$AUDIT_OUTCOME" != "success" \]; then[\s\S]*?exit 1/,
   );
+});
+
+test('Socket recovery supplies the immutable tag and peeled commit', () => {
+  assert.match(socketRunbook, /--ref "\$TAG"/);
+  assert.match(socketRunbook, /-f version="\$VERSION"/);
+  assert.match(socketRunbook, /-f tag="\$TAG"/);
+  assert.match(socketRunbook, /-f commit="\$COMMIT"/);
+  assert.match(socketRunbook, /COMMIT="\$\(git rev-parse "\$\{TAG\}\^\{commit\}"\)"/);
 });
