@@ -7,6 +7,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.20] - 2026-09-21 - "Stable channels and exact-source evidence"
+
+### Changed
+
+- Stable releases use `latest` as the only stable dist-tag for `aiwg`,
+  `@aiwg/cli`, and `@aiwg/cockpit`. The legacy `next` alias is retired from
+  npmjs.org and the Gitea package mirror, with release verification requiring
+  it to be absent.
+
+### Fixed
+
+- Post-publish Socket evidence is bound to the exact signed release source:
+  tag publication passes the release version and source commit directly to the
+  fail-closed audit workflow instead of relying on the public mirror's default
+  branch history (#2635).
+
 ## [2026.9.19] - 2026-09-21 - "Decision backends and provider handoffs"
 
 ### Added
@@ -28,9 +44,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Changed
 
-- Stable publication uses `latest` for all three packages. The release flow
-  verifies that the retired `next` dist-tag is absent from npmjs.org and the
-  Gitea package mirror.
+- Stable publication aligns and verifies both `latest` and `next` dist-tags
+  for all three packages on npmjs.org and the Gitea package mirror.
 
 ### Fixed
 
