@@ -13,7 +13,7 @@ import { conformanceDigest, resultDigest, summarizeConformance, verifyConformanc
 import { CsvAdapter, DirectoryAdapter, FileAdapter, HttpAdapter, JsonlAdapter } from '../../src/dataset/adapters.js'
 import { request, sha256Digest } from '../../src/dataset/adapter-sdk.js'
 import { verifyFortemiDatasetExecutionQualification } from '../../src/dataset/fortemi-live-qualification.js'
-import { qualifyAdversarialAdapters, qualifyCapabilityBinding, qualifyCheckpointBoundaries, qualifyOfflineMatrix, qualifyProvenanceBinding, qualifyReplay, qualifyStandardsGoldens } from './dataset-local-cells.js'
+import { qualifyAdversarialAdapters, qualifyCapabilityBinding, qualifyCheckpointBoundaries, qualifyOfflineMatrix, qualifyPriorStableMigration, qualifyProvenanceBinding, qualifyReplay, qualifyStandardsGoldens } from './dataset-local-cells.js'
 
 interface Arguments { manifest: string; report?: string; mode: 'local' | 'cross-repo' | 'live'; fortemiCheckout?: string; fortemiCommit?: string; fortemiServerCommit?: string; liveQualification?: string; liveRunReceipt?: string; verify?: string }
 
@@ -150,6 +150,7 @@ async function main() {
       else if (cell.id === 'offline.cache-matrix') results.push(await runBoundCell(cell, qualifyOfflineMatrix))
       else if (cell.id === 'provenance.complete') results.push(await runBoundCell(cell, qualifyProvenanceBinding))
       else if (cell.id === 'standards.prov-openlineage') results.push(await runBoundCell(cell, qualifyStandardsGoldens))
+      else if (cell.id === 'migration.prior-stable') results.push(await runBoundCell(cell, qualifyPriorStableMigration))
       else if (cell.id === 'parity.fortemi-core' && args.mode !== 'local' && args.fortemiCheckout && args.fortemiCommit) results.push(await runFortemiParity(cell, args.fortemiCheckout, args.fortemiCommit))
       else if (cell.id === 'parity.fortemi-server-live' && args.mode === 'live' && args.liveQualification && args.liveRunReceipt && args.fortemiServerCommit) results.push(await runFortemiLive(cell, args.liveQualification, args.liveRunReceipt, args.fortemiServerCommit))
       else results.push(await pending(cell))

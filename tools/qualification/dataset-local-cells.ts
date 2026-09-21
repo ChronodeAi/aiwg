@@ -1,19 +1,37 @@
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createBuiltinAdapterRegistry, FileAdapter, HttpAdapter, JsonlAdapter } from '../../src/dataset/adapters.js'
 import { request } from '../../src/dataset/adapter-sdk.js'
-import { computeProcessingPlanDigest } from '../../src/dataset/contracts.js'
+import {
+  computeProcessingPlanDigest,
+  computeRunReceiptDigest,
+  negotiateDatasetCapabilities,
+  validateCheckpointAncestry,
+  validateDatasetContract,
+  validateDatasetContractSet,
+  verifyProcessingPlanDigest,
+  verifyRunReceiptDigest,
+} from '../../src/dataset/contracts.js'
 import { LocalDatasetExecutionBackend } from '../../src/dataset/local-execution-backend.js'
 import { MemoryDatasetOrchestrationRepository } from '../../src/dataset/orchestration-repository.js'
 import { DatasetOrchestrationService } from '../../src/dataset/orchestration-service.js'
-import { DATASET_CONTRACT_VERSION, type CapabilityProfile, type ProcessingPlan } from '../../src/dataset/types.js'
+import {
+  DATASET_CONTRACT_VERSION,
+  type CapabilityProfile,
+  type Checkpoint,
+  type DatasetContract,
+  type ProcessingPlan,
+  type RunReceipt,
+} from '../../src/dataset/types.js'
 import { exportStandard, importStandard } from '../../src/dataset/standards.js'
 
 const ROOT = process.cwd()
 const SOURCE = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/sources/records.jsonl')
 const REPLAY_CORPUS = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/incremental/replay.json')
 const ADVERSARIAL_CORPUS = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/security/adversarial.json')
+const PRIOR_STABLE_BINDING = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/prior/v2026.9.17/binding.json')
 
 type ReplayItem = { id: string; cursor: number; tombstone?: boolean }
 type ReplayCorpus = {
@@ -32,6 +50,16 @@ type AdversarialCorpus = {
   paths: [string, string]
   urls: [string, string]
   limits: { compressedBytes: number; expandedBytes: number; records: number; nesting: number }
+}
+type PriorStableBinding = {
+  tag: string
+  tagObject: string
+  sourceCommit: string
+  packageVersion: string
+  contractVersion: string
+  corpusVersion: string
+  fixture: string
+  fixtureDigest: string
 }
 
 async function readJson<T>(path: string): Promise<T> {
@@ -191,6 +219,54 @@ export async function qualifyAdversarialAdapters(): Promise<void> {
     if (createBuiltinAdapterRegistry().manifests.some(item => item.sourceKinds.some(kind => archiveKinds.test(kind)))) throw new Error('CONFORMANCE_UNQUALIFIED_DECOMPRESSION_SURFACE')
   } finally {
     await rm(temporary, { recursive: true, force: true })
+  }
+}
+
+export async function qualifyPriorStableMigration(): Promise<void> {
+  const binding = await readJson<PriorStableBinding>(PRIOR_STABLE_BINDING)
+  if (binding.tag !== 'v2026.9.17'
+    || binding.tagObject !== 'b110d50d68e8539c9ad2de6a230014e0c01e1950'
+    || binding.sourceCommit !== '10b5f9eca8eeafec6ac2f179ebafdb71721dbd53'
+    || binding.packageVersion !== '2026.9.17'
+    || binding.contractVersion !== DATASET_CONTRACT_VERSION
+    || binding.corpusVersion !== '1.0.0'
+    || binding.fixture !== 'test/fixtures/dataset-intelligence/v1/prior/v2026.9.17/contracts.json'
+    || binding.fixtureDigest !== 'sha256:937feadd475d5c1e56528170d4990595d719b62098f925717e74d985c0e05d1c') {
+    throw new Error('CONFORMANCE_PRIOR_STABLE_BINDING_INVALID')
+  }
+  const fixturePath = resolve(ROOT, binding.fixture)
+  const fixtureBytes = await readFile(fixturePath)
+  if (`sha256:${createHash('sha256').update(fixtureBytes).digest('hex')}` !== binding.fixtureDigest) {
+    throw new Error('CONFORMANCE_PRIOR_STABLE_FIXTURE_DRIFT')
+  }
+  const fixture = JSON.parse(fixtureBytes.toString('utf8')) as { contracts: unknown[] }
+  const contracts = fixture.contracts.map((value) => {
+    const validated = validateDatasetContract(value)
+    if (!validated.valid || !validated.value) throw new Error('CONFORMANCE_PRIOR_STABLE_SCHEMA_MIGRATION_FAILED')
+    return validated.value
+  })
+  if (validateDatasetContractSet(contracts).length > 0) throw new Error('CONFORMANCE_PRIOR_STABLE_SCHEMA_SET_INVALID')
+
+  const requireContract = <T extends DatasetContract['kind']>(kind: T) => {
+    const contract = contracts.find(value => value.kind === kind)
+    if (!contract) throw new Error(`CONFORMANCE_PRIOR_STABLE_${kind.toUpperCase()}_MISSING`)
+    return contract as Extract<DatasetContract, { kind: T }>
+  }
+  const profile = requireContract('CapabilityProfile') as CapabilityProfile
+  const priorPlan = requireContract('ProcessingPlan') as ProcessingPlan
+  const priorCheckpoint = requireContract('Checkpoint') as Checkpoint
+  const priorReceipt = requireContract('RunReceipt') as RunReceipt
+  const plan = { ...priorPlan, planDigest: computeProcessingPlanDigest(priorPlan) }
+  const checkpoint = { ...priorCheckpoint, planDigest: plan.planDigest }
+  const receiptWithoutDigest = { ...priorReceipt, planDigest: plan.planDigest }
+  const receipt = { ...receiptWithoutDigest, receiptDigest: computeRunReceiptDigest(receiptWithoutDigest) }
+
+  if (!verifyProcessingPlanDigest(plan) || !verifyRunReceiptDigest(receipt)) throw new Error('CONFORMANCE_PRIOR_STABLE_DIGEST_MIGRATION_FAILED')
+  if (!validateDatasetContract(checkpoint).valid || !validateDatasetContract(receipt).valid) throw new Error('CONFORMANCE_PRIOR_STABLE_CONTRACT_MIGRATION_FAILED')
+  if (validateCheckpointAncestry(checkpoint).length > 0) throw new Error('CONFORMANCE_PRIOR_STABLE_CHECKPOINT_MIGRATION_FAILED')
+  const decision = negotiateDatasetCapabilities(profile, [{ name: 'incremental-read', version: '1' }])
+  if (decision.satisfied.join(',') !== 'incremental-read' || decision.degraded[0]?.capability !== 'vector-index') {
+    throw new Error('CONFORMANCE_PRIOR_STABLE_PROFILE_MIGRATION_FAILED')
   }
 }
 
