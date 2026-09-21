@@ -1,6 +1,9 @@
+import { execFile } from 'node:child_process';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import {
   SessionSourceAdapterRegistry,
@@ -10,6 +13,8 @@ import {
   redactSourceLocator,
   type SessionSourceAdapter,
 } from '../../../src/sessions/index.js';
+
+const execFileAsync = promisify(execFile);
 
 function fixtureAdapter(overrides: Partial<SessionSourceAdapter> = {}): SessionSourceAdapter {
   return {
@@ -145,32 +150,26 @@ describe('bounded session readers', () => {
     const root = await mkdtemp(join(tmpdir(), 'aiwg-reader-million-'));
     const path = join(root, 'million.jsonl');
     await writeFile(path, '{"ok":1}\n'.repeat(1_000_000));
-    const stream = await streamBoundedJsonLines(
-      { selectedPath: path, allowedRoots: [root], maxBytes: 16 * 1024 * 1024 },
-      {
-        consistency: 'complete',
-        limits: {
-          maxRecords: 1_000_000,
-          maxTotalBytes: 16 * 1024 * 1024,
-          maxRecordBytes: 1024,
-        },
-      },
+    const probe = fileURLToPath(new URL('../../fixtures/sessions/reader-retained-memory.ts', import.meta.url));
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--expose-gc', '--import', 'tsx', probe, path, root],
+      { timeout: 20_000, maxBuffer: 64 * 1024 },
     );
-    const baseline = process.memoryUsage().heapUsed;
-    let peak = baseline;
-    let count = 0;
-    for await (const record of stream) {
-      count += 1;
-      if (count === 1 || count === 1_000_000) {
-        expect(record.value).toEqual({ ok: 1 });
-      }
-      if (count % 50_000 === 0) {
-        peak = Math.max(peak, process.memoryUsage().heapUsed);
-      }
-    }
-    expect(count).toBe(1_000_000);
-    expect(stream.recordsRead).toBe(1_000_000);
-    expect(peak - baseline).toBeLessThan(96 * 1024 * 1024);
+    const result = JSON.parse(stdout) as {
+      count: number;
+      recordsRead: number;
+      first: unknown;
+      last: unknown;
+      retainedPeakGrowthBytes: number;
+    };
+    expect(result).toMatchObject({
+      count: 1_000_000,
+      recordsRead: 1_000_000,
+      first: { ok: 1 },
+      last: { ok: 1 },
+    });
+    expect(result.retainedPeakGrowthBytes).toBeLessThan(32 * 1024 * 1024);
   }, 30_000);
 
   it('ignores an incomplete active tail without advancing past it', async () => {
