@@ -96,12 +96,15 @@ describe('Jev transport contract', () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
   });
 
-  it('SEC-DNS: rejects private DNS answers for approved custom origins before credentials', async () => {
+  it('SEC-DNS: rejects approved custom origins before a public-to-private DNS rebind can occur', async () => {
     const credentials = vi.fn(async () => new TextEncoder().encode('synthetic-token'));
     const fetchMock = vi.fn(async () => reply());
+    const addresses = ['93.184.216.34', '169.254.1.1'];
+    const resolveAddresses = vi.fn(async () => [addresses.shift()!]);
     const adapter = new JevDecisionAdapter({ endpoint: 'https://custom.example/v1/systemone', allowedOrigins: ['https://custom.example'],
-      resolveAddresses: async () => ['169.254.1.1'], fetch: fetchMock });
+      resolveAddresses, fetch: fetchMock });
     expect((await adapter.evaluate(request({ resolveCredential: credentials }))).reason).toBe('data-boundary-denied');
+    expect(resolveAddresses).not.toHaveBeenCalled();
     expect(credentials).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -142,6 +145,20 @@ describe('Jev transport contract', () => {
     expect(await pending).toMatchObject({ reason: 'cancelled', termination: 'caller-cancelled', remoteExecution: 'unknown' });
   });
 
+  it('CAN-CREDENTIAL: caller cancellation stops a pending credential wait before dispatch', async () => {
+    const controller = new AbortController();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const fetchMock = vi.fn(async () => reply());
+    const adapter = new JevDecisionAdapter({ fetch: fetchMock });
+    const pending = adapter.evaluate(request({ signal: controller.signal,
+      resolveCredential: async () => { entered(); return new Promise<Uint8Array>(() => undefined); } }));
+    await started;
+    controller.abort();
+    expect(await pending).toMatchObject({ reason: 'cancelled', termination: 'caller-cancelled', dispatchCertainty: 'not-sent' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('PRV-CRED-CANARY: never serializes credential resolver error text', async () => {
     const canary = 'synthetic-secret-canary-should-never-appear';
     const adapter = new JevDecisionAdapter({ fetch: vi.fn(async () => reply()) });
@@ -179,6 +196,14 @@ describe('Jev transport contract', () => {
     expect((await largeBody.evaluate(request())).reason).toBe('invalid-output');
     const largeError = new JevDecisionAdapter({ fetch: async () => new Response(new Uint8Array(1024 * 1024 + 1), { status: 429 }) });
     expect((await largeError.evaluate(request())).reason).toBe('invalid-output');
+  });
+
+  it('SEC-RESPONSE-PARSE-TIME: interrupts pathological bounded JSON parsing', async () => {
+    const deeplyNested = '['.repeat(500_000) + '0' + ']'.repeat(500_000);
+    const adapter = new JevDecisionAdapter({ fetch: async () => new Response(deeplyNested) });
+    const started = performance.now();
+    expect((await adapter.evaluate(request())).reason).toBe('invalid-output');
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 

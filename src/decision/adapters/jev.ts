@@ -8,17 +8,16 @@ import type {
 } from '../types.js';
 import { DecisionValidationError, validateDecisionValue, validateDistribution } from '../validate.js';
 import { canonicalJson } from '../../security/artifact-trust.js';
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { runInNewContext } from 'node:vm';
 
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
 interface JevAdapterOptions {
   endpoint?: string;
   fetch?: typeof fetch;
-  /** Explicitly approved public HTTPS origins for non-default deployments. */
+  /** Reserved for a future pinned-address transport; custom origins currently fail closed. */
   allowedOrigins?: readonly string[];
-  /** DNS check for custom origins; production defaults to the system resolver. */
+  /** Reserved for a future pinned-address transport. */
   resolveAddresses?: (hostname: string) => Promise<readonly string[]>;
   now?: () => number;
 }
@@ -41,15 +40,11 @@ export class JevDecisionAdapter implements DecisionAdapter {
   readonly version = '1.0.0';
   private readonly endpoint: string;
   private readonly fetchImpl: typeof fetch;
-  private readonly allowedOrigins: readonly string[];
-  private readonly resolveAddresses: (hostname: string) => Promise<readonly string[]>;
   private readonly now: () => number;
 
   constructor(options: JevAdapterOptions = {}) {
     this.endpoint = options.endpoint ?? JEV_ENDPOINT;
     this.fetchImpl = options.fetch ?? fetch;
-    this.allowedOrigins = options.allowedOrigins ?? [];
-    this.resolveAddresses = options.resolveAddresses ?? systemResolveAddresses;
     this.now = options.now ?? Date.now;
   }
 
@@ -67,17 +62,19 @@ export class JevDecisionAdapter implements DecisionAdapter {
   async evaluate(request: DecisionAdapterRequest): Promise<AdapterObservation> {
     if (request.signal.aborted) return externalInterruption(request, 'not-sent');
     if (this.now() >= request.deadlineEpochMs) return failure('timeout', { termination: 'target-timeout', dispatchCertainty: 'not-sent' });
-    try { await authorizeEndpoint(this.endpoint, this.allowedOrigins, this.resolveAddresses); }
-    catch { return failure('data-boundary-denied', { dispatchCertainty: 'not-sent' }); }
+    try { authorizeEndpoint(this.endpoint); }
+    catch { return request.signal.aborted ? externalInterruption(request, 'not-sent')
+      : failure('data-boundary-denied', { dispatchCertainty: 'not-sent' }); }
     if (request.signal.aborted) return externalInterruption(request, 'not-sent');
     let token: string;
     try {
       if (!request.target.credentialRef) return failure('unauthorized', { dispatchCertainty: 'not-sent' });
-      const credential = new Uint8Array(await request.resolveCredential(request.target.credentialRef));
+      const credential = new Uint8Array(await withAbort(request.resolveCredential(request.target.credentialRef), request.signal));
       try { token = new TextDecoder('utf-8', { fatal: true }).decode(credential); }
       finally { credential.fill(0); }
       if (!token || /[\r\n\u0000-\u001f\u007f]/.test(token)) return failure('authentication', { dispatchCertainty: 'not-sent' });
     } catch (error) {
+      if (request.signal.aborted) return externalInterruption(request, 'not-sent');
       const category = error instanceof JevCredentialError ? error.category : null;
       const reason = category === 'missing' ? 'authentication'
         : category === 'denied' || category === 'configuration' || error instanceof DecisionValidationError ? 'unauthorized'
@@ -133,11 +130,12 @@ export class JevDecisionAdapter implements DecisionAdapter {
       try {
         const errorBody = await readBoundedBody(response, signal);
         if (!metadata.requestId && response.headers.get('content-type')?.includes('json')) {
-          const parseStarted = performance.now();
           let parsedError: unknown;
-          try { parsedError = JSON.parse(errorBody); }
-          catch { parsedError = null; }
-          if (performance.now() - parseStarted > MAX_PARSE_MS) throw new Error('response parse exceeded limit');
+          try { parsedError = parseBoundedJson(errorBody); }
+          catch (error) {
+            if (error && typeof error === 'object' && 'code' in error && error.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') throw error;
+            parsedError = null;
+          }
           if (parsedError && typeof parsedError === 'object' && !Array.isArray(parsedError)) {
             const field = (parsedError as Record<string, unknown>).request_id ?? (parsedError as Record<string, unknown>).requestId;
             const safe = safeRequestId(field);
@@ -156,9 +154,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
     let parsed: unknown;
     try {
       const encoded = await readBoundedBody(response, signal);
-      const parseStarted = performance.now();
-      parsed = JSON.parse(encoded);
-      if (performance.now() - parseStarted > MAX_PARSE_MS) throw new Error('response parse exceeded limit');
+      parsed = parseBoundedJson(encoded);
       if (request.signal.aborted) return externalInterruption(request, 'terminal-response', metadata);
       if (deadline.aborted) return failure('timeout', { ...metadata, termination: 'target-timeout', remoteExecution: 'unknown' });
       const normalized = normalizeResponse(request, parsed);
@@ -169,6 +165,17 @@ export class JevDecisionAdapter implements DecisionAdapter {
           : failure('invalid-output', metadata);
     }
   }
+}
+
+async function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+  let onAbort = (): void => undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new DOMException('Aborted', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try { return await Promise.race([promise, cancelled]); }
+  finally { signal.removeEventListener('abort', onAbort); }
 }
 
 function toJevQuestion(request: DecisionAdapterRequest): Record<string, unknown> {
@@ -328,6 +335,11 @@ function safeRequestId(value: unknown): string | null {
     && /^[\x21-\x7e]+$/.test(value) && !value.includes(',') ? value : null;
 }
 
+function parseBoundedJson(text: string): unknown {
+  // VM timeout interrupts synchronous parsing; input is a value, never source code.
+  return runInNewContext('JSON.parse(input)', { input: text }, { timeout: MAX_PARSE_MS });
+}
+
 function headersWithinLimit(headers: Headers): boolean {
   let bytes = 0;
   for (const [name, value] of headers) {
@@ -371,28 +383,11 @@ async function readBoundedBody(response: Response, signal: AbortSignal): Promise
   }
 }
 
-async function systemResolveAddresses(hostname: string): Promise<readonly string[]> {
-  return (await lookup(hostname, { all: true })).map(address => address.address);
-}
-
-async function authorizeEndpoint(endpoint: string, allowedOrigins: readonly string[], resolveAddresses: (hostname: string) => Promise<readonly string[]>): Promise<void> {
+function authorizeEndpoint(endpoint: string): void {
   const url = new URL(endpoint);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port && url.port !== '443') throw new Error('unsafe endpoint');
-  const approved = new Set([new URL(JEV_ENDPOINT).origin, ...allowedOrigins.map(origin => new URL(origin).origin)]);
-  if (!approved.has(url.origin)) throw new Error('unapproved endpoint');
-  if (url.origin !== new URL(JEV_ENDPOINT).origin) {
-    if (isIP(url.hostname)) throw new Error('literal endpoint address');
-    const addresses = await resolveAddresses(url.hostname);
-    if (!addresses.length || addresses.some(address => !publicIpv4(address))) throw new Error('private endpoint address');
-  }
-}
-
-function publicIpv4(address: string): boolean {
-  if (isIP(address) !== 4) return false; // fail closed on IPv6 until its full range policy is implemented
-  const [a, b, c] = address.split('.').map(Number);
-  if (a === 0 || a === 10 || a === 127 || a! >= 224 || a === 169 && b === 254 || a === 172 && b! >= 16 && b! <= 31
-    || a === 192 && (b === 168 || b === 0)
-    || a === 100 && b! >= 64 && b! <= 127 || a === 198 && (b === 18 || b === 19 || b === 51 && c === 100)
-    || a === 203 && b === 0 && c === 113) return false;
-  return true;
+  // Native fetch cannot pin the previously checked DNS address while preserving
+  // TLS hostname verification. Until a pinned transport exists, only the
+  // official endpoint origin is authorized, even with an explicit allowlist.
+  if (url.origin !== new URL(JEV_ENDPOINT).origin) throw new Error('unapproved endpoint');
 }
