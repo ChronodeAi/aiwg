@@ -7,6 +7,23 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- Normalized `decision.aiwg.io/v1alpha1` definitions, rulesets, bindings,
+  decision results, and ruleset results with schema/semantic validation,
+  immutable pins, deterministic composition, bounded retry/fallback, and
+  replay-safe receipts (#2573).
+- Interchangeable Jev and ordinary LLM-subagent decision adapters behind one
+  AIWG-owned contract, plus backend-swap examples, fixture-only conformance
+  tests, the opt-in `decision-engine` addon, and a separately gated live Jev
+  smoke command.
+
+### Documentation
+
+- Decision architecture, evaluation semantics, confidence provenance,
+  migration/rollback guidance, runtime credential boundaries, and FlowGraph
+  integration guidance.
+
 ## [2026.9.18] - 2026-09-21 - "Dataset conformance binds prior stable evidence"
 
 ### Added
