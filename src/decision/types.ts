@@ -51,7 +51,7 @@ export type DecisionPredicate =
   | { not: DecisionPredicate };
 
 export interface DecisionRuleset {
-  apiVersion: typeof DECISION_API_VERSION;
+  apiVersion: typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED;
   kind: 'DecisionRuleset';
   metadata: ArtifactMetadata;
   spec: {
@@ -93,7 +93,7 @@ export interface ExecutionTarget {
 }
 
 export interface DecisionBinding {
-  apiVersion: typeof DECISION_API_VERSION;
+  apiVersion: typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED;
   kind: 'DecisionBinding';
   metadata: ArtifactMetadata;
   spec: {

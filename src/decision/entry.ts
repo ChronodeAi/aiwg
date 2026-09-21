@@ -1,4 +1,4 @@
-import { TextEncoder } from 'node:util';
+import { TextEncoder, types as utilTypes } from 'node:util';
 import { gunzipSync } from 'node:zlib';
 import { parseDocument } from 'yaml';
 
@@ -49,15 +49,20 @@ export function admitEntry(value: unknown, limits: Readonly<EntryLimits> = DEFAU
       return add(JSON.stringify(item));
     }
     if (!item || typeof item !== 'object') throw new EntryAdmissionError('non-json-value', counts);
+    if (utilTypes.isProxy(item)) fail('proxy-object');
     if (stack.has(item)) fail('cycle');
     const prototype = Object.getPrototypeOf(item);
-    if (!Array.isArray(item) && prototype !== Object.prototype && prototype !== null) fail('object-prototype');
+    if (Array.isArray(item) ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) fail('object-prototype');
     stack.add(item);
     if (Array.isArray(item)) {
       if (item.length > limits.arrayLength) fail('array-length');
+      const keys = Reflect.ownKeys(item);
+      if (keys.some(key => typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9]\d*)$/.test(key)))) fail('unsafe-array-key');
       for (let index = 0; index < item.length; index += 1) {
-        if (!Object.prototype.hasOwnProperty.call(item, index)) fail('sparse-array');
-        visit(item[index], depth + 1);
+        const descriptor = Object.getOwnPropertyDescriptor(item, index);
+        if (!descriptor) throw new EntryAdmissionError('sparse-array', counts);
+        if (!('value' in descriptor) || !descriptor.enumerable) fail('accessor-or-hidden-field');
+        visit(descriptor.value, depth + 1);
       }
     } else {
       const descriptors = Object.getOwnPropertyDescriptors(item);

@@ -26,6 +26,8 @@ const schemaFiles = {
 } as const;
 const structuredSchemaFiles = {
   DecisionDefinition: 'DecisionDefinition.v1alpha2.schema.json',
+  DecisionRuleset: 'DecisionRuleset.v1alpha2.schema.json',
+  DecisionBinding: 'DecisionBinding.v1alpha2.schema.json',
   DecisionResult: 'DecisionResult.v1alpha2.schema.json',
   RulesetResult: 'RulesetResult.v1alpha2.schema.json',
 } as const;

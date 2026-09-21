@@ -3,7 +3,7 @@ import { gzipSync } from 'node:zlib';
 import { describe, expect, it, vi } from 'vitest';
 import {
   admitEntry, artifactPin, convertDecisionDefinitionV1Alpha1, DEFAULT_ENTRY_LIMITS,
-  JevDecisionAdapter, LlmSubagentDecisionAdapter, parseCompressedDecisionJson, parseDecisionJson, validateDefinition,
+  EntryAdmissionError, JevDecisionAdapter, LlmSubagentDecisionAdapter, parseCompressedDecisionJson, parseDecisionJson, validateDefinition, validateDecisionDocument,
   type DecisionDefinition, type DecisionAdapterRequest,
 } from '../../../src/decision/index.js';
 import { parseDecisionDoc } from '../../../src/artifacts/index-builder.js';
@@ -57,6 +57,9 @@ describe('decision structured entry contract', () => {
     ['depth', () => { let x: unknown = 'leaf'; for (let i = 0; i < 34; i++) x = [x]; return x; }],
     ['property-count', () => Object.fromEntries(Array.from({ length: 4097 }, (_, i) => [`k${i}`, i]))],
     ['array-length', () => Array.from({ length: 4097 }, () => 1)],
+    ['proxy', () => new Proxy({}, { get: () => { throw new Error('must not execute'); } })],
+    ['array-getter', () => { const x = [1]; Object.defineProperty(x, 0, { get: () => { throw new Error('must not execute'); } }); return x; }],
+    ['array-symbol', () => Object.assign([1], { [Symbol('key')]: true })],
     ['string-length', () => 'a'.repeat(65_537)],
   ] as const)('rejects %s before canonicalization', (_name, make) => {
     expect(() => admitEntry(make())).toThrow();
@@ -107,5 +110,31 @@ describe('decision structured entry contract', () => {
   it('enforces explicit byte limits before parsing', () => {
     expect(() => parseDecisionJson('"' + 'x'.repeat(DEFAULT_ENTRY_LIMITS.serializedBytes) + '"')).toThrow(/serialized-bytes/);
     expect(() => parseCompressedDecisionJson(gzipSync('"' + 'x'.repeat(DEFAULT_ENTRY_LIMITS.serializedBytes) + '"'))).toThrow(/decompressed-bytes/);
+  });
+
+  it('returns a typed nonretryable reason and counts for entry/time budgets', () => {
+    const many = [Array.from({ length: 4096 }, () => 1), Array.from({ length: 4096 }, () => 1)];
+    expect(() => admitEntry(many)).toThrowError(EntryAdmissionError);
+    try { admitEntry(many); } catch (error) {
+      expect(error).toMatchObject({ reasonCode: 'entry-count', counts: { entries: 8193 } });
+      expect(String(error)).not.toContain('4096');
+    }
+    expect(() => admitEntry({ entry: 'safe' }, { ...DEFAULT_ENTRY_LIMITS, timeMs: -1 })).toThrow(/time-budget/);
+  });
+
+  it('keeps v1alpha1 strict while dual readers accept v1alpha2 artifacts', () => {
+    const definition = structured();
+    validateDecisionDocument(definition);
+    const oldVersion = structured(); oldVersion.apiVersion = 'decision.aiwg.io/v1alpha1';
+    expect(() => validateDecisionDocument(oldVersion)).toThrow();
+    for (const [file, kind] of [['ruleset.json', 'DecisionRuleset'], ['binding-jev.json', 'DecisionBinding']] as const) {
+      const oldDoc = JSON.parse(readFileSync(`examples/decision/${file}`, 'utf8')) as { apiVersion: string; kind: string; spec: Record<string, unknown> };
+      validateDecisionDocument(oldDoc);
+      oldDoc.apiVersion = 'decision.aiwg.io/v1alpha2';
+      validateDecisionDocument(oldDoc);
+      expect(oldDoc.kind).toBe(kind);
+      oldDoc.spec.structuredAcceptance = { override: true };
+      expect(() => validateDecisionDocument(oldDoc)).toThrow();
+    }
   });
 });

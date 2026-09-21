@@ -243,6 +243,64 @@
       "publication": {
         "public": true
       }
+    },
+    {
+      "logicalName": "decision.ruleset.v1alpha2",
+      "id": "https://aiwg.io/schemas/decision/DecisionRuleset.v1alpha2.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionRuleset.v1alpha2.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "decision-runtime",
+          "boundary": "Portable rules and deterministic composition",
+          "path": "src/decision/compose.ts"
+        }
+      ],
+      "publication": {
+        "public": true
+      }
+    },
+    {
+      "logicalName": "decision.binding.v1alpha2",
+      "id": "https://aiwg.io/schemas/decision/DecisionBinding.v1alpha2.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionBinding.v1alpha2.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "decision-runtime",
+          "boundary": "Adapter selection and execution budgets",
+          "path": "src/decision/evaluate.ts"
+        }
+      ],
+      "publication": {
+        "public": true
+      }
     }
   ]
 }
