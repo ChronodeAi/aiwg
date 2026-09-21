@@ -13,6 +13,9 @@
 # - Trusted publishing replaces the long-lived NPMJS_TOKEN with short-lived
 #   OIDC tokens that npmjs.org verifies against the workflow's
 #   id-token claims. No secret to rotate, no secret to leak.
+# - OIDC authorizes publication with one dist-tag (`latest` for stable tags).
+#   npm does not authorize `npm dist-tag add` through trusted publishing, so
+#   moving the separate `next` alias requires an authenticated operator session.
 # - `npm publish --provenance` produces a cryptographic attestation linking
 #   the published tarball to (a) the GitHub Actions workflow run that
 #   produced it and (b) the source commit SHA. Anyone can verify via
@@ -87,11 +90,6 @@ on:
         description: 'Existing tag to re-attempt publish for (dispatch with --ref set to the same tag)'
         required: false
         type: string
-      remove_cli_bootstrap_tag:
-        description: 'Maintenance only: remove the deprecated @aiwg/cli bootstrap dist-tag without republishing'
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: npmjs-publish-${{ github.ref }}
@@ -104,7 +102,7 @@ permissions:
 jobs:
   publish-to-npmjs-org:
     name: Publish to npmjs.org with provenance
-    if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && !inputs.remove_cli_bootstrap_tag) }}
+    if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || github.event_name == 'workflow_dispatch' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
     runs-on: ubuntu-latest
@@ -288,15 +286,6 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION (dist-tag: $NPM_TAG)"
-
-      - name: Require npm dist-tag credential before publishing
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
-        run: |
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_DIST_TAG_TOKEN is required before npm publication"
-            exit 1
-          fi
 
       - name: Check package contents
         run: |
@@ -524,10 +513,9 @@ jobs:
           verify_attestations @aiwg/cli
 
       - name: Verify dist-tag points at this version
-        # Defense-in-depth against the dist-tag drift the Gitea workflow
-        # was hardened against (#1247, #1280). Even on first OIDC publish
-        # we confirm the dist-tag we asked for actually resolves to the
-        # version we just shipped.
+        # Confirm the tag used by OIDC publication resolves to this version.
+        # `next` is a separate registry mutation and is checked by the
+        # release flow after the operator has advanced it.
         run: |
           set -o pipefail
           VERSION='${{ steps.version.outputs.version }}'
@@ -570,39 +558,6 @@ jobs:
               echo "✗ dist-tag verification exhausted retries (@aiwg/cli@${NPM_TAG} did not resolve to ${VERSION})"
               exit 1
             fi
-          done
-
-      - name: Align latest and next dist-tags on stable releases
-        # OIDC trusted-publishing tokens cannot change dist-tags. A package
-        # management token is required so a successful release never leaves
-        # next pointing at an older version.
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
-        run: |
-          set -euo pipefail
-          VERSION='${{ steps.version.outputs.version }}'
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_DIST_TAG_TOKEN is required to align latest and next"
-            exit 1
-          fi
-          for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
-            for TAG in latest next; do
-              npm dist-tag add "${PACKAGE}@${VERSION}" "$TAG"
-            done
-            for ATTEMPT in 1 2 3 4 5; do
-              TAGS=$(npm dist-tag ls "$PACKAGE")
-              if grep -Fxq "latest: ${VERSION}" <<< "$TAGS" &&
-                 grep -Fxq "next: ${VERSION}" <<< "$TAGS"; then
-                echo "✓ ${PACKAGE}@latest and @next = ${VERSION}"
-                break
-              fi
-              if [ "$ATTEMPT" -eq 5 ]; then
-                echo "::error::${PACKAGE} dist-tags did not converge to ${VERSION}"
-                echo "$TAGS"
-                exit 1
-              fi
-              sleep 5
-            done
           done
 
       # ============================================================
@@ -997,49 +952,3 @@ jobs:
       commit: ${{ github.sha }}
     secrets:
       SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}
-
-  remove-deprecated-cli-bootstrap-tag:
-    name: Remove deprecated @aiwg/cli bootstrap tag
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.remove_cli_bootstrap_tag }}
-    runs-on: ubuntu-latest
-    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
-    timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Configure npmjs.org
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Remove bootstrap dist-tag and verify
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_DIST_TAG_TOKEN is required for dist-tag maintenance"
-            exit 1
-          fi
-
-          CURRENT=$(npm view @aiwg/cli dist-tags --json --prefer-online --no-update-notifier)
-          if node -e 'const tags=JSON.parse(process.argv[1]); process.exit(Object.hasOwn(tags, "bootstrap") ? 0 : 1)' "$CURRENT"; then
-            npm dist-tag rm @aiwg/cli bootstrap
-          else
-            echo "@aiwg/cli@bootstrap is already absent"
-          fi
-
-          for attempt in 1 2 3 4 5; do
-            CURRENT=$(npm view @aiwg/cli dist-tags --json --prefer-online --no-update-notifier)
-            if node -e 'const tags=JSON.parse(process.argv[1]); process.exit(Object.hasOwn(tags, "bootstrap") ? 1 : 0)' "$CURRENT"; then
-              echo "✓ @aiwg/cli bootstrap dist-tag is absent"
-              exit 0
-            fi
-            echo "Attempt ${attempt}: bootstrap tag still visible; retrying in 5s"
-            sleep 5
-          done
-
-          echo "::error::@aiwg/cli bootstrap dist-tag remained visible after removal"
-          exit 1

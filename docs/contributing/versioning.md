@@ -283,7 +283,10 @@ The GitHub trusted-publishing workflow publishes `aiwg`, `@aiwg/cockpit`, and
 package's provenance attestation before completing.
 
 For stable releases, OIDC sets `latest` during publication. The workflow does
-not create, advance, or maintain an npm `next` dist-tag.
+not create, advance, or maintain an npm `next` dist-tag. If the release policy
+requires `next` to match `latest`, an authenticated npm account session must
+advance `next` separately; the post-release verification gate must pass before
+the release is declared complete. Trusted publishing alone cannot do this.
 
 ### 5. Mirror signed release assets to the Gitea release
 
@@ -373,15 +376,21 @@ The `A2A Conformance` workflow provisions a reference agentic-sandbox instance v
 
 The npm release pipeline accepts only stable CalVer tags matching
 `vYYYY.M.PATCH`. It publishes `aiwg`, `@aiwg/cli`, and `@aiwg/cockpit` at the
-same version, then sets both `latest` and `next` to that version on npmjs.org
-and the Gitea package mirror. Publication fails if either tag cannot be set
-and verified. `next` is a stable-version alias; the pipeline does not publish
-nightly, alpha, beta, or RC versions.
+same version. GitHub Actions trusted publishing sets `latest` on npmjs.org;
+Gitea Actions sets `latest` and `next` on its package mirror. npmjs.org `next`
+requires a separate authenticated `npm dist-tag add` operation. The release
+plan verifies both public tags and must remain incomplete until they match.
+`next` is a stable-version alias; the pipeline does not publish nightly,
+alpha, beta, or RC versions.
 
 ```bash
-git tag -m "v2026.1.5" v2026.1.5
-git push origin v2026.1.5
-npm install -g aiwg                 # latest; aiwg@next resolves to the same release
+# After the signed tag is published by CI, use an authenticated npm account
+# session to advance the public alias. Never create a release tag by hand.
+VERSION=2026.9.19
+for package in aiwg @aiwg/cli @aiwg/cockpit; do
+  npm dist-tag add "${package}@${VERSION}" next --registry=https://registry.npmjs.org
+done
+bash tools/release/verify-npm-dist-tags.sh "$VERSION"
 ```
 
 Use source checkouts and ordinary test/CI branches for work that needs to be
