@@ -18,24 +18,15 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('npm view "@aiwg/cli@${NPM_TAG}" version');
     expect(workflow).toContain('GIT_CONFIG_KEY_0: safe.directory');
     expect(workflow).toContain('GIT_CONFIG_VALUE_0: ${{ github.workspace }}');
-    expect(workflow).toContain('remove_cli_bootstrap_tag:');
     expect(workflow).toContain('Verify workflow identity is tag-bound');
     expect(workflow).toContain(
       "gh workflow run npm-publish.yml --ref '$TAG' -f tag_to_publish='$TAG'",
     );
-    expect(workflow).toContain('npm dist-tag rm @aiwg/cli bootstrap');
-    expect(workflow).toContain('Remove deprecated @aiwg/cli bootstrap tag');
-    expect(workflow).not.toContain('npm dist-tag add @aiwg/cli bootstrap');
     expect(workflow).toContain('NPM_TAG=latest');
     expect(workflow).toContain('npm publication accepts stable versions only');
     expect(workflow).toContain("github.event_name == 'push' && !contains(github.ref_name, '-')");
-    expect(workflow).toContain('Align latest and next dist-tags on stable releases');
-    expect(workflow.indexOf('Require npm dist-tag credential before publishing')).toBeLessThan(
-      workflow.indexOf('- name: Publish to npmjs.org (OIDC + provenance)'),
-    );
-    expect(workflow).toContain('NPM_DIST_TAG_TOKEN is required to align latest and next');
-    expect(workflow).toContain('for TAG in latest next');
-    expect(workflow).toContain('grep -Fxq "next: ${VERSION}"');
+    expect(workflow).not.toContain('secrets.NPM_DIST_TAG_TOKEN');
+    expect(workflow).not.toMatch(/^\s+npm dist-tag (?:add|rm) /m);
     expect(workflow).not.toContain('NPM_TAG=prerelease');
     expect(workflow).not.toContain('NPM_TAG=nightly');
   });
