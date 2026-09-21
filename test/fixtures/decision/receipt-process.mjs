@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 
 const [directory, keyHex, invocationId, mode = 'acquire', targetState, fingerprintArg] = process.argv.slice(2);
 const store = new FileDecisionReceiptStore(directory, { integrityKey: Buffer.from(keyHex, 'hex'),
-  ...(mode === 'lock-hold' ? { staleLockMinAgeMs: 25, onLockAcquired: async () => {
-    process.stdout.write('locked\n');
-    await new Promise(() => undefined);
+  ...(mode.startsWith('publish-hold-') ? { onPublish: async stage => {
+    if (stage === mode.slice('publish-hold-'.length)) {
+      process.stdout.write(`publish-${stage}\n`);
+      await new Promise(() => undefined);
+    }
   } } : {}) });
 process.stdout.write('ready\n');
 process.stdin.once('data', async () => {

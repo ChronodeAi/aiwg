@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { link, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { link, mkdir, open, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalJson } from '../security/artifact-trust.js';
 import type { ArtifactPin, DecisionReceipt, DecisionReceiptState, DecisionReceiptStore } from './types.js';
@@ -139,9 +139,8 @@ export class MemoryDecisionReceiptStore implements DecisionReceiptStore {
 interface FileStoreOptions {
   integrityKey: Uint8Array;
   authorize?: (projectId: string) => boolean | Promise<boolean>;
-  /** Test seam for pausing while the process owns the lock. */
-  onLockAcquired?: () => Promise<void>;
-  staleLockMinAgeMs?: number;
+  /** Test seam for pausing before or just after atomic publication. */
+  onPublish?: (stage: 'before-link' | 'after-link', receipt: DecisionReceipt) => Promise<void>;
 }
 
 export class FileDecisionReceiptStore implements DecisionReceiptStore {
@@ -151,46 +150,70 @@ export class FileDecisionReceiptStore implements DecisionReceiptStore {
   private async check(projectId: string): Promise<void> {
     if (this.options.authorize && !await this.options.authorize(projectId)) throw new DecisionReceiptAccessError('Decision receipt access denied');
   }
-  private pathFor(invocationId: string): string {
-    return join(this.directory, `${createHash('sha256').update(invocationId).digest('hex')}.json`);
+  private prefixFor(invocationId: string): string {
+    return createHash('sha256').update(invocationId).digest('hex');
+  }
+  private pathFor(invocationId: string, revision: number): string {
+    return join(this.directory, `${this.prefixFor(invocationId)}.r${revision}.json`);
   }
   private mac(receipt: DecisionReceipt): string {
     return createHmac('sha256', this.options.integrityKey).update(canonicalJson(receipt)).digest('hex');
   }
   async read(invocationId: string, projectId = 'default'): Promise<DecisionReceipt | null> {
     await this.check(projectId);
-    let document: { receipt: DecisionReceipt; mac: string };
-    try { document = JSON.parse(await readFile(this.pathFor(invocationId), 'utf8')) as typeof document; }
+    let names: string[];
+    try { names = await readdir(this.directory); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw new DecisionReceiptIntegrityError('Corrupt decision receipt');
+      throw error;
     }
-    if (!document || typeof document.mac !== 'string' || !/^[a-f0-9]{64}$/.test(document.mac)) throw new DecisionReceiptIntegrityError('Corrupt decision receipt envelope');
-    const actual = Buffer.from(document.mac, 'hex');
-    if (!timingSafeEqual(actual, Buffer.from(this.mac(document.receipt), 'hex'))) throw new DecisionReceiptIntegrityError('Decision receipt integrity check failed');
-    validateReceipt(document.receipt, invocationId, projectId);
-    return structuredClone(document.receipt);
+    const prefix = `${this.prefixFor(invocationId)}.r`;
+    const revisions = names.filter(name => name.startsWith(prefix) && name.endsWith('.json'))
+      .map(name => Number(name.slice(prefix.length, -'.json'.length)));
+    if (!revisions.length) return null;
+    // A previous writer may have died after link() but before directory sync().
+    // Synchronize any observed publication before treating it as ownership evidence.
+    const dir = await open(this.directory, 'r');
+    try { await dir.sync(); } finally { await dir.close(); }
+    if (revisions.some(revision => !Number.isSafeInteger(revision) || revision < 1)) throw new DecisionReceiptIntegrityError('Corrupt decision receipt revision index');
+    revisions.sort((a, b) => a - b);
+    let previous: DecisionReceipt | null = null;
+    for (let index = 0; index < revisions.length; index += 1) {
+      const revision = revisions[index]!;
+      if (revision !== index + 1) throw new DecisionReceiptIntegrityError('Decision receipt revision gap');
+      let document: { receipt: DecisionReceipt; mac: string };
+      try { document = JSON.parse(await readFile(this.pathFor(invocationId, revision), 'utf8')) as typeof document; }
+      catch { throw new DecisionReceiptIntegrityError('Corrupt decision receipt'); }
+      if (!document || typeof document.mac !== 'string' || !/^[a-f0-9]{64}$/.test(document.mac)) throw new DecisionReceiptIntegrityError('Corrupt decision receipt envelope');
+      if (!timingSafeEqual(Buffer.from(document.mac, 'hex'), Buffer.from(this.mac(document.receipt), 'hex'))) {
+        throw new DecisionReceiptIntegrityError('Decision receipt integrity check failed');
+      }
+      validateReceipt(document.receipt, invocationId, projectId);
+      if (document.receipt.revision !== revision || (revision === 1 && document.receipt.state !== 'acquired')) {
+        throw new DecisionReceiptIntegrityError('Decision receipt revision mismatch');
+      }
+      if (previous) assertTransition(previous, document.receipt);
+      previous = document.receipt;
+    }
+    return structuredClone(previous);
   }
   async acquire(invocationId: string, projectId: string, fingerprint: string): Promise<{ owner: boolean; receipt: DecisionReceipt }> {
     await this.check(projectId);
-    return this.withLock(invocationId, async () => {
-      const existing = await this.read(invocationId, projectId);
-      if (existing) return { owner: false, receipt: existing };
-      const receipt = initial(invocationId, projectId, fingerprint);
-      await this.persist(invocationId, receipt);
-      return { owner: true, receipt };
-    });
+    const existing = await this.read(invocationId, projectId);
+    if (existing) return { owner: false, receipt: existing };
+    const receipt = initial(invocationId, projectId, fingerprint);
+    if (await this.persist(invocationId, receipt)) return { owner: true, receipt };
+    const winner = await this.read(invocationId, projectId);
+    if (!winner) throw new DecisionReceiptIntegrityError('Missing winning receipt');
+    return { owner: false, receipt: winner };
   }
   async compareAndSwap(invocationId: string, projectId: string, expectedRevision: number, next: DecisionReceipt): Promise<boolean> {
     await this.check(projectId);
-    return this.withLock(invocationId, async () => {
-      const current = await this.read(invocationId, projectId);
-      if (!current) throw new DecisionReceiptIntegrityError('Missing decision receipt');
-      if (current.revision !== expectedRevision) return false;
-      assertTransition(current, next);
-      await this.persist(invocationId, next);
-      return true;
-    });
+    const current = await this.read(invocationId, projectId);
+    if (!current) throw new DecisionReceiptIntegrityError('Missing decision receipt');
+    if (current.revision !== expectedRevision) return false;
+    assertTransition(current, next);
+    return this.persist(invocationId, next);
   }
   async waitForTerminal(invocationId: string, projectId: string, fingerprint: string, signal?: AbortSignal): Promise<DecisionReceipt> {
     for (;;) {
@@ -201,92 +224,26 @@ export class FileDecisionReceiptStore implements DecisionReceiptStore {
       await sleep(30, signal);
     }
   }
-  private async persist(invocationId: string, receipt: DecisionReceipt): Promise<void> {
-    const destination = this.pathFor(invocationId);
+  private async persist(invocationId: string, receipt: DecisionReceipt): Promise<boolean> {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const destination = this.pathFor(invocationId, receipt.revision);
     const temporary = `${destination}.${randomUUID()}.tmp`;
     try {
       const file = await open(temporary, 'wx', 0o600);
       try { await file.writeFile(`${JSON.stringify({ receipt, mac: this.mac(receipt) })}\n`); await file.sync(); }
       finally { await file.close(); }
-      await rename(temporary, destination);
+      await this.options.onPublish?.('before-link', receipt);
+      try { await link(temporary, destination); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+        throw error;
+      }
+      await this.options.onPublish?.('after-link', receipt);
       const dir = await open(this.directory, 'r');
       try { await dir.sync(); } finally { await dir.close(); }
+      return true;
     } finally { await rm(temporary, { force: true }); }
   }
-  private async withLock<T>(invocationId: string, operation: () => Promise<T>): Promise<T> {
-    await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const path = `${this.pathFor(invocationId)}.lock`;
-    const token = randomUUID();
-    const claimPath = `${path}.${token}.claim`;
-    const claim = await open(claimPath, 'wx', 0o600);
-    try {
-      await claim.writeFile(JSON.stringify({ pid: process.pid, token }));
-      await claim.sync();
-    } finally { await claim.close(); }
-    try {
-      const deadline = Date.now() + 60_000;
-      for (let attempt = 0; Date.now() < deadline; attempt += 1) {
-        try { await link(claimPath, path); }
-        catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-          await this.reclaimDeadLock(path);
-          await sleep(Math.min(10 + attempt, 100));
-          continue;
-        }
-        try {
-          await this.options.onLockAcquired?.();
-          return await operation();
-        } finally {
-          const owner = await readLockOwner(path);
-          if (owner?.token === token) await rm(path, { force: true });
-        }
-      }
-      throw new Error('Decision receipt lock timeout');
-    } finally {
-      await rm(claimPath, { force: true });
-    }
-  }
-
-  private async reclaimDeadLock(path: string): Promise<void> {
-    const age = await stat(path).then(info => Date.now() - info.mtimeMs, () => 0);
-    if (age < (this.options.staleLockMinAgeMs ?? 30_000)) return;
-    const owner = await readLockOwner(path);
-    if (!owner || processAlive(owner.pid)) return;
-    const guardPath = `${path}.reclaim`;
-    let guard: Awaited<ReturnType<typeof open>>;
-    try { guard = await open(guardPath, 'wx', 0o600); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
-      throw error;
-    }
-    try {
-      await guard.writeFile(String(process.pid));
-      await guard.sync();
-      const current = await readLockOwner(path);
-      if (current?.token === owner.token && !processAlive(current.pid)) {
-        const stale = `${path}.stale.${randomUUID()}`;
-        await rename(path, stale);
-        await rm(stale, { force: true });
-      }
-    } finally {
-      await guard.close();
-      await rm(guardPath, { force: true });
-    }
-  }
-}
-
-async function readLockOwner(path: string): Promise<{ pid: number; token: string } | null> {
-  try {
-    const value: unknown = JSON.parse(await readFile(path, 'utf8'));
-    if (value && typeof value === 'object' && Number.isSafeInteger((value as { pid?: unknown }).pid)
-      && typeof (value as { token?: unknown }).token === 'string') return value as { pid: number; token: string };
-  } catch { /* A newly created lock may not have written its owner yet. */ }
-  return null;
-}
-
-function processAlive(pid: number): boolean {
-  try { process.kill(pid, 0); return true; }
-  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 }
 
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {

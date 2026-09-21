@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { copyFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -134,10 +134,35 @@ describe('REC-ATOMIC store conformance', () => {
     temp.push(directory);
     const store = new FileDecisionReceiptStore(directory, { integrityKey: randomBytes(32) });
     await store.acquire('original', 'project', `sha256:${'a'.repeat(64)}`);
-    const file = (id: string) => join(directory, `${createHash('sha256').update(id).digest('hex')}.json`);
+    const file = (id: string) => join(directory, `${createHash('sha256').update(id).digest('hex')}.r1.json`);
     await copyFile(file('original'), file('substituted'));
     await expect(store.read('substituted', 'project')).rejects.toThrow(/Invalid decision receipt/);
     await expect(store.acquire('substituted', 'project', `sha256:${'a'.repeat(64)}`)).rejects.toThrow(/Invalid decision receipt/);
+  });
+
+  it('accepts only one simultaneous next revision and rejects gaps or corrupted highest revisions', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-revisions-'));
+    temp.push(directory);
+    const key = randomBytes(32);
+    const first = new FileDecisionReceiptStore(directory, { integrityKey: key });
+    const second = new FileDecisionReceiptStore(directory, { integrityKey: key });
+    const fingerprint = `sha256:${'a'.repeat(64)}`;
+    const acquired = (await first.acquire('revisions', 'project', fingerprint)).receipt;
+    const candidates = [nextReceipt(acquired, 'dispatched'), nextReceipt(acquired, 'dispatched')];
+    const [a, b] = await Promise.all([
+      first.compareAndSwap('revisions', 'project', 1, candidates[0]!),
+      second.compareAndSwap('revisions', 'project', 1, candidates[1]!),
+    ]);
+    expect([a, b].sort()).toEqual([false, true]);
+    expect((await first.read('revisions', 'project'))?.revision).toBe(2);
+    const prefix = createHash('sha256').update('revisions').digest('hex');
+    const highest = join(directory, `${prefix}.r2.json`);
+    const original = await readFile(highest, 'utf8');
+    await writeFile(highest, original.replace('dispatched', 'completed'));
+    await expect(first.read('revisions', 'project')).rejects.toThrow(/integrity/);
+    await writeFile(highest, original);
+    await rm(join(directory, `${prefix}.r1.json`));
+    await expect(first.read('revisions', 'project')).rejects.toThrow(/revision gap/);
   });
 
   it('elects exactly one owner across two processes', async () => {
@@ -169,56 +194,53 @@ describe('REC-ATOMIC store conformance', () => {
     expect(results.map(result => result.revision)).toEqual([1, 1]);
   });
 
-  it('does not steal a live holder after the stale-lock age threshold', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-live-lock-'));
+  it('allows one owner while another writer pauses before atomic publication', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-paused-writer-'));
     temp.push(directory);
     const key = randomBytes(32);
     let entered!: () => void;
     let release!: () => void;
-    const locked = new Promise<void>(resolve => { entered = resolve; });
+    const paused = new Promise<void>(resolve => { entered = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const first = new FileDecisionReceiptStore(directory, { integrityKey: key, staleLockMinAgeMs: 25,
-      onLockAcquired: async () => { entered(); await gate; } });
-    const second = new FileDecisionReceiptStore(directory, { integrityKey: key, staleLockMinAgeMs: 25 });
+    const first = new FileDecisionReceiptStore(directory, { integrityKey: key,
+      onPublish: async stage => { if (stage === 'before-link') { entered(); await gate; } } });
+    const second = new FileDecisionReceiptStore(directory, { integrityKey: key });
     const fingerprint = `sha256:${'a'.repeat(64)}`;
-    const owner = first.acquire('live', 'project', fingerprint);
-    await locked;
-    let secondFinished = false;
-    const contender = second.acquire('live', 'project', fingerprint).then(value => { secondFinished = true; return value; });
-    await new Promise(resolve => setTimeout(resolve, 80));
-    const lock = (await readdir(directory)).find(file => file.endsWith('.lock'))!;
-    expect(Date.now() - (await stat(join(directory, lock))).mtimeMs).toBeGreaterThan(25);
-    expect(secondFinished).toBe(false);
+    const pending = first.acquire('paused', 'project', fingerprint);
+    await paused;
+    const winner = await second.acquire('paused', 'project', fingerprint);
     release();
-    expect((await owner).owner).toBe(true);
-    expect((await contender).owner).toBe(false);
+    const loser = await pending;
+    expect(winner.owner).toBe(true);
+    expect(loser.owner).toBe(false);
+    expect(loser.receipt).toEqual(winner.receipt);
   });
 
-  it('recovers a lock only after the owner process has died', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-dead-lock-'));
+  it.each(['before-link', 'after-link'] as const)('recovers after SIGKILL at %s publication', async stage => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-publish-crash-'));
     temp.push(directory);
     const key = randomBytes(32);
     const child = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/decision/receipt-process.mjs',
-      directory, key.toString('hex'), 'dead-lock', 'lock-hold'],
+      directory, key.toString('hex'), `publish-${stage}`, `publish-hold-${stage}`],
     { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '';
     let ready!: () => void;
-    let locked!: () => void;
+    let published!: () => void;
     const isReady = new Promise<void>(resolve => { ready = resolve; });
-    const didLock = new Promise<void>(resolve => { locked = resolve; });
+    const didPublish = new Promise<void>(resolve => { published = resolve; });
     child.stdout.on('data', chunk => {
       output += String(chunk);
       if (output.includes('ready\n')) ready();
-      if (output.includes('locked\n')) locked();
+      if (output.includes(`publish-${stage}\n`)) published();
     });
     await isReady;
     child.stdin.write('go\n');
-    await didLock;
+    await didPublish;
     child.kill('SIGKILL');
     await new Promise<void>(resolve => child.once('exit', () => resolve()));
-    const store = new FileDecisionReceiptStore(directory, { integrityKey: key, staleLockMinAgeMs: 25 });
-    const acquisition = await store.acquire('dead-lock', 'project', `sha256:${'a'.repeat(64)}`);
-    expect(acquisition.owner).toBe(true);
+    const store = new FileDecisionReceiptStore(directory, { integrityKey: key });
+    const acquisition = await store.acquire(`publish-${stage}`, 'project', `sha256:${'a'.repeat(64)}`);
+    expect(acquisition.owner).toBe(stage === 'before-link');
     expect(acquisition.receipt.state).toBe('acquired');
   });
 
