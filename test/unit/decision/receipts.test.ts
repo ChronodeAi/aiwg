@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FileDecisionReceiptStore, MemoryDecisionReceiptStore, decisionInvocationFingerprint, nextReceipt } from '../../../src/decision/receipts.js';
+import { DecisionPreDispatchError, FileDecisionReceiptStore, MemoryDecisionReceiptStore, decisionInvocationFingerprint, nextReceipt } from '../../../src/decision/receipts.js';
 import { evaluateDecisionRuleset } from '../../../src/decision/evaluate.js';
 import { artifactPin } from '../../../src/decision/validate.js';
 import type { AdapterObservation, DecisionAdapter, DecisionBinding, DecisionDefinition, DecisionRuleset, DecisionReceiptStore, RulesetResult } from '../../../src/decision/types.js';
@@ -169,6 +169,59 @@ describe('REC-ATOMIC store conformance', () => {
     expect(results.map(result => result.revision)).toEqual([1, 1]);
   });
 
+  it('does not steal a live holder after the stale-lock age threshold', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-live-lock-'));
+    temp.push(directory);
+    const key = randomBytes(32);
+    let entered!: () => void;
+    let release!: () => void;
+    const locked = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const first = new FileDecisionReceiptStore(directory, { integrityKey: key, staleLockMinAgeMs: 25,
+      onLockAcquired: async () => { entered(); await gate; } });
+    const second = new FileDecisionReceiptStore(directory, { integrityKey: key, staleLockMinAgeMs: 25 });
+    const fingerprint = `sha256:${'a'.repeat(64)}`;
+    const owner = first.acquire('live', 'project', fingerprint);
+    await locked;
+    let secondFinished = false;
+    const contender = second.acquire('live', 'project', fingerprint).then(value => { secondFinished = true; return value; });
+    await new Promise(resolve => setTimeout(resolve, 80));
+    const lock = (await readdir(directory)).find(file => file.endsWith('.lock'))!;
+    expect(Date.now() - (await stat(join(directory, lock))).mtimeMs).toBeGreaterThan(25);
+    expect(secondFinished).toBe(false);
+    release();
+    expect((await owner).owner).toBe(true);
+    expect((await contender).owner).toBe(false);
+  });
+
+  it('recovers a lock only after the owner process has died', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-dead-lock-'));
+    temp.push(directory);
+    const key = randomBytes(32);
+    const child = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/decision/receipt-process.mjs',
+      directory, key.toString('hex'), 'dead-lock', 'lock-hold'],
+    { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+    let output = '';
+    let ready!: () => void;
+    let locked!: () => void;
+    const isReady = new Promise<void>(resolve => { ready = resolve; });
+    const didLock = new Promise<void>(resolve => { locked = resolve; });
+    child.stdout.on('data', chunk => {
+      output += String(chunk);
+      if (output.includes('ready\n')) ready();
+      if (output.includes('locked\n')) locked();
+    });
+    await isReady;
+    child.stdin.write('go\n');
+    await didLock;
+    child.kill('SIGKILL');
+    await new Promise<void>(resolve => child.once('exit', () => resolve()));
+    const store = new FileDecisionReceiptStore(directory, { integrityKey: key, staleLockMinAgeMs: 25 });
+    const acquisition = await store.acquire('dead-lock', 'project', `sha256:${'a'.repeat(64)}`);
+    expect(acquisition.owner).toBe(true);
+    expect(acquisition.receipt.state).toBe('acquired');
+  });
+
   it('retains a dispatched receipt after its owner process is killed', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-crash-'));
     temp.push(directory);
@@ -233,6 +286,45 @@ describe('REC-ATOMIC store conformance', () => {
     await crashAt('failed-branch', 'failed');
     await crashAt('uncertain-branch', 'acquired');
     await crashAt('uncertain-branch', 'execution-uncertain');
+  }, 30_000);
+
+  it('restarts the evaluator after each killed state without duplicate remote dispatch', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-evaluator-restart-'));
+    temp.push(directory);
+    const key = randomBytes(32);
+    const store = new FileDecisionReceiptStore(directory, { integrityKey: key });
+    for (const state of ['acquired', 'dispatched', 'remote-handle-known', 'observation-received', 'composed', 'completed']) {
+      const invocationId = `restart-${state}`;
+      const worker = adapter();
+      const base = request(store, worker, invocationId);
+      const fingerprint = decisionInvocationFingerprint({ invocationId, value: base.input,
+        definitions: base.ruleset.spec.evaluations.map(item => item.decision),
+        ruleset: artifactPin(base.ruleset), binding: artifactPin(base.binding) });
+      const child = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/decision/receipt-process.mjs',
+        directory, key.toString('hex'), invocationId, 'transition', state, fingerprint],
+      { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+      let output = '';
+      let ready!: () => void;
+      let transitioned!: () => void;
+      const isReady = new Promise<void>(resolve => { ready = resolve; });
+      const didTransition = new Promise<void>(resolve => { transitioned = resolve; });
+      child.stdout.on('data', chunk => {
+        output += String(chunk);
+        if (output.includes('ready\n')) ready();
+        if (output.includes(`\n${state}\n`)) transitioned();
+      });
+      await isReady;
+      child.stdin.write('go\n');
+      await didTransition;
+      child.kill('SIGKILL');
+      await new Promise<void>(resolve => child.once('exit', () => resolve()));
+      const restarted: DecisionReceiptStore = { read: store.read.bind(store), acquire: store.acquire.bind(store),
+        compareAndSwap: store.compareAndSwap.bind(store), waitForTerminal: async () => { throw new Error('owner terminated'); } };
+      const result = await evaluateDecisionRuleset({ ...base, receiptStore: restarted, receiptProjectId: 'project' });
+      if (state === 'completed') expect(result).toEqual((await store.read(invocationId, 'project'))?.result);
+      else expect(result.spec.reason, state).toBe('execution-uncertain');
+      expect(vi.mocked(worker.evaluate)).not.toHaveBeenCalled();
+    }
   }, 30_000);
 
   it('canonicalizes input keys and binds ordered pins', () => {
@@ -318,6 +410,56 @@ describe('REC-ATOMIC store conformance', () => {
       const second = await evaluateDecisionRuleset({ ...base, receiptStore: restarted });
       expect(second.spec.reason).toBe('execution-uncertain');
       expect(vi.mocked(worker.evaluate)).not.toHaveBeenCalled();
+    }
+  });
+
+  it('makes ambiguous post-dispatch failures uncertain without retry or fallback', async () => {
+    for (const store of await stores()) {
+      const worker = adapter();
+      worker.evaluate = vi.fn(async () => { throw new Error('socket closed after write'); });
+      const base = request(store, worker, 'ambiguous-throw');
+      base.binding.spec.evaluations.category!.targets[0]!.retry.maxRetries = 1;
+      const result = await evaluateDecisionRuleset(base);
+      expect(result.spec.reason).toBe('execution-uncertain');
+      expect(result.spec.outcome).toBeUndefined();
+      expect(vi.mocked(worker.evaluate)).toHaveBeenCalledTimes(1);
+      expect((await store.read(base.invocationId, 'default'))?.state).toBe('execution-uncertain');
+    }
+    for (const store of await stores()) {
+      const worker = adapter();
+      worker.evaluate = vi.fn(async () => ({ status: 'error', reason: 'network-transient', uncertainty: null,
+        actualModel: null, usage: { inputTokens: null, outputTokens: null, costUsd: null }, requestId: null,
+        dispatchCertainty: 'unknown' } satisfies AdapterObservation));
+      const base = request(store, worker, 'ambiguous-observation');
+      base.binding.spec.evaluations.category!.targets[0]!.retry.maxRetries = 1;
+      const result = await evaluateDecisionRuleset(base);
+      expect(result.spec.reason).toBe('execution-uncertain');
+      expect(vi.mocked(worker.evaluate)).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('retries only when transport proves a terminal response or no remote send', async () => {
+    for (const certainty of ['terminal-response', 'not-sent'] as const) {
+      const store = new MemoryDecisionReceiptStore();
+      const worker = adapter();
+      const original = worker.evaluate.bind(worker);
+      let calls = 0;
+      worker.evaluate = vi.fn(async request => {
+        calls += 1;
+        if (request.alias === 'category' && calls === 1) {
+          if (certainty === 'not-sent') throw new DecisionPreDispatchError('request not sent');
+          return { status: 'error', reason: 'rate-limited', uncertainty: null,
+            actualModel: null, usage: { inputTokens: null, outputTokens: null, costUsd: null }, requestId: null,
+            dispatchCertainty: certainty } satisfies AdapterObservation;
+        }
+        return original(request);
+      });
+      const base = request(store, worker, `proved-${certainty}`);
+      base.binding.spec.evaluations.category!.targets[0]!.retry.maxRetries = 1;
+      base.binding.spec.maxAttempts = 5;
+      const result = await evaluateDecisionRuleset({ ...base, delay: async () => undefined });
+      expect(result.spec.status).toBe('completed');
+      expect(vi.mocked(worker.evaluate).mock.calls.filter(([call]) => call.alias === 'category')).toHaveLength(2);
     }
   });
 

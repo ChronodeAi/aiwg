@@ -190,6 +190,8 @@ export interface AdapterObservation {
   actualModel: string | null;
   usage: DecisionUsage;
   requestId: string | null;
+  /** Transport evidence that a remote operation was not sent or returned a terminal response. */
+  dispatchCertainty?: 'not-sent' | 'terminal-response' | 'unknown';
   /** Transport hint used only by the dispatcher; never persisted as decision data. */
   retryAfterMs?: number;
 }

@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { link, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { canonicalJson } from '../security/artifact-trust.js';
 import type { ArtifactPin, DecisionReceipt, DecisionReceiptState, DecisionReceiptStore } from './types.js';
@@ -26,12 +26,14 @@ const allowed: Record<DecisionReceiptState, DecisionReceiptState[]> = {
   dispatched: ['remote-handle-known', 'observation-received', 'execution-uncertain'],
   'remote-handle-known': ['observation-received', 'execution-uncertain'],
   'observation-received': ['observation-received', 'dispatched', 'composed', 'failed', 'execution-uncertain'],
-  composed: ['completed', 'failed'],
+  composed: ['completed', 'failed', 'execution-uncertain'],
   completed: [], failed: [], 'execution-uncertain': [],
 };
 
 export class DecisionReceiptIntegrityError extends Error {}
 export class DecisionReceiptAccessError extends Error {}
+/** A transport may throw this only before it has attempted remote dispatch. */
+export class DecisionPreDispatchError extends Error {}
 
 export function validateReceipt(receipt: DecisionReceipt, invocationId: string, projectId: string): void {
   if (!receipt || receipt.schema !== 'decision-receipt/v2' || receipt.invocationId !== invocationId || receipt.projectId !== projectId
@@ -137,6 +139,9 @@ export class MemoryDecisionReceiptStore implements DecisionReceiptStore {
 interface FileStoreOptions {
   integrityKey: Uint8Array;
   authorize?: (projectId: string) => boolean | Promise<boolean>;
+  /** Test seam for pausing while the process owns the lock. */
+  onLockAcquired?: () => Promise<void>;
+  staleLockMinAgeMs?: number;
 }
 
 export class FileDecisionReceiptStore implements DecisionReceiptStore {
@@ -211,23 +216,77 @@ export class FileDecisionReceiptStore implements DecisionReceiptStore {
   private async withLock<T>(invocationId: string, operation: () => Promise<T>): Promise<T> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const path = `${this.pathFor(invocationId)}.lock`;
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      try {
-        const lock = await open(path, 'wx', 0o600);
+    const token = randomUUID();
+    const claimPath = `${path}.${token}.claim`;
+    const claim = await open(claimPath, 'wx', 0o600);
+    try {
+      await claim.writeFile(JSON.stringify({ pid: process.pid, token }));
+      await claim.sync();
+    } finally { await claim.close(); }
+    try {
+      const deadline = Date.now() + 60_000;
+      for (let attempt = 0; Date.now() < deadline; attempt += 1) {
+        try { await link(claimPath, path); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          await this.reclaimDeadLock(path);
+          await sleep(Math.min(10 + attempt, 100));
+          continue;
+        }
         try {
-          await lock.writeFile(String(process.pid));
-          await lock.sync();
+          await this.options.onLockAcquired?.();
           return await operation();
-        } finally { await lock.close(); await rm(path, { force: true }); }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        const age = await stat(path).then(s => Date.now() - s.mtimeMs, () => 0);
-        if (age > 30_000) await rm(path, { force: true });
-        await sleep(Math.min(10 + attempt, 100));
+        } finally {
+          const owner = await readLockOwner(path);
+          if (owner?.token === token) await rm(path, { force: true });
+        }
       }
+      throw new Error('Decision receipt lock timeout');
+    } finally {
+      await rm(claimPath, { force: true });
     }
-    throw new Error('Decision receipt lock timeout');
   }
+
+  private async reclaimDeadLock(path: string): Promise<void> {
+    const age = await stat(path).then(info => Date.now() - info.mtimeMs, () => 0);
+    if (age < (this.options.staleLockMinAgeMs ?? 30_000)) return;
+    const owner = await readLockOwner(path);
+    if (!owner || processAlive(owner.pid)) return;
+    const guardPath = `${path}.reclaim`;
+    let guard: Awaited<ReturnType<typeof open>>;
+    try { guard = await open(guardPath, 'wx', 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return;
+      throw error;
+    }
+    try {
+      await guard.writeFile(String(process.pid));
+      await guard.sync();
+      const current = await readLockOwner(path);
+      if (current?.token === owner.token && !processAlive(current.pid)) {
+        const stale = `${path}.stale.${randomUUID()}`;
+        await rename(path, stale);
+        await rm(stale, { force: true });
+      }
+    } finally {
+      await guard.close();
+      await rm(guardPath, { force: true });
+    }
+  }
+}
+
+async function readLockOwner(path: string): Promise<{ pid: number; token: string } | null> {
+  try {
+    const value: unknown = JSON.parse(await readFile(path, 'utf8'));
+    if (value && typeof value === 'object' && Number.isSafeInteger((value as { pid?: unknown }).pid)
+      && typeof (value as { token?: unknown }).token === 'string') return value as { pid: number; token: string };
+  } catch { /* A newly created lock may not have written its owner yet. */ }
+  return null;
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH'; }
 }
 
 async function sleep(ms: number, signal?: AbortSignal): Promise<void> {

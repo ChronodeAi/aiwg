@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { composeRuleset } from './compose.js';
-import { decisionInvocationFingerprint, nextReceipt } from './receipts.js';
+import { DecisionPreDispatchError, decisionInvocationFingerprint, nextReceipt } from './receipts.js';
 import { admitEntry, EntryAdmissionError } from './entry.js';
 import { DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED } from './types.js';
 import type {
@@ -256,8 +256,17 @@ async function evaluateOne(context: OneContext): Promise<DecisionResult> {
         const attemptDeadline = Math.min(context.totalDeadline, started + target.timeoutMs);
         try {
           await context.advance('dispatched', { pending: { alias: context.item.alias, targetIndex, ordinal: attempts.length + 1, attempts } });
-          final = await invokeWithDeadline(context, adapter!, target, attemptDeadline, attempts.length + 1);
-          if (context.request.receiptStore && (final.reason === 'timeout' || final.reason === 'execution-uncertain')) throw new RemoteUncertainError();
+          try {
+            final = await invokeWithDeadline(context, adapter!, target, attemptDeadline, attempts.length + 1);
+          } catch (error) {
+            if (context.request.receiptStore && !(error instanceof DecisionPreDispatchError)) throw new RemoteUncertainError();
+            await context.advance('observation-received');
+            throw error;
+          }
+          if (context.request.receiptStore && final.status !== 'success'
+            && final.dispatchCertainty !== 'terminal-response' && final.dispatchCertainty !== 'not-sent') {
+            throw new RemoteUncertainError();
+          }
           await context.advance('observation-received');
           final = normalizeObservation(context.item.definition, target, final);
         } catch (error) {
