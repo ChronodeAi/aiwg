@@ -183,7 +183,7 @@ describe('Jev transport contract', () => {
 });
 
 // Evaluator contract: one retry owner, bounded jitter, cancellation and attempt chronology.
-import { artifactPin, decisionResultForExport, evaluateDecisionRuleset, type AdapterObservation, type DecisionAdapter, type DecisionRuleset } from '../../../src/decision/index.js';
+import { artifactPin, decisionResultForExport, evaluateDecisionRuleset, validateDecisionDocument, type AdapterObservation, type DecisionAdapter, type DecisionRuleset } from '../../../src/decision/index.js';
 function evaluationFixture(observe: () => AdapterObservation, extra: Record<string, unknown> = {}) {
   const ruleset = fixture<DecisionRuleset>('ruleset.json');
   ruleset.spec.evaluations = ruleset.spec.evaluations.filter(item => item.alias === 'category');
@@ -222,6 +222,7 @@ describe('Jev retry and cancellation chronology', () => {
     expect(count).toBe(2);
     expect(attempts.map(attempt => attempt.ordinal)).toEqual([1, 2]);
     expect(attempts[0]).toMatchObject({ retryDelayMs: 100, httpStatus: 429, requestIdSource: 'typesafe' });
+    expect(() => validateDecisionDocument(result)).not.toThrow();
     const publicResult = decisionResultForExport(result);
     expect(publicResult.spec.evaluations.category?.spec.attempts[0]?.requestId).toBeNull();
     expect(JSON.stringify(publicResult)).not.toContain('response-id');
