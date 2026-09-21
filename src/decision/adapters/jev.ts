@@ -359,7 +359,8 @@ function safeRequestId(value: unknown): string | null {
 
 function parseBoundedJson(text: string): unknown {
   // VM timeout interrupts synchronous parsing; input is a value, never source code.
-  return runInNewContext('JSON.parse(input)', { input: text }, { timeout: MAX_PARSE_MS });
+  // Clone into this realm so entry admission sees ordinary local JSON prototypes.
+  return structuredClone(runInNewContext('JSON.parse(input)', { input: text }, { timeout: MAX_PARSE_MS }));
 }
 
 function headersWithinLimit(headers: Headers): boolean {
@@ -440,7 +441,7 @@ async function pinnedHttpsFetch(url: URL, init: RequestInit, pin: PinnedAddress)
   return new Promise<Response>((resolve, reject) => {
     const headers = init.headers as Record<string, string>;
     const outgoing = httpsRequest(url, {
-      method: 'POST', headers, maxHeaderSize: MAX_HEADER_BYTES,
+      method: 'POST', headers, maxHeaderSize: MAX_HEADER_BYTES, agent: false,
       servername: url.hostname, rejectUnauthorized: true,
       lookup: (hostname, _options, callback) => {
         if (hostname !== url.hostname) { callback(new Error('hostname mismatch'), '', 4); return; }

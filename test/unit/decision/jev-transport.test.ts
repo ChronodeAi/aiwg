@@ -75,6 +75,10 @@ describe('Jev transport contract', () => {
     expect(await adapter.evaluate(request({ signal: cancelled.signal }))).toMatchObject({ reason: 'cancelled', termination: 'caller-cancelled', dispatchCertainty: 'not-sent' });
     const total = new AbortController(); total.abort();
     expect(await adapter.evaluate(request({ signal: total.signal, totalSignal: total.signal, callerSignal: new AbortController().signal }))).toMatchObject({ reason: 'timeout', termination: 'total-deadline', dispatchCertainty: 'not-sent' });
+    const racingCaller = new AbortController(); const racingTotal = new AbortController();
+    racingTotal.abort(); racingCaller.abort();
+    expect(await adapter.evaluate(request({ signal: racingTotal.signal, totalSignal: racingTotal.signal,
+      callerSignal: racingCaller.signal }))).toMatchObject({ reason: 'cancelled', termination: 'caller-cancelled' });
     expect(await adapter.evaluate(request({ deadlineEpochMs: Date.now() - 1 }))).toMatchObject({ reason: 'timeout', dispatchCertainty: 'not-sent' });
     expect(await adapter.evaluate(request())).toMatchObject({ reason: 'network-transient', dispatchCertainty: 'unknown', remoteExecution: 'unknown' });
     const backendCancelled = new JevDecisionAdapter({ fetch: async () => { throw new DOMException('backend', 'AbortError'); } });

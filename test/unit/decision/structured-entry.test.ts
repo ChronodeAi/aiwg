@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   admitEntry, artifactPin, assertDecisionWriterVersion, convertDecisionDefinitionV1Alpha1, DECISION_CHANGED_SEMANTICS, DEFAULT_ENTRY_LIMITS,
   EntryAdmissionError, evaluateDecisionRuleset, JevDecisionAdapter, LlmSubagentDecisionAdapter, MemoryDecisionReceiptStore, parseCompressedDecisionJson, parseDecisionJson, parseDecisionYaml, readDecisionDocumentForRollback, validateDefinition, validateDecisionDocument,
-  type DecisionAdapter, type DecisionBinding, type DecisionRuleset,
+  type DecisionAdapter, type DecisionBinding, type DecisionRuleset, type DecisionResult,
   type DecisionDefinition, type DecisionAdapterRequest,
 } from '../../../src/decision/index.js';
 import { parseDecisionDoc } from '../../../src/artifacts/index-builder.js';
@@ -113,7 +113,10 @@ describe('decision structured entry contract', () => {
       body = JSON.parse(String(options?.body)) as Record<string, unknown>;
       return new Response(JSON.stringify({ answers: { category: { type: 'choice', choice: 'documentation', probabilities: { documentation: 1, runtime: 0, other: 0 }, confidence: 1 } }, model: 'fixture' }), { status: 200 });
     }) as typeof fetch });
-    await adapter.evaluate(request(definition));
+    const observation = await adapter.evaluate(request(definition));
+    const result = JSON.parse(readFileSync('examples/decision/result-category.json', 'utf8')) as DecisionResult;
+    result.spec.uncertainty = observation.uncertainty;
+    expect(() => validateDecisionDocument(result)).not.toThrow();
     const question = (body?.questions as Record<string, Record<string, unknown>>).category;
     expect(question.instructions).toEqual(definition.spec.question);
     expect((question.criteria as Record<string, unknown>).documentation).toEqual(definition.spec.answer.kind === 'choice' ? definition.spec.answer.options[0]?.description : null);

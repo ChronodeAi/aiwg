@@ -50,7 +50,7 @@ describe('pinned HTTPS transport', () => {
     expect(resolver).toHaveBeenCalledTimes(1);
     const [url, options] = vi.mocked(httpsRequest).mock.calls[0]!;
     expect((url as URL).hostname).toBe('custom.example');
-    expect(options).toMatchObject({ servername: 'custom.example', rejectUnauthorized: true });
+    expect(options).toMatchObject({ servername: 'custom.example', rejectUnauthorized: true, agent: false });
     const lookup = (options as { lookup: (host: string, options: unknown, callback: (error: Error | null, address: string, family: number) => void) => void }).lookup;
     const callback = vi.fn();
     lookup('custom.example', {}, callback);
