@@ -1,5 +1,9 @@
 # Connect AIWG to Grok Bot
 
+For operator-reviewed routine, teammate, connector and memory drafts, see
+[Grok Bot handoffs](bot-handoff.md). For coding-agent CI jobs, use the
+separate [Grok Build CI setup](grok-build-ci.md).
+
 > **Status:** Stable.
 
 Migrating from `--provider cursor` for Grok Bot fleets? See

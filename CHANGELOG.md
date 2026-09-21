@@ -7,6 +7,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.19] - 2026-09-21 - "Decision backends and provider handoffs"
+
 ### Added
 
 - Normalized `decision.aiwg.io/v1alpha1` definitions, rulesets, bindings,
@@ -17,12 +19,25 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   AIWG-owned contract, plus backend-swap examples, fixture-only conformance
   tests, the opt-in `decision-engine` addon, and a separately gated live Jev
   smoke command.
+- `aiwg bot-handoff` creates reviewable, provider-neutral drafts for routines,
+  teammate profiles, connector recommendations, and memory references.
+- `aiwg build-verify` checks deployment and discovery before provider-driven
+  build or CI work; Grok Build additionally requires native inspection.
+- Optional Grok Bot native adapter scaffolding for routines, teammates,
+  connector install profiles, registered machine health, and memory references.
+
+### Changed
+
+- Stable publication aligns and verifies both `latest` and `next` dist-tags
+  for all three packages on npmjs.org and the Gitea package mirror.
 
 ### Documentation
 
 - Decision architecture, evaluation semantics, confidence provenance,
   migration/rollback guidance, runtime credential boundaries, and FlowGraph
   integration guidance.
+- Provider-neutral bot handoff and build verification guides, plus Grok Build
+  CI setup and Grok Bot product guidance.
 
 ## [2026.9.18] - 2026-09-21 - "Dataset conformance binds prior stable evidence"
 

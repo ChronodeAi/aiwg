@@ -104,7 +104,7 @@ permissions:
 jobs:
   publish-to-npmjs-org:
     name: Publish to npmjs.org with provenance
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.remove_cli_bootstrap_tag }}
+    if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && !inputs.remove_cli_bootstrap_tag) }}
     outputs:
       version: ${{ steps.version.outputs.version }}
     runs-on: ubuntu-latest
@@ -165,8 +165,7 @@ jobs:
         # and writes refs/tags/<tag> as a commit ref, not the tag
         # object. `git tag -v` then fails with "cannot verify a non-
         # tag object of type commit". Force-fetch the tag object
-        # explicitly. See .gitea/workflows/npm-publish.yml prerelease
-        # job for the full post-mortem.
+        # explicitly. The Gitea workflow uses the same tag-object fetch.
         #
         # The safe.directory line is required on GH Actions runners
         # (containerized; runner uid ≠ workspace owner uid → git
@@ -280,23 +279,24 @@ jobs:
             echo "Error: Tag ($TAG_VERSION) does not match package.json ($VERSION)"
             exit 1
           fi
-          # Pre-release detection — first dash in the version means alpha/
-          # beta/rc/nightly. Trusted publishing emits provenance for both.
           BASE="${VERSION%%-*}"
           if [ "$VERSION" != "$BASE" ]; then
-            PRERELEASE=true
-            NPM_TAG=next
-            if echo "$VERSION" | grep -qiE '\-nightly\.'; then
-              NPM_TAG=nightly
-            fi
-          else
-            PRERELEASE=false
-            NPM_TAG=latest
+            echo "npm publication accepts stable versions only: $VERSION"
+            exit 1
           fi
+          NPM_TAG=latest
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION (pre-release: $PRERELEASE, dist-tag: $NPM_TAG)"
+          echo "Version: $VERSION (dist-tag: $NPM_TAG)"
+
+      - name: Require npm dist-tag credential before publishing
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::error::NPM_DIST_TAG_TOKEN is required before npm publication"
+            exit 1
+          fi
 
       - name: Check package contents
         run: |
@@ -572,62 +572,36 @@ jobs:
             fi
           done
 
-      - name: Advance @next dist-tag on stable releases
-        # On a stable publish (--tag latest), @next is still pointing at
-        # whatever pre-release we cut last. Consumers tracking `aiwg@next`
-        # would resolve to stale code. After a stable lands, advance @next
-        # to point at the same stable version so the channel never lags.
-        #
-        # IMPORTANT: OIDC trusted-publishing tokens are publish-scoped only;
-        # `npm dist-tag` requires a regular auth token. This step uses a
-        # narrowly-scoped automation token (`NPM_DIST_TAG_TOKEN` — package
-        # management scope on all three AIWG packages, NOT the old NPMJS_TOKEN).
-        # When the token is absent the step warns and continues — the
-        # tarball + signatures are already published, only the @next
-        # channel lags until an operator advances it manually.
-        # success() keeps @next advancement behind the publish and verification
-        # gates, so a pre-publish failure cannot attempt to tag a version that
-        # does not exist on npmjs.org yet.
-        # This was the v2026.6.3 failure mode (#1648 cascade stranded @next).
-        if: ${{ success() && steps.version.outputs.prerelease == 'false' }}
+      - name: Align latest and next dist-tags on stable releases
+        # OIDC trusted-publishing tokens cannot change dist-tags. A package
+        # management token is required so a successful release never leaves
+        # next pointing at an older version.
         env:
-          # setup-node generates an npmrc at $NPM_CONFIG_USERCONFIG that
-          # references ${NODE_AUTH_TOKEN}, so dropping the granular dist-tag
-          # token into NODE_AUTH_TOKEN authenticates without rewriting any
-          # config file. The previous publish step ran OIDC (no auth env);
-          # this step's NODE_AUTH_TOKEN binding is scoped to this step only.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
         run: |
-          set -o pipefail
+          set -euo pipefail
           VERSION='${{ steps.version.outputs.version }}'
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "⚠ NPM_DIST_TAG_TOKEN not configured — @next will lag @latest."
-            echo "  Operator follow-up: issue a granular automation token with"
-            echo "  package management scope on aiwg, @aiwg/cli, and @aiwg/cockpit,"
-            echo "  store it as NPM_DIST_TAG_TOKEN,"
-            echo "  then re-run this workflow OR run manually:"
-            echo "    npm dist-tag add aiwg@${VERSION} next"
-            echo "    npm dist-tag add @aiwg/cli@${VERSION} next"
-            echo "    npm dist-tag add @aiwg/cockpit@${VERSION} next"
-            exit 0
+            echo "::error::NPM_DIST_TAG_TOKEN is required to align latest and next"
+            exit 1
           fi
           for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
-            echo "Advancing ${PACKAGE}@next → ${VERSION}"
-            npm dist-tag add "${PACKAGE}@${VERSION}" next
-            # Cache-bust the verify (npm view caches dist-tags; right after a
-            # mutation the local cache can return the pre-mutation value).
-            for i in 1 2 3 4 5; do
-              CURRENT_NEXT=$(npm view "${PACKAGE}@next" version --prefer-online --no-update-notifier 2>/dev/null || echo "")
-              if [ "$CURRENT_NEXT" = "$VERSION" ]; then
-                echo "✓ ${PACKAGE}@next = ${VERSION}"
+            for TAG in latest next; do
+              npm dist-tag add "${PACKAGE}@${VERSION}" "$TAG"
+            done
+            for ATTEMPT in 1 2 3 4 5; do
+              TAGS=$(npm dist-tag ls "$PACKAGE")
+              if grep -Fxq "latest: ${VERSION}" <<< "$TAGS" &&
+                 grep -Fxq "next: ${VERSION}" <<< "$TAGS"; then
+                echo "✓ ${PACKAGE}@latest and @next = ${VERSION}"
                 break
               fi
-              echo "Attempt $i: ${PACKAGE}@next = ${CURRENT_NEXT:-<missing>}, expected ${VERSION}; retrying in 5s..."
-              sleep 5
-              if [ "$i" = "5" ]; then
-                echo "✗ ${PACKAGE}@next verification exhausted retries"
+              if [ "$ATTEMPT" -eq 5 ]; then
+                echo "::error::${PACKAGE} dist-tags did not converge to ${VERSION}"
+                echo "$TAGS"
                 exit 1
               fi
+              sleep 5
             done
           done
 
@@ -937,13 +911,6 @@ jobs:
           INSTALLER='${{ steps.release_files.outputs.installer }}'
           CHECKSUMS='${{ steps.release_files.outputs.checksums }}'
 
-          # Pre-release detection (same logic as the version step above).
-          if [ "$VERSION" != "${VERSION%%-*}" ]; then
-            PRERELEASE_FLAG="--prerelease"
-          else
-            PRERELEASE_FLAG=""
-          fi
-
           # Ensure the release exists; create it if not. `gh release view`
           # exits non-zero on miss, which `|| true` swallows for the test.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
@@ -951,7 +918,6 @@ jobs:
             gh release create "$TAG" \
               --title "$TAG" \
               --notes "Release $TAG. Signed assets attached (cosign keyless, GitHub Actions OIDC). Verify with: cosign verify-blob --bundle ${TARBALL}.sigstore --certificate-identity-regexp '^https://github.com/jmagly/aiwg/.github/workflows/npm-publish.yml@refs/tags/v' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ${TARBALL}" \
-              $PRERELEASE_FLAG
           else
             echo "Release $TAG exists — uploading signed assets."
           fi

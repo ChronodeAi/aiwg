@@ -60,6 +60,8 @@ export interface DeploymentVerificationFinding {
 }
 
 export interface ProviderDeploymentVerification {
+  /** Distinguishes on-disk/config evidence from documented native inspection. */
+  verificationLevel?: 'deployment' | 'native-inspection';
   provider: string;
   scope: DeploymentScope;
   outcome: DeploymentOutcome;
@@ -100,6 +102,8 @@ export interface UseDeploymentResult {
 }
 
 export interface VerifyProviderDeploymentOptions {
+  /** CI gate: fail if a supported native inspector cannot verify the deployment. */
+  requireNativeInspection?: boolean;
   projectRoot: string;
   /** Provider output root when it is split from the local project control root. */
   outputRoot?: string;
@@ -546,6 +550,7 @@ async function collectRegistryFindings(
 export async function verifyProviderDeployment(
   options: VerifyProviderDeploymentOptions,
 ): Promise<ProviderDeploymentVerification> {
+  let verificationLevel: 'deployment' | 'native-inspection' = 'deployment';
   const normalized = normalizeProviderDefinitionId(options.provider) ?? options.provider;
   const definition = getProviderDefinition(normalized);
   const findings: DeploymentVerificationFinding[] = [];
@@ -702,15 +707,15 @@ export async function verifyProviderDeployment(
       const inspect = runGrokInspect({
         cwd: options.projectRoot,
         expected: {
-          instructionPaths: ['AGENTS.md'],
-          skillNames: expectedSkillNames.slice(0, 32),
+          instructionPaths: options.requireNativeInspection ? [path.join(options.projectRoot, 'AGENTS.md')] : ['AGENTS.md'],
+          skillNames: options.requireNativeInspection ? expectedSkillNames : expectedSkillNames.slice(0, 32),
         },
       });
       if (inspect.status === 'absent') {
         findings.push(finding(
           normalized,
           'grok-inspect-absent',
-          'advisory',
+          options.requireNativeInspection ? 'blocking' : 'advisory',
           'Grok Build CLI (`grok`) is not on PATH; skipped `grok inspect`.',
           inspect.remediation,
           { grokHome: resolveGrokHome(), cwd: options.projectRoot },
@@ -723,7 +728,7 @@ export async function verifyProviderDeployment(
         findings.push(finding(
           normalized,
           'grok-inspect-failed',
-          'advisory',
+          options.requireNativeInspection ? 'blocking' : 'advisory',
           mismatchSummary
             ? `\`grok inspect\` did not confirm expected AIWG artifacts (${mismatchSummary}).`
             : `\`grok inspect\` exited ${inspect.exitCode ?? 'unknown'}.`,
@@ -736,6 +741,7 @@ export async function verifyProviderDeployment(
           },
         ));
       } else {
+        verificationLevel = 'native-inspection';
         findings.push(finding(
           normalized,
           'grok-inspect-ok',
@@ -746,7 +752,7 @@ export async function verifyProviderDeployment(
             binary: inspect.binary,
             cwd: inspect.cwd,
             parsedKeys: Object.keys(inspect.parsed).slice(0, 20),
-            checkedSkills: expectedSkillNames.slice(0, 32),
+            checkedSkills: options.requireNativeInspection ? expectedSkillNames : expectedSkillNames.slice(0, 32),
           },
         ));
       }
@@ -936,6 +942,7 @@ export async function verifyProviderDeployment(
 
   return {
     provider: normalized,
+    verificationLevel,
     scope: options.scope,
     outcome,
     restartRequired,

@@ -1,12 +1,36 @@
 # Grok Bot native surfaces — product evidence catalog (#209)
 
-**Status:** Evidence-gated (writers blocked)  
-**Date:** 2026-09-16  
+**Status:** Operator handoff drafts available; native writers evidence-gated
+
+**Date:** 2026-09-20
 **Parent:** [#209](https://github.com/jmagly/aiwg/issues/209)  
 **ADR:** [`docs/architecture/adr-grokbot-provider-target.md`](../architecture/adr-grokbot-provider-target.md)  
 **Provider guide:** [`docs/integrations/grokbot-quickstart.md`](./grokbot-quickstart.md)
 
 ## Purpose
+
+### Maintainer-approved interim scope (2026-09-20)
+
+`aiwg bot-handoff --provider grokbot --input proposal.json` now emits operator-reviewed drafts
+for routines, teammate profiles, connector recommendations and memory
+references. See [handoff format and review steps](bot-handoff.md). This
+resolves the interim-generator decision below; native installers remain gated.
+
+The earlier blanket statement that Grok Bot has no API is too broad. The
+[Cursor Admin API](https://cursor.com/docs/account/teams/admin-api#grok-bot)
+documents `GET /grok-bot/capabilities`, including the team's `localExecution`
+ceiling. This can support a separately scoped team-policy reader for #244; it
+does not establish individual machine reachability or effective local policy.
+No such probe is implemented by the handoff generator.
+
+Current connector UX uses Marketplace rather than the older Settings → Plugins
+wording below. Native routine/profile/memory import contracts and an automated
+connector installer were not established by this review.
+
+For AI coding tasks in CI, use the separate
+[Grok Build provider and verification path](grok-build-ci.md). Grok Bot Admin
+API access is not a dependency of Grok Build deployment. The historical catalog
+below records why the original native writers were deferred.
 
 Catalog each optional Grok Bot native surface from #209 against **public product
 docs** (operator-reproducible UX) and record what is still **missing** for an
@@ -26,6 +50,23 @@ CreateAgent profiles / memory / machines.
 | [#245](https://github.com/jmagly/aiwg/issues/245) | Memory reference helper (no secret scrape) |
 
 Evidence PR: [#240](https://github.com/jmagly/aiwg/pull/240).
+
+## Scaffolding modules (fail-closed)
+
+Typed contracts + kill-switches live under
+[`src/providers/grokbot-natives/`](../../src/providers/grokbot-natives/)
+(see [grokbot-native-adapters-scaffolding.md](./grokbot-native-adapters-scaffolding.md)).
+**Status remains evidence-gated** — scaffolding refuses writers until the
+Decision gate below is satisfied. Default OFF; baseline `aiwg use --provider grokbot`
+is unchanged.
+
+| Child | Module entry |
+|---|---|
+| [#244](https://github.com/jmagly/aiwg/issues/244) | `registeredMachineHealthProbe` |
+| [#245](https://github.com/jmagly/aiwg/issues/245) | `memoryReferenceHelper` |
+| [#241](https://github.com/jmagly/aiwg/issues/241) | `generateRoutinesImportStub` |
+| [#242](https://github.com/jmagly/aiwg/issues/242) | `projectCreateAgentStub` |
+| [#243](https://github.com/jmagly/aiwg/issues/243) | `buildConnectorInstallProfileStub` |
 
 ## Product evidence sources (2026-09)
 
@@ -89,6 +130,7 @@ Until a surface is unblocked by explicit product import/API evidence:
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/routines.ts` (`generateRoutinesImportStub`) — fail-closed; flag `AIWG_GROKBOT_NATIVE_ROUTINES`.
 - **Generator only after import contract exists:** map AIWG scheduled intents →
   product import payload; dry-run by default; write only with explicit
   confirmation and a disable flag (e.g. `AIWG_GROKBOT_ROUTINES=0`).
@@ -133,6 +175,7 @@ Feature flag / env kill-switch; removing the adapter must leave baseline
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/create-agent.ts` (`projectCreateAgentStub`) — fail-closed; flag `AIWG_GROKBOT_NATIVE_CREATE_AGENT`.
 - Project curated AIWG agent templates → product profile import (or API),
   opt-in per agent, with ownership markers and “never overwrite operator
   description” rules.
@@ -172,6 +215,7 @@ install in status/matrix.
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/connector-install-profile.ts` (`buildConnectorInstallProfileStub`) — recommend-only; flag `AIWG_GROKBOT_NATIVE_CONNECTORS`.
 - Emit an **install profile** (declarative list of recommended connectors +
   operator steps) and, only if product documents it, a non-secret config
   fragment applied via documented import/reload.
@@ -214,6 +258,7 @@ connectors for `grokbot`.
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/registered-machine-health.ts` (`registeredMachineHealthProbe`) — read-only; flag `AIWG_GROKBOT_NATIVE_MACHINE_PROBE`.
 - **Read-only** probe: report reachability / policy mode if product exposes a
   safe status surface; never enable local execution, never register machines,
   never write credentials.
@@ -253,6 +298,7 @@ Probe must be skippable; failures must not fail baseline `aiwg use`.
 
 ### Proposed AIWG adapter shape (when unblocked)
 
+- **Scaffolding:** `src/providers/grokbot-natives/memory-reference-helper.ts` (`memoryReferenceHelper`) — proposals only; flag `AIWG_GROKBOT_NATIVE_MEMORY_REF`.
 - Helper that proposes **operator-approved** short references/summaries (paths,
   issue URLs, `aiwg show` pointers) for the operator to paste or approve —
   never scrape clipboard, cookies, credentials, or full artifact bodies.
@@ -284,12 +330,12 @@ are true:
 - Claiming live-refresh or Cursor reload wording for these surfaces.
 - Folding xAI Grok Build into this provider.
 
-## Open questions for maintainers
+## Original questions and current disposition
 
-1. Prefer waiting for an xAI/Cursor **import API**, or authorize an opt-in
-   **prompt/handoff pack** generator that only emits operator instructions
-   under `AIWG_GROKBOT_SKILLS_DIR` / dry-run?
-2. Which child surface should go first once a contract exists?
+1. Interim handoff generation approved on 2026-09-20. The command prints drafts;
+   retain them in the canonical artifact store before an explicit provider export.
+2. Native installation priority remains separate. None of these optional Bot
+   integrations gates AIWG deployment to Grok Build CI jobs.
 
 ## Related: baseline loading (not #209 writers)
 

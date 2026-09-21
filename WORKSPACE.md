@@ -72,8 +72,8 @@ gh run list --repo jmagly/aiwg --limit 5
 gh run view <run-id> --repo jmagly/aiwg
 ```
 
-The GitHub job also owns everything after publication — `@next` dist-tag
-advance, cosign signing, SBOM generation, and uploading `SHA256SUMS`,
+The GitHub job also owns everything after publication — stable `latest`
+dist-tag publication, cosign signing, SBOM generation, and uploading `SHA256SUMS`,
 `aiwg-*.tgz`, and `install.sh` to the GitHub release. A failure anywhere in
 that job leaves the packages on npm but the release without assets, which is
 what `publication_verify` in the release config checks for.

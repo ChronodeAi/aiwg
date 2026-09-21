@@ -1154,6 +1154,26 @@ export const writerProfileCommand: Extension = {
   } satisfies CommandMetadata,
 };
 
+export const botHandoffCommand: Extension = {
+  id: 'bot-handoff', type: 'command', name: 'Bot Handoff',
+  description: 'Generate operator-reviewed routine, teammate, connector and memory drafts; no native installation',
+  version: '1.0.0', capabilities: ['cli', 'providers', 'handoff'],
+  keywords: ['provider', 'handoff', 'routines', 'teammates', 'connectors', 'memory'],
+  category: 'utility', platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '--input <proposal.json> [--provider <id>] [--dry-run]', allowedTools: ['Read'] } satisfies CommandMetadata,
+};
+
+export const buildVerifyCommand: Extension = {
+  id: 'build-verify', type: 'command', name: 'Build Verification',
+  description: 'Verify AIWG deployment and supported native discovery before any provider runs a build or CI task',
+  version: '1.0.0', capabilities: ['cli', 'providers', 'verification'],
+  keywords: ['provider', 'inspect', 'ci', 'verification'],
+  category: 'utility', platforms: { generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '[--provider <id>]', allowedTools: ['Read', 'Bash'] } satisfies CommandMetadata,
+};
+
 export const outputModeCommand: Extension = {
   id: 'output-mode',
   type: 'command',
@@ -4033,6 +4053,8 @@ export const commandDefinitions: Extension[] = [
   sessionsCommand,
   outputModeCommand,
   writerProfileCommand,
+  botHandoffCommand,
+  buildVerifyCommand,
   writingCommand,
   schemaCommand,
   datasetCommand,
