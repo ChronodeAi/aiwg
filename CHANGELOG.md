@@ -28,8 +28,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Changed
 
-- Stable publication aligns and verifies both `latest` and `next` dist-tags
-  for all three packages on npmjs.org and the Gitea package mirror.
+- Stable publication uses `latest` for all three packages. The release flow
+  verifies that the retired `next` dist-tag is absent from npmjs.org and the
+  Gitea package mirror.
 
 ### Documentation
 

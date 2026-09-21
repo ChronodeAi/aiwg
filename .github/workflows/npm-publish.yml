@@ -14,8 +14,8 @@
 #   OIDC tokens that npmjs.org verifies against the workflow's
 #   id-token claims. No secret to rotate, no secret to leak.
 # - OIDC authorizes publication with one dist-tag (`latest` for stable tags).
-#   npm does not authorize `npm dist-tag add` through trusted publishing, so
-#   moving the separate `next` alias requires an authenticated operator session.
+#   The legacy `next` alias is retired separately through an authenticated
+#   npm account session; trusted publishing cannot remove a dist-tag.
 # - `npm publish --provenance` produces a cryptographic attestation linking
 #   the published tarball to (a) the GitHub Actions workflow run that
 #   produced it and (b) the source commit SHA. Anyone can verify via
@@ -512,8 +512,7 @@ jobs:
 
       - name: Verify dist-tag points at this version
         # Confirm the tag used by OIDC publication resolves to this version.
-        # `next` is a separate registry mutation and is checked by the
-        # release flow after the operator has advanced it.
+        # The release flow also checks that the retired `next` alias is absent.
         run: |
           set -o pipefail
           VERSION='${{ steps.version.outputs.version }}'

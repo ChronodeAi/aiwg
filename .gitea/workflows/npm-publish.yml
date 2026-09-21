@@ -379,7 +379,7 @@ jobs:
             fi
           done
           npm dist-tag ls @aiwg/cli --registry=${{ env.GITEA_NPM_REGISTRY }}
-      - name: Align latest and next on Gitea
+      - name: Retire next on Gitea
         if: ${{ github.event.inputs.dry_run != 'true' }}
         run: |
           set -euo pipefail
@@ -388,16 +388,19 @@ jobs:
           NPMRC
           VERSION="${{ steps.version.outputs.version }}"
           for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
-            npm dist-tag add "${PACKAGE}@${VERSION}" next --registry=${{ env.GITEA_NPM_REGISTRY }}
+            TAGS=$(npm dist-tag ls "$PACKAGE" --registry=${{ env.GITEA_NPM_REGISTRY }})
+            if grep -Eq '^next: ' <<< "$TAGS"; then
+              npm dist-tag rm "$PACKAGE" next --registry=${{ env.GITEA_NPM_REGISTRY }}
+            fi
             for ATTEMPT in 1 2 3 4 5; do
               TAGS=$(npm dist-tag ls "$PACKAGE" --registry=${{ env.GITEA_NPM_REGISTRY }})
               if grep -Fxq "latest: ${VERSION}" <<< "$TAGS" &&
-                 grep -Fxq "next: ${VERSION}" <<< "$TAGS"; then
-                echo "✓ ${PACKAGE}@latest and @next = ${VERSION} on Gitea"
+                 ! grep -Eq '^next: ' <<< "$TAGS"; then
+                echo "✓ ${PACKAGE}@latest = ${VERSION}; @next absent on Gitea"
                 break
               fi
               if [ "$ATTEMPT" -eq 5 ]; then
-                echo "✗ ${PACKAGE} Gitea dist-tags did not converge to ${VERSION}"
+                echo "✗ ${PACKAGE} Gitea dist-tags did not converge to latest-only policy"
                 echo "$TAGS"
                 exit 1
               fi

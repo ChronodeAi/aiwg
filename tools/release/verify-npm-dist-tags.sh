@@ -12,15 +12,15 @@ for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
   for ATTEMPT in 1 2 3 4 5; do
     TAGS=$(npm dist-tag ls "$PACKAGE" --registry=https://registry.npmjs.org)
     if grep -Fxq "latest: ${VERSION}" <<< "$TAGS" &&
-       grep -Fxq "next: ${VERSION}" <<< "$TAGS"; then
-      echo "✓ ${PACKAGE}@latest and @next = ${VERSION}"
+       ! grep -Eq '^next: ' <<< "$TAGS"; then
+      echo "✓ ${PACKAGE}@latest = ${VERSION}; @next absent"
       VERIFIED=true
       break
     fi
     if [ "$ATTEMPT" -lt 5 ]; then sleep 5; fi
   done
   if [ "$VERIFIED" != true ]; then
-    echo "✗ ${PACKAGE} dist-tags do not both resolve to ${VERSION}" >&2
+    echo "✗ ${PACKAGE} requires latest = ${VERSION} and no next dist-tag" >&2
     echo "$TAGS" >&2
     exit 1
   fi

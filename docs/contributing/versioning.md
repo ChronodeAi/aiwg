@@ -283,10 +283,11 @@ The GitHub trusted-publishing workflow publishes `aiwg`, `@aiwg/cockpit`, and
 package's provenance attestation before completing.
 
 For stable releases, OIDC sets `latest` during publication. The workflow does
-not create, advance, or maintain an npm `next` dist-tag. If the release policy
-requires `next` to match `latest`, an authenticated npm account session must
-advance `next` separately; the post-release verification gate must pass before
-the release is declared complete. Trusted publishing alone cannot do this.
+not create, advance, or maintain an npm `next` dist-tag. `next` is retired from
+the public registry: removing it requires a one-time authenticated npm account
+session because trusted publishing authorizes publication, not dist-tag edits.
+The post-release gate checks that `latest` matches the release and `next` is
+absent for all three packages.
 
 ### 5. Mirror signed release assets to the Gitea release
 
@@ -377,20 +378,18 @@ The `A2A Conformance` workflow provisions a reference agentic-sandbox instance v
 The npm release pipeline accepts only stable CalVer tags matching
 `vYYYY.M.PATCH`. It publishes `aiwg`, `@aiwg/cli`, and `@aiwg/cockpit` at the
 same version. GitHub Actions trusted publishing sets `latest` on npmjs.org;
-Gitea Actions sets `latest` and `next` on its package mirror. npmjs.org `next`
-requires a separate authenticated `npm dist-tag add` operation. The release
-plan verifies both public tags and must remain incomplete until they match.
-`next` is a stable-version alias; the pipeline does not publish nightly,
-alpha, beta, or RC versions.
+Gitea Actions sets `latest` on its package mirror and removes its old `next`
+alias. The public npm `next` alias requires a one-time authenticated removal.
+The release plan remains incomplete until `latest` matches and `next` is absent
+on npmjs.org. The pipeline does not publish nightly, alpha, beta, or RC versions.
 
 ```bash
-# After the signed tag is published by CI, use an authenticated npm account
-# session to advance the public alias. Never create a release tag by hand.
-VERSION=2026.9.19
+# One-time public registry cleanup from an authenticated npm account session.
 for package in aiwg @aiwg/cli @aiwg/cockpit; do
-  npm dist-tag add "${package}@${VERSION}" next --registry=https://registry.npmjs.org
+  npm dist-tag rm "$package" next --registry=https://registry.npmjs.org
 done
-bash tools/release/verify-npm-dist-tags.sh "$VERSION"
+# After CI publishes the new version:
+bash tools/release/verify-npm-dist-tags.sh 2026.9.19
 ```
 
 Use source checkouts and ordinary test/CI branches for work that needs to be

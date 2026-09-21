@@ -40,8 +40,8 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow.match(/GT_NPM_TOKEN_VAULT_FIELD: \$\{\{ vars\.GT_NPM_TOKEN_VAULT_FIELD \}\}/g)).toHaveLength(1);
     expect(workflow).toContain('npm publish ./dist/packages/cli --registry=');
     expect(workflow).toContain('npm dist-tag add "@aiwg/cli@${VERSION}" latest');
-    expect(workflow).toContain('Align latest and next on Gitea');
-    expect(workflow).toContain('npm dist-tag add "${PACKAGE}@${VERSION}" next');
+    expect(workflow).toContain('Retire next on Gitea');
+    expect(workflow).toContain('npm dist-tag rm "$PACKAGE" next');
     expect(workflow).toContain('# Stable publishes deliberately omit `--tag`');
     expect(workflow).toContain("'^v[0-9]+\\.[0-9]+\\.[0-9]+$'");
     expect(workflow).not.toContain('build-and-publish-prerelease');
