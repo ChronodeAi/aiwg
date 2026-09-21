@@ -37,6 +37,14 @@ type AdversarialCorpus = {
 async function readJson<T>(path: string): Promise<T> {
   return JSON.parse(await readFile(path, 'utf8')) as T
 }
+
+function isReplayItem(value: unknown): value is ReplayItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.id === 'string' && candidate.id.length > 0
+    && Number.isInteger(candidate.cursor) && Number(candidate.cursor) >= 0
+    && (candidate.tombstone === undefined || typeof candidate.tombstone === 'boolean')
+}
 const profile = (optional = false): CapabilityProfile => ({
   contractVersion: DATASET_CONTRACT_VERSION, kind: 'CapabilityProfile', id: `profile:conformance:${optional}`,
   capabilities: [
@@ -71,10 +79,14 @@ export async function qualifyReplay(): Promise<void> {
   const requiredArrays = [corpus.initial, corpus.replay, corpus.duplicates, corpus.sameCursorTie, corpus.late, corpus.next, corpus.tombstones, corpus.malformed]
   if (requiredArrays.some(items => !Array.isArray(items) || items.length === 0)) throw new Error('CONFORMANCE_REPLAY_CORPUS_INCOMPLETE')
   if (JSON.stringify(corpus.initial) !== JSON.stringify(corpus.replay)) throw new Error('CONFORMANCE_REPLAY_CORPUS_NOT_EXACT')
+  if (![...corpus.initial, ...corpus.replay, ...corpus.duplicates, ...corpus.sameCursorTie, ...corpus.late, ...corpus.next, ...corpus.tombstones].every(isReplayItem)) throw new Error('CONFORMANCE_REPLAY_CORPUS_RECORD_INVALID')
+  if (corpus.malformed.some(isReplayItem)) throw new Error('CONFORMANCE_REPLAY_CORPUS_MALFORMED_CASE_ACCEPTED')
   if (new Set(corpus.duplicates.map(item => `${item.cursor}:${item.id}`)).size === corpus.duplicates.length) throw new Error('CONFORMANCE_REPLAY_CORPUS_DUPLICATE_MISSING')
   const tied = [...corpus.sameCursorTie].sort((left, right) => left.cursor - right.cursor || left.id.localeCompare(right.id))
   if (tied.some((item, index) => item.id !== corpus.sameCursorTie[index]?.id)) throw new Error('CONFORMANCE_REPLAY_CORPUS_TIE_UNORDERED')
-  if (!corpus.tombstones.some(item => item.tombstone) || Object.keys(corpus.schemaChange.before).length === 0 || Object.keys(corpus.schemaChange.after).length === 0) throw new Error('CONFORMANCE_REPLAY_CORPUS_BOUNDARY_MISSING')
+  const initialCursor = Math.max(...corpus.initial.map(item => item.cursor))
+  if (!corpus.late.some(item => item.cursor <= initialCursor) || !corpus.next.every(item => item.cursor > initialCursor)) throw new Error('CONFORMANCE_REPLAY_CORPUS_INCREMENTAL_BOUNDARY_MISSING')
+  if (!corpus.tombstones.some(item => item.tombstone && item.cursor > initialCursor) || JSON.stringify(corpus.schemaChange.before) === JSON.stringify(corpus.schemaChange.after)) throw new Error('CONFORMANCE_REPLAY_CORPUS_BOUNDARY_MISSING')
 
   const { repo, service, plan } = await planned()
   const first = await service.ingest({ planId: plan.id, planDigest: plan.planDigest.value, idempotencyKey: 'conformance:once' })
