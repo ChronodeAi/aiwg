@@ -75,6 +75,12 @@ document UX (2026-09) but not an import/API/reload contract. Catalog:
 [`docs/integrations/grokbot-native-surfaces-evidence.md`](../../integrations/grokbot-native-surfaces-evidence.md).
 Does **not** block stable promotion.
 
+Fail-closed scaffolding (typed contracts + default-OFF kill-switches; no writers):
+[`src/providers/grokbot-natives/`](../../../src/providers/grokbot-natives/) —
+operator notes in
+[`docs/integrations/grokbot-native-adapters-scaffolding.md`](../../integrations/grokbot-native-adapters-scaffolding.md).
+Baseline `aiwg use --provider grokbot` does not enable these surfaces.
+
 - macOS / Windows PUW: **waived** by maintainer for #210 (Linux-only validation sufficient)
 
 ## Cloud session global install
