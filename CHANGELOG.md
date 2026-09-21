@@ -23,6 +23,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   teammate profiles, connector recommendations, and memory references.
 - `aiwg build-verify` checks deployment and discovery before provider-driven
   build or CI work; Grok Build additionally requires native inspection.
+- Optional Grok Bot native adapter scaffolding for routines, teammates,
+  connector install profiles, registered machine health, and memory references.
 
 ### Changed
 
