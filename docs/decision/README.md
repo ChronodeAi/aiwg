@@ -25,6 +25,8 @@ Read the [normative specification](specification.md), [architecture](architectur
 
 Structured entry fields, version migration, and rollback rules are described in
 [structured entries](structured-entries.md).
+Jev request, retry, cancellation, and egress behavior is documented in the
+[transport contract](jev-transport.md).
 
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

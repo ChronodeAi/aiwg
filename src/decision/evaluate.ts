@@ -133,10 +133,8 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
 
   const now = request.now ?? Date.now;
   const totalDeadline = now() + request.binding.spec.totalTimeoutMs;
-  const totalAbort = AbortSignal.any([
-    request.signal ?? new AbortController().signal,
-    AbortSignal.timeout(request.binding.spec.totalTimeoutMs),
-  ]);
+  const totalTimeout = AbortSignal.timeout(request.binding.spec.totalTimeoutMs);
+  const totalAbort = AbortSignal.any([request.signal ?? new AbortController().signal, totalTimeout]);
   const evaluations: Record<string, DecisionResult> = structuredClone(receipt?.evaluations ?? {});
   let attemptsUsed = Object.values(evaluations).reduce((sum, result) => sum + result.spec.attempts.length, 0);
 
@@ -150,7 +148,7 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
     try { observation = normalizeObservation(item.definition, target, reconciled); }
     catch { throw new RemoteUncertainError(); }
     if (observation.status !== 'success') throw new RemoteUncertainError();
-    const context: OneContext = { request, item, rulesetPin, bindingPin, totalDeadline, signal: totalAbort,
+    const context: OneContext = { request, item, rulesetPin, bindingPin, totalDeadline, signal: totalAbort, totalTimeout,
       attemptsAvailable: request.binding.spec.maxAttempts, now, advance };
     const attempts = [...pending.attempts, toAttempt(target, pending.ordinal, observation, 0)];
     evaluations[item.alias] = decisionResult(context, observation, attempts);
@@ -160,7 +158,8 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
   for (const item of resolved) {
     if (evaluations[item.alias]) continue;
     if (totalAbort.aborted) {
-      evaluations[item.alias] = emptyDecisionResult(request, item, rulesetPin, bindingPin, 'cancelled', 'cancelled');
+      const reason = request.signal?.aborted ? 'cancelled' : 'timeout';
+      evaluations[item.alias] = emptyDecisionResult(request, item, rulesetPin, bindingPin, reason === 'cancelled' ? 'cancelled' : 'error', reason);
       continue;
     }
     const execution = await evaluateOne({
@@ -170,6 +169,7 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
       bindingPin,
       totalDeadline,
       signal: totalAbort,
+      totalTimeout,
       attemptsAvailable: request.binding.spec.maxAttempts - attemptsUsed,
       now,
       advance,
@@ -183,7 +183,8 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
 
   let result: RulesetResult;
   if (totalAbort.aborted) {
-    result = { ...base, spec: { ...base.spec, status: 'cancelled', reason: 'cancelled', matchedRules: [], evaluations } };
+    const reason = request.signal?.aborted ? 'cancelled' : 'timeout';
+    result = { ...base, spec: { ...base.spec, status: reason === 'cancelled' ? 'cancelled' : 'error', reason, matchedRules: [], evaluations } };
   } else {
     try {
       const composition = composeRuleset(request.ruleset, request.input, evaluations);
@@ -225,6 +226,7 @@ interface OneContext {
   bindingPin: ArtifactPin;
   totalDeadline: number;
   signal: AbortSignal;
+  totalTimeout: AbortSignal;
   attemptsAvailable: number;
   now: () => number;
   advance: (state: DecisionReceipt['state'], extra?: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending'>>) => Promise<void>;
@@ -237,7 +239,11 @@ async function evaluateOne(context: OneContext): Promise<DecisionResult> {
 
   for (let targetIndex = 0; targetIndex < evaluation.targets.length; targetIndex += 1) {
     const target = evaluation.targets[targetIndex]!;
-    if (attempts.length >= context.attemptsAvailable || context.now() >= context.totalDeadline) {
+    if (context.signal.aborted || context.now() >= context.totalDeadline) {
+      final = interruption(context);
+      break;
+    }
+    if (attempts.length >= context.attemptsAvailable) {
       final = observationFailure('budget-exhausted');
       break;
     }
@@ -248,7 +254,11 @@ async function evaluateOne(context: OneContext): Promise<DecisionResult> {
       attempts.push(toAttempt(target, attempts.length + 1, final, 0));
     } else {
       for (let retry = 0; retry <= target.retry.maxRetries; retry += 1) {
-        if (attempts.length >= context.attemptsAvailable || context.now() >= context.totalDeadline) {
+        if (context.signal.aborted || context.now() >= context.totalDeadline) {
+          final = interruption(context);
+          break;
+        }
+        if (attempts.length >= context.attemptsAvailable) {
           final = observationFailure('budget-exhausted');
           break;
         }
@@ -276,17 +286,22 @@ async function evaluateOne(context: OneContext): Promise<DecisionResult> {
         attempts.push(toAttempt(target, attempts.length + 1, final, Math.max(0, context.now() - started)));
         if (final.status === 'success') break;
         if (!RETRIABLE.has(final.reason) || retry === target.retry.maxRetries) break;
-        const delayMs = Math.min(
-          target.retry.maxDelayMs,
-          final.retryAfterMs ?? target.retry.initialDelayMs * 2 ** retry,
-          Math.max(0, context.totalDeadline - context.now()),
-        );
+        const remaining = Math.max(0, context.totalDeadline - context.now());
+        const baseDelay = Math.min(target.retry.maxDelayMs,
+          final.retryAfterMs ?? target.retry.initialDelayMs * 2 ** retry);
+        const random = context.request.random?.() ?? Math.random();
+        const jitter = Number.isFinite(random) ? Math.min(1, Math.max(0, random)) : 0.5;
+        const jittered = final.retryAfterMs === undefined ? Math.round(baseDelay * (0.75 + 0.5 * jitter)) : baseDelay;
+        const delayMs = Math.min(remaining, target.retry.maxDelayMs, Math.max(0, jittered));
+        if (context.signal.aborted || remaining <= delayMs) { final = interruption(context); break; }
+        attempts[attempts.length - 1]!.retryDelayMs = delayMs;
         try {
           await (context.request.delay ?? abortableDelay)(delayMs, context.signal);
         } catch {
-          final = observationFailure('cancelled');
+          final = interruption(context);
           break;
         }
+        if (context.signal.aborted || context.now() >= context.totalDeadline) { final = interruption(context); break; }
       }
     }
     if (final.status === 'success' || final.reason === 'cancelled') break;
@@ -312,9 +327,9 @@ async function invokeWithDeadline(
   const boundary = new Promise<AdapterObservation>(resolve => {
     timer = setTimeout(() => {
       controller.abort(new DOMException('Decision target timed out', 'TimeoutError'));
-      resolve(observationFailure('timeout'));
+      resolve(context.request.signal?.aborted ? interruption(context) : observationFailure('timeout', 'error', undefined, 'target-timeout'));
     }, timeoutMs);
-    const cancelled = (): void => resolve(observationFailure('cancelled'));
+    const cancelled = (): void => resolve(interruption(context));
     if (context.signal.aborted) cancelled();
     else {
       context.signal.addEventListener('abort', cancelled, { once: true });
@@ -322,7 +337,7 @@ async function invokeWithDeadline(
     }
   });
   try {
-    return await Promise.race([
+    const observed = await Promise.race([
       adapter.evaluate({
         alias: context.item.alias,
         definition: structuredClone(context.item.definition),
@@ -331,6 +346,8 @@ async function invokeWithDeadline(
         invocationId: `${context.request.invocationId}:${context.item.alias}:${ordinal}`,
         deadlineEpochMs,
         signal,
+        callerSignal: context.request.signal ?? new AbortController().signal,
+        totalSignal: context.signal,
         resolveCredential: context.request.resolveCredential ?? unauthorizedCredential,
         onRemoteHandle: async handle => {
           try {
@@ -341,10 +358,17 @@ async function invokeWithDeadline(
       }),
       boundary,
     ]);
+    return context.request.signal?.aborted ? observationFailure('cancelled', 'cancelled', observed, 'caller-cancelled') : observed;
   } finally {
     if (timer) clearTimeout(timer);
     removeAbortListener();
   }
+}
+
+function interruption(context: OneContext): AdapterObservation {
+  if (context.request.signal?.aborted) return observationFailure('cancelled', 'cancelled', undefined, 'caller-cancelled');
+  return observationFailure('timeout', 'error', undefined,
+    context.totalTimeout.aborted || context.now() >= context.totalDeadline ? 'total-deadline' : 'target-timeout');
 }
 
 function resolveDefinitions(request: DecisionEvaluationRequest): Array<{ alias: string; definition: DecisionDefinition; pin: ArtifactPin; input: unknown }> {
@@ -419,7 +443,8 @@ function emptyDecisionResult(
   status: DecisionStatus,
   reason: DecisionFailureReason,
 ): DecisionResult {
-  return decisionResult({ request, item, rulesetPin, bindingPin, totalDeadline: 0, signal: new AbortController().signal, attemptsAvailable: 0, now: Date.now, advance: async () => undefined }, observationFailure(reason, status), []);
+  return decisionResult({ request, item, rulesetPin, bindingPin, totalDeadline: 0, signal: new AbortController().signal,
+    totalTimeout: new AbortController().signal, attemptsAvailable: 0, now: Date.now, advance: async () => undefined }, observationFailure(reason, status), []);
 }
 
 function resultBase(request: DecisionEvaluationRequest, ruleset: ArtifactPin, binding: ArtifactPin): RulesetResult {
@@ -456,12 +481,14 @@ function observationFailure(
   reason: DecisionFailureReason,
   status: DecisionStatus = reason === 'cancelled' ? 'cancelled' : reason === 'unsupported-capability' ? 'unsupported' : 'error',
   inherit?: AdapterObservation,
+  termination?: DecisionAttempt['termination'],
 ): AdapterObservation {
   return {
     status, reason, uncertainty: inherit?.uncertainty ?? null,
     actualModel: inherit?.actualModel ?? null,
     usage: inherit?.usage ?? { inputTokens: null, outputTokens: null, costUsd: null },
     requestId: inherit?.requestId ?? null,
+    ...(termination ? { termination } : {}),
   };
 }
 
@@ -470,6 +497,10 @@ function toAttempt(target: ExecutionTarget, ordinal: number, observation: Adapte
     ordinal, adapter: target.adapter, adapterVersion: target.adapterVersion, requestedModel: target.model,
     actualModel: observation.actualModel, subagent: target.subagent ?? null, status: observation.status,
     reason: observation.reason, durationMs, usage: observation.usage, requestId: observation.requestId,
+    ...(observation.requestIdSource ? { requestIdSource: observation.requestIdSource } : {}),
+    ...(observation.httpStatus !== undefined ? { httpStatus: observation.httpStatus } : {}),
+    ...(observation.termination ? { termination: observation.termination } : {}),
+    ...(observation.remoteExecution ? { remoteExecution: observation.remoteExecution } : {}),
   };
 }
 

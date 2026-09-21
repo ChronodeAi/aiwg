@@ -133,6 +133,13 @@ export interface DecisionAttempt {
   durationMs: number;
   usage: DecisionUsage;
   requestId: string | null;
+  /** Source of an accepted, sanitized provider correlation ID. */
+  requestIdSource?: 'typesafe' | 'legacy' | 'body';
+  httpStatus?: number;
+  retryDelayMs?: number;
+  termination?: 'caller-cancelled' | 'target-timeout' | 'total-deadline' | 'backend-cancelled';
+  /** Remote execution and billing are uncertain after a dispatched cancellation or timeout. */
+  remoteExecution?: 'unknown';
 }
 
 export type DecisionStatus = 'success' | 'abstained' | 'error' | 'unsupported' | 'cancelled';
@@ -190,8 +197,12 @@ export interface AdapterObservation {
   actualModel: string | null;
   usage: DecisionUsage;
   requestId: string | null;
-  /** Transport evidence that a remote operation was not sent or returned a terminal response. */
+  /** Whether an HTTP exchange proves dispatch state for receipt retry safety. */
   dispatchCertainty?: 'not-sent' | 'terminal-response' | 'unknown';
+  requestIdSource?: 'typesafe' | 'legacy' | 'body';
+  httpStatus?: number;
+  termination?: DecisionAttempt['termination'];
+  remoteExecution?: 'unknown';
   /** Transport hint used only by the dispatcher; never persisted as decision data. */
   retryAfterMs?: number;
 }
@@ -204,6 +215,10 @@ export interface DecisionAdapterRequest {
   invocationId: string;
   deadlineEpochMs: number;
   signal: AbortSignal;
+  /** Original caller signal, distinct from a composed total-deadline signal. */
+  callerSignal?: AbortSignal;
+  /** Caller plus total deadline, before the evaluator adds the per-target timer. */
+  totalSignal?: AbortSignal;
   resolveCredential: (logicalRef: string) => Promise<Uint8Array>;
   /** Persist an opaque remote handle before the adapter reports completion. */
   onRemoteHandle?: (handle: string) => Promise<void>;
@@ -258,5 +273,7 @@ export interface DecisionEvaluationRequest {
   reconcileRemote?: (handle: string, signal: AbortSignal) => Promise<AdapterObservation | null>;
   signal?: AbortSignal;
   now?: () => number;
+  /** Uniform [0,1) source for bounded retry jitter. */
+  random?: () => number;
   delay?: (ms: number, signal: AbortSignal) => Promise<void>;
 }

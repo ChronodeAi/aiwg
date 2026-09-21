@@ -127,8 +127,12 @@
         },
         "value": {
           "anyOf": [
-            { "type": "number" },
-            { "type": "string" }
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            }
           ]
         },
         "reason": {
@@ -405,6 +409,33 @@
                     "type": "null"
                   }
                 ]
+              },
+              "requestIdSource": {
+                "enum": [
+                  "typesafe",
+                  "legacy",
+                  "body"
+                ]
+              },
+              "httpStatus": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 599
+              },
+              "retryDelayMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "termination": {
+                "enum": [
+                  "caller-cancelled",
+                  "target-timeout",
+                  "total-deadline",
+                  "backend-cancelled"
+                ]
+              },
+              "remoteExecution": {
+                "const": "unknown"
               }
             },
             "required": [
