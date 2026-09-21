@@ -105,6 +105,7 @@ jobs:
     if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || github.event_name == 'workflow_dispatch' }}
     outputs:
       version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.release_source.outputs.commit }}
     runs-on: ubuntu-latest
     # Container pinned by digest per .gitea/workflows/README.md ("CI Pinning
     # Policy"). Same discipline as the Gitea workflows — no mutable tags.
@@ -191,10 +192,12 @@ jobs:
         run: bash tools/ci/verify-signed-tag.sh
 
       - name: Checkout release tag
+        id: release_source
         run: |
           set -o pipefail
           TAG='${{ steps.release_tag.outputs.release_tag }}'
           git checkout --detach "refs/tags/${TAG}"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Verify source-bound storage benchmark claims (#2191)
         run: npm run verify:storage-claims
@@ -948,6 +951,6 @@ jobs:
     uses: ./.github/workflows/socket-post-publish.yml
     with:
       version: ${{ needs.publish-to-npmjs-org.outputs.version }}
-      commit: ${{ github.sha }}
+      commit: ${{ needs.publish-to-npmjs-org.outputs.commit }}
     secrets:
       SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}

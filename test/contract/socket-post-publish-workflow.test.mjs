@@ -17,7 +17,7 @@ const socketWorkflow = readFileSync(
 test('npm publication invokes the release-tag Socket workflow', () => {
   assert.match(
     publishWorkflow,
-    /publish-to-npmjs-org:[\s\S]*?outputs:\s*\n\s*version: \$\{\{ steps\.version\.outputs\.version \}\}/,
+    /publish-to-npmjs-org:[\s\S]*?outputs:\s*\n\s*version: \$\{\{ steps\.version\.outputs\.version \}\}\s*\n\s*commit: \$\{\{ steps\.release_source\.outputs\.commit \}\}/,
   );
   assert.match(
     publishWorkflow,
@@ -27,7 +27,15 @@ test('npm publication invokes the release-tag Socket workflow', () => {
     publishWorkflow,
     /version: \$\{\{ needs\.publish-to-npmjs-org\.outputs\.version \}\}/,
   );
-  assert.match(publishWorkflow, /commit: \$\{\{ github\.sha \}\}/);
+  assert.match(
+    publishWorkflow,
+    /id: release_source[\s\S]*?echo "commit=\$\(git rev-parse HEAD\)" >> "\$GITHUB_OUTPUT"/,
+  );
+  assert.match(
+    publishWorkflow,
+    /commit: \$\{\{ needs\.publish-to-npmjs-org\.outputs\.commit \}\}/,
+  );
+  assert.doesNotMatch(publishWorkflow, /commit: \$\{\{ github\.sha \}\}/);
   assert.match(
     publishWorkflow,
     /SOCKET_API_TOKEN: \$\{\{ secrets\.SOCKET_API_TOKEN \}\}/,
