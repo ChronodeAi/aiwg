@@ -28,7 +28,7 @@ complete supported setup unless project policy selects a narrower scope.
 | DeepSeek Harness | `aiwg use sdlc --provider dsh` | AGENTS.md |
 | Factory AI | `aiwg use sdlc --provider factory` | AGENTS.md |
 | Grok Bot | `aiwg use sdlc --provider grokbot` | AGENTS.md |
-| Grok Build | `aiwg use sdlc --provider grok-build` | AGENTS.md |
+| [Grok Build](grok-build-ci.md) | `aiwg use sdlc --provider grok-build` | AGENTS.md |
 | Hermes | `aiwg use sdlc --provider hermes` | AGENTS.md |
 | OpenCode | `aiwg use sdlc --provider opencode` | AGENTS.md |
 | OpenClaw | `aiwg use sdlc --provider openclaw` | AGENTS.md |

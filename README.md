@@ -1608,6 +1608,11 @@ See [cross-platform overview](docs/integrations/cross-platform-overview.md) for 
 | Antigravity | `aiwg use all --provider antigravity` | `AGENTS.md` and `.agents/` | Agents, skills, indexed commands, MCP config when enabled | See [Antigravity provider docs](docs/providers/antigravity.md). |
 | Generic Markdown | `aiwg use all --provider generic` | `AIWG.md` / `WORKSPACE.md` | Markdown instructions | Use when a provider reads repo docs but has no dedicated integration. |
 
+For CI jobs, [build verification](docs/integrations/build-verify.md) checks
+deployment and provider discovery before the provider runs a task. For routines,
+teammates, connectors, or memory proposals, [bot handoffs](docs/integrations/bot-handoff.md)
+produce a draft to review in the selected provider.
+
 After deployment, check readiness with the assistant or run the health check:
 
 ```bash

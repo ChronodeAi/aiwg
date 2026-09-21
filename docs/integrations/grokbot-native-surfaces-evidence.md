@@ -1,12 +1,36 @@
 # Grok Bot native surfaces — product evidence catalog (#209)
 
-**Status:** Evidence-gated (writers blocked)  
-**Date:** 2026-09-16  
+**Status:** Operator handoff drafts available; native writers evidence-gated
+
+**Date:** 2026-09-20
 **Parent:** [#209](https://github.com/jmagly/aiwg/issues/209)  
 **ADR:** [`docs/architecture/adr-grokbot-provider-target.md`](../architecture/adr-grokbot-provider-target.md)  
 **Provider guide:** [`docs/integrations/grokbot-quickstart.md`](./grokbot-quickstart.md)
 
 ## Purpose
+
+### Maintainer-approved interim scope (2026-09-20)
+
+`aiwg bot-handoff --provider grokbot --input proposal.json` now emits operator-reviewed drafts
+for routines, teammate profiles, connector recommendations and memory
+references. See [handoff format and review steps](bot-handoff.md). This
+resolves the interim-generator decision below; native installers remain gated.
+
+The earlier blanket statement that Grok Bot has no API is too broad. The
+[Cursor Admin API](https://cursor.com/docs/account/teams/admin-api#grok-bot)
+documents `GET /grok-bot/capabilities`, including the team's `localExecution`
+ceiling. This can support a separately scoped team-policy reader for #244; it
+does not establish individual machine reachability or effective local policy.
+No such probe is implemented by the handoff generator.
+
+Current connector UX uses Marketplace rather than the older Settings → Plugins
+wording below. Native routine/profile/memory import contracts and an automated
+connector installer were not established by this review.
+
+For AI coding tasks in CI, use the separate
+[Grok Build provider and verification path](grok-build-ci.md). Grok Bot Admin
+API access is not a dependency of Grok Build deployment. The historical catalog
+below records why the original native writers were deferred.
 
 Catalog each optional Grok Bot native surface from #209 against **public product
 docs** (operator-reproducible UX) and record what is still **missing** for an
@@ -284,12 +308,12 @@ are true:
 - Claiming live-refresh or Cursor reload wording for these surfaces.
 - Folding xAI Grok Build into this provider.
 
-## Open questions for maintainers
+## Original questions and current disposition
 
-1. Prefer waiting for an xAI/Cursor **import API**, or authorize an opt-in
-   **prompt/handoff pack** generator that only emits operator instructions
-   under `AIWG_GROKBOT_SKILLS_DIR` / dry-run?
-2. Which child surface should go first once a contract exists?
+1. Interim handoff generation approved on 2026-09-20. The command prints drafts;
+   retain them in the canonical artifact store before an explicit provider export.
+2. Native installation priority remains separate. None of these optional Bot
+   integrations gates AIWG deployment to Grok Build CI jobs.
 
 ## Related: baseline loading (not #209 writers)
 

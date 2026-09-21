@@ -26,18 +26,37 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('npm dist-tag rm @aiwg/cli bootstrap');
     expect(workflow).toContain('Remove deprecated @aiwg/cli bootstrap tag');
     expect(workflow).not.toContain('npm dist-tag add @aiwg/cli bootstrap');
+    expect(workflow).toContain('NPM_TAG=latest');
+    expect(workflow).toContain('npm publication accepts stable versions only');
+    expect(workflow).toContain("github.event_name == 'push' && !contains(github.ref_name, '-')");
+    expect(workflow).toContain('Align latest and next dist-tags on stable releases');
+    expect(workflow.indexOf('Require npm dist-tag credential before publishing')).toBeLessThan(
+      workflow.indexOf('- name: Publish to npmjs.org (OIDC + provenance)'),
+    );
+    expect(workflow).toContain('NPM_DIST_TAG_TOKEN is required to align latest and next');
+    expect(workflow).toContain('for TAG in latest next');
+    expect(workflow).toContain('grep -Fxq "next: ${VERSION}"');
+    expect(workflow).not.toContain('NPM_TAG=prerelease');
+    expect(workflow).not.toContain('NPM_TAG=nightly');
   });
 
   it('publishes and promotes the assembled package in the Gitea registry', () => {
     const workflow = readFileSync(path.join(ROOT, '.gitea/workflows/npm-publish.yml'), 'utf8');
     const workflowHeader = workflow.slice(0, workflow.indexOf('\njobs:'));
 
-    expect(workflow.match(/npm run package:cli/g)).toHaveLength(2);
+    expect(workflow.match(/npm run package:cli/g)).toHaveLength(1);
     expect(workflowHeader).not.toContain('GT_NPM_TOKEN_VAULT_FIELD');
-    expect(workflow.match(/GT_NPM_TOKEN_VAULT_FIELD: \$\{\{ vars\.GT_NPM_TOKEN_VAULT_FIELD \}\}/g)).toHaveLength(2);
+    expect(workflow.match(/GT_NPM_TOKEN_VAULT_FIELD: \$\{\{ vars\.GT_NPM_TOKEN_VAULT_FIELD \}\}/g)).toHaveLength(1);
     expect(workflow).toContain('npm publish ./dist/packages/cli --registry=');
-    expect(workflow).toContain('npm dist-tag add "@aiwg/cli@${VERSION}" "${TAG}"');
     expect(workflow).toContain('npm dist-tag add "@aiwg/cli@${VERSION}" latest');
+    expect(workflow).toContain('Align latest and next on Gitea');
+    expect(workflow).toContain('npm dist-tag add "${PACKAGE}@${VERSION}" next');
+    expect(workflow).toContain('# Stable publishes deliberately omit `--tag`');
+    expect(workflow).toContain("'^v[0-9]+\\.[0-9]+\\.[0-9]+$'");
+    expect(workflow).not.toContain('build-and-publish-prerelease');
+    expect(workflow).not.toContain('--tag next');
+    expect(workflow).not.toContain('--tag prerelease');
+    expect(workflow).not.toContain('NPM_TAG=');
     expect(workflow).toContain('npm view "aiwg@${VERSION}" dist.tarball --registry=');
     expect(workflow).toContain('npm view "@aiwg/cli@${VERSION}" dist.tarball --registry=');
     expect(workflow).toContain('npm view "@aiwg/cockpit@${VERSION}" dist.tarball --registry=');
@@ -49,7 +68,7 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('VERSION="${{ needs.build-and-publish.outputs.version }}"');
     expect(
       workflow.match(/cannot publish over the previously published versions/g),
-    ).toHaveLength(6);
+    ).toHaveLength(3);
     expect(workflow).toMatch(
       /verify-install:[\s\S]*?defaults:\s*\n\s*run:\s*\n\s*shell: bash/,
     );

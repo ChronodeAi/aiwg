@@ -282,18 +282,8 @@ The GitHub trusted-publishing workflow publishes `aiwg`, `@aiwg/cockpit`, and
 `@aiwg/cli` at the same CalVer. It verifies each requested dist-tag and each
 package's provenance attestation before completing.
 
-For stable releases, OIDC sets `latest` during publication. Advancing `next` to
-the same stable version is a separate package-management operation because npm
-trusted-publisher credentials are publish-scoped. The workflow uses the
-narrowly scoped `NPM_DIST_TAG_TOKEN` for all three packages. If that secret is
-not configured, publication still succeeds but the workflow warns that `next`
-must be advanced manually:
-
-```bash
-npm dist-tag add aiwg@2026.1.5 next
-npm dist-tag add @aiwg/cockpit@2026.1.5 next
-npm dist-tag add @aiwg/cli@2026.1.5 next
-```
+For stable releases, OIDC sets `latest` during publication. The workflow does
+not create, advance, or maintain an npm `next` dist-tag.
 
 ### 5. Mirror signed release assets to the Gitea release
 
@@ -379,88 +369,23 @@ The `A2A Conformance` workflow provisions a reference agentic-sandbox instance v
 - **What to do on red**: open the run, download the `conformance-reports-*` artifact (`report.md` + `report.junit.xml`), and diagnose. Common categories of failure are listed in the harness's own `report.md`. Do **not** force a stable tag past a red conformance run without explicit issue documentation and a follow-up tracking issue — that's how interop regressions ship.
 - **Workflow inputs**: the manual-dispatch form accepts `sandbox_ref` and `conformance_ref` for pinned-ref retries (e.g., to verify a fix against a specific sandbox commit before the release engineer is back online).
 
-## Pre-release Tags (alpha/beta)
+## npm publication channel
 
-Pre-release tags are **internal pipeline checkpoints** — not public releases.
+The npm release pipeline accepts only stable CalVer tags matching
+`vYYYY.M.PATCH`. It publishes `aiwg`, `@aiwg/cli`, and `@aiwg/cockpit` at the
+same version, then sets both `latest` and `next` to that version on npmjs.org
+and the Gitea package mirror. Publication fails if either tag cannot be set
+and verified. `next` is a stable-version alias; the pipeline does not publish
+nightly, alpha, beta, or RC versions.
 
 ```bash
-# Nightly — automated or ad-hoc; date-stamped
-git tag -m "v2026.1.5-nightly.20260324" v2026.1.5-nightly.20260324
-git push origin v2026.1.5-nightly.20260324
-# CI publishes to npm --tag nightly → npm install aiwg@nightly
-
-# Alpha — early feature testing
-git tag -m "v2026.1.5-alpha.1" v2026.1.5-alpha.1
-git push origin v2026.1.5-alpha.1
-# CI publishes to npm --tag next → npm install aiwg@next
-
-# Beta — feature-complete, broader testing
-git tag -m "v2026.1.5-beta.1" v2026.1.5-beta.1
-git push origin v2026.1.5-beta.1
-# CI publishes to npm --tag next → npm install aiwg@next
-
-# RC — release candidate (note: lowercase, dot-separated — matches npm semver)
-git tag -m "v2026.1.5-rc.1" v2026.1.5-rc.1
-git push origin v2026.1.5-rc.1
-# CI publishes to npm --tag next → npm install aiwg@next
-
-# Stable
 git tag -m "v2026.1.5" v2026.1.5
 git push origin v2026.1.5
-# CI publishes to npm --tag latest (default install)
+npm install -g aiwg                 # latest; aiwg@next resolves to the same release
 ```
 
-### Release Pipeline
-
-This is a standard multi-stage release pipeline used by many npm packages:
-
-```
-dev (local) → nightly → alpha → beta → RC → stable
-```
-
-### Naming Convention
-
-| Stage   | Format                           | Example                      | npm dist-tag | Meaning                             |
-| ------- | -------------------------------- | ---------------------------- | ------------ | ----------------------------------- |
-| Dev     | (local source install, no tag)   | —                            | —            | Active development on this machine  |
-| Nightly | `vYYYY.M.PATCH-nightly.YYYYMMDD` | `v2026.1.5-nightly.20260324` | `nightly`    | Automated or ad-hoc snapshot        |
-| Alpha   | `vYYYY.M.PATCH-alpha.N`          | `v2026.1.5-alpha.1`          | `next`       | Early testing, pipeline validation  |
-| Beta    | `vYYYY.M.PATCH-beta.N`           | `v2026.1.5-beta.1`           | `next`       | Feature-complete, broader testing   |
-| RC      | `vYYYY.M.PATCH-rc.N`             | `v2026.1.5-rc.1`             | `next`       | Release candidate, final pre-stable |
-| Stable  | `vYYYY.M.PATCH`                  | `v2026.1.5`                  | `latest`     | Public release                      |
-
-Alpha, beta, and RC all publish to the `next` dist-tag. The latest of these is always what `npm install -g aiwg@next` installs.
-
-**Install by channel:**
-
-```bash
-npm install -g aiwg                  # stable (latest dist-tag, default)
-npm install -g aiwg@next             # latest alpha/beta/RC
-npm install -g aiwg@nightly          # latest nightly snapshot
-npm install -g aiwg@2026.1.5-rc.3    # specific RC by exact version
-aiwg refresh --channel next          # switch installed version to next channel
-aiwg refresh --channel latest        # switch back to stable
-```
-
-### What pre-release means
-
-- Used to validate the publish pipeline and let a small group test before the stable tag
-- Nightly builds are automated snapshots; alphas/betas are intentional testing milestones
-- **No release announcement** — pre-releases are not public releases
-- **No new CHANGELOG entry** — the stable release CHANGELOG covers everything
-- **Prerelease-marked release pages** — tag workflows create Gitea and GitHub
-  release records marked as prereleases; only stable releases receive the
-  public announcement and stable release notes
-- CHANGELOG and `docs/releases/` docs are written once, for the stable tag, and cover everything that accumulated across all pre-releases
-
-### Pre-release → Stable flow
-
-```
-nightly → nightly → alpha.1 → fix → alpha.2 → beta.1 → test → stable tag
-                                                                     ↓
-                                                          CHANGELOG + announcement
-                                                          written once here
-```
+Use source checkouts and ordinary test/CI branches for work that needs to be
+validated before release. AIWG update channels are separate from npm dist-tags.
 
 ## Version Progression Examples
 
