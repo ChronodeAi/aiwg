@@ -36,6 +36,11 @@ export class DecisionReceiptAccessError extends Error {}
 export function validateReceipt(receipt: DecisionReceipt, invocationId: string, projectId: string): void {
   if (!receipt || receipt.schema !== 'decision-receipt/v2' || receipt.invocationId !== invocationId || receipt.projectId !== projectId
     || !Number.isSafeInteger(receipt.revision) || receipt.revision < 1
+    || !Number.isSafeInteger(receipt.acquiredAtEpochMs) || receipt.acquiredAtEpochMs < 0
+    || !Number.isSafeInteger(receipt.updatedAtEpochMs) || receipt.updatedAtEpochMs < receipt.acquiredAtEpochMs
+    || (receipt.state === 'completed' ? !Number.isSafeInteger(receipt.completedAtEpochMs)
+      || receipt.completedAtEpochMs! < receipt.acquiredAtEpochMs
+      : receipt.completedAtEpochMs !== undefined)
     || !/^sha256:[a-f0-9]{64}$/.test(receipt.fingerprint)
     || !Object.hasOwn(allowed, receipt.state) || !Array.isArray(receipt.remoteHandles)
     || receipt.remoteHandles.some(handle => typeof handle !== 'string' || !handle.length)
@@ -52,9 +57,11 @@ export function validateReceipt(receipt: DecisionReceipt, invocationId: string, 
   }
 }
 
-export function nextReceipt(previous: DecisionReceipt, state: DecisionReceiptState, extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending'>> = {}): DecisionReceipt {
+export function nextReceipt(previous: DecisionReceipt, state: DecisionReceiptState, extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending' | 'updatedAtEpochMs' | 'completedAtEpochMs'>> = {}): DecisionReceipt {
   if (!allowed[previous.state].includes(state)) throw new DecisionReceiptIntegrityError('Illegal receipt transition');
-  const next = { ...structuredClone(previous), ...structuredClone(extra), state, revision: previous.revision + 1 };
+  const updatedAtEpochMs = Math.max(previous.updatedAtEpochMs, extra.updatedAtEpochMs ?? Date.now());
+  const next = { ...structuredClone(previous), ...structuredClone(extra), state, revision: previous.revision + 1,
+    updatedAtEpochMs, ...(state === 'completed' ? { completedAtEpochMs: extra.completedAtEpochMs ?? updatedAtEpochMs } : {}) };
   if (next.remoteHandles.length < previous.remoteHandles.length || previous.remoteHandles.some((handle, index) => next.remoteHandles[index] !== handle)) {
     throw new DecisionReceiptIntegrityError('Remote handle lineage changed');
   }
@@ -66,7 +73,9 @@ export function nextReceipt(previous: DecisionReceipt, state: DecisionReceiptSta
 }
 
 function initial(invocationId: string, projectId: string, fingerprint: string): DecisionReceipt {
-  const receipt: DecisionReceipt = { schema: 'decision-receipt/v2', revision: 1, projectId, invocationId, fingerprint, state: 'acquired', remoteHandles: [], evaluations: {}, pending: null };
+  const acquiredAtEpochMs = Date.now();
+  const receipt: DecisionReceipt = { schema: 'decision-receipt/v2', revision: 1, acquiredAtEpochMs, updatedAtEpochMs: acquiredAtEpochMs,
+    projectId, invocationId, fingerprint, state: 'acquired', remoteHandles: [], evaluations: {}, pending: null };
   validateReceipt(receipt, invocationId, projectId);
   return receipt;
 }
@@ -74,7 +83,8 @@ function initial(invocationId: string, projectId: string, fingerprint: string): 
 function assertTransition(previous: DecisionReceipt, next: DecisionReceipt): void {
   const expected = nextReceipt(previous, next.state, {
     ...(next.result !== undefined ? { result: next.result } : {}), remoteHandles: next.remoteHandles,
-    evaluations: next.evaluations, pending: next.pending,
+    evaluations: next.evaluations, pending: next.pending, updatedAtEpochMs: next.updatedAtEpochMs,
+    ...(next.completedAtEpochMs !== undefined ? { completedAtEpochMs: next.completedAtEpochMs } : {}),
   });
   if (canonicalJson(expected) !== canonicalJson(next)) throw new DecisionReceiptIntegrityError('Receipt mutation outside legal transition');
 }

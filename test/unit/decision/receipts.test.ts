@@ -1,6 +1,6 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -74,6 +74,48 @@ describe('REC-ATOMIC store conformance', () => {
     }
   });
 
+  it('rejects each changed definition, ruleset, and binding pin before dispatch', async () => {
+    for (const store of await stores()) {
+      const worker = adapter();
+      const base = request(store, worker, 'pin-replay');
+      expect((await evaluateDecisionRuleset(base)).spec.status).toBe('completed');
+      const initialCalls = vi.mocked(worker.evaluate).mock.calls.length;
+      const binding = structuredClone(base.binding);
+      binding.metadata.version = '1.0.1';
+      expect((await evaluateDecisionRuleset({ ...base, binding })).spec.reason).toBe('replay-mismatch');
+      const ruleset = structuredClone(base.ruleset);
+      ruleset.metadata.version = '1.0.1';
+      const matchingBinding = structuredClone(base.binding);
+      matchingBinding.spec.ruleset = artifactPin(ruleset);
+      expect((await evaluateDecisionRuleset({ ...base, ruleset, binding: matchingBinding })).spec.reason).toBe('replay-mismatch');
+      const definitions = structuredClone(base.definitions);
+      definitions.category!.metadata.version = '1.0.1';
+      const changedRuleset = structuredClone(base.ruleset);
+      changedRuleset.spec.evaluations[0]!.decision = artifactPin(definitions.category!);
+      const changedBinding = structuredClone(base.binding);
+      changedBinding.spec.ruleset = artifactPin(changedRuleset);
+      expect((await evaluateDecisionRuleset({ ...base, definitions, ruleset: changedRuleset, binding: changedBinding })).spec.reason).toBe('replay-mismatch');
+      expect(vi.mocked(worker.evaluate).mock.calls).toHaveLength(initialCalls);
+    }
+  });
+
+  it('returns immutable timestamps, attempts, model, usage, and outcome on completed replay', async () => {
+    for (const store of await stores()) {
+      const worker = adapter();
+      const base = request(store, worker, 'immutable-replay');
+      const first = await evaluateDecisionRuleset(base);
+      const original = await store.read(base.invocationId, 'default');
+      expect(original?.state).toBe('completed');
+      expect(original?.completedAtEpochMs).toBeGreaterThanOrEqual(original!.acquiredAtEpochMs);
+      expect(original?.result).toEqual(first);
+      expect(original?.result?.spec.evaluations.category?.spec.attempts[0]).toMatchObject({ actualModel: 'model', usage: { inputTokens: 1, outputTokens: 1, costUsd: 0.01 } });
+      expect(original?.result?.spec.outcome).toBe('docs-review');
+      expect(await evaluateDecisionRuleset(base)).toEqual(first);
+      expect(await store.read(base.invocationId, 'default')).toEqual(original);
+      expect(vi.mocked(worker.evaluate).mock.calls).toHaveLength(3);
+    }
+  });
+
   it('rejects modified durable records before reuse', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-tamper-'));
     temp.push(directory);
@@ -85,6 +127,17 @@ describe('REC-ATOMIC store conformance', () => {
     const body = (await readFile(path, 'utf8')).replace('acquired', 'completed');
     await writeFile(path, body);
     await expect(store.read('id', 'project')).rejects.toThrow(/integrity/);
+  });
+
+  it('rejects a valid record substituted at another invocation filename', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-index-'));
+    temp.push(directory);
+    const store = new FileDecisionReceiptStore(directory, { integrityKey: randomBytes(32) });
+    await store.acquire('original', 'project', `sha256:${'a'.repeat(64)}`);
+    const file = (id: string) => join(directory, `${createHash('sha256').update(id).digest('hex')}.json`);
+    await copyFile(file('original'), file('substituted'));
+    await expect(store.read('substituted', 'project')).rejects.toThrow(/Invalid decision receipt/);
+    await expect(store.acquire('substituted', 'project', `sha256:${'a'.repeat(64)}`)).rejects.toThrow(/Invalid decision receipt/);
   });
 
   it('elects exactly one owner across two processes', async () => {
@@ -144,6 +197,44 @@ describe('REC-ATOMIC store conformance', () => {
     expect(receipt.receipt.revision).toBe(2);
   });
 
+  it('survives a real process kill and restart at every receipt state', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'decision-receipt-process-matrix-'));
+    temp.push(directory);
+    const key = randomBytes(32);
+    const reopen = () => new FileDecisionReceiptStore(directory, { integrityKey: key });
+    async function crashAt(invocationId: string, state: string): Promise<void> {
+      const child = spawn(process.execPath, ['--import', 'tsx', 'test/fixtures/decision/receipt-process.mjs',
+        directory, key.toString('hex'), invocationId, 'transition', state],
+      { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
+      let output = '';
+      let errors = '';
+      let ready!: () => void;
+      let transitioned!: () => void;
+      const isReady = new Promise<void>(resolve => { ready = resolve; });
+      const didTransition = new Promise<void>(resolve => { transitioned = resolve; });
+      child.stdout.on('data', chunk => {
+        output += String(chunk);
+        if (output.includes('ready\n')) ready();
+        if (output.includes(`\n${state}\n`)) transitioned();
+      });
+      child.stderr.on('data', chunk => { errors += String(chunk); });
+      await isReady;
+      child.stdin.write('go\n');
+      await didTransition;
+      child.kill('SIGKILL');
+      await new Promise<void>(resolve => child.once('exit', () => resolve()));
+      expect(errors).toBe('');
+      expect((await reopen().read(invocationId, 'project'))?.state).toBe(state);
+    }
+    for (const state of ['acquired', 'dispatched', 'remote-handle-known', 'observation-received', 'composed', 'completed']) {
+      await crashAt('matrix', state);
+    }
+    await crashAt('failed-branch', 'acquired');
+    await crashAt('failed-branch', 'failed');
+    await crashAt('uncertain-branch', 'acquired');
+    await crashAt('uncertain-branch', 'execution-uncertain');
+  }, 30_000);
+
   it('canonicalizes input keys and binds ordered pins', () => {
     const pin = { id: 'x', version: '1', digest: `sha256:${'a'.repeat(64)}` as const };
     const base = { invocationId: 'x', ruleset: pin, binding: pin, definitions: [pin], value: { é: 1.5, a: -0 } };
@@ -158,6 +249,38 @@ describe('REC-ATOMIC store conformance', () => {
     permitted = false;
     await expect(store.read('id', 'project')).rejects.toThrow(/access denied/);
     await expect(store.waitForTerminal('id', 'project', `sha256:${'a'.repeat(64)}`)).rejects.toThrow(/access denied/);
+  });
+
+  it('rechecks authorization immediately before remote reconciliation', async () => {
+    let permitted = true;
+    const underlying = new MemoryDecisionReceiptStore(() => permitted);
+    const worker = adapter();
+    const base = request(underlying, worker, 'revoked-reconcile');
+    const fingerprint = decisionInvocationFingerprint({ invocationId: base.invocationId, value: base.input,
+      definitions: base.ruleset.spec.evaluations.map(item => item.decision),
+      ruleset: artifactPin(base.ruleset), binding: artifactPin(base.binding) });
+    let receipt = (await underlying.acquire(base.invocationId, 'default', fingerprint)).receipt;
+    let next = nextReceipt(receipt, 'dispatched', { pending: { alias: 'category', targetIndex: 0, ordinal: 1, attempts: [] } });
+    await underlying.compareAndSwap(base.invocationId, 'default', receipt.revision, next);
+    receipt = next;
+    next = nextReceipt(receipt, 'remote-handle-known', { remoteHandles: ['remote-1'] });
+    await underlying.compareAndSwap(base.invocationId, 'default', receipt.revision, next);
+    let reads = 0;
+    const wrapped: DecisionReceiptStore = {
+      acquire: underlying.acquire.bind(underlying), compareAndSwap: underlying.compareAndSwap.bind(underlying),
+      waitForTerminal: async () => { throw new Error('owner stopped'); },
+      read: async (id, project) => {
+        const value = await underlying.read(id, project);
+        reads += 1;
+        if (reads === 1) permitted = false;
+        return value;
+      },
+    };
+    const reconciler = vi.fn(async () => null);
+    const result = await evaluateDecisionRuleset({ ...base, receiptStore: wrapped, reconcileRemote: reconciler });
+    expect(result.spec.reason).toBe('persistence-error');
+    expect(reconciler).not.toHaveBeenCalled();
+    expect(vi.mocked(worker.evaluate)).not.toHaveBeenCalled();
   });
 
   it('blocks outcomes when receipt persistence fails after inference', async () => {
@@ -244,6 +367,8 @@ describe('REC-ATOMIC store conformance', () => {
     const completed = nextReceipt(current, 'completed', { result });
     expect(await reopen().compareAndSwap(invocationId, 'project', current.revision, completed)).toBe(true);
     expect((await reopen().acquire(invocationId, 'project', current.fingerprint)).receipt).toEqual(completed);
+    expect((await reopen().read(invocationId, 'project'))?.acquiredAtEpochMs).toBe(current.acquiredAtEpochMs);
+    expect((await reopen().read(invocationId, 'project'))?.completedAtEpochMs).toBe(completed.completedAtEpochMs);
     expect(() => nextReceipt(completed, 'dispatched')).toThrow(/Illegal receipt transition/);
   });
 });

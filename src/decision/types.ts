@@ -218,6 +218,9 @@ export type DecisionReceiptState = 'acquired' | 'dispatched' | 'remote-handle-kn
 export interface DecisionReceipt {
   schema: 'decision-receipt/v2';
   revision: number;
+  acquiredAtEpochMs: number;
+  updatedAtEpochMs: number;
+  completedAtEpochMs?: number;
   projectId: string;
   invocationId: string;
   fingerprint: string;

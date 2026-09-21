@@ -96,6 +96,10 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
             if (pending?.state === 'completed') return structuredClone(pending.result!);
             if (pending && pending.fingerprint === fingerprint && (pending.state === 'remote-handle-known' || pending.state === 'observation-received')
               && pending.pending && pending.remoteHandles.length && request.reconcileRemote) {
+              const authorized = await request.receiptStore.read(request.invocationId, projectId);
+              if (!authorized || authorized.revision !== pending.revision || authorized.fingerprint !== fingerprint) {
+                throw new ReceiptPersistenceError();
+              }
               reconciled = await request.reconcileRemote(pending.remoteHandles.at(-1)!, request.signal ?? new AbortController().signal);
               if (reconciled?.status === 'success') {
                 receipt = pending;
