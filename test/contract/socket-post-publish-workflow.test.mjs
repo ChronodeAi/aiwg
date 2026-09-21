@@ -38,20 +38,32 @@ test('Socket uses exact call inputs instead of default-branch workflow_run', () 
   assert.match(socketWorkflow, /workflow_call:/);
   assert.doesNotMatch(socketWorkflow, /workflow_run:/);
   assert.match(socketWorkflow, /workflow_dispatch:/);
-  assert.match(socketWorkflow, /ref: \$\{\{ inputs\.commit \|\| github\.sha \}\}/);
+  assert.match(socketWorkflow, /ref: \$\{\{ github\.ref \}\}/);
   assert.match(
     socketWorkflow,
     /if \[ "\$GITHUB_REF" != "refs\/tags\/v\$\{VERSION\}" \]; then/,
   );
   assert.match(
     socketWorkflow,
-    /if \[ "\$ACTUAL_COMMIT" != "\$EXPECTED_COMMIT" \]; then/,
+    /TAG_COMMIT="\$\(git rev-parse "\$\{GITHUB_REF\}\^\{commit\}"\)"/,
+  );
+  assert.match(
+    socketWorkflow,
+    /if \[ "\$TAG_COMMIT" != "\$EXPECTED_COMMIT" \]; then/,
+  );
+  assert.match(
+    socketWorkflow,
+    /if \[ "\$ACTUAL_COMMIT" != "\$TAG_COMMIT" \]; then/,
   );
 });
 
 test('Socket scanner evidence remains fail closed', () => {
   assert.match(socketWorkflow, /continue-on-error: true/);
   assert.match(socketWorkflow, /if: always\(\)/);
+  assert.match(socketWorkflow, /Stage: release-binding/);
+  assert.match(socketWorkflow, /Stage: dependency-inventory/);
+  assert.match(socketWorkflow, /Stage: socket-audit/);
+  assert.match(socketWorkflow, /path: \$\{\{ runner\.temp \}\}\/socket-post-publish\//);
   assert.match(
     socketWorkflow,
     /if \[ "\$AUDIT_OUTCOME" != "success" \]; then[\s\S]*?exit 1/,
