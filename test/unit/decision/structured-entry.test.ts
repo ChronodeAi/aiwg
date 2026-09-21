@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 import { describe, expect, it, vi } from 'vitest';
 import {
   admitEntry, artifactPin, convertDecisionDefinitionV1Alpha1, DEFAULT_ENTRY_LIMITS,
-  EntryAdmissionError, JevDecisionAdapter, LlmSubagentDecisionAdapter, parseCompressedDecisionJson, parseDecisionJson, validateDefinition, validateDecisionDocument,
+  EntryAdmissionError, evaluateDecisionRuleset, JevDecisionAdapter, LlmSubagentDecisionAdapter, MemoryDecisionReceiptStore, parseCompressedDecisionJson, parseDecisionJson, validateDefinition, validateDecisionDocument,
+  type DecisionAdapter, type DecisionBinding, type DecisionRuleset,
   type DecisionDefinition, type DecisionAdapterRequest,
 } from '../../../src/decision/index.js';
 import { parseDecisionDoc } from '../../../src/artifacts/index-builder.js';
@@ -42,9 +44,17 @@ describe('decision structured entry contract', () => {
     expect(parseDecisionJson(source)).toEqual(value);
     expect(artifactPin(parseDecisionJson(source) as DecisionDefinition)).toEqual(artifactPin(value));
     expect(parseDecisionDoc(source, 'decision.json')).toMatchObject({ kind: 'DecisionDefinition' });
+    const yaml = dumpYaml(value);
+    expect(parseDecisionDoc(yaml, 'decision.yaml')).toMatchObject({ kind: 'DecisionDefinition' });
+    expect(artifactPin(loadYaml(yaml) as DecisionDefinition).digest).toBe(artifactPin(value).digest);
     const reordered = structured();
     reordered.spec.question = { context: ['plain', null, { active: true, weight: 1 }], task: 'classify' };
     expect(artifactPin(reordered).digest).toBe(artifactPin(value).digest);
+    const unicode = structured();
+    unicode.spec.question = { 'é': { '漢': [0.000001, -0, true, null] }, '😀': 'café' };
+    const unicodeReordered = structured();
+    unicodeReordered.spec.question = { '😀': 'café', 'é': { '漢': [0.000001, 0, true, null] } };
+    expect(artifactPin(unicode).digest).toBe(artifactPin(unicodeReordered).digest);
   });
 
   it.each([
@@ -137,4 +147,90 @@ describe('decision structured entry contract', () => {
       expect(() => validateDecisionDocument(oldDoc)).toThrow();
     }
   });
+
+  it('pre-admits malformed rulesets before digesting or dispatching', async () => {
+    const ruleset = JSON.parse(readFileSync('examples/decision/ruleset.json', 'utf8')) as DecisionRuleset;
+    (ruleset.spec as Record<string, unknown>).poison = ruleset;
+    const adapter = { id: 'jev', version: '1.0.0', capabilities: vi.fn(), evaluate: vi.fn() } as unknown as DecisionAdapter;
+    const result = await evaluateDecisionRuleset({
+      ruleset, binding: JSON.parse(readFileSync('examples/decision/binding-jev.json', 'utf8')) as DecisionBinding,
+      definitions: {}, input: { message: 'hello' }, runId: 'run', invocationId: 'bad-ruleset', adapters: { jev: adapter },
+    });
+    expect(result.spec.reason).toBe('invalid-definition');
+    expect(adapter.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('classifies cyclic input as invalid-input before dispatch', async () => {
+    const input: Record<string, unknown> = { message: 'hello' }; input.self = input;
+    const adapter = { id: 'jev', version: '1.0.0', capabilities: vi.fn(), evaluate: vi.fn() } as unknown as DecisionAdapter;
+    const result = await evaluateDecisionRuleset({
+      ruleset: JSON.parse(readFileSync('examples/decision/ruleset.json', 'utf8')) as DecisionRuleset,
+      binding: JSON.parse(readFileSync('examples/decision/binding-jev.json', 'utf8')) as DecisionBinding,
+      definitions: {}, input, runId: 'run', invocationId: 'bad-input', adapters: { jev: adapter },
+    });
+    expect(result.spec.reason).toBe('invalid-input');
+    expect(adapter.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('requires structured-entry capability and emits v1alpha2 provenance', async () => {
+    const definition = structured();
+    const ruleset = JSON.parse(readFileSync('examples/decision/ruleset.json', 'utf8')) as DecisionRuleset;
+    ruleset.spec.evaluations[0]!.decision = artifactPin(definition);
+    const binding = JSON.parse(readFileSync('examples/decision/binding-jev.json', 'utf8')) as DecisionBinding;
+    binding.spec.ruleset = artifactPin(ruleset);
+    const plain = JSON.parse(readFileSync('examples/decision/decision-severity.json', 'utf8')) as DecisionDefinition;
+    const core = JSON.parse(readFileSync('examples/decision/decision-core_unavailable.json', 'utf8')) as DecisionDefinition;
+    const adapter: DecisionAdapter = {
+      id: 'jev', version: '1.0.0',
+      capabilities: async () => ({ answerKinds: ['choice', 'ordinal-score', 'truth-probability'], features: ['typed-output'], maxOptions: 255, maxLevels: 10, confidenceProfiles: ['typesafe-distribution-v1'], executable: true }),
+      evaluate: vi.fn(async () => ({ status: 'success', reason: 'none', value: 'documentation', uncertainty: null, actualModel: 'fixture', usage: { inputTokens: null, outputTokens: null, costUsd: null }, requestId: null })),
+    };
+    const store = new MemoryDecisionReceiptStore();
+    const result = await evaluateDecisionRuleset({
+      ruleset, binding, definitions: { category: definition, severity: plain, core },
+      input: JSON.parse(readFileSync('examples/decision/input.json', 'utf8')),
+      runId: 'run', invocationId: 'structured-run', adapters: { jev: adapter }, receiptStore: store,
+    });
+    expect(result.apiVersion).toBe('decision.aiwg.io/v1alpha2');
+    expect(result.spec.evaluations.category?.apiVersion).toBe('decision.aiwg.io/v1alpha2');
+    expect(result.spec.evaluations.category?.spec.reason).toBe('unsupported-capability');
+    expect(vi.mocked(adapter.evaluate).mock.calls.some(([req]) => req.alias === 'category')).toBe(false);
+    const receipt = await store.read('structured-run');
+    expect(receipt?.result?.apiVersion).toBe('decision.aiwg.io/v1alpha2');
+    expect(receipt?.result?.spec.evaluations.category?.spec.decision.digest).toBe(artifactPin(definition).digest);
+    validateDecisionDocument(result);
+  });
+
+  it('keeps planned state, instructions, and target controls isolated from adapter mutation', async () => {
+    const definition = structured();
+    const originalQuestion = structuredClone(definition.spec.question);
+    const ruleset = JSON.parse(readFileSync('examples/decision/ruleset.json', 'utf8')) as DecisionRuleset;
+    ruleset.spec.evaluations[0]!.decision = artifactPin(definition);
+    const binding = JSON.parse(readFileSync('examples/decision/binding-jev.json', 'utf8')) as DecisionBinding;
+    binding.spec.ruleset = artifactPin(ruleset);
+    const input = JSON.parse(readFileSync('examples/decision/input.json', 'utf8')) as { message: string };
+    const originalInput = structuredClone(input);
+    const adapter: DecisionAdapter = {
+      id: 'jev', version: '1.0.0',
+      capabilities: async () => ({ answerKinds: ['choice', 'ordinal-score', 'truth-probability'], features: ['structured-entries'], maxOptions: 255, maxLevels: 10, confidenceProfiles: ['typesafe-distribution-v1'], executable: true }),
+      evaluate: async req => {
+        req.definition.spec.question = { state: 'override', model: 'override', questions: 'override' };
+        (req.input as { message: string }).message = 'changed';
+        req.target.model = 'override';
+        return { status: 'success', reason: 'none', value: req.alias === 'category' ? 'documentation' : 0.1,
+          uncertainty: null, actualModel: 'fixture', usage: { inputTokens: null, outputTokens: null, costUsd: null }, requestId: null };
+      },
+    };
+    const result = await evaluateDecisionRuleset({
+      ruleset, binding, definitions: { category: definition,
+        severity: JSON.parse(readFileSync('examples/decision/decision-severity.json', 'utf8')) as DecisionDefinition,
+        core: JSON.parse(readFileSync('examples/decision/decision-core_unavailable.json', 'utf8')) as DecisionDefinition },
+      input, runId: 'run', invocationId: 'mutation-test', adapters: { jev: adapter },
+    });
+    expect(definition.spec.question).toEqual(originalQuestion);
+    expect(input).toEqual(originalInput);
+    expect(binding.spec.evaluations.category?.targets[0]?.model).toBe('jev-latest');
+    expect(result.spec.evaluations.category?.spec.attempts[0]?.requestedModel).toBe('jev-latest');
+  });
+
 });

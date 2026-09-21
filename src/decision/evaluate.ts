@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { composeRuleset } from './compose.js';
 import { decisionInvocationFingerprint, nextReceipt } from './receipts.js';
+import { admitEntry, EntryAdmissionError } from './entry.js';
+import { DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED } from './types.js';
 import type {
   AdapterObservation,
   ArtifactPin,
@@ -33,18 +35,37 @@ const RETRIABLE = new Set<DecisionFailureReason>([
 ]);
 
 export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest): Promise<RulesetResult> {
-  const rulesetPin = artifactPin(request.ruleset);
-  const bindingPin = artifactPin(request.binding);
-  const base = resultBase(request, rulesetPin, bindingPin);
+  let rulesetPin: ArtifactPin;
+  let bindingPin: ArtifactPin;
+  let base: RulesetResult | undefined;
   let resolved: Array<{ alias: string; definition: DecisionDefinition; pin: ArtifactPin; input: unknown }>;
+  let admissionStage: 'artifact' | 'input' = 'artifact';
   try {
+    admitEntry(request.ruleset);
+    admitEntry(request.binding);
+    admitEntry(request.definitions);
+    admissionStage = 'input';
+    admitEntry(request.input);
+    admissionStage = 'artifact';
     validateRuleset(request.ruleset);
+    rulesetPin = artifactPin(request.ruleset);
+    bindingPin = artifactPin(request.binding);
+    // Pin and execute immutable snapshots; adapters receive separate per-attempt copies.
+    request = {
+      ...request,
+      ruleset: structuredClone(request.ruleset), binding: structuredClone(request.binding),
+      definitions: structuredClone(request.definitions), input: structuredClone(request.input),
+    };
+    base = resultBase(request, rulesetPin, bindingPin);
     validateBinding(request.binding, request.ruleset);
     validateAgainstSchema(request.ruleset.spec.inputSchema, request.input, 'ruleset input');
     resolved = resolveDefinitions(request);
   } catch (error) {
-    return failureResult(base, classifyValidationFailure(error));
+    const reason = error instanceof EntryAdmissionError && admissionStage === 'input'
+      ? 'invalid-input' : classifyValidationFailure(error);
+    return failureResult(base ?? invalidResultBase(request), reason);
   }
+  if (!base) return failureResult(invalidResultBase(request), 'invalid-definition');
 
   const fingerprint = decisionInvocationFingerprint({
     invocationId: request.invocationId,
@@ -291,9 +312,9 @@ async function invokeWithDeadline(
     return await Promise.race([
       adapter.evaluate({
         alias: context.item.alias,
-        definition: context.item.definition,
-        input: context.item.input,
-        target,
+        definition: structuredClone(context.item.definition),
+        input: structuredClone(context.item.input),
+        target: structuredClone(target),
         invocationId: `${context.request.invocationId}:${context.item.alias}:${ordinal}`,
         deadlineEpochMs,
         signal,
@@ -335,6 +356,9 @@ async function checkCapabilities(
   if (!adapter || adapter.id !== target.adapter || adapter.version !== target.adapterVersion) return observationFailure('executor-unavailable');
   const capabilities = await adapter.capabilities();
   if (!capabilities.executable || !capabilities.answerKinds.includes(definition.spec.answer.kind)) return observationFailure('unsupported-capability', 'unsupported');
+  if (definition.apiVersion === DECISION_API_VERSION_STRUCTURED && !capabilities.features.includes('structured-entries')) {
+    return observationFailure('unsupported-capability', 'unsupported');
+  }
   const required = new Set([...definition.spec.requiredCapabilities, ...target.requiredCapabilities]);
   const available = new Set([...capabilities.answerKinds, ...capabilities.features]);
   if ([...required].some(capability => !available.has(capability))) return observationFailure('unsupported-capability', 'unsupported');
@@ -363,7 +387,7 @@ function normalizeObservation(definition: DecisionDefinition, target: ExecutionT
 
 function decisionResult(context: OneContext, observation: AdapterObservation, attempts: DecisionAttempt[]): DecisionResult {
   return {
-    apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'DecisionResult',
+    apiVersion: resultVersion(context.request), kind: 'DecisionResult',
     metadata: { id: `${context.request.invocationId}-${context.item.alias}`, version: '1.0.0', description: `Decision result for ${context.item.alias}` },
     spec: {
       decision: context.item.pin, ruleset: context.rulesetPin, binding: context.bindingPin,
@@ -387,9 +411,27 @@ function emptyDecisionResult(
 
 function resultBase(request: DecisionEvaluationRequest, ruleset: ArtifactPin, binding: ArtifactPin): RulesetResult {
   return {
-    apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'RulesetResult',
+    apiVersion: resultVersion(request), kind: 'RulesetResult',
     metadata: { id: request.invocationId, version: '1.0.0', description: `Ruleset result for ${request.ruleset.metadata.id}` },
     spec: { ruleset, binding, runId: request.runId, invocationId: request.invocationId, status: 'error', reason: 'evaluation-failed', matchedRules: [], evaluations: {} },
+  };
+}
+
+function resultVersion(request: DecisionEvaluationRequest): typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED {
+  if (request.ruleset.apiVersion === DECISION_API_VERSION_STRUCTURED || request.binding.apiVersion === DECISION_API_VERSION_STRUCTURED
+    || Object.values(request.definitions).some(definition => definition.apiVersion === DECISION_API_VERSION_STRUCTURED)) {
+    return DECISION_API_VERSION_STRUCTURED;
+  }
+  return DECISION_API_VERSION;
+}
+
+function invalidResultBase(request: DecisionEvaluationRequest): RulesetResult {
+  const invalidPin: ArtifactPin = { id: 'invalid', version: '0.0.0', digest: `sha256:${'0'.repeat(64)}` };
+  return {
+    apiVersion: DECISION_API_VERSION, kind: 'RulesetResult',
+    metadata: { id: request.invocationId, version: '1.0.0', description: 'Rejected decision evaluation' },
+    spec: { ruleset: invalidPin, binding: invalidPin, runId: request.runId, invocationId: request.invocationId,
+      status: 'error', reason: 'invalid-definition', matchedRules: [], evaluations: {} },
   };
 }
 
