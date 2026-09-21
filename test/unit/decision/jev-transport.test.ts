@@ -96,17 +96,32 @@ describe('Jev transport contract', () => {
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ redirect: 'error' });
   });
 
-  it('SEC-DNS: rejects approved custom origins before a public-to-private DNS rebind can occur', async () => {
+  it('SEC-DNS: pins an approved public custom origin across a public-to-private DNS rebind', async () => {
     const credentials = vi.fn(async () => new TextEncoder().encode('synthetic-token'));
     const fetchMock = vi.fn(async () => reply());
     const addresses = ['93.184.216.34', '169.254.1.1'];
     const resolveAddresses = vi.fn(async () => [addresses.shift()!]);
+    const pinnedFetch = vi.fn(async (_url: URL, _init: RequestInit, pin: { address: string }) => {
+      expect(pin.address).toBe('93.184.216.34');
+      return reply();
+    });
     const adapter = new JevDecisionAdapter({ endpoint: 'https://custom.example/v1/systemone', allowedOrigins: ['https://custom.example'],
-      resolveAddresses, fetch: fetchMock });
-    expect((await adapter.evaluate(request({ resolveCredential: credentials }))).reason).toBe('data-boundary-denied');
-    expect(resolveAddresses).not.toHaveBeenCalled();
-    expect(credentials).not.toHaveBeenCalled();
+      resolveAddresses, fetch: fetchMock, pinnedFetch });
+    expect((await adapter.evaluate(request({ resolveCredential: credentials }))).status).toBe('success');
+    expect(resolveAddresses).toHaveBeenCalledTimes(1);
+    expect(pinnedFetch).toHaveBeenCalledTimes(1);
+    expect(credentials).toHaveBeenCalledTimes(1);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('SEC-DNS-PRIVATE: rejects a private approved-origin DNS answer before credentials', async () => {
+    const credentials = vi.fn(async () => new TextEncoder().encode('synthetic-token'));
+    const pinnedFetch = vi.fn(async () => reply());
+    const adapter = new JevDecisionAdapter({ endpoint: 'https://custom.example/v1/systemone', allowedOrigins: ['https://custom.example'],
+      resolveAddresses: async () => ['93.184.216.34', '127.0.0.1'], pinnedFetch });
+    expect((await adapter.evaluate(request({ resolveCredential: credentials }))).reason).toBe('data-boundary-denied');
+    expect(credentials).not.toHaveBeenCalled();
+    expect(pinnedFetch).not.toHaveBeenCalled();
   });
 
   it('SEC-HOST-MISMATCH: rejects a response whose final origin differs from the authorized origin', async () => {

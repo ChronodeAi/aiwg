@@ -9,18 +9,27 @@ import type {
 import { DecisionValidationError, validateDecisionValue, validateDistribution } from '../validate.js';
 import { canonicalJson } from '../../security/artifact-trust.js';
 import { runInNewContext } from 'node:vm';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+import { request as httpsRequest } from 'node:https';
+import { Readable } from 'node:stream';
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
 
 interface JevAdapterOptions {
   endpoint?: string;
   fetch?: typeof fetch;
-  /** Reserved for a future pinned-address transport; custom origins currently fail closed. */
+  /** Explicitly authorized public HTTPS origins. */
   allowedOrigins?: readonly string[];
-  /** Reserved for a future pinned-address transport. */
+  /** DNS policy seam; every answer must be public IPv4. */
   resolveAddresses?: (hostname: string) => Promise<readonly string[]>;
+  /** Fake pinned transport seam for offline tests. Production uses Node HTTPS. */
+  pinnedFetch?: (url: URL, init: RequestInit, pin: PinnedAddress) => Promise<Response>;
   now?: () => number;
 }
+
+interface PinnedAddress { address: string; family: 4 }
 
 const MAX_HEADER_BYTES = 32 * 1024;
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -35,16 +44,24 @@ export class JevCredentialError extends Error {
   }
 }
 
+class JevTransportResponseError extends Error {}
+
 export class JevDecisionAdapter implements DecisionAdapter {
   readonly id = 'jev';
   readonly version = '1.0.0';
   private readonly endpoint: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly allowedOrigins: readonly string[];
+  private readonly resolveAddresses: (hostname: string) => Promise<readonly string[]>;
+  private readonly pinnedFetch: NonNullable<JevAdapterOptions['pinnedFetch']>;
   private readonly now: () => number;
 
   constructor(options: JevAdapterOptions = {}) {
     this.endpoint = options.endpoint ?? JEV_ENDPOINT;
     this.fetchImpl = options.fetch ?? fetch;
+    this.allowedOrigins = options.allowedOrigins ?? [];
+    this.resolveAddresses = options.resolveAddresses ?? systemResolveAddresses;
+    this.pinnedFetch = options.pinnedFetch ?? pinnedHttpsFetch;
     this.now = options.now ?? Date.now;
   }
 
@@ -62,7 +79,8 @@ export class JevDecisionAdapter implements DecisionAdapter {
   async evaluate(request: DecisionAdapterRequest): Promise<AdapterObservation> {
     if (request.signal.aborted) return externalInterruption(request, 'not-sent');
     if (this.now() >= request.deadlineEpochMs) return failure('timeout', { termination: 'target-timeout', dispatchCertainty: 'not-sent' });
-    try { authorizeEndpoint(this.endpoint); }
+    let pin: PinnedAddress | null;
+    try { pin = await withAbort(authorizeEndpoint(this.endpoint, this.allowedOrigins, this.resolveAddresses), request.signal); }
     catch { return request.signal.aborted ? externalInterruption(request, 'not-sent')
       : failure('data-boundary-denied', { dispatchCertainty: 'not-sent' }); }
     if (request.signal.aborted) return externalInterruption(request, 'not-sent');
@@ -93,18 +111,22 @@ export class JevDecisionAdapter implements DecisionAdapter {
     if (request.signal.aborted) return externalInterruption(request, 'not-sent');
     let response: Response;
     try {
-      response = await this.fetchImpl(this.endpoint, {
+      const init: RequestInit = {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body,
         signal,
         redirect: 'error',
-      });
+      };
+      response = pin ? await this.pinnedFetch(new URL(this.endpoint), init, pin)
+        : await this.fetchImpl(this.endpoint, init);
     } catch (error) {
       return request.signal.aborted ? externalInterruption(request, 'unknown')
         : deadline.aborted ? failure('timeout', { termination: 'target-timeout', remoteExecution: 'unknown', dispatchCertainty: 'unknown' })
           : error instanceof Error && error.name === 'AbortError'
             ? failure('cancelled', { termination: 'backend-cancelled', remoteExecution: 'unknown', dispatchCertainty: 'unknown' })
+          : error instanceof JevTransportResponseError || error && typeof error === 'object' && 'code' in error && error.code === 'HPE_HEADER_OVERFLOW'
+            ? failure('invalid-output', { remoteExecution: 'unknown', dispatchCertainty: 'unknown' })
           : failure('network-transient', { remoteExecution: 'unknown', dispatchCertainty: 'unknown' });
     }
     const correlation = requestId(response.headers);
@@ -383,11 +405,72 @@ async function readBoundedBody(response: Response, signal: AbortSignal): Promise
   }
 }
 
-function authorizeEndpoint(endpoint: string): void {
+async function systemResolveAddresses(hostname: string): Promise<readonly string[]> {
+  return (await lookup(hostname, { all: true })).map(address => address.address);
+}
+
+async function authorizeEndpoint(endpoint: string, allowedOrigins: readonly string[],
+  resolveAddresses: (hostname: string) => Promise<readonly string[]>): Promise<PinnedAddress | null> {
   const url = new URL(endpoint);
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.port && url.port !== '443') throw new Error('unsafe endpoint');
-  // Native fetch cannot pin the previously checked DNS address while preserving
-  // TLS hostname verification. Until a pinned transport exists, only the
-  // official endpoint origin is authorized, even with an explicit allowlist.
-  if (url.origin !== new URL(JEV_ENDPOINT).origin) throw new Error('unapproved endpoint');
+  if (url.origin === new URL(JEV_ENDPOINT).origin) return null;
+  if (isIP(url.hostname)) throw new Error('literal endpoint address');
+  if (!allowedOrigins.some(origin => {
+    try {
+      const approved = new URL(origin);
+      return approved.protocol === 'https:' && !approved.username && !approved.password && !approved.search && !approved.hash
+        && approved.pathname === '/' && approved.origin === url.origin;
+    } catch { return false; }
+  })) throw new Error('unapproved endpoint');
+  const addresses = await resolveAddresses(url.hostname);
+  if (!addresses.length || addresses.some(address => !publicIpv4(address))) throw new Error('unsafe endpoint address');
+  return { address: addresses[0]!, family: 4 };
+}
+
+function publicIpv4(address: string): boolean {
+  if (isIP(address) !== 4) return false; // IPv6 is denied until its full special-use range policy is implemented.
+  const [a, b, c] = address.split('.').map(Number);
+  if (a === 0 || a === 10 || a === 127 || a! >= 224 || a === 169 && b === 254 || a === 172 && b! >= 16 && b! <= 31
+    || a === 192 && (b === 168 || b === 0) || a === 100 && b! >= 64 && b! <= 127
+    || a === 198 && (b === 18 || b === 19 || b === 51 && c === 100) || a === 203 && b === 0 && c === 113) return false;
+  return true;
+}
+
+async function pinnedHttpsFetch(url: URL, init: RequestInit, pin: PinnedAddress): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    const headers = init.headers as Record<string, string>;
+    const outgoing = httpsRequest(url, {
+      method: 'POST', headers, maxHeaderSize: MAX_HEADER_BYTES,
+      servername: url.hostname, rejectUnauthorized: true,
+      lookup: (hostname, _options, callback) => {
+        if (hostname !== url.hostname) { callback(new Error('hostname mismatch'), '', 4); return; }
+        callback(null, pin.address, pin.family);
+      },
+    }, incoming => {
+      try {
+        let stream: Readable = incoming;
+        const encoding = incoming.headers['content-encoding'];
+        if (encoding === 'gzip') stream = incoming.pipe(createGunzip());
+        else if (encoding === 'deflate') stream = incoming.pipe(createInflate());
+        else if (encoding === 'br') stream = incoming.pipe(createBrotliDecompress());
+        else if (encoding && encoding !== 'identity') throw new JevTransportResponseError();
+        const responseHeaders = new Headers();
+        for (let index = 0; index < incoming.rawHeaders.length; index += 2) {
+          responseHeaders.append(incoming.rawHeaders[index]!, incoming.rawHeaders[index + 1]!);
+        }
+        const status = incoming.statusCode ?? 502;
+        const noBody = status === 204 || status === 205 || status === 304;
+        const response = new Response(noBody ? null : Readable.toWeb(stream) as ReadableStream<Uint8Array>, {
+          status, headers: responseHeaders,
+        });
+        Object.defineProperty(response, 'url', { value: url.toString() });
+        resolve(response);
+      } catch (error) { incoming.destroy(); reject(error instanceof JevTransportResponseError ? error : new JevTransportResponseError()); }
+    });
+    outgoing.on('error', reject);
+    const onAbort = (): void => { outgoing.destroy(new DOMException('Aborted', 'AbortError')); };
+    init.signal?.addEventListener('abort', onAbort, { once: true });
+    outgoing.on('close', () => init.signal?.removeEventListener('abort', onAbort));
+    outgoing.end(init.body as string);
+  });
 }
