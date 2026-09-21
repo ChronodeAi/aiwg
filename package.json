@@ -159,7 +159,7 @@
     "test:integration:serve:flake-gate": "node tools/scripts/integration-flake-gate.mjs",
     "qualify:dataset:fortemi-execute": "tsx tools/qualification/dataset-fortemi-execute.ts",
     "test:contract:vitest": "vitest run --config config/vitest.contract.config.js",
-    "test:contract:node": "node --test test/contract/agentic-publication-source.test.mjs test/contract/setup-manifest-site-dispatch.test.mjs test/contract/site-manifest-release-dispatch.test.mjs",
+    "test:contract:node": "node --test test/contract/agentic-publication-source.test.mjs test/contract/setup-manifest-site-dispatch.test.mjs test/contract/site-manifest-release-dispatch.test.mjs test/contract/socket-post-publish-workflow.test.mjs",
     "test:packaging": "vitest run --config config/vitest.packaging.config.js",
     "test:conformance:example": "node tools/testing/run-conformance-example.mjs",
     "lint:test-registration": "node tools/testing/check-test-registration.mjs",

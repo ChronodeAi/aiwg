@@ -19,4 +19,5 @@ export const nodeFiles = [
   'test/contract/agentic-publication-source.test.mjs',
   'test/contract/setup-manifest-site-dispatch.test.mjs',
   'test/contract/site-manifest-release-dispatch.test.mjs',
+  'test/contract/socket-post-publish-workflow.test.mjs',
 ];

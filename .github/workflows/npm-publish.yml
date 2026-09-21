@@ -103,6 +103,8 @@ jobs:
   publish-to-npmjs-org:
     name: Publish to npmjs.org with provenance
     if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || github.event_name == 'workflow_dispatch' }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     runs-on: ubuntu-latest
     # Container pinned by digest per .gitea/workflows/README.md ("CI Pinning
     # Policy"). Same discipline as the Gitea workflows — no mutable tags.
@@ -939,3 +941,13 @@ jobs:
           See docs/releases/verifying.md for consumer-facing instructions.
           ============================================================
           EOF
+
+  socket-post-publish:
+    name: Audit published packages with Socket
+    needs: publish-to-npmjs-org
+    uses: ./.github/workflows/socket-post-publish.yml
+    with:
+      version: ${{ needs.publish-to-npmjs-org.outputs.version }}
+      commit: ${{ github.sha }}
+    secrets:
+      SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}

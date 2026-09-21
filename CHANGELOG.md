@@ -32,6 +32,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   verifies that the retired `next` dist-tag is absent from npmjs.org and the
   Gitea package mirror.
 
+### Fixed
+
+- Tag-bound npm publication invokes the fail-closed Socket audit directly as a
+  reusable workflow, binding the exact version and source commit without
+  depending on the public mirror's divergent default branch (#2635).
+
 ### Documentation
 
 - Decision architecture, evaluation semantics, confidence provenance,

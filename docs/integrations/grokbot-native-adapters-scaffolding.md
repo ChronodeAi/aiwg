@@ -100,5 +100,5 @@ catalog):
 ## Related
 
 - ADR: [adr-grokbot-provider-target.md](../architecture/adr-grokbot-provider-target.md)
-- Provider guide: [docs/agents/providers/grokbot.md](https://github.com/jmagly/aiwg/blob/main/docs/agents/providers/grokbot.md)
+- Provider guide: [docs/agents/providers/grokbot.md](https://github.com/jmagly/aiwg/blob/v2026.9.19/docs/agents/providers/grokbot.md)
 - Quickstart: [grokbot-quickstart.md](./grokbot-quickstart.md)

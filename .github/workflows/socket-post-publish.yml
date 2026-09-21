@@ -1,9 +1,19 @@
 name: Socket post-publish evidence
 
 on:
-  workflow_run:
-    workflows: ['Publish to npmjs.org (OIDC + provenance)']
-    types: [completed]
+  workflow_call:
+    inputs:
+      version:
+        description: Published AIWG version to audit
+        required: true
+        type: string
+      commit:
+        description: Release source commit to audit
+        required: true
+        type: string
+    secrets:
+      SOCKET_API_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       version:
@@ -15,12 +25,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: socket-post-publish-${{ github.event.workflow_run.head_sha || inputs.version }}
+  group: socket-post-publish-${{ inputs.commit || github.sha }}
   cancel-in-progress: false
 
 jobs:
   audit:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 15
@@ -28,30 +37,114 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Initialize audit evidence
+        run: |
+          set -euo pipefail
+          EVIDENCE_DIR="$RUNNER_TEMP/socket-post-publish"
+          mkdir -p "$EVIDENCE_DIR"
+          cat > "$EVIDENCE_DIR/workflow-status.md" <<EOF
+          # Socket post-publish workflow status
+
+          Status: started
+          Stage: checkout
+          Release: ${INPUT_VERSION}
+          Ref: ${GITHUB_REF}
+          EOF
+          echo "evidence_dir=$EVIDENCE_DIR" >> "$GITHUB_ENV"
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+
       - name: Checkout audited release source
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.ref }}
 
-      - name: Resolve published version
+      - name: Verify exact release binding
         id: release
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          EXPECTED_COMMIT: ${{ inputs.commit || github.sha }}
         run: |
           set -euo pipefail
-          VERSION="${INPUT_VERSION:-$(node -p "require('./package.json').version")}" 
+          STATUS_FILE="$evidence_dir/workflow-status.md"
+          record_failure() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              cat > "$STATUS_FILE" <<EOF
+          # Socket post-publish workflow status
+
+          Status: failed
+          Stage: release-binding
+          Release: ${INPUT_VERSION}
+          Ref: ${GITHUB_REF}
+          EOF
+            fi
+          }
+          trap record_failure EXIT
+          VERSION="$(node -p "require('./package.json').version")"
+          if [ "$INPUT_VERSION" != "$VERSION" ]; then
+            echo "Requested version $INPUT_VERSION does not match checked-out package version $VERSION" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/tags/v${VERSION}" ]; then
+            echo "Socket audit must be bound to refs/tags/v${VERSION}; observed $GITHUB_REF" >&2
+            exit 1
+          fi
+          TAG_COMMIT="$(git rev-parse "${GITHUB_REF}^{commit}")"
+          if [ "$TAG_COMMIT" != "$EXPECTED_COMMIT" ]; then
+            echo "Release tag commit $TAG_COMMIT does not match expected release source $EXPECTED_COMMIT" >&2
+            exit 1
+          fi
+          ACTUAL_COMMIT="$(git rev-parse HEAD)"
+          if [ "$ACTUAL_COMMIT" != "$TAG_COMMIT" ]; then
+            echo "Checked-out commit $ACTUAL_COMMIT does not match release tag commit $TAG_COMMIT" >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$TAG_COMMIT" >> "$GITHUB_OUTPUT"
+          cat > "$STATUS_FILE" <<EOF
+          # Socket post-publish workflow status
+
+          Status: passed
+          Stage: release-binding
+          Release: ${VERSION}
+          Ref: ${GITHUB_REF}
+          Commit: ${TAG_COMMIT}
+          EOF
 
       - name: Build published dependency inventory
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
+          STATUS_FILE="$evidence_dir/workflow-status.md"
+          record_failure() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              cat > "$STATUS_FILE" <<EOF
+          # Socket post-publish workflow status
+
+          Status: failed
+          Stage: dependency-inventory
+          Release: ${VERSION}
+          Ref: ${GITHUB_REF}
+          EOF
+            fi
+          }
+          trap record_failure EXIT
           AUDIT_ROOT="$RUNNER_TEMP/aiwg-socket-audit"
           mkdir -p "$AUDIT_ROOT"
           npm install --prefix "$AUDIT_ROOT" --package-lock-only --ignore-scripts --no-audit --no-fund \
             "aiwg@$VERSION" "@aiwg/cli@$VERSION"
           echo "dependency_lock=$AUDIT_ROOT/package-lock.json" >> "$GITHUB_ENV"
+          cat > "$STATUS_FILE" <<EOF
+          # Socket post-publish workflow status
+
+          Status: passed
+          Stage: dependency-inventory
+          Release: ${VERSION}
+          Ref: ${GITHUB_REF}
+          EOF
 
       - name: Query Socket and evaluate baseline
         id: socket
@@ -61,7 +154,17 @@ jobs:
           SOCKET_ORG_SLUG: ${{ vars.SOCKET_ORG_SLUG }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
-          node tools/release/socket-post-publish-audit.mjs \
+          set -uo pipefail
+          STATUS_FILE="$evidence_dir/workflow-status.md"
+          cat > "$STATUS_FILE" <<EOF
+          # Socket post-publish workflow status
+
+          Status: started
+          Stage: socket-audit
+          Release: ${VERSION}
+          Ref: ${GITHUB_REF}
+          EOF
+          if node tools/release/socket-post-publish-audit.mjs \
             --version "$VERSION" \
             --dependency-lock "$dependency_lock" \
             --dependency-lock package-lock.json \
@@ -69,16 +172,30 @@ jobs:
             --dependency-lock agentic/code/plugins/droid-bridge/package-lock.json \
             --dependency-lock tools/eval/package-lock.json \
             --dependency-lock apps/cockpit/desktop/src-tauri/Cargo.lock \
-            --commit "${{ github.event.workflow_run.head_sha || github.sha }}" \
+            --commit "${{ steps.release.outputs.commit }}" \
             --organization "${SOCKET_ORG_SLUG}" \
-            --output-dir test-results/socket-post-publish
+            --output-dir "$evidence_dir"; then
+            AUDIT_STATUS=passed
+          else
+            AUDIT_STATUS=failed
+          fi
+          cat > "$STATUS_FILE" <<EOF
+          # Socket post-publish workflow status
+
+          Status: ${AUDIT_STATUS}
+          Stage: socket-audit
+          Release: ${VERSION}
+          Ref: ${GITHUB_REF}
+          Commit: ${{ steps.release.outputs.commit }}
+          EOF
+          [ "$AUDIT_STATUS" = passed ]
 
       - name: Upload Socket evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: socket-post-publish-${{ steps.release.outputs.version }}
-          path: test-results/socket-post-publish/
+          name: socket-post-publish-${{ steps.release.outputs.version || inputs.version }}
+          path: ${{ runner.temp }}/socket-post-publish/
           if-no-files-found: error
 
       - name: Enforce audit result
