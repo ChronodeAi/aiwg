@@ -129,6 +129,20 @@ function record(value: unknown, ordinal: number, sourceLocator: string): Adapter
   return { logicalId: `sha256:${sha256Digest(`${sourceLocator}\0${ordinal}\0${serialized}`).value}`, ordinal, value, sourceLocator, contentDigest: sha256Digest(serialized) }
 }
 
+function valueDepth(value: unknown): number {
+  let maximum = 0
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }]
+  while (pending.length > 0) {
+    const current = pending.pop()!
+    if (current.value === null || typeof current.value !== 'object') continue
+    const depth = current.depth + 1
+    maximum = Math.max(maximum, depth)
+    const children = Array.isArray(current.value) ? current.value : Object.values(current.value as Record<string, unknown>)
+    for (const child of children) pending.push({ value: child, depth })
+  }
+  return maximum
+}
+
 function checkpoint(manifestValue: AdapterManifest, sourceIdentity: string, cursor: string): AdapterCheckpoint {
   return {
     contractVersion: DATASET_ADAPTER_CONTRACT_VERSION, kind: 'AdapterCheckpoint', adapter: { id: manifestValue.id, version: manifestValue.version },
@@ -209,7 +223,7 @@ abstract class LineAdapter<T extends FileConfig> extends LocalAdapter<T> {
     const found = await safeLocalPath(config.path, request.policy, 'file', 'discover')
     return { sourceIdentity: identity(kind, found.path, found.size, String(found.mtimeMs)), proposedSchema: schema, schemaBasis: 'inferred', estimates: { bytes: found.size }, privacySignals: [], licenseSignals: [], cursorSupport: true, checkpointSupport: true, identityStability: 'stable', limitations: ['Record count is established during bounded read.'] }
   }
-  protected async *lines(config: T, request: AdapterRequest<T> & { checkpoint?: AdapterCheckpoint }, parse: (line: string, ordinal: number) => unknown): AsyncIterable<AdapterRecord> {
+  protected async *lines(config: T, request: AdapterRequest<T> & { checkpoint?: AdapterCheckpoint }, parse: (line: string, ordinal: number, maxDepth: number) => unknown): AsyncIterable<AdapterRecord> {
     const limits = effectiveLimits(this.describe(), request.limits)
     const operation = request.checkpoint ? 'read' : 'preview'
     const found = await safeLocalPath(config.path, request.policy, 'file', operation)
@@ -221,7 +235,7 @@ abstract class LineAdapter<T extends FileConfig> extends LocalAdapter<T> {
       for await (const line of lines) {
         assertActive(request.signal, operation)
         if (Buffer.byteLength(line) > limits.maxRecordBytes || ordinal >= limits.maxRecords) throw new AdapterFailure(diagnostic(operation, 'ADAPTER_RESOURCE_LIMIT', 'The record or record count exceeds configured limits.'))
-        if (line.trim() !== '') yield record(parse(line, ordinal), ordinal, config.path)
+        if (line.trim() !== '') yield record(parse(line, ordinal, limits.maxDepth), ordinal, config.path)
         ordinal += 1
       }
     } finally { lines.close(); input.destroy() }
@@ -234,7 +248,16 @@ export class JsonlAdapter extends LineAdapter<FileConfig> {
   protected valid(value: Record<string, unknown>): value is FileConfig { return isFileConfig(value) }
   protected discoverPath(config: FileConfig, request: AdapterRequest<FileConfig>) { return this.lineDiscovery('jsonl', config, request, {}) }
   protected records(config: FileConfig, request: AdapterRequest<FileConfig> & { checkpoint?: AdapterCheckpoint }) {
-    return this.lines(config, request, (line, ordinal) => { try { return JSON.parse(line) as unknown } catch { throw new AdapterFailure(diagnostic(request.checkpoint ? 'read' : 'preview', 'ADAPTER_SCHEMA_DRIFT', `Malformed JSONL record at ordinal ${ordinal}.`)) } })
+    return this.lines(config, request, (line, ordinal, maxDepth) => {
+      try {
+        const value = JSON.parse(line) as unknown
+        if (valueDepth(value) > maxDepth) throw new AdapterFailure(diagnostic(request.checkpoint ? 'read' : 'preview', 'ADAPTER_RESOURCE_LIMIT', `JSONL record at ordinal ${ordinal} exceeds the configured nesting limit.`))
+        return value
+      } catch (error) {
+        if (error instanceof AdapterFailure) throw error
+        throw new AdapterFailure(diagnostic(request.checkpoint ? 'read' : 'preview', 'ADAPTER_SCHEMA_DRIFT', `Malformed JSONL record at ordinal ${ordinal}.`))
+      }
+    })
   }
 }
 
