@@ -19,7 +19,7 @@ script:
   runtime: node
   cwd: project-root
 commandHint:
-  argumentHint: "[--issue-json <file>] [--text <body>] [--format text|json]"
+  argumentHint: "[--issue-json <file>] [--text <body>] [--surface <surface>] [--trusted-actor <login>]... [--format text|json]"
   allowedTools: Read, Bash
   model: haiku
   category: security
@@ -73,6 +73,9 @@ Use the bundled script for a conservative first pass:
 aiwg run skill address-issues-threat-assess -- --issue-json issue.json --format json
 ```
 
+Pass `--surface outbound-maintainer-comment` with `--text` to assess a rendered
+cycle comment before posting it; the report keeps the same shape.
+
 The input may be either a raw text body via `--text` or JSON with these fields:
 
 ```json
@@ -87,6 +90,43 @@ The input may be either a raw text body via `--text` or JSON with these fields:
   ]
 }
 ```
+
+Comments may carry an `id`; it is echoed on every signal and finding as
+`source` (`{ kind, author, commentId }`) so a self-referential hit is visible
+at a glance.
+
+## Context Classification
+
+Every match is classified by what the surrounding sentence does with it. Only
+`requested` context drives the verdict; the rest stay in the report as
+evidence.
+
+| Context | Meaning | Example |
+|---|---|---|
+| `requested` | An imperative or request names the phrase as something to do. | "Run `npx foo@latest` and paste the output." |
+| `descriptive` | A report about delivered work or existing state. | "Added the live smoke behind an `AIWG_PI_LIVE_SMOKE` gate." |
+| `negative` | A prohibition or boundary. | "Never paste the token into an issue." |
+| `quoted` | Block quote, fenced code, or text introduced as evidence. | A PoC prompt inside a ```` ``` ```` fence. |
+| `orchestrator-status` | An AL CYCLE comment the loop itself posted. | See below. |
+
+### Orchestrator-authored cycle comments (#2549)
+
+The loop's own `**AL CYCLE #N –` status comments describe work it already
+delivered. They routinely name env gates, smoke harnesses, upstream launchers,
+and credential roles, and before this exemption they tripped `flag`/`reject`
+on the issues they were posted to. A comment is classified
+`orchestrator-status` only when **both** hold:
+
+1. its author is a trusted tracker actor — resolved automatically from
+   `.aiwg/aiwg.config` `remotes.tracker_actor.login` (and
+   `remotes.customer_tracker_actor.login`), or supplied with
+   `--trusted-actor <login>`; and
+2. its body carries the `AL CYCLE #N –` header or the
+   `<!-- aiwg-address-issues:cycle-` marker.
+
+A trusted maintainer's ordinary comment is still assessed. An untrusted author
+cannot exempt text by pasting the header. Issue titles and bodies are never
+exempt, whoever wrote them.
 
 ## Human Authorization Gate
 

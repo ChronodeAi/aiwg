@@ -159,18 +159,31 @@ Deploying to `.agents/skills/` is the most portable option if you need a single 
 
 | Scope | Path | Source |
 |-------|------|--------|
-| User-global | `~/.hermes/skills/` | `agent/skill_commands.py`, `agent/skill_utils.py`, `tools/skills_tool.py` |
+| User-global | `$HERMES_HOME/skills/` (default `~/.hermes/skills/`) | `hermes_constants.py`, `agent/skill_utils.py`, `tools/skills_tool.py` |
 
 - Source repo: https://github.com/NousResearch/hermes-agent (full Python)
-- Discovery: `rglob("SKILL.md")` — unlimited recursion confirmed
+- Discovery: recursive `SKILL.md` scan under the active profile's skills directory
 - NOT MCP-only for skills; file-based discovery is the primary mechanism
 - Managed Agent Skills imports deployed with `aiwg skills deploy <name>
-  --target hermes` land at `~/.hermes/skills/<name>` as strict Agent Skills
+  --target hermes` land at `$HERMES_HOME/skills/<name>` as strict Agent Skills
   bundles with AIWG ownership sidecars. This is separate from `aiwg use
   --provider hermes`, which deploys framework/kernel skills and provider bridge
   files.
 
 ---
+
+
+### Grok Bot
+
+| Scope | Path | Notes |
+|-------|------|-------|
+| User (when configured) | `$AIWG_GROKBOT_SKILLS_DIR/` | Absolute override required; AIWG does **not** invent `~/.grokbot` |
+| User standard (optional) | `$AIWG_GROKBOT_SKILLS_DIR/.aiwg/skills/` | Only with `--copy-all` |
+| Project | Indexed via `aiwg discover` / `aiwg show` | Discover-first bridge in `AGENTS.md` |
+
+Fail-closed until `AIWG_GROKBOT_SKILLS_DIR` is set. Never deploys to `.cursor/`.
+See `docs/architecture/adr-grokbot-provider-target.md`.
+
 
 ## Distribution Mechanism by Provider
 
@@ -188,6 +201,7 @@ Not all providers have a native plugin marketplace. The table below distinguishe
 | **Windsurf** | File-deploy adapter | `aiwg use sdlc --provider windsurf` |
 | **OpenClaw** | File-deploy adapter | `aiwg use sdlc --provider openclaw` |
 | **Hermes** | File-deploy adapter; managed Agent Skills target | `aiwg use sdlc --provider hermes`; `aiwg skills deploy <name> --target hermes` |
+| **Grok Bot** | File-deploy adapter; fail-closed user skill root | `aiwg use sdlc --provider grokbot`; set `AIWG_GROKBOT_SKILLS_DIR` for user-scope |
 
 **Marketplace vs. file-deploy distinction:**
 

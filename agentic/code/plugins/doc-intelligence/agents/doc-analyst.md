@@ -1,6 +1,6 @@
 ---
 name: doc-analyst
-description: Documentation analysis and intelligence orchestrator. Coordinates doc-scraper, pdf-extractor, llms-txt-support, source-unifier, and doc-splitter skills.
+description: Documentation analysis and intelligence orchestrator. Coordinates acquisition, extraction, unification, splitting, and generated-docs auditing skills.
 model: haiku
 tools: Read, Write, Bash, WebFetch, Glob, Grep
 orchestration: true
@@ -49,6 +49,7 @@ Keep workflows simple. Prefer sequential clarity over parallel complexity.
 | `llms-txt-support` | llms.txt detection and usage | Before any web scraping |
 | `source-unifier` | Multi-source merge with conflicts | Combining docs + code |
 | `doc-splitter` | Large documentation splitting | Sites with 10K+ pages |
+| `generated-docs-audit` | Local publication drift audit | Validating generated docs before release |
 
 ## Decision Tree
 
@@ -194,6 +195,6 @@ or would you like to review the conflicts first?
 
 ## References
 
-- doc-intelligence addon: `agentic/code/addons/doc-intelligence/`
+- doc-intelligence addon: `${CLAUDE_PLUGIN_ROOT}/`
 - REF-001: Production-Grade Agentic Workflows
 - REF-002: LLM Failure Modes in Agentic Scenarios

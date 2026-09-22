@@ -5,6 +5,13 @@ severity: HIGH
 safety-critical: true
 applies_to: [all-agents]
 tags: [authorization, scope, safety]
+triggers:
+  - "am I allowed to do this"
+  - "do I need permission for this"
+  - "can I delete this"
+  - "should I close this issue"
+  - "acting on a finding"
+  - "is this in scope"
 ---
 
 # Human Authorization Rules
@@ -171,7 +178,7 @@ Both are required. A well-researched unauthorized action is still a violation.
 ## Platform Applicability
 
 This rule applies universally across all AI coding platforms:
-- Claude Code, Codex, Copilot, Cursor, Warp, Factory, OpenCode, Windsurf
+- Every supported provider
 - Any agent that modifies files, manages artifacts, or takes actions with lasting effects
 
 Authorization is not a platform feature. It is an agent responsibility.

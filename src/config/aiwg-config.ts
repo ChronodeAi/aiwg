@@ -11,7 +11,7 @@
 
 import { readFile, writeFile, mkdir, access, readdir, rename, unlink } from 'fs/promises';
 import { createHash, randomBytes } from 'crypto';
-import { resolve, join, isAbsolute } from 'path';
+import { resolve, join, dirname, isAbsolute } from 'path';
 import type { ProjectLocalType } from '../extensions/manifest.js';
 import { normalizeNamedCaptures } from '../artifacts/index-builder.js';
 import {
@@ -25,12 +25,21 @@ import {
   validateAuthorization,
   type AuthorizationConfig,
 } from '../policy/authorization.js';
-import { projectAiwgPath, resolveProjectAiwgDir } from './project-artifacts.js';
+import {
+  projectAiwgPath,
+  projectControlPath,
+  resolveProjectAiwgDir,
+} from './project-artifacts.js';
 import {
   defaultThreatAssessmentConfig,
   validateThreatAssessmentConfig,
   type SecurityConfig,
 } from '../security/threat-assessment-config.js';
+import { defaultArtifactOutputs, validateArtifactOutputs, type ArtifactOutputsConfig } from '../artifacts/output-policy.js';
+import { validateUhpConfig } from '../uhp/config.js';
+import type { UhpConfig } from '../uhp/types.js';
+export type { UhpConfig, UhpEndpointProfile } from '../uhp/types.js';
+export type { ArtifactOutputsConfig } from '../artifacts/output-policy.js';
 
 export type {
   SecurityConfig,
@@ -145,6 +154,9 @@ export interface TrackerActorConfig {
   forbid_actors?: string[];
 }
 
+/** Explicit issue-tracker provider hint for self-hosted or local trackers. */
+export type IssueProviderConfig = 'gitea' | 'github' | 'local';
+
 /** Git transport identity and the project-local helper that enforces it. */
 export interface RemoteTransportConfig {
   /** Forge login expected to authenticate git pushes. */
@@ -168,10 +180,18 @@ export interface RemotesConfig {
   primary?: string;
   /** Where issues live. Defaults to `primary`. */
   issue_tracker?: string;
+  /** Explicit tracker provider for ambiguous self-hosted or local issue stores. */
+  issue_provider?: IssueProviderConfig;
   /** Where CI runs. Defaults to `primary`. */
   ci?: string;
   /** Which forge account/tool performs delivery writes. */
   tracker_actor?: TrackerActorConfig;
+  /** Optional customer-facing issue intake remote, distinct from internal engineering work. */
+  customer_issue_tracker?: string;
+  /** Explicit provider hint for the customer-facing tracker. */
+  customer_issue_provider?: IssueProviderConfig;
+  /** Account/tool used for customer acknowledgements, comments, and closures. */
+  customer_tracker_actor?: TrackerActorConfig;
   /** Identity and helper used for git transport to the primary remote. */
   transport?: RemoteTransportConfig;
   /** Mirrors, fork bases, publishing targets. */
@@ -185,8 +205,12 @@ export interface RemotesConfig {
 export interface ResolvedRemotes {
   primary: string;
   issue_tracker: string;
+  issue_provider?: IssueProviderConfig;
   ci: string;
   tracker_actor?: TrackerActorConfig;
+  customer_issue_tracker?: string;
+  customer_issue_provider?: IssueProviderConfig;
+  customer_tracker_actor?: TrackerActorConfig;
   transport?: RemoteTransportConfig;
   secondary: SecondaryRemote[];
 }
@@ -286,6 +310,99 @@ export interface WorkspaceRepoConfig {
   notes?: string;
 }
 
+/**
+ * Project-scope data classification. Same vocabulary as the per-artifact
+ * `AiwgPrivacyClassification` used by the Fortemi index export, lifted to the
+ * repository so agents have a structured signal for what a repo holds — rather
+ * than prose in a README and a free-text `notes` string (#2535).
+ */
+export type ProjectClassification = 'private' | 'sanitized' | 'public';
+
+/** How a repository's contents may be handled. Every field defaults to permissive. */
+export interface ProjectHandling {
+  /** May content be quoted into decks, docs, or messages outside the repo? */
+  excerptable?: boolean;
+  /** May content be published, including to a public site or package? */
+  publishable?: boolean;
+  /** May the repo be mirrored to a secondary remote? */
+  mirror?: boolean;
+}
+
+/**
+ * Project metadata. Accepts a bare string (the historical shape, a name) or the
+ * object form carrying classification and handling policy.
+ */
+export interface ProjectConfig {
+  name?: string;
+  description?: string;
+  classification?: ProjectClassification;
+  /** Whether the repo holds personally identifiable information. */
+  pii?: boolean;
+  handling?: ProjectHandling;
+}
+
+export const PROJECT_CLASSIFICATIONS: readonly ProjectClassification[] = ['private', 'sanitized', 'public'];
+
+/** Normalize the string-or-object `project` field to the object form. */
+/**
+ * Validate the `project` block. Accepts the bare-string form unconditionally so
+ * existing configs keep loading (#2535).
+ */
+export function validateProjectConfig(project: unknown): string[] {
+  const errors: string[] = [];
+  if (project === undefined || typeof project === 'string') return errors;
+  if (typeof project !== 'object' || project === null || Array.isArray(project)) {
+    errors.push('project: must be a string (name) or an object');
+    return errors;
+  }
+  const value = project as Record<string, unknown>;
+  if (value.classification !== undefined
+    && !PROJECT_CLASSIFICATIONS.includes(value.classification as ProjectClassification)) {
+    errors.push(`project.classification: must be one of ${PROJECT_CLASSIFICATIONS.join(' | ')}`);
+  }
+  for (const key of ['name', 'description'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'string') {
+      errors.push(`project.${key}: must be a string`);
+    }
+  }
+  if (value.pii !== undefined && typeof value.pii !== 'boolean') {
+    errors.push('project.pii: must be a boolean');
+  }
+  if (value.handling !== undefined) {
+    if (typeof value.handling !== 'object' || value.handling === null || Array.isArray(value.handling)) {
+      errors.push('project.handling: must be an object');
+    } else {
+      const handling = value.handling as Record<string, unknown>;
+      for (const key of ['excerptable', 'publishable', 'mirror'] as const) {
+        if (handling[key] !== undefined && typeof handling[key] !== 'boolean') {
+          errors.push(`project.handling.${key}: must be a boolean`);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+export function resolveProject(project: string | ProjectConfig | undefined): ProjectConfig | undefined {
+  if (project === undefined) return undefined;
+  if (typeof project === 'string') return { name: project };
+  return project;
+}
+
+/**
+ * Handling defaults derived from the classification when not stated explicitly.
+ * A `private` repo is closed by default; anything else stays permissive, so
+ * declaring a classification never silently tightens an existing project.
+ */
+export function resolveProjectHandling(project: ProjectConfig | undefined): Required<ProjectHandling> {
+  const closed = project?.classification === 'private';
+  return {
+    excerptable: project?.handling?.excerptable ?? !closed,
+    publishable: project?.handling?.publishable ?? !closed,
+    mirror: project?.handling?.mirror ?? !closed,
+  };
+}
+
 export interface ResolvedIssueLabel extends IssueLabelDefinition {
   role: string;
   resolved_name: string;
@@ -361,12 +478,24 @@ export interface AiwgConfig {
   /** Deterministic, project-owned security policy including forge-content assessment. */
   security?: SecurityConfig;
 
+  /** Canonical artifact storage and optional provider-native presentation/export policy. */
+  artifact_outputs?: ArtifactOutputsConfig;
+
+  /** Experimental remote Unified Harness Protocol client profiles. */
+  uhp?: UhpConfig;
+
   /**
    * General multi-repository workspace metadata. Root manifests pair this
    * block with `repos`; external members may use `member_of` as a back-reference.
    * @implements #1764
    */
   workspace?: WorkspaceConfig;
+
+  /**
+   * Project identity and data classification. A bare string is the project name
+   * (historical shape); the object form adds classification and handling policy.
+   */
+  project?: string | ProjectConfig;
 
   /**
    * Workspace members. Each member keeps its own `.aiwg/aiwg.config`, which is
@@ -551,6 +680,40 @@ export type MergeStyle = 'rebase-merge' | 'squash' | 'merge' | 'fast-forward-onl
 export type ForcePushPolicy = 'never' | 'own-branch-only' | 'allowed';
 
 /**
+ * Pre-rename spelling of {@link ForcePushPolicy}. Accepted as a deprecated alias so
+ * configs written before the rename keep validating (#2532).
+ */
+export type LegacyForcePushPolicy = 'main-only-blocked';
+
+/** Deprecated spellings mapped to their current value. */
+export const FORCE_PUSH_POLICY_ALIASES: Record<string, ForcePushPolicy> = {
+  'main-only-blocked': 'own-branch-only',
+};
+
+/**
+ * The rename also narrowed the permission: `main-only-blocked` allowed force-push on
+ * *any* feature branch, `own-branch-only` restricts it to the agent's own. Callers
+ * surface this rather than migrating silently, because accepting the alias quietly
+ * would change what an agent is permitted to do.
+ */
+export const FORCE_PUSH_POLICY_ALIAS_NOTE =
+  "'main-only-blocked' is a deprecated alias for 'own-branch-only'. The permission also narrowed: "
+  + 'the old value allowed force-push on any feature branch, the new one only on the agent\'s own branch.';
+
+/**
+ * Normalize a force-push policy, mapping deprecated spellings forward. Returns the
+ * canonical value and the alias it came from, if any.
+ */
+export function normalizeForcePushPolicy(
+  value: ForcePushPolicy | LegacyForcePushPolicy | string | undefined,
+): { policy: ForcePushPolicy | undefined; deprecatedFrom?: string } {
+  if (value === undefined) return { policy: undefined };
+  const alias = FORCE_PUSH_POLICY_ALIASES[value];
+  if (alias) return { policy: alias, deprecatedFrom: value };
+  return { policy: value as ForcePushPolicy };
+}
+
+/**
  * Branch-naming convention. `{issue}` and `{slug}` are interpolated by skills.
  */
 export interface BranchNaming {
@@ -661,7 +824,7 @@ export function resolveDelivery(delivery: DeliveryConfig | undefined): ResolvedD
     committer: delivery?.committer,
     signing: delivery?.signing,
     release_signing: delivery?.release_signing,
-    force_push_policy: delivery?.force_push_policy ?? 'never',
+    force_push_policy: normalizeForcePushPolicy(delivery?.force_push_policy).policy ?? 'never',
     auto_close_issues: delivery?.auto_close_issues ?? true,
     issue_comment_on_cycle: delivery?.issue_comment_on_cycle ?? true,
   };
@@ -716,9 +879,12 @@ export interface ResolvedParallelism {
  *     less aggressive at small fan-outs (10 is a safe middle ground)
  *   - hermes: MCP sidecar; rate-limit depends on upstream provider, operator
  *     should tune. Conservative 10 default.
+ *   - grokbot: desktop multi-agent; conservative 4 until native evidence.
+*   - grok-build: experimental; conservative 4 until Wave 2/3 evidence.
  *   - unknown: conservative 4 default.
  */
 export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> = {
+  antigravity: { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
   claude:   { max_parallel_subagents: 4,  max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
   codex:    { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   copilot:  { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
@@ -729,6 +895,14 @@ export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> 
   windsurf: { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   openclaw: { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   hermes:   { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
+  // Desktop multi-agent; conservative until native concurrency evidence exists.
+  grokbot:  { max_parallel_subagents: 4,  max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  'grok-build': { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  // Conservative defaults for remaining stable/experimental harnesses (#249).
+  openhuman: { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  omp:      { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  pi:       { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  'deepseek-harness': { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
 };
 
 const UNKNOWN_PROVIDER_PARALLELISM: ResolvedParallelism = {
@@ -781,10 +955,23 @@ export function resolveParallelism(
  * src/artifacts/types.ts).
  */
 export interface IndexConfig {
+  /** Default graph backend. Individual graph definitions take precedence. */
+  graphBackend?: 'json' | 'graphology' | 'sqlite';
   graphs?: Record<string, IndexGraphDef | IndexMarkdownIndices>;
+  graphOverrides?: {
+    codebase?: IndexBuiltinGraphOverride;
+  };
   userIndices?: {
     enabled?: boolean;
   };
+}
+
+/** Safe operator-controlled fields for adapting an immutable built-in graph. */
+export interface IndexBuiltinGraphOverride {
+  /** Replaces the built-in scan roots when present. */
+  scanDirs?: string[];
+  /** Replaces the built-in extension allow-list when present. */
+  extensions?: string[];
 }
 
 export interface UserIndicesConfig {
@@ -851,13 +1038,49 @@ export function validateIndexConfig(index: unknown): string[] {
     return ['index: must be an object'];
   }
 
-  const graphs = (index as Record<string, unknown>).graphs;
-  if (graphs === undefined) return errors; // index with no graphs is permissible
-  if (typeof graphs !== 'object' || graphs === null || Array.isArray(graphs)) {
-    return ['index.graphs: must be an object mapping graph names to definitions'];
+  const indexObject = index as Record<string, unknown>;
+  if (indexObject.graphBackend !== undefined && !GRAPH_BACKENDS.includes(indexObject.graphBackend as string)) {
+    errors.push(`index.graphBackend: must be one of ${GRAPH_BACKENDS.join(' | ')}`);
+  }
+  const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+
+  const graphOverrides = indexObject.graphOverrides;
+  if (graphOverrides !== undefined) {
+    if (typeof graphOverrides !== 'object' || graphOverrides === null || Array.isArray(graphOverrides)) {
+      errors.push('index.graphOverrides: must be an object mapping supported built-in graph names to overrides');
+    } else {
+      for (const [name, rawOverride] of Object.entries(graphOverrides as Record<string, unknown>)) {
+        const where = `index.graphOverrides.${name}`;
+        if (name !== 'codebase') {
+          errors.push(`${where}: unsupported built-in graph override (supported: codebase)`);
+          continue;
+        }
+        if (typeof rawOverride !== 'object' || rawOverride === null || Array.isArray(rawOverride)) {
+          errors.push(`${where}: must be an object`);
+          continue;
+        }
+        const override = rawOverride as Record<string, unknown>;
+        for (const field of Object.keys(override)) {
+          if (field !== 'scanDirs' && field !== 'extensions') {
+            errors.push(`${where}.${field}: unknown field (supported: scanDirs, extensions)`);
+          }
+        }
+        if (override.scanDirs !== undefined && (!isStringArray(override.scanDirs) || override.scanDirs.length === 0)) {
+          errors.push(`${where}.scanDirs: must be a non-empty array of strings`);
+        }
+        if (override.extensions !== undefined && (!isStringArray(override.extensions) || override.extensions.length === 0)) {
+          errors.push(`${where}.extensions: must be a non-empty array of strings`);
+        }
+      }
+    }
   }
 
-  const isStringArray = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === 'string');
+  const graphs = indexObject.graphs;
+  if (graphs === undefined) return errors; // index with no graphs is permissible
+  if (typeof graphs !== 'object' || graphs === null || Array.isArray(graphs)) {
+    errors.push('index.graphs: must be an object mapping graph names to definitions');
+    return errors;
+  }
 
   for (const [name, rawDef] of Object.entries(graphs as Record<string, unknown>)) {
     const where = `index.graphs.${name}`;
@@ -1151,8 +1374,8 @@ export async function readIndexConfig(
  *   - any host containing 'gitea' (or matching the typical Gitea path shape) → 'gitea'
  *
  * Returns 'unknown' for self-hosted instances we can't classify by host alone —
- * callers should then prompt the operator or fall back to the configured
- * AIWG provider list.
+ * callers should then prompt the operator or use `remotes.issue_provider`
+ * when the project has declared one.
  *
  * @implements #997
  */
@@ -1169,7 +1392,7 @@ export function resolveRemoteProvider(remoteUrl: string): 'github' | 'gitlab' | 
   // gitea — identified by hostname token. Self-hosted Gitea instances often
   // don't include 'gitea' in their hostname (e.g. corporate git servers), so
   // 'unknown' is the honest answer there — callers should consult the
-  // configured AIWG provider list rather than guess.
+  // explicit remotes.issue_provider hint rather than guess.
   if (lower.includes('gitea')) return 'gitea';
 
   return 'unknown';
@@ -1181,6 +1404,7 @@ export function resolveRemoteProvider(remoteUrl: string): 'github' | 'gitlab' | 
  * Defaults:
  *   - `primary` defaults to "origin"
  *   - `issue_tracker` defaults to `primary`
+ *   - customer tracker fields remain unset unless explicitly configured
  *   - `ci` defaults to `primary`
  *   - `secondary` defaults to `[]`
  *
@@ -1191,8 +1415,12 @@ export function resolveRemotes(remotes: RemotesConfig | undefined): ResolvedRemo
   return {
     primary,
     issue_tracker: remotes?.issue_tracker ?? primary,
+    issue_provider: remotes?.issue_provider,
     ci: remotes?.ci ?? primary,
     tracker_actor: remotes?.tracker_actor,
+    customer_issue_tracker: remotes?.customer_issue_tracker,
+    customer_issue_provider: remotes?.customer_issue_provider,
+    customer_tracker_actor: remotes?.customer_tracker_actor,
     transport: remotes?.transport,
     secondary: remotes?.secondary ?? [],
   };
@@ -1356,6 +1584,7 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
     security: {
       threatAssessment: defaultThreatAssessmentConfig(),
     },
+    artifact_outputs: defaultArtifactOutputs(),
     delivery: {
       mode: 'pr-required',
       default_branch: 'main',
@@ -1378,11 +1607,11 @@ export function emptyConfig(providers: string[] = ['claude']): AiwgConfig {
 /**
  * Resolve path to the project-level AIWG config.
  *
- * Defaults to `<project>/.aiwg/aiwg.config`; honors `AIWG_ARTIFACTS_PATH` so
- * projects can rename or relocate the AIWG artifact directory.
+ * The config is part of the repository-local control plane. Relocating the
+ * artifact corpus does not relocate this path.
  */
 export function getConfigPath(projectDir: string): string {
-  return projectAiwgPath(projectDir, CONFIG_FILENAME);
+  return projectControlPath(projectDir, CONFIG_FILENAME);
 }
 
 /**
@@ -1410,11 +1639,19 @@ export function getProjectDir(
  * Returns null if the file does not exist.
  */
 export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | null> {
-  const filePath = getConfigPath(projectDir);
+  const localPath = getConfigPath(projectDir);
+  const artifactPath = projectAiwgPath(projectDir, CONFIG_FILENAME);
+  let filePath = localPath;
   try {
-    await access(filePath);
+    await access(localPath);
   } catch {
-    return null;
+    if (artifactPath === localPath) return null;
+    try {
+      await access(artifactPath);
+      filePath = artifactPath;
+    } catch {
+      return null;
+    }
   }
 
   const content = await readFile(filePath, 'utf-8');
@@ -1442,42 +1679,106 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     throw new Error(`Invalid .aiwg/aiwg.config:\n${authorizationErrors.map(item => item.message).join('\n')}`);
   }
 
-  const threatAssessmentErrors = validateThreatAssessmentConfig(parsed.security?.threatAssessment);
+  const threatAssessmentErrors = [
+    ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
+    ...validateProjectConfig(parsed.project),
+  ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }
+
+  const artifactOutputErrors = validateArtifactOutputs(parsed.artifact_outputs);
+  if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
+
+  const uhpErrors = validateUhpConfig(parsed.uhp);
+  if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
 
   return parsed;
 }
 
 /**
- * Write aiwg.config, creating the resolved AIWG artifact directory if needed.
+ * Write aiwg.config to the repository-local control plane. When a reachable
+ * external corpus also carries the compatibility control copy, keep it in
+ * sync so split-root health remains deterministic.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
-  const threatAssessmentErrors = validateThreatAssessmentConfig(config.security?.threatAssessment);
+  const threatAssessmentErrors = [
+    ...validateThreatAssessmentConfig(config.security?.threatAssessment),
+    ...validateProjectConfig(config.project),
+  ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }
-  const dir = resolveProjectAiwgDir(projectDir);
-  await mkdir(dir, { recursive: true });
-  const filePath = join(dir, CONFIG_FILENAME);
-  // Atomic write: emit to a temp sibling, fsync-ish via rename. Prevents a
-  // crash or kill mid-write from corrupting the config file. Rename is
-  // atomic on POSIX and on NTFS when both paths are on the same volume.
-  // The random suffix avoids collisions if two concurrent writers run.
-  const tmpPath = `${filePath}.${randomBytes(6).toString('hex')}.tmp`;
-  try {
-    await writeFile(tmpPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
-    await rename(tmpPath, filePath);
-  } catch (err) {
-    // Best-effort cleanup of the temp file on failure, ignoring ENOENT.
+  const artifactOutputErrors = validateArtifactOutputs(config.artifact_outputs);
+  if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
+  const uhpErrors = validateUhpConfig(config.uhp);
+  if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
+  const localPath = getConfigPath(projectDir);
+  const artifactDir = resolveProjectAiwgDir(projectDir);
+  const artifactPath = join(artifactDir, CONFIG_FILENAME);
+  const content = JSON.stringify(config, null, 2) + '\n';
+
+  const writeAtomic = async (filePath: string): Promise<void> => {
+    await mkdir(dirname(filePath), { recursive: true });
+    // Atomic write: emit to a temp sibling, fsync-ish via rename. Prevents a
+    // crash or kill mid-write from corrupting the config file. Rename is
+    // atomic on POSIX and on NTFS when both paths are on the same volume.
+    // The random suffix avoids collisions if two concurrent writers run.
+    const tmpPath = `${filePath}.${randomBytes(6).toString('hex')}.tmp`;
     try {
-      await unlink(tmpPath);
-    } catch {
-      /* ignore */
+      await writeFile(tmpPath, content, 'utf-8');
+      await rename(tmpPath, filePath);
+    } catch (err) {
+      // Best-effort cleanup of the temp file on failure, ignoring ENOENT.
+      try {
+        await unlink(tmpPath);
+      } catch {
+        /* ignore */
+      }
+      throw err;
     }
-    throw err;
+  };
+
+  await writeAtomic(localPath);
+  if (artifactPath !== localPath) {
+    try {
+      await access(artifactDir);
+      await writeAtomic(artifactPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
+}
+
+
+/**
+ * Ensure `provider` appears in `config.providers` without wiping others (#247).
+ * First entry is the primary provider for parallelism/doctor labels.
+ * When `asPrimary` is true (explicit `--provider` deploy), move the provider to the front.
+ */
+export function ensureProviderListed(
+  config: AiwgConfig,
+  provider: string,
+  opts: { asPrimary?: boolean } = {},
+): AiwgConfig {
+  const normalized = provider.trim();
+  if (!normalized) return config;
+  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
+  const idx = providers.indexOf(normalized);
+  if (opts.asPrimary) {
+    if (idx === 0) {
+      config.providers = providers;
+      return config;
+    }
+    if (idx > 0) providers.splice(idx, 1);
+    providers.unshift(normalized);
+  } else if (idx < 0) {
+    providers.push(normalized);
+  } else {
+    return config;
+  }
+  config.providers = providers;
+  return config;
 }
 
 /**
@@ -1503,6 +1804,11 @@ export function updateInstalled(
     artifactHashes?: Record<string, string>;
     /** Provider-specific hashes captured from the deployed files (#1998). */
     deployedArtifactHashes?: Record<string, string>;
+    /**
+     * When true (explicit `--provider` deploy), move this provider to the front
+     * of `providers[]` so doctor/parallelism treat it as primary (#247).
+     */
+    asPrimary?: boolean;
   }
 ): AiwgConfig {
   // Project-local invariant: `source: 'project-local'` requires localPath + localType
@@ -1567,6 +1873,8 @@ export function updateInstalled(
   }
 
   config.installed[name] = existing;
+  // Keep providers[] aligned with deployedTo so doctor/parallelism see the right primary (#247).
+  ensureProviderListed(config, provider, { asPrimary: opts.asPrimary === true });
   return config;
 }
 

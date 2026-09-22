@@ -2,7 +2,7 @@
  * Tests for the --scope user|project resolver (PUW-027 / #1128).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { promises as fs } from 'node:fs';
@@ -16,6 +16,7 @@ import {
   mirrorToUserScope,
   mirrorSkillDirsToUserScope,
   rejectOpenClawProjectScope,
+  hermesHome,
 } from '../../../src/cli/scope-resolver.js';
 
 describe('detectScope', () => {
@@ -314,11 +315,35 @@ describe('rejectOpenClawProjectScope (#1156)', () => {
 });
 
 describe('USER_SCOPE_PATHS coverage', () => {
-  it('covers all 11 supported providers', () => {
-    const expected = ['claude', 'codex', 'copilot', 'cursor', 'opencode', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'factory'];
+  it('covers all 12 supported providers', () => {
+    const expected = ['claude', 'codex', 'pi', 'copilot', 'cursor', 'opencode', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'factory', 'grokbot'];
     for (const p of expected) {
       expect(USER_SCOPE_PATHS[p], `${p} should have user-scope paths`).toBeDefined();
     }
+  });
+
+  it('routes Pi user resources through the default agent directory without duplicate skill roots', () => {
+    const root = path.join(homedir(), '.pi', 'agent');
+    expect(USER_SCOPE_PATHS.pi).toEqual({
+      agents: '',
+      skills: path.join(root, 'skills'),
+      commands: path.join(root, 'prompts'),
+      rules: '',
+      behaviors: path.join(root, 'extensions'),
+    });
+  });
+
+  it('honors PI_CODING_AGENT_DIR for every Pi user resource', async () => {
+    const saved = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = '/tmp/pi-user-scope';
+    vi.resetModules();
+    const fresh = await import('../../../src/cli/scope-resolver.js');
+    expect(fresh.USER_SCOPE_PATHS.pi.skills).toBe('/tmp/pi-user-scope/skills');
+    expect(fresh.USER_SCOPE_PATHS.pi.commands).toBe('/tmp/pi-user-scope/prompts');
+    expect(fresh.USER_SCOPE_PATHS.pi.behaviors).toBe('/tmp/pi-user-scope/extensions');
+    if (saved === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = saved;
+    vi.resetModules();
   });
 
   it('uses ~/.agents/skills/ as cross-provider canonical target for the 4 bridge providers', () => {
@@ -341,3 +366,69 @@ describe('USER_SCOPE_PATHS coverage', () => {
     expect(USER_SCOPE_PATHS.opencode.commands).toBe(path.join(homedir(), '.config', 'opencode', 'commands'));
   });
 });
+
+// #2119 — HERMES_HOME resolution for the hermes provider home.
+describe('hermesHome (#2119 HERMES_HOME)', () => {
+  const saved = process.env.HERMES_HOME;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.HERMES_HOME;
+    else process.env.HERMES_HOME = saved;
+  });
+
+  it('falls back to $HOME/.hermes without HERMES_HOME (posix)', () => {
+    delete process.env.HERMES_HOME;
+    expect(hermesHome()).toBe(path.join(homedir(), '.hermes'));
+  });
+
+  it('honors HERMES_HOME absolute path', () => {
+    process.env.HERMES_HOME = '/tmp/hermes-home-x';
+    expect(hermesHome()).toBe('/tmp/hermes-home-x');
+  });
+
+  it('preserves a leading tilde like upstream Path(env)', () => {
+    process.env.HERMES_HOME = '~/custom-role';
+    expect(hermesHome()).toBe('~/custom-role');
+  });
+
+  it('preserves a relative path like upstream Path(env)', () => {
+    process.env.HERMES_HOME = '.profiles/coder';
+    expect(hermesHome()).toBe('.profiles/coder');
+  });
+
+  it('ignores blank / whitespace-only values', () => {
+    process.env.HERMES_HOME = '   ';
+    expect(hermesHome()).toBe(path.join(homedir(), '.hermes'));
+  });
+
+  it('resolves the user-scope skills path from HERMES_HOME at module load', async () => {
+    process.env.HERMES_HOME = '/tmp/hermes-user-scope';
+    vi.resetModules();
+    const fresh = await import('../../../src/cli/scope-resolver.js');
+    expect(fresh.USER_SCOPE_PATHS.hermes.skills).toBe('/tmp/hermes-user-scope/skills');
+  });
+});
+
+describe('grokbot USER_SCOPE_PATHS fail-closed (#205/#207)', () => {
+  const saved = process.env.AIWG_GROKBOT_SKILLS_DIR;
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env.AIWG_GROKBOT_SKILLS_DIR;
+    else process.env.AIWG_GROKBOT_SKILLS_DIR = saved;
+  });
+
+  it('keeps skills empty when AIWG_GROKBOT_SKILLS_DIR is unset', async () => {
+    delete process.env.AIWG_GROKBOT_SKILLS_DIR;
+    vi.resetModules();
+    const fresh = await import('../../../src/cli/scope-resolver.js');
+    expect(fresh.USER_SCOPE_PATHS.grokbot.skills).toBe('');
+  });
+
+  it('uses the absolute AIWG_GROKBOT_SKILLS_DIR override', async () => {
+    process.env.AIWG_GROKBOT_SKILLS_DIR = '/tmp/grokbot-user-scope';
+    vi.resetModules();
+    const fresh = await import('../../../src/cli/scope-resolver.js');
+    expect(fresh.USER_SCOPE_PATHS.grokbot.skills).toBe('/tmp/grokbot-user-scope');
+  });
+});
+

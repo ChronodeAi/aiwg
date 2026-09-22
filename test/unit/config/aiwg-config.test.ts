@@ -16,10 +16,13 @@ import {
   readAiwgConfig,
   writeAiwgConfig,
   updateInstalled,
+  ensureProviderListed,
   hashManifest,
   resolveRemotes,
   resolveRemoteProvider,
   resolveDelivery,
+  normalizeForcePushPolicy,
+  FORCE_PUSH_POLICY_ALIAS_NOTE,
   resolveParallelism,
   resolveIssueLabels,
   validateExternalLinks,
@@ -80,6 +83,10 @@ describe('aiwg-config', () => {
       expect(cfg.delivery!.force_push_policy).toBe('never');
     });
 
+    it('ships the safe artifact output policy (#2122)', () => {
+      expect(emptyConfig().artifact_outputs).toEqual({ canonical: 'aiwg', provider_native: 'explicit-only', destinations: {} });
+    });
+
     it('ships an explicit parallelism block with provider defaults (#1359)', () => {
       const cfg = emptyConfig(); // default provider = claude
       expect(cfg.parallelism).toBeDefined();
@@ -114,12 +121,12 @@ describe('aiwg-config', () => {
       expect(p).toBe(resolve('/some/project', '.aiwg', 'aiwg.config'));
     });
 
-    it('honors AIWG_ARTIFACTS_PATH for renamed or external project corpus directories', () => {
+    it('keeps the config in the local control plane when the corpus is external', () => {
       const previous = process.env.AIWG_ARTIFACTS_PATH;
       process.env.AIWG_ARTIFACTS_PATH = '../aiwg-web-release-ops/corpus/.aiwg';
       try {
         const p = getConfigPath('/some/project');
-        expect(p).toBe(resolve('/some/project', '../aiwg-web-release-ops/corpus/.aiwg', 'aiwg.config'));
+        expect(p).toBe(resolve('/some/project', '.aiwg', 'aiwg.config'));
       } finally {
         if (previous === undefined) {
           delete process.env.AIWG_ARTIFACTS_PATH;
@@ -189,14 +196,15 @@ describe('aiwg-config', () => {
       expect(read?.externalLinks).toEqual(cfg.externalLinks);
     });
 
-    it('reads and writes aiwg.config from AIWG_ARTIFACTS_PATH', async () => {
+    it('writes the local control config and mirrors an existing external control copy', async () => {
       const externalAiwgDir = join(tmpDir, 'renamed-aiwg-corpus');
+      mkdirSync(externalAiwgDir, { recursive: true });
       const previous = process.env.AIWG_ARTIFACTS_PATH;
       process.env.AIWG_ARTIFACTS_PATH = externalAiwgDir;
       try {
         await writeAiwgConfig(tmpDir, emptyConfig(['codex']));
         expect(existsSync(join(externalAiwgDir, 'aiwg.config'))).toBe(true);
-        expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(false);
+        expect(existsSync(join(tmpDir, '.aiwg', 'aiwg.config'))).toBe(true);
 
         const read = await readAiwgConfig(tmpDir);
         expect(read?.providers).toEqual(['codex']);
@@ -206,6 +214,20 @@ describe('aiwg-config', () => {
         } else {
           process.env.AIWG_ARTIFACTS_PATH = previous;
         }
+      }
+    });
+
+    it('falls back to a legacy external config when the local control copy is missing', async () => {
+      const externalAiwgDir = join(tmpDir, 'legacy-external-aiwg');
+      mkdirSync(externalAiwgDir, { recursive: true });
+      writeFileSync(join(externalAiwgDir, 'aiwg.config'), JSON.stringify(emptyConfig(['codex'])));
+      const previous = process.env.AIWG_ARTIFACTS_PATH;
+      process.env.AIWG_ARTIFACTS_PATH = externalAiwgDir;
+      try {
+        expect((await readAiwgConfig(tmpDir))?.providers).toEqual(['codex']);
+      } finally {
+        if (previous === undefined) delete process.env.AIWG_ARTIFACTS_PATH;
+        else process.env.AIWG_ARTIFACTS_PATH = previous;
       }
     });
 
@@ -357,6 +379,32 @@ describe('aiwg-config', () => {
       expect(updated.installed['sdlc'].manifestHash).toBe('sha256:original');
     });
 
+
+    it('appends a missing provider to providers[] (#247)', () => {
+      const cfg = emptyConfig(['cursor']);
+      const updated = updateInstalled(cfg, 'sdlc', 'grokbot', { agents: 1, commands: 0, skills: 2, rules: 0 }, {
+        version: '2026.9.16',
+        source: 'bundled',
+      });
+      expect(updated.providers).toEqual(['cursor', 'grokbot']);
+    });
+
+    it('promotes explicit provider to primary without wiping others (#247)', () => {
+      const cfg = emptyConfig(['cursor', 'claude']);
+      const updated = updateInstalled(cfg, 'sdlc', 'grokbot', { agents: 1, commands: 0, skills: 2, rules: 0 }, {
+        version: '2026.9.16',
+        source: 'bundled',
+        asPrimary: true,
+      });
+      expect(updated.providers).toEqual(['grokbot', 'cursor', 'claude']);
+    });
+
+    it('ensureProviderListed is idempotent when already primary', () => {
+      const cfg = emptyConfig(['grokbot', 'cursor']);
+      ensureProviderListed(cfg, 'grokbot', { asPrimary: true });
+      expect(cfg.providers).toEqual(['grokbot', 'cursor']);
+    });
+
     // Project-local (#1035)
     describe('project-local entries', () => {
       it('writes localPath/localType/manifestVersion when source=project-local', () => {
@@ -496,8 +544,12 @@ describe('aiwg-config', () => {
       expect(r).toEqual({
         primary: 'origin',
         issue_tracker: 'origin',
+        issue_provider: undefined,
         ci: 'origin',
         tracker_actor: undefined,
+        customer_issue_tracker: undefined,
+        customer_issue_provider: undefined,
+        customer_tracker_actor: undefined,
         transport: undefined,
         secondary: [],
       });
@@ -507,8 +559,10 @@ describe('aiwg-config', () => {
       const r = resolveRemotes({});
       expect(r.primary).toBe('origin');
       expect(r.issue_tracker).toBe('origin');
+      expect(r.issue_provider).toBeUndefined();
       expect(r.ci).toBe('origin');
       expect(r.tracker_actor).toBeUndefined();
+      expect(r.customer_issue_tracker).toBeUndefined();
       expect(r.transport).toBeUndefined();
       expect(r.secondary).toEqual([]);
     });
@@ -524,9 +578,11 @@ describe('aiwg-config', () => {
       const r = resolveRemotes({
         primary: 'origin',
         issue_tracker: 'gitea',
+        issue_provider: 'gitea',
         ci: 'jenkins',
       });
       expect(r.issue_tracker).toBe('gitea');
+      expect(r.issue_provider).toBe('gitea');
       expect(r.ci).toBe('jenkins');
     });
 
@@ -544,6 +600,28 @@ describe('aiwg-config', () => {
         via: 'tea',
         forbid_actors: ['roctibot'],
       });
+    });
+
+    it('preserves a distinct customer tracker and actor', () => {
+      const r = resolveRemotes({
+        primary: 'origin',
+        issue_tracker: 'origin',
+        customer_issue_tracker: 'github',
+        customer_issue_provider: 'github',
+        customer_tracker_actor: {
+          login: 'customer-maintainer',
+          via: 'gh',
+          forbid_actors: ['release-bot'],
+        },
+      });
+      expect(r.customer_issue_tracker).toBe('github');
+      expect(r.customer_issue_provider).toBe('github');
+      expect(r.customer_tracker_actor).toEqual({
+        login: 'customer-maintainer',
+        via: 'gh',
+        forbid_actors: ['release-bot'],
+      });
+      expect(r.issue_tracker).toBe('origin');
     });
 
     it('preserves primary remote transport identity metadata', () => {
@@ -619,6 +697,23 @@ describe('aiwg-config', () => {
   // ── resolveDelivery (#995) ─────────────────────────────────────────────────
 
   describe('resolveDelivery', () => {
+    it('normalizes the deprecated main-only-blocked force-push alias (#2532)', () => {
+      expect(resolveDelivery({ force_push_policy: 'main-only-blocked' } as never).force_push_policy)
+        .toBe('own-branch-only');
+      const normalized = normalizeForcePushPolicy('main-only-blocked');
+      expect(normalized.policy).toBe('own-branch-only');
+      expect(normalized.deprecatedFrom).toBe('main-only-blocked');
+      // The rename narrowed the permission, so the note must say so.
+      expect(FORCE_PUSH_POLICY_ALIAS_NOTE).toContain('narrowed');
+    });
+
+    it('passes current force-push values through unchanged (#2532)', () => {
+      for (const policy of ['never', 'own-branch-only', 'allowed'] as const) {
+        expect(normalizeForcePushPolicy(policy)).toEqual({ policy });
+      }
+      expect(normalizeForcePushPolicy(undefined).policy).toBeUndefined();
+    });
+
     it('returns conservative defaults when delivery is undefined', () => {
       const r = resolveDelivery(undefined);
       expect(r.mode).toBe('pr-required');
@@ -834,6 +929,11 @@ describe('aiwg-config', () => {
 
     it('getProviderParallelismDefaults returns fallback for unknown', () => {
       const r = getProviderParallelismDefaults('totally-unknown');
+      expect(r.max_parallel_subagents).toBe(4);
+    });
+
+    it('getProviderParallelismDefaults returns grokbot=4 (#249)', () => {
+      const r = getProviderParallelismDefaults('grokbot');
       expect(r.max_parallel_subagents).toBe(4);
     });
   });

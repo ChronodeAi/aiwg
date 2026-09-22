@@ -91,7 +91,8 @@ describe('Ralph Command Handlers', () => {
       expect(ralphHandler.name).toBe('Agent Loop');
       expect(ralphHandler.description.toLowerCase()).toContain('iterative task loop');
       expect(ralphHandler.category).toBe('ralph');
-      expect(ralphHandler.aliases).toEqual(['ralph', '-ralph', '--ralph']);
+      // #705: ralph* names stay accepted as aliases through the agent-loop rename.
+      expect(ralphHandler.aliases).toEqual(expect.arrayContaining(['ralph', '-ralph', '--ralph']));
     });
 
     it('should show help message when --help is passed', async () => {
@@ -183,6 +184,48 @@ describe('Ralph Command Handlers', () => {
       expect(result.exitCode).toBe(1);
       expect(result.message).toContain('--max-total-costt');
       expect(launcher.launchExternalRalph).not.toHaveBeenCalled();
+    });
+
+    const integerLimits = ['--max-iterations', '--max-total-tokens', '--max-output-tokens',
+      '--max-tool-calls', '--exploration-quota', '--timeout'];
+    const decimalLimits = ['--budget', '--max-total-cost', '--max-wall-clock-minutes'];
+    for (const flag of [...integerLimits, ...decimalLimits]) {
+      const invalid: Array<string | undefined> = ['1junk', '1,000', '0x10', '0', '-1', 'Infinity', '', undefined];
+      if (integerLimits.includes(flag)) invalid.push('1.5', '9007199254740992');
+      it.each(invalid)(`refuses ${flag}=%s before launching`, async raw => {
+        const { ralphHandler } = await import('../../../../src/cli/handlers/ralph.js');
+        const launcher = await import('../../../../src/cli/handlers/ralph-launcher.js');
+        mockContext.args = ['Synthetic task', '--completion', 'done', flag, ...(raw === undefined ? [] : [raw])];
+        const result = await ralphHandler.execute(mockContext);
+        expect(result.exitCode).toBe(1);
+        expect(result.message).toContain(flag);
+        expect(launcher.launchExternalRalph).not.toHaveBeenCalled();
+      });
+    }
+
+    it.each([['1', 1], ['1e2', 100], ['1.0', 1]] as const)('forwards exact whole numeric values %s', async (raw, expected) => {
+      const { ralphHandler } = await import('../../../../src/cli/handlers/ralph.js');
+      const launcher = await import('../../../../src/cli/handlers/ralph-launcher.js');
+      mockContext.args = ['Synthetic task', '--completion', 'done',
+        ...[...integerLimits, ...decimalLimits].flatMap(flag => [flag, raw])];
+      expect((await ralphHandler.execute(mockContext)).exitCode).toBe(0);
+      expect(launcher.launchExternalRalph).toHaveBeenCalledExactlyOnceWith(
+        mockContext.frameworkRoot, process.cwd(), expect.objectContaining({
+          maxIterations: expected, maxTotalTokens: expected, maxOutputTokens: expected,
+          maxToolCalls: expected, explorationQuota: expected, timeout: expected,
+          budget: expected, maxTotalCost: expected, maxWallClockMinutes: expected,
+        }),
+      );
+    });
+
+    it('forwards fractional cost and wall-clock limits without truncation', async () => {
+      const { ralphHandler } = await import('../../../../src/cli/handlers/ralph.js');
+      const launcher = await import('../../../../src/cli/handlers/ralph-launcher.js');
+      mockContext.args = ['Synthetic task', '--completion', 'done', ...decimalLimits.flatMap(flag => [flag, '0.25'])];
+      expect((await ralphHandler.execute(mockContext)).exitCode).toBe(0);
+      expect(launcher.launchExternalRalph).toHaveBeenCalledExactlyOnceWith(
+        mockContext.frameworkRoot, process.cwd(), expect.objectContaining({ budget: 0.25, maxTotalCost: 0.25, maxWallClockMinutes: 0.25 }),
+      );
     });
 
     it('should use internal mode when --internal flag is passed', async () => {
@@ -290,7 +333,7 @@ describe('Ralph Command Handlers', () => {
       expect(ralphStatusHandler.name).toBe('Ralph Status');
       expect(ralphStatusHandler.description.toLowerCase()).toContain('status');
       expect(ralphStatusHandler.category).toBe('ralph');
-      expect(ralphStatusHandler.aliases).toEqual(['ralph-status']);
+      expect(ralphStatusHandler.aliases).toEqual(expect.arrayContaining(['ralph-status']));
     });
 
     it('should show message when no loops found', async () => {
@@ -390,7 +433,7 @@ describe('Ralph Command Handlers', () => {
       expect(ralphAbortHandler.name).toBe('Ralph Abort');
       expect(ralphAbortHandler.description.toLowerCase()).toContain('abort');
       expect(ralphAbortHandler.category).toBe('ralph');
-      expect(ralphAbortHandler.aliases).toEqual(['ralph-abort']);
+      expect(ralphAbortHandler.aliases).toEqual(expect.arrayContaining(['ralph-abort']));
     });
 
     it('should abort running loop', async () => {
@@ -433,6 +476,23 @@ describe('Ralph Command Handlers', () => {
   });
 
   describe('ralphResumeHandler', () => {
+    it.each(['1junk', '1.5', '0', '-1', 'Infinity', '9007199254740992', undefined])('refuses invalid resume iteration limit %s', async raw => {
+      const { ralphResumeHandler } = await import('../../../../src/cli/handlers/ralph.js');
+      const launcher = await import('../../../../src/cli/handlers/ralph-launcher.js');
+      mockContext.args = ['--max-iterations', ...(raw === undefined ? [] : [raw])];
+      const result = await ralphResumeHandler.execute(mockContext);
+      expect(result.exitCode).toBe(1);
+      expect(result.message).toContain('--max-iterations');
+      expect(launcher.resumeLoop).not.toHaveBeenCalled();
+    });
+
+    it('forwards exponent resume limits as the complete numeric value', async () => {
+      const { ralphResumeHandler } = await import('../../../../src/cli/handlers/ralph.js');
+      const launcher = await import('../../../../src/cli/handlers/ralph-launcher.js');
+      mockContext.args = ['--max-iterations', '1e2'];
+      expect((await ralphResumeHandler.execute(mockContext)).exitCode).toBe(0);
+      expect(launcher.resumeLoop).toHaveBeenCalledExactlyOnceWith(mockContext.frameworkRoot, process.cwd(), undefined, { maxIterations: 100 });
+    });
     it('should have correct metadata', async () => {
       const { ralphResumeHandler } = await import('../../../../src/cli/handlers/ralph.js');
 
@@ -440,7 +500,7 @@ describe('Ralph Command Handlers', () => {
       expect(ralphResumeHandler.name).toBe('Ralph Resume');
       expect(ralphResumeHandler.description.toLowerCase()).toContain('resume');
       expect(ralphResumeHandler.category).toBe('ralph');
-      expect(ralphResumeHandler.aliases).toEqual(['ralph-resume']);
+      expect(ralphResumeHandler.aliases).toEqual(expect.arrayContaining(['ralph-resume']));
     });
 
     it('should resume aborted loop', async () => {

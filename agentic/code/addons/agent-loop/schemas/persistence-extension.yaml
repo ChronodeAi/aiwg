@@ -770,12 +770,12 @@ examples:
 
 references:
   base_schema:
-    - "@agentic/code/addons/ralph/schemas/loop-state.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/loop-state.yaml"
 
   related_schemas:
-    - "@agentic/code/addons/ralph/schemas/checkpoint.yaml"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
-    - "@agentic/code/addons/ralph/hooks/persistence-hooks.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/checkpoint.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/hooks/persistence-hooks.yaml"
 
   requirements:
     - "@.aiwg/requirements/nfr-modules/agent-persistence-nfrs.md"

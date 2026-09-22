@@ -1,94 +1,59 @@
 # Just Try It
 
-> **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed, `all` is deployed for your provider, and `aiwg-regenerate` has connected the agent to this project.
+Get a concrete result without learning the workflow catalog: a review of your README with three prioritized fixes.
 
-You don't want to read documentation. You want to see something happen. That's fine.
+## Before you begin
 
----
+Open a project with a README in your AI tool. If AIWG is not connected, follow [Install, Connect, and
+Verify](install-connect-verify.md). This task assumes the connection is ready; it does not require a new project or a
+full development lifecycle.
 
-## One-minute setup
+## Ask for a review
 
-Install AIWG and deploy it to your project:
-
-```bash
-npm install -g aiwg
-cd /path/to/any/project     # or make an empty folder
-aiwg use all --provider <provider>
-aiwg index build --all
-aiwg regenerate --provider <provider>
+```text
+Use AIWG to review this project's README for unclear positioning and missing
+onboarding steps. Save a report at
+.aiwg/marketing/brand/audit/readme-review.md with file references and the
+three highest-priority fixes. Leave the README unchanged.
 ```
 
-That's it—ask the current agent whether AIWG is active. Most providers can use
-the regenerated context immediately; restart only if verification finds cached
-startup instructions.
+The agent should inspect the relevant workflow and the README, then save its findings. If the selected workflow is
+unavailable, ask it to identify a suitable documentation or brand-review capability and keep the same report
+structure. You can open the report directly and use it in another session.
 
-If you pointed at an **existing project** (not an empty folder), run this once **inside the tool** first, so AIWG reconciles its context with what's already there:
+## What success looks like
 
-```
-/aiwg-regenerate
-```
+Each finding should identify a passage or missing step, explain its effect on a reader, and recommend a concrete
+change. The report should separate what the files show from the reviewer's judgment.
 
-(No slash command? Ask it: "run aiwg-regenerate to wire AIWG into this project.")
+This is an illustrative finding, not an observed result from your project:
 
-Now ask it anything about your project:
+> **Priority: High — Missing prerequisite.** The installation section asks readers to run a command without naming the
+required runtime. Add the prerequisite before that command and link to its setup guide.
 
-```
-What does this codebase do?
-```
+Check the source references yourself. If a finding misunderstands your audience or setup, tell the agent to revise the
+report. A saved report is useful context, not proof that every recommendation is correct.
 
-```
-Find the most complex function and explain it.
-```
+## Use the result
 
-```
-What tests are missing?
-```
+In the next session, ask:
 
-```
-Where would a security reviewer look first?
+```text
+Read .aiwg/marketing/brand/audit/readme-review.md and implement the first
+agreed fix. Preserve unrelated work and explain how the change resolves it.
 ```
 
-AIWG has pre-loaded 50+ specialized agents and rules. The AI will answer with the knowledge of a test engineer, security auditor, or architect — not a generic chatbot.
+Confirm that the agent consulted the report and that the proposed change follows the recommendation you selected.
 
----
+## Other small tasks
 
-## If you don't have a project to try it on
+If a README review does not fit your project, choose one of these:
 
-Make a folder, drop in one or two files, and run:
+- Explain the codebase's main entry points and save a short report with source references.
+- Identify important missing tests and save a list ranked by risk, with the code paths each test would protect.
+- Review a campaign draft for unclear audience and messaging, then save the three most useful revisions.
 
-```bash
-mkdir my-test && cd my-test
-echo "console.log('hello')" > index.js
-aiwg use all --provider <provider>
-aiwg index build --all
-aiwg regenerate --provider <provider>
-```
+Specify which files to inspect and where to save the output. Keep the first task small enough that you can judge
+whether the result is useful.
 
-Then (this is a brand-new folder, so nothing to reconcile — just ask):
-
-```
-What would a senior engineer say about this code?
-```
-
-It will answer as one. That's what AIWG does.
-
----
-
-## What you just installed
-
-`aiwg use all --provider <provider>` copied the complete agent, command, skill,
-and rule surface into the provider's native locations. Regeneration connected
-that provider to `WORKSPACE.md` and `AIWG.md`; the index makes those
-capabilities discoverable without loading the entire corpus.
-
-On an **existing project**, or to pull in the latest AIWG on a project you set up earlier, run `/aiwg-regenerate` inside the tool: it re-tailors that context to your actual codebase and preserves any edits you've made.
-
----
-
-## What to explore next
-
-Once you've seen it in action, pick a path:
-
-- **Starting a real project?** → [New Project](new-project.md)
-- **You have existing code?** → [Existing Project](existing-project.md)
-- **Want structured auditing?** → [Audit Existing Code](audit-existing-code.md)
+Continue with [Existing Project](existing-project.md), [Writing and Content](writing-and-content.md), or [another workflow](../overview/capabilities.md).

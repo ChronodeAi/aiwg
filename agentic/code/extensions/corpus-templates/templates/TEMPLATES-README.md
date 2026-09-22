@@ -107,6 +107,8 @@ When backfilling, do **not** restructure heading content silently. Preserve the 
 | `pdf_hash` | yes when PDF exists | string | SHA-256 of `pdfs/full/REF-XXX-*.pdf` |
 | `affiliation-primary` | optional | string or PROF-O ID | Primary author's institution |
 | `status` | optional | enum | `placeholder`, `pending-acquisition`, `acquisition-deficit` for partial inductions |
+| `acquisition-obstacle` | required when status is `pending-acquisition`/`acquisition-deficit` | object | `state` (`not-attempted`, `credential-required`, `structurally-unobtainable`, `artifact-absent`), `detail` (the specific obstacle), `paths-tried` (each path and what it returned). A bare boolean cannot be triaged |
+| `bibliography` | recommended on citation sidecars | object | `source` (`bbl`, `inline-thebibliography`, `pdf-reference-list`), `count`, `count-method`, optional `unique-count`. Counts come from the compiled bibliography, never `.bib` size or a sum of artifacts |
 
 The `pdf_hash` field is the load-bearing integrity check — verify with `sha256sum pdfs/full/REF-XXX-*.pdf` when refreshing.
 

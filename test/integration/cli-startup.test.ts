@@ -22,7 +22,7 @@
  * making a full build a precondition for the fast unit-test workflow.
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterAll, describe, it, expect } from 'vitest';
 import { spawnSync } from 'child_process';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -34,6 +34,9 @@ const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const ROUTER_PATH = path.join(REPO_ROOT, 'dist', 'src', 'cli', 'router.js');
 const BIN_PATH = path.join(REPO_ROOT, 'bin', 'aiwg.mjs');
+const TEST_CONFIG_DIR = mkdtempSync(path.join(os.tmpdir(), 'aiwg-cli-startup-config-'));
+
+afterAll(() => rmSync(TEST_CONFIG_DIR, { recursive: true, force: true }));
 
 // Skip the integration suite if the compiled output isn't present. These
 // tests need the build artifact; running them without it would just produce
@@ -66,6 +69,7 @@ function runCli(
       // Disable the update notifier in tests so no network calls fire.
       NO_UPDATE_NOTIFIER: '1',
       AIWG_NO_UPDATE_CHECK: '1',
+      AIWG_CONFIG: TEST_CONFIG_DIR,
       NO_COLOR: '1',
       ...(opts.env ?? {}),
     },
@@ -105,6 +109,38 @@ describe.skipIf(missingBuild)('CLI integration: basic lifecycle', () => {
     expect(parsed.version).toMatch(/\d{4}\.\d+\.\d+/);
     expect(parsed.invocation_id).toBeTruthy();
     expect(parsed.channel).toBeTruthy();
+  });
+});
+
+describe.skipIf(missingBuild)('CLI namespace help routing (#2306, #2307)', () => {
+  it('lists sessions in the fast root help', () => {
+    const result = runCli(['help']);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/sessions <command>\s+Manage the normalized session catalog/);
+  });
+
+  it.each(['sessions', 'catalog'])('%s shares usage across bare, flag, and help-prefix forms', (command) => {
+    const bare = runCli([command]);
+    expect(bare.status).toBe(command === 'catalog' ? 1 : 2);
+    for (const args of [[command, '--help'], [command, '-h'], ['help', command]]) {
+      const result = runCli(args);
+      expect(result.status, args.join(' ')).toBe(0);
+      expect(result.stdout).toBe(bare.stdout);
+      expect(result.stderr).toBe('');
+      expect(result.stdout).toContain(`Usage: aiwg ${command}`);
+      expect(result.stdout).toContain('Commands:');
+      expect(result.stdout).toContain('Options');
+      expect(result.stdout).not.toContain('No detailed help');
+    }
+  });
+
+  it('renders the sessions JSON help contract without opening storage', () => {
+    const result = runCli(['sessions', '--help', '--json', '--db', '/not-a-database/catalog.sqlite']);
+    expect(result.status).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.command).toBe('sessions.help');
+    expect(payload.status).toBe('ok');
+    expect(payload.data.usage).toContain('aiwg sessions <command>');
   });
 });
 
@@ -192,7 +228,7 @@ describe.skipIf(missingBuild)('CLI integration: non-interactive / CI-friendly pa
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
-  });
+  }, 65_000);
 });
 
 describe.skipIf(missingBuild)('CLI integration: JSONL logging', () => {

@@ -402,6 +402,59 @@ No citations found.
     });
   });
 
+  describe('rejected-candidate section is not an edge source (#2525)', () => {
+    // The citation-sidecar template gained a `## Rejected Candidates` section so a
+    // candidate dropped after investigation is recorded rather than silently
+    // reintroduced by a later extraction pass. Those rows name REF ids by design —
+    // they must never reach the graph, or the record of a rejection would itself
+    // fabricate the edge it exists to prevent.
+    const sidecar = [
+      '---',
+      'ref: REF-2539',
+      'title: "Probe"',
+      'type: citations',
+      '---',
+      '',
+      '## Outgoing: Papers This Work Cites',
+      '',
+      '| # | Title | Authors | Year | DOI/URL | Inducted REF | Confirmed by |',
+      '|---|-------|---------|------|---------|--------------|--------------|',
+      '| 1 | GCG | Zou et al. | 2023 | arXiv:2307.15043 | REF-1018 | printed-entry |',
+      '',
+      '## Rejected Candidates',
+      '',
+      '| # | Title | Authors | Year | Why rejected |',
+      '|---|-------|---------|------|--------------|',
+      '| 1 | Representation Engineering | Zou et al. | 2023 | wrong node after author-year disambiguation (REF-233) |',
+      '| 2 | Do Anything Now | Shen et al. | 2023 | `.bib`-only, absent from compiled `.bbl` (REF-543) |',
+      '',
+      '## Incoming: Papers That Cite This Work',
+      '',
+      '| # | Title | Authors | Year | DOI/URL | Inducted REF |',
+      '|---|-------|---------|------|---------|--------------|',
+      '| 1 | Later work | Someone | 2025 | arXiv:2501.00001 | REF-9001 |',
+      '',
+    ].join('\n');
+
+    it('keeps rejected REF ids out of both edge directions', () => {
+      const result = parseCitationSidecar(sidecar);
+      expect(result).not.toBeNull();
+      expect(result!.cites).toEqual(['REF-1018']);
+      expect(result!.citedBy).toEqual(['REF-9001']);
+      for (const rejected of ['REF-233', 'REF-543']) {
+        expect(result!.cites, rejected).not.toContain(rejected);
+        expect(result!.citedBy, rejected).not.toContain(rejected);
+      }
+    });
+
+    it('still reads the Inducted REF column when a Confirmed by column follows it', () => {
+      // The template's Outgoing table is 7 columns now. Column lookup is by name,
+      // so a trailing column must not shift what gets read.
+      const result = parseCitationSidecar(sidecar);
+      expect(result!.cites).toContain('REF-1018');
+    });
+  });
+
   describe('citationResultToEdges', () => {
     it('should convert cites to upstream edges and citedBy to downstream edges', () => {
       const refToPath = new Map([

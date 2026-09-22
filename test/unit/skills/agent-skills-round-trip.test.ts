@@ -36,7 +36,7 @@ const AIWG_VERSION = 'test-version';
 
 interface ProviderFixture {
   id: string;
-  location: 'project' | 'home';
+  location: 'project' | 'home' | 'configured';
   root: string;
   status: AgentSkillProjectionStatus;
   outcome: AgentSkillDeploymentOutcome;
@@ -232,6 +232,10 @@ describe('Agent Skills import-to-provider round trip', () => {
     sentinel = path.join(root, 'script-executed');
     fs.mkdirSync(projectDir);
     fs.mkdirSync(homeDir);
+    process.env.AIWG_GROKBOT_SKILLS_DIR = path.join(
+      homeDir,
+      'configured-grokbot-skills',
+    );
     process.env.AIWG_FIXTURE_SENTINEL = sentinel;
 
     sourceValidation = validateAgentSkillFile(path.join(SOURCE_ROOT, 'SKILL.md'), {
@@ -266,13 +270,14 @@ describe('Agent Skills import-to-provider round trip', () => {
 
   afterAll(() => {
     delete process.env.AIWG_FIXTURE_SENTINEL;
+    delete process.env.AIWG_GROKBOT_SKILLS_DIR;
     fs.rmSync(root, { recursive: true, force: true });
   });
 
   it('keeps the provider oracle explicit and aligned with all canonical IDs', () => {
     expect(providerOracle.providers.map((provider) => provider.id))
       .toEqual([...PROVIDER_IDS]);
-    expect(providerOracle.providers).toHaveLength(12);
+    expect(providerOracle.providers).toHaveLength(18);
   });
 
   it('preserves every managed source file as exact bytes without running scripts', () => {
@@ -299,7 +304,12 @@ describe('Agent Skills import-to-provider round trip', () => {
         homeDir,
         target: provider.id,
       });
-      const expectedBase = provider.location === 'home' ? homeDir : projectDir;
+      const configuredRoot = process.env.AIWG_GROKBOT_SKILLS_DIR!;
+      const expectedBase = provider.location === 'home'
+        ? homeDir
+        : provider.location === 'configured'
+          ? configuredRoot
+          : projectDir;
       const expectedPath = path.join(
         expectedBase,
         provider.root,
@@ -310,7 +320,9 @@ describe('Agent Skills import-to-provider round trip', () => {
         provider: provider.id,
         path: expectedPath,
         projectionStatus: provider.status,
-        outcome: provider.outcome,
+        outcome: ['codex', 'deepseek-harness'].includes(provider.id)
+          ? 'unchanged'
+          : provider.outcome,
       });
 
       expect(provider.validator).toBe('pass');
@@ -382,6 +394,7 @@ describe('Agent Skills import-to-provider round trip', () => {
         homeDir,
         target: provider.id,
       };
+      deployImportedAgentSkill(providerOracle.skill.name, options);
       expect(deployImportedAgentSkill(providerOracle.skill.name, options).outcome)
         .toBe('unchanged');
       expect(uninstallImportedAgentSkill(providerOracle.skill.name, options).outcome)

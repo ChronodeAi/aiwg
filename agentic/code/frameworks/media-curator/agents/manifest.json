@@ -5,8 +5,9 @@
     "acquisition-manager.md",
     "completeness-tracker.md",
     "discography-analyst.md",
-    "metadata-curator.md",
+    "llm-model-archivist.md",
     "media-quality-assessor.md",
+    "metadata-curator.md",
     "source-discoverer.md"
   ],
   "ignore": [

@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { HandlerContext } from '../../../src/cli/handlers/types.js';
 import { getProviderDefinition } from '../../../src/providers/provider-definitions.js';
+import { resolveHermesHomePath } from '../../../src/providers/hermes-home.js';
 
 vi.mock('../../../src/cli/ui.js', () => ({
   blank: vi.fn(),
@@ -107,16 +108,27 @@ const USE_PATH_GOLDENS = {
     },
     kernelSkills: '.factory/skills',
   },
+  grokbot: {
+    deployTarget: 'mixed',
+    artifacts: {
+      agents: null,
+      commands: null,
+      skills: null,
+      rules: null,
+      behaviors: null,
+    },
+    kernelSkills: null,
+  },
   hermes: {
     deployTarget: 'mixed',
     artifacts: {
       agents: null,
       commands: null,
-      skills: '~/.hermes/.aiwg/skills',
+      skills: resolveHermesHomePath('skills', '.aiwg'),
       rules: null,
       behaviors: null,
     },
-    kernelSkills: '~/.hermes/skills',
+    kernelSkills: resolveHermesHomePath('skills'),
   },
   opencode: {
     deployTarget: 'project',
@@ -192,6 +204,7 @@ const REGENERATE_FILE_GOLDENS: Record<string, string[]> = {
   copilot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.github/copilot-instructions.md'],
   cursor: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   factory: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
+  grokbot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   hermes: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.hermes.md'],
   opencode: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   warp: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', 'WARP.md'],
@@ -268,6 +281,8 @@ describe('provider output characterization for registry migration', () => {
     } = await import('../../../src/providers/provider-definitions.mjs');
 
     expect(SUPPORTED_PROVIDERS).toEqual([
+      'antigravity',
+      'omp',
       'claude-code',
       'cursor',
       'factory',
@@ -279,8 +294,11 @@ describe('provider output characterization for registry migration', () => {
     expect(listMcpInjectProviderIds()).toEqual(SUPPORTED_PROVIDERS);
     expect(normalizeRuntimeProviderId('claude')).toBe('claude-code');
     expect(normalizeRuntimeProviderId('openai')).toBe('codex');
+    expect(normalizeRuntimeProviderId('agy')).toBe('antigravity');
     expect(getMcpInjectionDefinition('openai')?.configFormat).toBe('toml');
     expect(getMcpInjectionDefinition('opencode')?.serversKey).toBe('mcp');
+    expect(getProviderConfigPath('agy', projectDir)).toBe(resolve(projectDir, '.agents/mcp_config.json'));
+    expect(getProviderConfigPath('antigravity', projectDir, { scope: 'user' })).toBe(resolve(homeDir, '.gemini/config/mcp_config.json'));
     expect(getProviderConfigPath('claude-code', projectDir)).toBe(resolve(projectDir, '.claude/settings.local.json'));
     expect(getProviderConfigPath('claude', projectDir)).toBe(resolve(projectDir, '.claude/settings.local.json'));
     expect(getProviderConfigPath('cursor', projectDir)).toBe(resolve(projectDir, '.cursor/mcp.json'));

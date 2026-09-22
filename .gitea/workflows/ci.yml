@@ -6,6 +6,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, develop]
   pull_request:
@@ -45,6 +46,17 @@ jobs:
         # docs/contributing/dependency-sources.md.
         run: npm run lint:dep-sources
 
+      - name: Reject eval-backed module import shims (#2082)
+        # Optional integrations stay lazy, but must use native import() rather
+        # than eval()/Function() code-generation wrappers.
+        run: npm run lint:eval-imports
+
+      - name: Verify published license boundaries (#2083)
+        # Legal templates contain illustrative policy data. Require explicit
+        # SPDX file metadata so those examples cannot masquerade as the
+        # distribution license of the package that carries them.
+        run: npm run lint:package-license-boundary
+
       - name: Scan known affected package feed (#1353)
         # Reads the operator-maintained CSV feed from either the canonical
         # mounted path or AIWG_AFFECTED_PACKAGES_CSV. In CI, prefer a raw gist
@@ -75,12 +87,39 @@ jobs:
       - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
         run: npm run build:cli
 
-      - name: Run Fortemi Core index release gate (#1696/#1697)
-        # Builds the real framework corpus index, validates the checked-in
-        # component-to-driver coverage report and discovery query matrix
-        # against local + Fortemi Core backends, and proves npm packaging
-        # includes the generated prebuilt index contract.
-        run: npm run ci:fortemi-index
+      - name: Install SQLite test backend
+        # Keep native prebuild plumbing out of the default/package-lock install
+        # tree while making the optional production backend mandatory in CI.
+        # This exact-version follow-up must not re-resolve the already-locked
+        # graph through the seven-day age filter; match the publish gate.
+        # Shared with contributors as `npm run features:sqlite` so a local run
+        # and a CI run install the same backend the same way (#2515).
+        run: npm run features:sqlite
+
+      - name: Verify test runner ownership
+        run: npm run lint:test-registration
+
+      - name: Verify test child-process timeouts
+        run: npm run lint:test-process-timeouts
+
+      - name: Enforce measured testing-quality and audit-foundation coverage
+        run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement
+
+      - name: Run source-bound testing conformance example
+        run: npm run test:conformance:example
+
+      - name: Preserve testing conformance evidence
+        if: always()
+        uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20
+        with:
+          name: testing-conformance-${{ gitea.sha }}
+          path: |
+            test-results/conformance-example
+            test-results/test-registration.json
+            test-results/testing-quality-coverage
+            test-results/audit-foundations-coverage
+            test-results/coverage-enforcement
+          if-no-files-found: error
 
       - name: Lint schemas
         # Validates schemas/executor-v1.json (draft-2020-12) and all
@@ -88,6 +127,16 @@ jobs:
         # Fails the build if the schema is structurally invalid or a fixture
         # violates the declared _validates_as shape. (#1178)
         run: npm run lint:schemas
+
+      - name: Validate ops extension templates
+        # Discovers every extension YAML template, resolves core and custom
+        # kinds through ADDON.yaml, and fails on schema or reference drift.
+        run: npm run lint:ops-templates
+
+      - name: Enforce Mission Protocol inventory and compatibility (#2178/#2180)
+        # Fails when a new Mission producer/consumer is unclassified or when
+        # mission.aiwg.io/v1 changes without an explicit version-policy verdict.
+        run: npm run lint:mission-inventory && npm run lint:mission-contract
 
       - name: Lint tracked generated artifacts
         # Keeps local build outputs, provider exports, indexes, caches,
@@ -100,11 +149,22 @@ jobs:
         # secret values. Live metadata is checked separately after induction.
         run: npm run lint:vault-migration
 
+      - name: Run contracts in their owning Vitest and Node lanes
+        run: npm run test:contract
+
       - name: Run conformance suite (fixture mode)
         # Exercises the executor-contract v1 dispatch path via fixture replay.
         # Runs as a separate step (not folded into test:ci) to keep the existing
         # CI budget intact. Zero network I/O — fully deterministic. (#1183)
         run: npm run test:conformance
+
+      - name: Run Dataset Intelligence conformance contracts (#2242)
+        run: npm run test:conformance:dataset
+
+      - name: Enforce adversarial attestation transport conformance (#2092)
+        # Regenerates deterministic real-key fixtures, rejects drift, and proves
+        # identical non-waiveable outcomes across every supported transport.
+        run: npm run test:security:attestation-conformance
 
       - name: Run node test suite (ralph-external + ralph)
         # The tools/ralph-external/*.test.mjs and test/unit/ralph/*.test.mjs
@@ -116,12 +176,14 @@ jobs:
         # `test:node` set is gated here. Deterministic, no network.
         run: npm run test:node
 
-      - name: Install SQLite test backend
-        # Keep native prebuild plumbing out of the default/package-lock install
-        # tree while making the optional production backend mandatory in CI.
-        # This exact-version follow-up must not re-resolve the already-locked
-        # graph through the seven-day age filter; match the publish gate.
-        run: npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0
+      - name: Run storage backend conformance gate (#2190/#2191)
+        # Enforces the zero-dependency golden corpus, migration safety/fault
+        # protocol, qualification negative controls, and PostgreSQL transport
+        # contracts. Live server suites remain isolated integration jobs.
+        run: npm run test:conformance:storage
+
+      - name: Verify source-bound storage benchmark claims (#2191)
+        run: npm run verify:storage-claims
 
       - name: Sanitize session regression corpus
         # Reject credential, personal-path, host-identity, and provenance drift
@@ -149,16 +211,25 @@ jobs:
           path: test-results/session-performance.json
           if-no-files-found: error
 
+      - name: Record runner headroom (#2553)
+        # The real-filesystem watcher test has timed out five times under CI
+        # load reporting "no events"; one of those logs also carried a
+        # "disk full" append failure. Print disk, inode, inotify, memory and
+        # load headroom into the job log before the suite so the next
+        # recurrence carries its environment evidence. Read-only; never fails.
+        run: node tools/ci/runner-headroom.mjs .
+
       - name: Run tests
         env:
-          # CI runs in docker-in-docker on the Gitea runner — cold start is
-          # ~50ms slower than a bare-metal laptop. The local dev budget of
-          # 150ms is preserved as the aspirational target; CI uses a looser
-          # budget so a slow-runner day doesn't block an otherwise-green PR.
-          # Bump either value if regression hits consistently.
+          # Shared-runner policy: paired Node baselines, median of 7 samples.
           AIWG_PERF_BUDGET_VERSION_MS: "300"
-          AIWG_PERF_BUDGET_HELP_MS: "650"
-        run: npm run test:ci
+          AIWG_PERF_BUDGET_HELP_MS: "750"
+          AIWG_PERF_SAMPLE_COUNT: "7"
+        # See #2521 — bound the full suite below this job's 15m cap so a hang is
+        # reported with a process tree rather than dying anonymously. Healthy
+        # Test runs measured 6.2-6.3 min end to end, so 10m is ~2x headroom on
+        # the whole job for a step that is only part of it.
+        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm run test:ci
 
       - name: Run tier-3 integration suite (#1174)
         # Spawns aiwg serve via bin/aiwg.mjs on an ephemeral port. The
@@ -171,12 +242,60 @@ jobs:
           AIWG_SERVE_HTTP_TIMEOUT_MS: "30000"
         run: npm run test:integration:serve
 
+  # Full-corpus index performance, real package installation/build, and
+  # full-corpus discovery are isolated gates. They must not compete with the
+  # general test workers or each other while measuring repository-scale work.
+  artifact-index:
+    name: Artifact index integration
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run isolated full-corpus artifact index tests
+        run: npm run test:integration:artifact-index
+
+  packaging:
+    name: Package lifecycle
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build release prerequisites
+        # Match both publish workflows: the root package intentionally ships
+        # apps/web/dist, so a CLI-only build produces an incomplete dry-run.
+        run: npm run build
+      - name: Run isolated packaging lifecycle tests
+        run: npm run test:packaging
+
+  release-discovery:
+    name: Release discovery and installed package
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build CLI prerequisites
+        run: npm run build:cli
+      - name: Verify real corpus, tarball and installed discovery
+        run: npm run ci:fortemi-index
+
   build:
     name: Build
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 10
-    needs: [test]
+    needs: [test, packaging, release-discovery]
 
     steps:
       - name: Checkout code

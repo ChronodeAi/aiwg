@@ -18,6 +18,7 @@ import type { StateTransferProjection } from './state-transfer.js';
 import {
   DEFAULT_PROJECT_AIWG_DIR,
   projectAiwgPath,
+  projectControlPath,
   resolveProjectAiwgDir,
 } from '../config/project-artifacts.js';
 
@@ -78,6 +79,9 @@ export interface MetadataEntry {
 
   /** Outbound @-mention references (paths this artifact depends on) */
   dependencies: string[];
+
+  /** Raw relative Markdown link targets parsed from this artifact. */
+  markdownLinks?: string[];
 
   /** Computed: paths that reference this artifact */
   dependents: string[];
@@ -176,6 +180,9 @@ export const OPERATIONAL_DISCOVERY_TYPES = [
   'command',
   'rule',
   'schema',
+  'decision-definition',
+  'decision-ruleset',
+  'decision-binding',
   'flow',
   'runbook',
   'template',
@@ -336,6 +343,8 @@ export interface IndexStats {
     incomingDeclarations?: number;
     /** Stored upstream plus downstream adjacency entries. */
     adjacencyEntries?: number;
+    /** Edges derived from relative Markdown links that resolve to indexed nodes. */
+    markdownLinkEdges?: number;
     /** Canonical outgoing citations without a matching incoming declaration. */
     unmirroredOutgoing?: number;
     /** Incoming declarations without a matching canonical outgoing citation. */
@@ -419,7 +428,7 @@ export const INDEX_VERSION = '1.0.0';
  * making the serialized index schema incompatible; a mismatch simply forces a
  * one-time content re-extraction during the next incremental build.
  */
-export const INDEX_EXTRACTOR_VERSION = '2026.07.21.2';
+export const INDEX_EXTRACTOR_VERSION = '2026.08.24.1';
 
 /**
  * Built-in graph type identifiers
@@ -554,8 +563,8 @@ export interface GraphConfig {
   /**
    * Graph storage backend for this graph.
    * - 'json' (default): zero-dep adjacency list
-   * - 'graphology': rich traversal, community detection (requires npm install graphology)
-   * - 'sqlite': persistent on-disk, SQL set operations (requires npm install better-sqlite3)
+   * - 'graphology': rich traversal, community detection (`aiwg features install graph`)
+   * - 'sqlite': persistent on-disk, SQL set operations (`aiwg features install sqlite`)
    *
    * @implements #727
    */
@@ -563,7 +572,7 @@ export interface GraphConfig {
 
   /**
    * Optional embedding index configuration for semantic similarity queries.
-   * Requires: npm install @xenova/transformers hnswlib-node
+   * Enable with: aiwg features install embeddings
    *
    * @implements #730
    */
@@ -670,6 +679,72 @@ export const BUILTIN_GRAPH_CONFIGS: Record<BuiltinGraphType, GraphConfig> = {
  * @implements #426
  */
 export const GRAPH_CONFIGS: Record<string, GraphConfig> = { ...BUILTIN_GRAPH_CONFIGS };
+
+let projectGraphBackend: GraphConfig['graphBackend'];
+
+/** Resolve backend precedence: graph override, project default, then JSON. */
+export function resolveGraphBackendType(graph?: GraphType): NonNullable<GraphConfig['graphBackend']> {
+  return (graph ? GRAPH_CONFIGS[graph]?.graphBackend : undefined) ?? projectGraphBackend ?? 'json';
+}
+
+interface BuiltinGraphOverride {
+  scanDirs?: string[];
+  extensions?: string[];
+}
+
+function freshBuiltinGraphConfig(name: BuiltinGraphType): GraphConfig {
+  const config = BUILTIN_GRAPH_CONFIGS[name];
+  return {
+    ...config,
+    scanDirs: [...config.scanDirs],
+    extensions: [...config.extensions],
+  };
+}
+
+/**
+ * Detect conventional Python layouts without treating every top-level folder
+ * as source. A Python project manifest activates `.py`/`.pyi` support; package
+ * roots are immediate directories containing `__init__.py`, plus the common
+ * `tests/` and `scripts/` roots when present.
+ */
+function detectPythonCodebaseConfig(cwd: string, base: GraphConfig): GraphConfig {
+  const hasPythonManifest = ['pyproject.toml', 'setup.py', 'setup.cfg']
+    .some((manifest) => fs.existsSync(path.join(cwd, manifest)));
+  if (!hasPythonManifest) return base;
+
+  const detectedRoots: string[] = [];
+  for (const root of ['tests', 'scripts']) {
+    if (fs.existsSync(path.join(cwd, root))) detectedRoots.push(root);
+  }
+
+  const excluded = new Set([
+    '.aiwg', '.git', '.github', '.venv', 'venv', 'node_modules',
+    'src', 'test', 'tests', 'tools', 'scripts', 'docs', 'documentation',
+  ]);
+  try {
+    for (const entry of fs.readdirSync(cwd, { withFileTypes: true })) {
+      if (!entry.isDirectory() || excluded.has(entry.name) || entry.name.startsWith('.')) continue;
+      if (fs.existsSync(path.join(cwd, entry.name, '__init__.py'))) detectedRoots.push(entry.name);
+    }
+  } catch {
+    // Layout detection is best-effort; the immutable defaults still apply.
+  }
+
+  return {
+    ...base,
+    scanDirs: [...new Set([...base.scanDirs, ...detectedRoots])],
+    extensions: [...new Set([...base.extensions, '.py', '.pyi'])],
+  };
+}
+
+function applyBuiltinGraphOverride(base: GraphConfig, override: BuiltinGraphOverride | undefined): GraphConfig {
+  if (!override) return base;
+  return {
+    ...base,
+    scanDirs: override.scanDirs ? [...override.scanDirs] : base.scanDirs,
+    extensions: override.extensions ? [...override.extensions] : base.extensions,
+  };
+}
 
 /**
  * Normalize metadataSupplements entries.
@@ -886,6 +961,13 @@ export function loadModuleGraphConfigs(cwd: string, diagnostics?: GraphConfigWar
  * @implements #426 #726
  */
 export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarning[]): string[] {
+  // Built-ins are immutable in index.graphs, but codebase roots/extensions may
+  // be adapted through the explicitly bounded graphOverrides contract (#2123).
+  // Reset on every project load so a prior cwd cannot leak its override or
+  // detected Python package roots into a later build in the same process.
+  GRAPH_CONFIGS.codebase = detectPythonCodebaseConfig(cwd, freshBuiltinGraphConfig('codebase'));
+  projectGraphBackend = undefined;
+
   // Load module-declared graphs first (frameworks/addons)
   const moduleLoaded = loadModuleGraphConfigs(cwd, diagnostics);
   const loaded: string[] = [...moduleLoaded];
@@ -895,16 +977,22 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
   // config.yaml is a
   // deprecated fallback so un-migrated corpora keep working.
   let graphs: Record<string, unknown> | undefined;
+  let graphOverrides: Record<string, unknown> | undefined;
   let fromDeprecatedYaml = false;
+  let canonicalIndexPresent = false;
 
   // (a) Canonical: .aiwg/aiwg.config (JSON).
   try {
-    const aiwgConfigPath = projectAiwgPath(cwd, 'aiwg.config');
+    const aiwgConfigPath = projectControlPath(cwd, 'aiwg.config');
     if (fs.existsSync(aiwgConfigPath)) {
       const parsed = JSON.parse(fs.readFileSync(aiwgConfigPath, 'utf-8')) as Record<string, unknown>;
       const idx = parsed.index as Record<string, unknown> | undefined;
+      canonicalIndexPresent = idx !== undefined;
+      if (idx?.graphBackend === 'json' || idx?.graphBackend === 'graphology' || idx?.graphBackend === 'sqlite') projectGraphBackend = idx.graphBackend;
       const g = idx?.graphs as Record<string, unknown> | undefined;
       if (g && typeof g === 'object') graphs = g;
+      const overrides = idx?.graphOverrides as Record<string, unknown> | undefined;
+      if (overrides && typeof overrides === 'object') graphOverrides = overrides;
     }
   } catch {
     // #1624 — surface a malformed aiwg.config rather than dropping the whole
@@ -917,15 +1005,21 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
   }
 
   // (b) Fallback: legacy .aiwg/config.yaml.
-  if (!graphs) {
+  if (!canonicalIndexPresent && !graphs && !graphOverrides) {
     try {
       const configPath = projectAiwgPath(cwd, 'config.yaml');
       if (fs.existsSync(configPath)) {
         const config = loadYaml(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown> | null;
         const idx = config?.index as Record<string, unknown> | undefined;
+        if (idx?.graphBackend === 'json' || idx?.graphBackend === 'graphology' || idx?.graphBackend === 'sqlite') projectGraphBackend = idx.graphBackend;
         const g = idx?.graphs as Record<string, unknown> | undefined;
         if (g && typeof g === 'object') {
           graphs = g;
+          fromDeprecatedYaml = true;
+        }
+        const overrides = idx?.graphOverrides as Record<string, unknown> | undefined;
+        if (overrides && typeof overrides === 'object') {
+          graphOverrides = overrides;
           fromDeprecatedYaml = true;
         }
       }
@@ -934,12 +1028,20 @@ export function loadUserGraphConfigs(cwd: string, diagnostics?: GraphConfigWarni
     }
   }
 
+  const codebaseOverride = graphOverrides?.codebase;
+  if (codebaseOverride && typeof codebaseOverride === 'object' && !Array.isArray(codebaseOverride)) {
+    GRAPH_CONFIGS.codebase = applyBuiltinGraphOverride(
+      GRAPH_CONFIGS.codebase,
+      codebaseOverride as BuiltinGraphOverride,
+    );
+  }
+
   if (!graphs) return loaded;
 
   if (fromDeprecatedYaml && !yamlIndexDeprecationWarned) {
     yamlIndexDeprecationWarned = true;
     process.stderr.write(
-      '[aiwg index] note: index.graphs in .aiwg/config.yaml is deprecated — move the index block into .aiwg/aiwg.config (see docs/cli-reference.md, #1491).\n',
+      '[aiwg index] note: index.graphs in .aiwg/config.yaml is deprecated — move the index block into .aiwg/aiwg.config (see docs/cli/reference.md, #1491).\n',
     );
   }
 

@@ -44,6 +44,7 @@ import { routeModelTier } from '../../models/router.js';
 import { buildWrapperRouteEnvelope, type RoutedCapabilityType } from '../../models/wrapper-route.js';
 import {
   loadProviderModelCatalog,
+  type ModelPolicyProvider,
   type ProviderModelCatalog,
 } from '../../models/provider-policy.js';
 import {
@@ -52,6 +53,10 @@ import {
 } from '../../artifacts/capability-resolver.js';
 
 const BASELINE_PROVIDER = 'claude-code';
+
+function isModelPolicyProvider(provider: string): provider is ModelPolicyProvider {
+  return Object.hasOwn(loadProviderModelCatalog().providers, provider);
+}
 
 interface ResolvedStewardProvider {
   id: string;
@@ -123,7 +128,15 @@ function formatProvider(
     lines.push(`\n  ${featureId} — ${status}`);
     if (feat?.description) lines.push(`    ${feat.description}`);
     if (isNative) {
-      if (feat?.native_example) lines.push(`    example: ${feat.native_example}`);
+      if (id === 'omp' && featureId === 'mcp') {
+        lines.push('    OMP supplies the native client. AIWG persistent injection/removal is available for project and profile scope; ephemeral injection is unsupported.');
+        lines.push('    example: aiwg mcp inject --provider omp --servers local-tools');
+      } else if (id === 'omp' && featureId === 'behaviors') {
+        lines.push('    AIWG bridges selected handlers through an OMP extension; no default policy is installed. Permission-request and pre-compaction enforcement are unsupported.');
+      } else if (id === 'omp' && (featureId === 'tasks' || featureId === 'agent_teams')) {
+        lines.push('    OMP native leaf tasks use AIWG workspace admission limits and verified child results; nested requests share the same scheduler.');
+        lines.push('    example: aiwg team run --provider omp --body-file tasks.json');
+      } else if (feat?.native_example) lines.push(`    example: ${feat.native_example}`);
     } else if (isExternalStrategy(emulation)) {
       lines.push(`    trigger: system cron, systemd timer, or CI; AIWG does not own the clock`);
     } else if (emulation) {
@@ -228,6 +241,19 @@ function printFullMatrix(matrix: CapabilityMatrix): void {
 
 // ── Main execution ─────────────────────────────────────────────────────────────
 
+function permissionsUsage(): string {
+  return `
+  aiwg steward permissions — authorization model audit and normalization
+
+  Usage:
+    aiwg steward permissions audit                 Find normalized-model errors and legacy grants
+    aiwg steward permissions migrate --dry-run     Preview legacy permission normalization
+    aiwg steward permissions migrate --apply       Back up and atomically normalize config
+
+  Reads .aiwg/aiwg.config authorization block. Migration backs up before writing.
+`;
+}
+
 async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void> {
   const subcommand = args[0];
 
@@ -240,6 +266,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     aiwg steward capabilities --feature <name>    Provider support matrix for a feature
     aiwg steward capabilities --all               Full matrix (all providers x features)
     aiwg steward find --capability <name>         Routing advice for your current provider
+    aiwg steward transports                       Report transport capabilities separately from providers
     aiwg steward models [--complex|--high-impact] Model policy/discovery routing advice
     aiwg steward models --route --capability-type <agent|skill|rule|workflow>
       --capability <id> --assignment <text> [--provider <name>] [--json]
@@ -249,7 +276,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     aiwg steward permissions migrate --apply      Back up and atomically normalize config
 
   Providers:
-    claude-code, codex, copilot, cursor, factory, opencode, warp, windsurf, hermes, openclaw
+    antigravity (agy), claude-code, codex, copilot, cursor, deepseek-harness (dsh), factory, opencode, pi, omp, warp, windsurf, hermes, openclaw
 
   Features:
     cron, agent_teams, tasks, mcp, behaviors, mission_control, daemon
@@ -265,6 +292,11 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
 
   if (subcommand === 'permissions') {
     const operation = args[1];
+    // `<namespace> --help` must reach the same usage block bare invocation prints (#2533).
+    if (!operation || operation === 'help' || operation === '--help' || operation === '-h') {
+      console.log(permissionsUsage());
+      return;
+    }
     const projectDir = ctx ? getProjectDir(ctx, args) : process.cwd();
     const config = await readAiwgConfig(projectDir);
     if (!config) throw new AiwgError({
@@ -298,7 +330,14 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
         return;
       }
       const diagnostics = await auditLegacyPermissions(projectDir, config);
-      console.log(`  ${dryRun ? 'Would normalize' : 'Normalizing'} ${diagnostics.filter(d => d.code.startsWith('legacy-')).length} legacy permission source(s).`);
+      const legacyCount = diagnostics.filter(d => d.code.startsWith('legacy-')).length;
+      if (legacyCount === 0 && !config.authorization) {
+        // Nothing legacy to convert: the only work is writing the initial
+        // default-deny block, which is what clears doctor's warning (#2563).
+        console.log(`  ${dryRun ? 'Would write' : 'Writing'} an initial default-deny authorization block (no legacy permission sources found).`);
+      } else {
+        console.log(`  ${dryRun ? 'Would normalize' : 'Normalizing'} ${legacyCount} legacy permission source(s).`);
+      }
       console.log(`  Result: ${Object.keys(normalized.authorization?.permissions ?? {}).length} permissions, ${Object.keys(normalized.authorization?.roles ?? {}).length} roles, ${normalized.authorization?.assignments.length ?? 0} assignments; default deny.`);
       if (apply) {
         const backup = await backupConfig(projectDir);
@@ -311,10 +350,22 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     }
     throw new AiwgError({
       code: 'ERR_USAGE_UNKNOWN_PERMISSION_OPERATION',
-      message: `Unknown permissions operation: ${operation ?? '(missing)'}`,
+      message: `Unknown permissions operation: ${operation}`,
       hint: 'Use audit or migrate --dry-run|--apply.',
       exitCode: EXIT_CODES.USAGE,
     });
+  }
+
+  if (subcommand === 'transports') {
+    const projectDir = ctx ? getProjectDir(ctx, args) : process.cwd();
+    const config = await readAiwgConfig(projectDir);
+    const profiles = Object.keys(config?.uhp?.profiles ?? {});
+    console.log('\n  Remote execution transports');
+    console.log('  ───────────────────────────');
+    console.log(`  UHP ${config?.uhp?.enabled ? 'enabled' : 'disabled'} (experimental client transport; not a provider capability)`);
+    console.log(`  Profiles: ${profiles.length ? profiles.join(', ') : 'none'}`);
+    console.log('  Routing: explicit `aiwg uhp <operation> --profile <name>`; no UHP↔A2A fallback.');
+    return;
   }
 
   const matrix = loadCapabilityMatrix();
@@ -499,6 +550,12 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
         hint: 'Pass --provider with a supported provider id.',
         exitCode: EXIT_CODES.USAGE,
       });
+      if (!isModelPolicyProvider(provider)) throw new AiwgError({
+        code: 'ERR_USAGE_UNSUPPORTED_PROVIDER',
+        message: `Model wrapper routing is not implemented for provider: ${provider}`,
+        hint: 'Use `aiwg steward capabilities --provider pi` for current Pi capability routing; model routing is tracked separately.',
+        exitCode: EXIT_CODES.USAGE,
+      });
       const capabilityType = flagValue('--capability-type') as RoutedCapabilityType | undefined;
       const capability = flagValue('--capability');
       const assignment = flagValue('--assignment');
@@ -627,6 +684,19 @@ export const stewardHandler: CommandHandler = {
   description: 'Provider capability routing and permission normalization',
   category: 'maintenance',
   aliases: [],
+
+  // The router intercepts --help before execute(), so a handler without this
+  // property gets the generic "no detailed help" stub even when its own usage
+  // text exists. Route to the same block bare invocation prints, and keep
+  // sub-namespace help reachable, without executing anything (#2533).
+  async help(ctx: HandlerContext): Promise<HandlerResult> {
+    const positional = ctx.args.filter((arg) => !arg.startsWith('-'));
+    if (positional[0] === 'permissions') {
+      return { exitCode: 0, message: permissionsUsage(), rawOutput: true };
+    }
+    await handleSteward([], ctx);
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {

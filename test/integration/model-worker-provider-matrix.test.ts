@@ -22,7 +22,7 @@ function deploy(provider: string, target: string, home: string, dryRun = false):
     '--skip-commands-migration',
     '--verbose',
     ...(dryRun ? ['--dry-run'] : []),
-  ], {
+  ], { timeout: 60_000,
     cwd: REPO_ROOT,
     env: { ...process.env, HOME: home, USERPROFILE: home },
     encoding: 'utf8',

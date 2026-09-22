@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GitAdapter } from '../../../src/packages/adapters/git.js';
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { timeout: 60_000, cwd, encoding: 'utf8' }).trim();
 }
 
 describe('GitAdapter immutable resolution', () => {

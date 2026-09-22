@@ -1,49 +1,32 @@
 # Starting a New Project
 
-> **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed, `all` is deployed for your provider, and `aiwg-regenerate` has connected the agent to this project.
+> **First time using AIWG?** Begin with [Install, Connect, and Verify](install-connect-verify.md). This guide assumes
+AIWG is connected to the target project and your provider session can read the deployed context.
 
 You have an idea. You want to build something. AIWG runs a structured intake conversation, generates the foundation documents your project needs, then assigns AI agents to carry the work forward.
 
-This is the full setup — requirements, architecture, test strategy, security baseline — generated from a single conversation.
+The first useful output is a project intake you can inspect and correct:
+problem statement, users, constraints, risks, and next action.
 
 ---
 
-## Step 1 — Install and connect
-
-```text
-Install or repair AIWG for this project by following
-https://raw.githubusercontent.com/jmagly/aiwg/main/setup.aiwg.yaml
-Explain the plan before changing anything, preserve my existing work, and ask
-me only for choices you cannot safely determine.
-```
-
----
-
-## Step 2 — Create your project folder
+## Step 1 — Create your project folder
 
 ```bash
 mkdir my-project && cd my-project
 git init
 ```
 
----
-
-## Step 3 — Deploy the complete AIWG system
-
-```bash
-aiwg use all --provider <provider>
-aiwg index build --all
-aiwg regenerate --provider <provider>
-```
-
-The agentic installer performs these commands for you. They are shown here as
-the manual fallback.
+If AIWG is not connected to this new folder yet, complete
+[Install, Connect, and Verify](install-connect-verify.md) here. Continue after
+the agent reports the project root, provider, deployed context, and one next
+action.
 
 ---
 
-## Step 4 — Open your provider and start intake
+## Step 2 — Start intake
 
-Then tell it what you're building:
+Tell the provider session what you're building:
 
 ```
 I want to build a REST API for a task management app. Users can create tasks,
@@ -67,7 +50,10 @@ These go into `.aiwg/` in your project. You can read them, edit them, and they g
 
 ---
 
-## Step 5 — Start building
+Success means the generated intake artifacts exist under `.aiwg/`, the agent
+can summarize them back to you, and you have corrected any wrong assumptions.
+
+## Step 3 — Start building
 
 Once intake is complete, the AI knows your project. You can now use natural language to drive development:
 

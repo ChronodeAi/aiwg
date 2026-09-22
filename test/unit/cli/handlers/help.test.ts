@@ -5,7 +5,7 @@
  * @parent #684
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 // ── Mocks ────────────────────────────────────────────────────
@@ -27,6 +27,9 @@ vi.mock('../../../../src/cli/ui.js', () => ({
 }));
 
 import { helpHandler } from '../../../../src/cli/handlers/help.js';
+import { getCommandIds } from '../../../../src/extensions/commands/definitions.js';
+
+afterEach(() => vi.restoreAllMocks());
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -58,6 +61,22 @@ describe('helpHandler metadata', () => {
 describe('helpHandler.execute', () => {
   beforeEach(() => { vi.clearAllMocks(); });
 
+  it('emits only the versioned canonical command registry for --json', async () => {
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await helpHandler.execute(makeCtx(['--json']));
+    expect(result.exitCode).toBe(0);
+    expect(output).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(output.mock.calls[0][0]);
+    expect(payload).toEqual({ schema: 'aiwg.command-registry.v1', commandIds: getCommandIds() });
+    expect(payload.commandIds).toContain('mc');
+    expect(payload.commandIds).not.toContain('aiwg');
+    expect(new Set(payload.commandIds).size).toBe(payload.commandIds.length);
+    const { header, blank, rule } = await import('../../../../src/cli/ui.js');
+    expect(header).not.toHaveBeenCalled();
+    expect(blank).not.toHaveBeenCalled();
+    expect(rule).not.toHaveBeenCalled();
+  });
+
   it('exits 0', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await helpHandler.execute(makeCtx());
@@ -86,10 +105,11 @@ describe('helpHandler.execute', () => {
     expect(allGroups).toMatch(/FRAMEWORK/i);
     expect(allGroups).toMatch(/WORKSPACE/i);
     expect(allGroups).toMatch(/MAINTENANCE/i);
-    expect(allGroups).toMatch(/RALPH/i);
+    // Loop category is mid-rename RALPH LOOP -> AGENT LOOP (#705, #558); accept either.
+    expect(allGroups).toMatch(/(RALPH|AGENT) LOOP/i);
   });
 
-  it('includes key commands in output (use, doctor, version, ralph)', async () => {
+  it('includes key commands in output (use, doctor, version, agent-loop)', async () => {
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation((s) => output.push(String(s ?? '')));
     await helpHandler.execute(makeCtx());
@@ -99,7 +119,8 @@ describe('helpHandler.execute', () => {
     expect(combined).toMatch(/use/);
     expect(combined).toMatch(/doctor/);
     expect(combined).toMatch(/version/);
-    expect(combined).toMatch(/ralph/);
+    expect(combined).toMatch(/(ralph|agent-loop)-status/);
+    expect(combined).toMatch(/sessions <command>.*normalized session catalog/);
   });
 
   it('includes provider list', async () => {

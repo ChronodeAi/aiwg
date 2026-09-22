@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionDefinition.v1alpha2.schema.json",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "const": "decision.aiwg.io/v1alpha2"
+    },
+    "kind": {
+      "const": "DecisionDefinition"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputSchema": {
+          "type": "object"
+        },
+        "question": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/entry"
+              },
+              "minProperties": 1
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/entry"
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "answer": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "choice"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "description": {
+                        "$ref": "#/$defs/entry"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "description"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "minItems": 2,
+                  "maxItems": 255
+                }
+              },
+              "required": [
+                "kind",
+                "options"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "ordinal-score"
+                },
+                "levels": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/entry"
+                  },
+                  "minItems": 2,
+                  "maxItems": 10
+                }
+              },
+              "required": [
+                "kind",
+                "levels"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "truth-probability"
+                },
+                "trueDescription": {
+                  "$ref": "#/$defs/entry"
+                },
+                "falseDescription": {
+                  "$ref": "#/$defs/entry"
+                }
+              },
+              "required": [
+                "kind",
+                "trueDescription",
+                "falseDescription"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 0
+        }
+      },
+      "required": [
+        "purpose",
+        "inputSchema",
+        "question",
+        "answer",
+        "requiredCapabilities"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "entry": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/entry"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/entry"
+          }
+        }
+      ]
+    }
+  }
+}

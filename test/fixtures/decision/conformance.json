@@ -1,0 +1,258 @@
+{
+  "schemaVersion": "1.0.0",
+  "status": "runtime acceptance cases; implementation pending",
+  "cases": [
+    {
+      "id": "C01",
+      "scope": "both",
+      "given": "valid choice",
+      "expect": "success with declared option"
+    },
+    {
+      "id": "C02",
+      "scope": "both",
+      "given": "ordinal distribution [0.25,0.5,0.25]",
+      "expect": "score=1 without rounding"
+    },
+    {
+      "id": "C03",
+      "scope": "both",
+      "given": "truth probability 0.5",
+      "expect": "value=0.5; no implicit boolean"
+    },
+    {
+      "id": "C04",
+      "scope": "both",
+      "given": "unknown choice or wrong value type",
+      "expect": "invalid-output; no action"
+    },
+    {
+      "id": "C05",
+      "scope": "both",
+      "given": "NaN, Infinity, probability outside [0,1]",
+      "expect": "invalid-output"
+    },
+    {
+      "id": "C06",
+      "scope": "both",
+      "given": "distribution missing key or sum outside tolerance",
+      "expect": "invalid-output"
+    },
+    {
+      "id": "C07",
+      "scope": "both",
+      "given": "missing/extra/duplicate answer key",
+      "expect": "invalid-output"
+    },
+    {
+      "id": "C08",
+      "scope": "both",
+      "given": "confidence below selected profile threshold",
+      "expect": "abstained:low-confidence"
+    },
+    {
+      "id": "C09",
+      "scope": "both",
+      "given": "confidence absent with threshold required",
+      "expect": "abstained:missing-confidence"
+    },
+    {
+      "id": "C10",
+      "scope": "both",
+      "given": "LLM profile under Jev threshold",
+      "expect": "abstained:confidence-profile-mismatch"
+    },
+    {
+      "id": "C11",
+      "scope": "both",
+      "given": "unsupported capability or option count",
+      "expect": "unsupported before credential fetch/network"
+    },
+    {
+      "id": "C12",
+      "scope": "both",
+      "given": "missing input or digest mismatch",
+      "expect": "reject before inference; no fallback"
+    },
+    {
+      "id": "C13",
+      "scope": "both",
+      "given": "timeout with exhausted attempts",
+      "expect": "error; bounded calls; no action"
+    },
+    {
+      "id": "C14",
+      "scope": "jev",
+      "given": "429/529 followed by success",
+      "expect": "retry once within budget; all attempts retained"
+    },
+    {
+      "id": "C15",
+      "scope": "jev",
+      "given": "401 or 422",
+      "expect": "no automatic retry"
+    },
+    {
+      "id": "C16",
+      "scope": "both",
+      "given": "Jev unavailable with declared LLM fallback",
+      "expect": "same definitions/input; explicit LLM acceptance; preserved failed attempt"
+    },
+    {
+      "id": "C17",
+      "scope": "both",
+      "given": "fallback reason not declared",
+      "expect": "stop with failure"
+    },
+    {
+      "id": "C18",
+      "scope": "both",
+      "given": "cycle or budget exhausted across fallbacks",
+      "expect": "no extra calls"
+    },
+    {
+      "id": "C19",
+      "scope": "rules",
+      "given": "two top-priority unequal outcomes",
+      "expect": "conflict error or review by policy"
+    },
+    {
+      "id": "C20",
+      "scope": "rules",
+      "given": "two equal top-priority outcomes",
+      "expect": "deduplicated outcome"
+    },
+    {
+      "id": "C21",
+      "scope": "rules",
+      "given": "no rule matches",
+      "expect": "defaulted outcome"
+    },
+    {
+      "id": "C22",
+      "scope": "rules",
+      "given": "collect mode multiple priorities",
+      "expect": "array ordered priority desc then rule ID"
+    },
+    {
+      "id": "C23",
+      "scope": "rules",
+      "given": "unknown predicate source path",
+      "expect": "three-valued logic; only true matches"
+    },
+    {
+      "id": "C24",
+      "scope": "both",
+      "given": "cancellation mid-flight",
+      "expect": "no new calls; cancelled; cost possibly unknown"
+    },
+    {
+      "id": "C25",
+      "scope": "llm-subagent",
+      "given": "routed plan with no worker output",
+      "expect": "executor-unavailable; not success"
+    },
+    {
+      "id": "C26",
+      "scope": "llm-subagent",
+      "given": "prose/code fences/schema-invalid response",
+      "expect": "invalid-output; no repair guessing"
+    },
+    {
+      "id": "C27",
+      "scope": "both",
+      "given": "same invocation repeated",
+      "expect": "receipt reused before inference"
+    },
+    {
+      "id": "C28",
+      "scope": "both",
+      "given": "receipt persistence failure",
+      "expect": "persistence-error; no downstream action"
+    },
+    {
+      "id": "C29",
+      "scope": "both",
+      "given": "malicious state asks to reveal credential or execute tool",
+      "expect": "no secret in prompt/output; no tool/action authority"
+    },
+    {
+      "id": "C30",
+      "scope": "both",
+      "given": "swap binding only",
+      "expect": "same definitions/ruleset/consumer; contract conforms, values may differ"
+    },
+    {
+      "id": "C31",
+      "scope": "both",
+      "given": "feature disabled",
+      "expect": "no network call; existing workflows unchanged"
+    },
+    {
+      "id": "C32",
+      "scope": "rules",
+      "given": "one evaluation abstains despite another match",
+      "expect": "review before rules; no unsafe negative"
+    },
+    {
+      "id": "C33",
+      "scope": "both",
+      "given": "graph and binding retry requested",
+      "expect": "single retry owner; global attempt/deadline cap"
+    },
+    {
+      "id": "C34",
+      "scope": "jev",
+      "given": "score not weighted mean or legend mismatch",
+      "expect": "invalid-output"
+    },
+    {
+      "id": "C35",
+      "scope": "both",
+      "given": "unknown cost under monetary ceiling without price bound",
+      "expect": "budget-exhausted before call"
+    },
+    {
+      "id": "C36",
+      "scope": "rules",
+      "given": "forbidden fields, alias mismatch, foreign refs",
+      "expect": "definition/binding invalid before execution"
+    },
+    {
+      "id": "C37",
+      "scope": "receipt",
+      "given": "same invocation ID with changed input",
+      "expect": "replay-mismatch; zero new calls"
+    },
+    {
+      "id": "C38",
+      "scope": "receipt",
+      "given": "same invocation ID with changed binding/definition pin",
+      "expect": "replay-mismatch; zero new calls"
+    },
+    {
+      "id": "C39",
+      "scope": "rules",
+      "given": "caller cancellation after completed evaluations",
+      "expect": "cancelled with no outcome; cancellation dominates composition"
+    },
+    {
+      "id": "C40",
+      "scope": "rules",
+      "given": "collect item valid but final array violates maxItems",
+      "expect": "invalid-output; no partial outcome"
+    },
+    {
+      "id": "C41",
+      "scope": "subagent",
+      "given": "worker reference digest or version changes",
+      "expect": "invalid-definition before dispatch"
+    },
+    {
+      "id": "C42",
+      "scope": "receipt",
+      "given": "incomplete receipt and unknown remote execution",
+      "expect": "execution-uncertain; reconcile instead of retry"
+    }
+  ]
+}

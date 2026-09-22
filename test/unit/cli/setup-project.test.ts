@@ -3,20 +3,20 @@ import { execFileSync } from 'child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { buildSetupProjectPlan, setupHandler } from '../../../src/cli/handlers/setup.js';
+import { buildSetupProjectPlan, parseSetupProjectOptions, setupHandler } from '../../../src/cli/handlers/setup.js';
 import { emptyConfig, getConfigPath, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
 
 function makeTmpDir(name: string): string {
   const dir = join(tmpdir(), `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
-  execFileSync('git', ['init', '-q'], { cwd: dir });
-  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
-  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+  execFileSync('git', ['init', '-q'], { timeout: 60_000, cwd: dir });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { timeout: 60_000, cwd: dir });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { timeout: 60_000, cwd: dir });
   return dir;
 }
 
 function addRemote(dir: string, name: string, url: string): void {
-  execFileSync('git', ['remote', 'add', name, url], { cwd: dir });
+  execFileSync('git', ['remote', 'add', name, url], { timeout: 60_000, cwd: dir });
 }
 
 function readConfig(dir: string): Record<string, unknown> {
@@ -38,6 +38,11 @@ describe('aiwg setup project', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('normalizes the Antigravity agy selector before persistence planning', () => {
+    const parsed = parseSetupProjectOptions({ args: ['--providers', 'agy'], cwd: tmp } as never);
+    expect(parsed.providers).toEqual(['antigravity']);
+  });
+
   it('builds a new-project policy from detected GitHub origin', async () => {
     addRemote(tmp, 'origin', 'https://github.com/example/project.git');
 
@@ -47,6 +52,7 @@ describe('aiwg setup project', () => {
     expect(plan.next.remotes).toMatchObject({
       primary: 'origin',
       issue_tracker: 'origin',
+      issue_provider: 'github',
       ci: 'origin',
       tracker_actor: { via: 'gh' },
     });
@@ -91,8 +97,30 @@ describe('aiwg setup project', () => {
     });
 
     expect(plan.issueProvider).toBe('gitea');
+    expect(plan.next.remotes?.issue_provider).toBe('gitea');
     expect(plan.next.remotes?.tracker_actor).toEqual({ login: 'maintainer', via: 'tea' });
     expect(plan.warnings.join('\n')).toContain("Remote 'origin' is self-hosted or unknown");
+  });
+
+  it('normalizes legacy main-only-blocked force-push policy during setup repair', async () => {
+    const cfg = emptyConfig(['codex']);
+    cfg.remotes = { primary: 'origin', issue_tracker: 'origin', ci: 'origin' };
+    cfg.delivery = {
+      ...cfg.delivery,
+      force_push_policy: 'main-only-blocked',
+    } as typeof cfg.delivery;
+    await writeAiwgConfig(tmp, cfg);
+    addRemote(tmp, 'origin', 'git@git.integrolabs.net:org/project.git');
+
+    const plan = await buildSetupProjectPlan({
+      projectDir: tmp,
+      dryRun: true,
+      issueProvider: 'gitea',
+      trackerActorLogin: 'maintainer',
+    });
+
+    expect(plan.next.delivery?.force_push_policy).toBe('own-branch-only');
+    expect(plan.warnings.join('\n')).toContain('main-only-blocked is a legacy alias');
   });
 
   it('classifies a GitHub secondary remote as a public mirror', async () => {
@@ -109,6 +137,27 @@ describe('aiwg setup project', () => {
     ]);
   });
 
+  it('configures a distinct customer issue tracker and actor', async () => {
+    addRemote(tmp, 'origin', 'git@git.integrolabs.net:org/project.git');
+    addRemote(tmp, 'github', 'https://github.com/example/project.git');
+
+    const plan = await buildSetupProjectPlan({
+      projectDir: tmp,
+      issueProvider: 'gitea',
+      customerIssueTracker: 'github',
+      customerIssueProvider: 'github',
+      customerTrackerActorLogin: 'customer-maintainer',
+    });
+
+    expect(plan.next.remotes).toMatchObject({
+      issue_tracker: 'origin',
+      issue_provider: 'gitea',
+      customer_issue_tracker: 'github',
+      customer_issue_provider: 'github',
+      customer_tracker_actor: { login: 'customer-maintainer', via: 'gh' },
+    });
+  });
+
   it('routes issue tracking to the local issue store when initialized', async () => {
     mkdirSync(join(tmp, '.aiwg', 'issues'), { recursive: true });
     writeFileSync(join(tmp, '.aiwg', 'issues', 'config.json'), '{"provider":"local"}\n');
@@ -118,6 +167,7 @@ describe('aiwg setup project', () => {
 
     expect(plan.issueProvider).toBe('local');
     expect(plan.next.remotes?.issue_tracker).toBe('local');
+    expect(plan.next.remotes?.issue_provider).toBe('local');
     expect(plan.warnings.join('\n')).not.toContain('Local issue store selected');
   });
 

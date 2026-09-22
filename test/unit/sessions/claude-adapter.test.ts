@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   CLAUDE_ADAPTER_VERSION,
   CLAUDE_TRANSCRIPT_SCHEMA_VERSION,
+  CLAUDE_WEB_EXPORT_SCHEMA_VERSION,
   ClaudeSessionAdapter,
   IncrementalSessionImporter,
   SESSION_CONTRACT_VERSION,
@@ -14,6 +15,7 @@ import {
   type SelectedSource,
   type SessionSource,
 } from '../../../src/sessions/index.js';
+import { describeWithSqlite } from '../../helpers/sqlite.js';
 
 const fixturesRoot = resolve('test/fixtures/sessions/claude');
 const temporaryRoots: string[] = [];
@@ -53,7 +55,7 @@ describe('Claude session adapter', () => {
       provider: 'claude',
       classification: 'implemented',
       supportedOperations: ['discover', 'inspect', 'stream'],
-      acquisitionModes: ['jsonl', 'hook'],
+      acquisitionModes: ['jsonl', 'hook', 'manual-export'],
     });
   });
 
@@ -189,7 +191,121 @@ describe('Claude session adapter', () => {
   });
 });
 
-describe('Claude adapter repository conformance', () => {
+describe('Claude web/account export adapter (#2565)', () => {
+  const adapter = new ClaudeSessionAdapter();
+
+  function selectedWebExport(name: string): SelectedSource {
+    return {
+      provider: 'claude',
+      locator: resolve(fixturesRoot, name),
+      locatorClass: 'claude-web-export-json',
+      sourceId: `claude-web-${name}`,
+      authorizedScope: { workspaceId: 'workspace-fixture', allowedRoots: [fixturesRoot] },
+    };
+  }
+
+  it('never auto-discovers manual-export sources -- .json files are not yielded by discover()', async () => {
+    const root = await mkdtemp(resolve(tmpdir(), 'aiwg-claude-web-export-discovery-'));
+    temporaryRoots.push(root);
+    await cp(resolve(fixturesRoot, 'active-session.jsonl'), resolve(root, 'active-session.jsonl'));
+    await cp(resolve(fixturesRoot, 'web-export.json'), resolve(root, 'conversations.json'));
+    const discovered = await collect(adapter.discover({
+      workspaceId: 'workspace-fixture',
+      allowedRoots: [root],
+    }));
+    expect(discovered.map((item) => item.locatorClass)).toEqual(['claude-transcript-jsonl']);
+  });
+
+  it('inspects a multi-conversation web/account export as a complete snapshot', async () => {
+    await expect(adapter.inspect(selectedWebExport('web-export.json'))).resolves.toEqual({
+      sourceSchemaVersion: CLAUDE_WEB_EXPORT_SCHEMA_VERSION,
+      consistency: 'complete',
+      operationalState: 'available',
+    });
+  });
+
+  it('streams every conversation in the export, preserving per-conversation session identity', async () => {
+    const records = await collect(adapter.stream(selectedWebExport('web-export.json')));
+    expect(records).toHaveLength(3);
+    expect(records.map((record) => record.nativeSessionId)).toEqual([
+      'web-conversation-1', 'web-conversation-1', 'web-conversation-2',
+    ]);
+    expect(records[0]).toMatchObject({
+      nativeEventId: 'web-msg-1',
+      role: 'human',
+      text: 'Can you review src/auth/token.ts?',
+      extensions: {
+        conversationName: 'Refactor the auth module',
+        provenance: { acquisition: 'claude-web-export-json', schema: CLAUDE_WEB_EXPORT_SCHEMA_VERSION },
+        unknownFields: { futureMessageField: 'preserved' },
+      },
+    });
+  });
+
+  it('records attachment references without claiming attachment bytes are portable', async () => {
+    const records = await collect(adapter.stream(selectedWebExport('web-export.json')));
+    const withAttachment = records.find((record) => record.nativeEventId === 'web-msg-2')!;
+    expect(withAttachment.text).toBe('I reviewed the token refresh logic.');
+    expect(withAttachment.extensions).toMatchObject({
+      attachmentReferences: [{
+        fileName: 'token.ts', fileType: 'text/typescript', fileSize: 2048, extractedContentAvailable: true,
+      }],
+      metadataLoss: ['attachment bytes unavailable in web/account export format'],
+    });
+  });
+
+  it('resolves a distinct schema/profile pair from local JSONL transcripts', async () => {
+    const registry = new SessionSourceAdapterRegistry();
+    registry.register(adapter);
+    expect(registry.report('claude', {
+      state: 'available',
+      evidence: {
+        adapterVersion: CLAUDE_ADAPTER_VERSION,
+        sourceSchemaVersion: CLAUDE_WEB_EXPORT_SCHEMA_VERSION,
+        verifiedAt: '2026-09-15',
+        reference: 'docs/providers/claude-code-sessions.md',
+      },
+      reason: null,
+      remediation: null,
+    }).acquisitionModes).toContain('manual-export');
+  });
+
+  it.each([
+    ['web-export-malformed.json', 'a JSONL transcript renamed to .json, or any non-array root'],
+    ['web-export-empty.json', 'an export with zero conversations'],
+    ['web-export-malformed-message.json', 'one message in an otherwise valid conversation has an invalid sender'],
+  ])('fails closed with MALFORMED_SOURCE for %s (%s)', async (name) => {
+    await expect(adapter.inspect(selectedWebExport(name))).rejects.toMatchObject({ code: 'MALFORMED_SOURCE' });
+  });
+
+  it('rejects a repeated message uuid within the same conversation', async () => {
+    await expect(adapter.inspect(selectedWebExport('web-export-duplicate-message.json')))
+      .rejects.toMatchObject({ code: 'DUPLICATE_NATIVE_ID' });
+  });
+
+  it('rejects a repeated conversation uuid within the same export', async () => {
+    await expect(adapter.inspect(selectedWebExport('web-export-duplicate-conversation.json')))
+      .rejects.toMatchObject({ code: 'DUPLICATE_NATIVE_ID' });
+  });
+
+  it('accepts a conversation with zero messages without crashing, contributing no records', async () => {
+    const records = await collect(adapter.stream(selectedWebExport('web-export-empty-conversation.json')));
+    expect(records).toHaveLength(1);
+    expect(records[0].nativeSessionId).toBe('web-conversation-nonempty');
+  });
+
+  it('preserves Unicode content across scripts and emoji without corruption', async () => {
+    const records = await collect(adapter.stream(selectedWebExport('web-export-unicode.json')));
+    expect(records).toHaveLength(2);
+    expect(records[0].text).toContain('こんにちは');
+    expect(records[0].text).toContain('🚀');
+    expect(records[0].text).toContain('مرحبا');
+    expect(records[1].text).toContain('你好');
+    expect(records[1].text).toContain('🎉');
+  });
+});
+
+describeWithSqlite('Claude adapter repository conformance', () => {
   it('imports active append incrementally, redacts content, and replays as a no-op', async () => {
     const root = await mkdtemp(resolve(tmpdir(), 'aiwg-claude-append-'));
     temporaryRoots.push(root);
@@ -213,7 +329,7 @@ describe('Claude adapter repository conformance', () => {
       // The fixture carries a fixed historical event timestamp. Keep this
       // append/resume test independent of the wall clock while lifecycle
       // threshold behavior is covered by dedicated importer tests.
-      inactivityThresholdMs: 30 * 24 * 60 * 60 * 1_000,
+      inactivityThresholdMs: 10 * 365 * 24 * 60 * 60 * 1_000,
     };
     const first = await importer.import(request);
     expect(first.reduce((sum, receipt) => sum + receipt.eventsInserted, 0)).toBe(3);

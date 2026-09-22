@@ -1,0 +1,15 @@
+{
+  "rulesetPath": "ruleset.json",
+  "bindingPath": "binding-llm-subagent.json",
+  "definitionPaths": [
+    "decision-category.json",
+    "decision-severity.json",
+    "decision-core_unavailable.json"
+  ],
+  "inputPath": "input.json",
+  "runId": "example-backend-swap",
+  "invocationId": "example-backend-swap-llm",
+  "adapterModules": {
+    "llm-subagent": "fixture-llm-adapter.mjs"
+  }
+}

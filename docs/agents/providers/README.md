@@ -27,9 +27,12 @@ or command interface so it can connect AIWG to the current project.
 | `aiwg.agent-reference.provider.copilot` | GitHub Copilot | [Operational reference](copilot.md) |
 | `aiwg.agent-reference.provider.cursor` | Cursor | [Operational reference](cursor.md) |
 | `aiwg.agent-reference.provider.factory` | Factory | [Operational reference](factory.md) |
+| `aiwg.agent-reference.provider.grokbot` | Grok Bot | [Operational reference](grokbot.md) |
 | `aiwg.agent-reference.provider.hermes` | Hermes | [Operational reference](hermes.md) |
 | `aiwg.agent-reference.provider.openclaw` | OpenClaw | [Operational reference](openclaw.md) |
 | `aiwg.agent-reference.provider.opencode` | OpenCode | [Operational reference](opencode.md) |
 | `aiwg.agent-reference.provider.openhuman` | OpenHuman | [Operational reference](openhuman.md) |
+| `aiwg.agent-reference.provider.omp` | Oh My Pi | [Operational reference](omp.md) |
+| `aiwg.agent-reference.provider.pi` | Pi Coding Agent (pi.dev) | [Operational reference](pi.md) |
 | `aiwg.agent-reference.provider.warp` | Warp | [Operational reference](warp.md) |
-| `aiwg.agent-reference.provider.windsurf` | Windsurf | [Operational reference](windsurf.md) |
+| `aiwg.agent-reference.provider.windsurf` | Devin Desktop (`devin`; Windsurf compatibility adapter) | [Operational reference](windsurf.md) |

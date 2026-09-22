@@ -424,5 +424,5 @@ references:
     - "#173"
   related:
     - "@agentic/code/frameworks/sdlc-complete/schemas/flows/sdlc-output-schemas.yaml"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"
     - "@docs/cli-reference.md#metrics"

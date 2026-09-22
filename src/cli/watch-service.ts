@@ -17,6 +17,27 @@ export interface WatchEvent {
 
 export type WatchCallback = (event: WatchEvent) => Promise<void>;
 
+/**
+ * What the watcher observed about its own lifecycle. A caller that saw no
+ * events can tell whether chokidar ever reported ready, whether every target
+ * was armed when `start()` resolved, and what errors the watch raised (#2553).
+ */
+export interface WatchDiagnostics {
+  /** chokidar emitted `ready` (initial scan complete). */
+  ready: boolean;
+  readyAt?: Date;
+  /** Every requested target was present in `getWatched()` when `start()` resolved. */
+  armed: boolean;
+  /** Requested targets that were not armed when `start()` resolved. */
+  missingTargets: string[];
+  /** Most recent chokidar `error` messages, oldest first (bounded). */
+  errors: string[];
+  /** Live `getWatched()` snapshot, or `{}` when no watcher exists. */
+  watched: Record<string, string[]>;
+}
+
+const MAX_RECORDED_ERRORS = 20;
+
 export interface WatchStats {
   filesWatched: number;
   eventsProcessed: number;
@@ -35,6 +56,9 @@ export class WatchService {
   private debounceMs = 500;
   private stats: WatchStats;
   private isRunning = false;
+  private readyAt: Date | undefined;
+  private missingTargets: string[] = [];
+  private recordedErrors: string[] = [];
 
   constructor() {
     this.stats = {
@@ -71,29 +95,106 @@ export class WatchService {
     this.watcher.on('change', (path) => this.handleEvent('change', path));
     this.watcher.on('unlink', (path) => this.handleEvent('unlink', path));
 
-    this.watcher.on('ready', () => {
-      const watched = this.watcher?.getWatched() || {};
-      this.stats.filesWatched = Object.values(watched).reduce(
-        (sum, files) => sum + files.length,
-        0
-      );
-    });
-
     this.watcher.on('error', (error) => {
       this.stats.errors++;
+      this.recordError(error);
       console.error('Watch error:', error);
     });
 
     this.isRunning = true;
+    this.readyAt = undefined;
+    this.missingTargets = [];
+    this.recordedErrors = [];
 
     // Wait for ready
     await new Promise<void>((resolve) => {
       if (this.watcher) {
-        this.watcher.on('ready', () => resolve());
+        this.watcher.on('ready', () => {
+          this.readyAt = new Date();
+          resolve();
+        });
       } else {
         resolve();
       }
     });
+
+    // `ready` only means chokidar finished its initial scan. Because the
+    // watcher runs with `ignoreInitial: true`, a file created between the scan
+    // and the watch actually being armed is reported by neither — the event is
+    // absent rather than late, so no caller-side wait can recover it (#2518).
+    // Resolving `start()` only once every target appears in `getWatched()`
+    // makes readiness mean armed.
+    await this.waitUntilArmed(patterns);
+    this.missingTargets = this.unarmedTargets(patterns);
+
+    const watched = this.watcher?.getWatched() ?? {};
+    this.stats.filesWatched = Object.values(watched).reduce(
+      (sum, files) => sum + files.length,
+      0
+    );
+  }
+
+  /**
+   * Poll `getWatched()` until every requested target is present, or the budget
+   * expires. Bounded on purpose: a target that does not exist on disk can never
+   * be armed, and `start()` must not hang waiting for one.
+   *
+   * The healthy path satisfies the first synchronous check and never awaits, so
+   * a test that mocks the watcher under fake timers must report its targets
+   * from `getWatched()` — otherwise the poll waits on a clock nothing advances.
+   */
+  private async waitUntilArmed(
+    patterns: string[],
+    timeoutMs = 500,
+    pollIntervalMs = 25
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (!this.allTargetsArmed(patterns)) {
+      if (Date.now() >= deadline) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+
+  /** True when chokidar reports a watch covering every requested target. */
+  private allTargetsArmed(patterns: string[]): boolean {
+    return this.unarmedTargets(patterns).length === 0;
+  }
+
+  /** Requested targets that `getWatched()` does not yet cover. */
+  private unarmedTargets(patterns: string[]): string[] {
+    if (!this.watcher) {
+      return [];
+    }
+
+    const watched = this.watcher.getWatched();
+
+    // chokidar keys `getWatched()` with the spelling it was given, so resolve
+    // both sides before comparing.
+    const armed = new Set<string>();
+    for (const [dir, entries] of Object.entries(watched)) {
+      const absoluteDir = path.resolve(dir);
+      armed.add(absoluteDir);
+      for (const entry of entries) {
+        armed.add(path.join(absoluteDir, entry));
+      }
+    }
+
+    // A directory target is keyed directly; a file target is listed under its
+    // parent. Either spelling resolves into the same set.
+    return patterns
+      .map((pattern) => path.resolve(pattern))
+      .filter((target) => !armed.has(target));
+  }
+
+  private recordError(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.recordedErrors.push(message);
+    if (this.recordedErrors.length > MAX_RECORDED_ERRORS) {
+      this.recordedErrors.splice(0, this.recordedErrors.length - MAX_RECORDED_ERRORS);
+    }
   }
 
   /**
@@ -151,6 +252,22 @@ export class WatchService {
    */
   getStats(): WatchStats {
     return { ...this.stats };
+  }
+
+  /**
+   * What the watcher has observed about its own lifecycle. Intended for the
+   * failure path: a caller that waited for an event that never came reports
+   * this instead of a bare "no events" (#2553).
+   */
+  getDiagnostics(): WatchDiagnostics {
+    return {
+      ready: this.readyAt !== undefined,
+      readyAt: this.readyAt,
+      armed: this.missingTargets.length === 0,
+      missingTargets: [...this.missingTargets],
+      errors: [...this.recordedErrors],
+      watched: this.watcher ? this.watcher.getWatched() : {},
+    };
   }
 
   /**

@@ -47,6 +47,12 @@ try {
   });
 
   for (const item of exported.items) {
+    // Release checkouts receive fresh filesystem mtimes on every runner. The
+    // general index records those mtimes for incremental local indexing, but a
+    // prebuilt release index must be reproducible from the same signed source.
+    // Bind exported record timestamps to the explicit build epoch instead.
+    item.updated_at = generatedAt;
+    if (item.source) item.source.updated_at = generatedAt;
     const searchText = [
       item.title,
       item.name,
@@ -60,8 +66,14 @@ try {
       .join('\n');
     item.text = item.summary || item.title || '';
     if (item.search) {
+      const executableFrontmatter = item.search.frontmatter?.aiwg_script
+        ? { aiwg_script: item.search.frontmatter.aiwg_script }
+        : {};
       item.search.body = searchText;
-      item.search.frontmatter = {};
+      // The prebuilt export intentionally drops general frontmatter to stay
+      // compact, but aiwg_script is runtime metadata rather than search-only
+      // decoration. `aiwg run skill` needs it when no local index exists.
+      item.search.frontmatter = executableFrontmatter;
     }
     delete item.chunks;
   }

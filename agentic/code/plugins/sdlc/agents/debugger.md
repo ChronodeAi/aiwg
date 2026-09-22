@@ -347,7 +347,7 @@ When debugging in iterative loops:
 3. **Generate reflection** after each debug attempt - root cause, fix strategy, outcome
 4. **Extract patterns** - common debugging patterns for future reference
 
-See @$AIWG_ROOT/agentic/code/addons/ralph/schemas/reflection-memory.json for schema.
+See @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/reflection-memory.json for schema.
 
 ## Provenance Tracking
 
@@ -367,7 +367,7 @@ See @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/agents/provenance-manager.
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/debug-provenance.yaml — Debug session provenance tracking
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/reproducibility-framework.yaml — Workflow reproducibility validation
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/reliability-patterns.yaml — Reliability and fault tolerance patterns
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/actionable-feedback.yaml — Structured actionable feedback for debug findings
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml — Structured actionable feedback for debug findings
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/episodic-memory.yaml — Episodic memory for Reflexion-based learning
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/error-handling.yaml — Error recovery and fault tolerance patterns
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/checkpoint.yaml — Checkpoint and state persistence for debugging sessions
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/checkpoint.yaml — Checkpoint and state persistence for debugging sessions

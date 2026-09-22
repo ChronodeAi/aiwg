@@ -11,15 +11,21 @@ import {
 import type { Platform } from '../agents/types.js';
 
 const PROVIDER_EXECUTABLES: Partial<Record<Platform, string[]>> = {
+  antigravity: ['agy'],
   claude: ['claude'],
   codex: ['codex'],
   copilot: ['github-copilot-cli', 'copilot'],
   cursor: ['cursor'],
+  'deepseek-harness': ['dsh'],
   factory: ['droid'],
+  // Grok Bot has no verified CLI executable name; omit rather than invent.
+  'grok-build': ['grok'],
   hermes: ['hermes'],
   opencode: ['opencode'],
   openclaw: ['openclaw'],
   openhuman: ['openhuman'],
+  pi: ['pi'],
+  omp: ['omp'],
   warp: ['warp'],
   windsurf: ['windsurf'],
 };

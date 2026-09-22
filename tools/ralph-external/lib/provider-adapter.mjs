@@ -169,6 +169,9 @@ export class ProviderAdapter {
     return {};
   }
 
+  /** JSONL written to stdin before bounded process termination, when supported. */
+  getAbortInput() { return null; }
+
   /**
    * Get the path where the provider stores session transcripts.
    *
@@ -277,6 +280,13 @@ async function registerBuiltinProviders() {
   } catch { /* ignore if not found */ }
   try {
     await import('./factory-adapter.mjs');
+  } catch { /* ignore if not found */ }
+  try {
+    await import('./pi-adapter.mjs');
+    await import('./omp-adapter.mjs');
+  } catch { /* ignore if not found */ }
+  try {
+    await import('./deepseek-harness-adapter.mjs');
   } catch { /* ignore if not found */ }
 }
 

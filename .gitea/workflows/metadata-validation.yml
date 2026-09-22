@@ -7,6 +7,7 @@
 name: Validate Metadata
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, develop]
     paths:
@@ -27,7 +28,7 @@ on:
       - '.gitea/workflows/metadata-validation.yml'
 
 concurrency:
-  group: ci-${{ gitea.head_ref || gitea.ref }}
+  group: metadata-validation-${{ gitea.head_ref || gitea.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,7 +36,10 @@ jobs:
     name: Validate Plugin Metadata
     runs-on: ubuntu-latest
     container: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2 (see ci/digests.txt)
-    timeout-minutes: 10
+    # Cold runners can spend most of the previous 10-minute budget installing
+    # and building the full CLI before validation starts. Keep the gate strict,
+    # but allow enough time for the validator to report an actual result.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
@@ -45,7 +49,7 @@ jobs:
         # --omit=optional skips runtime-optional features (embedding
         # index via @xenova/transformers + hnswlib-node, daemon PTY
         # bridge via node-pty, SQLite storage backend, hono serve
-        # bridge). The metadata validator only needs fs/path/yaml/
+        # bridge, and Sigstore artifact verification). The metadata validator only needs fs/path/yaml/
         # semver/zod — all already in required deps. Avoids the
         # libvips download (transitive via @xenova → sharp) that
         # frequently times out from github.com on this runner.
@@ -53,7 +57,7 @@ jobs:
         # install scripts.
         #
         # Code that imports optional deps (hono, @hono/node-server,
-        # node-pty, etc.) MUST be guarded with `// @ts-ignore` and
+        # node-pty, @sigstore/*, etc.) MUST be guarded with `// @ts-ignore` and
         # wrapped in try/catch — see src/cli/handlers/serve.ts for
         # the auto-install pattern.
         run: npm ci --omit=optional
@@ -181,7 +185,7 @@ jobs:
         # --omit=optional skips runtime-optional features (embedding
         # index via @xenova/transformers + hnswlib-node, daemon PTY
         # bridge via node-pty, SQLite storage backend, hono serve
-        # bridge). The metadata validator only needs fs/path/yaml/
+        # bridge, and Sigstore artifact verification). The metadata validator only needs fs/path/yaml/
         # semver/zod — all already in required deps. Avoids the
         # libvips download (transitive via @xenova → sharp) that
         # frequently times out from github.com on this runner.
@@ -189,7 +193,7 @@ jobs:
         # install scripts.
         #
         # Code that imports optional deps (hono, @hono/node-server,
-        # node-pty, etc.) MUST be guarded with `// @ts-ignore` and
+        # node-pty, @sigstore/*, etc.) MUST be guarded with `// @ts-ignore` and
         # wrapped in try/catch — see src/cli/handlers/serve.ts for
         # the auto-install pattern.
         run: npm ci --omit=optional

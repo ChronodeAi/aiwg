@@ -19,8 +19,24 @@ authenticated.
 
 - Harness script: `tools/ralph-external/manual-provider-test.sh`
 - Loop entry point: `tools/ralph-external/index.mjs`
-- Runtime providers: `claude`, `codex`, `opencode`, `factory`
-  (registered in `tools/ralph-external/lib/*-adapter.mjs`)
+- Runtime providers: `claude`, `codex`, `opencode`, `factory`, `pi`, `omp`,
+  `deepseek-harness` (registered in `tools/ralph-external/lib/*-adapter.mjs`)
+- Pi runs headless as `--provider pi` (`pi --mode json --no-approve`, Node
+  22.19+ preflight, qualified-version preflight, `--model`/`--thinking`/`--tools`
+  propagation, stdin closed, cancellation by bounded TERM/KILL). It never loads
+  project-local Pi resources, so do not describe a Pi loop run as a test of
+  deployed prompts or skills. Pi reads stdin commands only in `--mode rpc`; in
+  `--mode json` it drains a piped stdin to EOF before the prompt runs
+  (verified on 0.85.0, #2550), so the adapter offers no stdin `abort` frame
+  and the launcher must not open the child's stdin. `isAvailable()` fails
+  closed when `pi --version` is outside `PI_SUPPORTED_VERSIONS` in
+  `tools/ralph-external/lib/pi-adapter.mjs`.
+- **Pi status: experimental.** Required for experimental status: the adapter
+  contract tests in `test/unit/ralph/pi-adapter.test.mjs` (`npm run test:node`)
+  and the vitest Pi suites (`test/unit/providers/pi-*.test.ts`,
+  `test/unit/sessions/pi-adapter.test.ts`) green in CI. Required for stable:
+  the above plus a passing `npm run smoke:pi:live` against the pinned Pi
+  version recorded per release.
 - The `stub` provider is UAT-only (registered by the test fixture, not the runtime)
 - Each run executes in an isolated scratch workspace (`mktemp -d` by default), so
   the loop's `.aiwg/ralph-external/` output never touches the AIWG repo.
@@ -86,7 +102,11 @@ Expected: all tests pass (includes the resume, stop-semantics, unknown-budget, s
 
 ## Troubleshooting
 
-- **`Unknown provider '<name>'`** — the provider CLI adapter isn't registered; valid runtime providers are `claude`, `codex`, `opencode`, `factory`. `stub` is UAT-only.
+- **`Unknown provider '<name>'`** — the provider CLI adapter isn't registered; valid runtime providers are `claude`, `codex`, `opencode`, `factory`, `pi`, `omp`, `deepseek-harness`. `stub` is UAT-only.
+- **Pi adapter reports unavailable** — the Pi adapter preflights Node 22.19+
+  and a `pi` executable (`AIWG_PI_BIN` overrides the binary). Fix the runtime
+  first; see [the Pi provider reference](../agents/providers/pi.md) for direct
+  bounded Pi testing outside the loop.
 - **Loop aborts at iteration 1 with a cost/auth error** — the provider CLI isn't authenticated on this workstation. Authenticate the CLI directly (e.g. `codex login`) and retry.
 - **`budget-stop-report.json` missing under the `budget` scenario** — the task completed before the ceiling was crossed; raise `--max-iterations` or lower the ceiling, or use `--scenario plain` to confirm the loop runs at all first.
 - **Token/spend ceilings never fire on a non-claude provider** — expected and now surfaced: providers that report no usage make token/spend ceilings *unobservable* (a one-time warning is printed). Use `--scenario budget` (wall-clock) for a provider-independent hard stop.

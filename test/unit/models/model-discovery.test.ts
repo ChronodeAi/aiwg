@@ -7,6 +7,7 @@ import {
   diffModelCatalog,
   discoverOpenClawModels,
   discoverOpenCodeModels,
+  discoverPiModels,
   PROVIDER_DISCOVERY_DECISIONS,
   resolveDynamicModelCatalog,
   selectRoleModels,
@@ -72,8 +73,8 @@ afterEach(async () => {
 describe('dynamic model catalog', () => {
   it('records an implemented-or-unsupported decision for every AIWG provider', () => {
     expect(Object.keys(PROVIDER_DISCOVERY_DECISIONS).sort()).toEqual([
-      'claude', 'codex', 'copilot', 'cursor', 'factory', 'hermes',
-      'openclaw', 'opencode', 'openhuman', 'warp', 'windsurf',
+      'claude', 'codex', 'copilot', 'cursor', 'factory', 'grokbot', 'hermes',
+      'omp', 'openclaw', 'opencode', 'openhuman', 'pi', 'warp', 'windsurf',
     ]);
     expect(Object.values(PROVIDER_DISCOVERY_DECISIONS).every(decision =>
       decision.reason.length > 0 && decision.documentation.startsWith('https://')
@@ -81,7 +82,7 @@ describe('dynamic model catalog', () => {
     expect(Object.values(PROVIDER_DISCOVERY_DECISIONS)
       .filter(decision => decision.status === 'native')
       .map(decision => decision.provider)
-      .sort()).toEqual(['codex', 'openclaw', 'opencode']);
+      .sort()).toEqual(['codex', 'omp', 'openclaw', 'opencode', 'pi']);
   });
 
   it('maps enumerated models to semantic roles without inventing identifiers', () => {
@@ -123,6 +124,15 @@ describe('dynamic model catalog', () => {
       ['models', '--pure'],
       expect.objectContaining({ timeoutMs: 15_000 }),
     );
+  });
+
+  it('normalizes Pi model rows while preserving backend/model identity', async () => {
+    const runner = vi.fn()
+      .mockResolvedValueOnce({ stdout: '0.85.0\n', stderr: '', exitCode: 0 })
+      .mockResolvedValueOnce({ stdout: 'provider    model                  context\r\nopenrouter  fixture/code:free      32K\r\n', stderr: '', exitCode: 0 });
+    expect(await discoverPiModels('pi', runner)).toMatchObject({
+      provider: 'pi', runtimeVersion: '0.85.0', models: [{ id: 'openrouter/fixture/code:free' }],
+    });
   });
 
   it('normalizes documented OpenClaw JSON without probing provider APIs', async () => {
@@ -413,5 +423,28 @@ describe('dynamic model catalog', () => {
     expect(resolved.version).toBe('1.0.0');
     expect(resolved.providers.codex.roles.coding.id).toBe('new-runtime-model');
     expect(native).toHaveBeenCalledOnce();
+  });
+});
+
+describe('OMP catalog scope isolation', () => {
+  it('isolates cache by profile, config overlay and extension discovery mode', async () => {
+    const { root, cacheFile, inventory } = await fixture();
+    inventory.providers = [{ ...inventory.providers[0], id: 'omp', displayName: 'Oh My Pi' }];
+    const catalogFile = join(root, 'agentic/code/providers/model-catalog.v1.json');
+    const catalog = JSON.parse(await readFile(catalogFile, 'utf8'));
+    catalog.providers.omp = { roles: { coding: { id: 'configured/default', observed: false } } };
+    await writeFile(catalogFile, JSON.stringify(catalog));
+    let probes = 0;
+    const nativeDiscoverers = { omp: async () => { probes++; return { provider: 'omp', source: 'native' as const, observedAt: new Date().toISOString(), accountScope: 'local-runtime' as const, models: [{ id: 'fixture/model' }] }; } };
+    const base = { aiwgRoot: root, cacheFile, inventory, allowNetwork: true, nativeDiscoverers };
+    const first = await resolveDynamicModelCatalog({ ...base, omp: { profile: 'first', config: ['/a.yml'] } });
+    expect(first.providers.omp.roles.coding).toEqual({ id: 'configured/default', observed: false });
+    expect(first.discovery?.providers.omp.models).toEqual([{ id: 'fixture/model' }]);
+    expect(probes).toBe(1);
+    expect((await resolveDynamicModelCatalog({ ...base, omp: { profile: 'first', config: ['/a.yml'] } })).discovery?.source).toBe('cache');
+    expect(probes).toBe(1);
+    await resolveDynamicModelCatalog({ ...base, omp: { profile: 'second', config: ['/a.yml'] } }); expect(probes).toBe(2);
+    await resolveDynamicModelCatalog({ ...base, omp: { profile: 'second', config: ['/b.yml'] } }); expect(probes).toBe(3);
+    await resolveDynamicModelCatalog({ ...base, omp: { profile: 'second', config: ['/b.yml'], extensions: true } }); expect(probes).toBe(4);
   });
 });

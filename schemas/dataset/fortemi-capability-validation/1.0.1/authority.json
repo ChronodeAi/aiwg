@@ -1,0 +1,61 @@
+{
+  "contract": "fortemi.dataset-capability-validation/v1",
+  "revision": "1.0.1",
+  "wireContract": "fortemi.dataset-execution-capabilities/v1",
+  "wireSchemaVersion": "1.0.0",
+  "consumerIssue": 2242,
+  "authority": {
+    "repository": "Fortemi/fortemi-react",
+    "issue": "https://git.integrolabs.net/Fortemi/fortemi-react/issues/422",
+    "commit": "5625215762a8fd06db8fef4ccedd87f3c370ec31",
+    "mergedCommit": "35edcd9f8429fcd91a417021cbe4c427f900ed73",
+    "path": "packages/core/schemas/dataset-execution-capabilities/validation/1.0.1",
+    "manifestSha256": "20b59bb871c3afc9bb972896b2a2da718970c6fe7ef54b49000418f62a5701c0"
+  },
+  "files": [
+    {
+      "path": "capability.schema.json",
+      "authorityPath": "schema.json",
+      "sha256": "a4e9b427da669a02e83db00d39f48c2e106770d6cd2ec1b717938c57793b754c"
+    },
+    {
+      "path": "../../../../test/fixtures/dataset/fortemi-capability/negotiation-vectors.json",
+      "authorityPath": "negotiation-vectors.json",
+      "sha256": "2793990a842d5969f1f64c90170ab97ca4ffc4b93d1302a2f358fae54631a6dc"
+    },
+    {
+      "path": "../../../../test/fixtures/dataset/fortemi-capability/wire-vectors.json",
+      "authorityPath": "wire-vectors.json",
+      "sha256": "c52d32d0b1d0d312cf8b242f11fc116c47d104a74112cbd5d0019e6d39df9744"
+    }
+  ],
+  "consumer": {
+    "repository": "roctinam/aiwg",
+    "implementation": "src/dataset/fortemi-capability.ts",
+    "binding": "src/dataset/fortemi-dataset-execution.ts",
+    "test": "test/unit/dataset/fortemi-capability.test.ts",
+    "boundary": "Independent AIWG implementation of the wire rules. AIWG never imports the producer's validator; agreement is established by the shared authority vectors."
+  },
+  "observedDescriptor": {
+    "source": "Fortemi/fortemi mcp-server/lib/dataset-execution.js buildDatasetExecutionDescriptor",
+    "commit": "a701847db779a0a3adfa36a09dfa1055a10a0a0a",
+    "fixture": "test/fixtures/dataset/fortemi-capability/server-descriptor.json",
+    "sha256": "66ee315912429645e97c77a96e3f5110fe9db5e6909ff3c39e8b6e22135d8b95",
+    "runtimeVersion": "2026.9.10",
+    "qualification": "Descriptor rendered from pinned producer source; not a released-artifact or live-session receipt."
+  },
+  "qualification": {
+    "status": "source-consumer-adoption",
+    "covers": [
+      "advertised capability descriptor validation before preview or execute",
+      "independent negotiation bound to the advertised descriptor",
+      "receipt capabilityDecision bound to that independent negotiation"
+    ],
+    "remaining": [
+      "clean installed and released consumer qualification",
+      "live Fortemi Server session evidence under roctinam/aiwg#2194 authorization"
+    ],
+    "maturity": "alpha",
+    "suiteAudit": "NO-GO"
+  }
+}

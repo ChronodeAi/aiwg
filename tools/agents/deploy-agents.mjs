@@ -20,7 +20,7 @@
  *   --rules-only             Deploy only rules (skip agents)
  *   --dry-run                Show what would be deployed without writing
  *   --force                  Overwrite existing files
- *   --provider <name>        Target provider: claude (default), openai, codex, cursor, opencode, copilot, factory, warp, windsurf, hermes, or openclaw
+ *   --provider <name>        Target provider: antigravity (agy), claude (default), openai, codex, cursor, opencode, copilot, factory, grokbot, grok-build, pi, omp, deepseek-harness (dsh), warp, devin, hermes, openhuman, or openclaw
  *   --model <name>            Override model for all tiers (blanket)
  *   --reasoning-model <name> Override model for reasoning tasks
  *   --coding-model <name>    Override model for coding tasks
@@ -29,6 +29,8 @@
  *   --as-agents-md               Aggregate to single AGENTS.md (OpenAI/Codex)
  *   --create-agents-md           Create/update AGENTS.md template
  *   --skip-commands-migration    Skip deleting the commands directory (warns about duplicate TUI entries) (Factory/Codex/OpenCode/Cursor)
+ *   --deploy-source <name>       Managed-marker source for deployed artifacts (default: bundled)
+ *   --deploy-version <version>   Managed-marker version for deployed artifacts (default: source package.json)
  *
  * Modes:
  *   general       - Deploy only writing-quality addon agents and commands (alias: writing)
@@ -49,8 +51,12 @@
  *   copilot   - GitHub Copilot - .github/agents/, .github/commands/, .github/skills/, .github/copilot-rules/
  *   cursor    - Cursor IDE - .cursor/agents/, .cursor/commands/, .cursor/skills/, .cursor/rules/
  *   warp      - Warp Terminal - .warp/agents/, .warp/commands/, .warp/skills/, .warp/rules/ + WARP.md
- *   windsurf  - Windsurf - .windsurf/agents/, .windsurf/workflows/, .windsurf/skills/, .windsurf/rules/
+ *   devin     - Devin Desktop - .windsurf/agents/, .windsurf/workflows/, .windsurf/skills/, .windsurf/rules/
+ *   windsurf  - Deprecated alias for devin
  *   openclaw  - OpenClaw - ~/.openclaw/agents/, ~/.openclaw/commands/, ~/.openclaw/skills/, ~/.openclaw/rules/, ~/.openclaw/behaviors/
+ *   pi        - Pi Coding Agent - .agents/skills/, .pi/skills/, .pi/prompts/, AGENTS.md
+ *   omp       - Oh My Pi - .omp/agents/, .omp/prompts/, .agents/skills/, .omp/AGENTS.md
+ *   deepseek-harness - DeepSeek Harness - .agents/skills/, AGENTS.md, .dsh/aiwg.cordis.patch.yml
  *
  * Defaults:
  *   --source resolves relative to this script's repo root (../..)
@@ -69,9 +75,12 @@ import os from 'os';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
 import {
+  addManagedMarker,
   collectBehaviorDirs,
   collectFrameworkArtifacts,
   computeAllArtifactBasenames,
+  computeAllSkillNames,
+  contentHash,
   deployEmulatedBehaviors,
   getAddonSkillDirs,
   listSkillDirs,
@@ -81,6 +90,7 @@ import {
   parseFrontmatter,
   pruneStaleAiwgFiles,
   resolveAiwgRoot,
+  updateSidecarManifest,
 } from './providers/base.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
 
@@ -102,24 +112,23 @@ function getDeployVersion(srcRoot) {
 // ============================================================================
 
 const PROVIDER_ALIASES = {
+  agy: 'antigravity',
   'openai': 'codex',
+  'devin': 'windsurf',
   'devin-desktop': 'windsurf',
   'devin-local': 'windsurf',
   'cascade': 'windsurf',
+  'pi-coding-agent': 'pi',
+  'oh-my-pi': 'omp',
+  'dsh': 'deepseek-harness',
 };
 
-const AVAILABLE_PROVIDERS = ['claude', 'factory', 'codex', 'opencode', 'copilot', 'cursor', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman'];
+const AVAILABLE_PROVIDERS = ['antigravity', 'claude', 'factory', 'codex', 'opencode', 'copilot', 'cursor', 'pi', 'omp', 'deepseek-harness', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'grokbot', 'grok-build'];
 
 const UNSUPPORTED_PROVIDER_HINTS = {
-  devin: [
-    'Devin Desktop is supported through the Windsurf compatibility adapter:',
-    '  aiwg use sdlc --provider windsurf',
-    '  aiwg use sdlc --provider devin-desktop',
-    'Devin CLI has distinct rules/skills surfaces and is recorded as future-provider metadata; AIWG does not emit .devin/ provider output yet.',
-  ],
   'devin-cli': [
     'Devin CLI has distinct rules/skills surfaces and is not a deployable AIWG provider yet.',
-    'Use --provider windsurf or --provider devin-desktop for Devin Desktop/Windsurf local IDE deployments.',
+    'Use --provider devin for Devin Desktop deployments.',
   ],
 };
 
@@ -156,7 +165,7 @@ const MIRRORED_KERNEL_COMMAND_SKILLS = new Set([
 ]);
 
 function providerUsesSkillsNatively(providerName) {
-  return ['claude', 'cursor', 'hermes', 'openhuman'].includes(providerName);
+  return ['antigravity', 'claude', 'cursor', 'deepseek-harness', 'hermes', 'openhuman', 'pi', 'omp'].includes(providerName);
 }
 
 function shouldMirrorStandardCommandSkill(skillName) {
@@ -214,7 +223,13 @@ function resolveCommandMirrorDir(provider, target) {
   // Closest conventional location for providers whose primary command
   // surface is MCP/aggregation rather than a documented command directory.
   if (provider.name === 'hermes') {
-    return path.join(os.homedir(), '.hermes', 'commands');
+    // #2119: HERMES_HOME is the single source of truth the running Hermes
+    // runtime uses to locate its files — resolve the home the same way the
+    // provider does instead of hardcoding $HOME/.hermes.
+    const hermesHome = typeof provider.getHermesHome === 'function'
+      ? provider.getHermesHome()
+      : path.join(os.homedir(), '.hermes');
+    return path.resolve(hermesHome, 'commands');
   }
 
   return null;
@@ -284,6 +299,7 @@ function mirrorSkillsAsCommands(provider, target, srcRoot, opts) {
   if (!opts.dryRun) fs.mkdirSync(targetDir, { recursive: true });
 
   const ext = commandFileExtensionForProvider(provider);
+  const deployedEntries = [];
   let count = 0;
 
   for (const skillDir of skillDirs) {
@@ -292,8 +308,15 @@ function mirrorSkillsAsCommands(provider, target, srcRoot, opts) {
     if (typeof provider.transformCommand === 'function') {
       content = provider.transformCommand(path.join(skillDir, `${skillName}.md`), content, opts);
     }
+    // #2507: mirrored wrappers used to be written with no ownership signal, so
+    // AIWG could neither count them as deployed nor prune them when the source
+    // skill went away — a later run reported its own 46 wrappers as unmanaged
+    // artifacts the operator should delete. They carry the same managed marker
+    // and sidecar entry as any other deployed command now.
+    content = addManagedMarker(content, opts.deployVersion || 'unknown', opts.deploySource || 'bundled');
 
-    const dest = path.join(targetDir, `${skillName}${ext}`);
+    const filename = `${skillName}${ext}`;
+    const dest = path.join(targetDir, filename);
     if (opts.dryRun) {
       if (opts.verbose) console.log(`[dry-run] mirror skill command ${skillName} -> ${dest}`);
       const raw = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
@@ -306,11 +329,21 @@ function mirrorSkillsAsCommands(provider, target, srcRoot, opts) {
     } else {
       fs.writeFileSync(dest, content, 'utf8');
     }
+    deployedEntries.push({ filename, hash: contentHash(content), kind: 'skill-command' });
     count++;
+  }
+
+  if (deployedEntries.length > 0) {
+    updateSidecarManifest(targetDir, deployedEntries, {
+      dryRun: opts.dryRun,
+      version: opts.deployVersion || 'unknown',
+      source: opts.deploySource || 'bundled',
+    });
   }
 
   return count;
 }
+
 
 // ============================================================================
 // Stale-Artifact Prune (agents / commands / rules) — #1627
@@ -337,8 +370,31 @@ function mirrorSkillsAsCommands(provider, target, srcRoot, opts) {
  * @param {object} opts deploy opts (dryRun/verbose/quiet + deploy flags)
  * @param {string|null} explicitSource the raw `--source` value (null when unset)
  */
+/** Bundles whose deploy is itself the kernel-only bulk install. */
+const BULK_INSTALL_BUNDLES = new Set(['all']);
+
+/**
+ * True when the kernel-only bulk install is the only thing this project has
+ * deployed, so clearing leftover flat artifacts is a migration and not a
+ * deletion of another bundle's surface (#2508).
+ *
+ * A project with no readable `.aiwg/aiwg.config` has no recorded owner, so the
+ * pre-#152 migration cleanup still applies.
+ */
+export function bulkInstallOwnsFlatArtifacts(target) {
+  let installed;
+  try {
+    const raw = realFs.readFileSync(path.join(target, '.aiwg', 'aiwg.config'), 'utf8');
+    installed = JSON.parse(raw)?.installed;
+  } catch {
+    return true;
+  }
+  if (!installed || typeof installed !== 'object') return true;
+  return !Object.keys(installed).some(name => !BULK_INSTALL_BUNDLES.has(name));
+}
+
 function pruneStaleAiwgArtifacts(provider, target, srcRoot, opts, explicitSource) {
-  if (opts.skillsOnly) return; // skills run their own prune in the provider
+  if (opts.skillsOnly && !opts.kernelOnly) return; // skills run their own prune in the provider
 
   const aiwgRoot = resolveAiwgRoot(srcRoot);
   if (!aiwgRoot) return; // no AIWG tree → bundle/standalone deploy; never prune
@@ -351,6 +407,37 @@ function pruneStaleAiwgArtifacts(provider, target, srcRoot, opts, explicitSource
     const rel = path.relative(codeRoot, path.resolve(explicitSource));
     const underCode = !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
     if (!underCode) return; // project-local bundle / external source → skip
+  }
+
+  if (opts.kernelOnly) {
+    // A kernel-only run deploys skills and nothing else (deployCommands /
+    // deployRules / deployBehaviors are all forced false above), so it has no
+    // basis for judging any flat artifact stale. The empty desired set below
+    // exists for one narrow migration: clearing agents/commands/rules left by
+    // the pre-#152 bulk default, when the bulk install is the only thing this
+    // project ever deployed.
+    //
+    // #2508: applying it unconditionally deleted every artifact a sibling
+    // bundle owned — `aiwg use sdlc` followed by `aiwg use all` took
+    // .claude/agents from 139 to 0. When another bundle is installed, it owns
+    // this surface deliberately and the migration assumption does not hold.
+    if (!bulkInstallOwnsFlatArtifacts(target)) {
+      if (opts.verbose) {
+        console.log('skip kernel-only flat prune: another installed bundle owns agents/commands/rules');
+      }
+      return;
+    }
+    for (const type of ['agents', 'commands', 'rules']) {
+      const relPath = provider.paths?.[type];
+      if (!relPath || relPath.endsWith('.md')) continue;
+      const destDir = path.isAbsolute(relPath) ? relPath : path.join(target, relPath);
+      pruneStaleAiwgFiles(destDir, new Set(), {
+        dryRun: opts.dryRun,
+        verbose: opts.verbose,
+        artifactExtensions: ['.md', '.mdc', '.toml'],
+      });
+    }
+    return;
   }
 
   const typesThisRun = [];
@@ -370,6 +457,10 @@ function pruneStaleAiwgArtifacts(provider, target, srcRoot, opts, explicitSource
     const removed = pruneStaleAiwgFiles(destDir, desired, {
       dryRun: opts.dryRun,
       verbose: opts.verbose,
+      // Retire wrappers whose source skill no longer ships (#2511). Only the
+      // command directory holds them; the kernel-only branch returns earlier,
+      // so a bulk install still cannot touch wrappers it did not write.
+      skillCommandStems: type === 'commands' ? computeAllSkillNames(srcRoot) : null,
     });
     if (removed.length > 0 && !opts.quiet) {
       console.log(`  Pruned: ${removed.length} stale AIWG ${type} file${removed.length === 1 ? '' : 's'}`);
@@ -404,6 +495,7 @@ function parseArgs() {
     commandsOnly: false,
     skillsOnly: false,
     rulesOnly: false,
+    kernelOnly: false,
     filter: null,           // Glob pattern for agent names
     filterRole: null,       // Filter by role: reasoning|coding|efficiency
     save: false,            // Save model config to project models.json
@@ -412,7 +504,15 @@ function parseArgs() {
     quiet: false,           // Suppress all non-error output (for embedding in use.ts)
     asPlugin: false,        // Generate .factory-plugin/ bundle (Factory provider only)
     deployBehaviors: false, // Deploy behaviors in addition to agents
-    skipCommandsMigration: false  // Skip commands → skills migration (warns about duplicates)
+    skipCommandsMigration: false, // Skip commands → skills migration (warns about duplicates)
+    warnOnSkippedCommandsMigration: true, // Emit the duplicate warning when the migration is skipped
+    // Managed-marker provenance (#2502). Deployers that are not shipping the
+    // bundled framework corpus (project-local bundles, in particular) must
+    // override these so `aiwg refresh` does not mistake their artifacts for
+    // stale copies of packaged ones.
+    deploySource: null,           // Managed-marker source; defaults to 'bundled'
+    listingBudget: false,         // Honor the provider startup-listing cap despite --copy-all (#2561)
+    deployVersion: null           // Managed-marker version; defaults to srcRoot package.json
   };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -436,6 +536,7 @@ function parseArgs() {
     else if (a === '--commands-only') cfg.commandsOnly = true;
     else if (a === '--skills-only') cfg.skillsOnly = true;
     else if (a === '--rules-only') cfg.rulesOnly = true;
+    else if (a === '--kernel-only') cfg.kernelOnly = true;
     else if (a === '--deploy-behaviors') cfg.deployBehaviors = true;
     else if (a === '--filter' && args[i + 1]) cfg.filter = args[++i];
     else if (a === '--filter-role' && args[i + 1]) cfg.filterRole = args[++i];
@@ -445,7 +546,12 @@ function parseArgs() {
     else if (a === '--quiet' || a === '-q') cfg.quiet = true;
     else if (a === '--as-plugin') cfg.asPlugin = true;
     else if (a === '--skip-commands-migration') cfg.skipCommandsMigration = true;
+    // Structural opt-out: skip the migration without claiming the operator declined it (#2541).
+    else if (a === '--no-commands-warning') cfg.warnOnSkippedCommandsMigration = false;
     else if (a === '--copy-all' || a === '--copy-standard-skills') cfg.copyStandardSkills = true;
+    else if (a === '--deploy-source' && args[i + 1]) cfg.deploySource = String(args[++i]);
+    else if (a === '--listing-budget') cfg.listingBudget = true;
+    else if (a === '--deploy-version' && args[i + 1]) cfg.deployVersion = String(args[++i]);
     else if (a === '--help' || a === '-h') {
       printHelp();
       process.exit(0);
@@ -472,6 +578,7 @@ Options:
   --commands-only          Deploy only commands (skip agents)
   --skills-only            Deploy only skills (skip agents)
   --rules-only             Deploy only rules (skip agents)
+  --kernel-only            Deploy kernel skills only and prune managed bulk artifacts
   --dry-run                Show what would be deployed without writing
   --force                  Overwrite existing files
   --provider <name>        Target provider (see below)
@@ -487,8 +594,17 @@ Options:
   --as-agents-md               Aggregate to single AGENTS.md (Codex)
   --create-agents-md           Create/update AGENTS.md template
   --skip-commands-migration    Skip deleting the commands directory before skills deployment
+  --listing-budget             Honor the provider startup-listing cap even with --copy-all
+  --deploy-source <name>       Managed-marker source stamped into deployed artifacts.
+                               Defaults to 'bundled'. Deploys that do not ship the packaged
+                               framework corpus (e.g. project-local bundles) MUST override
+                               this so refresh's stale-artifact prune skips them (#2502).
+  --deploy-version <version>   Managed-marker version stamped into deployed artifacts.
+                               Defaults to the --source tree's package.json version.
   --copy-all                   Copy ALL skills per-project (legacy mirror at <provider>/.aiwg/skills/).
-                               Default is kernel-only + index-driven discovery for the rest (#1217).
+                               For aiwg use all, this also restores the legacy full agent,
+                               command, and expanded-rule copy. Default bulk deployment is
+                               kernel-only + index-driven discovery for the rest (#1217).
                                Use this for sandboxed runtimes / air-gapped corpora where
                                $AIWG_ROOT isn't readable from the agent's working dir.
                                Alias: --copy-standard-skills — rc.29 era).
@@ -531,10 +647,14 @@ Providers (all deploy agents, commands, skills, and rules):
               Paths: .cursor/agents/, .cursor/commands/, .cursor/skills/, .cursor/rules/
   warp      - Warp Terminal
               Paths: .warp/agents/, .warp/commands/, .warp/skills/, .warp/rules/ + WARP.md
-  windsurf  - Windsurf
+  deepseek-harness - DeepSeek Harness (alias: dsh; experimental)
+              Paths: AGENTS.md, .agents/skills/, .dsh/aiwg.cordis.patch.yml
+  devin     - Devin Desktop (preferred; aliases: devin-desktop, windsurf)
               Paths: .windsurf/agents/, .windsurf/workflows/, .windsurf/skills/, .windsurf/rules/
+  grokbot   - Grok Bot (AGENTS.md bridge; skills only with AIWG_GROKBOT_SKILLS_DIR)
+  grok-build - Grok Build (experimental; .grok paths + $GROK_HOME; no bare grok alias)
   hermes    - Hermes Agent (MCP-based integration)
-              Skills: ~/.hermes/skills/ (user-global) | Agents: AGENTS.md (lean routing guide)
+              Skills: $HERMES_HOME/skills/ (user-global; defaults to ~/.hermes/skills/) | Agents: AGENTS.md
               Commands/Rules: served via MCP, not file-deployed
 
 Modes:
@@ -741,6 +861,10 @@ function deepMerge(target, source) {
 async function promptCommandsMigration(cfg, provider, targetDir) {
   // Home-directory providers share commands across projects — do not delete.
   if (provider.capabilities?.homeDirectoryDeploy) return false;
+  // Some providers intentionally expose both surfaces with different runtime
+  // semantics. Pi prompt templates (/name) are not aliases for Agent Skills
+  // (/skill:name), so command-to-skill migration would destroy valid prompts.
+  if (provider.capabilities?.parallelCommandAndSkillSurfaces) return false;
 
   const commandsRelPath = provider.paths?.commands;
   if (!commandsRelPath) return false;
@@ -865,7 +989,10 @@ export async function main() {
     srcRoot,
     target: cfg.target,
     mode: cfg.mode,
-    provider: cfg.provider,
+    // Provider aliases are selectors, not artifact identities. Passing the
+    // canonical id keeps generated frontmatter byte-identical for devin,
+    // devin-desktop, and the deprecated windsurf selector.
+    provider: resolveProvider(cfg.provider),
     dryRun: cfg.dryRun,
     force: cfg.force,
     reasoningModel: cfg.reasoningModel,
@@ -874,13 +1001,14 @@ export async function main() {
     modelsConfig,
     asAgentsMd: cfg.asAgentsMd,
     createAgentsMd: cfg.createAgentsMd,
-    deployCommands: cfg.deployCommands,
-    deploySkills: cfg.deploySkills,
-    deployRules: cfg.deployRules,
-    deployBehaviors: cfg.deployBehaviors,
+    deployCommands: cfg.kernelOnly ? false : cfg.deployCommands,
+    deploySkills: cfg.kernelOnly ? true : cfg.deploySkills,
+    deployRules: cfg.kernelOnly ? false : cfg.deployRules,
+    deployBehaviors: cfg.kernelOnly ? false : cfg.deployBehaviors,
     commandsOnly: cfg.commandsOnly,
-    skillsOnly: cfg.skillsOnly,
+    skillsOnly: cfg.skillsOnly || cfg.kernelOnly,
     rulesOnly: cfg.rulesOnly,
+    kernelOnly: cfg.kernelOnly,
     filter: cfg.filter,
     filterRole: cfg.filterRole,
     save: cfg.save,
@@ -888,15 +1016,17 @@ export async function main() {
     verbose: cfg.verbose,
     quiet: cfg.quiet,
     asPlugin: cfg.asPlugin,
-    deployBehaviors: cfg.deployBehaviors,
+    deployBehaviors: cfg.kernelOnly ? false : cfg.deployBehaviors,
     skipCommandsMigration: cfg.skipCommandsMigration,
+    warnOnSkip: cfg.warnOnSkippedCommandsMigration !== false,
     // #1217 / #1219: --copy-all flag forces legacy per-project mirror
     // for the standard tier. Default is no-copy + index-driven discovery.
     // Replaces the legacy AIWG_COPY_STANDARD_SKILLS env var (removed rc.30).
     // Default (#1217) is no-copy + index-driven discovery.
     copyStandardSkills: cfg.copyStandardSkills === true,
-    deployVersion: getDeployVersion(srcRoot),
-    deploySource: 'bundled',
+    listingBudget: cfg.listingBudget === true,
+    deployVersion: cfg.deployVersion || getDeployVersion(srcRoot),
+    deploySource: cfg.deploySource || 'bundled',
   };
 
   // Commands → Skills migration: prompt then delete the commands directory

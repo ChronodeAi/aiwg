@@ -29,6 +29,7 @@ import {
   contributeStartHandler,
   validateMetadataHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
   utilityHandlers,
 } from './utilities.js';
@@ -108,6 +109,7 @@ import { regenerateHandler, regenerateHandlers } from './regenerate.js';
 import { workspaceContextHandler, workspaceContextHandlers } from './workspace-context.js';
 import { artifactsHandler, artifactsHandlers } from './artifacts.js';
 import { mcHandler, mcHandlers } from './mc.js';
+import { missionHandlers } from './mission.js';
 import { sdlcAccelerateHandler } from './sdlc-accelerate.js';
 import { teamHandler, teamHandlers } from './team.js';
 import { installHandler } from './install.js';
@@ -135,6 +137,18 @@ import { skillUsageHandler } from './skill-usage.js';
 import { modelsHandler } from './models.js';
 import { versionsHandler } from './resource-versions.js';
 import { jobHandler } from './job.js';
+import { costReportHandler } from './cost-report.js';
+import { evidenceHandler } from './evidence.js';
+import { artifactVerifyHandler } from './artifact-verify.js';
+import { writingHandler } from './writing.js';
+import { writerProfileHandler } from './writer-profile.js';
+import { botHandoffHandler } from './bot-handoff.js';
+import { buildVerifyHandler } from './build-verify.js';
+import { outputModeHandler } from './output-mode.js';
+import { installationHandler } from './installation.js';
+import { uhpHandler } from './uhp.js';
+import { schemaHandler } from './schema.js';
+import { datasetHandler } from './dataset.js';
 
 import type { CommandHandler } from './types.js';
 
@@ -145,6 +159,7 @@ export {
   versionHandler,
   authHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
   refreshHandler,
   regenerateHandler,
@@ -167,6 +182,17 @@ export {
   issueAuditHandler,
   runHandler,
   jobHandler,
+  costReportHandler,
+  evidenceHandler,
+  artifactVerifyHandler,
+  outputModeHandler,
+  writerProfileHandler,
+  botHandoffHandler,
+  buildVerifyHandler,
+  writingHandler,
+  schemaHandler,
+  datasetHandler,
+  installationHandler,
 
   // Project
   newBundleHandler,
@@ -207,6 +233,7 @@ export {
   researchQueryHandler,
   runtimeInfoHandler,
   agentcardHandler,
+  uhpHandler,
 
   // Agentic Tools (RLM)
   chunkHandler,
@@ -298,6 +325,7 @@ export {
   ralphHandlers,
   subcommandHandlers,
   mcHandlers,
+  missionHandlers,
   teamHandlers,
   stewardHandlers,
   regenerateHandlers,
@@ -319,8 +347,10 @@ export const allHandlers: CommandHandler[] = [
   versionHandler,
   authHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
   refreshHandler,
+  installationHandler,
   regenerateHandler,
   workspaceContextHandler,
 
@@ -346,6 +376,16 @@ export const allHandlers: CommandHandler[] = [
   issueAuditHandler,
   runHandler,
   jobHandler,
+  costReportHandler,
+  evidenceHandler,
+  artifactVerifyHandler,
+  outputModeHandler,
+  writerProfileHandler,
+  botHandoffHandler,
+  buildVerifyHandler,
+  writingHandler,
+  schemaHandler,
+  datasetHandler,
 
   // Workspace management
   ...workspaceHandlers,
@@ -364,6 +404,7 @@ export const allHandlers: CommandHandler[] = [
   skillsHandler,
   runtimeInfoHandler,
   agentcardHandler,
+  uhpHandler,
 
   // Utilities
   prefillCardsHandler,
@@ -387,6 +428,7 @@ export const allHandlers: CommandHandler[] = [
 
   // Mission Control
   ...mcHandlers,
+  ...missionHandlers,
 
   // Agent Teams
   ...teamHandlers,

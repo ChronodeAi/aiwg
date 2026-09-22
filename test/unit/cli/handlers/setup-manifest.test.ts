@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -185,6 +186,48 @@ describe('setup manifest CLI handlers', () => {
     expect(result.exitCode).toBe(0);
     expect(fs.existsSync(marker)).toBe(false);
     expect(stdoutSpy.mock.calls.map(([chunk]) => String(chunk)).join('\n')).toContain('[setup:dry-run]');
+  });
+
+  it('blocks provider-orchestrated handoff until the exact manifest bytes are verified', () => {
+    const manifest = baseManifest({ id: 'inspect', type: 'agentic', instruction: 'Inspect the project safely.' });
+    manifest.metadata.execution_mode = 'provider-orchestrated';
+    writeManifest(tmpDir, manifest);
+
+    const validation = validateSetupManifest({ cwd: tmpDir, frameworkRoot: REPO_ROOT });
+    expect(validation.findings.filter((finding) => finding.rule === 'agenticStep')).toEqual([]);
+    expect(runSetupManifest({
+      cwd: tmpDir,
+      frameworkRoot: REPO_ROOT,
+      platform: 'linux',
+      paramValues: { INSTALL_DIR: tmpDir },
+      skip: new Set(),
+      yes: true,
+    })).toMatchObject({
+      exitCode: 29,
+      message: expect.stringContaining('handoff blocked'),
+    });
+
+    const manifestPath = path.join(tmpDir, 'setup.manifest.yaml');
+    const bytes = fs.readFileSync(manifestPath);
+    expect(runSetupManifest({
+      cwd: tmpDir,
+      frameworkRoot: REPO_ROOT,
+      platform: 'linux',
+      paramValues: { INSTALL_DIR: tmpDir },
+      skip: new Set(),
+      yes: true,
+      artifactVerification: {
+        schemaVersion: 'aiwg.verify.result.v1',
+        status: 'verified',
+        exitCode: 0,
+        artifact: { name: 'setup.manifest.yaml', sha256: createHash('sha256').update(bytes).digest('hex') },
+        identities: ['release'],
+        diagnostics: [],
+      },
+    })).toMatchObject({
+      exitCode: 2,
+      message: expect.stringContaining('verified provider-orchestrated manifest'),
+    });
   });
 
   it('fails invalid manifests and missing params before execution', () => {

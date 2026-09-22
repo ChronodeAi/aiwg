@@ -9,9 +9,11 @@
  * @issue #1374
  */
 
-import { A2AClient } from '../a2a/client.js';
+import { A2AClient, A2A_HITL_PROMPT_V1 } from '../a2a/client.js';
 import {
   isTerminalTaskState,
+  type A2AProtocolVersion,
+  type NormalizedAgentInterface,
   type Task,
   type TaskState,
 } from '../a2a/types.js';
@@ -20,12 +22,16 @@ import type {
   ExecutorRegistration,
   ExecutorRegistry,
 } from './executor-registry.js';
+import { extractGraphMetadata } from '../flow/graph-metadata.js';
+import { extractHitlEnvelope } from '../a2a/hitl.js';
 
 export interface A2ATerminalObserverOptions {
   fetch?: typeof fetch;
   pollIntervalMs?: number;
   maxPolls?: number;
   onError?: (err: unknown) => void;
+  protocolVersion?: A2AProtocolVersion;
+  selectedInterface?: NormalizedAgentInterface;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 1000;
@@ -39,12 +45,27 @@ export async function observeA2ATerminalState(
   initialTask: Task,
   opts: A2ATerminalObserverOptions = {}
 ): Promise<void> {
+  const mission = registry.getMission(missionId);
+  if (mission && !(mission.a2a?.taskId === initialTask.id
+    && mission.a2a.instanceId === a2aInstanceId)) {
+    mission.a2a = {
+      instanceId: a2aInstanceId, taskId: initialTask.id,
+      ...(initialTask.contextId ? { contextId: initialTask.contextId } : {}),
+      protocolVersion: opts.protocolVersion ?? '0.3',
+      ...(opts.selectedInterface ? { selectedInterface: opts.selectedInterface } : {}),
+      acceptedPrompts: new Set(),
+    };
+  }
   try {
     const clientOpts: ConstructorParameters<typeof A2AClient>[0] = {
       baseUrl: executor.transportEndpoints.rest,
       bearer: executor.token,
       instanceId: a2aInstanceId,
+      protocolVersion: opts.protocolVersion ?? '0.3',
+      protocolPolicy: opts.protocolVersion ?? '0.3',
+      optionalExtensions: [A2A_HITL_PROMPT_V1],
     };
+    if (opts.selectedInterface) clientOpts.selectedInterface = opts.selectedInterface;
     if (opts.fetch) clientOpts.fetch = opts.fetch;
     const client = new A2AClient(clientOpts);
 
@@ -60,6 +81,9 @@ export async function observeA2ATerminalState(
       if (attempt === (opts.maxPolls ?? DEFAULT_MAX_POLLS)) break;
       await sleep(opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS);
       task = await client.getTask(task.id);
+      if (task.id !== initialTask.id || task.contextId !== initialTask.contextId) {
+        throw new Error('A2A observer task binding changed');
+      }
       emitNonTerminalProgress(registry, executor.executorId, missionId, task);
     }
 
@@ -92,10 +116,12 @@ function emitNonTerminalProgress(
     return;
   }
   if (state === 'input-required') {
+    const prompt = extractHitlEnvelope(task);
     registry.handleEvent(makeEnvelope('mission.hitl_required', executorId, missionId, task, {
       state: 'hitl-required',
       a2a_task_id: task.id,
       summary: taskStatusSummary(task),
+      ...(prompt?.ok ? { hitl_id: prompt.envelope.prompt_id, hitl_prompt: prompt.envelope } : {}),
     }));
   }
 }
@@ -144,23 +170,42 @@ function makeEnvelope(
   task: Task,
   data: Record<string, unknown>
 ): EventEnvelope {
+  const graph = extractGraphMetadata(task.metadata);
   return {
     event,
     executor_id: executorId,
     mission_id: missionId,
     ts: task.status.timestamp ?? new Date().toISOString(),
-    data,
+    data: {
+      ...data,
+      ...(graph ? {
+        graph_metadata: { ...graph, nodeState: taskStateToGraphState(task.status.state) },
+        graph_node_state: taskStateToGraphState(task.status.state),
+      } : {}),
+    },
   };
 }
 
+function taskStateToGraphState(state: TaskState): string {
+  switch (state) {
+    case 'submitted': return 'pending';
+    case 'working': return 'running';
+    case 'input-required':
+    case 'auth-required': return 'blocked-hitl';
+    case 'completed': return 'succeeded';
+    case 'failed':
+    case 'rejected': return 'failed';
+    case 'canceled': return 'canceled';
+    default: return 'unknown';
+  }
+}
+
 function taskStatusSummary(task: Task): string | undefined {
-  const status = task.status as Task['status'] & { summary?: unknown };
-  return typeof status.summary === 'string' ? status.summary : undefined;
+  return task.status.summary;
 }
 
 function exitCodeData(task: Task): { exit_code?: number } {
-  const status = task.status as Task['status'] & { exit_code?: unknown };
-  return typeof status.exit_code === 'number' ? { exit_code: status.exit_code } : {};
+  return task.status.exitCode !== undefined ? { exit_code: task.status.exitCode } : {};
 }
 
 function sleep(ms: number): Promise<void> {

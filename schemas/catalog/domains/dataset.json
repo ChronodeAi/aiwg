@@ -1,0 +1,466 @@
+{
+  "$schema": "../domain-manifest.v1.schema.json",
+  "schemaVersion": "1",
+  "domain": "dataset-intelligence",
+  "owner": { "id": "aiwg-maintainers" },
+  "policy": { "strict": true, "compatibility": "backward", "requireFixtures": true },
+  "artifacts": [
+    {
+      "logicalName": "dataset.fortemi-live-qualification-receipt",
+      "id": "https://aiwg.io/schemas/dataset/fortemi-live-qualification-receipt.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "preview",
+      "owner": {
+        "id": "aiwg-maintainers"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/dataset/fortemi-live-qualification-receipt.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "breaking"
+      },
+      "consumers": [
+        {
+          "id": "fortemi-dataset-live-preflight",
+          "boundary": "sanitized read-only capability evidence",
+          "path": "src/dataset/fortemi-live-qualification.ts"
+        }
+      ],
+      "fixtures": {
+        "valid": [
+          "test/fixtures/dataset/fortemi-live-qualification-receipt.v2.valid.json"
+        ],
+        "invalid": [
+          "test/fixtures/dataset/fortemi-live-qualification-receipt.v2.invalid.json"
+        ]
+      },
+      "projections": [
+        {
+          "kind": "types",
+          "path": "src/dataset/fortemi-live-qualification.ts",
+          "generated": false
+        },
+        {
+          "kind": "validator",
+          "path": "src/dataset/fortemi-live-qualification.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      }
+    },
+    {
+      "logicalName": "dataset.fortemi-run-receipt",
+      "id": "https://fortemi.dev/schemas/dataset-execution/validation/1.0.1/run-receipt.schema.json",
+      "version": "1.0.1",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "preview",
+      "owner": {
+        "id": "Fortemi/fortemi"
+      },
+      "authority": {
+        "kind": "external",
+        "path": "schemas/dataset/fortemi-run-receipt/validation-1.0.1/run-receipt.schema.json",
+        "uri": "https://fortemi.dev/schemas/dataset-execution/validation/1.0.1/run-receipt.schema.json"
+      },
+      "compatibility": {
+        "mode": "none"
+      },
+      "consumers": [
+        {
+          "id": "fortemi-dataset-execution-client",
+          "boundary": "independent verification of bounded live RunReceipts",
+          "path": "src/dataset/fortemi-dataset-execution.ts"
+        }
+      ],
+      "fixtures": {
+        "valid": [
+          "test/fixtures/dataset/fortemi-run-receipt/degraded-run-receipt.json"
+        ],
+        "invalid": [
+          "test/fixtures/dataset/fortemi-run-receipt/invalid.json"
+        ]
+      },
+      "projections": [
+        {
+          "kind": "mirror",
+          "path": "schemas/dataset/fortemi-run-receipt/validation-1.0.1/run-receipt.schema.json",
+          "digest": "sha256:ef99ec0fb7cde6b59746c61ed80a308a25fe1a54fb3052f0f4af97798ee0af5c",
+          "generated": true
+        },
+        {
+          "kind": "validator",
+          "path": "src/dataset/fortemi-run-receipt.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      },
+      "digest": "sha256:ef99ec0fb7cde6b59746c61ed80a308a25fe1a54fb3052f0f4af97798ee0af5c"
+    },
+    {
+      "logicalName": "dataset.fortemi-capability-validation",
+      "id": "https://fortemi.dev/schemas/dataset-execution-capabilities/validation/1.0.1.schema.json",
+      "version": "1.0.1",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "preview",
+      "owner": {
+        "id": "Fortemi/fortemi-react"
+      },
+      "authority": {
+        "kind": "external",
+        "path": "schemas/dataset/fortemi-capability-validation/1.0.1/capability.schema.json",
+        "uri": "https://fortemi.dev/schemas/dataset-execution-capabilities/validation/1.0.1.schema.json"
+      },
+      "compatibility": {
+        "mode": "none"
+      },
+      "consumers": [
+        {
+          "id": "fortemi-dataset-execution-client",
+          "boundary": "independent validation of the advertised capability descriptor and negotiation binding",
+          "path": "src/dataset/fortemi-capability.ts"
+        }
+      ],
+      "fixtures": {
+        "valid": [
+          "test/fixtures/dataset/fortemi-capability/server-descriptor.json"
+        ],
+        "invalid": [
+          "test/fixtures/dataset/fortemi-capability/invalid-descriptor.json"
+        ]
+      },
+      "projections": [
+        {
+          "kind": "mirror",
+          "path": "schemas/dataset/fortemi-capability-validation/1.0.1/capability.schema.json",
+          "digest": "sha256:a4e9b427da669a02e83db00d39f48c2e106770d6cd2ec1b717938c57793b754c",
+          "generated": true
+        },
+        {
+          "kind": "validator",
+          "path": "src/dataset/fortemi-capability.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      },
+      "digest": "sha256:a4e9b427da669a02e83db00d39f48c2e106770d6cd2ec1b717938c57793b754c"
+    },
+    {
+      "logicalName": "dataset.fortemi-live-qualification-receipt",
+      "id": "https://aiwg.io/schemas/dataset/fortemi-live-qualification-receipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/fortemi-live-qualification-receipt.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "fortemi-dataset-live-preflight", "boundary": "sanitized read-only capability evidence", "path": "src/dataset/fortemi-live-qualification.ts" }
+      ],
+      "fixtures": {
+        "valid": ["test/fixtures/dataset/fortemi-live-qualification-receipt.valid.json"],
+        "invalid": ["test/fixtures/dataset/fortemi-live-qualification-receipt.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/dataset/fortemi-live-qualification.ts", "generated": false },
+        { "kind": "validator", "path": "src/dataset/fortemi-live-qualification.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.deprecations",
+      "id": "https://aiwg.io/schemas/dataset/dataset-deprecations.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/dataset-deprecations.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "dataset-intelligence-documentation", "boundary": "machine-readable release and removal gates", "path": "agentic/code/addons/dataset-intelligence/deprecations/dataset-deprecations.v1.json" }
+      ],
+      "fixtures": {
+        "valid": ["test/fixtures/dataset/deprecations.valid.json"],
+        "invalid": ["test/fixtures/dataset/deprecations.invalid.json"]
+      },
+      "projections": [],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.conformance-manifest",
+      "id": "https://aiwg.io/schemas/dataset/conformance-manifest.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/conformance-manifest.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "dataset-conformance-policy", "boundary": "matrix completeness, maturity, and evidence policy", "path": "src/dataset/conformance.ts" },
+        { "id": "dataset-conformance-runner", "boundary": "repository-local and controlled qualification", "path": "tools/qualification/dataset-conformance.ts" }
+      ],
+      "fixtures": { "valid": ["test/fixtures/dataset-intelligence/v1/manifest.json"], "invalid": ["test/fixtures/dataset/conformance-manifest.invalid.json"] },
+      "projections": [{ "kind": "types", "path": "src/dataset/conformance-types.ts", "generated": false }, { "kind": "validator", "path": "src/dataset/conformance.ts", "generated": false }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.conformance-receipt",
+      "id": "https://aiwg.io/schemas/dataset/conformance-receipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/conformance-receipt.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "dependencies": [{ "id": "https://aiwg.io/schemas/dataset/conformance-manifest.v1.schema.json", "version": "1.0.0" }],
+      "consumers": [{ "id": "dataset-conformance-gate", "boundary": "receipt verification and stable-release eligibility", "path": "src/dataset/conformance.ts" }],
+      "fixtures": { "valid": ["test/fixtures/dataset/conformance-receipt.valid.json"], "invalid": ["test/fixtures/dataset/conformance-receipt.invalid.json"] },
+      "projections": [{ "kind": "types", "path": "src/dataset/conformance-types.ts", "generated": false }, { "kind": "validator", "path": "src/dataset/conformance.ts", "generated": false }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.source-adapter",
+      "id": "https://aiwg.io/schemas/dataset/source-adapter.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/source-adapter.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "dependencies": [{ "id": "https://aiwg.io/schemas/dataset/dataset-contracts.v1.schema.json", "version": "1.0.0" }],
+      "consumers": [
+        { "id": "dataset-adapter-sdk", "boundary": "manifest, configuration, lifecycle, checkpoint, and qualification contracts", "path": "src/dataset/adapter-sdk.ts" },
+        { "id": "dataset-reference-adapters", "boundary": "bounded source access", "path": "src/dataset/adapters.ts" }
+      ],
+      "fixtures": { "valid": ["test/fixtures/dataset/adapters/contracts.valid.json"], "invalid": ["test/fixtures/dataset/adapters/contracts.invalid.json"] },
+      "projections": [
+        { "kind": "types", "path": "src/dataset/adapter-types.ts", "generated": false },
+        { "kind": "validator", "path": "src/dataset/adapter-sdk.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.contracts",
+      "id": "https://aiwg.io/schemas/dataset/dataset-contracts.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/dataset-contracts.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "dataset-runtime", "boundary": "serialized contract validation", "path": "src/dataset/contracts.ts" },
+        { "id": "dataset-types", "boundary": "TypeScript representation", "path": "src/dataset/types.ts" }
+      ],
+      "fixtures": {
+        "valid": ["test/fixtures/dataset/contracts.valid.json"],
+        "invalid": ["test/fixtures/dataset/contracts.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/dataset/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/dataset/contracts.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.schema-governance",
+      "id": "https://aiwg.io/schemas/dataset/dataset-schema-governance.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/dataset-schema-governance.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "dependencies": [
+        { "id": "https://aiwg.io/schemas/dataset/dataset-contracts.v1.schema.json", "version": "1.0.0" }
+      ],
+      "consumers": [
+        { "id": "dataset-schema-governance-runtime", "boundary": "candidate promotion, compatibility impact, and boundary validation", "path": "src/dataset/schema-governance.ts" },
+        { "id": "dataset-schema-governance-types", "boundary": "TypeScript representation", "path": "src/dataset/schema-governance.ts" }
+      ],
+      "fixtures": {
+        "valid": ["test/fixtures/dataset/schema-governance.valid.json"],
+        "invalid": ["test/fixtures/dataset/schema-governance.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/dataset/schema-governance.ts", "generated": false },
+        { "kind": "validator", "path": "src/dataset/schema-governance.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.run-ledger",
+      "id": "https://aiwg.io/schemas/dataset/run-ledger.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/run-ledger.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "run-ledger-runtime", "boundary": "append-only run and evidence ledger", "path": "src/dataset/ledger.ts" },
+        { "id": "provenance-projections", "boundary": "legacy and standards projections", "path": "src/dataset/projections.ts" }
+      ],
+      "fixtures": {
+        "valid": ["test/fixtures/dataset/run-ledger.valid.json"],
+        "invalid": ["test/fixtures/dataset/run-ledger.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/dataset/ledger-types.ts", "generated": false },
+        { "kind": "validator", "path": "src/dataset/ledger.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.standards-exchange",
+      "id": "https://aiwg.io/schemas/dataset/dataset-standards-exchange.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/dataset-standards-exchange.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "dependencies": [
+        { "id": "https://aiwg.io/schemas/dataset/run-ledger.v1.schema.json", "version": "1.0.0" }
+      ],
+      "consumers": [
+        { "id": "dataset-standards-runtime", "boundary": "profile selection, conversions, and loss reports", "path": "src/dataset/standards.ts" },
+        { "id": "dataset-standards-types", "boundary": "TypeScript representation", "path": "src/dataset/standards-types.ts" }
+      ],
+      "fixtures": {
+        "valid": ["test/fixtures/dataset/standards/exchange.valid.json"],
+        "invalid": ["test/fixtures/dataset/standards/exchange.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/dataset/standards-types.ts", "generated": false },
+        { "kind": "validator", "path": "src/dataset/standards.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.profile.prov-json-20130430",
+      "id": "https://aiwg.io/schemas/dataset/profiles/prov-json-20130430.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/profiles/prov-json-20130430.schema.json" },
+      "compatibility": { "mode": "none" },
+      "dependencies": [
+        { "id": "https://aiwg.io/schemas/dataset/dataset-standards-exchange.v1.schema.json", "version": "1.0.0" }
+      ],
+      "consumers": [{ "id": "prov-json-adapter", "boundary": "validated PROV-JSON import and export", "path": "src/dataset/standards.ts" }],
+      "fixtures": { "valid": ["test/fixtures/dataset/standards/prov-json-20130430.valid.json"], "invalid": ["test/fixtures/dataset/standards/prov-json-20130430.invalid.json"] },
+      "projections": [{ "kind": "validator", "path": "src/dataset/standards.ts", "generated": false }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.profile.openlineage-1.0.0",
+      "id": "https://aiwg.io/schemas/dataset/profiles/openlineage-1.0.0.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "schemas/dataset/profiles/openlineage-1.0.0.schema.json" },
+      "compatibility": { "mode": "none" },
+      "dependencies": [
+        { "id": "https://aiwg.io/schemas/dataset/dataset-standards-exchange.v1.schema.json", "version": "1.0.0" }
+      ],
+      "consumers": [{ "id": "openlineage-adapter", "boundary": "validated OpenLineage RunEvent import and export", "path": "src/dataset/standards.ts" }],
+      "fixtures": { "valid": ["test/fixtures/dataset/standards/openlineage-1.0.0.valid.json"], "invalid": ["test/fixtures/dataset/standards/openlineage-1.0.0.invalid.json"] },
+      "projections": [{ "kind": "validator", "path": "src/dataset/standards.ts", "generated": false }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.addon-intake",
+      "id": "https://aiwg.io/schemas/addons/dataset-intelligence/dataset-intake.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "agentic/code/addons/dataset-intelligence/schemas/dataset-intake.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "dependencies": [
+        { "id": "https://aiwg.io/schemas/dataset/dataset-contracts.v1.schema.json", "version": "1.0.0" }
+      ],
+      "consumers": [
+        { "id": "dataset-intelligence-intake", "boundary": "cross-domain plain-language intake", "path": "agentic/code/addons/dataset-intelligence/skills/dataset-intake/SKILL.md" },
+        { "id": "dataset-orchestration-cli", "boundary": "preview and plan request", "path": "src/cli/handlers/dataset.ts" }
+      ],
+      "fixtures": {
+        "valid": ["agentic/code/addons/dataset-intelligence/examples/valid/dataset-intake.v1.json"],
+        "invalid": ["agentic/code/addons/dataset-intelligence/examples/invalid/dataset-intake.v1.json"]
+      },
+      "projections": [],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "dataset.addon-workflow-handoff",
+      "id": "https://aiwg.io/schemas/addons/dataset-intelligence/dataset-workflow-handoff.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": { "id": "aiwg-maintainers" },
+      "authority": { "kind": "canonical", "path": "agentic/code/addons/dataset-intelligence/schemas/dataset-workflow-handoff.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "dependencies": [
+        { "id": "https://aiwg.io/schemas/dataset/dataset-contracts.v1.schema.json", "version": "1.0.0" },
+        { "id": "https://aiwg.io/schemas/dataset/run-ledger.v1.schema.json", "version": "1.0.0" }
+      ],
+      "consumers": [
+        { "id": "dataset-intelligence-flows", "boundary": "stable phase and approval handoff references", "path": "agentic/code/addons/dataset-intelligence/flows" },
+        { "id": "dataset-orchestration-cli", "boundary": "plan, run, cancellation, checkpoint, and verification envelopes", "path": "src/cli/handlers/dataset.ts" }
+      ],
+      "fixtures": {
+        "valid": [
+          "agentic/code/addons/dataset-intelligence/examples/valid/dataset-workflow-handoff.v1.json",
+          "agentic/code/addons/dataset-intelligence/examples/valid/dataset-workflow-cancelled.v1.json",
+          "agentic/code/addons/dataset-intelligence/examples/valid/dataset-workflow-degraded.v1.json",
+          "agentic/code/addons/dataset-intelligence/examples/valid/dataset-workflow-retired.v1.json"
+        ],
+        "invalid": ["agentic/code/addons/dataset-intelligence/examples/invalid/dataset-workflow-handoff.v1.json"]
+      },
+      "projections": [],
+      "publication": { "public": true }
+    }
+  ]
+}

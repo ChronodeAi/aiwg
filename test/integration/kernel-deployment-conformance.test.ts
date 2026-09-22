@@ -29,9 +29,11 @@ const PROVIDERS = [
   { id: 'opencode', root: (project: string) => join(project, '.opencode/skill'), standardRoot: (project: string) => join(project, '.opencode/.aiwg/skill') },
   { id: 'warp', root: (project: string) => join(project, '.warp/skills'), standardRoot: (project: string) => join(project, '.warp/.aiwg/skills') },
   { id: 'windsurf', root: (project: string) => join(project, '.windsurf/skills'), standardRoot: (project: string) => join(project, '.windsurf/.aiwg/skills') },
+  { id: 'grokbot', root: (_project: string, home: string) => join(home, 'configured-grokbot-skills'), standardRoot: (_project: string, home: string) => join(home, 'configured-grokbot-skills/.aiwg/skills') },
   { id: 'hermes', root: (_project: string, home: string) => join(home, '.hermes/skills'), standardRoot: (_project: string, home: string) => join(home, '.hermes/skills/.aiwg') },
   { id: 'openclaw', root: (_project: string, home: string) => join(home, '.openclaw/skills/aiwg'), standardRoot: (_project: string, home: string) => join(home, '.openclaw/.aiwg/skills') },
   { id: 'openhuman', root: (_project: string, home: string) => join(home, '.openhuman/skills'), standardRoot: (_project: string, home: string) => join(home, '.openhuman/.aiwg/skills') },
+  { id: 'pi', root: (project: string) => join(project, '.agents/skills'), standardRoot: (project: string) => join(project, '.pi/.aiwg/skills') },
 ] as const;
 
 function skillDirs(parent: string): string[] {
@@ -112,9 +114,13 @@ function deploy(
     '--quiet',
     ...(options.copyAll ? ['--copy-all'] : []),
     ...(options.dryRun ? ['--dry-run'] : []),
-  ], {
+  ], { timeout: 60_000,
     cwd: REPO_ROOT,
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    // #2119: pin HERMES_HOME to the fake home too. Without this, a HERMES_HOME
+    // inherited from the developer's environment (e.g. a per-role Hermes home)
+    // redirects hermes skill deploys away from the test root and into the
+    // real home — breaking test hermeticity and mutating user state.
+    env: { ...process.env, HOME: home, USERPROFILE: home, HERMES_HOME: join(home, '.hermes'), AIWG_GROKBOT_SKILLS_DIR: join(home, 'configured-grokbot-skills') },
     stdio: 'pipe',
   });
   return { project, home };
@@ -126,7 +132,7 @@ afterAll(() => {
 
 describe('kernel deployment conformance', () => {
   it('has a non-empty, unique canonical kernel inventory', () => {
-    expect(EXPECTED_KERNEL.length).toBe(24);
+    expect(EXPECTED_KERNEL.length).toBe(26);
     expect(new Set(EXPECTED_KERNEL).size).toBe(EXPECTED_KERNEL.length);
   });
 
@@ -198,22 +204,33 @@ describe('kernel deployment conformance', () => {
     ).sort()).toEqual(EXPECTED_KERNEL);
   });
 
-  it('repairs an oversized Codex deployment while preserving operator-owned skills', () => {
-    const first = deploy('codex', { copyAll: true, suffix: 'repair' });
-    const root = PROVIDERS[1].root(first.project, first.home);
-    const operator = join(root, 'operator-owned-fixture');
-    mkdirSync(operator, { recursive: true });
-    writeFileSync(join(operator, 'SKILL.md'), '---\nname: operator-owned-fixture\ndescription: operator-owned skill\n---\noperator\n');
+  for (const provider of PROVIDERS) {
+    it(`${provider.id} repairs a full-copy deployment while preserving operator-owned skills`, () => {
+      const first = deploy(provider.id, { copyAll: true, suffix: 'repair' });
+      const kernelRoot = provider.root(first.project, first.home);
+      const standardRoot = provider.standardRoot(first.project, first.home);
+      const operator = join(kernelRoot, 'operator-owned-fixture');
+      mkdirSync(operator, { recursive: true });
+      writeFileSync(join(operator, 'SKILL.md'), '---\nname: operator-owned-fixture\ndescription: operator-owned skill\n---\noperator\n');
+      expect(existsSync(join(standardRoot, 'voice-apply', 'SKILL.md'))).toBe(true);
 
-    const repaired = deploy('codex', { suffix: 'repair' });
-    const repairedRoot = PROVIDERS[1].root(repaired.project, repaired.home);
-    const stats = codexListingStats(repairedRoot);
+      const repaired = deploy(provider.id, { suffix: 'repair' });
+      const repairedKernelRoot = provider.root(repaired.project, repaired.home);
+      const repairedStandardRoot = provider.standardRoot(repaired.project, repaired.home);
 
-    expect(existsSync(join(repairedRoot, 'voice-apply'))).toBe(false);
-    expect(existsSync(operator)).toBe(true);
-    expect(stats.count).toBe(EXPECTED_KERNEL.length + 1);
-    expect(stats.totalChars).toBeLessThanOrEqual(CODEX_LISTING_CHAR_CAP);
-  });
+      expect(existsSync(join(repairedStandardRoot, 'voice-apply'))).toBe(false);
+      expect(existsSync(operator)).toBe(true);
+      expect(skillDirs(repairedKernelRoot).map(dir => dir.split('/').at(-1)!).filter(name =>
+        EXPECTED_KERNEL.includes(name)
+      ).sort()).toEqual(EXPECTED_KERNEL);
+
+      if (provider.id === 'codex') {
+        const stats = codexListingStats(repairedKernelRoot);
+        expect(stats.count).toBe(EXPECTED_KERNEL.length + 1);
+        expect(stats.totalChars).toBeLessThanOrEqual(CODEX_LISTING_CHAR_CAP);
+      }
+    });
+  }
 
   it('moves managed skills cleanly across kernel and standard tiers', async () => {
     const root = join(TEST_ROOT, 'tier-transition');
@@ -265,7 +282,7 @@ describe('kernel deployment conformance', () => {
 
   it('matches the command mirror policy for every deployable provider', () => {
     const commandProviders = ['factory', 'opencode', 'warp', 'windsurf', 'copilot', 'codex', 'openclaw'];
-    const nativeOnlyProviders = ['claude', 'cursor', 'hermes', 'openhuman'];
+    const nativeOnlyProviders = ['claude', 'cursor', 'grokbot', 'hermes', 'openhuman', 'pi'];
     expect(PROVIDERS.map(provider => provider.id).sort()).toEqual(
       [...commandProviders, ...nativeOnlyProviders].sort(),
     );
@@ -283,10 +300,42 @@ describe('kernel deployment conformance', () => {
     for (const doc of [
       'docs/architecture-overview.md',
       'docs/how-it-works.md',
-      'docs/discovery-and-kernel-skills.md',
+      'docs/cli/capability-routing.md',
     ]) {
       const content = readFileSync(join(REPO_ROOT, doc), 'utf8');
       expect(content, doc).toContain(`${EXPECTED_KERNEL.length} kernel skills`);
     }
   });
 });
+
+describe('grokbot fail-closed kernel deploy (#219)', () => {
+  it('does not invent ~/grokbot-skills when AIWG_GROKBOT_SKILLS_DIR is unset', () => {
+    const project = join(TEST_ROOT, 'grokbot-unset');
+    const home = join(TEST_ROOT, 'grokbot-unset-home');
+    mkdirSync(project, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
+    delete env.AIWG_GROKBOT_SKILLS_DIR;
+    let exitCode = 0;
+    let stdout = '';
+    let stderr = '';
+    try {
+      stdout = execFileSync(
+        'node',
+        [join(REPO_ROOT, 'bin/aiwg.mjs'), 'use', 'all', '--provider', 'grokbot', '--scope', 'user', '--dry-run'],
+        { cwd: project, env, encoding: 'utf8', timeout: 120_000 },
+      );
+    } catch (error) {
+      const err = error as { status?: number; stdout?: string; stderr?: string };
+      exitCode = err.status ?? 1;
+      stdout = err.stdout ?? '';
+      stderr = err.stderr ?? '';
+    }
+    expect(exitCode).not.toBe(0);
+    expect(stdout + stderr).toMatch(/AIWG_GROKBOT_SKILLS_DIR/);
+    expect(existsSync(join(home, 'grokbot-skills'))).toBe(false);
+    expect(existsSync(join(home, '.grokbot'))).toBe(false);
+    expect(existsSync(join(project, '.cursor'))).toBe(false);
+  });
+});
+

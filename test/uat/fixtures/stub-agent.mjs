@@ -22,6 +22,27 @@ if (logFile) {
   }) + '\n');
 }
 
+// UAT_STUB_USAGE ("<totalTokens>:<costUsd>") makes the stub report provider usage
+// the way a real stream-json provider does, so token and spend ceilings become
+// observable through the genuine parse path (#1766). Without it the stub reports
+// no usage at all, which is what keeps those dimensions correctly unobservable.
+const usageSpec = process.env.UAT_STUB_USAGE;
+if (usageSpec) {
+  const [rawTokens, rawCost] = usageSpec.split(':');
+  const totalTokens = Number(rawTokens);
+  const costUsd = Number(rawCost);
+  if (!Number.isFinite(totalTokens) || !Number.isFinite(costUsd)) {
+    process.stderr.write(`stub-agent: invalid UAT_STUB_USAGE '${usageSpec}' (want "<tokens>:<cost>")\n`);
+    process.exit(2);
+  }
+  const outputTokens = Math.floor(totalTokens / 2);
+  process.stdout.write(JSON.stringify({
+    type: 'result',
+    usage: { input_tokens: totalTokens - outputTokens, output_tokens: outputTokens },
+    total_cost_usd: costUsd,
+  }) + '\n');
+}
+
 const output = process.env.UAT_STUB_OUTPUT || 'Ralph Loop: SUCCESS\nTask complete.\n';
 process.stdout.write(output.endsWith('\n') ? output : `${output}\n`);
 process.exit(0);

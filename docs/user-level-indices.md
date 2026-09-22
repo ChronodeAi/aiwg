@@ -8,6 +8,11 @@ Private project memory can also live under `~/.aiwg/projects/`; see
 [`user-level-project-memory.md`](./user-level-project-memory.md) for the
 manifest, index, and resolution order.
 
+These remain active compatibility workflows. Dataset Intelligence may register
+their sources and provenance, but does not make a regenerable index canonical
+or replace existing `aiwg index` commands. See the [dataset migration
+guide](./addons/dataset-intelligence/migration-guide.md).
+
 ## Built-In User Capability Graph
 
 Place custom user capabilities under `~/.aiwg`:
@@ -82,6 +87,12 @@ For lower-level graph options, use `index.graphs`:
 }
 ```
 
+`indices.user.roots` entries are explicit-build user roots and are not included
+in bare `aiwg index build` unless you also declare a full `index.graphs` entry.
+Full graph definitions under `index.graphs` follow the normal graph policy:
+`defaultBuild` defaults to `true`, so set `"defaultBuild": false` when the graph
+should be built only by name.
+
 Then build or query the graph from any project:
 
 ```bash
@@ -113,11 +124,13 @@ JSON results include provenance:
 }
 ```
 
-Use explicit graph selection when reproducibility requires a single source:
+When reproducibility requires a single source, name the intended graph and
+asset ID in the agent conversation:
 
-```bash
-aiwg discover "custom review" --graph user --json
-aiwg show skill custom-review --graph project --json
+```text
+Find the `custom-review` asset in my user-level AIWG graph, compare it with any
+project-level asset of the same ID, and tell me which source you selected
+before using it.
 ```
 
 ## Project Opt-Out

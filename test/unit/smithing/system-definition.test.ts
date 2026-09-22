@@ -101,7 +101,7 @@ function validateSystemDefinition(def: SystemDefinition): string[] {
 function validateCommandAvailability(cmd: CommandEntry): boolean {
   // Check if command exists on the system
   try {
-    const result = require('child_process').execSync(`command -v ${cmd.name}`, {
+    const result = require('child_process').execSync(`command -v ${cmd.name}`, { timeout: 60_000,
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
     });

@@ -30,7 +30,8 @@ export interface LintCheck {
     | 'file-exists'
     | 'id-unique'
     | 'id-format'
-    | 'cross-ref-bidirectional';
+    | 'cross-ref-bidirectional'
+    | 'unregistered-uncertainty';
 
   /** Fields to check (for frontmatter checks) */
   fields?: string[];
@@ -47,8 +48,48 @@ export interface LintCheck {
   /** Base directory for resolving references */
   basePath?: string;
 
+  /**
+   * Phrases marking an identifier as deliberately absent, for
+   * `reference-resolves`. A mention beside one of these is documentation of a
+   * gap, not a dangling reference (#2555). Defaults to the corpus set.
+   */
+  absenceMarkers?: string[];
+
   /** Section name that should contain cross-references */
   section?: string;
+
+  /**
+   * Phrases that state an unperformed check, for `unregistered-uncertainty`.
+   * Matched case-insensitively. Defaults to the induction set when omitted.
+   */
+  uncertaintyPatterns?: string[];
+
+  /**
+   * Things the agent could have checked (OpenReview, camera-ready, PDF, census,
+   * code URL, venue...). Required on the same line as the uncertainty phrase, so
+   * a paper's own unverified claim is not mistaken for a skipped check.
+   */
+  verificationTargets?: string[];
+
+  /**
+   * Patterns that discharge an uncertainty by naming a specific obstacle or
+   * recording an outcome (HTTP status, credential requirement, rate limit,
+   * paywall, or a declared check with evidence). Defaults to a general set.
+   */
+  obstaclePatterns?: string[];
+
+  /**
+   * Maximum character distance between the uncertainty phrase and its
+   * verification target. Markdown keeps whole paragraphs on one line, so
+   * same-line co-occurrence alone relates unrelated clauses. Default 80.
+   */
+  targetProximity?: number;
+
+  /**
+   * How many lines after an uncertainty may carry its obstacle. Default 2 —
+   * the obstacle normally sits in the same sentence or the next one.
+   */
+  obstacleWithinLines?: number;
 }
 
 /**
@@ -146,6 +187,12 @@ export interface LintResult {
     warnings: number;
     infos: number;
     passed: boolean;
+    /** Rules in the selected rulesets (#2555). */
+    rulesSelected: number;
+    /** Rules that selected at least one file in this target (#2555). */
+    rulesApplied: number;
+    /** Rule ids whose glob matched no file in this target (#2555). */
+    inapplicableRules: string[];
   };
 
   /** Timestamp */
@@ -156,6 +203,9 @@ export interface LintResult {
  * CLI options for the lint command
  */
 export interface LintOptions {
+  /** Lint files git ignores too (default: false — generated trees are skipped, #2555). */
+  respectGitignore?: boolean;
+
   /** Target path to lint */
   target: string;
 

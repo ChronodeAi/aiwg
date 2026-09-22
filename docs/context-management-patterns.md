@@ -2,6 +2,8 @@
 
 This guide documents AIWG's context management strategies, including partial summarization, multi-directory skill discovery, and cross-platform considerations.
 
+The normative packet, budget, reset, handoff, and persistence rules for research and planning are in the [provider-neutral context engineering contract](context-engineering-contract.md).
+
 ## Partial Summarization
 
 Partial summarization (also called "Summarize from here") is a Claude Code feature that allows you to compact conversation history while preserving recent work.
@@ -586,7 +588,7 @@ claude --add-dir ~/.aiwg-global
 ## References
 
 - @.aiwg/ - AIWG state directory structure
-- @docs/agents/cli-reference.md - CLI commands and flags
+- @docs/cli/reference.md - CLI commands and flags
 - @docs/ralph-guide.md - Agent loop persistence patterns
 - @CLAUDE.md - Multi-platform instructions
 - @agentic/code/frameworks/sdlc-complete/docs/orchestrator-architecture.md - Phase progression

@@ -54,7 +54,7 @@ describe('security-engineering executable skills', () => {
     writeFileSync(join(dir, 'src', 'bad.c'), 'void f(char *d, char *s) { strcpy(d, s); }\n');
     writeFileSync(join(dir, 'tests', 'ignored.c'), 'void f(char *d, char *s) { strcpy(d, s); }\n');
 
-    const result = spawnSync('node', [bannedAudit, '--starter', 'c', '--format', 'sarif', '--fail-on-violation'], {
+    const result = spawnSync('node', [bannedAudit, '--starter', 'c', '--format', 'sarif', '--fail-on-violation'], { timeout: 60_000,
       cwd: dir,
       encoding: 'utf8',
     });
@@ -82,7 +82,7 @@ describe('security-engineering executable skills', () => {
       "",
     ].join("\n"));
 
-    const result = spawnSync('node', [bannedAudit, '--format', 'json'], { cwd: dir, encoding: 'utf8' });
+    const result = spawnSync('node', [bannedAudit, '--format', 'json'], { timeout: 60_000, cwd: dir, encoding: 'utf8' });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('Banlist validation failed');
@@ -93,7 +93,7 @@ describe('security-engineering executable skills', () => {
   it('sanitizer-in-ci emits recipes and operator notes', () => {
     const dir = tempProject('aiwg-sanitizer-');
     writeFileSync(join(dir, 'go.mod'), 'module example.com/x\n');
-    const result = spawnSync('node', [sanitizerEmit, '--language', 'go', '--ci', 'github', '--coverage'], { cwd: dir, encoding: 'utf8' });
+    const result = spawnSync('node', [sanitizerEmit, '--language', 'go', '--ci', 'github', '--coverage'], { timeout: 60_000, cwd: dir, encoding: 'utf8' });
     expect(result.status).toBe(0);
     expect(existsSync(join(dir, '.aiwg/security-engineering/sanitizers/github/go.yaml'))).toBe(true);
     expect(readFileSync(join(dir, '.aiwg/security-engineering/sanitizers/OPERATOR.md'), 'utf8')).toContain('Sanitizer CI Operator Notes');
@@ -102,7 +102,7 @@ describe('security-engineering executable skills', () => {
   it('fuzzing-in-ci emits Go native fuzz recipe, harness, and merge helper', () => {
     const dir = tempProject('aiwg-fuzzing-');
     writeFileSync(join(dir, 'go.mod'), 'module example.com/x\n');
-    const result = spawnSync('node', [fuzzingEmit, '--language', 'go', '--ci', 'github', '--seconds-per-target', '5'], { cwd: dir, encoding: 'utf8' });
+    const result = spawnSync('node', [fuzzingEmit, '--language', 'go', '--ci', 'github', '--seconds-per-target', '5'], { timeout: 60_000, cwd: dir, encoding: 'utf8' });
     expect(result.status).toBe(0);
     const harness = readFileSync(join(dir, '.aiwg/security-engineering/fuzzing/go/fuzz_parse.go'), 'utf8');
     expect(harness).toContain('import "testing"');
@@ -114,13 +114,13 @@ describe('security-engineering executable skills', () => {
   it('security-report creates a redacted custody record and disclosure-track appends lifecycle entries', () => {
     const dir = tempProject('aiwg-disclosure-');
     writeFileSync(join(dir, 'SECURITY.md'), 'Report privately to security@example.com. We acknowledge within 24 hours. Coordinated disclosure window is 90 days.\n');
-    const intake = spawnSync('node', [reportScript, '--json'], { cwd: dir, encoding: 'utf8' });
+    const intake = spawnSync('node', [reportScript, '--json'], { timeout: 60_000, cwd: dir, encoding: 'utf8' });
     expect(intake.status).toBe(0);
     const parsed = JSON.parse(intake.stdout);
     expect(parsed.caseId).toMatch(/^SEC-/);
     expect(existsSync(join(dir, parsed.custodyRecord))).toBe(true);
 
-    const track = spawnSync('node', [trackScript, parsed.caseId, '--stage', 'triage', '--decision', 'validated'], { cwd: dir, encoding: 'utf8' });
+    const track = spawnSync('node', [trackScript, parsed.caseId, '--stage', 'triage', '--decision', 'validated'], { timeout: 60_000, cwd: dir, encoding: 'utf8' });
     expect(track.status).toBe(0);
     const record = readFileSync(join(dir, parsed.custodyRecord), 'utf8');
     expect(record).toContain('Lifecycle Transition: triage');

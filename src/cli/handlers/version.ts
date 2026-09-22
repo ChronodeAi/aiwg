@@ -14,7 +14,7 @@ import { getVersionInfo } from '../../channel/manager.mjs';
 import { getLoggerInfo } from '../log.js';
 import * as ui from '../ui.js';
 import { maybePrintCommunityFooter } from '../../community/footer.js';
-import { existsSync, statSync, readdirSync } from 'fs';
+import { existsSync, statSync, readdirSync, readFileSync } from 'fs';
 import path from 'path';
 
 /**
@@ -53,6 +53,34 @@ interface VersionFingerprint {
     logFileSize?: number;
   };
   invocation_id: string;
+  installation: Awaited<ReturnType<typeof getVersionInfo>>['installation'];
+  /**
+   * Set when the canonical installation declares a different root than the one
+   * actually executing. `version` above is always the running binary's (#2529).
+   */
+  drift?: { canonicalRoot: string; canonicalVersion: string | null; actualRoot: string };
+}
+
+/**
+ * Print the installation-drift notice when the canonical declaration and the
+ * running binary disagree. Keeps `aiwg version` honest about which one it is
+ * describing, and names the command that explains the rest (#2529).
+ */
+function printDrift(fp: VersionFingerprint): void {
+  if (fp.drift) {
+    const method = fp.installation?.identity?.method ?? 'unrecorded';
+    const declared = fp.drift.canonicalVersion ? ` (${fp.drift.canonicalVersion})` : '';
+    ui.dim(`    ! canonical install declares ${method} at ${fp.drift.canonicalRoot}${declared} — run \`aiwg installation show\``);
+    return;
+  }
+  // Same root, different method (a source checkout recorded as npm, or the
+  // reverse) is drift too; `version` is the first recovery command an operator
+  // reaches for, so it must say so instead of looking aligned (#2559).
+  const state = fp.installation?.state;
+  if (state && state !== 'aligned' && state !== 'unrecorded') {
+    const reasons = Array.isArray(fp.installation?.drift) ? fp.installation.drift : [];
+    ui.dim(`    ! installation identity ${state}: ${reasons.join('; ') || 'see aiwg installation show'} — run \`aiwg installation show\``);
+  }
 }
 
 function collectFingerprint(versionInfo: Awaited<ReturnType<typeof getVersionInfo>>): VersionFingerprint {
@@ -78,6 +106,7 @@ function collectFingerprint(versionInfo: Awaited<ReturnType<typeof getVersionInf
       logFile: loggerInfo.logFile,
     },
     invocation_id: loggerInfo.provenance.invocation_id,
+    installation: versionInfo.installation,
   };
 
   if (versionInfo.gitHash) {
@@ -86,6 +115,22 @@ function collectFingerprint(versionInfo: Awaited<ReturnType<typeof getVersionInf
       branch: versionInfo.gitBranch ?? '(unknown)',
       path: versionInfo.edgePath ?? versionInfo.packageRoot,
     };
+  }
+
+  // `version` is the first thing anyone runs to answer "what am I on". If the
+  // canonical install declares a different root than the one executing, say so
+  // here rather than letting drift persist while every check looks correct.
+  const canonicalRoot = fp.installation?.identity?.root;
+  const actualRoot = fp.installation?.actualRoot;
+  if (canonicalRoot && actualRoot && path.resolve(canonicalRoot) !== path.resolve(actualRoot)) {
+    let canonicalVersion: string | null = null;
+    try {
+      const pkg = JSON.parse(readFileSync(path.join(canonicalRoot, 'package.json'), 'utf8')) as { version?: string };
+      canonicalVersion = pkg.version ?? null;
+    } catch {
+      // Canonical root may not exist or be readable; report the drift regardless.
+    }
+    fp.drift = { canonicalRoot, canonicalVersion, actualRoot };
   }
 
   // Locale / timezone are useful for timezone-dependent bug reports.
@@ -126,12 +171,11 @@ async function displayVersion(opts: { verbose: boolean; json: boolean }): Promis
   console.log(`  ${ui.brandMark()} ${ui.bold('aiwg')}  ${ui.bold(fp.version)}  ${ui.channelLabel(fp.channel)}`);
 
   if (!opts.verbose) {
-    if (fp.git) {
-      ui.dim(`    git: ${fp.git.sha} (${fp.git.branch})`);
-      ui.dim(`    path: ${fp.git.path}`);
-    } else {
-      ui.dim(`    path: ${fp.packageRoot}`);
-    }
+    if (fp.git) ui.dim(`    git: ${fp.git.sha} (${fp.git.branch})`);
+    // Always the root that actually executed — not the declared edge checkout,
+    // which is what made drift invisible here (#2529).
+    ui.dim(`    path: ${fp.packageRoot}`);
+    printDrift(fp);
     maybePrintCommunityFooter();
     ui.blank();
     return;
@@ -140,11 +184,13 @@ async function displayVersion(opts: { verbose: boolean; json: boolean }): Promis
   // --verbose: the full environment fingerprint.
   if (fp.git) {
     ui.dim(`    git:       ${fp.git.sha} (${fp.git.branch})`);
-    ui.dim(`    path:      ${fp.git.path}`);
-  } else {
-    ui.dim(`    path:      ${fp.packageRoot}`);
+    if (fp.git.path !== fp.packageRoot) ui.dim(`    edge:      ${fp.git.path}`);
   }
+  ui.dim(`    path:      ${fp.packageRoot}`);
   ui.dim(`    channel:   ${fp.channel}`);
+  ui.dim(`    install:   ${fp.installation?.identity?.method ?? 'unrecorded'} (${fp.installation?.state ?? 'unknown'})`);
+  ui.dim(`    canonical: ${fp.installation?.identity?.root ?? '(unrecorded)'}`);
+  ui.dim(`    actual:    ${fp.installation?.actualRoot ?? fp.packageRoot}`);
   ui.dim(`    node:      ${fp.node}`);
   ui.dim(`    platform:  ${fp.platform.os} ${fp.platform.arch} (${fp.platform.release})`);
   ui.dim(`    tty:       stdin=${fp.tty.stdin} stdout=${fp.tty.stdout} stderr=${fp.tty.stderr}`);

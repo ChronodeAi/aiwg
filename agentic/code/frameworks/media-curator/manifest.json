@@ -60,6 +60,10 @@
       {
         "path": ".aiwg/frameworks/media-curator/transcripts/",
         "description": "Transcript sidecars with source/transcript hashes and segment timestamps"
+      },
+      {
+        "path": ".aiwg/frameworks/media-curator/models/",
+        "description": "Open-weight model inventory, archival reports, and per-model fixity/PROV receipts"
       }
     ],
     "topology": {

@@ -7,7 +7,7 @@
  * @see https://modelcontextprotocol.io/specification/2025-11-25
  * @architecture @.aiwg/architecture/software-architecture-doc.md - Section 2.1 CLI Layer
  * @reference @docs/references/REF-066-mcp-specification-2025.md
- * @cli @docs/CLI_USAGE.md - mcp serve command
+ * @cli @docs/cli/agent-usage.md - mcp serve command
  * @frameworks @agentic/code/frameworks/sdlc-complete/
  * @frameworks @agentic/code/frameworks/media-marketing-kit/
  */
@@ -18,6 +18,7 @@ import { z } from 'zod';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { registerWriterProfileResources } from './tools/writer-profiles.mjs';
 import { registerDiscoveryTools } from './tools/discovery.mjs';
 import { registerCommandRunTool } from './tools/command-run.mjs';
 import { registerInteractionTools } from './tools/interaction.mjs';
@@ -51,6 +52,7 @@ export function createServer() {
   //   rule-list, rule-show, agent-show, template-list, template-show
   // ============================================
   registerDiscoveryTools(server);
+  registerWriterProfileResources(server);
 
   // ============================================
   // Command-run dispatch (#1312) — registers:

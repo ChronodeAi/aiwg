@@ -26,7 +26,7 @@ interface ProviderOracle {
   };
   providers: Array<{
     id: string;
-    location: 'project' | 'home';
+    location: 'project' | 'home' | 'configured';
     root: string;
     status: string;
     resources: string;
@@ -76,7 +76,11 @@ describe('Agent Skills user documentation contract', () => {
     expect(oracle.providers.map((provider) => provider.id))
       .toEqual([...PROVIDER_IDS]);
     for (const provider of oracle.providers) {
-      const base = provider.location === 'home' ? '~' : '<project>';
+      const base = provider.location === 'home'
+        ? '~'
+        : provider.location === 'configured'
+          ? '$AIWG_GROKBOT_SKILLS_DIR'
+          : '<project>';
       const expectedPath = `${base}/${provider.root}/<name>`.replace('//', '/');
       expect(guide).toContain(
         `| \`${provider.id}\` | \`${expectedPath}\` | \`${provider.status}\` |`,
@@ -95,7 +99,7 @@ describe('Agent Skills user documentation contract', () => {
 
   it('keeps CLI, ADR, quality, and provider references internally consistent', () => {
     const guide = read('docs/skills/agent-skills.md');
-    const cli = read('docs/agents/cli-reference.md');
+    const cli = read('docs/cli/reference.md');
     const adr = read('docs/architecture/adr-agent-skills-portability-contract.md');
     const quality = read('docs/skills/quality-rubric.md');
     const extensionOverview = read('docs/extensions/overview.md');

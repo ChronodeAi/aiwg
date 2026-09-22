@@ -369,7 +369,7 @@ When generating or fixing tests iteratively:
 3. **Generate reflection** after each test generation/fix cycle
 4. **Track test patterns** - which test strategies are most effective
 
-See @$AIWG_ROOT/agentic/code/addons/ralph/schemas/reflection-memory.json for schema.
+See @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/reflection-memory.json for schema.
 
 ## Provenance Tracking
 

@@ -16,8 +16,33 @@
       "examples": ["1"]
     },
     "project": {
-      "type": "string",
-      "description": "Project name"
+      "description": "Project identity and data classification. A bare string is the project name; the object form adds classification and handling policy.",
+      "oneOf": [
+        { "type": "string", "description": "Project name" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "classification": {
+              "type": "string",
+              "enum": ["private", "sanitized", "public"],
+              "description": "What the repository holds. 'private' defaults every handling flag to false."
+            },
+            "pii": { "type": "boolean", "description": "Repository holds personally identifiable information" },
+            "handling": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "excerptable": { "type": "boolean", "description": "May content be quoted outside the repo?" },
+                "publishable": { "type": "boolean", "description": "May content be published?" },
+                "mirror": { "type": "boolean", "description": "May the repo be mirrored to a secondary remote?" }
+              }
+            }
+          }
+        }
+      ]
     },
     "installed": {
       "type": "object",
@@ -41,7 +66,8 @@
           "codex",
           "opencode",
           "factory",
-          "hermes"
+          "hermes",
+          "grokbot"
         ]
       }
     },
@@ -63,6 +89,93 @@
       "properties": {
         "threatAssessment": {
           "$ref": "#/definitions/ThreatAssessment"
+        }
+      }
+    },
+    "artifact_outputs": {
+      "type": "object",
+      "description": "Canonical AIWG artifact storage and optional provider-native presentation/export destinations. Provider-native output is explicit-only by default.",
+      "additionalProperties": false,
+      "properties": {
+        "canonical": {
+          "type": "string",
+          "enum": ["aiwg"],
+          "default": "aiwg",
+          "description": "Durable source of truth. Presentation destinations never replace this artifact."
+        },
+        "provider_native": {
+          "type": "string",
+          "enum": ["disabled", "explicit-only", "project-default"],
+          "default": "explicit-only",
+          "description": "Whether provider-native destinations are disabled, require an explicit task request, or may be selected by a declared project default."
+        },
+        "destinations": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z0-9][a-z0-9.-]*$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": true },
+              "use_when": { "type": "string", "enum": ["disabled", "user-requested", "project-default"], "default": "user-requested" }
+            }
+          }
+        }
+      }
+    },
+    "uhp": {
+      "type": "object",
+      "description": "Experimental Unified Harness Protocol client configuration. Credentials are references only and are resolved at request time.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "profiles": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["endpoint", "version", "credential", "experimental"],
+            "properties": {
+              "endpoint": { "type": "string", "format": "uri", "pattern": "^https?://" },
+              "version": { "const": "2026-08-11" },
+              "credential": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "name"],
+                "properties": {
+                  "source": { "const": "env" },
+                  "name": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]*$" }
+                }
+              },
+              "defaultHarness": { "type": "string", "pattern": "^chrn_[A-Za-z0-9_-]+$" },
+              "defaultModel": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" },
+              "experimental": { "const": true },
+              "trust": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "allowedHosts": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+                  "allowPrivateNetwork": { "type": "boolean", "default": false },
+                  "allowInsecureLoopback": { "type": "boolean", "default": false },
+                  "allowRedirects": { "type": "boolean", "default": false }
+                }
+              },
+              "limits": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "requestTimeoutMs": { "type": "integer", "minimum": 1 },
+                  "inactivityTimeoutMs": { "type": "integer", "minimum": 1 },
+                  "maxTaskSeconds": { "type": "integer", "minimum": 1 },
+                  "maxUploadBytes": { "type": "integer", "minimum": 1 },
+                  "maxArtifactBytes": { "type": "integer", "minimum": 1 },
+                  "maxArtifactCount": { "type": "integer", "minimum": 1 },
+                  "maxRetries": { "type": "integer", "minimum": 1 }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -106,6 +219,11 @@
           "type": "string",
           "description": "Where issues live. Defaults to primary."
         },
+        "issue_provider": {
+          "type": "string",
+          "enum": ["gitea", "github", "local"],
+          "description": "Explicit issue-tracker provider for self-hosted or local trackers when the remote URL is ambiguous."
+        },
         "ci": {
           "type": "string",
           "description": "Where CI runs. Defaults to primary."
@@ -113,6 +231,19 @@
         "tracker_actor": {
           "$ref": "#/definitions/TrackerActor",
           "description": "Forge account/tool that must author delivery writes such as issue comments, PRs, labels, and closures (#1601)."
+        },
+        "customer_issue_tracker": {
+          "type": "string",
+          "description": "Optional customer-facing issue intake remote. Internal engineering work remains on issue_tracker."
+        },
+        "customer_issue_provider": {
+          "type": "string",
+          "enum": ["gitea", "github", "local"],
+          "description": "Explicit provider hint for the customer-facing issue tracker."
+        },
+        "customer_tracker_actor": {
+          "$ref": "#/definitions/TrackerActor",
+          "description": "Forge account/tool for customer acknowledgements, comments, and closures."
         },
         "transport": {
           "$ref": "#/definitions/RemoteTransport",
@@ -276,6 +407,14 @@
             "indices": { "$ref": "#/definitions/IndexMarkdownIndices" }
           },
           "additionalProperties": { "$ref": "#/definitions/IndexGraphDef" }
+        },
+        "graphOverrides": {
+          "type": "object",
+          "description": "Safely adapts supported built-in graphs without redefining their identity or storage semantics.",
+          "additionalProperties": false,
+          "properties": {
+            "codebase": { "$ref": "#/definitions/IndexBuiltinGraphOverride" }
+          }
         },
         "userIndices": {
           "type": "object",
@@ -828,6 +967,15 @@
             "rebuildOn": { "type": "string", "enum": ["content-change", "always", "never"] }
           }
         }
+      }
+    },
+    "IndexBuiltinGraphOverride": {
+      "type": "object",
+      "description": "Operator-controlled scan fields for an immutable built-in graph. Present fields replace the detected/default values.",
+      "additionalProperties": false,
+      "properties": {
+        "scanDirs": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "extensions": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
       }
     },
     "IndexMarkdownIndices": {

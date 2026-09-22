@@ -71,7 +71,9 @@ function parseArgs(args) {
     enableAnalytics: true,        // Iteration analytics (#167)
     enableBestOutput: true,       // Best output tracking (#168)
     enableEarlyStopping: true,    // Early stopping (#149)
-    provider: 'claude',           // CLI provider (claude, codex, opencode, factory)
+    provider: 'claude',           // CLI provider (claude, codex, opencode, factory, pi, omp, deepseek-harness)
+    thinking: null,
+    tools: null,
     verbose: false,               // Verbose per-iteration detail
     logFile: null,                // Optional log file path
     allowExhaustedResume: false,  // Explicitly permit resuming a budget-exhausted loop (#1765)
@@ -83,8 +85,11 @@ function parseArgs(args) {
   // A numeric flag that is present but not a positive number is a hard usage
   // error — NaN limits used to be accepted and then silently never fire (#1770)
   const positiveNumber = (flag, raw, { integer = false } = {}) => {
-    const value = integer ? parseInt(raw, 10) : parseFloat(raw);
-    if (!Number.isFinite(value) || value <= 0) {
+    // Consume the whole decimal value; prefix parsers silently truncate typos
+    // and fractional counters. Exponents are allowed, non-decimal bases are not.
+    const decimal = typeof raw === 'string' && /^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw);
+    const value = decimal ? Number(raw) : NaN;
+    if (!Number.isFinite(value) || value <= 0 || (integer && !Number.isSafeInteger(value))) {
       console.error(`Error: ${flag} requires a positive number (got '${raw}')`);
       process.exit(1);
     }
@@ -166,6 +171,10 @@ function parseArgs(args) {
       options.enableEarlyStopping = false;
     } else if (arg === '--provider') {
       options.provider = args[++i];
+    } else if (arg === '--thinking') {
+      options.thinking = args[++i];
+    } else if (arg === '--tools') {
+      options.tools = args[++i].split(',').map(value => value.trim()).filter(Boolean);
     } else if (arg === '--verbose' || arg === '-v') {
       options.verbose = true;
     } else if (arg === '--log-file') {
@@ -175,6 +184,26 @@ function parseArgs(args) {
     }
 
     i++;
+  }
+
+  // #1766: budget stops and the exploration quota live inside the analytics
+  // subsystem, so --no-analytics silently voids every declared ceiling. The
+  // coupling is documented; warn at parse time so an operator cannot believe a
+  // limit applies while the loop runs uncapped.
+  if (options.enableAnalytics === false) {
+    const voided = Object.entries(options.budgetLimits || {})
+      .filter(([, limit]) => Number.isFinite(Number(limit)) && Number(limit) > 0)
+      .map(([name]) => name);
+    if (options.explorationQuota && options.explorationQuota.enabled === true) {
+      voided.push('exploration_quota');
+    }
+    if (voided.length > 0) {
+      console.warn(
+        `[External Ralph] --no-analytics disables the analytics subsystem, which owns budget ` +
+        `enforcement and the exploration quota. Declared control(s) will NOT fire: ${voided.join(', ')}. ` +
+        `Remove --no-analytics to enforce them.`
+      );
+    }
   }
 
   return options;
@@ -271,7 +300,9 @@ OPTIONS:
   --timeout <min>         Timeout per iteration in minutes (default: 60)
   --mcp-config <json>     MCP server configuration JSON
   --gitea-issue           Create/link Gitea issue for tracking
-  --provider <name>       CLI provider: claude (default), codex, opencode, factory
+  --provider <name>       CLI provider: claude (default), codex, opencode, factory, pi, omp, deepseek-harness (dsh)
+  --thinking <level>      Provider thinking level (Pi: off..max)
+  --tools <names>         Comma-separated provider tool allow-list
 
 RESEARCH-BACKED OPTIONS (REF-015, REF-021):
   -m, --memory <n|preset>  Memory capacity Ω: 1-10 or preset name
@@ -529,7 +560,7 @@ async function main() {
   await ensureProvidersRegistered();
   const providerName = options.provider || 'claude';
   if (!hasProvider(providerName)) {
-    console.error(`Error: Unknown provider '${providerName}'. Available: claude, codex, opencode, factory`);
+    console.error(`Error: Unknown provider '${providerName}'. Available: claude, codex, opencode, factory, pi, omp, deepseek-harness (dsh)`);
     process.exit(1);
   }
 
@@ -631,6 +662,8 @@ async function main() {
         mcpConfig: options.mcpConfig,
         giteaIntegration: options.giteaIssue ? { enabled: true } : null,
         provider: options.provider,
+        thinking: options.thinking,
+        tools: options.tools,
         verbose: options.verbose,
       });
     }
@@ -658,7 +691,10 @@ async function main() {
 // main(), fail the no-objective check, and process.exit(1) — killing the caller.
 const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (invokedDirectly) {
-  main().catch(console.error);
+  main().catch(error => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }
 
 // Import process reliability modules

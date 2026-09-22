@@ -37,6 +37,58 @@ paths outside the authorized roots fail before any catalog write. Source paths,
 working directories, and transcript paths are reduced to redacted locator or
 workspace classes before persistence.
 
+## Claude web/account export (manual-export)
+
+Claude.ai account/web data exports are a distinct source format from local
+JSONL transcripts -- renaming `conversations.json` to `.jsonl` is not a
+conversion, and this adapter does not accept it as one. Support was added
+as a `manual-export` acquisition mode (#2565), following the same pattern
+already used by the Copilot and Cursor adapters for their own account/web
+exports: `manual-export` sources are never auto-discovered by
+`aiwg sessions discover` -- they require an explicit, user-selected file
+path, because a web export must be requested and downloaded from the
+provider first.
+
+```bash
+aiwg sessions import ./conversations.json \
+  --provider claude --source-id my-web-export --workspace default
+```
+
+A `.json` file passed to `import` for the `claude` provider is treated as a
+web/account export (`claude-web-export-json`); `.hooks.jsonl`/`.hook.jsonl`
+and other `.jsonl` files are treated as local hook/transcript sources as
+before, unchanged.
+
+Supported layout: a JSON array of conversations, each with a `uuid`,
+optional `name`/`created_at`/`updated_at`, and a `chat_messages` array.
+Each message carries a `uuid`, `sender` (`human` or `assistant`), and
+either a `text` string or a `content` array of text blocks. This matches
+one export file containing many conversations/sessions, not a
+one-file-per-session assumption.
+
+What is preserved:
+
+- every conversation's native identity (`uuid`) as its own session, so one
+  export file can and normally does become many catalog sessions;
+- message identity, ordering, timestamps, and role;
+- attachment/file references (`file_name`, `file_type`, `file_size`, and
+  extracted text when present) as metadata.
+
+What is explicitly not claimed: the web/account export format does not
+carry original attachment bytes, only metadata about them. Records with an
+attachment note this in their `metadataLoss` rather than silently omitting
+it. This is a genuine format limitation, not something this adapter chose
+to drop.
+
+Fails closed with `MALFORMED_SOURCE` on: a non-array root (including a
+JSONL transcript renamed to `.json`), an export with zero conversations,
+or any message whose fields don't match the documented shape. Fails closed
+with `DUPLICATE_NATIVE_ID` on a repeated conversation uuid within one
+export file, or a repeated message uuid within one conversation -- a `uuid`
+field is only useful as an identifier if it is actually unique, so a
+collision is treated as a data-integrity signal worth surfacing rather
+than silently accepting the later record.
+
 ## Consistency and replay
 
 Transcript files are treated as provisional because Claude Code may still be
@@ -69,7 +121,13 @@ session content and does not use it to create catalog sessions or events.
 
 ## Known limitations
 
-- Only the documented local JSONL and hook shapes are supported.
+- Only the documented local JSONL/hook shapes and the documented
+  web/account export `conversations.json` array shape are supported.
+- The web/account export adapter has not been characterized against edited
+  or branched conversations, since the current test fixtures don't cover
+  that structure; if the real export format represents edits/branches
+  differently than a flat `chat_messages` array, that case is unhandled
+  rather than silently misrepresented as a normal linear conversation.
 - Provider-internal fields can change without notice; unknown minor fields are
   preserved, but an unknown declared major version fails closed.
 - Content redaction follows the catalog import policy. Opaque provider fields

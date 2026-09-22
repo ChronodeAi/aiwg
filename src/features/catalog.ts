@@ -50,15 +50,27 @@ export const FEATURE_CATALOG: FeatureDefinition[] = [
   },
   {
     name: 'sqlite',
-    description: 'SQLite storage backend for memory / activity-log / kb subsystems',
+    description: 'SQLite runtime for session catalogs and persistent storage backends',
     packages: ['better-sqlite3'],
     packageSpecs: { 'better-sqlite3': '12.8.0' },
     scriptPackages: ['better-sqlite3'],
     enables: [
+      'aiwg sessions list / discover / import-discovered / timeline / search',
       'storage.config: backend=sqlite for any subsystem',
       'transactional reads/writes against `.aiwg/storage/`',
     ],
-    cost: '~5 MB — native compile via node-gyp',
+    cost: '~5 MB — platform prebuild when available, otherwise a native compile via node-gyp',
+  },
+  {
+    name: 'postgres',
+    description: 'Advanced direct PostgreSQL canonical-storage backend',
+    packages: ['pg'],
+    packageSpecs: { pg: '8.23.0' },
+    enables: [
+      'aiwg.storage-backend/v1 direct PostgreSQL persistence',
+      'transactional migration batches, snapshots, cursors, and tombstones',
+    ],
+    cost: '~1 MB — pure JavaScript PostgreSQL client',
   },
   {
     name: 'pty',
@@ -87,6 +99,33 @@ export const FEATURE_CATALOG: FeatureDefinition[] = [
       'ralph-external WebSocket dispatch',
     ],
     cost: '~3 MB — pure JS, no native deps',
+  },
+  {
+    name: 'graph',
+    description: 'Graphology backend for artifact-index traversal only; not Flow graph execution',
+    packages: ['graphology', 'graphology-operators', 'graphology-traversal'],
+    packageSpecs: {
+      graphology: '0.26.0',
+      'graphology-operators': '1.6.0',
+      'graphology-traversal': '0.3.0',
+    },
+    enables: [
+      'index.graphBackend: graphology',
+      'in-memory attributed graph traversal and operator workflows',
+      'artifact graph data operations (use graph-pattern addon for Flow execution graphs)',
+    ],
+    cost: '~2 MB — pure JS, no native deps',
+  },
+  {
+    name: 'terminal',
+    description: 'Headless terminal state parsing for PTY orchestration and auditing',
+    packages: ['@xterm/headless'],
+    packageSpecs: { '@xterm/headless': '6.0.0' },
+    enables: [
+      'structured screen-state parsing for PTY orchestrators',
+      'auditable terminal snapshots without a browser DOM',
+    ],
+    cost: '~1 MB — pure JS, no native deps',
   },
 ];
 

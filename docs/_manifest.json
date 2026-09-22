@@ -23,8 +23,7 @@
     "sponsors",
     "task-management-integration",
     "usage-notes",
-    "yaml-metalanguage",
-    "how-it-works"
+    "yaml-metalanguage"
   ],
   "order": [
     "welcome",
@@ -39,10 +38,19 @@
     "getting-started/first-success-start-intake",
     "getting-started/verify-aiwg-is-working",
     "overview/what-is-aiwg",
+    "overview/capabilities",
     "overview/executive-brief",
+    "overview/reading-list",
+    "how-it-works",
+    "architecture-overview",
     "getting-started/prerequisites",
     "install",
+    "cli",
+    "cli/install-and-repair",
+    "cli/reference",
     "security/supply-chain-hardening",
+    "research/asset-authenticity-and-provenance",
+    "architecture/adr-cross-asset-attestation-envelope",
     "install/web-backed-resources",
     "install/non-interactive",
     "quickstart",
@@ -53,13 +61,22 @@
     "integrations/claude-code-quickstart",
     "integrations/factory-quickstart",
     "integrations/cursor-quickstart",
+    "integrations/deepseek-harness-quickstart",
     "integrations/copilot-quickstart",
     "integrations/codex-quickstart",
     "integrations/opencode-quickstart",
     "integrations/warp-terminal-quickstart",
     "integrations/windsurf-quickstart",
+    "integrations/grokbot-quickstart",
+    "integrations/grokbot-cloud-session-global-install",
+    "integrations/grokbot-native-surfaces-evidence",
+    "integrations/grokbot-linux-puw",
+    "migration/grokbot-from-cursor-workaround",
     "integrations/hermes-quickstart",
     "integrations/openhuman-quickstart",
+    "integrations/openclaw-quickstart",
+    "integrations/omp-quickstart",
+    "integrations/pi-quickstart",
     "integrations/cross-platform-config",
     "openclaw-guide",
     "quickstart-sdlc",
@@ -84,7 +101,17 @@
     "architecture/adr-agent-skills-portability-contract",
     "reports/agentskills-standard-audit-2026-07-25",
     "configuration/aiwg-config",
+    "architecture/adr-deepseek-harness-runtime",
+    "architecture/adr-grokbot-provider-target",
+    "architecture/adr-artifact-output-destinations",
+    "context-tier-model",
+    "context-engineering-contract",
+    "verification-contracts",
+    "autonomy-and-human-roles",
+    "skills-budget-guide",
     "security/threat-assessment-policy",
+    "security/context-memory-firewall",
+    "security/grokbot-path-security-review",
     "security/repo-access-manifest",
     "fortemi-core-prebuilt-indices",
     "user-level-indices",
@@ -98,6 +125,8 @@
     "configuration/model-configuration",
     "hook-patterns",
     "mcp/README",
+    "uhp-client",
+    "security/uhp-client-threat-model",
     "plugin-marketplace-guide",
     "daemon-guide",
     "soul-md-guide",
@@ -251,6 +280,9 @@
     "addons/aiwg-utils",
     "addons/aiwg-utils/overview",
     "addons/aiwg-utils/rules-reference",
+    "addons/civic-action",
+    "addons/civic-action/overview",
+    "addons/civic-action/quickstart",
     "addons/auto-memory",
     "addons/auto-memory/overview",
     "addons/daemon",
@@ -285,6 +317,7 @@
     "cockpit/development",
     "cockpit/releases",
     "serve-guide",
+    "a2a-protocol-compatibility",
     "concierge-guide",
     "customization",
     "customization/README",
@@ -298,10 +331,20 @@
     "storage",
     "storage/README",
     "storage/overview",
+    "storage/backend-contract",
     "storage/migration",
+    "storage/migration-protocol",
     "storage/security",
     "providers",
     "providers/capability-matrix",
+    "providers/provider-inventory",
+    "providers/antigravity",
+    "providers/deepseek-harness",
+    "providers/deepseek-harness-sessions",
+    "providers/omp",
+    "providers/omp-verification",
+    "providers/omp-sessions",
+    "providers/pi-sessions",
     "project-local/overview",
     "mcp/profiles",
     "mcp/codex-profiles",
@@ -449,7 +492,49 @@
     "frameworks/media-marketing-kit/design-operations-examples",
     "addons/compound-memory",
     "addons/compound-memory/operator-guide",
-    "addons/compound-memory/overview"
+    "addons/compound-memory/overview",
+    "addons/network-analysis/overview",
+    "frameworks/sdlc-complete/agent-examples/ai-ml-engineer-examples",
+    "addons/civic-action/issue-traceability",
+    "addons/civic-action/research",
+    "addons/civic-action/research/aiwg-design-patterns",
+    "addons/civic-action/research/civic-workflow-standards",
+    "addons/civic-action/research/control-source-matrix",
+    "addons/civic-action/research/legal-ethics-guardrails",
+    "addons/civic-action/research/synthesis-and-readiness",
+    "addons/composition-engine",
+    "addons/composition-engine/composition-evaluation-research-matrix",
+    "addons/composition-engine/composition-evaluation",
+    "addons/composition-engine/polyrhythmic-reasoning",
+    "addons/composition-engine/runtime-operations",
+    "addons/composition-engine/schema-evolution",
+    "addons/graph-pattern",
+    "addons/graph-pattern/decision-guide",
+    "addons/voice-framework/output-modes",
+    "addons/dataset-intelligence",
+    "addons/dataset-intelligence/overview",
+    "addons/dataset-intelligence/quickstart",
+    "addons/dataset-intelligence/adapter-authoring",
+    "addons/dataset-intelligence/fortemi-boundaries",
+    "addons/dataset-intelligence/migration-guide",
+    "addons/dataset-intelligence/offline-troubleshooting",
+    "addons/dataset-intelligence/task-guide",
+    "addons/dataset-intelligence/worked-examples",
+    "addons/voice-framework/custom-output-modes",
+    "addons/voice-framework/output-mode-integration",
+    "addons/voice-framework/output-mode-troubleshooting",
+    "frameworks/forensics-complete/packet-evidence-integration",
+    "frameworks/ops-complete/packet-verification",
+    "frameworks/research-complete/packet-evidence",
+    "frameworks/security-engineering",
+    "frameworks/security-engineering/network-control-review",
+    "addons/network-analysis/integrations",
+    "addons/network-analysis/maintainer-guide",
+    "addons/network-analysis/offline-analysis",
+    "addons/network-analysis/operator-guide",
+    "addons/network-analysis/release-checklist",
+    "addons/network-analysis/termshark-handoff",
+    "releases/grokbot-stable-promotion-notes"
   ],
   "sections": [
     {
@@ -466,7 +551,7 @@
     {
       "id": "getting-started/start-here",
       "title": "Start Here",
-      "summary": "Beginner path from plain-language goal to first useful AIWG result",
+      "summary": "Connect AIWG, save a README review, and carry it into the next task",
       "file": "getting-started/start-here.md",
       "parent": "getting-started"
     },
@@ -480,7 +565,7 @@
     {
       "id": "getting-started/install-connect-verify",
       "title": "Install, Connect, and Verify AIWG",
-      "summary": "Canonical install, use all, regenerate, and verification path",
+      "summary": "Canonical agent-led setup, provider handoff, and readiness verification",
       "file": "getting-started/install-connect-verify.md",
       "parent": "getting-started"
     },
@@ -522,21 +607,21 @@
     {
       "id": "getting-started/verify-aiwg-is-working",
       "title": "Verify AIWG Is Working",
-      "summary": "First-success recipe for verifying installation and discovery",
+      "summary": "Verify readiness before starting your first task",
       "file": "getting-started/verify-aiwg-is-working.md",
       "parent": "getting-started"
     },
     {
       "id": "overview/what-is-aiwg",
       "title": "What is AIWG?",
-      "summary": "Framework overview and key concepts",
+      "summary": "Reusable project context, specialist workflows, examples, and limits",
       "file": "overview/what-is-aiwg.md",
       "parent": "getting-started"
     },
     {
       "id": "overview/executive-brief",
       "title": "Executive Brief",
-      "summary": "High-level summary for decision makers",
+      "summary": "Adoption effort, limitations, and a measurable team pilot",
       "file": "overview/executive-brief.md",
       "parent": "getting-started"
     },
@@ -569,6 +654,21 @@
       "parent": "install"
     },
     {
+      "id": "cli",
+      "title": "CLI",
+      "summary": "Direct-user install and repair commands, with agent and automation references",
+      "file": "cli/README.md",
+      "collapsed": true,
+      "parent": "getting-started"
+    },
+    {
+      "id": "cli/install-and-repair",
+      "title": "Install and Repair Commands",
+      "summary": "The intentionally small direct-user CLI surface",
+      "file": "cli/install-and-repair.md",
+      "parent": "cli"
+    },
+    {
       "id": "security/supply-chain-hardening",
       "title": "npm Supply-Chain Hardening",
       "summary": "Harden npm projects against install-time malware and publish-path abuse",
@@ -578,7 +678,7 @@
     {
       "id": "quickstart",
       "title": "Quick Start",
-      "summary": "Install and deploy in 5 minutes",
+      "summary": "Connect your project and produce a saved README review",
       "file": "quickstart.md",
       "parent": "getting-started"
     },
@@ -661,9 +761,30 @@
     },
     {
       "id": "integrations/windsurf-quickstart",
-      "title": "Windsurf",
-      "summary": "Setup for Windsurf",
+      "title": "Devin Desktop",
+      "summary": "Setup for Devin Desktop using the Windsurf compatibility adapter",
       "file": "integrations/windsurf-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-quickstart",
+      "title": "Grok Bot",
+      "summary": "Connect AIWG to Grok Bot (stable, fail-closed skill root)",
+      "file": "integrations/grokbot-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-cloud-session-global-install",
+      "title": "Grok Bot Cloud Session Global Install",
+      "summary": "Install AIWG on the Grok Bot shared cloud computer without inventing native paths",
+      "file": "integrations/grokbot-cloud-session-global-install.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-native-surfaces-evidence",
+      "title": "Grok Bot Native Surfaces Evidence",
+      "summary": "Evidence and automation gates for optional Grok Bot native integrations",
+      "file": "integrations/grokbot-native-surfaces-evidence.md",
       "parent": "integrations"
     },
     {
@@ -671,6 +792,41 @@
       "title": "Hermes Agent",
       "summary": "Setup AIWG as an MCP sidecar for Hermes Agent",
       "file": "integrations/hermes-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/openhuman-quickstart",
+      "title": "OpenHuman",
+      "summary": "Connect AIWG to OpenHuman",
+      "file": "integrations/openhuman-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/openclaw-quickstart",
+      "title": "OpenClaw",
+      "summary": "Connect AIWG to an OpenClaw workspace",
+      "file": "integrations/openclaw-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/deepseek-harness-quickstart",
+      "title": "DeepSeek Harness",
+      "summary": "Deploy and verify AIWG with the experimental DeepSeek Harness provider",
+      "file": "integrations/deepseek-harness-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/omp-quickstart",
+      "title": "Oh My Pi",
+      "summary": "Deploy and verify AIWG with the experimental OMP provider",
+      "file": "integrations/omp-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/pi-quickstart",
+      "title": "Pi Coding Agent (pi.dev)",
+      "summary": "Deploy AIWG context, skills, and prompt templates to Pi",
+      "file": "integrations/pi-quickstart.md",
       "parent": "integrations"
     },
     {
@@ -683,7 +839,7 @@
     {
       "id": "openclaw-guide",
       "title": "OpenClaw Guide",
-      "summary": "Deploy to OpenClaw — 10th platform, first with native behaviors support. ClawHub publication and ~/.openclaw/ structure.",
+      "summary": "Connect AIWG to OpenClaw, including user-level scope and behavior support",
       "file": "openclaw-guide.md",
       "parent": "integrations"
     },
@@ -901,10 +1057,87 @@
       "parent": "reference"
     },
     {
+      "id": "architecture/adr-deepseek-harness-runtime",
+      "title": "DeepSeek Harness Runtime Boundary",
+      "summary": "Runtime, lifecycle, credential, and session-import decisions for the experimental provider",
+      "file": "architecture/adr-deepseek-harness-runtime.md",
+      "parent": "reference"
+    },
+    {
+      "id": "architecture/adr-grokbot-provider-target",
+      "title": "ADR: Grok Bot provider target",
+      "summary": "Runtime, lifecycle, credential, and session-import decisions for the experimental provider",
+      "file": "architecture/adr-grokbot-provider-target.md",
+      "parent": "reference"
+    },
+    {
+      "id": "architecture/adr-artifact-output-destinations",
+      "title": "Artifact Output Destinations",
+      "summary": "Canonical storage, optional provider-native presentation, precedence, and provenance",
+      "file": "architecture/adr-artifact-output-destinations.md",
+      "parent": "reference"
+    },
+    {
+      "id": "context-tier-model",
+      "title": "Context Tier Model",
+      "summary": "Keep standing provider context small with discoverable on-demand references",
+      "file": "context-tier-model.md",
+      "parent": "reference"
+    },
+    {
+      "id": "context-engineering-contract",
+      "title": "Context Engineering Contract",
+      "summary": "Provider-neutral context packets, budgets, resets, and handoffs",
+      "file": "context-engineering-contract.md",
+      "parent": "reference"
+    },
+    {
+      "id": "verification-contracts",
+      "title": "Verification Contracts",
+      "summary": "Completion evidence for research and planning dispatches",
+      "file": "verification-contracts.md",
+      "parent": "reference"
+    },
+    {
+      "id": "autonomy-and-human-roles",
+      "title": "Autonomy and Human Roles",
+      "summary": "Risk-based execution modes, checkpoints, and human responsibilities",
+      "file": "autonomy-and-human-roles.md",
+      "parent": "reference"
+    },
+    {
+      "id": "skills-budget-guide",
+      "title": "Skills Budget Guide",
+      "summary": "Diagnose and remediate provider skill-listing budget pressure",
+      "file": "skills-budget-guide.md",
+      "parent": "reference"
+    },
+    {
       "id": "security/threat-assessment-policy",
       "title": "Threat-Assessment Policy",
       "summary": "Configure deterministic threat assessment across forge and delivery surfaces",
       "file": "security/threat-assessment-policy.md",
+      "parent": "reference"
+    },
+    {
+      "id": "research/asset-authenticity-and-provenance",
+      "title": "Cross-Asset Authenticity",
+      "summary": "Threat model, trust matrix, signed-envelope contract, and rollout plan for every AIWG asset class",
+      "file": "research/asset-authenticity-and-provenance.md",
+      "parent": "reference"
+    },
+    {
+      "id": "architecture/adr-cross-asset-attestation-envelope",
+      "title": "Cross-Asset Attestation Decision",
+      "summary": "DSSE and in-toto architecture decision for common AIWG artifact verification",
+      "file": "architecture/adr-cross-asset-attestation-envelope.md",
+      "parent": "reference"
+    },
+    {
+      "id": "security/context-memory-firewall",
+      "title": "Context and Memory Firewall",
+      "summary": "Audit provider context budgets, deployment drift, and persistent-memory trust",
+      "file": "security/context-memory-firewall.md",
       "parent": "reference"
     },
     {
@@ -929,6 +1162,20 @@
       "parent": "reference"
     },
     {
+      "id": "uhp-client",
+      "title": "Experimental UHP Client",
+      "summary": "Configure, operate, recover, and safely qualify remote UHP harness execution",
+      "file": "uhp-client.md",
+      "parent": "reference"
+    },
+    {
+      "id": "security/uhp-client-threat-model",
+      "title": "UHP Client Threat Model",
+      "summary": "Trust boundaries, controls, residual risks, and operator review for UHP client transport",
+      "file": "security/uhp-client-threat-model.md",
+      "parent": "reference"
+    },
+    {
       "id": "plugin-marketplace-guide",
       "title": "Plugin Marketplace",
       "summary": "Install and manage plugins",
@@ -944,7 +1191,7 @@
     },
     {
       "id": "soul-md-guide",
-      "title": "SOUL.md — Agent Identity",
+      "title": "SOUL.md \u2014 Agent Identity",
       "summary": "Give agents persistent character: worldview, opinions, reasoning traits. soul-create, soul-enable, soul-blend.",
       "file": "soul-md-guide.md",
       "parent": "reference"
@@ -959,7 +1206,7 @@
     {
       "id": "behaviors-guide",
       "title": "Behaviors",
-      "summary": "Behavior bundles — directives and toolsets for daemon-governed agents",
+      "summary": "Behavior bundles \u2014 directives and toolsets for daemon-governed agents",
       "file": "behaviors-guide.md",
       "parent": "reference"
     },
@@ -1078,6 +1325,13 @@
       "title": "Creating Skills",
       "summary": "Build reusable skills",
       "file": "development/skill-creation-guide.md",
+      "parent": "development"
+    },
+    {
+      "id": "development/rule-creation-guide",
+      "title": "Creating Rules",
+      "summary": "Write rules agents can actually find",
+      "file": "development/rule-creation-guide.md",
       "parent": "development"
     },
     {
@@ -1200,7 +1454,7 @@
     },
     {
       "id": "blog/2026-6-aiwg-june-2026-report",
-      "title": "AIWG — June 2026 Report",
+      "title": "AIWG \u2014 June 2026 Report",
       "summary": "A month-end report covering Cockpit, OpenHuman support, plain-words search, media research notes, and leaner startup context.",
       "file": "blog/2026-6-aiwg-june-2026-report.md",
       "parent": "blog"
@@ -1309,49 +1563,49 @@
     },
     {
       "id": "releases/v2026.5.11-announcement",
-      "title": "v2026.5.11 — Provider Detection + Local Issue Sync",
+      "title": "v2026.5.11 \u2014 Provider Detection + Local Issue Sync",
       "summary": "Codex-aware provider detection, local issue sync documentation, media transcript sidecars, and release doc-sync hygiene.",
       "file": "releases/v2026.5.11-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.10-announcement",
-      "title": "v2026.5.10 — Beginner Onboarding Wizard + Docs",
+      "title": "v2026.5.10 \u2014 Beginner Onboarding Wizard + Docs",
       "summary": "Guided onboarding wizard, deterministic workspace engagement status, and beginner docs for first-run success.",
       "file": "releases/v2026.5.10-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.9-announcement",
-      "title": "v2026.5.9 — Workspace-Aware Deploy Fix",
+      "title": "v2026.5.9 \u2014 Workspace-Aware Deploy Fix",
       "summary": "Fix workspace-aware aiwg use all to deploy selected sources directly without repeating full framework post-deploy flow.",
       "file": "releases/v2026.5.9-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.8-announcement",
-      "title": "v2026.5.8 — Fleet Discipline + Release Hygiene",
+      "title": "v2026.5.8 \u2014 Fleet Discipline + Release Hygiene",
       "summary": "Fleet behavior policies, status export, repo-access preflight, model-tier routing, serve reliability, and install hygiene.",
       "file": "releases/v2026.5.8-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.7-announcement",
-      "title": "v2026.5.7 — RLM Search Reliability + Internal Loop Routing",
+      "title": "v2026.5.7 \u2014 RLM Search Reliability + Internal Loop Routing",
       "summary": "RLM search reliability, single-chunk prep coverage, and internal agent-loop routing.",
       "file": "releases/v2026.5.7-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.6-announcement",
-      "title": "v2026.5.6 — Agent-loop Completion Inference + Auto-Compact Discipline",
+      "title": "v2026.5.6 \u2014 Agent-loop Completion Inference + Auto-Compact Discipline",
       "summary": "Agent-loop completion inference, auto-compact discipline, and publish workflow ordering fixes.",
       "file": "releases/v2026.5.6-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.5-announcement",
-      "title": "v2026.5.5 — Cross-provider Discover-first Parity",
+      "title": "v2026.5.5 \u2014 Cross-provider Discover-first Parity",
       "summary": "Discover-first deployment parity, project-isolation warning, and novice-user adoption study artifacts.",
       "file": "releases/v2026.5.5-announcement.md",
       "parent": "releases"
@@ -1393,7 +1647,7 @@
     },
     {
       "id": "releases/v2026.4.0-announcement",
-      "title": "v2026.4.0 — Autonomous Systems",
+      "title": "v2026.4.0 \u2014 Autonomous Systems",
       "summary": "Major release: corpus architecture, daemon, Mission Control, behaviors, SOUL.md, OpenClaw, Hermes, ops-complete, and more.",
       "file": "releases/v2026.4.0-announcement.md",
       "parent": "releases"
@@ -1677,7 +1931,7 @@
     {
       "id": "frameworks/sdlc-complete",
       "title": "SDLC Complete",
-      "summary": "Full lifecycle framework — internal docs and deep guides",
+      "summary": "Full lifecycle framework \u2014 internal docs and deep guides",
       "collapsed": true,
       "parent": "frameworks"
     },
@@ -1775,7 +2029,7 @@
     {
       "id": "addons/ralph",
       "title": "Ralph Addon",
-      "summary": "Iterative loop execution — quickstart, best practices, troubleshooting",
+      "summary": "Iterative loop execution \u2014 quickstart, best practices, troubleshooting",
       "collapsed": true,
       "parent": "addons"
     },
@@ -1803,7 +2057,7 @@
     {
       "id": "addons/ralph/quickstart",
       "title": "Quick Start",
-      "summary": "Get started with iterative AI task execution in 5 minutes.",
+      "summary": "Run a bounded task loop and inspect its verification result",
       "file": "addons/ralph/quickstart.md",
       "parent": "addons/ralph"
     },
@@ -1824,7 +2078,7 @@
     {
       "id": "addons/rlm",
       "title": "RLM Addon",
-      "summary": "Recursive Language Model — deployment, multi-provider, integration guides",
+      "summary": "Recursive Language Model \u2014 deployment, multi-provider, integration guides",
       "collapsed": true,
       "parent": "addons"
     },
@@ -1873,7 +2127,7 @@
     {
       "id": "tools/ralph-external",
       "title": "External Ralph",
-      "summary": "Crash-resilient external loop — snapshot manager and provider API",
+      "summary": "Crash-resilient external loop \u2014 snapshot manager and provider API",
       "collapsed": true,
       "parent": "tools"
     },
@@ -1908,14 +2162,14 @@
     {
       "id": "frameworks/media-marketing-kit/quickstart",
       "title": "Quick Start",
-      "summary": "Deploy the MMK framework and run your first campaign workflow in about 15 minutes.",
+      "summary": "Prepare a campaign brief and inspect its supporting decisions",
       "file": "frameworks/media-marketing-kit/quickstart.md",
       "parent": "frameworks/media-marketing-kit"
     },
     {
       "id": "frameworks/ops-complete",
       "title": "Ops Complete",
-      "summary": "Operational infrastructure framework — YAML-native with sys, it, dev, stream extensions",
+      "summary": "Operational infrastructure framework \u2014 YAML-native with sys, it, dev, stream extensions",
       "collapsed": true,
       "parent": "frameworks"
     },
@@ -1929,14 +2183,14 @@
     {
       "id": "frameworks/ops-complete/overview",
       "title": "Overview",
-      "summary": "ops-complete is the operational infrastructure layer for AIWG — a framework for AI agents working in",
+      "summary": "ops-complete is the operational infrastructure layer for AIWG \u2014 a framework for AI agents working in",
       "file": "frameworks/ops-complete/overview.md",
       "parent": "frameworks/ops-complete"
     },
     {
       "id": "frameworks/ops-complete/quickstart",
       "title": "Quick Start",
-      "summary": "Deploy the ops-complete framework and write your first validated runbook in about 10 minutes.",
+      "summary": "Prepare a runbook with verification and recovery steps",
       "file": "frameworks/ops-complete/quickstart.md",
       "parent": "frameworks/ops-complete"
     },
@@ -1957,56 +2211,77 @@
     {
       "id": "frameworks/research-complete/quickstart",
       "title": "Quick Start",
-      "summary": "Run a literature search and produce AI-grounded paper summaries in about 20 minutes.",
+      "summary": "Find sources and prepare summaries with traceable citations",
       "file": "frameworks/research-complete/quickstart.md",
       "parent": "frameworks/research-complete"
     },
     {
       "id": "addons/aiwg-dev",
       "title": "AIWG Dev",
-      "summary": "Developer toolkit — validate-component, dev-doctor, link-check, devkit scaffolding",
+      "summary": "Developer toolkit \u2014 validate-component, dev-doctor, link-check, devkit scaffolding",
       "collapsed": true,
       "parent": "addons"
     },
     {
       "id": "addons/aiwg-dev/overview",
       "title": "Overview",
-      "summary": "aiwg-dev is the developer toolkit for contributors building AIWG itself — adding new addons, framewo",
+      "summary": "aiwg-dev is the developer toolkit for contributors building AIWG itself \u2014 adding new addons, framewo",
       "file": "addons/aiwg-dev/overview.md",
       "parent": "addons/aiwg-dev"
     },
     {
       "id": "addons/aiwg-dev/quickstart",
       "title": "Quick Start",
-      "summary": "Install the developer toolkit and validate your first component in 5 minutes.",
+      "summary": "Create and validate a project component",
       "file": "addons/aiwg-dev/quickstart.md",
       "parent": "addons/aiwg-dev"
     },
     {
       "id": "addons/aiwg-utils",
       "title": "AIWG Utils",
-      "summary": "Core utility rules — subagent scoping, context budget, instruction comprehension",
+      "summary": "Core utility rules \u2014 subagent scoping, context budget, instruction comprehension",
       "collapsed": true,
       "parent": "addons"
     },
     {
       "id": "addons/aiwg-utils/overview",
       "title": "Overview",
-      "summary": "aiwg-utils is the core utility addon bundled with every AIWG installation. It provides seven enforce",
+      "summary": "Shared rules and helper workflows for discovery, routing, and maintenance",
       "file": "addons/aiwg-utils/overview.md",
       "parent": "addons/aiwg-utils"
     },
     {
       "id": "addons/aiwg-utils/rules-reference",
       "title": "Rules Reference",
-      "summary": "Seven enforcement rules deployed with every AIWG installation. These rules apply automatically based",
+      "summary": "Shared behavioral rules and the conditions for applying them",
       "file": "addons/aiwg-utils/rules-reference.md",
       "parent": "addons/aiwg-utils"
     },
     {
+      "id": "addons/civic-action",
+      "title": "Civic Action",
+      "summary": "Evidence-bound civic research, public records, meetings, local resources, corrections, and publishing gates",
+      "collapsed": true,
+      "parent": "addons"
+    },
+    {
+      "id": "addons/civic-action/overview",
+      "title": "Overview",
+      "summary": "Capabilities, safety boundaries, evidence model, and human authority for the Civic Action addon.",
+      "file": "addons/civic-action/overview.md",
+      "parent": "addons/civic-action"
+    },
+    {
+      "id": "addons/civic-action/quickstart",
+      "title": "Quick Start",
+      "summary": "Install Civic Action and run its source, meeting, and publication gates safely.",
+      "file": "addons/civic-action/quickstart.md",
+      "parent": "addons/civic-action"
+    },
+    {
       "id": "addons/auto-memory",
       "title": "Auto Memory",
-      "summary": "Automatic memory management — seed templates, memory evolution, cross-session persistence",
+      "summary": "Automatic memory management \u2014 seed templates, memory evolution, cross-session persistence",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2020,7 +2295,7 @@
     {
       "id": "addons/daemon",
       "title": "Daemon Addon",
-      "summary": "Persistent background agent — web UI, YAML profiles, scheduled tasks, Telegram",
+      "summary": "Persistent background agent \u2014 web UI, YAML profiles, scheduled tasks, Telegram",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2062,14 +2337,14 @@
     {
       "id": "addons/prose-integration",
       "title": "Prose Integration",
-      "summary": "OpenProse contract-driven execution — five skills, obligation semantics",
+      "summary": "OpenProse contract-driven execution \u2014 five skills, obligation semantics",
       "collapsed": true,
       "parent": "addons"
     },
     {
       "id": "addons/prose-integration/overview",
       "title": "Overview",
-      "summary": "The prose-integration addon provides AIWG tools for working with OpenProse programs — Markdown files",
+      "summary": "The prose-integration addon provides AIWG tools for working with OpenProse programs \u2014 Markdown files",
       "file": "addons/prose-integration/overview.md",
       "parent": "addons/prose-integration"
     },
@@ -2139,7 +2414,7 @@
     {
       "id": "addons/voice-framework",
       "title": "Voice Framework",
-      "summary": "Voice profile documentation — four built-in voices, custom profiles, blending",
+      "summary": "Voice profile documentation \u2014 four built-in voices, custom profiles, blending",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2153,7 +2428,7 @@
     {
       "id": "addons/voice-framework/quickstart",
       "title": "Quick Start",
-      "summary": "Apply your first voice profile to content in about 2 minutes.",
+      "summary": "Apply a writing profile and review the resulting draft",
       "file": "addons/voice-framework/quickstart.md",
       "parent": "addons/voice-framework"
     },
@@ -2179,7 +2454,7 @@
     {
       "id": "cockpit/architecture",
       "title": "Architecture",
-      "summary": "Shells, Bridge, executor — control vs data plane, ports, components",
+      "summary": "Shells, Bridge, executor \u2014 control vs data plane, ports, components",
       "file": "cockpit/architecture.md",
       "parent": "cockpit"
     },
@@ -2239,6 +2514,13 @@
       "file": "serve-guide.md"
     },
     {
+      "id": "a2a-protocol-compatibility",
+      "title": "A2A Protocol Compatibility",
+      "summary": "Negotiate A2A 0.3 compatibility and 1.0 HTTP+JSON",
+      "file": "a2a-protocol-compatibility.md",
+      "parent": "serve-guide"
+    },
+    {
       "id": "concierge-guide",
       "title": "Concierge Guide",
       "summary": "Concierge agent interface",
@@ -2259,7 +2541,7 @@
     {
       "id": "customization/project-local-quickstart",
       "title": "Project-Local Quickstart",
-      "summary": "5-minute first bundle",
+      "summary": "Create and validate a project-local bundle",
       "file": "customization/project-local-quickstart.md",
       "parent": "customization"
     },
@@ -2332,6 +2614,20 @@
       "parent": "storage"
     },
     {
+      "id": "storage/backend-contract",
+      "title": "Scalable Backend Contract",
+      "summary": "Versioned capabilities, consistency, and scaling semantics",
+      "file": "storage/backend-contract.md",
+      "parent": "storage"
+    },
+    {
+      "id": "storage/migration-protocol",
+      "title": "Scalable Migration Protocol",
+      "summary": "Checksum-backed offline and online migration safety contract",
+      "file": "storage/migration-protocol.md",
+      "parent": "storage"
+    },
+    {
       "id": "storage/security",
       "title": "Storage Security",
       "summary": "Access control and threat model",
@@ -2348,6 +2644,62 @@
       "title": "Capability Matrix",
       "summary": "Cross-provider feature comparison",
       "file": "providers/capability-matrix.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/provider-inventory",
+      "title": "Provider Inventory",
+      "summary": "Canonical list and count of named provider integrations",
+      "file": "providers/provider-inventory.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/antigravity",
+      "title": "Google Antigravity CLI Provider Guide",
+      "summary": "Experimental provider selection, project resources, MCP, headless operation, and qualification boundaries",
+      "file": "providers/antigravity.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/deepseek-harness",
+      "title": "DeepSeek Harness Provider Guide",
+      "summary": "Safe deployment, runtime profiles, credential references, and qualification boundaries",
+      "file": "providers/deepseek-harness.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/deepseek-harness-sessions",
+      "title": "DeepSeek Harness Session Import",
+      "summary": "Authorized, bounded import of native raw session-v2 JSONL",
+      "file": "providers/deepseek-harness-sessions.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/omp",
+      "title": "Oh My Pi Provider Guide",
+      "summary": "Complete deployment, runtime, profile, MCP, team, and maintenance guide",
+      "file": "providers/omp.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/omp-verification",
+      "title": "OMP Verification Baseline",
+      "summary": "Pinned native and OpenRouter verification evidence for Oh My Pi",
+      "file": "providers/omp-verification.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/omp-sessions",
+      "title": "OMP Session Ingestion",
+      "summary": "Authorized discovery and replay-safe import of OMP session trees",
+      "file": "providers/omp-sessions.md",
+      "parent": "providers"
+    },
+    {
+      "id": "providers/pi-sessions",
+      "title": "Pi Session Acquisition",
+      "summary": "Authorized discovery and fail-closed import of Pi v3 JSONL session trees",
+      "file": "providers/pi-sessions.md",
       "parent": "providers"
     },
     {
@@ -2475,7 +2827,7 @@
     {
       "id": "frameworks/knowledge-base/overview",
       "title": "Overview",
-      "summary": "AIWG's existing frameworks — research-complete, media-curator, sdlc-complete — are purpose-built for",
+      "summary": "AIWG's existing frameworks \u2014 research-complete, media-curator, sdlc-complete \u2014 are purpose-built for",
       "file": "frameworks/knowledge-base/overview.md",
       "parent": "frameworks/knowledge-base"
     },
@@ -2909,7 +3261,7 @@
     {
       "id": "addons/agent-loop/quickstart",
       "title": "Quick Start",
-      "summary": "Get started with iterative AI task execution in 5 minutes.",
+      "summary": "Run a bounded task loop and inspect its verification result",
       "file": "addons/agent-loop/quickstart.md",
       "parent": "addons/agent-loop"
     },
@@ -3343,7 +3695,7 @@
     {
       "id": "frameworks/media-marketing-kit/design-operations-examples",
       "title": "Design Operations Examples",
-      "summary": "These examples use the same lifecycle—constraints, history, research, five comparable candidates, hu",
+      "summary": "These examples use the same lifecycle\u2014constraints, history, research, five comparable candidates, hu",
       "file": "frameworks/media-marketing-kit/design-operations-examples.md",
       "parent": "frameworks/media-marketing-kit"
     },
@@ -3367,6 +3719,363 @@
       "summary": "Compound Memory composes AIWG's existing memory capabilities into a governed",
       "file": "addons/compound-memory/overview.md",
       "parent": "addons/compound-memory"
+    },
+    {
+      "id": "frameworks/sdlc-complete/agent-examples/ai-ml-engineer-examples",
+      "title": "Ai Ml Engineer Examples",
+      "summary": "Externalized from the agent definition per the few-shot-examples rule. These examples are patterns t",
+      "file": "frameworks/sdlc-complete/agent-examples/ai-ml-engineer-examples.md",
+      "parent": "frameworks/sdlc-complete/agent-examples"
+    },
+    {
+      "id": "addons/civic-action/issue-traceability",
+      "title": "Issue Traceability",
+      "summary": "| Issue | Implemented proof | Verification |",
+      "file": "addons/civic-action/issue-traceability.md",
+      "parent": "addons/civic-action"
+    },
+    {
+      "id": "addons/civic-action/research",
+      "title": "Research",
+      "summary": "",
+      "collapsed": true,
+      "parent": "addons/civic-action"
+    },
+    {
+      "id": "addons/civic-action/research/aiwg-design-patterns",
+      "title": "Aiwg Design Patterns",
+      "summary": "Status: implementation design input for AIWG issues #2213\u2013#2222",
+      "file": "addons/civic-action/research/aiwg-design-patterns.md",
+      "parent": "addons/civic-action/research"
+    },
+    {
+      "id": "addons/civic-action/research/civic-workflow-standards",
+      "title": "Civic Workflow Standards",
+      "summary": "Issues: #2214, #2216, #2217, #2218, #2220, #2221",
+      "file": "addons/civic-action/research/civic-workflow-standards.md",
+      "parent": "addons/civic-action/research"
+    },
+    {
+      "id": "addons/civic-action/research/control-source-matrix",
+      "title": "Control Source Matrix",
+      "summary": "Reviewed: 2026-09-01",
+      "file": "addons/civic-action/research/control-source-matrix.md",
+      "parent": "addons/civic-action/research"
+    },
+    {
+      "id": "addons/civic-action/research/legal-ethics-guardrails",
+      "title": "Legal Ethics Guardrails",
+      "summary": "- Issues: [AIWG #2213](https://git.integrolabs.net/roctinam/aiwg/issues/2213), jurisdiction-sensitiv",
+      "file": "addons/civic-action/research/legal-ethics-guardrails.md",
+      "parent": "addons/civic-action/research"
+    },
+    {
+      "id": "addons/civic-action/research/synthesis-and-readiness",
+      "title": "Synthesis And Readiness",
+      "summary": "Decision date: 2026-09-01",
+      "file": "addons/civic-action/research/synthesis-and-readiness.md",
+      "parent": "addons/civic-action/research"
+    },
+    {
+      "id": "addons/composition-engine",
+      "title": "Composition Engine",
+      "summary": "",
+      "collapsed": true,
+      "parent": "addons"
+    },
+    {
+      "id": "addons/composition-engine/composition-evaluation-research-matrix",
+      "title": "Composition Evaluation Research Matrix",
+      "summary": "This matrix records the decision and evidence status for every source named in",
+      "file": "addons/composition-engine/composition-evaluation-research-matrix.md",
+      "parent": "addons/composition-engine"
+    },
+    {
+      "id": "addons/composition-engine/composition-evaluation",
+      "title": "Composition Evaluation",
+      "summary": "This harness is the release-claim gate for composition policy documentation.",
+      "file": "addons/composition-engine/composition-evaluation.md",
+      "parent": "addons/composition-engine"
+    },
+    {
+      "id": "addons/composition-engine/polyrhythmic-reasoning",
+      "title": "Polyrhythmic Reasoning",
+      "summary": "The polyrhythmic-reasoning adapter turns the illustrative 4:4 and 5:4",
+      "file": "addons/composition-engine/polyrhythmic-reasoning.md",
+      "parent": "addons/composition-engine"
+    },
+    {
+      "id": "addons/composition-engine/runtime-operations",
+      "title": "Runtime Operations",
+      "summary": "The FlowGraph runtime is a deterministic planner/executor beneath the existing",
+      "file": "addons/composition-engine/runtime-operations.md",
+      "parent": "addons/composition-engine"
+    },
+    {
+      "id": "addons/composition-engine/schema-evolution",
+      "title": "Schema Evolution",
+      "summary": "flow.aiwg.io/v1alpha1 is an experimental conformance line. It is not a",
+      "file": "addons/composition-engine/schema-evolution.md",
+      "parent": "addons/composition-engine"
+    },
+    {
+      "id": "addons/graph-pattern",
+      "title": "Graph Pattern",
+      "summary": "",
+      "collapsed": true,
+      "parent": "addons"
+    },
+    {
+      "id": "addons/graph-pattern/decision-guide",
+      "title": "Decision Guide",
+      "summary": "Graph is one optional AIWG Flow profile. Choose it for explicit shared state,",
+      "file": "addons/graph-pattern/decision-guide.md",
+      "parent": "addons/graph-pattern"
+    },
+    {
+      "id": "addons/voice-framework/output-modes",
+      "title": "Output Modes",
+      "summary": "Output modes are provider-neutral presentation constraints selected at runtime. With no configured m",
+      "file": "addons/voice-framework/output-modes.md",
+      "parent": "addons/voice-framework"
+    },
+    {
+      "id": "addons/dataset-intelligence",
+      "title": "Dataset Intelligence",
+      "summary": "",
+      "collapsed": true,
+      "parent": "addons"
+    },
+    {
+      "id": "addons/dataset-intelligence/overview",
+      "title": "Overview",
+      "summary": "Dataset Intelligence gives every AIWG domain the same governed path from \u201cuse",
+      "file": "addons/dataset-intelligence/overview.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/dataset-intelligence/quickstart",
+      "title": "Quick Start",
+      "summary": "Tell AIWG what you have and what you want:",
+      "file": "addons/dataset-intelligence/quickstart.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/dataset-intelligence/adapter-authoring",
+      "title": "Adapter Authoring",
+      "summary": "Use the normative [source adapter guide](../../../dataset/source-adapters.md)",
+      "file": "addons/dataset-intelligence/adapter-authoring.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/dataset-intelligence/fortemi-boundaries",
+      "title": "Fortemi Boundaries",
+      "summary": "| Layer | Authority | Persistence claim | Recovery |",
+      "file": "addons/dataset-intelligence/fortemi-boundaries.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/dataset-intelligence/migration-guide",
+      "title": "Migration Guide",
+      "summary": "Migration is projection, not relabeling. Preserve the original store, produce",
+      "file": "addons/dataset-intelligence/migration-guide.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/dataset-intelligence/offline-troubleshooting",
+      "title": "Offline Troubleshooting",
+      "summary": "| State | Meaning | Required action |",
+      "file": "addons/dataset-intelligence/offline-troubleshooting.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/dataset-intelligence/task-guide",
+      "title": "Task Guide",
+      "summary": "This guide starts from a user outcome. It does not assume that the user knows",
+      "file": "addons/dataset-intelligence/task-guide.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/dataset-intelligence/worked-examples",
+      "title": "Worked Examples",
+      "summary": "These are reviewable workflow examples, not promises that every lifecycle",
+      "file": "addons/dataset-intelligence/worked-examples.md",
+      "parent": "addons/dataset-intelligence"
+    },
+    {
+      "id": "addons/voice-framework/custom-output-modes",
+      "title": "Custom Output Modes",
+      "summary": "Use a custom output mode when you want repeatable sentence structure, terminology, document organiza",
+      "file": "addons/voice-framework/custom-output-modes.md",
+      "parent": "addons/voice-framework"
+    },
+    {
+      "id": "addons/voice-framework/output-mode-integration",
+      "title": "Output Mode Integration",
+      "summary": "This guide is for skill authors, script authors, and provider-adapter maintainers. A correct integra",
+      "file": "addons/voice-framework/output-mode-integration.md",
+      "parent": "addons/voice-framework"
+    },
+    {
+      "id": "addons/voice-framework/output-mode-troubleshooting",
+      "title": "Output Mode Troubleshooting",
+      "summary": "aiwg output-mode status",
+      "file": "addons/voice-framework/output-mode-troubleshooting.md",
+      "parent": "addons/voice-framework"
+    },
+    {
+      "id": "addons/network-analysis",
+      "title": "Network Analysis",
+      "summary": "Governed offline PCAP and PCAPNG evidence",
+      "collapsed": true,
+      "parent": "addons"
+    },
+    {
+      "id": "addons/network-analysis/overview",
+      "title": "Overview",
+      "summary": "Saved-capture workflows, boundaries, tools, and evidence",
+      "file": "addons/network-analysis/overview.md",
+      "parent": "addons/network-analysis"
+    },
+    {
+      "id": "frameworks/forensics-complete/packet-evidence-integration",
+      "title": "Packet Evidence Integration",
+      "summary": "The network-analysis addon owns TShark probing, safe execution, recipe",
+      "file": "frameworks/forensics-complete/packet-evidence-integration.md",
+      "parent": "frameworks/forensics-complete"
+    },
+    {
+      "id": "frameworks/ops-complete/packet-verification",
+      "title": "Packet Verification",
+      "summary": "Use the network-analysis overview, dns, tcp-health, tls, http-metadata,",
+      "file": "frameworks/ops-complete/packet-verification.md",
+      "parent": "frameworks/ops-complete"
+    },
+    {
+      "id": "frameworks/research-complete/packet-evidence",
+      "title": "Packet Evidence",
+      "summary": "packet-evidence is a first-class source type for governed observations from a",
+      "file": "frameworks/research-complete/packet-evidence.md",
+      "parent": "frameworks/research-complete"
+    },
+    {
+      "id": "frameworks/research-complete/bibliographic-services",
+      "title": "Bibliographic Services",
+      "summary": "What each citation and retraction service is good for, and where each will mislead you",
+      "file": "frameworks/research-complete/bibliographic-services.md",
+      "parent": "frameworks/research-complete"
+    },
+    {
+      "id": "frameworks/security-engineering",
+      "title": "Security Engineering",
+      "summary": "",
+      "collapsed": true,
+      "parent": "frameworks"
+    },
+    {
+      "id": "frameworks/security-engineering/network-control-review",
+      "title": "Network Control Review",
+      "summary": "Use governed packet evidence to compare intended controls with observed saved",
+      "file": "frameworks/security-engineering/network-control-review.md",
+      "parent": "frameworks/security-engineering"
+    },
+    {
+      "id": "addons/network-analysis/integrations",
+      "title": "Integrations",
+      "summary": "Framework handoffs and ownership boundaries for packet evidence",
+      "file": "addons/network-analysis/integrations.md",
+      "parent": "addons/network-analysis"
+    },
+    {
+      "id": "addons/network-analysis/maintainer-guide",
+      "title": "Maintainer Guide",
+      "summary": "The addon separates schemas, runtime enforcement, source-distributed workflows,",
+      "file": "addons/network-analysis/maintainer-guide.md",
+      "parent": "addons/network-analysis"
+    },
+    {
+      "id": "addons/network-analysis/offline-analysis",
+      "title": "Offline Analysis",
+      "summary": "The analyzer reads an authorized saved PCAP or PCAPNG through a private,",
+      "file": "addons/network-analysis/offline-analysis.md",
+      "parent": "addons/network-analysis"
+    },
+    {
+      "id": "addons/network-analysis/operator-guide",
+      "title": "Operator Guide",
+      "summary": "Use this addon only with a saved PCAP or PCAPNG whose collection and analysis",
+      "file": "addons/network-analysis/operator-guide.md",
+      "parent": "addons/network-analysis"
+    },
+    {
+      "id": "addons/network-analysis/release-checklist",
+      "title": "Release Checklist",
+      "summary": "Complete this checklist for every release that changes the addon, runtime,",
+      "file": "addons/network-analysis/release-checklist.md",
+      "parent": "addons/network-analysis"
+    },
+    {
+      "id": "addons/network-analysis/termshark-handoff",
+      "title": "Termshark Handoff",
+      "summary": "Termshark is an optional local review surface for evidence already produced by",
+      "file": "addons/network-analysis/termshark-handoff.md",
+      "parent": "addons/network-analysis"
+    },
+    {
+      "id": "overview/capabilities",
+      "title": "Choose a Workflow",
+      "summary": "Find a workflow by the deliverable you need",
+      "file": "overview/capabilities.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "architecture-overview",
+      "title": "Architecture Overview",
+      "summary": "Deployment, discovery, project context, and optional runtime services",
+      "file": "architecture-overview.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "how-it-works",
+      "title": "How AIWG Works",
+      "summary": "How instructions and saved artifacts carry work between sessions",
+      "file": "how-it-works.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "overview/reading-list",
+      "title": "Research Reading List",
+      "summary": "Design background from external research, separate from AIWG performance claims",
+      "file": "overview/reading-list.md",
+      "parent": "getting-started"
+    },
+    {
+      "id": "security/grokbot-path-security-review",
+      "title": "Grok Bot Path Security Review",
+      "summary": "Fail-closed skill-root policy, containment, and #210 verification fixes",
+      "file": "security/grokbot-path-security-review.md",
+      "parent": "reference"
+    },
+    {
+      "id": "migration/grokbot-from-cursor-workaround",
+      "title": "Migrate Grok Bot from Cursor Workaround",
+      "summary": "Move Grok fleets to --provider grokbot; keep Cursor IDE on cursor",
+      "file": "migration/grokbot-from-cursor-workaround.md",
+      "parent": "reference"
+    },
+    {
+      "id": "releases/grokbot-stable-promotion-notes",
+      "title": "Grok Bot Stable Promotion Notes",
+      "summary": "Release notes for grokbot experimental \u2192 stable (#210)",
+      "file": "releases/grokbot-stable-promotion-notes.md",
+      "parent": "reference"
+    },
+    {
+      "id": "integrations/grokbot-linux-puw",
+      "title": "Grok Bot Linux PUW (#210)",
+      "summary": "Linux PUW evidence for grokbot stable; macOS/Windows waived by maintainer",
+      "file": "integrations/grokbot-linux-puw.md",
+      "parent": "reference"
     }
   ],
   "pages": [

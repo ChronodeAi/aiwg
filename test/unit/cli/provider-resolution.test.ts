@@ -18,9 +18,11 @@ describe('normalizeProviderId', () => {
     expect(normalizeProviderId('claude-code')).toBe('claude');
     expect(normalizeProviderId('openai')).toBe('codex');
     expect(normalizeProviderId('tinyhumansai')).toBe('openhuman');
+    expect(normalizeProviderId('devin')).toBe('windsurf');
     expect(normalizeProviderId('devin-desktop')).toBe('windsurf');
     expect(normalizeProviderId('devin-local')).toBe('windsurf');
     expect(normalizeProviderId('cascade')).toBe('windsurf');
+    expect(normalizeProviderId('pi-coding-agent')).toBe('pi');
   });
 
   it('returns null for unknown provider ids', () => {
@@ -58,6 +60,12 @@ describe('commandLooksLikeProvider (process-tree branch)', () => {
 
   it('returns null for a non-provider command', () => {
     expect(commandLooksLikeProvider('/usr/bin/bash -c "echo hi"')).toBeNull();
+  });
+
+  it('detects Pi only from an exact pi command marker', () => {
+    expect(commandLooksLikeProvider('/usr/local/bin/pi --mode rpc')).toBe('pi');
+    expect(commandLooksLikeProvider('/usr/bin/pico README.md')).toBeNull();
+    expect(commandLooksLikeProvider('/work/happi/bin/server')).toBeNull();
   });
 });
 

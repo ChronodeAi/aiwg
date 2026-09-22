@@ -96,13 +96,11 @@ reader-AppRole credentials.
 # Commit the release prep (personal key — GitHub Verified)
 git commit -S -m "docs(release): prepare 2026.X.Y artifacts"
 
-# Export the ci-aiwg reader bootstrap from the TPM-backed credential handoff.
-# The concrete release-key routes come from the operator's private routing
-# environment or protected forge variables; never commit them here.
-source /path/to/private/vault-runtime.env
-export VAULT_CI_ROLE_ID="$(_vault_cred ci-aiwg role-id)"
-export VAULT_CI_SECRET_ID="$(_vault_cred ci-aiwg secret-id)"
-source /path/to/private/aiwg-release-routing.env
+# Follow the private itops release-signing runbook to source the mode-0600
+# ci-aiwg bootstrap and export VAULT_ADDR, VAULT_CACERT, and the four
+# RELEASE_SIGNING_* route variables. This public repository intentionally omits
+# concrete provider paths and fields. Never print or copy bootstrap values into
+# a project file.
 
 # Cut the signed tag — fetches the vault key, signs with the release-only key,
 # supplies its passphrase through batch loopback pinentry (no dialog), and runs
@@ -119,15 +117,15 @@ git push origin main --tags
 # creating the verified GitHub release.
 git push github main --tags
 
-unset VAULT_CI_ROLE_ID VAULT_CI_SECRET_ID
+unset VAULT_CI_ROLE_ID VAULT_CI_SECRET_ID VAULT_ADDR VAULT_CACERT
 unset RELEASE_SIGNING_KEY_VAULT_PATH RELEASE_SIGNING_KEY_VAULT_FIELD
 unset RELEASE_SIGNING_PASSPHRASE_VAULT_PATH RELEASE_SIGNING_PASSPHRASE_VAULT_FIELD
 ```
 
 **Signing-key custody note**: the active release-signing key is
 `401584AAA3376B898FB34427839584D0E25E5126` (`AIWG Release Signing`). Its private
-material and passphrase live vault-only; the concrete route is supplied by the
-private routing environment, not checked-in docs. The separate
+material and passphrase live vault-only; the concrete route is governed by the
+private itops runbook and intentionally omitted here. The separate
 `9292EFCBB0EA41BECEEFDAFA9C1B8CE0E0E09C33` key signed `v2026.7.12` and remains
 published for historical verification, but it is not the active release key.
 CI only pulls repository contents and verifies tags against committed public
@@ -140,7 +138,7 @@ commit the recovery-medium path or manifest here.
 
 Vault source of truth:
 
-- SOP: private itops secret-management runbook.
+- SOP: private itops secret-management and release-signing runbooks.
 - Release key route: `RELEASE_SIGNING_KEY_VAULT_PATH` and
   `RELEASE_SIGNING_KEY_VAULT_FIELD`.
 - Release passphrase route: `RELEASE_SIGNING_PASSPHRASE_VAULT_PATH` and
@@ -284,27 +282,23 @@ The GitHub trusted-publishing workflow publishes `aiwg`, `@aiwg/cockpit`, and
 `@aiwg/cli` at the same CalVer. It verifies each requested dist-tag and each
 package's provenance attestation before completing.
 
-For stable releases, OIDC sets `latest` during publication. Advancing `next` to
-the same stable version is a separate package-management operation because npm
-trusted-publisher credentials are publish-scoped. The workflow uses the
-narrowly scoped `NPM_DIST_TAG_TOKEN` for all three packages. If that secret is
-not configured, publication still succeeds but the workflow warns that `next`
-must be advanced manually:
-
-```bash
-npm dist-tag add aiwg@2026.1.5 next
-npm dist-tag add @aiwg/cockpit@2026.1.5 next
-npm dist-tag add @aiwg/cli@2026.1.5 next
-```
+For stable releases, OIDC sets `latest` during publication. The workflow does
+not create, advance, or maintain an npm `next` dist-tag. `next` is retired from
+the public registry: removing it requires a one-time authenticated npm account
+session because trusted publishing authorizes publication, not dist-tag edits.
+The post-release gate checks that `latest` matches the release and `next` is
+absent for all three packages.
 
 ### 5. Mirror signed release assets to the Gitea release
 
-Once `.github/workflows/npm-publish.yml` finishes on the GitHub mirror, the GitHub release for the new tag carries four signed assets:
+Once `.github/workflows/npm-publish.yml` finishes on the GitHub mirror, the GitHub release for the new tag carries the release evidence mirrored by this step:
 
 - `aiwg-X.Y.Z.tgz` (the published tarball)
 - `aiwg-X.Y.Z.tgz.sigstore` (cosign keyless signature bundle)
 - `release-manifest.json` (audit manifest — SHA-256, version, tag, commit, workflow run URL)
 - `release-manifest.json.sigstore` (cosign keyless signature bundle for the manifest)
+- `aiwg-X.Y.Z.cdx.json` and `.sigstore` (CycloneDX SBOM and signature bundle)
+- `install.sh` and `SHA256SUMS` (installer plus the release-asset checksum manifest)
 
 The Gitea-side release does NOT auto-mirror these — to avoid expanding the Gitea write-token surface that Wave 4 reduced (#1283, #1286), the mirror is a single explicit operator command after the GitHub workflow lands the assets. Run:
 
@@ -316,7 +310,7 @@ gh workflow run upload-release-sigs.yml \
 
 …or trigger it from the Gitea Actions UI (Actions → "Mirror signed release assets to Gitea release" → Run workflow → enter the tag).
 
-The workflow downloads the four assets from the public GitHub mirror and uploads them to the Gitea release via the existing `NPM_TOKEN` (no new token required). Re-runs are idempotent — duplicate-name uploads are detected (HTTP 409) and the existing asset is deleted then re-uploaded.
+The workflow downloads these assets from the public GitHub mirror and uploads them to the Gitea release with a vault-provided Gitea release token. Re-runs are idempotent — duplicate-name uploads are detected (HTTP 409) and the existing asset is deleted then re-uploaded.
 
 Verify both releases have the four sig assets attached:
 
@@ -326,6 +320,36 @@ Verify both releases have the four sig assets attached:
 | Gitea   | <https://git.integrolabs.net/roctinam/aiwg/releases/tag/vYYYY.M.PATCH> |
 
 Consumer verification commands (cosign-based, registry-independent) are documented in [`docs/releases/verifying.md`](../releases/verifying.md). See [`#1287`](https://git.integrolabs.net/roctinam/aiwg/issues/1287) and [the A8 ADR](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/adr-tarball-cosign-signing.md) for the full rationale.
+
+#### Attested web publication ordering
+
+After the Gitea release assets are present and independently rechecked, the
+same workflow dispatches the private web-release publisher with an
+`aiwg.web-release-handoff/v1` contract. The handoff is bound to exact
+`setup.aiwg.yaml` and `agentic.yaml` bytes from the verified signed tag and
+requires:
+
+- an adjacent AIWG attestation descriptor for each published YAML, flow bundle,
+  and selected prebuilt index;
+- descriptor path, SHA-256, exact byte length, and media type in the signed web
+  release manifest;
+- compatibility with signed `aiwg.resource-manifest/v1` and v2 consumers;
+- monotonic sequence and expiry for stable-channel metadata; and
+- a site callback only after the signed release and sidecars are published.
+
+`notify-site.yml` is therefore recovery/callback-only; tag pushes no longer race
+the attestation publisher. Its descriptor payload helps aiwg.io locate the
+expected objects, but the site must verify the signed web manifest and exact
+digests. CDN ETags, Last-Modified, Content-Type, and Content-Length never replace
+that verification.
+
+The repository-owned [`agentic.yaml`](../../agentic.yaml) is the authoritative
+agent handoff source. It is deliberately distinct from `setup.aiwg.yaml`: the
+first manifest requires local verification and binds the handoff, while the
+second contains the installation plan. Release CI reads both exact files from
+the verified signed tag and never aliases, copies, or synthesizes either one.
+Disabling attestation emission for rollback likewise leaves prior sidecars,
+signed manifests, and trusted sequence state intact.
 
 ## Release Gates
 
@@ -343,94 +367,34 @@ In addition to the four steps above, the following CI workflows act as **release
 
 ### A2A Conformance Gate Details
 
-The `A2A Conformance` workflow provisions a reference agentic-sandbox v2 instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. Failure blocks the release.
+The `A2A Conformance` workflow provisions a reference agentic-sandbox instance via Docker Compose, builds the `roctinam/agentic-sandbox-conformance` Go harness, and runs the suite end-to-end. The separate `npm run uat:serve-live` lane exercises AIWG's own versioned client; set `AIWG_A2A_LIVE_DISPATCH=1 AIWG_A2A_LIVE_REQUIRE_BOTH=1` for a release qualification that requires live 0.3 and 1.0 interfaces. Mock and fixture results are recorded separately and do not substitute for this live lane. Failure blocks the release.
 
 - **What to do on green**: proceed with tagging.
 - **What to do on red**: open the run, download the `conformance-reports-*` artifact (`report.md` + `report.junit.xml`), and diagnose. Common categories of failure are listed in the harness's own `report.md`. Do **not** force a stable tag past a red conformance run without explicit issue documentation and a follow-up tracking issue — that's how interop regressions ship.
 - **Workflow inputs**: the manual-dispatch form accepts `sandbox_ref` and `conformance_ref` for pinned-ref retries (e.g., to verify a fix against a specific sandbox commit before the release engineer is back online).
 
-## Pre-release Tags (alpha/beta)
+## npm publication channel
 
-Pre-release tags are **internal pipeline checkpoints** — not public releases.
-
-```bash
-# Nightly — automated or ad-hoc; date-stamped
-git tag -m "v2026.1.5-nightly.20260324" v2026.1.5-nightly.20260324
-git push origin v2026.1.5-nightly.20260324
-# CI publishes to npm --tag nightly → npm install aiwg@nightly
-
-# Alpha — early feature testing
-git tag -m "v2026.1.5-alpha.1" v2026.1.5-alpha.1
-git push origin v2026.1.5-alpha.1
-# CI publishes to npm --tag next → npm install aiwg@next
-
-# Beta — feature-complete, broader testing
-git tag -m "v2026.1.5-beta.1" v2026.1.5-beta.1
-git push origin v2026.1.5-beta.1
-# CI publishes to npm --tag next → npm install aiwg@next
-
-# RC — release candidate (note: lowercase, dot-separated — matches npm semver)
-git tag -m "v2026.1.5-rc.1" v2026.1.5-rc.1
-git push origin v2026.1.5-rc.1
-# CI publishes to npm --tag next → npm install aiwg@next
-
-# Stable
-git tag -m "v2026.1.5" v2026.1.5
-git push origin v2026.1.5
-# CI publishes to npm --tag latest (default install)
-```
-
-### Release Pipeline
-
-This is a standard multi-stage release pipeline used by many npm packages:
-
-```
-dev (local) → nightly → alpha → beta → RC → stable
-```
-
-### Naming Convention
-
-| Stage   | Format                           | Example                      | npm dist-tag | Meaning                             |
-| ------- | -------------------------------- | ---------------------------- | ------------ | ----------------------------------- |
-| Dev     | (local source install, no tag)   | —                            | —            | Active development on this machine  |
-| Nightly | `vYYYY.M.PATCH-nightly.YYYYMMDD` | `v2026.1.5-nightly.20260324` | `nightly`    | Automated or ad-hoc snapshot        |
-| Alpha   | `vYYYY.M.PATCH-alpha.N`          | `v2026.1.5-alpha.1`          | `next`       | Early testing, pipeline validation  |
-| Beta    | `vYYYY.M.PATCH-beta.N`           | `v2026.1.5-beta.1`           | `next`       | Feature-complete, broader testing   |
-| RC      | `vYYYY.M.PATCH-rc.N`             | `v2026.1.5-rc.1`             | `next`       | Release candidate, final pre-stable |
-| Stable  | `vYYYY.M.PATCH`                  | `v2026.1.5`                  | `latest`     | Public release                      |
-
-Alpha, beta, and RC all publish to the `next` dist-tag. The latest of these is always what `npm install -g aiwg@next` installs.
-
-**Install by channel:**
+The npm release pipeline accepts only stable CalVer tags matching
+`vYYYY.M.PATCH`. It publishes `aiwg`, `@aiwg/cli`, and `@aiwg/cockpit` at the
+same version. GitHub Actions trusted publishing sets `latest` on npmjs.org;
+Gitea Actions sets `latest` on its package mirror and removes its old `next`
+alias. The public npm `next` alias requires a one-time authenticated removal.
+The release plan remains incomplete until `latest` matches and `next` is absent
+on npmjs.org. The pipeline does not publish nightly, alpha, beta, or RC versions.
 
 ```bash
-npm install -g aiwg                  # stable (latest dist-tag, default)
-npm install -g aiwg@next             # latest alpha/beta/RC
-npm install -g aiwg@nightly          # latest nightly snapshot
-npm install -g aiwg@2026.1.5-rc.3    # specific RC by exact version
-aiwg refresh --channel next          # switch installed version to next channel
-aiwg refresh --channel latest        # switch back to stable
+# One-time public registry cleanup from an authenticated npm account session.
+for package in aiwg @aiwg/cli @aiwg/cockpit; do
+  npm dist-tag rm "$package" next --registry=https://registry.npmjs.org
+done
+# After CI publishes the new version:
+VERSION="$(node -p "require('./package.json').version")"
+bash tools/release/verify-npm-dist-tags.sh "$VERSION"
 ```
 
-### What pre-release means
-
-- Used to validate the publish pipeline and let a small group test before the stable tag
-- Nightly builds are automated snapshots; alphas/betas are intentional testing milestones
-- **No release announcement** — pre-releases are not public releases
-- **No new CHANGELOG entry** — the stable release CHANGELOG covers everything
-- **Prerelease-marked release pages** — tag workflows create Gitea and GitHub
-  release records marked as prereleases; only stable releases receive the
-  public announcement and stable release notes
-- CHANGELOG and `docs/releases/` docs are written once, for the stable tag, and cover everything that accumulated across all pre-releases
-
-### Pre-release → Stable flow
-
-```
-nightly → nightly → alpha.1 → fix → alpha.2 → beta.1 → test → stable tag
-                                                                     ↓
-                                                          CHANGELOG + announcement
-                                                          written once here
-```
+Use source checkouts and ordinary test/CI branches for work that needs to be
+validated before release. AIWG update channels are separate from npm dist-tags.
 
 ## Version Progression Examples
 

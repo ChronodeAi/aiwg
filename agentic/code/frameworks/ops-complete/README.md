@@ -101,6 +101,7 @@ inputs:
 |------|-------------|---------|
 | `ops-documentation` | HIGH | Executable, idempotent, verified procedure format |
 | `ops-safety` | CRITICAL | Interactive command detection, destructive operation gates |
+| `ops-information-governance` | CRITICAL | Mandatory minimization, redaction, publication, retention, and disposal boundary |
 | `ops-cross-repo` | HIGH | Scope validation, cross-repo reference format |
 | `ops-issue-tracking` | MEDIUM | Label conventions, dependency tracking, phased work |
 
@@ -111,6 +112,7 @@ inputs:
 | `runbook.md` | Step-by-step operational procedure with verification |
 | `incident.md` | Incident report with timeline and RCA |
 | `troubleshooting.md` | Symptom-driven diagnosis tree |
+| [`docs/packet-verification.md`](docs/packet-verification.md) | Privacy-safe packet evidence for troubleshooting and before/after validation |
 
 ### Agents
 
@@ -125,6 +127,8 @@ inputs:
 |-------|---------|
 | `ops-verify` | Post-procedure verification runner |
 | `ops-audit-trail` | Track files modified, backups created, commands run |
+
+All collected operational output and generated artifacts must cross the evidence boundary before an agent response, file write, repository action, tracker submission, cross-repo transfer, or export. Use `aiwg ops evidence prepare` or the public `aiwg/governance` API. See `docs/ops-evidence-governance.md` for policy schemas, sink defaults, overrides, and lifecycle handling.
 
 ## Creating Custom Extensions
 
@@ -145,6 +149,11 @@ spec:
 ```
 
 Drop it in `agentic/code/extensions/netops/` and add templates, rules, skills as needed. Auto-discovery scans conventional subdirectories.
+
+Custom YAML kinds are declared under `spec.kinds` in `ADDON.yaml`, with schema
+paths relative to the extension root. Run `npm run lint:ops-templates` to
+validate every shipped extension YAML template and receive file-plus-pointer
+diagnostics. See `docs/extensions-guide.md` for the complete contract.
 
 ## Relationship to Other Frameworks
 

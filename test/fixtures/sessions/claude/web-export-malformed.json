@@ -1,0 +1,4 @@
+{
+  "note": "A real Claude web/account export root is an array of conversations, not an object. Renaming a JSONL transcript to .json is not a conversion either -- this fixture models that mistake.",
+  "chat_messages": []
+}

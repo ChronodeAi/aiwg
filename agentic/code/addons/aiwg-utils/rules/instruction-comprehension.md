@@ -1,5 +1,10 @@
 ---
 enforcement: high
+triggers:
+  - "what did the user actually ask for"
+  - "did I follow the instructions"
+  - "the user repeated themselves"
+  - "user says that is not what I asked"
 ---
 
 # Instruction Comprehension Rules
@@ -204,7 +209,7 @@ In the Thought-Action-Observation loop:
 ## Platform Applicability
 
 This rule applies universally across all AI coding platforms:
-- Claude Code, Codex, Copilot, Cursor, Warp, Factory, OpenCode, Windsurf
+- Every supported provider
 - Any agent that receives natural language instructions
 
 Following instructions is not a feature. It is the baseline expectation.

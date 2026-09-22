@@ -11,6 +11,12 @@ import { join } from 'path';
 import { validateIndexConfig, readIndexConfig } from '../../../src/config/aiwg-config.js';
 
 describe('validateIndexConfig', () => {
+  it('accepts a project graph backend default and rejects unknown values', () => {
+    expect(validateIndexConfig({ graphBackend: 'sqlite', graphs: {} })).toEqual([]);
+    expect(validateIndexConfig({ graphBackend: 'redis', graphs: {} })).toContain(
+      'index.graphBackend: must be one of json | graphology | sqlite',
+    );
+  });
   it('accepts an absent/empty block', () => {
     expect(validateIndexConfig(undefined)).toEqual([]);
     expect(validateIndexConfig(null)).toEqual([]);
@@ -42,6 +48,29 @@ describe('validateIndexConfig', () => {
       },
     });
     expect(errs).toEqual([]);
+  });
+
+  it('accepts a bounded codebase built-in override', () => {
+    expect(validateIndexConfig({
+      graphOverrides: {
+        codebase: {
+          scanDirs: ['backend', 'spec'],
+          extensions: ['.py', '.pyi'],
+        },
+      },
+    })).toEqual([]);
+  });
+
+  it('rejects unsupported or unsafe built-in override fields', () => {
+    const errors = validateIndexConfig({
+      graphOverrides: {
+        project: { scanDirs: ['elsewhere'] },
+        codebase: { scanDirs: [], shared: true },
+      },
+    });
+    expect(errors).toContain('index.graphOverrides.project: unsupported built-in graph override (supported: codebase)');
+    expect(errors).toContain('index.graphOverrides.codebase.scanDirs: must be a non-empty array of strings');
+    expect(errors).toContain('index.graphOverrides.codebase.shared: unknown field (supported: scanDirs, extensions)');
   });
 
   it('flags a graph def missing scanDirs', () => {

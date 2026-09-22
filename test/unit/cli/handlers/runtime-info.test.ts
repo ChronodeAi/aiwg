@@ -21,7 +21,9 @@ const mockDiscovery = {
 };
 
 vi.mock('../../../../src/smiths/toolsmith/runtime-discovery.mjs', () => ({
-  RuntimeDiscovery: vi.fn(() => mockDiscovery),
+  RuntimeDiscovery: vi.fn(function RuntimeDiscoveryMock() {
+    return mockDiscovery;
+  }),
 }));
 
 describe('Runtime Info Command Handler', () => {
@@ -366,6 +368,22 @@ describe('Runtime Info Command Handler', () => {
 
       consoleSpy.mockRestore();
     });
+  });
+
+  it.each(['hermes', 'openhuman'])('reports indexed command access for %s in capability audits', async (provider) => {
+    const { runtimeInfoHandler } = await import('../../../../src/cli/handlers/runtime-info.js');
+    mockContext.args = ['--capabilities', '--provider', provider];
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const result = await runtimeInfoHandler.execute(mockContext);
+      expect(result.exitCode).toBe(0);
+      expect(output.mock.calls.flat().join('\n')).toContain('commands: Indexed: aiwg discover / aiwg show command');
+      if (provider === 'openhuman') {
+        expect(output.mock.calls.flat().join('\n')).toContain('agents: Indexed: aiwg discover / aiwg show agent');
+      }
+    } finally {
+      output.mockRestore();
+    }
   });
 
   describe('error handling', () => {
