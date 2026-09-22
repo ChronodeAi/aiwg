@@ -1,5 +1,9 @@
 ---
 enforcement: high
+triggers:
+  - "should I keep working"
+  - "context is getting long"
+  - "should I stop here"
 ---
 
 # Auto-Compact and Continue

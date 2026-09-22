@@ -2,7 +2,7 @@
  * Artifact Index Builder
  *
  * Scans .aiwg/ directories, extracts metadata from artifact frontmatter,
- * computes checksums, extracts @-mention dependencies, and builds a
+ * computes checksums, extracts @-mention and Markdown-link dependencies, and builds a
  * structured index at .aiwg/.index/.
  *
  * @implements #415
@@ -14,6 +14,8 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { load as loadYaml } from 'js-yaml';
+import { validateDecisionDocument } from '../decision/validate.js';
+import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
 import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
 import {
   DEFAULT_INDEX_EXTENSIONS,
@@ -31,13 +33,13 @@ import {
 import { parseCitationSidecar, citationResultToEdges, buildRefToPathMap } from './citation-parser.js';
 import { writeIndexFile, resolveIndexDir, loadGraphIndexFile } from './index-reader.js';
 import { loadManifest, writeManifest, statMatches, makeEntry, type ChecksumManifest, type ManifestStats } from './checksum-manifest.js';
-import { workspaceLinkedFiles } from '../smiths/context-pipeline/workspace-context.js';
 import { normalizeOperationalState } from './operational-state.js';
 import {
   DEFAULT_PROJECT_AIWG_DIR,
   resolveProjectAiwgDir,
 } from '../config/project-artifacts.js';
 import { normalizeStateTransferProjection } from './state-transfer.js';
+import { collectGraphIndexFiles, findArtifactFiles, indexPathFor } from './index-files.js';
 
 export interface BuildOptions {
   force?: boolean;
@@ -46,28 +48,6 @@ export interface BuildOptions {
   outputDir?: string; // Override index output directory (default: <cwd>/.aiwg/.index/)
   graph?: GraphType;  // Target a specific graph (default: project for backward compat)
   explicit?: boolean; // true when graph was requested via --graph flag; false for auto-selected defaultBuild graphs
-}
-
-function pathContains(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function toPosixPath(value: string): string {
-  return value.split(path.sep).join('/');
-}
-
-function indexPathFor(cwd: string, fullPath: string, graph?: GraphType): string {
-  if (!graph || graph === 'project') {
-    const artifactRoot = resolveProjectAiwgDir(cwd);
-    if (pathContains(artifactRoot, fullPath)) {
-      const relative = toPosixPath(path.relative(artifactRoot, fullPath));
-      return relative ? `${DEFAULT_PROJECT_AIWG_DIR}/${relative}` : DEFAULT_PROJECT_AIWG_DIR;
-    }
-  }
-  const rel = path.relative(cwd, fullPath);
-  if (!rel.startsWith('..') && !path.isAbsolute(rel)) return toPosixPath(rel);
-  return fullPath;
 }
 
 function absoluteEntryPath(cwd: string, entryPath: string, graph?: GraphType): string {
@@ -115,6 +95,64 @@ export function extractMentions(content: string): string[] {
     mentions.add(match[1]);
   }
   return Array.from(mentions);
+}
+
+/**
+ * Extract relative Markdown links that may resolve to graph-local artifacts.
+ *
+ * External URLs, absolute paths, and anchor-only links are intentionally absent
+ * from the accepted pattern. Resolution still happens later against indexed
+ * nodes, so a parsed link outside the active graph cannot create an edge.
+ */
+export function extractMarkdownLinks(content: string): string[] {
+  const links = new Set<string>();
+  const pattern = /(!?)\[[^\]]+\]\((\.\/?[^)#\s]+)(?:#[^)]+)?\)/g;
+  let match;
+  while ((match = pattern.exec(content)) !== null) {
+    if (match[1] === '!') continue;
+    links.add(match[2]);
+  }
+  return Array.from(links);
+}
+
+function resolveMarkdownLinkDependency(
+  cwd: string,
+  sourcePath: string,
+  rawLink: string,
+  entries: Record<string, MetadataEntry>,
+  graph?: GraphType,
+): string | null {
+  const target = rawLink.split('#')[0]?.trim();
+  if (!target) return null;
+  const sourceFullPath = absoluteEntryPath(cwd, sourcePath, graph);
+  const targetFullPath = path.resolve(path.dirname(sourceFullPath), target);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(targetFullPath);
+  } catch {
+    return null;
+  }
+  if (!stat.isFile()) return null;
+  const indexedPath = indexPathFor(cwd, targetFullPath, graph);
+  return entries[indexedPath] ? indexedPath : null;
+}
+
+function addDependencyEdge(
+  depGraph: DependencyGraph,
+  entries: Record<string, MetadataEntry>,
+  sourcePath: string,
+  targetPath: string,
+  type: TypedEdge['type'],
+): boolean {
+  if (sourcePath === targetPath) return false;
+  if (!depGraph[sourcePath]) depGraph[sourcePath] = { upstream: [], downstream: [] };
+  if (!depGraph[targetPath]) depGraph[targetPath] = { upstream: [], downstream: [] };
+  if (depGraph[sourcePath].upstream.some(edge => edge.path === targetPath)) return false;
+
+  depGraph[sourcePath].upstream.push({ path: targetPath, type });
+  depGraph[targetPath].downstream.push({ path: sourcePath, type });
+  if (entries[targetPath]) entries[targetPath].dependents.push(sourcePath);
+  return true;
 }
 
 /**
@@ -167,6 +205,49 @@ interface SchemaDocMetadata {
   name?: string;
   capability?: string;
   searchTerms: string[];
+}
+
+interface DecisionDocMetadata {
+  type: 'decision-definition' | 'decision-ruleset' | 'decision-binding';
+  kind: 'DecisionDefinition' | 'DecisionRuleset' | 'DecisionBinding';
+  name: string;
+  description: string;
+  capability: string;
+  tags: string[];
+  searchTerms: string[];
+}
+
+/** Classify and schema-check authored decision-system documents. */
+export function parseDecisionDoc(content: string, relativePath: string): DecisionDocMetadata | null {
+  if (!/\.(json|ya?ml)$/i.test(relativePath)) return null;
+  if (Buffer.byteLength(content, 'utf8') > 262_144) return null;
+  let document: unknown;
+  try {
+    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : parseDecisionYaml(content);
+    validateDecisionDocument(document);
+  } catch {
+    return null;
+  }
+  const value = document as {
+    kind: DecisionDocMetadata['kind'];
+    metadata: { id: string; version: string; description: string };
+    spec: Record<string, unknown>;
+  };
+  if (!['DecisionDefinition', 'DecisionRuleset', 'DecisionBinding'].includes(value.kind)) return null;
+  const type = ({
+    DecisionDefinition: 'decision-definition',
+    DecisionRuleset: 'decision-ruleset',
+    DecisionBinding: 'decision-binding',
+  } as const)[value.kind];
+  const purpose = typeof value.spec.purpose === 'string' ? value.spec.purpose : value.metadata.description;
+  const terms = new Set<string>([
+    value.kind, value.metadata.id, value.metadata.version, purpose,
+    ...Object.keys(value.spec),
+  ]);
+  return {
+    type, kind: value.kind, name: value.metadata.id, description: value.metadata.description,
+    capability: purpose.slice(0, 240), tags: ['decision-system', value.kind], searchTerms: [...terms],
+  };
 }
 
 function parseSchemaDoc(content: string, relativePath: string): SchemaDocMetadata | null {
@@ -654,30 +735,6 @@ function applyMetadataSupplements(
 }
 
 /**
- * Recursively find all indexable files under a directory
- */
-function findArtifactFiles(dir: string, extensions: string[] = [...DEFAULT_INDEX_EXTENSIONS]): string[] {
-  const results: string[] = [];
-  if (!fs.existsSync(dir)) return results;
-
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isSymbolicLink() && !fs.existsSync(fullPath)) {
-      continue;
-    }
-    if (entry.isDirectory()) {
-      // Skip hidden dirs and .index
-      if (entry.name.startsWith('.')) continue;
-      results.push(...findArtifactFiles(fullPath, extensions));
-    } else if (extensions.some(ext => entry.name.endsWith(ext))) {
-      results.push(fullPath);
-    }
-  }
-  return results;
-}
-
-/**
  * Build the artifact index
  */
 /**
@@ -773,6 +830,30 @@ export function parseFlowDoc(
   };
 }
 
+/**
+ * Best-effort absolute path to the AIWG install root, for error text that must
+ * name where the framework graph can actually be built (#2530).
+ */
+function resolveInstallRootHint(): string {
+  try {
+    // The running module lives under the install root; walk up to the package.
+    let dir = path.dirname(new URL(import.meta.url).pathname);
+    for (let i = 0; i < 10; i += 1) {
+      const pkg = path.join(dir, 'package.json');
+      if (fs.existsSync(pkg)) {
+        try {
+          const content = JSON.parse(fs.readFileSync(pkg, 'utf8')) as { name?: string };
+          if (content.name === 'aiwg' || content.name === '@aiwg/cli') return dir;
+        } catch { /* keep walking */ }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* fall through */ }
+  return '<aiwg install root>';
+}
+
 export async function buildIndex(
   cwd: string,
   options: BuildOptions = {}
@@ -814,7 +895,21 @@ export async function buildIndex(
       return;
     }
     console.error(`Error: No scan directories found: ${scanDirs.join(', ')}`);
-    console.log('Run this command from a project with the required directories.');
+    // The framework graph scans the AIWG corpus, which only exists at the install
+    // root — never in a consumer project. Saying "run from a project with the
+    // required directories" sends the operator looking in the wrong place (#2530).
+    if (graph === 'framework') {
+      const installRoot = resolveInstallRootHint();
+      console.log('The framework graph indexes the AIWG corpus and can only be built at the');
+      console.log('install root, not in a consumer project. Build it there, then sync here:');
+      console.log('');
+      console.log(`  cd ${installRoot} && aiwg index build --graph framework --force`);
+      console.log(`  cd ${cwd} && aiwg index sync --backend fortemi-core --graph framework`);
+      console.log('');
+      console.log("As an immediate workaround, discovery also works with '--backend local'.");
+    } else {
+      console.log('Run this command from a project with the required directories.');
+    }
     process.exit(1);
   }
 
@@ -873,24 +968,9 @@ export async function buildIndex(
   };
 
   // Collect files from all scan directories
-  const files: string[] = [];
-  for (const dir of existingDirs) {
-    files.push(...findArtifactFiles(dir, fileExtensions));
-  }
-  // WORKSPACE.md is the root of the project context graph. Index it and its
-  // local Markdown-linked nodes without copying them into provider trees.
-  if (!scope && (!graph || graph === 'project')) {
-    const workspacePath = path.join(cwd, 'WORKSPACE.md');
-    const contextFiles = [
-      ...(fs.existsSync(workspacePath) ? [workspacePath] : []),
-      ...await workspaceLinkedFiles(cwd),
-    ];
-    for (const contextFile of contextFiles) {
-      if (fileExtensions.some((extension) => contextFile.endsWith(extension)) && !files.includes(contextFile)) {
-        files.push(contextFile);
-      }
-    }
-  }
+  const files = scope
+    ? existingDirs.flatMap(dir => findArtifactFiles(dir, fileExtensions))
+    : await collectGraphIndexFiles(cwd, graph);
   const entries: Record<string, MetadataEntry> = {};
   const tagIndex: TagIndex = {};
   const depGraph: DependencyGraph = {};
@@ -977,16 +1057,18 @@ export async function buildIndex(
       // markdown+frontmatter — detect them up front so they classify and
       // become discoverable (#1540).
       const flow = parseFlowDoc(content, relativePath);
+      const decision = flow ? null : parseDecisionDoc(content, relativePath);
       const inferredType = inferType(data, relativePath);
       const physicalType = inferType({ ...data, type: undefined }, relativePath);
-      const runbook = flow ? null : parseRunbookDoc(data, body, relativePath);
+      const runbook = flow || decision ? null : parseRunbookDoc(data, body, relativePath);
       const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
-      const title = flow?.name ?? schemaDoc?.title ?? extractTitle(data, body);
+      const title = flow?.name ?? decision?.name ?? schemaDoc?.title ?? extractTitle(data, body);
       const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
-      const type = flow?.type ?? (runbook ? 'runbook' : inferredType);
-      const tags = flow ? flow.tags : (Array.isArray(data.tags) ? data.tags.map(String) : []);
-      const summary = flow?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
+      const type = flow?.type ?? decision?.type ?? (runbook ? 'runbook' : inferredType);
+      const tags = flow?.tags ?? decision?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
+      const summary = flow?.description ?? decision?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
       const dependencies = extractMentions(content);
+      const markdownLinks = extractMarkdownLinks(content);
 
       // Discovery metadata (#1214, #1540, #1792) — meaningful for operational
       // AIWG artifact kinds. Kept undefined on document types so the index file
@@ -997,10 +1079,10 @@ export async function buildIndex(
       // Declarative processes have no trigger phrases — they rely on their
       // capability and structure-aware search terms.
       const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
-      const capability = flow?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
-      const kind = flow?.kind ?? runbook?.kind;
+      const capability = flow?.capability ?? decision?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
+      const kind = flow?.kind ?? decision?.kind ?? runbook?.kind;
       const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
-      const searchTerms = flow?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
+      const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
       const kernel =
         data.kernel === true || data.kernel === 'true' ? true : undefined;
       // Script entrypoint metadata is meaningful for skills only (#1227).
@@ -1010,7 +1092,7 @@ export async function buildIndex(
       // Canonical short name (#1233) — used by the scorer to floor exact-name
       // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
       // remain searchable even when the rendered title strips the hyphen.
-      const name = flow ? flow.name : schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
+      const name = flow?.name ?? decision?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
 
       entry = {
         path: relativePath,
@@ -1025,6 +1107,7 @@ export async function buildIndex(
         checksum,
         summary,
         dependencies,
+        ...(markdownLinks.length > 0 ? { markdownLinks } : {}),
         dependents: [], // Computed after all entries are processed
         ...(name ? { name } : {}),
         ...(triggers && triggers.length > 0 ? { triggers } : {}),
@@ -1062,6 +1145,7 @@ export async function buildIndex(
   }
 
   // Build dependency graph and compute dependents
+  let markdownLinkEdgeCount = 0;
   for (const entry of Object.values(entries)) {
     if (!depGraph[entry.path]) {
       depGraph[entry.path] = { upstream: [], downstream: [] };
@@ -1073,19 +1157,14 @@ export async function buildIndex(
         p => p === dep || p.endsWith(dep)
       );
       if (normalizedDep && normalizedDep !== entry.path) {
-        const upEdge: TypedEdge = { path: normalizedDep, type: 'depends-on' };
-        depGraph[entry.path].upstream.push(upEdge);
+        addDependencyEdge(depGraph, entries, entry.path, normalizedDep, 'depends-on');
+      }
+    }
 
-        if (!depGraph[normalizedDep]) {
-          depGraph[normalizedDep] = { upstream: [], downstream: [] };
-        }
-        const downEdge: TypedEdge = { path: entry.path, type: 'depends-on' };
-        depGraph[normalizedDep].downstream.push(downEdge);
-
-        // Also update the dependents field on the target entry
-        if (entries[normalizedDep]) {
-          entries[normalizedDep].dependents.push(entry.path);
-        }
+    for (const link of entry.markdownLinks ?? []) {
+      const normalizedDep = resolveMarkdownLinkDependency(cwd, entry.path, link, entries, graph);
+      if (normalizedDep && addDependencyEdge(depGraph, entries, entry.path, normalizedDep, 'markdown-link')) {
+        markdownLinkEdgeCount++;
       }
     }
   }
@@ -1198,6 +1277,20 @@ export async function buildIndex(
   writeIndexFile(effectiveOutputCwd, 'tags.json', tagIndex, indexOutputDir);
   writeIndexFile(effectiveOutputCwd, 'dependencies.json', depGraph, indexOutputDir);
 
+  // Materialize the configured backend and always retain dependencies.json as
+  // the stable compatibility/export contract.
+  const { createGraphBackend } = await import('./graph-backend.js');
+  const { resolveGraphBackendType } = await import('./types.js');
+  const backendType = resolveGraphBackendType(graph);
+  const persistentPath = backendType === 'sqlite' ? path.join(indexOutputDir, 'graph.db') : undefined;
+  let selectedBackend;
+  try {
+    selectedBackend = await createGraphBackend(backendType, persistentPath);
+    selectedBackend.deserialize(depGraph);
+  } finally {
+    await selectedBackend?.close?.();
+  }
+
   // Update and persist the checksum manifest for faster future builds (#794).
   // The next manifest contains entries for every file we processed this build.
   // Files that disappeared from disk are pruned; the resulting manifest is
@@ -1248,7 +1341,9 @@ export async function buildIndex(
     byType,
     tagDistribution: tagDist,
     graphMetrics: {
+      backend: backendType,
       totalEdges,
+      markdownLinkEdges: markdownLinkEdgeCount,
       ...(citationMetrics ? {
         canonicalEdges: citationMetrics.canonicalEdges,
         outgoingDeclarations: citationMetrics.outgoingDeclarations,

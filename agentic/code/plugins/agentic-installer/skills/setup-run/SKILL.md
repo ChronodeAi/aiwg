@@ -9,6 +9,11 @@ description: "Execute a `setup.aiwg.io/v1` SetupManifest, performing cross-platf
 
 Execute a `setup.aiwg.io/v1` SetupManifest, performing cross-platform installation step by step.
 
+This skill executes deterministic manifests. If
+`metadata.execution_mode: provider-orchestrated`, validate the manifest and
+hand it to the current supported AI provider; do not begin deterministic CLI
+execution.
+
 ## Trigger Phrases
 
 - "run the setup manifest"
@@ -231,7 +236,7 @@ The installer-agent must explain what it detects and what it will do before maki
 
 ## References
 
-- Schema: `agentic/code/addons/agentic-installer/schemas/v1/setup-manifest.schema.json`
-- Agent: `agentic/code/addons/agentic-installer/agents/installer-agent.md`
-- Script lib: `agentic/code/addons/agentic-installer/scripts/lib/`
-- Generate skill: `agentic/code/addons/agentic-installer/skills/setup-generate/SKILL.md`
+- Schema: `${CLAUDE_PLUGIN_ROOT}/schemas/v1/setup-manifest.schema.json`
+- Agent: `${CLAUDE_PLUGIN_ROOT}/agents/installer-agent.md`
+- Script lib: `${CLAUDE_PLUGIN_ROOT}/scripts/lib/`
+- Generate skill: `${CLAUDE_PLUGIN_ROOT}/skills/setup-generate/SKILL.md`

@@ -1,5 +1,7 @@
 # Agent Loop
 
+Classify work with the [autonomy and human operating roles framework](../../../../docs/autonomy-and-human-roles.md). A loop cannot override human-owned actions, checkpoints, or failed verification.
+
 Iterative AI task execution with automatic recovery - **iteration beats perfection**.
 
 ## Overview
@@ -167,7 +169,7 @@ Al inverts traditional AI optimization from "unpredictable success" to "predicta
 
 **The key insight**: Al excels at HOW to build, but thrashes on WHAT to build. Define your requirements first, then let Al implement.
 
-See [When to Use Al](docs/when-to-use-ralph.md) for detailed guidance on avoiding the token-burning trap.
+See [When to Use Al](docs/when-to-use-agent-loop.md) for detailed guidance on avoiding the token-burning trap.
 
 ## External Al
 
@@ -186,12 +188,12 @@ External Al provides:
 - Two-phase state assessment
 - Crash recovery and resume
 
-See [Al Guide](../../../../docs/ralph-guide.md) for full documentation on both internal and external Al.
+See [Al Guide](../../../../docs/agent-loop-guide.md) for full documentation on both internal and external Al.
 
 ## Related
 
-- [Al Guide](../../../../docs/ralph-guide.md) - **Complete documentation** for both internal and external Al
-- [When to Use Al](docs/when-to-use-ralph.md) - Understanding Al's sweet spot
+- [Al Guide](../../../../docs/agent-loop-guide.md) - **Complete documentation** for both internal and external Al
+- [When to Use Al](docs/when-to-use-agent-loop.md) - Understanding Al's sweet spot
 - [Quickstart Guide](docs/quickstart.md) - Getting started
 - [Best Practices](docs/best-practices.md) - Writing effective tasks
 - [Troubleshooting](docs/troubleshooting.md) - Common issues

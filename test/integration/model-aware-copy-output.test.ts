@@ -18,7 +18,7 @@ function deploy(target: string, home: string, copyAll: boolean): void {
     '--skip-commands-migration',
     '--quiet',
     ...(copyAll ? ['--copy-all'] : []),
-  ], {
+  ], { timeout: 60_000,
     cwd: REPO_ROOT,
     env: { ...process.env, HOME: home, USERPROFILE: home },
     stdio: 'pipe',
@@ -32,7 +32,7 @@ function useAiwgUtils(target: string, home: string): string {
     '--provider', 'codex',
     '--target', target,
     '--verbose',
-  ], {
+  ], { timeout: 60_000,
     cwd: REPO_ROOT,
     env: { ...process.env, AIWG_ROOT: REPO_ROOT, HOME: home, USERPROFILE: home },
     encoding: 'utf8',
@@ -52,7 +52,7 @@ async function workspace(provider = 'codex') {
     installed: {},
     scripts: {},
   }));
-  execFileSync('git', ['init', '-q'], { cwd: project });
+  execFileSync('git', ['init', '-q'], { timeout: 60_000, cwd: project });
   return { project, home };
 }
 
@@ -144,7 +144,7 @@ describe('model-aware copy output', () => {
     const raw = execFileSync(process.execPath, [
       join(REPO_ROOT, 'bin/aiwg.mjs'),
       'show', 'skill', 'voice-apply', '--json', '--backend', 'local',
-    ], {
+    ], { timeout: 60_000,
       cwd: project,
       env: cliEnv,
       encoding: 'utf8',

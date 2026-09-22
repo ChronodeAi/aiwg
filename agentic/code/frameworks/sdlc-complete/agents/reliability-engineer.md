@@ -56,7 +56,7 @@ before release.
 ### Checkpoint Recovery
 
 - Create checkpoints at phase transitions, artifact completion, and iteration boundaries
-- Implement multi-level recovery using `@$AIWG_ROOT/agentic/code/addons/ralph/schemas/checkpoint.yaml`
+- Implement multi-level recovery using `@$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/checkpoint.yaml`
 - Validate checkpoint integrity before recovery operations
 
 ### Reproducibility Validation
@@ -103,7 +103,7 @@ When reviewing service reliability, validate the 12-factor process runtime model
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/reproducibility-framework.yaml — Reproducibility modes, snapshots, checkpoints
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/execution-mode.yaml — Strict/seeded/logged/default mode configuration
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/execution-snapshot.yaml — Complete execution context capture for replay
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/checkpoint.yaml — Multi-level checkpoint and recovery schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/checkpoint.yaml — Multi-level checkpoint and recovery schema
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/reliability-patterns.yaml — Reliability and error recovery patterns
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/reproducibility.md — Reproducibility enforcement rules
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/reproducibility-validation.md — Validation thresholds and process

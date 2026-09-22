@@ -182,4 +182,17 @@ describe('user-registry (#1156)', () => {
     const r = await readUserRegistry();
     expect(r.installed).toEqual({});
   });
+
+  it('exposes override detection and operator warn copy (#246)', async () => {
+    const {
+      isUserRegistryPathOverrideActive,
+      USER_REGISTRY_PATH_OVERRIDE_WARN,
+      userRegistryPath,
+    } = await import('../../../src/config/user-registry.js');
+    expect(isUserRegistryPathOverrideActive()).toBe(true);
+    expect(userRegistryPath()).toBe(process.env.AIWG_USER_REGISTRY_PATH);
+    expect(USER_REGISTRY_PATH_OVERRIDE_WARN).toContain('test override active');
+    expect(USER_REGISTRY_PATH_OVERRIDE_WARN).toContain('~/.aiwg/installed.json');
+  });
+
 });

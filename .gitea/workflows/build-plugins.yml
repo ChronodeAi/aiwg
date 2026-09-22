@@ -18,7 +18,7 @@ on:
         type: boolean
 
 concurrency:
-  group: release
+  group: build-plugins
   cancel-in-progress: false
 
 jobs:
@@ -121,6 +121,9 @@ jobs:
     runs-on: ubuntu-latest
     container: node:20@sha256:8f693eaa7e0a8e71560c9a82b55fd54c2ae920a2ba5d2cde28bac7d1c01c9ba5  # node 20.20.2 (see ci/digests.txt)
     needs: build
+    # Healthy runs finish in 3-5 min. Without a bound, a non-terminating test
+    # handle pins the runner indefinitely (a hang held one for 3h on 2026-09-12).
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
@@ -145,8 +148,14 @@ jobs:
 
       - name: Run tests
         env:
-          # CI runs in docker-in-docker on the Gitea runner — cold start is
-          # ~50ms slower than a bare-metal laptop. Matches ci.yml budgets.
+          # Shared-runner policy: paired Node baselines, median of 7 samples.
           AIWG_PERF_BUDGET_VERSION_MS: "300"
-          AIWG_PERF_BUDGET_HELP_MS: "500"
-        run: npm test -- --run
+          AIWG_PERF_BUDGET_HELP_MS: "750"
+          AIWG_PERF_SAMPLE_COUNT: "7"
+        # Bounded below this job's timeout-minutes so a hang fails with
+        # attribution instead of silently holding a runner slot for hours.
+        # Vitest's own exit guard is armed only once the run completes, so a
+        # wedged worker never trips it (#2521). Healthy Validate Build runs
+        # measured 3.0-4.8 min end to end, so 10m is roughly 2x headroom on the
+        # whole job and still fires ahead of the 15m job cap.
+        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm test -- --run

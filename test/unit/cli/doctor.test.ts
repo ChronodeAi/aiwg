@@ -65,6 +65,14 @@ describe('tools/cli/doctor.mjs — file', () => {
     expect(content).toContain("shell: process.platform === 'win32'");
     expect(content).toContain('spawn failed: ${r.error.code || r.error.message}');
   });
+
+  it('requires discovery to return the known aiwg-doctor capability', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+    expect(content).toContain("args: ['discover', 'aiwg doctor', '--json', '--limit', '10']");
+    expect(content).toContain("result?.name === 'aiwg-doctor'");
+    expect(content).toContain('returned zero results for the known aiwg-doctor capability');
+  });
 });
 
 // ── Installation check logic ──────────────────────────────────
@@ -194,10 +202,13 @@ describe('doctor: deployed skill budget warning', () => {
     expect(content).toContain('aiwg list --deployed');
   });
 
-  it('offers an actionable Codex repair without counting hidden standard skills', () => {
+  it('offers a non-destructive Codex repair without counting hidden standard skills (#2561)', () => {
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
-    expect(content).toContain('aiwg use all --provider codex --force');
+    // `--force` overwrites unmanaged files; it is never the budget remediation.
+    expect(content).not.toContain('aiwg use all --provider codex --force');
+    expect(content).toContain('aiwg use <bundle> --provider codex');
+    expect(content).toContain('standard tier');
     expect(content).toContain("provName !== 'codex' && provider?.paths?.skills");
     expect(content).toContain('startup-visible skills');
   });
@@ -331,9 +342,11 @@ describe('doctor: Fortemi Core prebuilt index findings (#1697)', () => {
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
     expect(content).toContain('getFortemiCorePrebuiltStatus');
+    expect(content).toContain('getFortemiCoreExecutableSkillStatus');
     expect(content).toContain('getFortemiCoreSyncStatus');
     expect(content).toContain('fortemi-core-index');
     expect(content).toContain('prebuilt framework index present');
+    expect(content).toContain('prebuilt framework index is missing executable metadata');
     expect(content).toContain('run "npm run release:fortemi-index" before release packaging');
   });
 });
@@ -364,6 +377,7 @@ describe('doctor: provider awareness (regression)', () => {
     const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
 
     expect(content).toMatch(/openhuman:\s*'OpenHuman'/);
+    expect(content).toMatch(/grokbot:\s*'Grok Bot'/);
     expect(content).toContain('checkOpenHumanHarnessTier2');
     expect(content).toContain('OpenHuman Tier-2 harness');
     expect(content).toContain("'agent', 'prompts'");
@@ -549,5 +563,104 @@ describe('tools/cli/doctor.mjs — startup-context budget (#1673)', () => {
     // Must not fail doctor (error => exit 1) for a structural over-budget.
     expect(fn).not.toContain("'error'");
     expect(fn).toContain('Startup Context');
+  });
+});
+
+describe('tools/cli/doctor.mjs — subagent dispatch headroom (#2562)', () => {
+  let content: string;
+  beforeEach(async () => {
+    const { readFileSync } = await import('fs');
+    content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  });
+
+  it('defines a claude-only dispatch headroom check invoked next to the startup budget', () => {
+    expect(content).toContain('async function checkSubagentDispatchHeadroom');
+    expect(content).toContain('await checkSubagentDispatchHeadroom(provName, label)');
+    expect(content).toMatch(/checkSubagentDispatchHeadroom[\s\S]*?if \(provName !== 'claude'\) return;/);
+  });
+
+  it('fails doctor when the inlined surface leaves no room for a subagent, unlike the advisory startup budget', () => {
+    const fn = content.slice(
+      content.indexOf('async function checkSubagentDispatchHeadroom'),
+      content.indexOf('async function checkStartupContextBudget'),
+    );
+    expect(fn).toContain("status === 'fails' ? 'error' : 'warn'");
+    expect(fn).toContain('Prompt is too long');
+    expect(fn).toContain('Ancestor directories contribute');
+    expect(fn).toContain('AIWG_RULES_INLINE_BUDGET_TOKENS');
+  });
+
+  it('computes headroom from the standard window minus startup context, agent def, and system prompt', async () => {
+    // @ts-expect-error — .mjs module without type declarations
+    const { subagentDispatchHeadroom } = await import('../../../tools/lint/claude-context-inventory.mjs');
+    expect(subagentDispatchHeadroom({ totalTokens: 97_000, budgetTokens: 200_000 })).toEqual({ headroom: 87_000, status: 'ok' });
+    expect(subagentDispatchHeadroom({ totalTokens: 150_000, budgetTokens: 200_000 })).toEqual({ headroom: 34_000, status: 'at-risk' });
+    expect(subagentDispatchHeadroom({ totalTokens: 190_000, budgetTokens: 200_000 })).toMatchObject({ status: 'fails' });
+  });
+});
+
+// ── Context and persistent-memory firewall (#2040) ────────────────────
+
+describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
+  let content: string;
+  beforeEach(async () => {
+    const { readFileSync } = await import('fs');
+    content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+  });
+
+  it('imports and invokes the cross-category firewall', () => {
+    expect(content).toContain('scanContextMemoryFirewall');
+    expect(content).toContain("from '../security/context-memory-firewall.mjs'");
+    expect(content).toContain('const firewall = await scanContextMemoryFirewall');
+  });
+
+  it('exposes strict, baseline, and provider-budget controls', () => {
+    expect(content).toContain("a === '--strict-context'");
+    expect(content).toContain("a === '--context-baseline'");
+    expect(content).toContain("a === '--context-budget-tokens'");
+    expect(content).toContain("strictContext ? 'error' : 'warn'");
+  });
+
+  it('reports all six context contributions and review states', () => {
+    expect(content).toContain('Object.entries(firewall.categories)');
+    expect(content).toContain('firewall.trust.stale');
+    expect(content).toContain('firewall.trust.quarantined');
+    expect(content).toContain("record.reviewStatus === 'changed-review-required'");
+  });
+});
+
+// ── User registry override + shared parallelism defaults (#246 / #249) ──
+
+describe('doctor: user registry override warn (#246)', () => {
+  it('warns when AIWG_USER_REGISTRY_PATH is set', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain("AIWG_USER_REGISTRY_PATH");
+    expect(content).toContain('test override active');
+    expect(content).toContain('User Registry Path');
+    expect(content).toContain('not writing to default ~/.aiwg/installed.json');
+  });
+});
+
+describe('doctor: parallelism defaults use shared map (#249)', () => {
+  it('imports getProviderParallelismDefaults instead of a hardcoded subset', () => {
+    const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+    expect(content).toContain('getProviderParallelismDefaults');
+    expect(content).not.toContain('const PROVIDER_DEFAULTS = {');
+  });
+
+  it('labels primary=grokbot with shared default of 4', async () => {
+    const { getProviderParallelismDefaults } = await import('../../../src/config/aiwg-config.js');
+    const primary = 'grokbot';
+    const expectedDefault = getProviderParallelismDefaults(primary).max_parallel_subagents;
+    expect(expectedDefault).toBe(4);
+    const p = { max_parallel_subagents: 4 };
+    const isOverride =
+      p.max_parallel_subagents !== undefined &&
+      p.max_parallel_subagents !== expectedDefault;
+    const label = isOverride
+      ? `max_parallel_subagents=${p.max_parallel_subagents} (operator override; provider default for ${primary} = ${expectedDefault})`
+      : `max_parallel_subagents=${p.max_parallel_subagents} (provider default for ${primary})`;
+    expect(isOverride).toBe(false);
+    expect(label).toBe('max_parallel_subagents=4 (provider default for grokbot)');
   });
 });

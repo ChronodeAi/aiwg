@@ -103,6 +103,28 @@ Reverts the deployed file. The bundle source under `.aiwg/extensions/`
 is **never** deleted by `remove` — only `rm -rf` does that, and only
 when you ask for it explicitly.
 
+## Share bundles with a nested project
+
+In a member project's `.aiwg/aiwg.config`, add a search root whose children
+include `extensions/`, `addons/`, or the other bundle directories:
+
+```json
+{
+  "projectLocal": {
+    "searchPaths": ["../.aiwg"]
+  }
+}
+```
+
+Paths resolve from the member project; absolute paths and
+`AIWG_PROJECT_LOCAL_PATHS` are also supported. Run `aiwg use <bundle> --provider codex`
+from that member. The deployed bundle's sources become available through its
+default `aiwg discover`, `aiwg show`, and managed project quickref. A subsequent
+`aiwg index build --graph project` includes the same validated bundle payloads.
+Unrelated files beside the external bundles are excluded, as are payload links
+that escape their bundle. Removing a search root and rebuilding prunes its
+entries from the local project index.
+
 ## What just happened
 
 | You ran | What happened |
@@ -114,7 +136,7 @@ when you ask for it explicitly.
 
 ### A note on `.gitignore`
 
-AIWG-managed projects historically `.gitignore` the whole `.aiwg/` tree because most of its content is generated state (working scratch, ralph state, research corpora, etc.). Project-local bundle source under `.aiwg/{addons,extensions,frameworks,plugins,providers}/` and `.aiwg/quickref.json` are exceptions — they are operator-authored, and they should travel with the project.
+AIWG-managed projects historically `.gitignore` the whole `.aiwg/` tree because most of its content is generated state (working scratch, ralph state, research corpora, etc.). Project-local bundle source under `.aiwg/{addons,extensions,frameworks,plugins,providers}/`, legacy `.aiwg/quickref.json`, and managed `.aiwg/quickref.config.json` are exceptions — they are operator-authored, and they should travel with the project.
 
 `aiwg new-bundle` detects this and self-heals: when it finds a blanket `.aiwg/` ignore rule and no existing source-directory negation, it appends a sentinel-marked block:
 
@@ -122,6 +144,7 @@ AIWG-managed projects historically `.gitignore` the whole `.aiwg/` tree because 
 # AIWG project-local bundle source — track these (managed by AIWG)
 !.aiwg/aiwg.config
 !.aiwg/quickref.json
+!.aiwg/quickref.config.json
 !.aiwg/addons/
 !.aiwg/extensions/
 !.aiwg/frameworks/
@@ -141,6 +164,49 @@ If you adopted project-local bundles before this self-heal landed, run `aiwg doc
 - Add more artifacts (`skills/`, `agents/`, `commands/`) — see [`project-local-lifecycle.md`](project-local-lifecycle.md)
 - Pick the right type for your next bundle — see [`extensions-vs-addons-vs-frameworks-vs-plugins.md`](extensions-vs-addons-vs-frameworks-vs-plugins.md)
 - Graduate to upstream — see "Graduation" in the lifecycle doc
+
+## Skill support assets
+
+A `SKILL.md` can reference support files beside it — templates, references,
+scripts, assets. AIWG deploys every referenced path alongside the transformed
+skill, so the deployed instruction never points at something that isn't there.
+
+```text
+.aiwg/extensions/my-team-tools/
+└── skills/
+    └── my-report/
+        ├── SKILL.md
+        └── templates/
+            ├── summary.md
+            └── audit-report/
+                ├── findings.md
+                └── appendix.md
+```
+
+References are picked up from the body of `SKILL.md` under the four recognized
+prefixes (`templates/`, `references/`, `scripts/`, `assets/`):
+
+```markdown
+## Resources
+
+- `templates/summary.md`: the single-file summary skeleton.
+- `templates/audit-report/`: the multi-file report skeleton.
+```
+
+Both forms work. A reference to a **directory** deploys that directory
+recursively, preserving file modes so script packs stay executable. A reference
+that resolves to neither a file nor a directory fails the deploy rather than
+shipping a skill that points at a missing asset.
+
+Two constraints:
+
+- **Symlinks are never deployed.** A link inside a bundle can point anywhere on
+  the host, so the deploy refuses it instead of following it.
+- **A declared `script.entrypoint` must be a file**, not a directory.
+
+A bundle whose deploy fails for any of these reasons records no deployment, and
+`aiwg doctor` reports it under `Project-local artifacts → Deployment`. Re-run
+`aiwg use <bundle>` to see the specific reason.
 
 ## Script-backed skills
 

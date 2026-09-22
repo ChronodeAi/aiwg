@@ -155,7 +155,7 @@ When iterating on architectural decisions:
 3. **Generate reflection** after each architecture review cycle
 4. **Track decision patterns** - which criteria weightings produce best outcomes
 
-See @$AIWG_ROOT/agentic/code/addons/ralph/schemas/reflection-memory.json for schema.
+See @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/reflection-memory.json for schema.
 
 ## GRADE Quality Enforcement
 

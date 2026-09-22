@@ -278,7 +278,7 @@ Before completing any progress tracking task:
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/thought-protocol.md - Six thought types
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/conversable-agent-interface.md - Agent interface requirements
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/few-shot-examples.md - Example quality standards
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/iteration-analytics.yaml - Metrics schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml - Metrics schema
 - @.aiwg/research/findings/REF-076-production-challenges.md - Infinite loop detection
 - @.aiwg/research/findings/REF-058-r-lam.md - Reproducibility and checkpoints
 

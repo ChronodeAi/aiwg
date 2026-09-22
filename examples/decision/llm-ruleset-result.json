@@ -1,0 +1,217 @@
+{
+  "apiVersion": "decision.aiwg.io/v1alpha1",
+  "kind": "RulesetResult",
+  "metadata": {
+    "id": "example-llm-composed-result",
+    "version": "1.0.0",
+    "description": "example composed result"
+  },
+  "spec": {
+    "ruleset": {
+      "id": "example-triage",
+      "version": "1.0.0",
+      "digest": "sha256:8619b985cd193f223caa35092e9ca44d4afc2e5fd7be53ae99277f8f55071b0c"
+    },
+    "binding": {
+      "id": "example-binding-llm-subagent",
+      "version": "1.0.0",
+      "digest": "sha256:5369e969adf739e577931490a9540dead98798769bb9d637c7db5fa90f0f137e"
+    },
+    "runId": "example-design-run",
+    "invocationId": "example-invocation",
+    "status": "completed",
+    "reason": "none",
+    "outcome": "docs-review",
+    "matchedRules": [
+      "docs"
+    ],
+    "evaluations": {
+      "category": {
+        "apiVersion": "decision.aiwg.io/v1alpha1",
+        "kind": "DecisionResult",
+        "metadata": {
+          "id": "example-llm-result-category",
+          "version": "1.0.0",
+          "description": "example result category"
+        },
+        "spec": {
+          "decision": {
+            "id": "example-category",
+            "version": "1.0.0",
+            "digest": "sha256:161af95ce387331720fe1ded3a45cdf90f6d3feb32f24c74f0745714cd0d6b2e"
+          },
+          "ruleset": {
+            "id": "example-triage",
+            "version": "1.0.0",
+            "digest": "sha256:8619b985cd193f223caa35092e9ca44d4afc2e5fd7be53ae99277f8f55071b0c"
+          },
+          "binding": {
+            "id": "example-binding-llm-subagent",
+            "version": "1.0.0",
+            "digest": "sha256:5369e969adf739e577931490a9540dead98798769bb9d637c7db5fa90f0f137e"
+          },
+          "alias": "category",
+          "runId": "example-design-run",
+          "invocationId": "example-invocation",
+          "status": "success",
+          "value": "documentation",
+          "reason": "none",
+          "uncertainty": null,
+          "attempts": [
+            {
+              "ordinal": 1,
+              "adapter": "llm-subagent",
+              "adapterVersion": "1.0.0-design",
+              "requestedModel": "operator-selected-model",
+              "actualModel": "fixture-model",
+              "subagent": {
+                "id": "example-decision-worker",
+                "version": "1.0.0",
+                "digest": "sha256:6d042bcfb6902e20b9b7394455576928bf6e520613bb66b52e6ab2751c1d7eeb"
+              },
+              "status": "success",
+              "reason": "none",
+              "durationMs": 10,
+              "usage": {
+                "inputTokens": null,
+                "outputTokens": null,
+                "costUsd": null
+              },
+              "requestId": null
+            }
+          ]
+        }
+      },
+      "severity": {
+        "apiVersion": "decision.aiwg.io/v1alpha1",
+        "kind": "DecisionResult",
+        "metadata": {
+          "id": "example-llm-result-severity",
+          "version": "1.0.0",
+          "description": "example result severity"
+        },
+        "spec": {
+          "decision": {
+            "id": "example-severity",
+            "version": "1.0.0",
+            "digest": "sha256:0d68cc3e1b61f6452e8485664205296266bf6fac73b499c96eb3e3454f2e8c26"
+          },
+          "ruleset": {
+            "id": "example-triage",
+            "version": "1.0.0",
+            "digest": "sha256:8619b985cd193f223caa35092e9ca44d4afc2e5fd7be53ae99277f8f55071b0c"
+          },
+          "binding": {
+            "id": "example-binding-llm-subagent",
+            "version": "1.0.0",
+            "digest": "sha256:5369e969adf739e577931490a9540dead98798769bb9d637c7db5fa90f0f137e"
+          },
+          "alias": "severity",
+          "runId": "example-design-run",
+          "invocationId": "example-invocation",
+          "status": "success",
+          "value": 0.01,
+          "reason": "none",
+          "uncertainty": {
+            "source": "model-self-report",
+            "profile": "llm-self-report-v1",
+            "calibration": "uncalibrated",
+            "confidence": null,
+            "distribution": {
+              "0": 0.99,
+              "1": 0.01,
+              "2": 0.0
+            },
+            "calibrationRef": null
+          },
+          "attempts": [
+            {
+              "ordinal": 1,
+              "adapter": "llm-subagent",
+              "adapterVersion": "1.0.0-design",
+              "requestedModel": "operator-selected-model",
+              "actualModel": "fixture-model",
+              "subagent": {
+                "id": "example-decision-worker",
+                "version": "1.0.0",
+                "digest": "sha256:6d042bcfb6902e20b9b7394455576928bf6e520613bb66b52e6ab2751c1d7eeb"
+              },
+              "status": "success",
+              "reason": "none",
+              "durationMs": 10,
+              "usage": {
+                "inputTokens": null,
+                "outputTokens": null,
+                "costUsd": null
+              },
+              "requestId": null
+            }
+          ]
+        }
+      },
+      "core_unavailable": {
+        "apiVersion": "decision.aiwg.io/v1alpha1",
+        "kind": "DecisionResult",
+        "metadata": {
+          "id": "example-llm-result-core_unavailable",
+          "version": "1.0.0",
+          "description": "example result core_unavailable"
+        },
+        "spec": {
+          "decision": {
+            "id": "example-core_unavailable",
+            "version": "1.0.0",
+            "digest": "sha256:409f1441f515ae6dd144cc603246943e680c686fd608491215aa61718fab9e32"
+          },
+          "ruleset": {
+            "id": "example-triage",
+            "version": "1.0.0",
+            "digest": "sha256:8619b985cd193f223caa35092e9ca44d4afc2e5fd7be53ae99277f8f55071b0c"
+          },
+          "binding": {
+            "id": "example-binding-llm-subagent",
+            "version": "1.0.0",
+            "digest": "sha256:5369e969adf739e577931490a9540dead98798769bb9d637c7db5fa90f0f137e"
+          },
+          "alias": "core_unavailable",
+          "runId": "example-design-run",
+          "invocationId": "example-invocation",
+          "status": "success",
+          "value": 0.05,
+          "reason": "none",
+          "uncertainty": {
+            "source": "model-self-report",
+            "profile": "llm-self-report-v1",
+            "calibration": "uncalibrated",
+            "confidence": null,
+            "distribution": null,
+            "calibrationRef": null
+          },
+          "attempts": [
+            {
+              "ordinal": 1,
+              "adapter": "llm-subagent",
+              "adapterVersion": "1.0.0-design",
+              "requestedModel": "operator-selected-model",
+              "actualModel": "fixture-model",
+              "subagent": {
+                "id": "example-decision-worker",
+                "version": "1.0.0",
+                "digest": "sha256:6d042bcfb6902e20b9b7394455576928bf6e520613bb66b52e6ab2751c1d7eeb"
+              },
+              "status": "success",
+              "reason": "none",
+              "durationMs": 10,
+              "usage": {
+                "inputTokens": null,
+                "outputTokens": null,
+                "costUsd": null
+              },
+              "requestId": null
+            }
+          ]
+        }
+      }
+    }
+  }
+}

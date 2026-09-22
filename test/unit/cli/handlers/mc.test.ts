@@ -116,7 +116,7 @@ vi.mock('../../../../src/serve/shared-host-scheduler.js', () => ({
   },
 }));
 
-import { mcHandler } from '../../../../src/cli/handlers/mc.js';
+import { mcHandler, estimateMissionRunCost, SONNET_CACHE_USD } from '../../../../src/cli/handlers/mc.js';
 import { launchExternalRalph } from '../../../../src/cli/handlers/ralph-launcher.js';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -133,6 +133,10 @@ function makeCtx(args: string[]): HandlerContext {
 beforeEach(() => {
   inMemoryFs.clear();
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 // ── mcHandler metadata ────────────────────────────────────────
@@ -192,6 +196,61 @@ describe('mc start', () => {
 // ── mc dispatch ───────────────────────────────────────────────
 
 describe('mc dispatch', () => {
+  const integerFlags = ['--max-iterations', '--max-total-tokens', '--max-output-tokens', '--max-tool-calls', '--exploration-quota'];
+  const decimalFlags = ['--max-total-cost', '--max-wall-clock-minutes'];
+  for (const flag of [...integerFlags, ...decimalFlags]) {
+    const invalid = ['1junk', '1,000', '0x10', '0', '-1', 'Infinity', ''];
+    if (integerFlags.includes(flag)) invalid.push('1.5', '9007199254740992');
+    for (const syntax of ['separate', 'equals']) {
+      it.each(invalid)(`rejects ${syntax} ${flag}=%s without changing session state`, async raw => {
+        vi.spyOn(console, 'log').mockImplementation(() => {});
+        const started = await mcHandler.execute(makeCtx(['start']));
+        expect(started.exitCode).toBe(0);
+        const before = [...inMemoryFs.store.entries()];
+        const args = syntax === 'equals' ? [`${flag}=${raw}`] : [flag, raw];
+        const result = await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission', ...args]));
+        expect([...inMemoryFs.store.entries()]).toEqual(before);
+        expect(result.exitCode).toBe(1);
+        const ui = await import('../../../../src/cli/ui.js');
+        expect(ui.error).toHaveBeenCalledWith(expect.stringContaining(flag));
+        expect(launchExternalRalph).not.toHaveBeenCalled();
+      });
+    }
+    it(`rejects missing ${flag} value without dispatching`, async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const started = await mcHandler.execute(makeCtx(['start']));
+      const before = [...inMemoryFs.store.entries()];
+      const result = await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission', flag]));
+      expect([...inMemoryFs.store.entries()]).toEqual(before);
+      expect(result.exitCode).toBe(1);
+      expect(launchExternalRalph).not.toHaveBeenCalled();
+    });
+  }
+
+  it.each(['separate', 'equals'])('persists exact valid numeric values using %s syntax', async syntax => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const started = await mcHandler.execute(makeCtx(['start']));
+    const values = [...integerFlags.map(flag => [flag, '1e2']), ...decimalFlags.map(flag => [flag, '0.25'])];
+    const args = values.flatMap(([flag, raw]) => syntax === 'equals' ? [`${flag}=${raw}`] : [flag, raw]);
+    const result = await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission', ...args]));
+    expect(result.exitCode).toBe(0);
+    const saved = JSON.parse(inMemoryFs.store.get(`.aiwg/ralph-external/mc/sessions/${started.message}/session.json`)!);
+    expect(saved.missions).toHaveLength(1);
+    expect(saved.missions[0]).toMatchObject({ maxIterations: 100, maxTotalTokens: 100, maxOutputTokens: 100,
+      maxToolCalls: 100, explorationQuota: 100, maxTotalCost: 0.25, maxWallClockMinutes: 0.25 });
+  });
+
+  it('keeps quota disabled and iteration defaults when numeric flags are absent', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const started = await mcHandler.execute(makeCtx(['start']));
+    expect((await mcHandler.execute(makeCtx(['dispatch', started.message!, 'Synthetic mission']))).exitCode).toBe(0);
+    const saved = JSON.parse(inMemoryFs.store.get(`.aiwg/ralph-external/mc/sessions/${started.message}/session.json`)!);
+    expect(saved.missions).toHaveLength(1);
+    expect(saved.missions[0].maxIterations).toBe(10);
+    expect(saved.missions[0]).not.toHaveProperty('explorationQuota');
+    expect(saved.missions[0]).not.toHaveProperty('maxTotalTokens');
+  });
+
   it('exits 1 when no objective given', async () => {
     const result = await mcHandler.execute(makeCtx(['dispatch']));
     expect(result.exitCode).toBe(1);
@@ -644,5 +703,71 @@ describe('mc run (#1439)', () => {
     const session = JSON.parse(jsonOutput!);
     expect(session.missions[0].status).toBe('queued'); // skipped, still queued
     consoleSpy.mockRestore();
+  });
+});
+
+// ── Cost estimate (#2522) ─────────────────────────────────────
+// The gate previously ignored declared `maxTotalCost` entirely. These cover the
+// three cases the fix must distinguish: no ceilings, ceilings on a provider that
+// reports spend, and ceilings on a provider that does not (#1766).
+describe('estimateMissionRunCost (#2522)', () => {
+  const mission = (maxIterations: number, maxTotalCost?: number) => ({ maxIterations, maxTotalCost });
+
+  it('falls back to the uncapped iteration floor when no ceilings are declared', () => {
+    const estimate = estimateMissionRunCost([mission(10), mission(5)], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
+    expect(estimate.iterationFloorUsd).toBeCloseTo(15 * SONNET_CACHE_USD, 5);
+    expect(estimate.declaredCeilingUsd).toBe(0);
+    expect(estimate.cappedMissions).toBe(0);
+    expect(estimate.inertCeilingMissions).toBe(0);
+  });
+
+  it('caps each mission at its declared ceiling when the provider reports spend', () => {
+    // Ten missions capped at $1 each: the uncapped floor is 10 x 10 x $1.60 =
+    // $160, while the enforced ceiling total is $10.
+    const missions = Array.from({ length: 10 }, () => mission(10, 1));
+    const estimate = estimateMissionRunCost(missions, 'claude');
+    expect(estimate.spendObservable).toBe(true);
+    expect(estimate.estimateUsd).toBeCloseTo(10, 5);
+    expect(estimate.iterationFloorUsd).toBeCloseTo(160, 5);
+    expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.cappedMissions).toBe(10);
+    expect(estimate.inertCeilingMissions).toBe(0);
+  });
+
+  it('never caps below the floor when a ceiling exceeds it', () => {
+    const estimate = estimateMissionRunCost([mission(2, 999)], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(2 * SONNET_CACHE_USD, 5);
+    expect(estimate.cappedMissions).toBe(1);
+  });
+
+  it('does not weaken the estimate when spend is unobservable on the provider', () => {
+    const missions = Array.from({ length: 10 }, () => mission(10, 1));
+    const estimate = estimateMissionRunCost(missions, 'codex');
+    expect(estimate.spendObservable).toBe(false);
+    // Inert ceilings must not shrink the warning — the operator has no enforced
+    // protection here, which is exactly when the gate matters most.
+    expect(estimate.estimateUsd).toBeCloseTo(160, 5);
+    expect(estimate.declaredCeilingUsd).toBeCloseTo(10, 5);
+    expect(estimate.cappedMissions).toBe(0);
+    expect(estimate.inertCeilingMissions).toBe(10);
+  });
+
+  it('treats an unrecognized provider as unobservable rather than assuming cost reporting', () => {
+    // Any provider outside COST_REPORTING_PROVIDERS, including the fallback
+    // mc uses when no provider is configured. Spelled differently here so the
+    // mission-protocol inventory scanner does not read a provider name as
+    // mission status vocabulary.
+    const estimate = estimateMissionRunCost([mission(10, 1)], 'not-a-configured-provider');
+    expect(estimate.spendObservable).toBe(false);
+    expect(estimate.estimateUsd).toBeCloseTo(10 * SONNET_CACHE_USD, 5);
+    expect(estimate.inertCeilingMissions).toBe(1);
+  });
+
+  it('ignores a non-finite declared ceiling instead of poisoning the estimate', () => {
+    const estimate = estimateMissionRunCost([{ maxIterations: 4, maxTotalCost: Number.NaN }], 'claude');
+    expect(estimate.estimateUsd).toBeCloseTo(4 * SONNET_CACHE_USD, 5);
+    expect(estimate.declaredCeilingUsd).toBe(0);
+    expect(estimate.cappedMissions).toBe(0);
   });
 });

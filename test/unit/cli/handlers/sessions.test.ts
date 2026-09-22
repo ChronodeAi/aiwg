@@ -9,6 +9,7 @@ import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
 import { acquireImportLease } from '../../../../src/sessions/index.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
+import { describeWithSqlite } from '../../../helpers/sqlite.js';
 
 function context(args: string[], cwd = process.cwd()): HandlerContext {
   return { args, rawArgs: ['sessions', ...args], cwd, frameworkRoot: process.cwd() };
@@ -44,7 +45,7 @@ describe('sessions CLI contracts', () => {
       command: 'sessions.sources',
       status: 'ok',
       error: null,
-      data: { count: 12 },
+      data: { count: 16 },
     });
     expect(output.data.providers.map((item: any) => item.provider))
       .toEqual([...output.data.providers.map((item: any) => item.provider)].sort());
@@ -54,7 +55,7 @@ describe('sessions CLI contracts', () => {
       .toMatchObject({
         disposition: 'implemented',
         supportedOperations: ['discover', 'inspect', 'stream'],
-        acquisitionModes: ['jsonl', 'hook'],
+        acquisitionModes: ['jsonl', 'hook', 'manual-export'],
       });
     expect(output.data.providers.find((item: any) => item.provider === 'codex'))
       .toMatchObject({
@@ -104,6 +105,15 @@ describe('sessions CLI contracts', () => {
         supportedOperations: ['inspect', 'stream'],
         acquisitionModes: ['jsonl'],
       });
+    expect(output.data.providers.find((item: any) => item.provider === 'grokbot'))
+      .toMatchObject({
+        disposition: 'manual-only',
+        supportedOperations: ['inspect', 'stream'],
+        acquisitionModes: ['manual-export'],
+        reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
+      });
+    expect(output.data.providers.find((item: any) => item.provider === 'pi'))
+      .toMatchObject({ disposition: 'implemented', supportedOperations: ['discover', 'inspect', 'stream'], acquisitionModes: ['jsonl'] });
     expect(output.data.providers.find((item: any) => item.provider === 'warp'))
       .toMatchObject({
         disposition: 'manual-only',
@@ -306,6 +316,29 @@ describe('sessions CLI contracts', () => {
     });
   });
 
+  it('previews the current Hermes CLI JSONL representation without transformation', async () => {
+    const fixture = resolve('test/fixtures/sessions/hermes/current-native.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'hermes', '--source-id', 'hermes-current-native',
+      '--workspace', 'workspace-fixture', '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'preview',
+      data: {
+        source: {
+          provider: 'hermes',
+          providerProfile: 'native-schema-23-export',
+          locatorClass: 'hermes-export-jsonl',
+          sourceSchemaVersion: '1.0.0',
+          consistency: 'complete',
+        },
+        wouldInspect: true,
+        wouldPersist: false,
+      },
+    });
+  });
+
   it('previews a sanitized OpenCode JSON export without persisting it', async () => {
     const fixture = resolve('test/fixtures/sessions/opencode/complete.json');
     const result = await sessionsHandler.execute(context([
@@ -401,9 +434,35 @@ describe('sessions CLI contracts', () => {
       },
     });
   });
+
+  it('previews a Grok Bot manual-export interchange import without UNSUPPORTED_OPERATION', async () => {
+    const fixture = resolve('test/fixtures/sessions/grokbot/valid-v1.jsonl');
+    const result = await sessionsHandler.execute(context([
+      'import', fixture, '--provider', 'grokbot', '--source-id', 'grokbot-fixture-v1',
+      '--workspace', 'workspace-fixture', '--dry-run', '--json',
+    ]));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'preview',
+      data: {
+        source: {
+          provider: 'grokbot',
+          providerProfile: 'manual-interchange',
+          locatorClass: 'manual-export',
+          adapterVersion: '1.0.0',
+          sourceSchemaVersion: '1.0.0',
+          disposition: 'manual-only',
+          consistency: 'complete',
+          extensions: { 'native.grokbot': {} },
+        },
+        wouldInspect: true,
+        wouldPersist: false,
+      },
+    });
+  });
 });
 
-describe('sessions CLI catalog lifecycle', () => {
+describeWithSqlite('sessions CLI catalog lifecycle', () => {
   let root: string;
   let log: ReturnType<typeof vi.spyOn>;
 
@@ -428,6 +487,28 @@ describe('sessions CLI catalog lifecycle', () => {
         coverage: {
           status: 'unknown',
           workspaceId: realpathSync(process.cwd()),
+        },
+      },
+    });
+  });
+
+  it('does not cross a repository boundary to adopt an ancestor workspace', async () => {
+    const ancestor = resolve(root, 'ancestor');
+    const workspace = resolve(ancestor, 'project');
+    mkdirSync(resolve(ancestor, '.aiwg'), { recursive: true });
+    writeFileSync(resolve(ancestor, '.aiwg', 'aiwg.config'), '{}\n');
+    mkdirSync(resolve(workspace, '.git'), { recursive: true });
+
+    const result = await sessionsHandler.execute(context([
+      'list', '--db', resolve(root, 'catalog.sqlite'), '--json',
+    ], workspace));
+    expect(result.exitCode).toBe(0);
+    expect(jsonOutput(log)).toMatchObject({
+      status: 'ok',
+      data: {
+        coverage: {
+          status: 'unknown',
+          workspaceId: realpathSync(workspace),
         },
       },
     });

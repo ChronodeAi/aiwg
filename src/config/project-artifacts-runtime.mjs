@@ -6,7 +6,7 @@
  */
 
 import { homedir } from 'os';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { isAbsolute, join, resolve } from 'path';
 
 export const DEFAULT_PROJECT_AIWG_DIR = '.aiwg';
@@ -63,6 +63,54 @@ export function resolveProjectAiwgDir(projectDir, env = process.env) {
   return resolve(projectDir, DEFAULT_PROJECT_AIWG_DIR);
 }
 
+/**
+ * Resolve the repository-local AIWG control plane.
+ *
+ * `.aiwg-location` and the artifact path environment variables relocate the
+ * potentially large artifact corpus. They do not relocate the small control
+ * plane required to open and operate the repository while that corpus is
+ * offline.
+ */
+export function resolveProjectControlDir(projectDir) {
+  return resolve(projectDir, DEFAULT_PROJECT_AIWG_DIR);
+}
+
+export function isProjectArtifactRootExternal(projectDir, env = process.env) {
+  return resolve(resolveProjectAiwgDir(projectDir, env)) !== resolve(resolveProjectControlDir(projectDir));
+}
+
+/**
+ * Resolve an artifact root for a payload write. Default local mode may create
+ * `.aiwg`; an explicitly external root must already be mounted/attached so a
+ * disconnected mount cannot be silently replaced by a new local directory.
+ */
+export function resolveProjectAiwgDirForWrite(projectDir, env = process.env) {
+  const artifactRoot = resolveProjectAiwgDir(projectDir, env);
+  if (isProjectArtifactRootExternal(projectDir, env)) {
+    let available = false;
+    try {
+      available = existsSync(artifactRoot) && statSync(artifactRoot).isDirectory();
+    } catch {
+      available = false;
+    }
+    if (!available) {
+      throw new Error(
+        `Configured external AIWG artifact root is unavailable: ${artifactRoot}. ` +
+        'Reconnect or attach the external corpus; AIWG will not fall back to repository-local .aiwg payload.',
+      );
+    }
+  }
+  return artifactRoot;
+}
+
 export function projectAiwgPath(projectDir, ...segments) {
   return join(resolveProjectAiwgDir(projectDir), ...segments);
+}
+
+export function projectAiwgWritePath(projectDir, ...segments) {
+  return join(resolveProjectAiwgDirForWrite(projectDir), ...segments);
+}
+
+export function projectControlPath(projectDir, ...segments) {
+  return join(resolveProjectControlDir(projectDir), ...segments);
 }

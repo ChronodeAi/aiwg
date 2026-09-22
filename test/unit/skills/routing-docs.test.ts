@@ -31,6 +31,10 @@ describe('routing documentation regressions', () => {
     expect(skill).toContain('stays AIWG-native');
     const addressIssues = read('agentic/code/frameworks/sdlc-complete/skills/address-issues/SKILL.md');
     expect(addressIssues).toContain('Codex and Claude Code');
+    expect(addressIssues).toContain('MUST NOT author a free-form cycle comment');
+    expect(addressIssues).toContain('scripts/cycle-comment.mjs');
+    expect(addressIssues).toContain('templates/issue-comments/al-cycle.md');
+    expect(addressIssues).toContain('structured checkpoint is returned to address-issues');
     if (exists('.aiwg/research/codex-goal-integration.md')) {
       expect(exists('.aiwg/research/codex-goal-integration.md')).toBe(true);
     }
@@ -199,7 +203,7 @@ describe('routing documentation regressions', () => {
   });
 
   it('cli-reference.md carries the skill-first reading guide (#1480)', () => {
-    const ref = read('docs/agents/cli-reference.md');
+    const ref = read('docs/cli/reference.md');
     expect(ref).toContain('skill-first');
     expect(ref).toContain('augment');
     // distinguishes the two categories and routes paired commands through the skill
@@ -232,16 +236,30 @@ describe('routing documentation regressions', () => {
 
   it('Fortemi storage docs stay separate from Fortemi Core index/search', () => {
     const doc = read('docs/storage/backends/fortemi.md');
+    const qualification = read('docs/storage/qualification.md');
+    const secrets = read('docs/contributing/ci-cd-secrets.md');
+    const prebuilt = read('docs/fortemi-core-prebuilt-indices.md');
     expect(doc).toContain('Fortemi MCP storage adapter');
     expect(doc).toMatch(/not the Fortemi\s+Core index\/search backend/);
     expect(doc).toContain('aiwg index sync');
     expect(doc).toContain('"type": "fortemi"');
+    expect(doc).toContain('This command is read-only by default');
+    expect(doc).toContain('Only the exact value `1` enables');
+    expect(doc).toContain('Endpoint access alone is not mutation authorization');
+    expect(doc).toContain('aiwg.fortemi-live-qualification-receipt/v1');
+    expect(qualification).toContain('PostgreSQL Direct, PostgREST, and Fortemi jobs');
+    expect(qualification).toContain('an uploaded');
+    expect(qualification).toContain('directory or console report is not certification evidence');
+    expect(secrets).toContain('ci/vault-fetch.storage-fortemi.spec');
+    expect(secrets).toContain('ci/vault-fetch.storage-fortemi-auth.spec');
+    expect(prebuilt).toContain('`AIWG_FORTEMI_CORE_LIVE` is a legacy test-only placeholder');
+    expect(prebuilt).toContain('It does not contact Fortemi');
   });
 
   it('documents provider-neutral corpus ingest and credential references (#1508)', () => {
     const migration = read('docs/storage/migration.md');
     const fortemi = read('docs/storage/backends/fortemi.md');
-    const cli = read('docs/agents/cli-reference.md');
+    const cli = read('docs/cli/reference.md');
 
     for (const doc of [migration, fortemi, cli]) {
       expect(doc).toContain('aiwg storage import-corpus');
@@ -256,7 +274,7 @@ describe('routing documentation regressions', () => {
   });
 
   it('CLI reference documents Fortemi Core graph traversal backend flags', () => {
-    const ref = read('docs/agents/cli-reference.md');
+    const ref = read('docs/cli/reference.md');
 
     expect(ref).toContain(
       'aiwg index query "static retrieval evidence" --fulltext --graph project --json',

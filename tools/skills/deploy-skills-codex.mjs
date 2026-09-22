@@ -44,6 +44,66 @@ const MAX_NAME_LENGTH = 100;
 const MAX_DESCRIPTION_LENGTH = 500;
 const LEGACY_RENAMED_SKILLS = new Set(['aiwg-mcp']);
 
+/** Codex's built-in startup skill-listing cap, in characters (see doctor). */
+export const CODEX_LISTING_CHAR_CAP = 8000;
+
+export function resolveCodexListingCap(env = process.env) {
+  const raw = env.AIWG_CODEX_LISTING_CAP;
+  if (raw === undefined || raw === '') return CODEX_LISTING_CHAR_CAP;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : CODEX_LISTING_CHAR_CAP;
+}
+
+/** Chars one skill contributes to Codex's startup listing ("- name: desc\n"). */
+export function listingEntryChars(name, description) {
+  return String(name ?? '').length + String(description ?? '').length + 5;
+}
+
+function deployedSkillListing(skillDir) {
+  let raw;
+  try { raw = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'); } catch { return null; }
+  const fm = raw.match(/^---\n([\s\S]*?)\n---/)?.[1];
+  if (!fm) return null;
+  const name = stripWrappingQuotes(fm.match(/^\s*name:\s*(.+?)\s*$/m)?.[1] ?? '');
+  const description = stripWrappingQuotes(fm.match(/^\s*description:\s*(.+?)\s*$/m)?.[1] ?? '');
+  return name ? { name, description } : null;
+}
+
+/**
+ * Decide which planned skills must leave the startup-visible kernel dir so
+ * the projected listing stays under the cap (#2561). Existing kernel skills
+ * that this run does not replace count toward the projection. Kernel-flagged
+ * skills are never demoted; the rest are demoted largest-entry-first so the
+ * fewest skills lose startup visibility. Returns the demoted set plus the
+ * projected listing sizes for reporting.
+ */
+export function planCodexListingBudget(planned, kernelDir, cap) {
+  const incomingNames = new Set(planned.map((item) => item.skill.name));
+  let projected = 0;
+  let existing = 0;
+  if (fs.existsSync(kernelDir)) {
+    for (const entry of fs.readdirSync(kernelDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const listing = deployedSkillListing(path.join(kernelDir, entry.name));
+      if (!listing || incomingNames.has(listing.name) || incomingNames.has(entry.name)) continue;
+      existing += listingEntryChars(listing.name, listing.description);
+    }
+  }
+  projected = existing + planned.reduce((sum, item) => sum + listingEntryChars(item.skill.name, item.skill.description), 0);
+  const before = projected;
+  const demoted = new Set();
+  if (!cap || projected <= cap) return { demoted, before, after: projected, cap };
+  const demotable = planned
+    .filter((item) => !item.kernel)
+    .sort((a, b) => listingEntryChars(b.skill.name, b.skill.description) - listingEntryChars(a.skill.name, a.skill.description));
+  for (const item of demotable) {
+    if (projected <= cap) break;
+    demoted.add(item);
+    projected -= listingEntryChars(item.skill.name, item.skill.description);
+  }
+  return { demoted, before, after: projected, cap };
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const cfg = {
@@ -53,6 +113,17 @@ function parseArgs() {
     dryRun: false,
     force: false,
     copyStandardSkills: false,
+    // Codex lists every skill under the kernel dir at startup and truncates the
+    // listing at 8,000 chars. Skills that would push the listing past the cap
+    // are placed on the standard tier instead (#2561). The budget is active
+    // only when the caller names a standard tier (`--standard-target`, set by
+    // the codex provider for project deploys) or passes `--listing-cap`
+    // explicitly; standalone/legacy home-dir invocations keep deploying every
+    // selected skill to the target. 0 disables the budget.
+    listingCap: resolveCodexListingCap(),
+    listingCapExplicit: false,
+    listingBudget: false,
+    standardTarget: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -63,6 +134,9 @@ function parseArgs() {
     else if (a === '--dry-run') cfg.dryRun = true;
     else if (a === '--force') cfg.force = true;
     else if (a === '--copy-all' || a === '--copy-standard-skills') cfg.copyStandardSkills = true;
+    else if (a === '--listing-cap' && args[i + 1]) { cfg.listingCap = Math.max(0, Number(args[++i]) || 0); cfg.listingCapExplicit = true; }
+    else if (a === '--standard-target' && args[i + 1]) cfg.standardTarget = path.resolve(args[++i]);
+    else if (a === '--listing-budget') cfg.listingBudget = true;
   }
 
   cfg.mode = normalizeDeploymentMode(cfg.mode);
@@ -417,6 +491,17 @@ function isFullAiwgSourceRoot(srcRoot) {
   const repoRoot = path.resolve(scriptDir, '..', '..');
   const srcRoot = source || repoRoot;
   const fullAiwgSourceRoot = isFullAiwgSourceRoot(srcRoot);
+  const copyStandardSkills = cfg.copyStandardSkills === true;
+  // Component-scoped deploys (the way `aiwg use all` installs selected
+  // frameworks/addons) still need a complete inventory for stale-skill
+  // reconciliation.  AIWG_ROOT is supplied by the orchestrator for exactly
+  // this purpose; fall back to the script checkout for standalone use.
+  const configuredAiwgRoot = process.env.AIWG_ROOT
+    ? path.resolve(process.env.AIWG_ROOT)
+    : repoRoot;
+  const inventoryRoot = fullAiwgSourceRoot
+    ? srcRoot
+    : (!copyStandardSkills && isFullAiwgSourceRoot(configuredAiwgRoot) ? configuredAiwgRoot : null);
 
   console.log(`Deploying skills to Codex`);
   console.log(`  Source: ${srcRoot}`);
@@ -440,8 +525,6 @@ function isFullAiwgSourceRoot(srcRoot) {
   // Codex normally deploys to the project `.agents/skills/` target, so the
   // kernel/standard split is enforced at filter time rather than via separate
   // destination directories. The standalone legacy default remains supported.
-  const copyStandardSkills = cfg.copyStandardSkills === true;
-
   // Track every AIWG-managed source skill name so we can scope post-deploy
   // cleanup to skills AIWG ships — never delete user-authored or
   // third-party skills sitting alongside.
@@ -457,10 +540,13 @@ function isFullAiwgSourceRoot(srcRoot) {
   // so full-root cleanup can remove stale AIWG skills. Component-scoped
   // cleanup is limited below to names owned by that component, preserving
   // user-authored skills alongside the generated set.
-  for (const { dir } of getSkillDirectories(srcRoot, 'all')) {
+  for (const { dir } of getSkillDirectories(inventoryRoot || srcRoot, 'all')) {
     const allSkills = findSkillDirs(dir);
     for (const s of allSkills) {
       allManagedNames.add(path.basename(s));
+      if (!copyStandardSkills && isKernelSkill(s)) {
+        desiredNames.add(path.basename(s));
+      }
       // Also record the frontmatter `name:` since Codex uses that as the
       // target dir. Best-effort — ignore parse errors.
       try {
@@ -469,13 +555,20 @@ function isFullAiwgSourceRoot(srcRoot) {
         if (fmMatch) {
           const nameMatch = fmMatch[1].match(/^\s*name:\s*(.+?)\s*$/m);
           if (nameMatch) {
-            allManagedNames.add(stripWrappingQuotes(nameMatch[1]));
+            const deployedName = stripWrappingQuotes(nameMatch[1]);
+            allManagedNames.add(deployedName);
+            if (!copyStandardSkills && isKernelSkill(s)) {
+              desiredNames.add(deployedName);
+            }
           }
         }
       } catch { /* ignore */ }
     }
   }
 
+  // Plan every skill first so the listing budget can be judged across the
+  // whole run rather than per source directory (#2561).
+  const planned = [];
   for (const { dir, label } of skillDirs) {
     const found = findSkillDirs(dir);
     if (found.length === 0) continue;
@@ -487,10 +580,6 @@ function isFullAiwgSourceRoot(srcRoot) {
       : found.filter(s => isKernelSkill(s));
     if (skills.length === 0) continue;
 
-    for (const s of skills) desiredNames.add(path.basename(s));
-
-    console.log(`\n${label} (${skills.length} skills):`);
-
     for (const skillDir of skills) {
       const skill = transformToCodexSkill(skillDir);
       if (!skill) {
@@ -500,11 +589,52 @@ function isFullAiwgSourceRoot(srcRoot) {
         totalSkipped++;
         continue;
       }
-
-      const result = deploySkill(skill, target, { force, dryRun });
-      if (result.action === 'deploy') totalDeployed++;
-      else totalSkipped++;
+      planned.push({ skill, skillDir, label, kernel: isKernelSkill(skillDir) });
     }
+  }
+
+  const standardTarget = cfg.standardTarget
+    || path.join(path.dirname(path.dirname(target)), '.codex', '.aiwg', 'skills');
+  // An operator `--copy-all` asks for every standard skill in the listing;
+  // honoring the cap there would silently undo the request and break the
+  // documented kernel/standard contract. `--listing-budget` is how the caller
+  // says the copy-all was its own doing (project-local bundles force it so
+  // their skills are reachable at all) and the cap still applies (#2561).
+  const budgetActive = cfg.listingCapExplicit
+    || cfg.listingBudget
+    || (Boolean(cfg.standardTarget) && !copyStandardSkills);
+  const budget = planCodexListingBudget(planned, target, budgetActive ? cfg.listingCap : 0);
+  for (const item of planned) {
+    if (budget.demoted.has(item)) continue;
+    desiredNames.add(path.basename(item.skillDir));
+    desiredNames.add(item.skill.name);
+  }
+
+  let currentLabel = null;
+  for (const item of planned) {
+    if (item.label !== currentLabel) {
+      currentLabel = item.label;
+      console.log(`\n${item.label} (${planned.filter((p) => p.label === item.label).length} skills):`);
+    }
+    const demoted = budget.demoted.has(item);
+    const result = deploySkill(item.skill, demoted ? standardTarget : target, { force, dryRun });
+    if (demoted) console.log(`    ↳ standard tier (${path.relative(process.cwd(), standardTarget) || standardTarget}) — startup listing budget`);
+    if (result.action === 'deploy') totalDeployed++;
+    else totalSkipped++;
+  }
+
+  if (budget.demoted.size > 0) {
+    const names = [...budget.demoted].map((item) => item.skill.name).join(', ');
+    console.log(
+      `\nCodex listing budget: ${budget.demoted.size} skill(s) placed on the standard tier so the startup listing ` +
+      `stays at ~${budget.after.toLocaleString()} of ${budget.cap.toLocaleString()} chars (was ~${budget.before.toLocaleString()}): ${names}. ` +
+      'They remain reachable through `aiwg discover` / `aiwg show`. Override with --listing-cap <chars> (0 disables) or AIWG_CODEX_LISTING_CAP.',
+    );
+  } else if (budgetActive && budget.cap && budget.after > budget.cap) {
+    console.log(
+      `\nWarning: kernel skills alone estimate ~${budget.after.toLocaleString()} chars, above Codex's ${budget.cap.toLocaleString()}-char listing cap; ` +
+      'nothing non-kernel is left to demote.',
+    );
   }
 
   // Post-deploy cleanup: remove AIWG-managed skills that are stale for the
@@ -528,7 +658,7 @@ function isFullAiwgSourceRoot(srcRoot) {
       // the .aiwg-managed marker. Treat only the exact historical names as
       // managed so malformed legacy frontmatter cannot survive an upgrade.
       let isAiwgManaged = allManagedNames.has(name) || LEGACY_RENAMED_SKILLS.has(name);
-      if (!isAiwgManaged && fullAiwgSourceRoot) {
+      if (!isAiwgManaged && (fullAiwgSourceRoot || inventoryRoot)) {
         // Check for the .aiwg-managed marker file (preferred — survives
         // frontmatter transforms) or fall back to namespace check.
         const markerFile = path.join(target, name, '.aiwg-managed');

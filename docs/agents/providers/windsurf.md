@@ -4,7 +4,12 @@ publication: agent-reference
 stable_id: aiwg.agent-reference.provider.windsurf
 ---
 
-# Windsurf Operational Reference
+# Devin Desktop Operational Reference
+
+> **Selector and paths:** Use `--provider devin`. AIWG preserves the existing
+> `.windsurf/` files because Devin Desktop uses the Windsurf compatibility
+> adapter. `--provider windsurf` remains accepted with a deprecation notice;
+> the distinct `devin-cli` surface is not supported.
 
 > **First time using AIWG?** Begin with [Install, Connect, and Verify](https://docs.aiwg.io/pages/getting-started--install-connect-verify.html). This guide assumes AIWG is already installed, `all` is deployed for your provider, and `aiwg-regenerate` has connected the agent to this project.
 
@@ -24,14 +29,14 @@ npm install -g aiwg
 cd /path/to/your/project
 
 # Deploy SDLC framework:
-aiwg use all --provider windsurf
+aiwg use all --provider devin
 ```
 
-**3. Open in Windsurf**
+**3. Open in Devin Desktop**
 
 ```bash
-# Windsurf automatically loads rules and agents
-code /path/to/your/project  # or use Windsurf launcher
+# Devin Desktop automatically loads rules and agents
+code /path/to/your/project  # or use the Devin Desktop launcher
 ```
 
 **4. Regenerate for intelligent integration**
@@ -183,7 +188,7 @@ Check deployment:
 
 ```bash
 # Redeploy framework
-aiwg use sdlc --provider windsurf --force
+aiwg use sdlc --provider devin --force
 
 # Verify workflows exist
 ls .windsurf/workflows/
@@ -230,7 +235,7 @@ Skills are deployed to `.windsurf/skills/`:
 ls .windsurf/skills/
 
 # Redeploy if missing
-aiwg use sdlc --provider windsurf --force
+aiwg use sdlc --provider devin --force
 ```
 
 ---
@@ -327,7 +332,7 @@ See [Al Guide](../ralph-guide.md) for full documentation including `--provider` 
 - [Cross-Platform Overview](cross-platform-overview.md) - Compare platform differences
 - [Intake Guide](../intake-guide.md) - Start your first project
 - [SDLC Framework](https://github.com/jmagly/aiwg/blob/main/agentic/code/frameworks/sdlc-complete/README.md) - Complete framework reference
-- [Commands Reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/cli-reference.md) - All 40 AIWG commands
+- [Commands Reference](https://github.com/jmagly/aiwg/blob/main/docs/cli/reference.md) - All 40 AIWG commands
 
 ---
 

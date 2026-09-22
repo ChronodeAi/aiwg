@@ -1,7 +1,8 @@
-import { mkdtemp, mkdir, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   formatClaudeContextInventory,
@@ -17,9 +18,26 @@ async function write(root: string, relPath: string, content: string) {
   await writeFile(filePath, content);
 }
 
+const temporaryRoots = new Set<string>();
+
+async function makeTemporaryRoot(prefix: string) {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  temporaryRoots.add(root);
+  return root;
+}
+
+afterEach(async () => {
+  const roots = [...temporaryRoots];
+  temporaryRoots.clear();
+  for (const root of roots) {
+    await rm(root, { recursive: true, force: true });
+    expect(existsSync(root), `temporary root still exists: ${root}`).toBe(false);
+  }
+});
+
 describe('lint:claude-context', () => {
   it('flags oversized skills and broad parallel dispatch instructions', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aiwg-claude-context-'));
+    const root = await makeTemporaryRoot('aiwg-claude-context-');
     await write(
       root,
       'agentic/code/frameworks/demo/skills/doc-sync/SKILL.md',
@@ -42,7 +60,7 @@ ${'x'.repeat(1024)}
   });
 
   it('flags subagents that preload skills at startup', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aiwg-claude-context-'));
+    const root = await makeTemporaryRoot('aiwg-claude-context-');
     await write(
       root,
       'agentic/code/plugins/demo/agents/reviewer.md',
@@ -65,7 +83,7 @@ Review code.
   });
 
   it('measures aggregate startup context and ranks rules as the dominant component', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aiwg-startup-'));
+    const root = await makeTemporaryRoot('aiwg-startup-');
     await write(root, 'CLAUDE.md', 'a'.repeat(4000));
     await write(root, 'AGENTS.md', 'b'.repeat(400));
     await write(root, '.claude/rules/one.md', 'c'.repeat(40000));
@@ -82,8 +100,30 @@ Review code.
     expect(formatStartupContext(result)).toContain('Startup context budget');
   });
 
+  it('includes ancestor directories CLAUDE.md and rules, which Claude Code also inlines (#2562)', async () => {
+    const workspace = await makeTemporaryRoot('aiwg-startup-ancestor-');
+    await write(workspace, 'CLAUDE.md', 'w'.repeat(4000));
+    await write(workspace, '.claude/rules/workspace-rule.md', 'r'.repeat(40000));
+    const project = join(workspace, 'nested', 'project');
+    await mkdir(project, { recursive: true });
+    await write(project, '.claude/rules/project-rule.md', 'p'.repeat(40000));
+
+    const result = await scanStartupContext({ rootDir: project });
+    const labels = result.components.map((c) => c.label);
+    expect(labels).toContain('.claude/rules/*.md');
+    expect(labels).toContain('../../.claude/rules/*.md');
+    expect(labels).toContain('../../CLAUDE.md');
+    // 84K chars / 4 = 21K tokens, 11K of which come from the ancestor.
+    expect(result.totalTokens).toBe(21000);
+    expect(result.ancestorTokens).toBe(11000);
+
+    const projectOnly = await scanStartupContext({ rootDir: project, includeAncestors: false });
+    expect(projectOnly.totalTokens).toBe(10000);
+    expect(projectOnly.ancestorTokens).toBe(0);
+  });
+
   it('flags startup context that exceeds the standard Sonnet budget', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aiwg-startup-over-'));
+    const root = await makeTemporaryRoot('aiwg-startup-over-');
     // ~210k tokens of rules — over the 200k standard window.
     await write(root, '.claude/rules/huge.md', 'x'.repeat(840000));
 

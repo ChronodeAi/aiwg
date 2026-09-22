@@ -70,7 +70,7 @@ dashboards, interpret trends, and recommend actions to improve outcomes.
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/hitl-cost-tracking.yaml — HITL cost optimization with REF-057 benchmarks
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/token-efficiency.yaml — Token efficiency thresholds and MetaGPT baseline
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/agent-efficiency.yaml — Agent grounding, subscriptions, and reflection tracking
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/iteration-analytics.yaml — Iteration quality tracking and best output selection
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml — Iteration quality tracking and best output selection
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/research/lats-evaluation.yaml — LATS hybrid value function for artifact evaluation
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/hitl-gates.md — Human gate cost savings model
 - @.aiwg/research/findings/REF-057-agent-laboratory.md — 84% cost reduction research

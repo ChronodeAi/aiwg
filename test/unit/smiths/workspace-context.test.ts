@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  buildWorkspaceManagedBlock,
   WORKSPACE_MANAGED_END,
   WORKSPACE_MANAGED_START,
   WORKSPACE_OPERATOR_END,
@@ -12,6 +13,7 @@ import {
   auditWorkspaceContext,
   buildProviderBootstrapBlock,
   diagnoseWorkspaceContext,
+  WORKSPACE_PRECEDENCE_SUPERSEDED,
   ensureWorkspaceContext,
   extractExistingProjectContext,
   migrateWorkspaceContext,
@@ -46,6 +48,53 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
     expect(await readFile(join(root, 'WORKSPACE.md'), 'utf8')).toContain('Operator convention: use fixtures.');
   });
 
+  it('preserves dominant CRLF endings while refreshing managed blocks (#152)', async () => {
+    const root = await project();
+    await ensureWorkspaceContext(root);
+    const workspacePath = join(root, 'WORKSPACE.md');
+    const original = await readFile(workspacePath, 'utf8');
+    const crlf = original
+      .replace('This file is the canonical provider-neutral home', 'Stale managed text')
+      .replace(/\n/g, '\r\n');
+    await writeFile(workspacePath, crlf, 'utf8');
+
+    const result = await ensureWorkspaceContext(root);
+    const refreshed = await readFile(workspacePath, 'utf8');
+
+    expect(result.action).toBe('updated');
+    expect(refreshed).toContain('This file is the canonical provider-neutral home');
+    expect(refreshed.match(/\r\n/g)?.length).toBe(refreshed.match(/\n/g)?.length);
+  });
+
+  it('uses the majority line ending for a mixed WORKSPACE.md (#152)', async () => {
+    const root = await project();
+    await ensureWorkspaceContext(root);
+    const workspacePath = join(root, 'WORKSPACE.md');
+    const original = await readFile(workspacePath, 'utf8');
+    const mixed = original.replace(/\n/g, '\r\n').replace('\r\n', '\n');
+    await writeFile(workspacePath, mixed.replace('This file is the canonical provider-neutral home', 'Stale managed text'), 'utf8');
+
+    await ensureWorkspaceContext(root);
+    const refreshed = await readFile(workspacePath, 'utf8');
+    expect((refreshed.match(/\r\n/g)?.length ?? 0)).toBeGreaterThan(
+      (refreshed.match(/(?<!\r)\n/g)?.length ?? 0),
+    );
+  });
+
+  it('links repository control files locally when the artifact corpus is external', async () => {
+    const root = await project();
+    await writeFile(join(root, '.aiwg-location'), '../private-corpus/.aiwg\n');
+    await ensureWorkspaceContext(root);
+    const content = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    expect(content).toContain('[AIWG project configuration](.aiwg/aiwg.config)');
+    expect(content).not.toContain('../private-corpus/.aiwg/aiwg.config');
+    expect(content).toContain('[Project-local quickref](.aiwg/quickref.json)');
+    expect(content).not.toContain('../private-corpus/.aiwg/quickref.json');
+    expect(content).toContain('run `aiwg artifacts path --json --check-write`');
+    expect(content).toContain('Only `AIWG.md`, `aiwg.config`, and `frameworks/registry.json`');
+    expect(content).toContain('never fall back to repository-local payload');
+  });
+
   it('has an explicit, honest bootstrap contract for every registered provider', () => {
     for (const provider of listProviderDefinitions()) {
       const contract = providerContextContract(provider.id);
@@ -53,16 +102,216 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
       expect(contract?.verification.source).toBeTruthy();
       const bootstrap = buildProviderBootstrapBlock(provider.id);
       if (contract?.loadMode === 'native-include') {
-        expect(bootstrap.indexOf('@WORKSPACE.md')).toBeLessThan(bootstrap.indexOf('@AIWG.md'));
+        const prefix = provider.id === 'omp' ? '@../' : '@';
+        expect(bootstrap).toContain(`${prefix}WORKSPACE.md`);
+        expect(bootstrap.indexOf(`${prefix}WORKSPACE.md`)).toBeLessThan(bootstrap.indexOf(`${prefix}AIWG.md`));
       } else if (contract?.loadMode === 'unsupported') {
         expect(bootstrap).toContain('no verified project-local automatic context loader');
       } else {
         expect(bootstrap.indexOf('WORKSPACE.md')).toBeLessThan(bootstrap.indexOf('AIWG.md'));
       }
     }
-    for (const surface of ['claude', 'codex', 'copilot', 'cursor', 'factory', 'opencode', 'warp', 'windsurf', 'devin-desktop', 'hermes', 'openclaw', 'openhuman']) {
+    for (const surface of ['claude', 'codex', 'copilot', 'cursor', 'factory', 'opencode', 'warp', 'windsurf', 'devin-desktop', 'hermes', 'openclaw', 'openhuman', 'grokbot']) {
       expect(buildProviderBootstrapBlock(surface)).toContain('Provider workspace bootstrap');
     }
+  });
+
+  // #2512 — the generated precedence ranked provider/harness instructions above
+  // AIWG, so a session directive claiming to supersede earlier guidance beat a
+  // rule marked CRITICAL with "Exceptions: None". Rule authority is now asserted
+  // in the bootstrap file the harness reads first, not left to be inferred.
+  describe('AIWG rule authority in the bootstrap', () => {
+    it('asserts rule authority in every provider bootstrap block', () => {
+      for (const provider of listProviderDefinitions()) {
+        const bootstrap = buildProviderBootstrapBlock(provider.id);
+        expect(bootstrap, `${provider.id} bootstrap must assert rule authority`)
+          .toContain('AIWG rules deployed to this project are binding');
+        expect(bootstrap, `${provider.id} bootstrap must name directive supersession`)
+          .toMatch(/claim to supersede earlier\s+guidance/);
+        expect(bootstrap, `${provider.id} bootstrap must preserve platform constraints`)
+          .toContain('Platform capability and safety constraints remain absolute');
+      }
+    });
+
+    it('asserts rule authority for providers with no automatic loader', () => {
+      const bootstrap = buildProviderBootstrapBlock('not-a-real-provider');
+      expect(bootstrap).toContain('AIWG rules deployed to this project are binding');
+      expect(bootstrap).toContain('Platform capability and safety constraints remain absolute');
+    });
+
+    it('ranks AIWG rules above harness directives and below platform constraints', () => {
+      const managed = buildWorkspaceManagedBlock('/tmp/example-project');
+      const constraints = managed.indexOf('Platform capability and safety constraints are absolute');
+      const rules = managed.indexOf('AIWG rules deployed to this project bind over');
+      const workspace = managed.indexOf('Root WORKSPACE.md supplies shared project/operator context');
+
+      expect(constraints).toBeGreaterThan(-1);
+      expect(rules).toBeGreaterThan(-1);
+      // Ordering is the contract: constraints, then AIWG rules, then context.
+      expect(constraints).toBeLessThan(rules);
+      expect(rules).toBeLessThan(workspace);
+      // The old ordering must not come back.
+      expect(managed).not.toContain('Provider, system, and organization instructions retain their native authority.');
+    });
+
+    it('keeps the capability-versus-directive distinction explicit', () => {
+      const managed = buildWorkspaceManagedBlock('/tmp/example-project');
+      expect(managed).toContain('capability versus preference');
+      expect(managed).toContain('follow the rule and say plainly that you did');
+    });
+
+    // #2513 — the line filter dropped lines starting with `<` but not the
+    // continuation of a tag that wrapped, so a hero anchor's alt text became
+    // the project purpose in the first file every bootstrap loads.
+    it('does not take wrapped HTML markup as the project purpose', async () => {
+      const root = await project();
+      await writeFile(join(root, 'README.md'), [
+        '<div align="center">',
+        '',
+        '<a href="https://example.invalid"><img src="hero.png" alt="Example — one',
+        'source of truth; connecting tools" width="1000"></a>',
+        '',
+        '# Example',
+        '',
+        '**The real one-line purpose of this project.**',
+        '',
+      ].join('\n'));
+
+      await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture', version: '1.0.0' }));
+
+      const { content } = await extractExistingProjectContext(root);
+
+      expect(content).toContain('The real one-line purpose of this project.');
+      expect(content).not.toContain('width="1000"');
+      expect(content).not.toContain('</a>');
+      expect(content).not.toContain('source of truth; connecting tools');
+    });
+
+    // #2512 — the diagnostic checked that bootstrap files point AT WORKSPACE.md
+    // but never that the policy inside it was current, so a workspace on the
+    // superseded precedence read as healthy and nothing prompted a regenerate.
+    it('flags a workspace still carrying the superseded precedence', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      const workspacePath = join(root, 'WORKSPACE.md');
+      const current = await readFile(workspacePath, 'utf8');
+      await writeFile(
+        workspacePath,
+        current.replace(
+          /1\. Platform capability[\s\S]*?within the ceiling set above\./,
+          `1. ${WORKSPACE_PRECEDENCE_SUPERSEDED}`,
+        ),
+      );
+
+      const codes = (await diagnoseWorkspaceContext(root)).map((item) => item.code);
+      expect(codes).toContain('precedence-superseded');
+    });
+
+    it('flags a bootstrap file that does not assert rule authority', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      await writeFile(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({
+        version: '1', providers: ['claude'], installed: {}, scripts: {},
+      }));
+      const claudeMd = join(root, 'CLAUDE.md');
+      await writeFile(claudeMd, buildProviderBootstrapBlock('claude')
+        .replace(/AIWG rules deployed to this project are binding[\s\S]*?distinction\./, ''));
+
+      const codes = (await diagnoseWorkspaceContext(root)).map((item) => item.code);
+      expect(codes).toContain('authority-missing');
+    });
+
+    it('ignores relative paths inside fenced code blocks and inline code spans (#2536)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      const workspacePath = join(root, 'WORKSPACE.md');
+      const current = await readFile(workspacePath, 'utf8');
+      await writeFile(workspacePath, current.replace(WORKSPACE_OPERATOR_END, [
+        'Add the citation network link to the analysis document:',
+        '',
+        '```',
+        'Citation network: [REF-XXX-citations.md](../citations/REF-XXX-citations.md)',
+        '```',
+        '',
+        '~~~markdown',
+        'Sidecar: [REF-YYY.md](../../elsewhere/REF-YYY.md)',
+        '~~~',
+        '',
+        'Inline example: `[escaped](../inline/escape.md)` stays documentation.',
+        '',
+        WORKSPACE_OPERATOR_END,
+      ].join('\n')));
+
+      const diagnostics = await diagnoseWorkspaceContext(root);
+      expect(diagnostics.map((item) => item.code)).not.toContain('unsafe-link');
+      expect(diagnostics.some((item) => item.severity === 'error')).toBe(false);
+    });
+
+    it('still flags an unfenced relative path that escapes the project (#2536)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      const workspacePath = join(root, 'WORKSPACE.md');
+      const current = await readFile(workspacePath, 'utf8');
+      await writeFile(workspacePath, current.replace(WORKSPACE_OPERATOR_END, [
+        'Real link: [outside](../outside/escape.md)',
+        '',
+        WORKSPACE_OPERATOR_END,
+      ].join('\n')));
+
+      const codes = (await diagnoseWorkspaceContext(root)).map((item) => item.code);
+      expect(codes).toContain('unsafe-link');
+    });
+
+    it('surfaces a provider-named source carrying substantial operator content for scope review (#2537)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      await writeFile(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({
+        version: '1', providers: ['claude'], installed: {}, scripts: {},
+      }));
+      // The reported case: CLAUDE.md used as the project's main context file,
+      // carrying a project-neutral artifact contract rather than Claude specifics.
+      const contract = ['# Corpus contract', '', 'Induction pipeline, naming conventions, GRADE scheme.', ''].join('\n')
+        + 'Verification discipline and housekeeping cadence. '.repeat(400);
+      await writeFile(join(root, 'CLAUDE.md'), `${buildProviderBootstrapBlock('claude')}\n\n${contract}`);
+
+      const audit = await auditWorkspaceContext(root);
+      const claudeRoute = audit.plan.routing.find((entry) => entry.source === 'CLAUDE.md');
+      expect(claudeRoute).toBeDefined();
+      // Startup files are bootstrap surfaces; their operator content ports into
+      // WORKSPACE.md, which every provider loads (#2558). The substantial body is
+      // still surfaced for review so provider-only parts can be moved afterwards.
+      expect(claudeRoute?.scope).toBe('project-neutral');
+      expect(claudeRoute?.destination).toBe('WORKSPACE.md');
+      expect(claudeRoute?.provider).toBe('claude');
+      expect(claudeRoute?.operatorBytes).toBeGreaterThan(4096);
+      expect(audit.plan.scopeReview.map((entry) => entry.source)).toContain('CLAUDE.md');
+    });
+
+    it('does not flag a small provider adapter for scope review (#2537)', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      await writeFile(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({
+        version: '1', providers: ['claude'], installed: {}, scripts: {},
+      }));
+      await writeFile(join(root, 'CLAUDE.md'), `${buildProviderBootstrapBlock('claude')}\n\nPrefer the Bash tool for file edits.\n`);
+
+      const audit = await auditWorkspaceContext(root);
+      expect(audit.plan.scopeReview).toHaveLength(0);
+    });
+
+    it('reports no policy drift for a freshly generated workspace', async () => {
+      const root = await project();
+      await ensureWorkspaceContext(root);
+      await writeFile(join(root, '.aiwg', 'aiwg.config'), JSON.stringify({
+        version: '1', providers: ['claude'], installed: {}, scripts: {},
+      }));
+      await writeFile(join(root, 'CLAUDE.md'), buildProviderBootstrapBlock('claude'));
+
+      const codes = (await diagnoseWorkspaceContext(root)).map((item) => item.code);
+      expect(codes).not.toContain('precedence-superseded');
+      expect(codes).not.toContain('precedence-missing');
+      expect(codes).not.toContain('authority-missing');
+    });
   });
 
   it('classifies identical directives, polarity conflicts, possible secrets, and nested scope', async () => {
@@ -90,8 +339,10 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
     expect(dryRun.written).toContain('WORKSPACE.md');
     const applied = await migrateWorkspaceContext(root, { apply: true });
     expect(applied.transactionId).toBeTruthy();
-    const providerPath = join(root, '.aiwg', 'context', 'providers', 'AGENTS.md');
-    expect(await readFile(providerPath, 'utf8')).toContain('Source attribution: migrated from `AGENTS.md`');
+    const workspace = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    expect(workspace).toContain('Source attribution: migrated from `AGENTS.md`');
+    expect(workspace).toContain('Use provider-specific Codex checks.');
+    await expect(readFile(join(root, '.aiwg', 'context', 'providers', 'AGENTS.md'), 'utf8')).rejects.toThrow();
     const second = await migrateWorkspaceContext(root, { apply: true });
     expect(second.changed).toBe(false);
     expect(JSON.parse(await readFile(join(root, 'opencode.json'), 'utf8')).instructions).toEqual(['WORKSPACE.md', 'AIWG.md']);
@@ -211,9 +462,14 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
     expect(workspace).toContain('## Existing Project Snapshot');
     expect(workspace).toContain('existing-app');
     expect(workspace).not.toContain('Generated framework listing');
-    const providerContext = await readFile(join(root, '.aiwg', 'context', 'providers', 'AGENTS.override.md'), 'utf8');
-    expect(providerContext).toContain('Always run the fixture checks.');
-    expect(providerContext).not.toContain('Generated framework listing');
+    // Operator content from the startup files lands in the WORKSPACE.md
+    // operator block, verbatim and attributed, not in an unloaded side file (#2558).
+    expect(workspace).toContain('### Migrated from AGENTS.override.md');
+    expect(workspace).toContain('Always run the fixture checks.');
+    expect(workspace).toContain('### Migrated from CLAUDE.md');
+    expect(workspace).toContain('Preserve the integration fixtures.');
+    await expect(readFile(join(root, '.aiwg', 'context', 'providers', 'AGENTS.override.md'), 'utf8')).rejects.toThrow();
+    expect(applied.written).not.toContain('.aiwg/context/providers/AGENTS.override.md');
     expect(await readFile(join(root, 'AGENTS.override.md'), 'utf8')).toContain('WORKSPACE.md');
     expect(await readFile(join(root, 'CLAUDE.md'), 'utf8')).toContain('@WORKSPACE.md');
     expect(applied.written).not.toContain('.aiwg/context/providers/AIWG.md');
@@ -230,14 +486,89 @@ describe('WORKSPACE.md canonical context graph (#1811)', () => {
     await expect(readFile(join(root, 'WORKSPACE.md'), 'utf8')).rejects.toThrow();
   });
 
-  it('keeps provider startup roots out of neutral extraction even when directives overlap', async () => {
+  it('ports every provider startup root into WORKSPACE.md and writes no provider side files (#2558)', async () => {
     const root = await project();
     await writeFile(join(root, 'CLAUDE.md'), '# Provider body\n\nAlways use fixtures.\n\n' + 'Framework detail.\n'.repeat(400));
     await writeFile(join(root, 'AGENTS.override.md'), 'Always use fixtures.\n');
     const audit = await auditWorkspaceContext(root);
-    expect(audit.plan.neutralSources).toEqual([]);
-    expect(audit.plan.providerSources).toContain('CLAUDE.md');
-    expect(audit.plan.providerSources).toContain('AGENTS.override.md');
+    expect(audit.plan.neutralSources).toEqual(expect.arrayContaining(['CLAUDE.md', 'AGENTS.override.md']));
+    expect(audit.plan.providerSources).toEqual([]);
+    expect(audit.plan.outputs.some((output) => output.includes('/context/providers/'))).toBe(false);
+  });
+
+  it('ports operator runbook content verbatim, preserving tables and code blocks (#2558)', async () => {
+    const root = await project();
+    const runbook = [
+      '# Ops notes',
+      '',
+      '| Host | Role |',
+      '|------|------|',
+      '| gateway-01 | edge |',
+      '',
+      '```bash',
+      'systemctl status nginx',
+      '```',
+      '',
+      'Always confirm before restarting services.',
+      '',
+    ].join('\n');
+    await writeFile(join(root, 'CLAUDE.md'), runbook);
+    const applied = await migrateWorkspaceContext(root, { apply: true });
+    const workspace = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    expect(applied.written).toContain('WORKSPACE.md');
+    expect(workspace).toContain('| gateway-01 | edge |');
+    expect(workspace).toContain('systemctl status nginx');
+    expect(workspace).toContain('### Migrated from CLAUDE.md');
+    expect(workspace).not.toContain('- | Host | Role |');
+    expect(workspace.indexOf('<!-- AIWG:workspace-operator:start -->')).toBeLessThan(workspace.indexOf('| gateway-01 | edge |'));
+
+    // Idempotent: a second migration does not duplicate the ported body.
+    const repeated = await migrateWorkspaceContext(root, { apply: true });
+    expect(repeated.changed).toBe(false);
+    expect((await readFile(join(root, 'WORKSPACE.md'), 'utf8')).split('| gateway-01 | edge |')).toHaveLength(2);
+  });
+
+  it('keeps migrated provider context linked across regeneration and reports it as not auto-loaded (#2558)', async () => {
+    const root = await project();
+    await ensureWorkspaceContext(root);
+    const providerDir = join(root, '.aiwg', 'context', 'providers');
+    await mkdir(providerDir, { recursive: true });
+    await writeFile(join(providerDir, 'CLAUDE.md'), '# Provider-specific context from CLAUDE.md\n\nUse the Bash tool for edits.\n');
+
+    // `aiwg use` / `aiwg regenerate` rebuild the managed block without passing providerFiles.
+    const refreshed = await ensureWorkspaceContext(root);
+    expect(refreshed.action).toBe('updated');
+    const workspace = await readFile(join(root, 'WORKSPACE.md'), 'utf8');
+    expect(workspace).toContain('[Provider-specific context](./.aiwg/context/providers/CLAUDE.md)');
+    const again = await ensureWorkspaceContext(root);
+    expect(again.action).toBe('unchanged');
+
+    const diagnostics = await diagnoseWorkspaceContext(root);
+    const unloaded = diagnostics.find((item) => item.code === 'provider-context-not-loaded');
+    expect(unloaded?.severity).toBe('info');
+    expect(unloaded?.path).toBe('.aiwg/context/providers/CLAUDE.md');
+  });
+
+  it('reports identical shared stubs once per file pair as informational, not once per line (#2558)', async () => {
+    const root = await project();
+    await ensureWorkspaceContext(root);
+    const providerDir = join(root, '.aiwg', 'context', 'providers');
+    await mkdir(providerDir, { recursive: true });
+    const stub = [
+      'Operator context now lives in WORKSPACE.md.',
+      'Read the Project Context section there first.',
+      'Never store credentials in provider files.',
+      'Prefer the canonical workspace graph over provider copies.',
+    ].join('\n');
+    await writeFile(join(providerDir, 'CLAUDE.md'), stub);
+    await writeFile(join(providerDir, 'AGENTS.override.md'), stub);
+
+    const diagnostics = await diagnoseWorkspaceContext(root);
+    const duplicates = diagnostics.filter((item) => item.code === 'duplicate-directive');
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0].severity).toBe('info');
+    expect(duplicates[0].message).toContain('4 directive(s)');
+    expect(diagnostics.some((item) => item.severity === 'warning' && item.code === 'duplicate-directive')).toBe(false);
   });
 
   it('redacts possible credentials from audit output and refuses extraction without writes', async () => {

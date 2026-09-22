@@ -46,7 +46,18 @@ function detectVersionChannel(version) {
   if (version.includes('-alpha.')) return 'alpha';
   if (version.includes('-nightly.')) return 'nightly';
   try {
-    const raw = readFileSync(path.join(os.homedir(), '.aiwg', 'channel.json'), 'utf8');
+    const legacyDir = path.join(os.homedir(), '.aiwg');
+    const xdgDir = path.join(os.homedir(), '.config', 'aiwg');
+    const configDir = process.env.AIWG_CONFIG
+      ? path.resolve(process.env.AIWG_CONFIG)
+      : existsSync(legacyDir) ? legacyDir : existsSync(xdgDir) ? xdgDir : legacyDir;
+    const installationFile = path.join(configDir, 'installation.json');
+    if (existsSync(installationFile)) {
+      const installation = JSON.parse(readFileSync(installationFile, 'utf8'));
+      if (installation?.runMode === 'development') return 'dev';
+      if (typeof installation?.channel === 'string') return installation.channel;
+    }
+    const raw = readFileSync(path.join(configDir, 'channel.json'), 'utf8');
     const cfg = JSON.parse(raw);
     if (cfg?.devMode) return 'dev';
     if (typeof cfg?.channel === 'string') return cfg.channel;
@@ -67,8 +78,132 @@ function maybeHandleFastVersion(args) {
   return true;
 }
 
-if (maybeHandleFastVersion(process.argv.slice(2))) {
-  process.exit(0);
+const FAST_HELP_TEXT = `
+  ◆ AIWG
+────────────────────────────────────────────────────────
+
+  Usage: aiwg <command> [options]
+
+  FRAMEWORK
+    use <framework>              Deploy framework (sdlc, marketing, media-curator, research, forensics, security-engineering, ops, validation, knowledge-base, all)
+    use cockpit                  Install the opt-in @aiwg/cockpit package outside the base aiwg footprint
+    list                         List installed frameworks and addons
+    remove <id>                  Remove a framework or addon
+
+  PROJECT
+    new <name>                   Create new project with SDLC templates
+    init                         Create the baseline .aiwg/aiwg.config file
+    setup project                CLI helper used by agents for repo/tracker/delivery/signing policy
+    quickref generate --project  Generate the canonical project quickref skill (--dry-run previews deterministic output)
+    quickref deploy --project    Deploy the project quickref to configured provider kernel surfaces
+
+  WORKSPACE
+    status                       Show workspace health and installed frameworks
+    sessions <command>           Manage the normalized session catalog, imports, and analytics
+    migrate-workspace            Migrate legacy .aiwg/ to framework-scoped structure
+    rollback-workspace           Rollback workspace migration from backup
+
+  MCP SERVER
+    mcp serve                    Start AIWG MCP server (stdio transport)
+    mcp install [target]         Generate MCP client config (claude, copilot, factory, cursor)
+    mcp info                     Show MCP server capabilities
+
+  TOOLSMITH
+    runtime-info                 Show runtime environment summary
+    runtime-info --discover      Full tool discovery and catalog generation
+    runtime-info --check <tool>  Check specific tool availability
+
+  CATALOG
+    catalog list                 List all models in catalog
+    catalog info <id>            Show detailed model information
+    catalog search <q>           Search models by query
+
+  DISCOVERY
+    discover "<phrase>"          Find skills/agents/commands/rules by capability
+    show <type> <name>           Stream the body of an indexed artifact
+    versions <list|resolve|show> Browse and resolve signed AIWG web resource releases
+    auth <login|status|logout>   Authenticate for paid AIWG web resources
+    index <subcommand>           Manage the artifact index (build/query/discover/deps/stats)
+    artifacts move --to <path>   Move/rename the project AIWG artifact root and reindex
+
+  DISPATCH
+    run skill <name>             Execute a script-bearing skill
+    run <script-name>            Run a user-defined script from .aiwg/aiwg.config
+    output-mode <action>         Configure composable output language and presentation
+
+  FEATURES
+    features                     Show optional feature install status
+    cockpit [--status]           Launch the opt-in AIWG Cockpit control plane
+
+  VALIDATION
+    validate-metadata [path]     Validate AIWG component metadata (defaults to agentic/code)
+    installation <action>        Inspect/adopt/switch canonical global installation
+    verify <artifact>            Verify DSSE provenance using an explicit versioned trust root
+    verify trust <action>        Bootstrap, update, or inspect artifact trust state
+    context-firewall [scan]      Audit provider context, trust, drift, poisoning signals, and budget
+    context-firewall baseline    Plan or explicitly write the reviewed context baseline
+
+  METRICS
+    cost-report --fleet          Observe OpenRouter per-bot MTD spend and correlate local activity
+
+  EVIDENCE
+    evidence export --output <dir> Package portable activity, report, source, eval, and provenance evidence
+    evidence verify <bundle>     Verify every member hash and the bundle checkpoint
+
+  SCAFFOLDING
+    new-bundle <name>            Create project-local bundle (--type extension|addon|framework|plugin|provider, --starter skill|rule|agent|minimal, --dry-run)
+    new-extension <name>         Alias for new-bundle --type extension
+    new-addon <name>             Alias for new-bundle --type addon
+    new-framework <name>         Alias for new-bundle --type framework
+    new-plugin <name>            Alias for new-bundle --type plugin
+    new-provider <name>          Alias for new-bundle --type provider
+    add-agent <name>             Add agent to existing bundle
+    add-command <name>           Add command to existing bundle
+    add-skill <name>             Add skill to existing bundle
+    scaffold-addon <name>        [legacy] Use new-addon instead
+    scaffold-framework <name>    [legacy] Use new-framework instead
+
+  PROMOTE
+    promote <name>               Graduate project-local bundle to upstream (--to upstream|corpus, --dry-run, --cleanup)
+
+  AGENT LOOP
+    agent-loop "<task>"          Execute iterative task loop (--completion, --max-iterations)
+    agent-loop-status            Check current loop status
+    agent-loop-abort             Abort running loop
+    agent-loop-resume            Resume interrupted loop
+                                 (legacy ralph* names remain accepted as aliases)
+
+  MAINTENANCE
+    doctor                       Check installation health
+    version                      Show version and channel info
+    refresh                      Update AIWG and redeploy frameworks (formerly: sync)
+    update                       Update the active installation and re-deploy installed frameworks (alias: upgrade)
+    help                         Show this help message
+
+  CHANNEL
+    --use-dev [path]             Customize AIWG live from a local clone or fork
+    --use-main                   Switch to edge channel (bleeding edge)
+    --use-stable                 Switch back to stable npm package
+────────────────────────────────────────────────────────
+
+  Providers: 12 — claude (default), codex, copilot, cursor, factory, hermes, opencode, openclaw, openhuman, pi, warp, windsurf (alias: devin)
+
+  Examples:
+    aiwg use sdlc                   Install SDLC framework
+    aiwg use sdlc --global          Install user assets + lightweight project wiring
+    aiwg use cockpit                Install opt-in Cockpit package
+    aiwg cockpit                    Launch Cockpit after install
+    aiwg discover "deploy"          Find skills by capability
+    aiwg show skill intake-wizard   Stream a skill body
+    aiwg doctor                     Check installation health
+    aiwg refresh                    Pull latest + redeploy frameworks
+`;
+
+function maybeHandleFastHelp(args) {
+  if (args.length !== 1) return false;
+  if (!['help', '--help', '-help', '-h'].includes(args[0])) return false;
+  process.stdout.write(`${FAST_HELP_TEXT}\n`);
+  return true;
 }
 
 // Preflight: verify dist/ is built before any of the dynamic imports below
@@ -100,6 +235,37 @@ function maybeWarnUnbuiltDist() {
   process.exit(1);
 }
 maybeWarnUnbuiltDist();
+
+// Propagate the strict no-write contract through helpers that may resolve
+// installation/channel state before the command context exists.
+if (process.argv.slice(2).includes('--dry-run')) {
+  process.env['AIWG_CLI_DRY_RUN'] = '1';
+}
+
+// Display a cached notice and schedule its refresh before every eligible CLI
+// path, including fast help/version, channel recovery, and later preflight
+// failures. This local-only bootstrap never waits on the registry and failures
+// are deliberately ignored so update advice cannot change command behavior.
+async function runUpdateNotifierBootstrap() {
+  try {
+    const notifierPath = path.join(packageRoot, 'dist', 'src', 'update', 'notifier.mjs');
+    const notifier = await import(pathToFileURL(notifierPath).href);
+    const activePackageRoot = notifier.resolveActivePackageRoot(packageRoot);
+    notifier.maybePrintNotice(activePackageRoot);
+    notifier.scheduleBackgroundCheck(activePackageRoot);
+  } catch {
+    // Best effort: installation/router diagnostics retain authority.
+  }
+}
+
+await runUpdateNotifierBootstrap();
+
+if (maybeHandleFastVersion(process.argv.slice(2))) {
+  process.exit(0);
+}
+if (maybeHandleFastHelp(process.argv.slice(2))) {
+  process.exit(0);
+}
 
 // Mint or inherit an invocation ID before anything else loads. Child processes
 // spawned by handlers (detached update-notifier, aiwg exec, etc.) inherit the
@@ -142,7 +308,7 @@ trace('bin:entry');
  */
 async function resolveRouterPath() {
   const { loadConfig } = await import('../dist/src/channel/manager.mjs');
-  const config = await loadConfig();
+  const config = await loadConfig({ createIfMissing: !process.argv.slice(2).includes('--dry-run') });
   if (config.devMode && config.edgePath && config.edgePath !== packageRoot) {
     const devRouter = path.join(config.edgePath, 'dist', 'src', 'cli', 'router.js');
     if (!existsSync(devRouter)) {
@@ -217,6 +383,29 @@ async function applyVerbosityFromArgs(args, routerPath) {
   return level;
 }
 
+/**
+ * Commands that only read state and therefore stay available while the
+ * recorded installation identity disagrees with the executing checkout
+ * (#2559). Everything else fails closed until the operator adopts or
+ * switches the identity. `index` is limited to its inspection subcommands;
+ * `index build` rewrites the capability index and is treated as a write.
+ */
+const RECOVERY_SAFE_COMMANDS = new Set([
+  'version', 'status', 'doctor', 'runtime-info', 'discover', 'show', 'help',
+]);
+const RECOVERY_SAFE_INDEX_SUBCOMMANDS = new Set(['query', 'deps', 'stats']);
+
+function isRecoverySafeCommand(args) {
+  const command = args.find((arg) => !arg.startsWith('-'));
+  if (!command) return false;
+  if (RECOVERY_SAFE_COMMANDS.has(command)) return true;
+  if (command === 'index') {
+    const sub = args.slice(args.indexOf(command) + 1).find((arg) => !arg.startsWith('-'));
+    return sub !== undefined && RECOVERY_SAFE_INDEX_SUBCOMMANDS.has(sub);
+  }
+  return false;
+}
+
 async function main() {
   const args = process.argv.slice(2);
 
@@ -241,22 +430,55 @@ async function main() {
 
   // Resolve the active router once. In dev mode this points into the checkout,
   // while packageRoot still points at the globally installed launcher.
-  const routerPath = await resolveRouterPath();
+  const routerPath = args[0] === 'installation'
+    ? path.join(packageRoot, 'dist', 'src', 'cli', 'router.js')
+    : await resolveRouterPath();
   const activePackageRoot = path.resolve(path.dirname(routerPath), '..', '..', '..');
+
+  // Fail closed when a different installation wins PATH resolution. Recovery
+  // commands remain reachable so an operator can explicitly adopt or switch.
+  if (args[0] !== 'installation') {
+    const identityPath = path.join(activePackageRoot, 'dist', 'src', 'installation', 'manager.mjs');
+    if (activePackageRoot !== packageRoot && !existsSync(identityPath)) {
+      console.error(`Dev mode: compiled installation manager not found at ${identityPath}`);
+      console.error(`  Run: (cd ${activePackageRoot} && npm run build:cli)`);
+      console.error(`  Or switch back: aiwg --use-stable`);
+      process.exit(1);
+    }
+    const { assertCanonicalInstallation } = await import(pathToFileURL(identityPath).href);
+    const readOnlyPreview = args.includes('--dry-run');
+    try {
+      assertCanonicalInstallation({
+        actualRoot: activePackageRoot,
+        createIfMissing: !readOnlyPreview,
+        allowUnrecorded: readOnlyPreview,
+      });
+    } catch (error) {
+      if (error?.code !== 'AIWG_INSTALLATION_DRIFT' || !isRecoverySafeCommand(args)) throw error;
+      // Read-only diagnostics stay reachable under drift so the documented
+      // recovery ladder (status → doctor → runtime-info → version → local
+      // discover) can run before the identity is repaired. Every mutating
+      // command still fails closed above (#2559).
+      const drift = Array.isArray(error.status?.drift) ? error.status.drift : [];
+      process.env['AIWG_INSTALLATION_DRIFT'] = JSON.stringify({
+        state: error.status?.state ?? 'mismatch',
+        drift,
+      });
+      process.stderr.write(
+        `aiwg: warning: installation identity drift detected; \`${args[0]}\` is read-only and continues, ` +
+        'but update, refresh, and deployment stay blocked until the identity is repaired.\n' +
+        drift.map((item) => `- ${item}\n`).join('') +
+        'Inspect: aiwg installation show\n' +
+        'Adopt this installation: aiwg installation adopt\n' +
+        'Switch deliberately: aiwg installation switch --root <path> --method <npm|web|source> [--manager <absolute-path>]\n',
+      );
+    }
+  }
 
   // Wire up the logger level from -v/-vv/--quiet/AIWG_LOG_LEVEL before any
   // handler runs, and stamp the top-level invocation ID so the logger can
   // tag every record with it.
   await applyVerbosityFromArgs(args, routerPath);
-
-  // Update notifier: print any pending notice from the previous run's
-  // background check, then schedule the next background check. Both are
-  // non-blocking — the current command never waits on the network.
-  // Honors NO_UPDATE_NOTIFIER, CI=*, and non-TTY stderr.
-  const notifierPath = path.join(activePackageRoot, 'dist', 'src', 'update', 'notifier.mjs');
-  const { scheduleBackgroundCheck, maybePrintNotice } = await import(pathToFileURL(notifierPath).href);
-  maybePrintNotice(activePackageRoot);
-  scheduleBackgroundCheck(activePackageRoot);
 
   // Top-level cancellation controller. SIGINT / SIGTERM flip it, long-running
   // handlers plumb ctx.signal through fetches and loops so Ctrl-C cancels

@@ -54,7 +54,9 @@ node --version         # → Node version
 aiwg doctor            # workspace health snapshot (helpful)
 ```
 
-And — also required — the **provider** (the AIWG harness you were running): one of `claude-code`, `hermes`, `codex`, `copilot`, `cursor`, `warp`, `factory`, `opencode`, `windsurf`, `openclaw`.
+And — also required — the **provider** (the AIWG harness you were running): one
+of `claude-code`, `codex`, `copilot`, `cursor`, `factory`, `hermes`, `opencode`,
+`openclaw`, `grokbot`, `openhuman`, `omp`, `pi`, `warp`, or `windsurf`.
 
 > **Why these three (AIWG version + OS + provider) are non-negotiable:**
 > - **AIWG version**: a bug you're hitting may already be fixed in `main` but not yet in the version you installed. Without the version, the first triage step is asking you for it.
@@ -123,7 +125,9 @@ Example sweep: jmagly#108–#112 → roctinam #1264–#1268 (May 2026). Closed #
 Three paths, all valid:
 
 ```bash
-# 1. Via the issue-create skill (handles Gitea, GitHub, Jira, Linear, local files)
+# 1. Via discovery, then the issue-create skill (handles Gitea, GitHub, Jira, Linear, local files)
+aiwg discover "issue create" --type skill
+aiwg show skill issue-create
 aiwg run skill issue-create -- "<title>" --provider gitea --labels "bug"
 
 # 2. Via the Gitea MCP server (when available)
@@ -159,7 +163,7 @@ mcp__git-gitea__issue_write method=create owner=roctinam repo=aiwg title='<title
 | Find existing skills/issues for a topic | `aiwg discover "<keywords>"` |
 | Bundle discover + tracker search | `aiwg run skill steward-prep-delivery -- "<terms>"` |
 | Fetch a skill body | `aiwg show skill aiwg-issue` |
-| File a new issue (skill-mediated) | `aiwg run skill issue-create -- "<title>"` |
+| File a new issue (skill-mediated) | `aiwg discover "issue create" --type skill`, then `aiwg show skill issue-create` |
 | Read the full kernel skill | `aiwg show skill aiwg-issue` |
 
 ## Related

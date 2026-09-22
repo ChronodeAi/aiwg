@@ -15,19 +15,21 @@
  * | codex      | .codex/agents/           | AGENTS.md            | ✅ Full       |
  * | opencode   | .opencode/agent/         | AGENTS.md            | ✅ Full       |
  * | warp       | .warp/agents/            | WARP.md              | ✅ Full       |
- * | windsurf   | .windsurf/agents/        | .windsurfrules       | 🧪 Experimental |
+ * | windsurf   | .windsurf/agents/        | .windsurfrules       | ✅ Devin Desktop compatibility adapter |
  * | copilot    | .github/agents/          | copilot-instructions | ✅ Full       |
  * | hermes     | ~/.hermes/skills/        | AGENTS.md            | optional MCP sidecar |
  * | openclaw   | ~/.openclaw/agents/      | AGENTS.md            | ✅ Full       |
  * | openhuman  | .agents/agents/          | AGENTS.md            | ✅ Full       |
+ * | pi         | .agents/skills/          | AGENTS.md            | experimental |
+ * | deepseek-harness | .agents/skills/    | AGENTS.md            | experimental |
  * | generic    | agents/                  | varies               | ✅ Full       |
  *
  * CLI usage: --provider <platform> or --platform <platform>
  */
-export type Platform = 'claude' | 'codex' | 'copilot' | 'cursor' | 'factory' | 'hermes' | 'opencode' | 'openclaw' | 'openhuman' | 'warp' | 'windsurf' | 'generic';
+export type Platform = 'antigravity' | 'claude' | 'codex' | 'copilot' | 'cursor' | 'deepseek-harness' | 'factory' | 'grokbot' | 'grok-build' | 'hermes' | 'opencode' | 'openclaw' | 'openhuman' | 'pi' | 'omp' | 'warp' | 'windsurf' | 'generic';
 export type AgentCategory = 'writing-quality' | 'sdlc' | 'security' | 'testing' | 'architecture' | 'documentation' | 'general';
 export type ArtifactType = 'agent' | 'command' | 'skill' | 'rule';
-export type SupportLevel = 'native' | 'conventional' | 'aggregated';
+export type SupportLevel = 'native' | 'conventional' | 'aggregated' | 'indexed';
 
 /**
  * Provider path configuration (all four artifact types required)
@@ -57,6 +59,16 @@ export interface AgentMetadata {
   description: string;
   category?: AgentCategory;
   model?: string;
+  /** OMP native model priority order, when explicitly configured. */
+  modelPriority?: string[];
+  thinkingLevel?: string;
+  spawns?: string[] | '*';
+  blocking?: boolean;
+  output?: unknown;
+  autoloadSkills?: string[];
+  readSummarize?: boolean;
+  prewalk?: boolean | string;
+  advisor?: boolean | string;
   modelRole?: 'reasoning' | 'coding' | 'efficiency';
   modelTier?: 'economy' | 'standard' | 'premium' | 'max-quality';
   tools?: string[];

@@ -486,6 +486,6 @@ references:
   implementation:
     - "#165"
   related:
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
-    - "@agentic/code/addons/ralph/schemas/cross-task-memory.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/cross-task-memory.yaml"
     - "@tools/ralph-external/"

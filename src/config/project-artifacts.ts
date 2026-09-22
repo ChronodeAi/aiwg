@@ -13,7 +13,16 @@ export {
   expandProjectArtifactPath,
   parseProjectArtifactLocation,
   projectAiwgPath,
+  projectAiwgWritePath,
+  projectControlPath,
   readProjectArtifactLocation,
   resolveProjectAiwgDir,
+  resolveProjectAiwgDirForWrite,
+  resolveProjectControlDir,
+  isProjectArtifactRootExternal,
 } from './project-artifacts-runtime.mjs';
 export type { ProjectArtifactEnv } from './project-artifacts-runtime.mjs';
+export {
+  PROJECT_CONTROL_PLANE_FILES,
+  auditProjectArtifactHealth,
+} from './project-artifacts-health.mjs';

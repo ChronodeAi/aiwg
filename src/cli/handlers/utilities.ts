@@ -22,6 +22,11 @@ import { projectAiwgPath } from '../../config/project-artifacts.js';
 import {
   checkCollisions,
 } from '../../smiths/skillsmith/collision-detector.js';
+import {
+  renderUseDeploymentResult,
+  verifyConfiguredDeployments,
+  type DeploymentScope,
+} from '../services/deployment-verification.js';
 
 /**
  * Maps framework registry IDs (e.g. 'sdlc-complete') to `aiwg use` names (e.g. 'sdlc').
@@ -462,6 +467,25 @@ async function runUserScopeDoctor(verbose: boolean): Promise<HandlerResult> {
   };
 }
 
+const DOCTOR_HELP = `aiwg doctor — check AIWG installation health
+
+Usage:
+  aiwg doctor [options]
+  aiwg -doctor [options]
+  aiwg --doctor [options]
+
+Options:
+  --deployment          Verify configured provider deployments
+  --provider <name>     Limit deployment verification to one provider
+  --bundle <name>       Limit deployment verification to one bundle
+  --scope <scope>       Verification scope: project or user
+  --user                Alias for --scope user
+  --project-local       Include project-local artifact diagnostics
+  --json                Emit machine-readable deployment verification output
+  --verbose, -v         Include verbose diagnostics
+  --help, -h            Show this help
+`;
+
 /**
  * Handler for doctor command
  *
@@ -481,7 +505,37 @@ export const doctorHandler: CommandHandler = {
   category: 'maintenance',
   aliases: ['-doctor', '--doctor'],
 
+  async help(): Promise<HandlerResult> {
+    return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--help') || ctx.args.includes('-h')) {
+      return { exitCode: 0, message: DOCTOR_HELP, rawOutput: true };
+    }
+
+    if (ctx.args.includes('--deployment')) {
+      const providerIndex = ctx.args.indexOf('--provider');
+      const bundleIndex = ctx.args.indexOf('--bundle');
+      const scopeIndex = ctx.args.indexOf('--scope');
+      const scopeValue = scopeIndex >= 0 ? ctx.args[scopeIndex + 1] : undefined;
+      if (scopeValue && scopeValue !== 'project' && scopeValue !== 'user') {
+        return { exitCode: 2, message: `Invalid deployment verification scope: ${scopeValue}` };
+      }
+      const result = await verifyConfiguredDeployments(ctx.cwd || process.cwd(), {
+        provider: providerIndex >= 0 ? ctx.args[providerIndex + 1] : undefined,
+        bundle: bundleIndex >= 0 ? ctx.args[bundleIndex + 1] : undefined,
+        scope: scopeValue as DeploymentScope | undefined,
+      }, ctx.frameworkRoot);
+      return {
+        exitCode: result.exitCode,
+        message: ctx.args.includes('--json')
+          ? JSON.stringify(result, null, 2)
+          : renderUseDeploymentResult(result),
+        rawOutput: ctx.args.includes('--json'),
+      };
+    }
+
     // #1156 Phase 1 — `aiwg doctor --scope user` / `aiwg doctor --user`
     // validates the per-user registry (~/.aiwg/installed.json) without
     // running the project-scope diagnostics. Operators need this to verify
@@ -541,18 +595,34 @@ export const doctorHandler: CommandHandler = {
           namespace: 'aiwg',
           skillsBaseDir: skillsDir,
         });
-        const errorAndWarn = collisions.filter(r => r.severity === 'error' || r.severity === 'warn');
-        if (errorAndWarn.length > 0) {
-          // In doctor context we report stale skills, not deployment blocks.
-          // Re-running `aiwg use` will auto-clean aiwg-owned stale skills.
+        // Two distinct causes share this scan, and conflating them mislabels
+        // one as the other: an `error` is a name that shadows a Claude
+        // built-in; a `warn` is a deployed skill this namespace does not own
+        // (#2504). Report each under its own heading with its own remedy.
+        const builtinCollisions = collisions.filter(r => r.severity === 'error');
+        const unownedCollisions = collisions.filter(r => r.severity === 'warn');
+        if (builtinCollisions.length > 0 || unownedCollisions.length > 0) {
           console.log('\n── Skill collision scan ──');
-          console.log('');
-          console.log('⚠ Stale skills detected (names collide with Claude built-ins):');
-          for (const r of errorAndWarn) {
-            console.log(`  ✗ ${r.skillName}: ${r.reason}`);
+          if (builtinCollisions.length > 0) {
+            console.log('');
+            console.log('⚠ Stale skills detected (names collide with Claude built-ins):');
+            for (const r of builtinCollisions) {
+              console.log(`  ✗ ${r.skillName}: ${r.reason}`);
+            }
+            console.log('');
+            console.log('  Fix: run `aiwg use <framework>` to redeploy and auto-clean stale skill directories.');
           }
-          console.log('');
-          console.log('  Fix: run `aiwg use <framework>` to redeploy and auto-clean stale skill directories.');
+          if (unownedCollisions.length > 0) {
+            console.log('');
+            console.log("⚠ Deployed skills not owned by namespace 'aiwg' (a redeploy would overwrite them):");
+            for (const r of unownedCollisions) {
+              console.log(`  ✗ ${r.skillName}: ${r.reason}`);
+            }
+            console.log('');
+            console.log("  Fix: if the skill is yours, move it out of the AIWG-managed skills directory");
+            console.log("  or give it its own namespace. If AIWG generated it, re-run `aiwg use` to");
+            console.log('  restore the ownership marker.');
+          }
         }
       }
     } catch {
@@ -623,6 +693,112 @@ export const doctorHandler: CommandHandler = {
   },
 };
 
+const CONTEXT_FIREWALL_HELP = `aiwg context-firewall — inspect provider context and reviewed memory
+
+Usage:
+  aiwg context-firewall [scan] [options]
+  aiwg context-firewall baseline [--plan]
+  aiwg context-firewall baseline --write --confirm-reviewed [--output <path>]
+
+Actions:
+  scan       Read-only inventory, trust, poisoning, drift, and budget checks (default)
+  baseline   Plan or explicitly write the reviewed digest baseline
+
+Options:
+  --root <path>           Project root (default: current directory)
+  --provider <name>       Limit to a provider; repeatable
+  --baseline <path>       Existing reviewed baseline used by the scan
+  --output <path>         Baseline destination (must remain within the project)
+  --budget-tokens <n>     Portable provider-context budget
+  --warn-ratio <n>        Warning threshold as a fraction of the budget
+  --strict                Exit non-zero for violations or a missing baseline
+  --json                  Emit stable machine-readable output
+  --limit <n>             Bound scan detail in human-readable output
+  --no-content-scan       Skip poisoning classification
+  --plan                  Show every record; do not write (baseline default)
+  --write                 Write after review; requires --confirm-reviewed
+  --confirm-reviewed      Confirm every record in the plan was reviewed
+`;
+
+function contextFirewallError(message: string): HandlerResult {
+  return { exitCode: 2, message: `${message}\n\n${CONTEXT_FIREWALL_HELP}` };
+}
+
+/**
+ * Public operator route for the context/memory firewall.
+ *
+ * The implementation remains a reusable packaged engine, while this handler
+ * owns stable command vocabulary and keeps internal script entrypoints out of
+ * user- and agent-facing remediation guidance.
+ */
+export const contextFirewallHandler: CommandHandler = {
+  id: 'context-firewall',
+  name: 'Context Firewall',
+  description: 'Audit provider context and manage its reviewed baseline',
+  category: 'maintenance',
+  aliases: ['-context-firewall', '--context-firewall'],
+
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--help') || ctx.args.includes('-h')) {
+      return { exitCode: 0, message: CONTEXT_FIREWALL_HELP };
+    }
+
+    const action = ctx.args[0] && !ctx.args[0].startsWith('-') ? ctx.args[0] : 'scan';
+    if (!['scan', 'baseline'].includes(action)) {
+      return contextFirewallError(`Unknown context-firewall action '${action}'.`);
+    }
+
+    const input = action === 'scan' ? ctx.args.slice(action === ctx.args[0] ? 1 : 0) : ctx.args.slice(1);
+    const forwarded: string[] = ['--package-root', ctx.frameworkRoot];
+    let output: string | undefined;
+    let plan = false;
+    let write = false;
+    let confirmed = false;
+
+    for (let index = 0; index < input.length; index += 1) {
+      const arg = input[index];
+      if (arg === '--output') {
+        output = input[index + 1];
+        if (!output) return contextFirewallError('--output requires a path.');
+        index += 1;
+      } else if (arg.startsWith('--output=')) {
+        output = arg.slice('--output='.length);
+        if (!output) return contextFirewallError('--output requires a path.');
+      } else if (arg === '--plan') {
+        plan = true;
+      } else if (arg === '--write') {
+        write = true;
+      } else if (arg === '--confirm-reviewed') {
+        confirmed = true;
+      } else {
+        forwarded.push(arg);
+      }
+    }
+
+    if (action === 'scan' && (output || plan || write || confirmed)) {
+      return contextFirewallError('Baseline mutation options require the `baseline` action.');
+    }
+    if (plan && write) return contextFirewallError('Choose either --plan or --write, not both.');
+    if (write && !confirmed) {
+      return contextFirewallError('Baseline writes require --confirm-reviewed after inspecting the plan.');
+    }
+    if (confirmed && !write) {
+      return contextFirewallError('--confirm-reviewed is only valid with --write.');
+    }
+
+    if (action === 'baseline') {
+      if (write) {
+        forwarded.push(output ? `--write-baseline=${output}` : '--write-baseline', '--confirm-reviewed');
+      } else {
+        forwarded.push(output ? `--plan-baseline=${output}` : '--plan-baseline');
+      }
+    }
+
+    const runner = createScriptRunner(ctx.frameworkRoot);
+    return runner.run('tools/security/context-memory-firewall.mjs', forwarded, { cwd: ctx.cwd });
+  },
+};
+
 /**
  * Handler for update command
  *
@@ -670,6 +846,10 @@ export const updateHandler: CommandHandler = {
         });
         console.log(`${update.message}\n`);
       } catch (error) {
+        if ((error as { code?: string }).code === 'AIWG_INSTALLATION_DRIFT'
+          || (error as { code?: string }).code === 'AIWG_INSTALLATION_INVALID') {
+          return { exitCode: 78, message: error instanceof Error ? error.message : String(error) };
+        }
         console.error(`Warning: Update check failed: ${error instanceof Error ? error.message : String(error)}`);
         console.log('Continuing with re-deployment...\n');
       }
@@ -770,5 +950,6 @@ export const utilityHandlers: CommandHandler[] = [
   contributeStartHandler,
   validateMetadataHandler,
   doctorHandler,
+  contextFirewallHandler,
   updateHandler,
 ];

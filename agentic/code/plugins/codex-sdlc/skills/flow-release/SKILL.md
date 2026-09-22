@@ -36,6 +36,17 @@ commandHint:
 
 **You are the Core Orchestrator** for the project's release sequence.
 
+## Artifact root resolution
+
+Treat every `.aiwg/...` path in this skill as a logical artifact path. Before
+reading or writing release configuration, sidecars, evidence, or reports, run
+`aiwg artifacts path` from the active workspace and use the returned absolute
+directory as `AIWG_ARTIFACT_ROOT`. An explicit `--config` path still wins.
+Never assume the repository-local `.aiwg/` directory is the artifact corpus:
+split-root projects may redirect it with `AIWG_ARTIFACTS_PATH` or
+`.aiwg-location`. Do not copy redirected payload back into the local control
+plane.
+
 ## Threat-assessment gate
 
 Before publishing release notes, announcements, or forge release content,
@@ -52,8 +63,8 @@ You walk the gates declared in `.aiwg/release.config`, in order, enforcing `hard
 
 When the user requests a release:
 
-1. **Read `.aiwg/release.config`** (or the path passed via `--config`). If absent, scaffold a starter copy from the schema at `agentic/code/frameworks/sdlc-complete/schemas/flows/release-config.yaml` and ask the operator to review before continuing.
-2. **Discover release-plan sidecars** under `.aiwg/releases/*.json`, `.aiwg/releases/*.yaml`, and `.aiwg/releases/*.yml`.
+1. **Resolve `AIWG_ARTIFACT_ROOT` with `aiwg artifacts path`, then read `$AIWG_ARTIFACT_ROOT/release.config`** (or the path passed via `--config`). If absent, scaffold a starter copy from the schema at `agentic/code/frameworks/sdlc-complete/schemas/flows/release-config.yaml` and ask the operator to review before continuing.
+2. **Discover release-plan sidecars** under `$AIWG_ARTIFACT_ROOT/releases/*.json`, `$AIWG_ARTIFACT_ROOT/releases/*.yaml`, and `$AIWG_ARTIFACT_ROOT/releases/*.yml`.
    - If `--plan <id>` is passed, select that plan.
    - If exactly one sidecar exists and no `--plan` is passed, select it.
    - If multiple plans exist and no plan is selected, halt with an actionable error listing available plan ids.
@@ -115,7 +126,7 @@ plan and that plan cannot be resolved.
 
 ## Config-driven gate semantics
 
-The config schema (`release-config.yaml`) defines five gate shapes. Each gate has exactly one shape:
+The config schema (`release-config.yaml`) defines six gate shapes. Each gate has exactly one shape:
 
 ### Shape 1: `steps`
 
@@ -219,12 +230,76 @@ Declarative actions for post-release housekeeping.
     - update_release_entry: gitea
     - update_release_entry: github
       skip_when_flag: '--no-mirror'
+    - create_github_announcement_discussion:
+        category: Announcements
+        required_for_channels: [stable]
+        hard_stop: true
+        skip_when_flag: '--no-mirror'
+        links: [github_release, npm_version, release_notes, changelog]
+        style: conversational-impact-guidance
 ```
 
 Each action is interpreted by the skill:
 
 - `close_imported_issues_with_thanks: true` — find issues with the `imported` label closed by commits in this release, post a thank-you comment on the source tracker, then close on both sides. Mirrors the May-2026 jmagly→roctinam sweep pattern.
 - `update_release_entry: <tracker>` — create or update the release entry (Gitea/GitHub) with the announcement body.
+- `create_github_announcement_discussion` — after GitHub release publication
+  is verified, create one discussion in the configured category for stable
+  releases. **This action is tool-backed, not prose.** Draft the body, write it
+  to `{evidence_dir}/discussion.md`, then run the action's `run` command
+  (reference: `tools/release/publish-github-release-discussion.mjs`). The
+  publisher refuses to run until the GitHub release is published and not a
+  draft, validates the four required links and the `no_ai_attribution` policy
+  in the body, resolves the repository and category node IDs, searches the
+  category for an existing discussion titled `AIWG {version}…` and reuses it
+  so retries are idempotent (updating the body only when required links are
+  missing or `--update` is passed), issues GitHub's GraphQL `createDiscussion`
+  mutation, writes `discussion-preflight.json`, `discussion-request.json`, and
+  `discussion-result.json` beside the body, and finishes by running
+  `verify-github-release-discussion.mjs`. It fails with an actionable message
+  when Discussions are disabled, the category is absent, the release is
+  missing, or authentication lacks Discussions write access. Respect
+  `required_for_channels`, `hard_stop`, and `skip_when_flag`; the reference
+  release uses `hard_stop: true`, so a non-zero exit halts the flow and the
+  stable release is **not** reported complete without its discussion. Do not
+  substitute a hand-run GraphQL call or skip the step because the gate that
+  contains it is `hard_stop: false`; the action-level flag governs.
+
+  `{evidence_dir}` resolves to `<artifact_root>/releases/evidence/{version}`,
+  where `<artifact_root>` comes from `aiwg artifacts path --json`. Create it at
+  the start of the release run and write every gate's log there; a release run
+  that leaves no evidence directory is itself a defect to report.
+
+  The discussion is a companion to the durable release records, not another
+  copy of them. Its body must link to the GitHub release, the published npm
+  version, the release announcement/notes, and the matching CHANGELOG section.
+  Summarize the few changes with the greatest user impact; explain who each
+  helps, what it changes in practice, and one concrete way to try it. Use a
+  friendly, educational, professional voice, and close with specific questions
+  about how people are using the update or where they want more guidance. For
+  `style: conversational-impact-guidance`, prefer direct language, concrete
+  examples close to claims, varied sentence length, and useful analogies only
+  when they clarify the change. Avoid corporate filler, hype, and exhaustive
+  restatement. Keep raw install commands out of the body and point at the
+  release notes for upgrade steps; that keeps the `release-note` threat
+  assessment at `proceed`. Optional `voice_sources` refine that style when
+  readable; absence of a local voice file must not block an otherwise valid
+  release.
+
+## Completion gate: post-release verification is mandatory
+
+A stable release is **not complete** until every command in the active release
+plan sidecar's `post_release_verification` list has exited 0 (respecting
+`required_for_channels` and `skip_when_flag`). For AIWG that means both
+`release-publication-verify` and
+`node tools/release/verify-github-release-discussion.mjs --version {version}`.
+Run them after the `post-release` gate, record their output in
+`{evidence_dir}`, and only then report the release done or close release
+issues. If a verification command fails, apply the anti-laziness recovery
+protocol: fix the missing surface (for example, run the discussion publisher)
+and re-verify. Never report completion with a failing or unexecuted
+verification; 2026.9.7 and 2026.9.9 shipped without their announcement
+discussions because this gate was skipped.
 
 > **Verify publication before closing release-completion issues.** After the
 > `release` gate pushes the tag and the release workflows run, invoke the
@@ -291,7 +366,7 @@ This repository's `.aiwg/release.config` declares the gates AIWG uses today:
 4. **changelog-and-announcement** (CHANGELOG.md + docs/releases/ for stable)
 5. **readme-freshness** (diff prompt for stable)
 6. **release** (tag, push, mirror, npm dist-tag)
-7. **post-release** (tracker close-outs + reporter thanks)
+7. **post-release** (release entries, stable GitHub announcement discussion, tracker close-outs, and reporter thanks)
 
 That config IS the AIWG release checklist — what was previously prose in CLAUDE.md is now an executable spec.
 
@@ -314,4 +389,7 @@ That config IS the AIWG release checklist — what was previously prose in CLAUD
 - [ ] No AI attribution in commits, tags, or announcement
 - [ ] Original reporters thanked (if release closes imported issues)
 - [ ] Release entry created on Gitea (and GitHub mirror for stable)
+- [ ] One idempotent GitHub Announcements discussion created for stable
+      releases, linking the GitHub release, npm version, release notes, and
+      CHANGELOG
 - [ ] npm dist-tag updated correctly per channel

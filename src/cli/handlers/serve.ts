@@ -11,7 +11,6 @@
 
 import path from 'path';
 import { existsSync, readFileSync } from 'fs';
-import { spawnSync } from 'child_process';
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import { createPtyWsHandler, registry as ptyRegistry } from '../../serve/pty-bridge.js';
 import { telemetryStore, createEvent } from '../../serve/telemetry.js';
@@ -23,6 +22,8 @@ import {
 import { routeTask, type AgentFilter } from '../../serve/agent-router.js';
 import { routeDispatch, type V1DispatchPayload } from '../../serve/dispatch-router.js';
 import { observeA2ATerminalState } from '../../serve/a2a-terminal-observer.js';
+import { respondToA2AMission } from '../../serve/mission-hitl.js';
+import { A2A_HITL_PROMPT_V1 } from '../../a2a/client.js';
 import {
   executorRegistry,
   validateRegisterPayload,
@@ -38,6 +39,7 @@ import {
 } from '../../a2a/webhook.js';
 import { AiwgError, EXIT_CODES } from '../errors.js';
 import { projectAiwgPath } from '../../config/project-artifacts.js';
+import { loadFeaturePackage } from '../../features/runtime.js';
 
 // A2A push-notification state — module-scoped so the test harness can
 // monkey-patch them in if needed. One process serves one set of secrets.
@@ -47,8 +49,14 @@ const webhookIdempotency = new IdempotencyCache();
 const DEFAULT_PORT = 7337;
 const DEFAULT_HOST = '127.0.0.1';
 
+function readA2AProtocolPolicy(value: string | undefined): '0.3' | '1.0' | 'auto' {
+  const policy = value ?? '0.3';
+  if (policy === '0.3' || policy === '1.0' || policy === 'auto') return policy;
+  throw new Error(`AIWG_A2A_PROTOCOL_POLICY must be 0.3, 1.0, or auto (received '${policy}')`);
+}
+
 /**
- * Parse --port, --bind, --no-open, --read-only flags from args
+ * Parse dashboard and A2A negotiation flags from args.
  */
 function parseServeArgs(args: string[]): {
   port: number;
@@ -56,12 +64,18 @@ function parseServeArgs(args: string[]): {
   open: boolean;
   readOnly: boolean;
   sandbox: string | null;
+  a2aProtocolPolicy?: '0.3' | '1.0' | 'auto';
+  allowA2AProtocolFallback?: boolean;
+  allowLegacyExecutorFallback?: boolean;
 } {
   let port = DEFAULT_PORT;
   let host = DEFAULT_HOST;
   let open = true;
   let readOnly = false;
   let sandbox: string | null = null;
+  let a2aProtocolPolicy: '0.3' | '1.0' | 'auto' | undefined;
+  let allowA2AProtocolFallback: boolean | undefined;
+  let allowLegacyExecutorFallback: boolean | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -79,10 +93,30 @@ function parseServeArgs(args: string[]): {
       open = false;
     } else if (arg === '--read-only') {
       readOnly = true;
+    } else if (arg === '--a2a-protocol' && args[i + 1]) {
+      a2aProtocolPolicy = readA2AProtocolPolicy(args[i + 1]);
+      i++;
+    } else if (arg === '--a2a-protocol-fallback') {
+      allowA2AProtocolFallback = true;
+    } else if (arg === '--no-a2a-protocol-fallback') {
+      allowA2AProtocolFallback = false;
+    } else if (arg === '--a2a-legacy-executor-fallback') {
+      allowLegacyExecutorFallback = true;
+    } else if (arg === '--no-a2a-legacy-executor-fallback') {
+      allowLegacyExecutorFallback = false;
     }
   }
 
-  return { port, host, open, readOnly, sandbox };
+  return {
+    port,
+    host,
+    open,
+    readOnly,
+    sandbox,
+    ...(a2aProtocolPolicy ? { a2aProtocolPolicy } : {}),
+    ...(allowA2AProtocolFallback !== undefined ? { allowA2AProtocolFallback } : {}),
+    ...(allowLegacyExecutorFallback !== undefined ? { allowLegacyExecutorFallback } : {}),
+  };
 }
 
 // ============================================================
@@ -223,10 +257,9 @@ async function setupWebSockets(httpServer: any, readOnly: boolean): Promise<void
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let wsMod: any;
   try {
-    // @ts-expect-error — ws lacks bundled types; we use the runtime constructor only
-    wsMod = await import('ws');
+    wsMod = await loadFeaturePackage('ws');
   } catch {
-    console.warn('[serve] ws package not available — WebSocket routes disabled. Install with: npm install ws');
+    console.warn('[serve] WebSocket routes disabled — run `aiwg features install webserver` to enable them.');
     return;
   }
 
@@ -502,7 +535,17 @@ export async function startServer(opts: {
   host: string;
   readOnly: boolean;
   frameworkRoot: string;
+  a2aProtocolPolicy?: '0.3' | '1.0' | 'auto';
+  allowA2AProtocolFallback?: boolean;
+  allowLegacyExecutorFallback?: boolean;
 }): Promise<{ url: string; close: () => void }> {
+  const configuredA2AProtocolPolicy = opts.a2aProtocolPolicy
+    ?? readA2AProtocolPolicy(process.env['AIWG_A2A_PROTOCOL_POLICY']);
+  const configuredA2AProtocolFallback = opts.allowA2AProtocolFallback
+    ?? process.env['AIWG_A2A_PROTOCOL_FALLBACK'] === 'true';
+  const configuredLegacyExecutorFallback = configuredA2AProtocolPolicy !== '1.0'
+    && (opts.allowLegacyExecutorFallback
+      ?? process.env['AIWG_A2A_LEGACY_EXECUTOR_FALLBACK'] !== 'false');
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let honoMod: any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -513,42 +556,18 @@ export async function startServer(opts: {
     // import path raises ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING (#1277).
     // hono is an optionalDependency; tsc may not find its types under
     // `npm ci --omit=optional` (e.g. metadata-validation workflow). The
-    // try/catch + auto-install fallback below handles that at runtime.
+    // try/catch below emits the managed feature-install route at runtime.
     // @ts-ignore — optional dep; may not be installed at typecheck time
-    honoMod = await import('hono');
+    honoMod = await loadFeaturePackage('hono');
     // @ts-ignore — optional dep; may not be installed at typecheck time
-    nodeMod = await import('@hono/node-server');
+    nodeMod = await loadFeaturePackage('@hono/node-server');
   } catch {
-    // Auto-install optional serve dependencies on first use
-    console.log('Installing serve dependencies (hono, @hono/node-server, ws)...');
-    const result = spawnSync(
-      'npm',
-      ['install', '--save-optional', 'hono', '@hono/node-server', 'ws'],
-      { stdio: 'inherit' },
-    );
-    if (result.status !== 0) {
-      throw new AiwgError({
-        code: 'ERR_SERVE_DEPS_INSTALL_FAILED',
-        message: 'Failed to install serve dependencies (hono, @hono/node-server, ws)',
-        hint: 'Install manually: npm install hono @hono/node-server ws',
-        exitCode: EXIT_CODES.GENERAL,
-      });
-    }
-    // Retry imports after install
-    try {
-      // @ts-ignore — optional dep; may not be installed at typecheck time
-      honoMod = await import('hono');
-      // @ts-ignore — optional dep; may not be installed at typecheck time
-      nodeMod = await import('@hono/node-server');
-    } catch (err) {
-      throw new AiwgError({
-        code: 'ERR_SERVE_DEPS_LOAD_FAILED',
-        message: 'Serve dependencies installed but could not be loaded',
-        hint: 'Try: npm install hono @hono/node-server ws',
-        exitCode: EXIT_CODES.GENERAL,
-        cause: err,
-      });
-    }
+    throw new AiwgError({
+      code: 'ERR_SERVE_DEPS_MISSING',
+      message: 'The optional webserver feature is not available',
+      hint: 'Run `aiwg features install webserver`, then retry `aiwg serve`.',
+      exitCode: EXIT_CODES.GENERAL,
+    });
   }
 
   const { Hono } = honoMod;
@@ -810,8 +829,33 @@ export async function startServer(opts: {
     let a2aInstanceId: string | undefined;
     let dispatchPath: 'v2' | 'v1-fallback' = 'v2';
     let a2aTask = undefined as Awaited<ReturnType<typeof routeDispatch>>['task'] | undefined;
+    let a2aProtocolVersion: '0.3' | '1.0' | undefined;
+    let a2aInterface: Awaited<ReturnType<typeof routeDispatch>>['a2aInterface'] | undefined;
+    let a2aFallbackReason: string | undefined;
+    const a2aProtocolPolicy = configuredA2AProtocolPolicy;
     try {
       const result = await routeDispatch(executor, payload as V1DispatchPayload, {
+        optionalExtensions: [A2A_HITL_PROMPT_V1],
+        a2aProtocolPolicy,
+        allowA2AProtocolFallback: configuredA2AProtocolFallback,
+        allowLegacyExecutorFallback: configuredLegacyExecutorFallback,
+        onA2AProtocolSelection: (info) => {
+          telemetryStore.ingest(createEvent('a2a.protocol.selected', sessionId, {
+            selected_version: info.selected,
+            policy: info.policy,
+            ...(info.interface ? {
+              protocol_binding: info.interface.protocolBinding,
+              interface_url: info.interface.url,
+            } : {}),
+          }, missionId));
+        },
+        onA2AProtocolFallback: (info) => {
+          telemetryStore.ingest(createEvent('a2a.protocol.fallback', sessionId, {
+            from_version: info.from,
+            to_version: info.to,
+            reason: info.reason,
+          }, missionId));
+        },
         onV1Fallback: (info) => {
           logServeWarn(
             'dispatch',
@@ -840,6 +884,9 @@ export async function startServer(opts: {
       dispatchPath = result.dispatchPath;
       a2aInstanceId = result.a2aInstanceId;
       a2aTask = result.task;
+      a2aProtocolVersion = result.a2aProtocolVersion;
+      a2aInterface = result.a2aInterface;
+      a2aFallbackReason = result.a2aFallbackReason;
       if (result.estimatedStart) estimatedStart = result.estimatedStart;
     } catch (err) {
       const msg = (err as Error).message ?? String(err);
@@ -865,7 +912,22 @@ export async function startServer(opts: {
     }
 
     // 4. Record the mission and emit telemetry
-    executorRegistry.assignMission(missionId, executor.executorId);
+    if (a2aProtocolVersion && a2aInterface) {
+      executorRegistry.recordA2AProtocolSelection(executor.executorId, {
+        policy: a2aProtocolPolicy,
+        selectedVersion: a2aProtocolVersion,
+        interface: a2aInterface,
+        ...(a2aFallbackReason ? { fallbackReason: a2aFallbackReason } : {}),
+      });
+    }
+    const existingMission = executorRegistry.getMission(missionId);
+    // An idempotent replay must not discard in-flight/accepted approvals.
+    if (!(dispatchPath === 'v2' && a2aTask && a2aInstanceId
+      && existingMission?.executorId === executor.executorId
+      && existingMission.a2a?.taskId === a2aTask.id
+      && existingMission.a2a.instanceId === a2aInstanceId)) {
+      executorRegistry.assignMission(missionId, executor.executorId);
+    }
     if (dispatchPath === 'v2' && a2aTask && a2aInstanceId) {
       void observeA2ATerminalState(
         executorRegistry,
@@ -880,6 +942,8 @@ export async function startServer(opts: {
               `A2A terminal observer failed for mission ${missionId}: ${(err as Error).message ?? String(err)}`
             );
           },
+          ...(a2aProtocolVersion ? { protocolVersion: a2aProtocolVersion } : {}),
+          ...(a2aInterface ? { selectedInterface: a2aInterface } : {}),
         }
       );
     }
@@ -888,6 +952,8 @@ export async function startServer(opts: {
       executorId: executor.executorId,
       objective: payload.objective,
       completion: payload.completion,
+      ...(a2aProtocolVersion ? { a2a_protocol_version: a2aProtocolVersion } : {}),
+      ...(a2aFallbackReason ? { a2a_fallback_reason: a2aFallbackReason } : {}),
     }, missionId));
 
     // 5. Return 202 Accepted
@@ -898,6 +964,12 @@ export async function startServer(opts: {
       dispatch_path: dispatchPath,
     };
     if (a2aInstanceId) dispatchResp.a2a_instance_id = a2aInstanceId;
+    if (a2aProtocolVersion) dispatchResp.a2a_protocol_version = a2aProtocolVersion;
+    if (a2aInterface) {
+      dispatchResp.a2a_protocol_binding = a2aInterface.protocolBinding;
+      dispatchResp.a2a_interface_url = a2aInterface.url;
+    }
+    if (a2aFallbackReason) dispatchResp.a2a_fallback_reason = a2aFallbackReason;
     if (estimatedStart) dispatchResp.estimated_start = estimatedStart;
     return c.json(dispatchResp, 202);
   });
@@ -920,7 +992,7 @@ export async function startServer(opts: {
     });
   });
 
-  // POST /api/v1/missions/:id/hitl_response → 200; forwards to owning executor over WS
+  // POST /api/v1/missions/:id/hitl_response → owning task's negotiated transport
   app.post('/api/v1/missions/:id/hitl_response', async (c: any) => {
     const missionId: string = c.req.param('id');
     const mission = executorRegistry.getMission(missionId);
@@ -932,8 +1004,17 @@ export async function startServer(opts: {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const payload = body as any;
-    if (!payload.hitl_id || !payload.response) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+      || typeof payload.hitl_id !== 'string' || !payload.hitl_id || !Object.hasOwn(payload, 'response')) {
       return c.json({ error: 'hitl_id and response are required' }, 400);
+    }
+
+    if (mission.a2a) {
+      const result = await respondToA2AMission(executorRegistry, missionId, payload.hitl_id, payload.response);
+      return c.json(result.body, result.status);
+    }
+    if (typeof payload.response !== 'string' || !payload.response) {
+      return c.json({ error: 'Legacy HITL response must be a non-empty string' }, 400);
     }
 
     // Push hitl_responded event to the executor over WS
@@ -1039,6 +1120,7 @@ export async function startServer(opts: {
     const result = await handleWebhook(configId, bodyBuf, signature, eventId, {
       registry: pushSecretRegistry,
       idempotency: webhookIdempotency,
+      contentType: c.req.header('content-type') ?? undefined,
       route: async (entry, event) => {
         // Append to mission recentEvents via a synthesized envelope.
         // The 'mission.webhook' event type falls through the registry's
@@ -1052,7 +1134,7 @@ export async function startServer(opts: {
               executor_id: mission.executorId,
               mission_id: entry.missionId,
               ts: new Date().toISOString(),
-              data: { stream_event: event as Record<string, unknown> },
+              data: { stream_event: event as unknown as Record<string, unknown> },
             });
           }
         }
@@ -1082,6 +1164,9 @@ export async function startServer(opts: {
       secret?: string;
       missionId?: string;
       taskId?: string;
+      contextId?: string;
+      protocolVersion?: '0.3' | '1.0';
+      taskOwner?: string;
       metadata?: Record<string, unknown>;
     };
     if (!p.configId || typeof p.configId !== 'string') {
@@ -1090,11 +1175,17 @@ export async function startServer(opts: {
     if (!p.secret || typeof p.secret !== 'string' || p.secret.length < 16) {
       return c.json({ error: 'secret is required and must be ≥16 chars' }, 400);
     }
+    if (p.protocolVersion === '1.0' && !p.taskId) {
+      return c.json({ error: 'taskId is required for A2A 1.0 push ownership scope' }, 400);
+    }
     pushSecretRegistry.register({
       configId: p.configId,
       secret: p.secret,
       ...(p.missionId ? { missionId: p.missionId } : {}),
       ...(p.taskId ? { taskId: p.taskId } : {}),
+      ...(p.contextId ? { contextId: p.contextId } : {}),
+      ...(p.protocolVersion ? { protocolVersion: p.protocolVersion } : {}),
+      ...(p.taskOwner ? { taskOwner: p.taskOwner } : {}),
       ...(p.metadata ? { metadata: p.metadata } : {}),
     });
     return c.json({ ok: true, configId: p.configId }, 201);
@@ -1764,7 +1855,8 @@ export async function startServer(opts: {
   const webDistDir = path.join(opts.frameworkRoot, 'apps', 'web', 'dist');
   if (existsSync(webDistDir)) {
     try {
-      const { serveStatic } = await (new Function('m', 'return import(m)'))('@hono/node-server/serve-static');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { serveStatic } = await loadFeaturePackage('@hono/node-server/serve-static') as any;
       app.use('/*', serveStatic({ root: webDistDir }));
     } catch {
       // serve-static import failed — fall through to placeholder below
@@ -1857,12 +1949,28 @@ export const serveHandler: CommandHandler = {
   aliases: [],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
-    const { port, host, open, readOnly } = parseServeArgs(ctx.args);
+    const {
+      port,
+      host,
+      open,
+      readOnly,
+      a2aProtocolPolicy,
+      allowA2AProtocolFallback,
+      allowLegacyExecutorFallback,
+    } = parseServeArgs(ctx.args);
 
     let server: { url: string; close: () => void } | undefined;
 
     try {
-      server = await startServer({ port, host, readOnly, frameworkRoot: ctx.frameworkRoot });
+      server = await startServer({
+        port,
+        host,
+        readOnly,
+        frameworkRoot: ctx.frameworkRoot,
+        ...(a2aProtocolPolicy ? { a2aProtocolPolicy } : {}),
+        ...(allowA2AProtocolFallback !== undefined ? { allowA2AProtocolFallback } : {}),
+        ...(allowLegacyExecutorFallback !== undefined ? { allowLegacyExecutorFallback } : {}),
+      });
     } catch (error) {
       const { handlerResultFromError } = await import('../errors.js');
       return handlerResultFromError(error);
@@ -1878,7 +1986,7 @@ export const serveHandler: CommandHandler = {
     if (open) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const openMod: any = await (new Function('m', 'return import(m)'))('open');
+        const openMod: any = await loadFeaturePackage('open');
         const openBrowser = openMod.default ?? openMod;
         await openBrowser(url);
       } catch {

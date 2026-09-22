@@ -802,4 +802,4 @@ references:
     - "@agentic/code/addons/rlm/schemas/rlm-state.yaml"
     - "@.claude/rules/tao-loop.md"
     - "@.claude/rules/thought-protocol.md"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"

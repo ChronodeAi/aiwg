@@ -20,7 +20,7 @@ import {
 } from '../../../src/artifacts/index-builder.js';
 import { discoverCapability } from '../../../src/artifacts/query-engine.js';
 import type { ArtifactIndex } from '../../../src/artifacts/types.js';
-import { GRAPH_CONFIGS } from '../../../src/artifacts/types.js';
+import { GRAPH_CONFIGS, OPERATIONAL_DISCOVERY_TYPES } from '../../../src/artifacts/types.js';
 
 let tmpRoot: string;
 let cwd: string;
@@ -33,10 +33,19 @@ function writeSkill(slug: string, framework: string, body: string): string {
   return file;
 }
 
+let previousXdgDataHome: string | undefined;
+
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-discover-'));
   cwd = path.join(tmpRoot, 'project');
   fs.mkdirSync(cwd, { recursive: true });
+  // The framework graph is USER-GLOBAL. This file builds it 18 times from
+  // two-artifact fixtures; unsandboxed, each one overwrites the developer's real
+  // ~/.local/share/aiwg/index/framework and silently breaks `aiwg discover`
+  // host-wide until the next full rebuild. Pin it here rather than per call so
+  // new tests inherit the sandbox instead of having to remember it (#2544).
+  previousXdgDataHome = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = path.join(tmpRoot, 'xdg');
   // Clear any user-defined graphs leaked from earlier tests
   for (const k of Object.keys(GRAPH_CONFIGS)) {
     if (!['framework', 'project', 'codebase', 'source', 'user'].includes(k)) {
@@ -46,6 +55,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+  else process.env.XDG_DATA_HOME = previousXdgDataHome;
   fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -71,6 +82,19 @@ Should be ignored.
       'start fresh project',
       'new project',
     ]);
+  });
+
+  it('is applied to rules, not only skills (#2544)', () => {
+    // `rule` is in OPERATIONAL_DISCOVERY_TYPES, so the indexer runs trigger
+    // extraction over rule bodies. A rule's name describes the policy, not the
+    // question an agent asks, so without triggers it ranks only on lexical
+    // title overlap and loses to any skill whose triggers cover a token.
+    expect(OPERATIONAL_DISCOVERY_TYPES).toContain('rule');
+    expect(extractTriggers('# Human Authorization Rules\n\nBody.', {
+      enforcement: 'high',
+      triggers: ['am I allowed to do this', 'do I need permission for this'],
+      // Extraction lowercases, so frontmatter casing does not matter.
+    })).toEqual(['am i allowed to do this', 'do i need permission for this']);
   });
 
   it('returns empty array when no Triggers section exists', () => {
@@ -229,9 +253,7 @@ describe('buildIndex → type inference', () => {
     consoleSpy.mockRestore();
     consoleErrSpy.mockRestore();
 
-    const indexDir = process.env.XDG_DATA_HOME
-      ? path.join(process.env.XDG_DATA_HOME, 'aiwg', 'index', 'framework')
-      : path.join(os.homedir(), '.local', 'share', 'aiwg', 'index', 'framework');
+    const indexDir = path.join(process.env.XDG_DATA_HOME as string, 'aiwg', 'index', 'framework');
     const metadataPath = path.join(indexDir, 'metadata.json');
     if (!fs.existsSync(metadataPath)) {
       // Test environment may have a different writer; skip the rest
@@ -319,6 +341,73 @@ deprecated_names: [al]
         ]),
       );
     }
+  });
+
+  it('does not match short one-word aliases inside longer words', async () => {
+    writeSkill(
+      'ralph',
+      'agent-loop',
+      `---
+name: ralph
+description: Execute an iterative task loop until completion
+aliases: [al, agent-loop]
+deprecated_names: [al]
+---
+
+# Agent Loop
+`,
+    );
+    writeSkill(
+      'steward',
+      'aiwg-utils',
+      `---
+name: steward
+description: Diagnose and repair stale AIWG setup and provider files
+triggers:
+  - "AIWG setup is stale or broken"
+  - "steward repair AIWG setup"
+---
+
+# Steward
+`,
+    );
+
+    const setupSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const setupErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+    setupSpy.mockRestore();
+    setupErrSpy.mockRestore();
+
+    const captured: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args) =>
+      captured.push(args.join(' ')),
+    );
+    await discoverCapability(cwd, {
+      phrase: 'AIWG setup is stale or broken',
+      graph: 'framework',
+      json: true,
+      backend: 'local',
+      limit: 3,
+    });
+    logSpy.mockRestore();
+
+    const parsed = JSON.parse(captured.join('\n'));
+    expect(parsed.results[0]?.path).toContain('/steward/SKILL.md');
+    expect(parsed.results[0]?.ranking.matches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          field: 'trigger',
+          match: 'exact',
+          value: 'aiwg setup is stale or broken',
+        }),
+      ]),
+    );
+    expect(
+      parsed.results.some((result: { path: string; ranking: { matches: { value?: string }[] } }) =>
+        result.path.includes('/ralph/SKILL.md') &&
+        result.ranking.matches.some((match) => match.value === 'al'),
+      ),
+    ).toBe(false);
   });
 
   it('emits a stable schema with path/type/score/triggers/capability', async () => {
@@ -495,6 +584,81 @@ deprecated_names: [al]
       expect(parsed.results.length, `"${phrase}" should not dead-end`).toBeGreaterThan(0);
       expect(parsed.results[0].path).toContain('intake-wizard');
     }
+  });
+
+  it('does not dilute a relevant capability match with unmatched query terms (#154)', async () => {
+    writeSkill(
+      'product-designer',
+      'design',
+      `---\nname: product-designer\ndescription: Crafts user experience flows, interface designs, and interaction specs that align with product objectives\n---\n`,
+    );
+    writeSkill(
+      'generic-reviewer',
+      'design',
+      `---\nname: generic-reviewer\ndescription: Reviews existing project screens\n---\n`,
+    );
+
+    const setupSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const setupErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+    setupSpy.mockRestore();
+    setupErrSpy.mockRestore();
+
+    const captured: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args) =>
+      captured.push(args.join(' ')),
+    );
+    await discoverCapability(cwd, {
+      phrase: 'design a user interface, information architecture, UX review of an existing screen',
+      graph: 'framework',
+      json: true,
+      backend: 'local',
+      limit: 3,
+    });
+    logSpy.mockRestore();
+
+    const parsed = JSON.parse(captured.join('\n'));
+    const productDesigner = parsed.results.find((result: { path: string }) =>
+      result.path.includes('/product-designer/SKILL.md'));
+    expect(productDesigner).toBeDefined();
+    expect(productDesigner.ranking.lexical_score).toBeGreaterThanOrEqual(0.2);
+  });
+
+  it('matches short acronyms on token boundaries rather than inside words (#154)', async () => {
+    writeSkill(
+      'linux-forensics',
+      'forensics',
+      `---\nname: linux-forensics\ndescription: Investigate Linux hosts and filesystems\n---\n`,
+    );
+    writeSkill(
+      'native-ux-tools',
+      'design',
+      `---\nname: native-ux-tools\ndescription: Use native UX tools for interface design\n---\n`,
+    );
+
+    const setupSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const setupErrSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+    setupSpy.mockRestore();
+    setupErrSpy.mockRestore();
+
+    const captured: string[] = [];
+    const logSpy = vi.spyOn(console, 'log').mockImplementation((...args) =>
+      captured.push(args.join(' ')),
+    );
+    await discoverCapability(cwd, {
+      phrase: 'UX',
+      graph: 'framework',
+      json: true,
+      backend: 'local',
+      limit: 5,
+    });
+    logSpy.mockRestore();
+
+    const parsed = JSON.parse(captured.join('\n'));
+    expect(parsed.results[0]?.path).toContain('/native-ux-tools/SKILL.md');
+    expect(parsed.results.some((result: { path: string }) =>
+      result.path.includes('/linux-forensics/SKILL.md'))).toBe(false);
   });
 
   // #1230 — kernel-marked skills used to short-circuit path anchoring,

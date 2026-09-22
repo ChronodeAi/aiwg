@@ -59,18 +59,18 @@ function writeStandaloneWrapper(repository: string, id: string): string {
 }
 
 function commitRepository(repository: string): string {
-  execFileSync('git', ['init', '--initial-branch=main'], { cwd: repository });
-  execFileSync('git', ['config', 'user.name', 'AIWG Test'], { cwd: repository });
-  execFileSync('git', ['config', 'user.email', 'test@aiwg.invalid'], { cwd: repository });
-  execFileSync('git', ['add', '.'], { cwd: repository });
-  execFileSync('git', ['commit', '-m', 'fixture'], { cwd: repository });
-  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repository, encoding: 'utf8' }).trim();
+  execFileSync('git', ['init', '--initial-branch=main'], { timeout: 60_000, cwd: repository });
+  execFileSync('git', ['config', 'user.name', 'AIWG Test'], { timeout: 60_000, cwd: repository });
+  execFileSync('git', ['config', 'user.email', 'test@aiwg.invalid'], { timeout: 60_000, cwd: repository });
+  execFileSync('git', ['add', '.'], { timeout: 60_000, cwd: repository });
+  execFileSync('git', ['commit', '-m', 'fixture'], { timeout: 60_000, cwd: repository });
+  return execFileSync('git', ['rev-parse', 'HEAD'], { timeout: 60_000, cwd: repository, encoding: 'utf8' }).trim();
 }
 
 function publishBareRepository(repository: string, serverRoot: string, name: string): string {
   const bare = path.join(serverRoot, `${name}.git`);
-  execFileSync('git', ['clone', '--bare', repository, bare]);
-  execFileSync('git', ['--git-dir', bare, 'update-server-info']);
+  execFileSync('git', ['clone', '--bare', repository, bare], { timeout: 60_000 });
+  execFileSync('git', ['--git-dir', bare, 'update-server-info'], { timeout: 60_000 });
   return `${name}.git`;
 }
 

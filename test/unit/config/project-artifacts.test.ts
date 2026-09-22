@@ -8,7 +8,11 @@ import {
   PROJECT_AIWG_LOCATION_FILE,
   parseProjectArtifactLocation,
   projectAiwgPath,
+  projectAiwgWritePath,
+  projectControlPath,
   resolveProjectAiwgDir,
+  resolveProjectAiwgDirForWrite,
+  resolveProjectControlDir,
 } from '../../../src/config/project-artifacts.js';
 
 const ARTIFACT_ENV_KEYS = [
@@ -82,6 +86,13 @@ describe('project-artifacts', () => {
     expect(projectAiwgPath('/repo/project', 'aiwg.config')).toBe(join(resolve('/repo/project', '.aiwg'), 'aiwg.config'));
   });
 
+  it('keeps control-plane paths local when the artifact corpus is relocated', () => {
+    expect(resolveProjectControlDir('/repo/project')).toBe(resolve('/repo/project', '.aiwg'));
+    expect(projectControlPath('/repo/project', 'aiwg.config')).toBe(
+      join(resolve('/repo/project', '.aiwg'), 'aiwg.config'),
+    );
+  });
+
   it('parses pointer files with comments and optional shell assignment syntax', () => {
     expect(parseProjectArtifactLocation('# comment\n../private/.aiwg\n')).toBe('../private/.aiwg');
     expect(parseProjectArtifactLocation('export AIWG_ARTIFACTS_PATH="../private/.aiwg"\n')).toBe('../private/.aiwg');
@@ -116,6 +127,22 @@ describe('project-artifacts', () => {
       writeFileSync(join(projectDir, PROJECT_AIWG_LOCATION_FILE), '.project-aiwg-store\n', 'utf-8');
       expect(projectAiwgPath(projectDir, 'context', 'providers', 'codex.md')).toBe(
         join(projectDir, '.project-aiwg-store', 'context', 'providers', 'codex.md'),
+      );
+      expect(projectControlPath(projectDir, 'AIWG.md')).toBe(join(projectDir, '.aiwg', 'AIWG.md'));
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when an explicitly external artifact root is unavailable for writes', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'aiwg-artifact-offline-'));
+    try {
+      writeFileSync(join(projectDir, PROJECT_AIWG_LOCATION_FILE), '../offline-corpus/.aiwg\n', 'utf-8');
+      expect(() => resolveProjectAiwgDirForWrite(projectDir, {})).toThrow(
+        /Configured external AIWG artifact root is unavailable/,
+      );
+      expect(() => projectAiwgWritePath(projectDir, 'reports', 'result.md')).toThrow(
+        /will not fall back to repository-local \.aiwg payload/,
       );
     } finally {
       rmSync(projectDir, { recursive: true, force: true });

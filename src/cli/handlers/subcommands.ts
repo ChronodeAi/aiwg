@@ -55,6 +55,7 @@ export const quickrefHandler: CommandHandler = {
         console.log(`${verb} ${result.skillName}`);
         console.log(`  Source: ${result.sourcePath}`);
         console.log(`  Output: ${result.outputPath}`);
+        for (const warning of result.warnings) console.log(`  Warning: ${warning}`);
         if (ctx.dryRun) {
           console.log('\n--- preview ---\n');
           console.log(result.content);
@@ -205,6 +206,12 @@ export const catalogHandler: CommandHandler = {
   description: "Model catalog commands (list, info, search)",
   category: "catalog",
   aliases: [],
+
+  async help(): Promise<HandlerResult> {
+    const { printCatalogHelp } = await import("../../catalog/cli.mjs");
+    printCatalogHelp();
+    return { exitCode: 0 };
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     try {
@@ -770,6 +777,18 @@ export const removeHandler: CommandHandler = {
   aliases: [],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    // Explicit provider removal is separate from framework removal. The native
+    // adapter validates receipt hashes and preserves operator modifications.
+    const nativeRemovalProvider = parseRemoveProvider(ctx.args);
+    if (firstRemovePositional(ctx.args) === 'omp' && nativeRemovalProvider.provider === 'omp') {
+      const { uninstall } = await import('../../../tools/agents/providers/omp.mjs');
+      const { getProjectDir } = await import('../../config/aiwg-config.js');
+      const dryRun = ctx.args.includes('--dry-run');
+      const scope = ctx.args.includes('--user') || isScopeUser(ctx.args) ? 'user' : 'project';
+      const count = uninstall(getProjectDir({ cwd: ctx.cwd }, ctx.args), { dryRun, scope });
+      return { exitCode: 0, message: `${dryRun ? 'Would remove' : 'Removed'} ${count} unchanged OMP-owned files; operator files preserved.` };
+    }
+
     // #1156 Phase 1 — `--scope user` / `--user`: revert the user-scope mirror
     // for the given framework. Independent of any project; reads the per-user
     // registry at ~/.aiwg/installed.json to find what was deployed, deletes
@@ -953,6 +972,22 @@ export const promoteHandler: CommandHandler = {
       console.log(`✓ Promoted '${positional}' → ${result.plan?.destination}`);
       if (cleanup) {
         console.log('  Source removed from .aiwg/');
+        try {
+          const { deployProjectQuickref, generateProjectQuickref, hasProjectQuickref } = await import('../../extensions/project-quickref.js');
+          if (await hasProjectQuickref(projectDir)) {
+            if (config.providers.length > 0) {
+              for (const provider of config.providers) await deployProjectQuickref(projectDir, provider);
+              console.log(`  Managed project quickref refreshed for: ${config.providers.join(', ')}.`);
+            } else {
+              await generateProjectQuickref(projectDir);
+              console.log('  Managed project quickref generated; no providers are configured for deployment.');
+            }
+          } else {
+            console.log('  Managed project quickref is now empty; run `aiwg doctor --project-local` to inspect deployed stale copies.');
+          }
+        } catch (error) {
+          console.log(`  Managed project quickref refresh failed: ${(error as Error).message}`);
+        }
       }
       return { exitCode: 0 };
     } catch (err) {
@@ -1069,6 +1104,14 @@ export const newBundleHandler: CommandHandler = {
         }
       } catch {
         // .gitignore management is best-effort; don't fail the scaffold
+      }
+
+      try {
+        const { generateProjectQuickref } = await import('../../extensions/project-quickref.js');
+        await generateProjectQuickref(ctx.cwd);
+        console.log('  → Managed project quickref refreshed from discovered capabilities.');
+      } catch (error) {
+        console.log(`  → Managed project quickref refresh deferred: ${(error as Error).message}`);
       }
 
       // #1235 / #1758 — auto-rebuild the project graph and refresh the
@@ -1233,6 +1276,29 @@ export const pluginStatusHandler: CommandHandler = {
  *
  * Delegates to tools/plugin/package-plugins.mjs
  */
+function packagePluginHelp(): HandlerResult {
+  return {
+    exitCode: 0,
+    message: [
+      "aiwg package-plugin — package a project-local or built-in marketplace wrapper",
+      "",
+      "Usage:",
+      "  aiwg package-plugin <name> [--source <path>] [--output <path>] [--provider <name>] [--clean] [--dry-run]",
+      "  aiwg package-plugin --plugin <name> [options]  # compatibility form",
+      "",
+      "Options:",
+      "  --source <path>    explicit project-local wrapper source (must stay inside the project)",
+      "  --output <path>    standalone archive output (default: dist/plugins)",
+      "  --provider <name>  claude, codex, or all for standalone wrappers; built-ins retain all formats",
+      "  --clean            clean generated plugin output before packaging",
+      "  --dry-run, -n      preview without writing",
+      "  --help, -h         show this help",
+      "",
+      "Project-local wrappers are discovered under .aiwg/plugins and packaged as deterministic archives.",
+    ].join("\n"),
+  };
+}
+
 export const packagePluginHandler: CommandHandler = {
   id: "package-plugin",
   name: "Package Plugin",
@@ -1240,28 +1306,13 @@ export const packagePluginHandler: CommandHandler = {
   category: "plugin",
   aliases: ["-package-plugin", "--package-plugin"],
 
+  async help(): Promise<HandlerResult> {
+    return packagePluginHelp();
+  },
+
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     if (ctx.args.includes("--help") || ctx.args.includes("-h")) {
-      return {
-        exitCode: 0,
-        message: [
-          "aiwg package-plugin — package a project-local or built-in marketplace wrapper",
-          "",
-          "Usage:",
-          "  aiwg package-plugin <name> [--source <path>] [--output <path>] [--provider <name>] [--clean] [--dry-run]",
-          "  aiwg package-plugin --plugin <name> [options]  # compatibility form",
-          "",
-          "Options:",
-          "  --source <path>    explicit project-local wrapper source (must stay inside the project)",
-          "  --output <path>    standalone archive output (default: dist/plugins)",
-          "  --provider <name>  claude, codex, or all for standalone wrappers; built-ins retain all formats",
-          "  --clean            clean generated plugin output before packaging",
-          "  --dry-run, -n      preview without writing",
-          "  --help, -h         show this help",
-          "",
-          "Project-local wrappers are discovered under .aiwg/plugins and packaged as deterministic archives.",
-        ].join("\n"),
-      };
+      return packagePluginHelp();
     }
 
     const hasExplicitPlugin = ctx.args.includes("--plugin") || ctx.args.includes("-p");

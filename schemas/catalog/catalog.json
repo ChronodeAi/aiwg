@@ -1,0 +1,20 @@
+{
+  "$schema": "./catalog.v1.schema.json",
+  "schemaVersion": "1",
+  "policy": {
+    "strict": true,
+    "remoteReferences": "deny",
+    "compatibility": "unknown",
+    "requireFixtures": false,
+    "requireDigest": false
+  },
+  "domains": [
+    "domains/control-plane.json",
+    "domains/dataset.json",
+    "domains/decision.json",
+    "domains/storage.json",
+    "domains/repository-json-schemas.json",
+    "domains/network-analysis.json",
+    "domains/testing-quality.json"
+  ]
+}

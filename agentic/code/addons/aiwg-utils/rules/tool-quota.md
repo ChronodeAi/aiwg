@@ -1,5 +1,9 @@
 ---
 enforcement: high
+triggers:
+  - "how many times should I retry"
+  - "this command keeps failing"
+  - "am I in a loop"
 ---
 
 # Tool Quota and Loop Detection

@@ -33,11 +33,11 @@ import {
   type AiwgFortemiRecord,
 } from './browser-export.js';
 import { loadProviderModelMetadata } from '../models/provider-models.js';
+import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 import {
   operationalStateQueryProjection,
   type OperationalStateQueryProjection,
 } from './operational-state.js';
-import { projectAiwgPath } from '../config/project-artifacts.js';
 import type {
   ResourceSource,
   VerifiedWebRelease,
@@ -92,6 +92,12 @@ const DISCOVER_TYPE_ORDER = new Map(
 function canonicalLocalityRank(entryPath: string): number {
   const normalized = entryPath.replace(/\\/g, '/');
   if (normalized.startsWith('.aiwg/') || normalized.includes('/.aiwg/')) return 0;
+  // Top-level persona mirrors are the least canonical source for a name a bundle
+  // also owns. Without this they fell into the catch-all below and scored 1,
+  // beating the bundle copy at 2 — the opposite of #1643. It only ever looked
+  // correct because a populated user index supplied provenance and `scopeRank`
+  // never reached this fallback (#2544).
+  if (normalized.startsWith('agentic/code/agents/') || normalized.includes('/agentic/code/agents/')) return 4;
   if (normalized.includes('/plugins/') || normalized.startsWith('agentic/code/plugins/')) return 3;
   if (
     normalized.includes('/frameworks/') ||
@@ -119,8 +125,42 @@ function graphScope(graph: GraphType): ProvenancedEntry['indexScope'] {
   return 'custom';
 }
 
+function containsTokenSequence(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || haystack.length < needle.length) return false;
+  for (let i = 0; i <= haystack.length - needle.length; i++) {
+    let matched = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
+}
+
 function withIndexProvenance(entry: MetadataEntry, graph: GraphType): ProvenancedEntry {
   return { ...entry, indexGraph: graph, indexScope: graphScope(graph) };
+}
+
+/** Keep existing project capabilities visible while their derived cache is unavailable. */
+function projectCapabilityFallback(cwd: string): MetadataEntry[] | null {
+  const index = loadGraphIndexFile<ArtifactIndex>(cwd, 'metadata.json', 'project');
+  if (index) {
+    const entries = Object.values(index.entries).map((entry) => withIndexProvenance(entry, 'project'));
+    if (entries.length > 0) {
+      // One diagnostic per command, on stderr so JSON and skill bodies stay parseable.
+      console.error('Warning: project capability cache is unavailable or stale; using the local project index. Run `aiwg index sync` to repair the cache.');
+      return entries;
+    }
+  }
+  if (['extensions', 'addons', 'frameworks', 'plugins', 'skills'].some(
+    (dir) => fs.existsSync(projectAiwgPath(cwd, dir)),
+  )) {
+    console.error('Warning: project capabilities could not be loaded: the cache is unavailable and the local project index is missing or empty. Run `aiwg index build --graph project` to repair discovery.');
+  }
+  return index ? [] : null;
 }
 
 function discoveryIdForEntry(entry: MetadataEntry): string {
@@ -205,7 +245,7 @@ const SCORE_STOPWORDS = new Set([
   'with', 'into', 'from', 'is', 'are', 'be', 'i', 'we', 'my',
   // pronouns / determiners / fillers
   'it', 'you', 'me', 'us', 'your', 'our', 'this', 'that', 'these', 'those',
-  'there', 'here', 'some', 'any', 'all', 'also', 'please', 'about',
+  'there', 'here', 'some', 'any', 'all', 'also', 'please', 'about', 'project',
   // question words
   'how', 'what', 'which', 'where', 'when', 'who', 'why',
   // asking / request verbs ("find a skill that handles …")
@@ -215,6 +255,7 @@ const SCORE_STOPWORDS = new Set([
   // AIWG meta-type nouns — zero discriminating signal in a discover query
   'aiwg', 'skill', 'skills', 'agent', 'agents', 'command', 'commands',
   'rule', 'rules', 'schema', 'schemas', 'flow', 'flows', 'workflow', 'workflows',
+  'template', 'templates',
 ]);
 
 /**
@@ -225,8 +266,20 @@ const SCORE_STOPWORDS = new Set([
 function tokenize(text: string): string[] {
   return text
     .toLowerCase()
-    .split(/[^a-z0-9-]+/)
-    .filter(t => t.length > 1 && !SCORE_STOPWORDS.has(t));
+    .split(/[^a-z0-9]+/)
+    .filter(t => t.length > 1 && !SCORE_STOPWORDS.has(t))
+    .map(token => token.length > 4 && token.endsWith('s') && !token.endsWith('ss')
+      ? token.slice(0, -1)
+      : token);
+}
+
+function matchedFieldTokens(queryTokens: string[], field: string): string[] {
+  const fieldTokens = new Set(tokenize(field));
+  return queryTokens.filter(token => fieldTokens.has(token));
+}
+
+function fieldContainsQuery(field: string, queryTokens: string[]): boolean {
+  return containsTokenSequence(tokenize(field), queryTokens);
 }
 
 /**
@@ -349,6 +402,7 @@ function scoreEntryDetailed(
   );
   let score = 0;
   const matches: LexicalMatchDiagnostic[] = [];
+  const creditedTokens = new Set<string>();
   const finish = (uncappedScore = score, cap = 1): DetailedScore => ({
     score: Math.min(uncappedScore, cap),
     diagnostic: {
@@ -365,6 +419,20 @@ function scoreEntryDetailed(
   ): void => {
     score += contribution;
     matches.push({ ...match, contribution });
+  };
+  const addTokenMatch = (
+    contributionPerToken: number,
+    hits: string[],
+    match: Omit<LexicalMatchDiagnostic, 'contribution' | 'matched_tokens' | 'query_token_coverage'>,
+  ): void => {
+    const newlyMatched = hits.filter(token => !creditedTokens.has(token));
+    if (newlyMatched.length === 0) return;
+    newlyMatched.forEach(token => creditedTokens.add(token));
+    addMatch(contributionPerToken * newlyMatched.length, {
+      ...match,
+      matched_tokens: newlyMatched,
+      query_token_coverage: tokens.length > 0 ? newlyMatched.length / tokens.length : 0,
+    });
   };
 
   // Exact-name floor (#1233) — if the query (normalized) exactly matches
@@ -450,12 +518,10 @@ function scoreEntryDetailed(
         });
         return finish(1.0008, 1.0008);
       } else if (
-        trigger.includes(lower) ||
-        lower.includes(trigger) ||
-        trigger.includes(rawLower) ||
-        rawLower.includes(trigger)
+        containsTokenSequence(triggerTokens, tokens) ||
+        containsTokenSequence(tokens, triggerTokens)
       ) {
-        const triggerInsideQuery = lower.includes(trigger) || rawLower.includes(trigger);
+        const triggerInsideQuery = containsTokenSequence(tokens, triggerTokens);
         const containedCoverage = triggerInsideQuery
           ? queryCoverage
           : triggerTokens.length > 0
@@ -484,14 +550,12 @@ function scoreEntryDetailed(
           query_token_coverage: queryCoverage,
         });
       } else if (useMultiToken) {
-        const hits = tokens.filter(t => trigger.includes(t));
+        const hits = matchedFieldTokens(tokens, trigger);
         if (overlapOK(hits.length)) {
-          addMatch(0.06 * 4 * (hits.length / tokens.length), {
+          addTokenMatch(0.1 * 4, hits, {
             field: 'trigger',
             match: 'token-overlap',
             value: trigger,
-            matched_tokens: hits,
-            query_token_coverage: hits.length / tokens.length,
           });
         }
       }
@@ -500,28 +564,26 @@ function scoreEntryDetailed(
 
   // Capability description (2x weight) — full phrase first, then tokens
   if (capabilityLower) {
-    if (capabilityLower.includes(lower)) {
+    if (fieldContainsQuery(capabilityLower, tokens)) {
       addMatch(0.2 * 2, {
         field: 'capability',
         match: 'contained-phrase',
         value: entry.capability,
       });
     } else if (useMultiToken) {
-      const hits = tokens.filter(t => capabilityLower.includes(t));
+      const hits = matchedFieldTokens(tokens, capabilityLower);
       if (overlapOK(hits.length)) {
-        addMatch(0.1 * 2 * (hits.length / tokens.length), {
+        addTokenMatch(0.1 * 2, hits, {
           field: 'capability',
           match: 'token-overlap',
           value: entry.capability,
-          matched_tokens: hits,
-          query_token_coverage: hits.length / tokens.length,
         });
       }
     }
   }
 
   // Title (3x weight)
-  if (titleLower.includes(lower)) {
+  if (fieldContainsQuery(titleLower, tokens)) {
     addMatch(0.3 * 3, {
       field: 'title',
       match: titleLower === lower ? 'exact' : 'contained-phrase',
@@ -531,31 +593,27 @@ function scoreEntryDetailed(
       addMatch(0.2, { field: 'title', match: 'exact', value: entry.title });
     }
   } else if (useMultiToken) {
-    const hits = tokens.filter(t => titleLower.includes(t));
+    const hits = matchedFieldTokens(tokens, titleLower);
     if (overlapOK(hits.length)) {
-      addMatch(0.08 * 3 * (hits.length / tokens.length), {
+      addTokenMatch(0.08 * 3, hits, {
         field: 'title',
         match: 'token-overlap',
         value: entry.title,
-        matched_tokens: hits,
-        query_token_coverage: hits.length / tokens.length,
       });
     }
   }
 
   // Tags (2x weight)
   for (const tag of tagsLower) {
-    if (tag.includes(lower)) {
+    if (fieldContainsQuery(tag, tokens)) {
       addMatch(0.2 * 2, { field: 'tag', match: 'contained-phrase', value: tag });
     } else if (useMultiToken) {
-      const hits = tokens.filter(t => tag.includes(t));
+      const hits = matchedFieldTokens(tokens, tag);
       if (overlapOK(hits.length)) {
-        addMatch(0.05 * 2 * (hits.length / tokens.length), {
+        addTokenMatch(0.05 * 2, hits, {
           field: 'tag',
           match: 'token-overlap',
           value: tag,
-          matched_tokens: hits,
-          query_token_coverage: hits.length / tokens.length,
         });
       }
     }
@@ -563,16 +621,14 @@ function scoreEntryDetailed(
 
   // Structure-aware language terms (1.5x weight). These are deliberately
   // below declared triggers/capabilities but above generic body summaries.
-  if (searchTermsLower.includes(lower)) {
+  if (fieldContainsQuery(searchTermsLower, tokens)) {
     addMatch(0.18 * 1.5, { field: 'search_terms', match: 'contained-phrase' });
   } else if (useMultiToken) {
-    const hits = tokens.filter(t => searchTermsLower.includes(t));
+    const hits = matchedFieldTokens(tokens, searchTermsLower);
     if (overlapOK(hits.length)) {
-      addMatch(0.06 * 1.5 * (hits.length / tokens.length), {
+      addTokenMatch(0.06 * 1.5, hits, {
         field: 'search_terms',
         match: 'token-overlap',
-        matched_tokens: hits,
-        query_token_coverage: hits.length / tokens.length,
       });
     }
   }
@@ -580,46 +636,42 @@ function scoreEntryDetailed(
   // Exact declarative kind and physical source classification are compact,
   // useful routing signals (e.g. FlowPlaybook vs OpsInventory; runbook that
   // originated under templates/).
-  if (kindLower.includes(lower)) {
+  if (fieldContainsQuery(kindLower, tokens)) {
     addMatch(0.15, { field: 'kind', match: 'contained-phrase', value: entry.kind });
   }
-  if (sourceTypeLower.includes(lower)) {
+  if (fieldContainsQuery(sourceTypeLower, tokens)) {
     addMatch(0.08, { field: 'source_type', match: 'contained-phrase', value: entry.sourceType });
   }
 
   // Summary (1x weight)
-  if (summaryLower.includes(lower)) {
+  if (fieldContainsQuery(summaryLower, tokens)) {
     addMatch(0.15, { field: 'summary', match: 'contained-phrase' });
   } else if (useMultiToken) {
-    const hits = tokens.filter(t => summaryLower.includes(t));
+    const hits = matchedFieldTokens(tokens, summaryLower);
     if (overlapOK(hits.length)) {
-      addMatch(0.04 * (hits.length / tokens.length), {
+      addTokenMatch(0.04, hits, {
         field: 'summary',
         match: 'token-overlap',
-        matched_tokens: hits,
-        query_token_coverage: hits.length / tokens.length,
       });
     }
   }
 
   // Path (0.5x weight)
-  if (pathLower.includes(lower)) {
+  if (fieldContainsQuery(pathLower, tokens)) {
     addMatch(0.1, { field: 'path', match: 'contained-phrase', value: entry.path });
   } else if (useMultiToken) {
-    const hits = tokens.filter(t => pathLower.includes(t));
+    const hits = matchedFieldTokens(tokens, pathLower);
     if (overlapOK(hits.length)) {
-      addMatch(0.03 * (hits.length / tokens.length), {
+      addTokenMatch(0.03, hits, {
         field: 'path',
         match: 'token-overlap',
         value: entry.path,
-        matched_tokens: hits,
-        query_token_coverage: hits.length / tokens.length,
       });
     }
   }
 
   // Type (0.5x weight)
-  if (typeLower.includes(lower)) {
+  if (fieldContainsQuery(typeLower, tokens)) {
     addMatch(0.1, { field: 'type', match: 'contained-phrase', value: entry.type });
   }
 
@@ -889,7 +941,7 @@ const DEFAULT_CAPABILITY_GRAPHS: GraphType[] = ['project', 'user', 'framework'];
 
 function projectAllowsUserIndices(cwd: string): boolean {
   try {
-    const configPath = projectAiwgPath(cwd, 'aiwg.config');
+    const configPath = projectControlPath(cwd, 'aiwg.config');
     if (!fs.existsSync(configPath)) return true;
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
     const index = parsed.index as Record<string, unknown> | undefined;
@@ -1040,6 +1092,13 @@ export async function discoverCapability(
     let unavailableReason: string | undefined;
     for (const graph of graphs) {
       const loaded = loadFortemiCoreMetadataEntries(cwd, graph, verifiedSourcePaths);
+      if (loaded.reason && graph === 'project' && !params.graph) {
+        const fallback = projectCapabilityFallback(cwd);
+        if (fallback) {
+          entries.push(...fallback);
+          continue;
+        }
+      }
       if (loaded.reason) unavailableReason ??= loaded.reason;
       entries.push(...loaded.entries.map((entry) => withIndexProvenance(entry, graph)));
       const discovered = await queryFortemiCoreAiwgDiscovery(cwd, {
@@ -1202,41 +1261,32 @@ export async function discoverCapability(
   // lexical ranking so canonical domain phrases rank their owning capability
   // top-K instead of being out-scored by artifacts that merely mention the
   // word. Facet activation can also rescue an otherwise-empty strict pass.
-  let scored = dedupeDiscoverResults(
-    await applyFacetFusion(strictScored, candidates, params.phrase),
-  ).slice(0, limit);
-
-  // #1561 — verbose-query fallback. A wordy full-sentence query
-  // ("find me a skill that handles intake forms") dilutes the token hit ratio
-  // below the strict ceil(n/2) overlap gate and returns nothing, training
-  // agents to conclude "no skill exists" — the exact decline-without-search
-  // failure the skill-discovery rule guards against. When the strict pass
-  // dead-ends, re-score with a relaxed (single-hit) overlap so the meaningful
-  // tokens still surface ranked candidates rather than an empty set.
-  let relaxed = false;
-  if (scored.length === 0) {
-    // Floor the relaxed pass so a single incidental path/summary token hit
-    // (~0.006–0.008) doesn't surface as noise. Capability/title/trigger field
-    // hits land ~0.04+, so this keeps meaningful matches while dropping junk —
-    // if nothing clears the floor, we fall through to the no-match hint, which
-    // is more honest than surfacing a 0.01 path match.
-    const RELAXED_MIN_SCORE = 0.02;
-    const relaxedFull = candidates
-      .map(entry => {
-        const detailed = scoreEntryDetailed(entry, params.phrase, { relaxOverlap: true });
-        lexicalDiagnostics.set(entry.path, detailed.diagnostic);
-        return { entry, score: detailed.score };
-      })
-      .filter(r => r.score >= RELAXED_MIN_SCORE)
-      .sort(compareDiscoverResults);
-    const relaxedScored = dedupeDiscoverResults(
-      await applyFacetFusion(relaxedFull, candidates, params.phrase),
-    ).slice(0, limit);
-    if (relaxedScored.length > 0) {
-      scored = relaxedScored;
-      relaxed = true;
+  // #154 — a strict result anywhere in the corpus must not suppress relevant
+  // partial matches for a natural-language query. Score the relaxed pass on
+  // matched terms (unmatched terms do not divide the score), apply a noise
+  // floor, and union it with strict matches before ranking. Word-boundary
+  // token matching keeps this from resurrecting substring noise such as UX in
+  // Linux.
+  const RELAXED_MIN_SCORE = 0.02;
+  const strictPaths = new Set(strictScored.map(result => result.entry.path));
+  const combinedByPath = new Map(strictScored.map(result => [result.entry.path, result]));
+  for (const entry of candidates) {
+    const detailed = scoreEntryDetailed(entry, params.phrase, { relaxOverlap: true });
+    if (detailed.score < RELAXED_MIN_SCORE) continue;
+    const existing = combinedByPath.get(entry.path);
+    if (!existing || detailed.score > existing.score) {
+      combinedByPath.set(entry.path, { entry, score: detailed.score });
+      lexicalDiagnostics.set(entry.path, detailed.diagnostic);
     }
   }
+  const scored = dedupeDiscoverResults(
+    await applyFacetFusion(
+      Array.from(combinedByPath.values()).sort(compareDiscoverResults),
+      candidates,
+      params.phrase,
+    ),
+  ).slice(0, limit);
+  const relaxed = scored.some(result => !strictPaths.has(result.entry.path));
 
   const queryTimeMs = Date.now() - startTime;
 
@@ -1552,6 +1602,13 @@ async function loadShowEntries(
     let unavailableReason: string | undefined;
     for (const graph of graphs) {
       const loaded = loadFortemiCoreMetadataEntries(cwd, graph);
+      if (loaded.reason && graph === 'project' && !params.graph) {
+        const fallback = projectCapabilityFallback(cwd);
+        if (fallback) {
+          entries.push(...fallback);
+          continue;
+        }
+      }
       if (loaded.reason) unavailableReason ??= loaded.reason;
       entries.push(...loaded.entries.map((entry) => withIndexProvenance(entry, graph)));
     }
@@ -1694,7 +1751,7 @@ async function findCorpusArtifact(
   ];
 
   // (subdir, type, layout) — 'flat' = `<name>.md`, 'slug' = `<name>/SKILL.md`
-  const tries: Array<{ sub: string; type: string; layout: 'flat' | 'slug' }> = [
+  const tries: Array<{ sub: string; type: string; layout: 'flat' | 'slug'; extension?: '.md' | '.json' | '.yaml' }> = [
     { sub: 'skills', type: 'skill', layout: 'slug' },
     { sub: 'skills', type: 'skill', layout: 'flat' },
     { sub: 'agents', type: 'agent', layout: 'flat' },
@@ -1704,6 +1761,9 @@ async function findCorpusArtifact(
     { sub: 'behaviors', type: 'behavior', layout: 'flat' },
     { sub: 'flows', type: 'flow', layout: 'flat' },
     { sub: 'runbooks', type: 'runbook', layout: 'flat' },
+    { sub: 'decisions', type: 'decision-definition', layout: 'flat', extension: '.json' },
+    { sub: 'rulesets', type: 'decision-ruleset', layout: 'flat', extension: '.json' },
+    { sub: 'bindings', type: 'decision-binding', layout: 'flat', extension: '.json' },
   ];
 
   for (const group of groups) {
@@ -1720,7 +1780,7 @@ async function findCorpusArtifact(
         if (typeFilter.length > 0 && !typeFilter.includes(t.type)) continue;
         const candidate = t.layout === 'slug'
           ? path.join(group.dir, bundle, t.sub, name, 'SKILL.md')
-          : path.join(group.dir, bundle, t.sub, `${name}.md`);
+          : path.join(group.dir, bundle, t.sub, `${name}${t.extension ?? '.md'}`);
         try {
           const stat = await fsp.stat(candidate);
           if (stat.isFile()) {

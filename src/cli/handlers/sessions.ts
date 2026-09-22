@@ -1,8 +1,9 @@
 import {
-  existsSync, mkdirSync, realpathSync, statSync,
+  existsSync, linkSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import {
-  dirname, isAbsolute, resolve,
+  basename, dirname, isAbsolute, join, resolve,
 } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
@@ -24,6 +25,14 @@ import {
   OpenClawSessionAdapter,
   OPENHUMAN_ADAPTER_VERSION,
   OpenHumanSessionAdapter,
+  GROKBOT_ADAPTER_VERSION,
+  GrokbotSessionAdapter,
+  PI_ADAPTER_VERSION,
+  PiSessionAdapter,
+  DEEPSEEK_HARNESS_ADAPTER_VERSION,
+  DeepSeekHarnessSessionAdapter,
+  OmpSessionAdapter,
+  OMP_ADAPTER_VERSION,
   WARP_ADAPTER_VERSION,
   WarpSessionAdapter,
   DEVIN_DESKTOP_ADAPTER_VERSION,
@@ -56,6 +65,14 @@ import {
   sha256,
   parseTimelineGap,
   writeDiscoveryManifest,
+  buildSessionExportPlan,
+  reverifySessionExportPlan,
+  buildSessionAiwgFortemiIndexExport,
+  recoverAiwgFortemiIndexFromFullV1Shard,
+  embedAttachmentsInFullV1Shard,
+  recoverEmbeddedAttachments,
+  SESSION_EXPORT_PLAN_SCHEMA_VERSION,
+  type SessionExportPlan,
   type SessionProviderId,
   type SessionAuthorizationContext,
   type SessionAnalyticsCategory,
@@ -124,6 +141,10 @@ Commands:
   show <session-id>               Show a session with events and tags
   search <query> --workspace <id> Search authorized normalized content
   extract [session-id] --workspace <id> Extract structural candidates
+  export plan --workspace <id> --out <file> <session-id...>  Select sessions into a reviewable plan
+  export build --plan <file> --out <dir>  Build a Fortemi Knowledge Shard from a plan
+  export verify --input <shard>   Validate a shard and its receipt
+  export unpack --input <shard> --out <dir>  Recover a shard's records to disk
   candidates [--state <state>]    List the candidate review queue
   review <id> <version> <state>   Record an explicit review transition
   promote <id> <version>          Preview promotion; use --confirm to write
@@ -145,6 +166,8 @@ Options:
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
+  --omp-root <path>  Explicitly authorize an OMP profile sessions root
+  --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
   --confirm, --yes  Confirm a persistent discovered batch import
   --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
@@ -153,7 +176,32 @@ Options:
   --consumer <id> Select a named memory consumer for promotion
   --workspace <id>, --tag <tag>, --limit <n>, --cursor <n>
   --page-size <n>  Extraction scan page size (default 250, maximum 500)
-  --max-documents <n>  Explicit extraction safety limit; returns a partial receipt`;
+  --max-documents <n>  Explicit extraction safety limit; returns a partial receipt
+  --include-bytes  Embed registered-output bytes in session export shards
+  --max-attachment-bytes <n>  Maximum bytes per embedded output (default 67108864)
+  --force         Permit replacing an existing export or recovery output
+
+Search filters:
+  --date-from <rfc3339>, --date-to <rfc3339>
+  --participant <actor>, --model <id>, --role <role>, --tool <name>
+  --entity <entity>, --sensitivity <class>, --extraction-state <state>
+  --control-events exclude|include|only (default: exclude)
+  Query syntax: FTS5 terms, quoted phrases, prefixes, AND/OR/NOT
+  Follow the opaque nextCursor with the same query and filters
+
+Analytics / forensics:
+  --session <id>, --date-from <rfc3339>, --date-to <rfc3339>
+  --actor <id>, --participant <id>, --tool <name>, --status <status>
+  --provider <id>, --tag <tag>, --sensitivity <class>, --extraction-state <state>
+  --group-by tool|session|provider, --limit <1..5000>
+  --authorize-forensics  Required for each authorized forensic invocation
+  --markdown      Render a sanitized forensic timeline table`;
+
+function printHelp(ctx: HandlerContext, exitCode: number = EXIT.ok): HandlerResult {
+  if (ctx.args.includes('--json')) emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
+  else console.log(HELP);
+  return { exitCode };
+}
 
 export const sessionsHandler: CommandHandler = {
   id: 'sessions',
@@ -161,6 +209,10 @@ export const sessionsHandler: CommandHandler = {
   description: 'Manage the normalized session catalog (the singular `session` command remains the launcher)',
   category: 'project',
   aliases: [],
+
+  async help(ctx) {
+    return printHelp(ctx);
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const json = ctx.args.includes('--json');
@@ -175,9 +227,8 @@ export const sessionsHandler: CommandHandler = {
       return { exitCode: normalized.exitCode, message: normalized.error.message };
     }
     if (!parsed.command || parsed.flags.has('--help') || parsed.flags.has('-h')) {
-      if (json) emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
-      else console.log(HELP);
-      return { exitCode: parsed.command ? EXIT.ok : EXIT.usage };
+      const explicitHelp = parsed.flags.has('--help') || parsed.flags.has('-h');
+      return printHelp(ctx, explicitHelp ? EXIT.ok : EXIT.usage);
     }
     try {
       const result = await executeCommand(ctx, parsed);
@@ -508,6 +559,7 @@ async function executeCommand(
           ? preview(command, { items, count: items.length, durableMemoryWrites: 0, scan })
           : ok(command, { items, count: items.length, durableMemoryWrites: 0, scan });
       }
+      case 'export': return exportCommand(ctx, args, repository);
       case 'candidates': {
         const { workspaceId } = readAuthorizationContext(ctx, args, command, repository);
         const state = candidateState(args.values.get('--state'));
@@ -761,7 +813,7 @@ async function importSource(
   if (provider !== 'generic' && provider !== 'claude' && provider !== 'codex'
     && provider !== 'copilot' && provider !== 'cursor' && provider !== 'factory'
     && provider !== 'hermes' && provider !== 'opencode' && provider !== 'openclaw'
-    && provider !== 'openhuman' && provider !== 'warp' && provider !== 'devin-desktop') {
+    && provider !== 'openhuman' && provider !== 'grokbot' && provider !== 'pi' && provider !== 'omp' && provider !== 'deepseek-harness' && provider !== 'warp' && provider !== 'devin-desktop') {
     throw new CliError('UNSUPPORTED_OPERATION', `session import is not implemented for ${provider}`, EXIT.unsupported);
   }
   const sourceId = requiredValue(args, '--source-id');
@@ -777,9 +829,13 @@ async function importSource(
   const isOpenCode = provider === 'opencode';
   const isOpenClaw = provider === 'openclaw';
   const isOpenHuman = provider === 'openhuman';
+  const isGrokbot = provider === 'grokbot';
+  const isPi = provider === 'pi';
+  const isOmp = provider === 'omp';
+  const isDsh = provider === 'deepseek-harness';
   const isWarp = provider === 'warp';
   const isDevinDesktop = provider === 'devin-desktop';
-  const adapter: SessionSourceAdapter = isClaude
+  const adapter: SessionSourceAdapter = isDsh ? new DeepSeekHarnessSessionAdapter() : isOmp ? new OmpSessionAdapter() : isClaude
     ? new ClaudeSessionAdapter()
     : isCodex
       ? new CodexSessionAdapter()
@@ -797,13 +853,17 @@ async function importSource(
                   ? new OpenClawSessionAdapter()
                   : isOpenHuman
                     ? new OpenHumanSessionAdapter()
+                    : isGrokbot
+                      ? new GrokbotSessionAdapter()
+                      : isPi
+                        ? new PiSessionAdapter()
                     : isWarp
                       ? new WarpSessionAdapter()
                       : isDevinDesktop
                         ? new DevinDesktopSessionAdapter()
                         : new GenericSessionInterchangeAdapter();
-  const locatorClass = isClaude
-    ? (input.endsWith('.hooks.jsonl') ? 'claude-hook-jsonl' : 'claude-transcript-jsonl')
+  const locatorClass = isDsh ? 'deepseek-harness-session-v2-jsonl' : isOmp ? 'omp-session-v3-jsonl' : isClaude
+    ? claudeLocatorClass(input)
     : isCodex
       ? (input.endsWith('.app-server.jsonl') ? 'codex-app-server-jsonl' : 'codex-rollout-jsonl')
       : isCopilot
@@ -820,6 +880,10 @@ async function importSource(
                   ? 'openclaw-consistent-snapshot-jsonl'
                   : isOpenHuman
                     ? 'openhuman-enriched-jsonl'
+                    : isGrokbot
+                      ? 'manual-export'
+                      : isPi
+                        ? 'pi-session-v3-jsonl'
                     : isWarp
                       ? 'warp-markdown-export'
                       : isDevinDesktop
@@ -832,8 +896,8 @@ async function importSource(
   const probe = await adapter.inspect(selectedSource);
   const source = SessionSourceSchema.parse({
     contractVersion: SESSION_CONTRACT_VERSION, sourceId, provider,
-    providerProfile: isClaude
-      ? 'documented-local-jsonl'
+    providerProfile: isDsh ? 'native-session-v2-jsonl' : isOmp ? 'native-title-slot-v3' : isClaude
+      ? claudeProviderProfile(locatorClass)
       : isCodex
         ? 'app-server-v2-rollout-fallback'
         : isCopilot
@@ -850,13 +914,15 @@ async function importSource(
                     ? 'schema-16-event-v3-consistent-snapshot'
                     : isOpenHuman
                       ? 'schema-1-session-raw-enriched'
-                      : isWarp
-                        ? 'manual-lossy-markdown-export'
+                      : isGrokbot
+                        ? 'manual-interchange'
+                        : isWarp
+                          ? 'manual-lossy-markdown-export'
                         : isDevinDesktop
                           ? 'opt-in-cascade-transcript-hook'
                           : 'manual-interchange',
     locatorClass, redactedLocator: redactSourceLocator(input),
-    adapterVersion: isClaude
+    adapterVersion: isDsh ? DEEPSEEK_HARNESS_ADAPTER_VERSION : isOmp ? OMP_ADAPTER_VERSION : isClaude
       ? CLAUDE_ADAPTER_VERSION
       : isCodex
         ? CODEX_ADAPTER_VERSION
@@ -874,20 +940,22 @@ async function importSource(
                     ? OPENCLAW_ADAPTER_VERSION
                     : isOpenHuman
                       ? OPENHUMAN_ADAPTER_VERSION
-                      : isWarp
-                        ? WARP_ADAPTER_VERSION
+                      : isGrokbot
+                        ? GROKBOT_ADAPTER_VERSION
+                        : isWarp
+                          ? WARP_ADAPTER_VERSION
                         : isDevinDesktop
                           ? DEVIN_DESKTOP_ADAPTER_VERSION
                           : GENERIC_ADAPTER_VERSION,
     sourceSchemaVersion: probe.sourceSchemaVersion,
-    disposition: isWarp
+    disposition: isWarp || isGrokbot
       ? 'manual-only'
       : isClaude || isCodex || isCopilot || isCursor || isFactory || isHermes
-        || isOpenCode || isOpenClaw || isOpenHuman || isDevinDesktop
+        || isOpenCode || isOpenClaw || isOpenHuman || isDevinDesktop || isOmp || isDsh || isPi
         ? 'implemented' : 'manual-only',
     operationalState: probe.operationalState,
     consistency: probe.consistency, authorizedAt: new Date().toISOString(),
-    extensions: isClaude
+    extensions: isDsh ? { 'native.deepseek-harness': {} } : isOmp ? { 'native.omp': {} } : isClaude
       ? { 'native.claude': {} }
       : isCodex
         ? { 'native.codex': {} }
@@ -905,8 +973,10 @@ async function importSource(
                     ? { 'native.openclaw': {} }
                     : isOpenHuman
                       ? { 'native.openhuman': {} }
-                      : isWarp
-                        ? { 'native.warp': {} }
+                      : isGrokbot
+                        ? { 'native.grokbot': {} }
+                        : isWarp
+                          ? { 'native.warp': {} }
                         : isDevinDesktop
                           ? { 'native.devin-desktop': {
                               product: 'Devin Desktop',
@@ -953,6 +1023,303 @@ async function importSource(
   }
 }
 
+/**
+ * `aiwg sessions export {plan,build,verify,unpack}` (#2564). Sub-verb after
+ * `export`, matching the issue's proposed shape:
+ *   export plan --workspace ID --out selection.json SESSION_ID...
+ *   export build --plan selection.json --out DIRECTORY
+ *   export verify --input evidence.shard
+ *   export unpack --input evidence.shard --out DIRECTORY
+ */
+async function exportCommand(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  repository: SessionRepository,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const subVerb = requiredPositional(args, 0, 'export sub-command (plan|build|verify|unpack)');
+  const command = `export.${subVerb}`;
+  if (subVerb === 'plan') return exportPlan(ctx, args, repository, command);
+  if (subVerb === 'build') return exportBuild(ctx, args, repository, command);
+  if (subVerb === 'verify') return exportVerify(ctx, args, command);
+  if (subVerb === 'unpack') return exportUnpack(ctx, args, command);
+  throw new CliError('UNKNOWN_COMMAND', `unknown export sub-command: ${subVerb}`, EXIT.usage);
+}
+
+function exportPlan(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  repository: SessionRepository,
+  command: string,
+): { envelope: Envelope; exitCode: number } {
+  const workspaceId = normalizeWorkspaceId(ctx.cwd, requiredValue(args, '--workspace'));
+  const out = resolve(ctx.cwd, requiredValue(args, '--out'));
+  const flagSelection = args.values.get('--session')?.split(',').map((value) => value.trim()).filter(Boolean) ?? [];
+  const sessionIds = [...new Set([...flagSelection, ...args.positionals.slice(1)])];
+  const { plan } = buildSessionExportPlan(repository, { workspaceId, sessionIds, projectRoot: ctx.cwd });
+  mkdirSync(dirname(out), { recursive: true, mode: 0o700 });
+  writeFileSync(out, `${JSON.stringify(plan, null, 2)}\n`, { mode: 0o600 });
+  return ok(command, {
+    plan: out,
+    totals: plan.totals,
+    sessions: plan.sessions.map((entry) => entry.sessionId),
+    outputs: plan.outputs.length,
+  });
+}
+
+async function exportBuild(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  repository: SessionRepository,
+  command: string,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const planPath = resolve(ctx.cwd, requiredValue(args, '--plan'));
+  const outDirectory = resolve(ctx.cwd, requiredValue(args, '--out'));
+  const shardName = args.values.get('--shard-name') ?? 'evidence.shard';
+  if (basename(shardName) !== shardName) {
+    throw new CliError('INVALID_ARGUMENT', '--shard-name must be a filename, not a path', EXIT.usage);
+  }
+  const finalPath = join(outDirectory, shardName);
+  const receiptPath = `${finalPath}.receipt.json`;
+  if (!args.flags.has('--force') && (existsSync(finalPath) || existsSync(receiptPath))) {
+    throw new CliError(
+      'OUTPUT_EXISTS',
+      `refusing to overwrite an existing shard or receipt: ${finalPath} (use --force to replace)`,
+      EXIT.usage,
+    );
+  }
+  let plan: SessionExportPlan;
+  try {
+    plan = JSON.parse(readFileSync(planPath, 'utf8')) as SessionExportPlan;
+  } catch {
+    throw new CliError('MALFORMED_SOURCE', `plan file is not readable JSON: ${planPath}`, EXIT.usage);
+  }
+  if (plan.schemaVersion !== SESSION_EXPORT_PLAN_SCHEMA_VERSION) {
+    throw new CliError(
+      'UNKNOWN_SCHEMA_MAJOR',
+      `plan schemaVersion ${plan.schemaVersion} is not supported by this build (expected ${SESSION_EXPORT_PLAN_SCHEMA_VERSION})`,
+      EXIT.contract,
+    );
+  }
+  // Recheck source changes before writing (#2564 acceptance criteria):
+  // re-select from the live repository and reject on any digest drift.
+  const {
+    sessions, eventsBySessionId, catalogTagsBySessionId, outputBytesByRegistrationId, attachmentBytesByEventId,
+  } = reverifySessionExportPlan(repository, plan, { projectRoot: ctx.cwd });
+  const includeBytes = args.flags.has('--include-bytes');
+  const outputs = plan.outputs.map((output) => ({
+    ...output,
+    bytesEmbedded: includeBytes && outputBytesByRegistrationId.has(output.registrationId),
+  }));
+  const index = buildSessionAiwgFortemiIndexExport(
+    plan.workspaceId, sessions, eventsBySessionId, outputs, catalogTagsBySessionId,
+  );
+  // aiwgFortemiIndexToKnowledgeShardWithReport targets the declared
+  // full-v1/2.0.0 archive contract and validates losslessness -- unlike the
+  // plain aiwgFortemiIndexToKnowledgeShard (core-v1), which silently embeds
+  // the whole input record as opaque note metadata regardless of whether it
+  // maps to any native component. The mapping in fortemi-export-mapping.ts
+  // was built specifically so every AIWG-specific field lands in a real
+  // full-v1 component (tags, provenance_events) rather than being smuggled
+  // through as an unmapped blob.
+  const { aiwgFortemiIndexToKnowledgeShardWithReport } = await import('@fortemi/core');
+  const result = await aiwgFortemiIndexToKnowledgeShardWithReport(index);
+  if (!result.success || !result.archive) {
+    throw new CliError(
+      'MALFORMED_SOURCE',
+      `full-v1 shard conversion failed: ${JSON.stringify(result.losses)}`,
+      EXIT.contract,
+    );
+  }
+  let bytes = result.archive;
+  let embeddedAttachmentCount = 0;
+  let embeddedAttachmentBytes = 0;
+  if (includeBytes) {
+    const maximum = Number(args.values.get('--max-attachment-bytes') ?? 64 * 1024 * 1024);
+    if (!Number.isSafeInteger(maximum) || maximum <= 0) {
+      throw new CliError('INVALID_ARGUMENT', '--max-attachment-bytes must be a positive integer', EXIT.usage);
+    }
+    const attachments = plan.outputs.map((output) => {
+      const content = outputBytesByRegistrationId.get(output.registrationId)!;
+      if (content.length > maximum) {
+        throw new CliError(
+          'SOURCE_TOO_LARGE',
+          `registered output exceeds --max-attachment-bytes: ${output.outputLocator}`,
+          EXIT.contract,
+        );
+      }
+      return {
+        recordId: `output_${output.registrationId}`,
+        attachmentId: randomUUID(),
+        filename: basename(output.outputLocator),
+        mimeType: output.mediaType,
+        bytes: content,
+      };
+    });
+    for (const attachment of plan.attachments ?? []) {
+      const content = attachmentBytesByEventId.get(attachment.eventId)!;
+      if (content.length > maximum) {
+        throw new CliError(
+          'SOURCE_TOO_LARGE',
+          `session attachment exceeds --max-attachment-bytes: ${attachment.filename}`,
+          EXIT.contract,
+        );
+      }
+      attachments.push({
+        recordId: attachment.eventId,
+        attachmentId: randomUUID(),
+        filename: basename(attachment.filename),
+        mimeType: attachment.mediaType,
+        bytes: content,
+      });
+    }
+    embeddedAttachmentCount = attachments.length;
+    embeddedAttachmentBytes = attachments.reduce((sum, attachment) => sum + attachment.bytes.length, 0);
+    bytes = await embedAttachmentsInFullV1Shard(bytes, attachments);
+  }
+  mkdirSync(outDirectory, { recursive: true, mode: 0o700 });
+  // Interrupted writes must never be mistaken for a completed export: write
+  // to a sibling temp file, then rename (atomic on the same filesystem), and
+  // only then write the receipt -- the receipt's existence is the completion
+  // signal, not the shard file's.
+  const tempPath = join(outDirectory, `.${shardName}.${randomUUID()}.tmp`);
+  writeFileSync(tempPath, bytes, { mode: 0o600 });
+  if (args.flags.has('--force')) renameSync(tempPath, finalPath);
+  else {
+    try {
+      linkSync(tempPath, finalPath);
+      unlinkSync(tempPath);
+    } catch (error) {
+      if (existsSync(tempPath)) unlinkSync(tempPath);
+      throw new CliError('OUTPUT_EXISTS', `refusing to overwrite an existing shard: ${finalPath}`, EXIT.usage, error);
+    }
+  }
+  const readBack = readFileSync(finalPath);
+  const shardDigest = sha256(readBack);
+  if (readBack.length !== bytes.length) {
+    throw new CliError('IMPORT_INTERRUPTED', 'shard readback size did not match the written archive', EXIT.storage);
+  }
+  const receipt = {
+    schemaVersion: '1.0.0',
+    generatedAt: new Date().toISOString(),
+    workspaceId: plan.workspaceId,
+    planGeneratedAt: plan.generatedAt,
+    sessionIds: plan.sessions.map((entry) => entry.sessionId),
+    totals: plan.totals,
+    indexSchemaVersion: index.schema_version,
+    archiveProfile: result.profile,
+    archiveSchemaVersion: result.schema_version,
+    lossless: result.lossless,
+    losses: result.losses,
+    fortemiReceipt: result.receipt,
+    shardFile: shardName,
+    shardDigest,
+    shardBytes: readBack.length,
+    embeddedAttachmentCount,
+    embeddedAttachmentBytes,
+  };
+  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, {
+    mode: 0o600,
+    flag: args.flags.has('--force') ? 'w' : 'wx',
+  });
+  return ok(command, { shard: finalPath, receipt: receiptPath, ...receipt });
+}
+
+async function exportVerify(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  command: string,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const input = resolve(ctx.cwd, requiredValue(args, '--input'));
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(input);
+  } catch {
+    throw new CliError('SOURCE_NOT_AUTHORIZED', `shard file is not readable: ${input}`, EXIT.usage);
+  }
+  let recovered;
+  let embeddedAttachments;
+  try {
+    recovered = recoverAiwgFortemiIndexFromFullV1Shard(bytes);
+    embeddedAttachments = recoverEmbeddedAttachments(bytes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);
+  }
+  const shardDigest = sha256(bytes);
+  const receiptPath = `${input}.receipt.json`;
+  let receiptMatches: boolean | null = null;
+  if (existsSync(receiptPath)) {
+    try {
+      const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as { shardDigest?: string; shardBytes?: number };
+      receiptMatches = receipt.shardDigest === shardDigest && receipt.shardBytes === bytes.length;
+    } catch {
+      receiptMatches = false;
+    }
+  }
+  return ok(command, {
+    valid: true,
+    schemaVersion: recovered.schema_version,
+    itemCount: recovered.items.length,
+    shardDigest,
+    shardBytes: bytes.length,
+    receiptChecked: existsSync(receiptPath),
+    receiptMatches,
+    embeddedAttachmentCount: embeddedAttachments.length,
+  });
+}
+
+async function exportUnpack(
+  ctx: HandlerContext,
+  args: ParsedArgs,
+  command: string,
+): Promise<{ envelope: Envelope; exitCode: number }> {
+  const input = resolve(ctx.cwd, requiredValue(args, '--input'));
+  const outDirectory = resolve(ctx.cwd, requiredValue(args, '--out'));
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(input);
+  } catch {
+    throw new CliError('SOURCE_NOT_AUTHORIZED', `shard file is not readable: ${input}`, EXIT.usage);
+  }
+  let recovered;
+  try {
+    recovered = recoverAiwgFortemiIndexFromFullV1Shard(bytes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError('MALFORMED_SOURCE', `shard failed validation: ${message}`, EXIT.contract);
+  }
+  const attachments = recoverEmbeddedAttachments(bytes);
+  mkdirSync(outDirectory, { recursive: true, mode: 0o700 });
+  const finalPath = join(outDirectory, 'index.json');
+  if (!args.flags.has('--force') && existsSync(finalPath)) {
+    throw new CliError('OUTPUT_EXISTS', `refusing to overwrite recovered output: ${finalPath}`, EXIT.usage);
+  }
+  const attachmentPaths = attachments.map((attachment) => join(
+    outDirectory, 'attachments', attachment.recordId, basename(attachment.filename),
+  ));
+  if (!args.flags.has('--force')) {
+    const conflict = attachmentPaths.find((attachmentPath) => existsSync(attachmentPath));
+    if (conflict) throw new CliError('OUTPUT_EXISTS', `refusing to overwrite recovered attachment: ${conflict}`, EXIT.usage);
+  }
+  const tempPath = join(outDirectory, `.index.json.${randomUUID()}.tmp`);
+  writeFileSync(tempPath, `${JSON.stringify(recovered, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tempPath, finalPath);
+  for (const [index, attachment] of attachments.entries()) {
+    const attachmentDirectory = join(outDirectory, 'attachments', attachment.recordId);
+    mkdirSync(attachmentDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(attachmentPaths[index], attachment.bytes, { mode: 0o600 });
+  }
+  return ok(command, {
+    index: finalPath,
+    schemaVersion: recovered.schema_version,
+    itemCount: recovered.items.length,
+    sessionRecordCount: recovered.items.filter((item) => item.type === 'aiwg.session').length,
+    eventRecordCount: recovered.items.filter((item) => item.type === 'aiwg.session-event').length,
+    recoveredAttachmentCount: attachments.length,
+    recoveredAttachmentBytes: attachments.reduce((sum, attachment) => sum + attachment.bytes.length, 0),
+  });
+}
+
 async function discoverWorkspace(
   ctx: HandlerContext,
   args: ParsedArgs,
@@ -963,6 +1330,10 @@ async function discoverWorkspace(
     providerHome: args.values.has('--provider-home')
       ? resolve(ctx.cwd, args.values.get('--provider-home')!)
       : undefined,
+    ompRoot: args.values.has('--omp-root')
+      ? resolve(ctx.cwd, args.values.get('--omp-root')!) : undefined,
+    dshRoot: args.values.has('--dsh-root')
+      ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     codexRoot: args.values.has('--codex-root')
       ? resolve(ctx.cwd, args.values.get('--codex-root')!)
       : undefined,
@@ -1076,12 +1447,13 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
     return {
       provider, disposition: 'implemented', operationalState: 'available',
       supportedOperations: ['discover', 'inspect', 'stream'],
-      acquisitionModes: ['jsonl', 'hook'],
+      acquisitionModes: ['jsonl', 'hook', 'manual-export'],
       reasonCode: null,
-      remediation: 'Authorize a Claude projects or hook root, then import an explicit JSONL file.',
+      remediation: 'Authorize a Claude projects or hook root and import a JSONL file, '
+        + 'or import an explicitly selected Claude web/account conversations.json export.',
       evidence: {
         adapterVersion: CLAUDE_ADAPTER_VERSION,
-        verifiedAt: '2026-07-27',
+        verifiedAt: '2026-09-15',
         documentation: 'https://code.claude.com/docs/en/sessions',
       },
     };
@@ -1184,6 +1556,59 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
       },
     };
   }
+  if (provider === 'omp') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['jsonl'], reasonCode: null,
+      remediation: 'Authorize the selected OMP profile sessions root or an explicit native JSONL file.',
+      evidence: {
+        adapterVersion: OMP_ADAPTER_VERSION,
+        verifiedAt: '2026-09-04',
+        documentation: 'https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/session-entries.ts',
+      },
+    };
+  }
+  if (provider === 'deepseek-harness') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'], acquisitionModes: ['jsonl'],
+      reasonCode: null,
+      remediation: 'Authorize an explicit DeepSeek Harness raw JSONL sessions root. Compressed .zstd histories must be exported as raw JSONL first.',
+      evidence: {
+        adapterVersion: DEEPSEEK_HARNESS_ADAPTER_VERSION,
+        verifiedAt: '2026-09-05',
+        documentation: 'https://github.com/deepseek-ai/deepseek-harness/tree/main/packages/session/session-persistence-jsonl',
+      },
+    };
+  }
+  if (provider === 'pi') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['jsonl'], reasonCode: null,
+      remediation: 'Authorize PI_CODING_AGENT_SESSION_DIR, the default Pi sessions root, or an explicit v3 JSONL export.',
+      evidence: {
+        adapterVersion: PI_ADAPTER_VERSION,
+        verifiedAt: '2026-09-04',
+        documentation: 'https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/session-manager.ts',
+      },
+    };
+  }
+  if (provider === 'grokbot') {
+    return {
+      provider, disposition: 'manual-only', operationalState: 'available',
+      supportedOperations: ['inspect', 'stream'],
+      acquisitionModes: ['manual-export'],
+      reasonCode: 'MANUAL_SOURCE_SELECTION_REQUIRED',
+      remediation: 'Select an authorized AIWG session interchange export; Grok Bot auto-discover is unsupported until a native locator exists.',
+      evidence: {
+        adapterVersion: GROKBOT_ADAPTER_VERSION,
+        verifiedAt: '2026-09-15',
+        documentation: 'docs/providers/grokbot-sessions.md',
+      },
+    };
+  }
   if (provider === 'warp') {
     return {
       provider, disposition: 'manual-only', operationalState: 'available',
@@ -1232,6 +1657,17 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
     remediation: 'Use the generic interchange until the provider adapter milestone is delivered.',
     evidence: { adapterVersion: null, verifiedAt: '2026-07-26' },
   };
+}
+
+function claudeLocatorClass(input: string): string {
+  if (input.endsWith('.hooks.jsonl') || input.endsWith('.hook.jsonl')) return 'claude-hook-jsonl';
+  if (input.endsWith('.json')) return 'claude-web-export-json';
+  return 'claude-transcript-jsonl';
+}
+
+function claudeProviderProfile(locatorClass: string): string {
+  if (locatorClass === 'claude-web-export-json') return 'web-account-export-conversations-json';
+  return 'documented-local-jsonl';
 }
 
 function cursorLocatorClass(input: string): string {
@@ -1286,10 +1722,11 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--manifest', '--provider-home', '--codex-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--dsh-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',
+    '--out', '--plan', '--input', '--shard-name', '--max-attachment-bytes',
   ]);
   let command: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
@@ -1404,12 +1841,13 @@ function projectRootCandidate(start: string): string | null {
   } catch {
     current = resolve(start);
   }
-  let gitRoot: string | null = null;
   while (true) {
     if (existsSync(resolve(current, '.aiwg', 'aiwg.config'))) return current;
-    if (!gitRoot && existsSync(resolve(current, '.git'))) gitRoot = current;
+    // A repository root is the project boundary. Do not let an unrelated
+    // ancestor workspace configuration capture session catalog reads.
+    if (existsSync(resolve(current, '.git'))) return current;
     const parent = dirname(current);
-    if (parent === current) return gitRoot;
+    if (parent === current) return null;
     current = parent;
   }
 }

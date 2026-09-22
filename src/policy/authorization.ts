@@ -10,7 +10,7 @@ import { access, copyFile, mkdir, readFile, rename } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import type { AiwgConfig, WorkspaceRepoAction } from '../config/aiwg-config.js';
-import { projectAiwgPath } from '../config/project-artifacts.js';
+import { projectAiwgPath, projectControlPath } from '../config/project-artifacts.js';
 
 export type AuthorizationEffect = 'allow' | 'deny';
 export type AuthorizationSubjectKind = 'user' | 'group' | 'service' | 'workload';
@@ -212,7 +212,7 @@ export function evaluateAuthorization(
 }
 
 export function validateAuthorization(model: AuthorizationConfig | undefined): AuthorizationDiagnostic[] {
-  if (!model) return [{ severity: 'warning', code: 'authorization-missing', message: 'No normalized authorization block; run steward permissions audit.' }];
+  if (!model) return [{ severity: 'warning', code: 'authorization-missing', message: 'No normalized authorization block; default deny applies. Write one with `aiwg steward permissions migrate --apply`.' }];
   const out: AuthorizationDiagnostic[] = [];
   if (model.version !== '1') out.push({ severity: 'error', code: 'version', message: `Unsupported authorization version: ${model.version}` });
   if (model.default_effect !== 'deny') out.push({ severity: 'error', code: 'default-effect', message: 'Authorization must default to deny.' });
@@ -450,7 +450,7 @@ export async function archiveLegacyPermissionManifests(projectDir: string): Prom
 }
 
 export async function backupConfig(projectDir: string): Promise<string> {
-  const source = projectAiwgPath(projectDir, 'aiwg.config');
+  const source = projectControlPath(projectDir, 'aiwg.config');
   const backupDir = projectAiwgPath(projectDir, 'backups');
   await mkdir(backupDir, { recursive: true });
   const content = await readFile(source);

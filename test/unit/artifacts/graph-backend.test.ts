@@ -6,10 +6,13 @@
  * @implements #727
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import * as featureRuntime from '../../../src/features/runtime.js';
+import { SqliteGraphBackend } from '../../../src/artifacts/backends/sqlite-backend.js';
 import { JsonGraphBackend } from '../../../src/artifacts/backends/json-backend.js';
 import { createGraphBackend } from '../../../src/artifacts/graph-backend.js';
 import type { DependencyGraph } from '../../../src/artifacts/types.js';
+import { itWithSqlite } from '../../helpers/sqlite.js';
 
 describe('JsonGraphBackend', () => {
   describe('addNode / hasNode', () => {
@@ -218,27 +221,39 @@ describe('createGraphBackend', () => {
   });
 
   it('creates or throws for graphology backend', async () => {
+    let available = true;
     try {
       await import('graphology');
-      // graphology is installed — should create successfully
+    } catch {
+      available = false;
+    }
+    if (available) {
       const backend = await createGraphBackend('graphology');
       expect(backend.nodeCount()).toBe(0);
-    } catch {
-      // graphology not installed — should throw helpful error
-      await expect(createGraphBackend('graphology')).rejects.toThrow(/graphology backend requires/);
+    } else {
+      await expect(createGraphBackend('graphology')).rejects.toThrow(/aiwg features install graph/);
     }
   });
 
-  it('creates or throws for sqlite backend', async () => {
+  itWithSqlite('creates a real sqlite backend through the supported package resolver', async () => {
+    const backend = await createGraphBackend('sqlite');
     try {
-      require('better-sqlite3');
-      // better-sqlite3 is installed — should create successfully
-      const backend = await createGraphBackend('sqlite');
+      expect(backend).toBeInstanceOf(SqliteGraphBackend);
       expect(backend.nodeCount()).toBe(0);
-    } catch {
-      // better-sqlite3 not installed — should throw helpful error
-      await expect(createGraphBackend('sqlite')).rejects.toThrow(/sqlite backend requires/);
-    }
+      backend.addNode('fixture');
+      expect(backend.hasNode('fixture')).toBe(true);
+      expect(backend.nodeCount()).toBe(1);
+    } finally { await backend.close?.(); }
+  });
+
+  it('reports remediation when the sqlite package resolver fails', async () => {
+    const resolver = vi.spyOn(featureRuntime, 'requireFeaturePackage').mockImplementation(() => {
+      throw new Error('synthetic unavailable native dependency');
+    });
+    try {
+      await expect(createGraphBackend('sqlite')).rejects.toThrow(/aiwg features install sqlite/);
+      expect(resolver).toHaveBeenCalledExactlyOnceWith('better-sqlite3');
+    } finally { resolver.mockRestore(); }
   });
 
   it('throws for unknown backend', async () => {

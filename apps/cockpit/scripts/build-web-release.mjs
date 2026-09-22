@@ -18,6 +18,10 @@ import { fileURLToPath } from 'node:url';
 
 const cockpitRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const webRoot = join(cockpitRoot, 'web');
+// Bridge sources the web bundle imports by relative path (`../../bridge/src/...`).
+// The staged build copies only `web/`, so anything the bundle reaches outside it
+// must be staged too or `vite build` cannot resolve it (#2547 release build).
+const sharedBridgeSources = ['desktop-contract.mjs', 'desktop-contract.d.mts'];
 const distRoot = join(webRoot, 'dist');
 const lockKey = createHash('sha256').update(cockpitRoot).digest('hex').slice(0, 16);
 const lockRoot = join(tmpdir(), `aiwg-cockpit-web-release-${lockKey}.lock`);
@@ -120,6 +124,12 @@ async function buildWebRelease() {
           && !firstSegment.startsWith('.dist-previous-');
       },
     });
+
+    const stagedBridgeSrc = join(stageRoot, 'bridge', 'src');
+    await mkdir(stagedBridgeSrc, { recursive: true });
+    for (const name of sharedBridgeSources) {
+      await cp(join(cockpitRoot, 'bridge', 'src', name), join(stagedBridgeSrc, name));
+    }
 
     runNpm(['ci', '--include=dev', '--no-audit', '--no-fund'], stagedWebRoot, cacheRoot);
     runNpm(['run', 'build'], stagedWebRoot, cacheRoot);

@@ -220,7 +220,7 @@ Do not inline bulky examples in this agent definition; it must remain below the 
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/activity-log.md — Append-only discipline used by `.aiwg/security/audit.md`
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/security-gate/SKILL.md — Companion writer of the rolling audit log (same schema)
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/quality-assurance.yaml — Quality assurance and hallucination detection
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/actionable-feedback.yaml — Structured actionable feedback for security findings
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml — Structured actionable feedback for security findings
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/hallucination-detection.yaml — Hallucination detection for security claims
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [OWASP Cheat Sheet Series](https://cheatsheetseries.owasp.org/)

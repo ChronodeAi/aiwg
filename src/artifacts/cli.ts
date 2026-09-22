@@ -543,7 +543,7 @@ async function handleBuild(args: string[]): Promise<void> {
     console.log('');
     console.log('Default behavior (no --graph): builds all graphs with defaultBuild: true');
     console.log('Multi-graph builds run by buildOrder/buildTier (refs → citations → bibliography before heavy graphs)');
-    console.log('  Built-in defaults: project (always), codebase (skipped if src/test/tools absent)');
+    console.log('  Built-in defaults: project (always), codebase (auto-detects JavaScript/TypeScript and Python layouts)');
     console.log('');
     console.log('Examples:');
     console.log('  aiwg index build');
@@ -768,7 +768,7 @@ async function requireEmbeddingIndex(cwd: string, graph: GraphType | undefined):
   if (!deps.available) {
     console.error(`Error: semantic search needs optional dependencies: ${deps.missing.join(', ')}`);
     console.error('Install them to enable semantic features:');
-    console.error('  npm install @xenova/transformers hnswlib-node');
+    console.error('  aiwg features install embeddings');
     return null;
   }
   const dir = resolveIndexDir(cwd, graph);
@@ -974,7 +974,7 @@ async function handleEmbed(args: string[]): Promise<void> {
   const deps = await checkEmbeddingDeps();
   if (!deps.available) {
     console.error(`Error: embedding needs optional dependencies: ${deps.missing.join(', ')}`);
-    console.error('  npm install @xenova/transformers hnswlib-node');
+    console.error('  aiwg features install embeddings');
     process.exit(1);
   }
   const index = loadGraphIndexFile<{ entries: Record<string, unknown> }>(cwd, 'metadata.json', graph);
@@ -1577,6 +1577,11 @@ async function handleSetQuery(args: string[]): Promise<void> {
   });
 }
 
+/** `index discover` flags that consume the following argument as a value. */
+const DISCOVER_VALUE_FLAGS = new Set([
+  '--type', '--limit', '--format', '--graph', '--backend', '--resource-source', '--aiwg-version',
+]);
+
 /**
  * Handle 'index discover' command — capability-search for AIWG operational
  * assets.
@@ -1595,14 +1600,25 @@ async function handleDiscover(args: string[]): Promise<void> {
   const { discoverCapability } = await import('./query-engine.js');
   const cwd = process.cwd();
 
-  // Parse positional phrase (everything before flags)
+  // Parse the positional phrase. Flags may appear before or after it — the
+  // documented local-backend fallback is written flag-first
+  // (`aiwg discover --backend local "<phrase>"`, #2530), so a phrase after a
+  // value flag must not be swallowed as that flag's argument (#2559).
   const textParts: string[] = [];
   const flags: string[] = [];
-  let inFlags = false;
-  for (const arg of args) {
-    if (arg.startsWith('--')) inFlags = true;
-    if (inFlags) flags.push(arg);
-    else textParts.push(arg);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg.startsWith('--')) {
+      textParts.push(arg);
+      continue;
+    }
+    flags.push(arg);
+    const bare = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
+    const next = args[index + 1];
+    if (DISCOVER_VALUE_FLAGS.has(bare) && !arg.includes('=') && next !== undefined && !next.startsWith('--')) {
+      flags.push(next);
+      index += 1;
+    }
   }
 
   const phrase = textParts.join(' ').trim();

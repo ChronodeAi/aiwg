@@ -185,7 +185,7 @@ When working in iterative loops (Al or retry scenarios):
 3. **Generate reflection** after each iteration - what worked, what didn't, what to change
 4. **Apply sliding window** - keep k=5 most recent reflections in context
 
-See @$AIWG_ROOT/agentic/code/addons/ralph/schemas/reflection-memory.json for schema.
+See @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/reflection-memory.json for schema.
 
 ## Provenance Tracking
 

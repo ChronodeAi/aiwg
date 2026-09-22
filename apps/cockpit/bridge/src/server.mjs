@@ -14,9 +14,10 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, basename, extname, resolve, sep } from 'node:path';
+import { dirname, join, basename, extname, resolve, sep, isAbsolute, parse } from 'node:path';
 import { storeCockpitToken } from '../../shell-core/keychain.mjs';
 import { assertActivityEvent } from './activity-contract.mjs';
+import { createDesktopHttpHandler } from './desktop-http.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 // Primary seam for roctinam/aiwg#1589: Cockpit talks to a real agentic-sandbox
@@ -33,11 +34,13 @@ const EXECUTOR_TOKEN_FILE = process.env.AIWG_COCKPIT_EXECUTOR_TOKEN_FILE ?? '';
 const MCP_TOKEN_FILE = process.env.AIWG_COCKPIT_MCP_TOKEN_FILE ?? '';
 const LOCAL_DOCKER_FALLBACK = process.env.AIWG_COCKPIT_LOCAL_DOCKER_FALLBACK === '1';
 const REQUIRE_SANDBOX_MTLS = process.env.AIWG_COCKPIT_REQUIRE_SANDBOX_MTLS === '1';
+const COCKPIT_A2A_PROTOCOL_POLICY = process.env.AIWG_COCKPIT_A2A_PROTOCOL_POLICY ?? '0.3';
+const COCKPIT_A2A_PROTOCOL_FALLBACK = process.env.AIWG_COCKPIT_A2A_PROTOCOL_FALLBACK === '1';
 export function localLibvirtFallbackAllowed(platform = process.platform, envValue = process.env.AIWG_COCKPIT_LOCAL_LIBVIRT_FALLBACK) {
   return platform === 'linux' || envValue === '1';
 }
 const RUNTIME_DIR = join(homedir(), '.aiwg', 'cockpit', 'runtime');
-const auditDir = () => process.env.AIWG_COCKPIT_AUDIT_DIR || join(homedir(), '.aiwg', 'cockpit', 'audit');
+const auditDir = () => executorRequestContext.getStore()?.auditDir ?? (process.env.AIWG_COCKPIT_AUDIT_DIR || join(homedir(), '.aiwg', 'cockpit', 'audit'));
 const auditLog = () => join(auditDir(), 'events.jsonl');
 // The built React app (apps/cockpit/web/dist). Served when present; falls back to the
 // legacy vanilla page so the Bridge works even before a web build.
@@ -52,6 +55,8 @@ const CAPABILITY_TYPES = new Set([
 ]);
 const mcSessionsDir = () => join(process.cwd(), '.aiwg', 'ralph-external', 'mc', 'sessions');
 const executorRequestContext = new AsyncLocalStorage();
+const localDockerFallbackEnabled = () => executorRequestContext.getStore()?.localDockerFallback ?? LOCAL_DOCKER_FALLBACK;
+const localLibvirtFallbackEnabled = () => executorRequestContext.getStore()?.localLibvirtFallback ?? localLibvirtFallbackAllowed();
 
 function executorAuthError(code, message, cause) {
   const err = new Error(message, cause ? { cause } : undefined);
@@ -148,6 +153,29 @@ function validBrowserOrigin(req) {
   }
 }
 
+/** Desktop local-mode boundary. The listening socket anchors Host/port; client
+ * forwarding headers never establish authority. Hosted mode needs its own
+ * explicit HTTPS/proxy policy and is not enabled by this local validator. */
+export function validDesktopBrowserOrigin(req, { allowSameOriginFetch = false } = {}) {
+  try {
+    const scheme = req.socket.encrypted ? 'https:' : 'http:';
+    const hostHeader = req.headers.host;
+    if (typeof hostHeader !== 'string') return false;
+    const expected = new URL(`${scheme}//${hostHeader}`);
+    const port = Number(expected.port || (scheme === 'https:' ? 443 : 80));
+    if (!isLocalHostName(expected.hostname) || expected.host !== hostHeader || port !== req.socket.localPort) return false;
+    const origin = req.headers.origin;
+    if (origin === undefined) {
+      // Browsers omit Origin on some same-origin GETs. Fetch Metadata supplies
+      // the browser boundary in that case; WebSocket and mutations require it.
+      return allowSameOriginFetch && ['GET', 'HEAD'].includes(req.method) && req.headers['sec-fetch-site'] === 'same-origin';
+    }
+    return typeof origin === 'string' && origin === expected.origin;
+  } catch {
+    return false;
+  }
+}
+
 function validCsrf(req, auth) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method ?? 'GET')) return true;
   if (auth?.kind === 'bearer' && !req.headers.origin) return true;
@@ -194,6 +222,8 @@ function spawnCollect(cmd, args) {
   });
 }
 async function runAiwg(args) {
+  const command = executorRequestContext.getStore()?.aiwgCommand;
+  if (command) return command(Object.freeze([...args])); // errors never fall through to PATH
   try { return await spawnCollect('aiwg', args); }
   catch (e) { if (e && e.code === 'ENOENT') return spawnCollect(process.execPath, [REPO_BIN, ...args]); throw e; }
 }
@@ -270,20 +300,23 @@ async function dispatchMission(body, upstreamUrl) {
 // assets, on disk under ~/.aiwg/cockpit/library. AIWG install files are NEVER written
 // (clone reads the catalog read-only, writes only into the library). ---
 const LIBRARY_DIR = join(homedir(), '.aiwg', 'cockpit', 'library');
+const currentLibraryDir = () => executorRequestContext.getStore()?.libraryDir ?? LIBRARY_DIR;
 /** Resolve a name to a path INSIDE the library, or null if it would escape. */
 function inLibrary(name) {
-  const r = join(LIBRARY_DIR, String(name).replace(/^[/\\]+/, ''));
-  return r === LIBRARY_DIR || r.startsWith(LIBRARY_DIR + '/') ? r : null;
+  const libraryDir = currentLibraryDir();
+  const r = join(libraryDir, String(name).replace(/^[/\\]+/, ''));
+  return r === libraryDir || r.startsWith(libraryDir + sep) ? r : null;
 }
 async function listLibrary() {
+  const libraryDir = currentLibraryDir();
   let entries;
-  try { entries = await readdir(LIBRARY_DIR, { withFileTypes: true }); } catch { return []; }
+  try { entries = await readdir(libraryDir, { withFileTypes: true }); } catch { return []; }
   const out = [];
   for (const e of entries) {
     if (e.name.startsWith('.')) continue;
     let meta = { name: e.name, kind: e.isDirectory() ? 'dir' : 'file', type: 'unknown', origin: 'imported' };
     if (e.isDirectory()) {
-      try { meta = { ...meta, ...JSON.parse(await readFile(join(LIBRARY_DIR, e.name, '.cockpit-origin.json'), 'utf8')), name: e.name, kind: 'dir' }; } catch { /* no manifest */ }
+      try { meta = { ...meta, ...JSON.parse(await readFile(join(libraryDir, e.name, '.cockpit-origin.json'), 'utf8')), name: e.name, kind: 'dir' }; } catch { /* no manifest */ }
     }
     out.push(meta);
   }
@@ -291,9 +324,10 @@ async function listLibrary() {
 }
 /** Clone a catalog asset (skill dir or single file) into the library — never the reverse. */
 async function cloneToLibrary({ type, name, path }) {
+  const libraryDir = currentLibraryDir();
   if (!type || !name || !path) throw new Error('type, name, path required');
   if (!existsSync(path)) throw new Error('source not found');
-  await mkdir(LIBRARY_DIR, { recursive: true, mode: 0o755 });
+  await mkdir(libraryDir, { recursive: true, mode: 0o755 });
   const destName = String(name).replace(/[^a-z0-9._-]/gi, '-');
   const isDir = /SKILL\.(md|markdown)$/i.test(basename(path)) || (await stat(path)).isDirectory();
   const src = /SKILL\.(md|markdown)$/i.test(basename(path)) ? dirname(path) : path;
@@ -331,7 +365,7 @@ function resolveCorpusPath(p) {
   let abs;
   try { abs = resolve(String(p)); } catch { return null; }
   if (!SHOW_EXT_RE.test(abs)) return null;
-  if (!CORPUS_ROOTS.some((root) => abs === root || abs.startsWith(root + sep))) return null;
+  if (!(executorRequestContext.getStore()?.corpusRoots ?? CORPUS_ROOTS).some((root) => abs === root || abs.startsWith(root + sep))) return null;
   return abs;
 }
 
@@ -384,7 +418,7 @@ async function loadContributions() {
   const sources = [], actions = [], screens = [], hooks = [], workflows = [];
   const manifestIds = new Set();
   const itemIds = new Set();
-  for (const [dirIndex, dir] of CONTRIB_DIRS.entries()) {
+  for (const [dirIndex, dir] of (executorRequestContext.getStore()?.contributionDirs ?? CONTRIB_DIRS).entries()) {
     const trustTier = dirIndex === 0 ? 'first-party' : 'sandboxed-third-party';
     let entries = [];
     try { entries = (await readdir(dir)).filter((f) => f.endsWith('.json') && f !== 'contribution.schema.json'); } catch { continue; }
@@ -689,6 +723,11 @@ async function getExecutorCapabilities(executorUrl) {
       host_runtime_enabled: body.host_runtime_enabled === true || body.hostRuntimeEnabled === true,
       runtime_providers: runtimeProviders && Array.isArray(runtimeProviders.providers) ? runtimeProviders : undefined,
       raw_status: body.status ?? body.state ?? 'unknown',
+      real_executor: !mockExecutorReason(body),
+      implementation: body.implementation ?? body.service ?? body.name ?? 'agentic-sandbox',
+      version: body.version ?? body.build?.version ?? null,
+      commit: body.commit ?? body.build?.commit ?? body.git_commit ?? null,
+      auth_required: body.auth_required ?? body.auth?.required ?? null,
     };
   } catch (err) {
     rethrowExecutorSecurityError(err);
@@ -991,7 +1030,7 @@ async function destroyInstance(upstreamUrl, instanceId) {
   try {
     const result = await fetchJsonFirst(candidates);
     if (result.status < 400) {
-      if (LOCAL_DOCKER_FALLBACK && ['docker', 'container'].includes(runtime) && dockerName) {
+      if (localDockerFallbackEnabled() && ['docker', 'container'].includes(runtime) && dockerName) {
         try {
           await spawnCollect('docker', ['rm', '-f', dockerName]);
           return {
@@ -1043,7 +1082,7 @@ async function destroyInstance(upstreamUrl, instanceId) {
       body: { error: 'instance_not_destroyable', message: `No destroyable runtime record for ${instanceId}` },
     };
   }
-  if (!LOCAL_DOCKER_FALLBACK) {
+  if (!localDockerFallbackEnabled()) {
     return {
       target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/destroy`,
       status: 409,
@@ -1137,7 +1176,7 @@ async function reconnectInstance(upstreamUrl, instanceId) {
   }
 
   if (['docker', 'container'].includes(runtime) && dockerName) {
-    if (!LOCAL_DOCKER_FALLBACK) {
+    if (!localDockerFallbackEnabled()) {
       return {
         target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`,
         status: 409,
@@ -1178,7 +1217,7 @@ async function reconnectInstance(upstreamUrl, instanceId) {
   }
 
   if (VM_RUNTIME_KINDS.includes(runtime)) {
-    if (!localLibvirtFallbackAllowed()) {
+    if (!localLibvirtFallbackEnabled()) {
       return {
         target: `${upstreamUrl}/api/v2/admin/instances/${encodeURIComponent(instanceId)}/reconnect`,
         status: 409,
@@ -1527,6 +1566,7 @@ function normalizeInstance(executorUrl, i) {
     state: i.state ?? i.status ?? 'unknown',
     tenant: i.tenant_id ?? i.tenant ?? i.tenantId ?? 'default',
     card_url: i.card_url ?? i.cardUrl ?? `${executorUrl}/agents/${encodeURIComponent(id)}/.well-known/agent-card.json`,
+    a2a_protocol: i.a2a_protocol ?? i.a2aProtocol,
     runtime_posture: runtimePosture,
     host_daemon: normalizeHostDaemon(i.host_daemon ?? i.hostDaemon, runtimePosture.kind),
     transport: normalizeTransport(
@@ -1756,6 +1796,113 @@ function runtimeExtensionFromCard(card) {
   return ext?.params && typeof ext.params === 'object' ? ext.params : null;
 }
 
+function cockpitA2ASettings() {
+  const context = executorRequestContext.getStore();
+  return {
+    policy: context?.a2aProtocolPolicy ?? COCKPIT_A2A_PROTOCOL_POLICY,
+    allowFallback: context?.allowA2AProtocolFallback ?? COCKPIT_A2A_PROTOCOL_FALLBACK,
+  };
+}
+
+/** Normalize and select the ordered AgentCard interface Cockpit will use. */
+export function selectCockpitA2AInterface(card, policy = '0.3') {
+  if (!['0.3', '1.0', 'auto'].includes(policy)) {
+    throw new Error(`invalid Cockpit A2A protocol policy: ${policy}`);
+  }
+  const normalizeVersion = (value) => {
+    const match = /^(0\.3|1\.0)(?:\.\d+)?$/.exec(String(value ?? '').trim());
+    return match?.[1] ?? null;
+  };
+  const topVersion = normalizeVersion(card?.protocolVersion);
+  const interfaces = [];
+  for (const [preference, entry] of (Array.isArray(card?.supportedInterfaces) ? card.supportedInterfaces : []).entries()) {
+    const version = normalizeVersion(entry?.protocolVersion) ?? topVersion;
+    const binding = entry?.protocolBinding ?? entry?.transport;
+    if (!version || !binding || typeof entry?.url !== 'string') continue;
+    interfaces.push({
+      url: entry.url.replace(/\/+$/, ''),
+      protocol_version: version,
+      protocol_binding: String(binding),
+      preference,
+    });
+  }
+  if (topVersion === '0.3' && typeof card?.url === 'string' && !interfaces.some((entry) => entry.protocol_version === '0.3')) {
+    interfaces.push({
+      url: card.url.replace(/\/+$/, ''),
+      protocol_version: '0.3',
+      protocol_binding: String(card.preferredTransport ?? 'REST'),
+      preference: interfaces.length,
+    });
+  }
+  const versions = policy === 'auto' ? ['1.0', '0.3'] : [policy];
+  for (const version of versions) {
+    const selected = interfaces
+      .filter((entry) => entry.protocol_version === version)
+      .sort((a, b) => a.preference - b.preference)[0];
+    if (selected) return { policy, ...selected };
+  }
+  throw new Error(`AgentCard has no interface compatible with Cockpit A2A policy ${policy}`);
+}
+
+async function discoverCockpitA2AInterface(executorUrl, instanceId) {
+  const { body: card } = await fetchJsonFirst([
+    `${executorUrl}/agents/${encodeURIComponent(instanceId)}/.well-known/agent-card.json`,
+  ]);
+  return { card, selected: selectCockpitA2AInterface(card, cockpitA2ASettings().policy) };
+}
+
+function cockpitA2AHeaders(version, mutating = false) {
+  const mediaType = version === '1.0' ? 'application/a2a+json' : 'application/json';
+  return {
+    accept: mediaType,
+    ...(mutating ? { 'content-type': mediaType } : {}),
+    ...(version === '1.0' ? { 'a2a-version': '1.0' } : {}),
+  };
+}
+
+function isA2AVersionNotSupported(status, body) {
+  const type = String(body?.type ?? '').toLowerCase();
+  const code = String(body?.code ?? body?.error?.code ?? '').toLowerCase();
+  return status === 400 && (
+    type.includes('version-not-supported') ||
+    ['versionnotsupportederror', 'version_not_supported', 'a2a.version_not_supported', '-32009'].includes(code)
+  );
+}
+
+async function negotiatedCockpitA2ARequest(executorUrl, instanceId, candidatesFor) {
+  const settings = cockpitA2ASettings();
+  let card;
+  let selected;
+  try {
+    ({ card, selected } = await discoverCockpitA2AInterface(executorUrl, instanceId));
+  } catch (error) {
+    // Pre-AgentCard executors remain supported only under the explicit legacy
+    // policy. Auto and 1.0 must negotiate from advertised interfaces.
+    if (settings.policy !== '0.3') throw error;
+    selected = {
+      policy: '0.3',
+      url: `${executorUrl}/agents/${encodeURIComponent(instanceId)}`,
+      protocol_version: '0.3',
+      protocol_binding: 'REST',
+      preference: 0,
+    };
+  }
+  let result = await fetchJsonFirst(candidatesFor(selected));
+  let active = selected;
+  let fallbackReason;
+  if (
+    selected.protocol_version === '1.0' &&
+    settings.policy === 'auto' &&
+    settings.allowFallback &&
+    isA2AVersionNotSupported(result.status, result.body)
+  ) {
+    active = selectCockpitA2AInterface(card, '0.3');
+    fallbackReason = `${result.body?.type ?? result.body?.code ?? 'VersionNotSupportedError'}`;
+    result = await fetchJsonFirst(candidatesFor(active));
+  }
+  return { ...result, selected: active, fallbackReason };
+}
+
 async function enrichInstanceFromAgentCard(executorUrl, instance) {
   const id = instance.instance_id ?? instance.instanceId ?? instance.id;
   if (!id) return instance;
@@ -1764,12 +1911,20 @@ async function enrichInstanceFromAgentCard(executorUrl, instance) {
       `${executorUrl}/agents/${encodeURIComponent(id)}/.well-known/agent-card.json`,
     ]);
     const runtimeExtension = runtimeExtensionFromCard(body);
-    if (!runtimeExtension) return instance;
+    const selected = selectCockpitA2AInterface(body, cockpitA2ASettings().policy);
     return {
       ...instance,
-      runtime_extension: runtimeExtension,
-      loadout: instance.loadout ?? runtimeExtension.loadout,
-      image_ref: instance.image_ref ?? runtimeExtension.image_ref,
+      a2a_protocol: {
+        policy: selected.policy,
+        selected_version: selected.protocol_version,
+        protocol_binding: selected.protocol_binding,
+        interface_url: selected.url,
+      },
+      ...(runtimeExtension ? {
+        runtime_extension: runtimeExtension,
+        loadout: instance.loadout ?? runtimeExtension.loadout,
+        image_ref: instance.image_ref ?? runtimeExtension.image_ref,
+      } : {}),
     };
   } catch (err) {
     rethrowExecutorSecurityError(err);
@@ -1896,20 +2051,59 @@ async function getInventory(executorUrl, { requireSandboxMtls = false } = {}) {
 // /admin/running. A2A task lifecycle states: submitted/working/input-required are
 // active; completed/canceled/failed/rejected are terminal.
 const ACTIVE_TASK_STATES = new Set(['submitted', 'working', 'input-required', 'in_progress', 'running']);
-const taskState = (t) => t.status?.state ?? t.state ?? (typeof t.status === 'string' ? t.status : 'unknown');
+const V1_TASK_STATES = {
+  TASK_STATE_SUBMITTED: 'submitted',
+  TASK_STATE_WORKING: 'working',
+  TASK_STATE_COMPLETED: 'completed',
+  TASK_STATE_FAILED: 'failed',
+  TASK_STATE_CANCELED: 'canceled',
+  TASK_STATE_INPUT_REQUIRED: 'input-required',
+  TASK_STATE_REJECTED: 'rejected',
+  TASK_STATE_AUTH_REQUIRED: 'auth-required',
+};
+const normalizeTaskState = (value) => V1_TASK_STATES[value] ?? value ?? 'unknown';
+const taskState = (t) => normalizeTaskState(t.status?.state ?? t.state ?? (typeof t.status === 'string' ? t.status : 'unknown'));
 const taskIdOf = (t) => t.id ?? t.task_id ?? t.taskId;
 const taskTenantOf = (t) => t.metadata?.tenant_id ?? t.metadata?.tenantId ?? t.tenant ?? t.tenant_id ?? t.tenantId ?? 'default';
+
+function normalizeCockpitA2ATask(task) {
+  if (!task || typeof task !== 'object' || !task.id || !task.status || typeof task.status !== 'object') return task;
+  return { ...task, status: { ...task.status, state: normalizeTaskState(task.status.state) } };
+}
+
+function normalizeCockpitA2ATaskResponse(body) {
+  const candidate = body?.task && typeof body.task === 'object' ? body.task : body;
+  return normalizeCockpitA2ATask(candidate);
+}
 
 /** Active tasks for one instance via the A2A task surface (#1639). The session
  *  agent id (not the instance id) keys the agent routes on real executors. */
 async function listInstanceTasks(executorUrl, instanceId) {
   const agentId = await resolveSessionAgentId(executorUrl, instanceId);
-  const candidates = unique([instanceId, agentId]).flatMap((id) => [
-    `${executorUrl}/agents/${encodeURIComponent(id)}/tasks`,
-    `${executorUrl}/api/v1/agents/${encodeURIComponent(id)}/tasks`,
-  ]);
-  const { body } = await fetchJsonFirst(candidates);
-  return asArrayFromEnvelope(body, ['tasks', 'items', 'data']);
+  const settings = cockpitA2ASettings();
+  try {
+    const result = await negotiatedCockpitA2ARequest(executorUrl, agentId, (selected) => {
+      const headers = cockpitA2AHeaders(selected.protocol_version);
+      return selected.protocol_version === '1.0'
+        ? [{ target: `${selected.url}/tasks`, headers }]
+        : [
+            { target: `${selected.url}/v1/tasks`, headers },
+            { target: `${selected.url}/tasks`, headers },
+          ];
+    });
+    if (result.status >= 400) {
+      throw new Error(`A2A ${result.selected.protocol_version} task list failed with HTTP ${result.status}`);
+    }
+    return asArrayFromEnvelope(result.body, ['tasks', 'items', 'data']).map(normalizeCockpitA2ATask);
+  } catch (error) {
+    if (settings.policy !== '0.3') throw error;
+    const candidates = unique([instanceId, agentId]).flatMap((id) => [
+      `${executorUrl}/agents/${encodeURIComponent(id)}/tasks`,
+      `${executorUrl}/api/v1/agents/${encodeURIComponent(id)}/tasks`,
+    ]);
+    const { body } = await fetchJsonFirst(candidates);
+    return asArrayFromEnvelope(body, ['tasks', 'items', 'data']).map(normalizeCockpitA2ATask);
+  }
 }
 
 /** Running board derived from active A2A tasks across running instances (#1639).
@@ -2045,7 +2239,7 @@ async function getApprovals(executorUrl, status) {
   };
 }
 
-const TERMINAL_MISSION_STATES = new Set(['done', 'completed', 'complete', 'failed', 'aborted', 'canceled', 'cancelled', 'rejected']);
+const TERMINAL_MISSION_STATES = new Set(['done', 'completed', 'complete', 'failed', 'incomplete', 'aborted', 'canceled', 'cancelled', 'rejected']);
 
 function normalizeMissionStatus(status) {
   const value = String(status ?? 'unknown').toLowerCase();
@@ -2055,12 +2249,18 @@ function normalizeMissionStatus(status) {
   return value;
 }
 
-function missionSummary(mission) {
-  const status = normalizeMissionStatus(mission.status);
+export function missionSummary(mission) {
+  const canonical = mission?.apiVersion === 'mission.aiwg.io/v1' && mission?.kind === 'Mission';
+  const canonicalStatus = canonical ? mission.status ?? {} : {};
+  const canonicalMetadata = canonical ? mission.metadata ?? {} : {};
+  const canonicalSpec = canonical ? mission.spec ?? {} : {};
+  const canonicalProvenance = canonical ? mission.provenance ?? {} : {};
+  const uhp = canonical ? mission.extensions?.['aiwg.source.uhp-2026-08-11'] ?? {} : {};
+  const status = normalizeMissionStatus(canonical ? canonicalStatus.state : mission.status);
   return {
-    id: String(mission.id ?? mission.mission_id ?? mission.missionId ?? ''),
-    title: mission.objective ?? mission.goal ?? mission.task ?? mission.title ?? 'Untitled mission',
-    completion: mission.completion ?? mission.completionCriterion ?? mission.completion_criterion,
+    id: String(canonicalMetadata.id ?? mission.id ?? mission.mission_id ?? mission.missionId ?? ''),
+    title: canonicalSpec.objective ?? mission.objective ?? mission.goal ?? mission.task ?? mission.title ?? 'Untitled mission',
+    completion: canonicalSpec.completionCriterion ?? mission.completion ?? mission.completionCriterion ?? mission.completion_criterion,
     status,
     loop: mission.loop ?? mission.iteration ?? mission.currentIteration ?? 0,
     max_iterations: mission.maxIterations ?? mission.max_iterations ?? mission.maxIterations ?? 0,
@@ -2069,10 +2269,55 @@ function missionSummary(mission) {
     target_agent: mission.targetAgent ?? mission.target_agent,
     ralph_loop_id: mission.ralphLoopId ?? mission.ralph_loop_id,
     ralph_pid: mission.ralphPid ?? mission.ralph_pid,
-    started_at: mission.startedAt ?? mission.started_at,
-    completed_at: mission.completedAt ?? mission.completed_at,
-    error: mission.error,
-    terminal: TERMINAL_MISSION_STATES.has(status),
+    started_at: canonicalMetadata.createdAt ?? mission.startedAt ?? mission.started_at,
+    completed_at: canonicalStatus.terminal ? canonicalMetadata.updatedAt : mission.completedAt ?? mission.completed_at,
+    error: canonicalStatus.error?.message ?? mission.error,
+    terminal: canonical ? canonicalStatus.terminal === true : TERMINAL_MISSION_STATES.has(status),
+    ...(canonical ? {
+      canonical_version: mission.apiVersion,
+      native_state: canonicalStatus.nativeState,
+      transport: canonicalProvenance.transport,
+      protocol_version: canonicalProvenance.sourceVersion,
+      endpoint_profile: uhp.endpointProfile,
+      response_id: uhp.responseId,
+      remote_session_id: uhp.sessionId,
+      artifacts: canonicalStatus.artifacts,
+    } : {}),
+    ...(graphMissionProjection(mission) ?? {}),
+  };
+}
+
+function graphMissionProjection(mission) {
+  const graph = mission.graph ?? mission.graph_metadata;
+  if (!graph || typeof graph !== 'object' || !graph.graphId || !graph.runId) return null;
+  const nodes = Array.isArray(mission.graphNodes ?? mission.graph_nodes)
+    ? (mission.graphNodes ?? mission.graph_nodes).map((node) => ({
+      node_id: node.nodeId ?? node.node_id,
+      node_run_id: node.nodeRunId ?? node.node_run_id,
+      state: node.state ?? node.nodeState ?? 'unknown',
+      runtime_binding: node.runtimeBinding ?? node.runtime_binding ?? 'unknown',
+      route_reason: node.routeReason ?? node.route_reason,
+      evidence_summary: node.evidenceSummary ?? node.evidence_summary,
+      hitl_status: node.hitlStatus ?? node.hitl_status,
+      cost_usd: Number(node.costUsd ?? node.cost_usd ?? 0),
+      tokens: Number(node.tokens ?? 0),
+      duration_ms: Number(node.durationMs ?? node.duration_ms ?? 0),
+      retry_count: Number(node.retryCount ?? node.retry_count ?? 0),
+      budget_remaining: node.budgetRemaining ?? node.budget_remaining,
+      checkpoint_id: node.checkpointId ?? node.checkpoint_id,
+      replay_of_node_run_id: node.replayOfNodeRunId ?? node.replay_of_node_run_id,
+      artifacts: Array.isArray(node.artifacts) ? node.artifacts : [],
+    })) : [];
+  return {
+    graph: {
+      schema_version: graph.schemaVersion ?? graph.schema_version ?? 'graph.flow.aiwg.io/v1',
+      graph_id: graph.graphId,
+      graph_version: graph.graphVersion,
+      run_id: graph.runId,
+      replay_of_run_id: graph.replayOfRunId ?? graph.replay_of_run_id,
+      checkpoint_id: graph.checkpointId ?? graph.checkpoint_id,
+    },
+    graph_nodes: nodes,
   };
 }
 
@@ -2221,6 +2466,10 @@ function fleetMissionProjection(record, sessionId) {
     exit_classification: status.exit_classification,
     error: status.error_code,
     schedule: record.spec?.schedule,
+    ...(graphMissionProjection({
+      graph_metadata: record.lineage?.graph_metadata ?? record.metadata?.['aiwg.flow.graph'],
+      graph_nodes: record.status?.graph_nodes,
+    }) ?? {}),
   };
 }
 
@@ -2331,46 +2580,55 @@ async function respondApproval(executorUrl, approvalId, decision) {
   const [instanceId, taskId] = String(approvalId).split('::');
   if (!instanceId || !taskId) return { status: 400, body: { error: 'invalid_approval_id' } };
   const agentId = await resolveSessionAgentId(executorUrl, instanceId);
-  const message = {
-    message: {
-      messageId: `cockpit-hitl-${Date.now()}`,
-      role: 'user',
-      taskId,
-      contextId: taskId,
-      parts: [{ kind: 'text', text: decision }],
-      metadata: { hitl_response: { decision }, approval_decision: decision },
-    },
-  };
-  const response = JSON.stringify({ decision, response: message.message });
-  const candidates = unique([agentId, instanceId]).flatMap((id) => [
-    {
-      target: `${executorUrl}/api/v1/agents/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}:respond`,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: response,
-    },
-    {
-      target: `${executorUrl}/agents/${encodeURIComponent(id)}/tasks/${encodeURIComponent(taskId)}:respond`,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: response,
-    },
-    {
-      target: `${executorUrl}/api/v1/agents/${encodeURIComponent(id)}/messages:send`,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(message),
-    },
-    {
-      target: `${executorUrl}/agents/${encodeURIComponent(id)}/messages:send`,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(message),
-    },
-  ]);
   try {
-    const { status, body } = await fetchJsonFirst(candidates);
-    return { status, body };
+    const result = await negotiatedCockpitA2ARequest(executorUrl, agentId, (selected) => {
+      const message = {
+        messageId: `cockpit-hitl-${Date.now()}`,
+        role: selected.protocol_version === '1.0' ? 'ROLE_USER' : 'user',
+        taskId,
+        contextId: taskId,
+        parts: [selected.protocol_version === '1.0'
+          ? { text: decision }
+          : { kind: 'text', text: decision }],
+        metadata: { hitl_response: { decision }, approval_decision: decision },
+      };
+      if (selected.protocol_version === '1.0') {
+        return [{
+          target: `${selected.url}/message:send`,
+          method: 'POST',
+          headers: cockpitA2AHeaders('1.0', true),
+          body: JSON.stringify({ message }),
+        }];
+      }
+      const response = JSON.stringify({ decision, response: message });
+      return [
+        {
+          target: `${selected.url}/v1/tasks/${encodeURIComponent(taskId)}:respond`,
+          method: 'POST',
+          headers: cockpitA2AHeaders('0.3', true),
+          body: response,
+        },
+        {
+          target: `${selected.url}/tasks/${encodeURIComponent(taskId)}:respond`,
+          method: 'POST',
+          headers: cockpitA2AHeaders('0.3', true),
+          body: response,
+        },
+        {
+          target: `${executorUrl}/api/v1/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}:respond`,
+          method: 'POST',
+          headers: cockpitA2AHeaders('0.3', true),
+          body: response,
+        },
+        {
+          target: `${selected.url}/v1/messages:send`,
+          method: 'POST',
+          headers: cockpitA2AHeaders('0.3', true),
+          body: JSON.stringify({ message }),
+        },
+      ];
+    });
+    return { status: result.status, body: normalizeCockpitA2ATaskResponse(result.body) };
   } catch (e) {
     rethrowExecutorSecurityError(e);
     return { status: 409, body: { error: 'approval_response_failed', detail: String(e?.message ?? e) } };
@@ -2648,6 +2906,21 @@ async function proxyExecutorWebsocket({ req, socket, head, target, executorToken
   upstreamRequest.end();
 }
 
+function embeddingDirectory(value, label) {
+  if (typeof value !== 'string' || !value.trim() || !isAbsolute(value)) {
+    throw new TypeError(`${label} must be a non-empty absolute directory path`);
+  }
+  const normalized = resolve(value);
+  if (normalized === parse(normalized).root) throw new TypeError(`${label} must not be a filesystem root`);
+  return normalized;
+}
+
+function embeddingDirectories(value, defaults, label) {
+  if (value === undefined) return Object.freeze([...defaults]);
+  if (!Array.isArray(value) || value.length === 0) throw new TypeError(`${label} must be a non-empty array`);
+  return Object.freeze(value.map((entry) => embeddingDirectory(entry, label)));
+}
+
 export function createBridge({
   executorUrl = EXECUTOR_URL,
   allowMockExecutor = ALLOW_MOCK_EXECUTOR,
@@ -2656,7 +2929,44 @@ export function createBridge({
   requireSandboxMtls = REQUIRE_SANDBOX_MTLS,
   bootstrapTtlMs = 60_000,
   sessionTtlMs = 12 * 60 * 60 * 1000,
+  a2aProtocolPolicy = COCKPIT_A2A_PROTOCOL_POLICY,
+  allowA2AProtocolFallback = COCKPIT_A2A_PROTOCOL_FALLBACK,
+  // Explicit embedding seams are per-instance; omitted options retain operator defaults.
+  libraryDir,
+  auditDir: requestedAuditDir,
+  mcpTokenFile = MCP_TOKEN_FILE,
+  localDockerFallback = LOCAL_DOCKER_FALLBACK,
+  localLibvirtFallback,
+  aiwgCommand,
+  corpusRoots,
+  contributionDirs,
+  // Trusted embedding seam; no default verifier and no operator-token fallback.
+  desktopIdentity,
+  desktopBackend,
 } = {}) {
+  if (desktopIdentity !== undefined && (!desktopIdentity ||
+      ['bind', 'status', 'authorize', 'withDelegation', 'logout', 'onInvalidate'].some((method) => typeof desktopIdentity[method] !== 'function'))) {
+    throw new TypeError('desktopIdentity must implement authoritative desktop identity operations');
+  }
+  if (desktopBackend !== undefined && (!desktopBackend || typeof desktopBackend.request !== 'function')) throw new TypeError('desktopBackend must implement desktop requests');
+  if (typeof mcpTokenFile !== 'string') throw new TypeError('mcpTokenFile must be a string');
+  if (typeof localDockerFallback !== 'boolean' || (localLibvirtFallback !== undefined && typeof localLibvirtFallback !== 'boolean')) {
+    throw new TypeError('local fallback options must be booleans');
+  }
+  if (aiwgCommand !== undefined && typeof aiwgCommand !== 'function') {
+    throw new TypeError('aiwgCommand must be a function');
+  }
+  const instanceLibraryDir = libraryDir === undefined ? LIBRARY_DIR : embeddingDirectory(libraryDir, 'libraryDir');
+  // Undefined preserves the historical per-request environment default.
+  const instanceAuditDir = requestedAuditDir === undefined
+    ? undefined
+    : embeddingDirectory(requestedAuditDir, 'auditDir');
+  const instanceCorpusRoots = embeddingDirectories(corpusRoots, CORPUS_ROOTS, 'corpusRoots');
+  const instanceContributionDirs = embeddingDirectories(contributionDirs, CONTRIB_DIRS, 'contributionDirs');
+
+  if (!['0.3', '1.0', 'auto'].includes(a2aProtocolPolicy)) {
+    throw new Error(`AIWG_COCKPIT_A2A_PROTOCOL_POLICY must be 0.3, 1.0, or auto (received '${a2aProtocolPolicy}')`);
+  }
   const upstreamUrl = executorUrl;
   const TOKEN = token ?? randomBytes(24).toString('hex');
   const bootstrapNonces = new Map();
@@ -2683,18 +2993,26 @@ export function createBridge({
   };
   const sessionAuth = (req) => {
     const id = cookies(req).cockpit_session ?? '';
-    const session = browserSessions.get(digest(id));
+    const sessionId = digest(id);
+    const session = browserSessions.get(sessionId);
     if (!session) return null;
-    if (session.expiresAt < Date.now()) {
-      browserSessions.delete(digest(id));
+    if (session.expiresAt <= Date.now()) {
+      browserSessions.delete(sessionId);
+      desktopIdentity?.logout(sessionId);
       return null;
     }
-    return { kind: 'session', csrf: session.csrf };
+    return { kind: 'session', csrf: session.csrf, sessionId, desktopAudience: `cockpit:${sessionId}` };
   };
   const requestAuth = (req) => bearerAuthed(req, TOKEN)
     ? { kind: 'bearer', csrf: TOKEN }
     : sessionAuth(req);
   const executorOrigin = new URL(upstreamUrl).origin;
+  const requestContext = Object.freeze({
+    executorOrigin, executorTokenFile, a2aProtocolPolicy, allowA2AProtocolFallback,
+    libraryDir: instanceLibraryDir, auditDir: instanceAuditDir,
+    mcpTokenFile, localDockerFallback, localLibvirtFallback, aiwgCommand,
+    corpusRoots: instanceCorpusRoots, contributionDirs: instanceContributionDirs,
+  });
   const executorAddress = new URL(upstreamUrl);
   const attachTargets = new Map();
   const issueAttachUrl = (req, value) => {
@@ -2761,6 +3079,39 @@ export function createBridge({
         res.setHeader('cache-control', 'no-store');
         return json(res, 200, { csrf: auth.csrf });
       }
+      if (url.pathname === '/bootstrap/session' && req.method === 'DELETE') {
+        const auth = sessionAuth(req);
+        if (!auth) return json(res, 401, { error: 'unauthorized' });
+        if (!validDesktopBrowserOrigin(req)) return json(res, 403, { error: 'forbidden_origin' });
+        if (!validCsrf(req, auth)) return json(res, 403, { error: 'csrf_required' });
+        // Remove local authority first so pending binds cannot resurrect it.
+        browserSessions.delete(auth.sessionId);
+        desktopIdentity?.logout(auth.sessionId);
+        res.writeHead(204, {
+          'cache-control': 'no-store',
+          'set-cookie': 'cockpit_session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0',
+        });
+        return res.end();
+      }
+      if (url.pathname === '/api/desktop-identity') {
+        const auth = sessionAuth(req); // A native/operator bearer is insufficient.
+        if (!auth) return json(res, 401, { error: 'unauthorized' });
+        if (!validDesktopBrowserOrigin(req, { allowSameOriginFetch: true })) return json(res, 403, { error: 'forbidden_origin' });
+        if (req.method !== 'GET') return json(res, 405, { error: 'method_not_allowed' });
+        res.setHeader('cache-control', 'no-store');
+        if (!desktopIdentity) return json(res, 200, { state: 'unsupported', reason: 'desktop_identity_not_configured' });
+        try {
+          const identity = await desktopIdentity.status(auth.sessionId);
+          if (sessionAuth(req)?.sessionId !== auth.sessionId) return json(res, 401, { error: 'unauthorized' });
+          return json(res, 200, identity);
+        } catch (err) {
+          // Never forward issuer response bodies, delegation, or diagnostics.
+          return json(res, err?.code === 'identity_unavailable' ? 503 : 403, {
+            error: err?.code === 'identity_unavailable' ? 'desktop_identity_unavailable' : 'desktop_identity_denied',
+          });
+        }
+      }
+      if (await desktopHttp.handle(req, res, url)) return;
       if (url.pathname.startsWith('/api/') && !validBrowserOrigin(req)) {
         return json(res, 403, { error: 'forbidden_origin' });
       }
@@ -2804,7 +3155,7 @@ export function createBridge({
         return json(res, 200, await getBootstrapTrustPosture(upstreamUrl, { requireSandboxMtls }));
       }
       if (url.pathname === '/api/mcp/discovery' && req.method === 'GET') return json(res, 200, await getMcpDiscovery(upstreamUrl));
-      if (url.pathname === '/api/mcp' && req.method === 'POST') return proxyMcpRequest(req, res, upstreamUrl, MCP_TOKEN_FILE);
+      if (url.pathname === '/api/mcp' && req.method === 'POST') return proxyMcpRequest(req, res, upstreamUrl, mcpTokenFile);
       if (url.pathname === '/api/running') return json(res, 200, await getRunning(upstreamUrl));
       if (url.pathname === '/api/missions' && req.method === 'GET') return json(res, 200, await getMissions(upstreamUrl));
       if (url.pathname === '/api/missions' && req.method === 'POST') {
@@ -3019,8 +3370,9 @@ export function createBridge({
       {
         const lm = url.pathname.match(/^\/api\/library\/(.+)$/);
         if (lm && req.method === 'DELETE') {
+          const libraryDir = currentLibraryDir();
           const target = inLibrary(decodeURIComponent(lm[1]));
-          if (!target || target === LIBRARY_DIR || !existsSync(target)) return json(res, 404, { error: 'not_in_library' });
+          if (!target || target === libraryDir || !existsSync(target)) return json(res, 404, { error: 'not_in_library' });
           await rm(target, { recursive: true, force: true });
           return json(res, 200, { removed: decodeURIComponent(lm[1]) });
         }
@@ -3190,8 +3542,33 @@ export function createBridge({
         return json(res, 200, { ...result, projection: await getMissions(upstreamUrl) });
       }
       if ((m = url.pathname.match(/^\/api\/tasks\/([^/]+)\/([^/]+)\/cancel$/)) && req.method === 'POST') {
-        await appendAudit('task.cancel.requested', { instance_id: decodeURIComponent(m[1]), task_id: decodeURIComponent(m[2]) });
-        return proxy(res, 'POST', `${upstreamUrl}/agents/${encodeURIComponent(m[1])}/tasks/${encodeURIComponent(m[2])}:cancel`);
+        const instanceId = decodeURIComponent(m[1]);
+        const taskId = decodeURIComponent(m[2]);
+        await appendAudit('task.cancel.requested', { instance_id: instanceId, task_id: taskId });
+        const agentId = await resolveSessionAgentId(upstreamUrl, instanceId);
+        const result = await negotiatedCockpitA2ARequest(upstreamUrl, agentId, (selected) => {
+          const request = (target) => ({
+            target,
+            method: 'POST',
+            headers: cockpitA2AHeaders(selected.protocol_version, true),
+            body: '{}',
+          });
+          return selected.protocol_version === '1.0'
+            ? [request(`${selected.url}/tasks/${encodeURIComponent(taskId)}:cancel`)]
+            : [
+                request(`${selected.url}/v1/tasks/${encodeURIComponent(taskId)}/cancel`),
+                request(`${selected.url}/tasks/${encodeURIComponent(taskId)}/cancel`),
+                request(`${upstreamUrl}/api/v1/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}/cancel`),
+              ];
+        });
+        await appendAudit('task.cancel.protocol', {
+          instance_id: instanceId,
+          task_id: taskId,
+          selected_version: result.selected.protocol_version,
+          protocol_binding: result.selected.protocol_binding,
+          ...(result.fallbackReason ? { fallback_reason: result.fallbackReason } : {}),
+        });
+        return json(res, result.status, normalizeCockpitA2ATaskResponse(result.body));
       }
 
       // --- approval inbox (UC-009) + cost (UC-010) ---
@@ -3212,6 +3589,15 @@ export function createBridge({
         executor_url: upstreamUrl,
         mock_executor_allowed: allowMockExecutor,
         executor_auth_configured: Boolean(executorTokenFile),
+        a2a_protocol: {
+          policy: a2aProtocolPolicy,
+          fallback_enabled: Boolean(allowA2AProtocolFallback),
+        },
+        executor: await getExecutorCapabilities(upstreamUrl),
+        // Runtime feature gate for the desktop panel (#2547): the browser shows
+        // desktop controls only when both the identity verifier and the
+        // dedicated desktop backend are configured on this Bridge.
+        desktop: { configured: Boolean(desktopIdentity && desktopBackend) },
       });
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const distIndex = join(WEB_DIST, 'index.html');
@@ -3240,11 +3626,11 @@ export function createBridge({
     }
   };
   const server = http.createServer((req, res) => executorRequestContext.run(
-    { executorOrigin, executorTokenFile },
+    requestContext,
     () => handleRequest(req, res),
   ));
   server.on('upgrade', (req, socket, head) => executorRequestContext.run(
-    { executorOrigin, executorTokenFile },
+    requestContext,
     async () => {
       try {
         const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
@@ -3269,7 +3655,39 @@ export function createBridge({
     },
   ));
   server.cockpitToken = TOKEN; // exposed for shells/tests
+  const desktopHttp = createDesktopHttpHandler({ identity: desktopIdentity, backend: desktopBackend,
+    getAuth: sessionAuth, validOrigin: validDesktopBrowserOrigin, validCsrf, json });
   server.issueBootstrapNonce = issueBootstrapNonce;
+  // Called by a trusted organizational login adapter after code/device-flow
+  // completion. No public request route accepts raw identity binding fields.
+  server.bindDesktopIdentity = async (req, { workspaceId, evidence }) => {
+    const auth = sessionAuth(req);
+    if (!auth || !desktopIdentity) throw executorAuthError('desktop_identity_denied', 'desktop identity unavailable');
+    const result = await desktopIdentity.bind({
+      browserSessionId: auth.sessionId, audience: auth.desktopAudience, workspaceId, evidence,
+    });
+    if (!sessionAuth(req)) {
+      desktopIdentity.logout(auth.sessionId);
+      throw executorAuthError('desktop_identity_denied', 'desktop identity unavailable');
+    }
+    return result;
+  };
+  const expireDesktopSessions = desktopIdentity ? setInterval(() => {
+    for (const [id, session] of browserSessions) {
+      if (session.expiresAt <= Date.now()) {
+        browserSessions.delete(id);
+        desktopIdentity.logout(id);
+      }
+    }
+  }, 1000) : null;
+  expireDesktopSessions?.unref();
+  server.once('close', () => {
+    desktopHttp.close();
+    if (expireDesktopSessions) clearInterval(expireDesktopSessions);
+    for (const id of browserSessions.keys()) desktopIdentity?.logout(id);
+    browserSessions.clear();
+    bootstrapNonces.clear();
+  });
   return server;
 }
 

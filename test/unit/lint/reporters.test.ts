@@ -22,6 +22,9 @@ function makeResult(overrides: Partial<LintResult> = {}): LintResult {
       warnings: 0,
       infos: 0,
       passed: true,
+      rulesSelected: 3,
+      rulesApplied: 3,
+      inapplicableRules: [],
     },
     timestamp: '2026-04-12T00:00:00Z',
     ...overrides,
@@ -49,7 +52,7 @@ describe('formatResult', () => {
             message: 'Missing field',
           },
         ],
-        summary: { filesChecked: 1, errors: 1, warnings: 0, infos: 0, passed: false },
+        summary: { filesChecked: 1, errors: 1, warnings: 0, infos: 0, passed: false, rulesSelected: 3, rulesApplied: 3, inapplicableRules: [] },
       });
       const parsed = JSON.parse(formatResult(result, 'json'));
       expect(parsed.diagnostics).toHaveLength(1);
@@ -60,7 +63,7 @@ describe('formatResult', () => {
   describe('summary format', () => {
     it('produces a concise one-line summary', () => {
       const result = makeResult({
-        summary: { filesChecked: 10, errors: 2, warnings: 3, infos: 1, passed: false },
+        summary: { filesChecked: 10, errors: 2, warnings: 3, infos: 1, passed: false, rulesSelected: 3, rulesApplied: 3, inapplicableRules: [] },
       });
       const output = formatResult(result, 'summary');
       expect(output).toContain('10 files');
@@ -98,7 +101,7 @@ describe('formatResult', () => {
           { ruleId: 'r2', ruleName: 'R2', severity: 'warn', file: 'b.md', message: 'Warn in B' },
           { ruleId: 'r3', ruleName: 'R3', severity: 'error', file: 'a.md', message: 'Another error in A' },
         ],
-        summary: { filesChecked: 2, errors: 2, warnings: 1, infos: 0, passed: false },
+        summary: { filesChecked: 2, errors: 2, warnings: 1, infos: 0, passed: false, rulesSelected: 3, rulesApplied: 3, inapplicableRules: [] },
       });
       const output = formatResult(result, 'full');
       expect(output).toContain('a.md');
@@ -157,5 +160,23 @@ describe('formatRuleList', () => {
     expect(output).toContain('[error]');
     expect(output).toContain('[warn]');
     expect(output).toContain('[info]');
+  });
+});
+
+describe('rule applicability reporting (#2555)', () => {
+  it('names how many rules applied in both full and summary output', () => {
+    const result = makeResult({ summary: { filesChecked: 5, errors: 0, warnings: 0, infos: 0, passed: true, rulesSelected: 11, rulesApplied: 4, inapplicableRules: ['a', 'b'] } });
+    expect(formatResult(result, 'full')).toContain('Rules applied: 4 of 11');
+    expect(formatResult(result, 'summary')).toContain('Rules applied: 4 of 11');
+    expect(formatResult(result, 'full')).toContain('2 rule(s) matched no file here: a, b');
+  });
+
+  it('says a no-rule-applies run is not a clean result instead of showing only PASS', () => {
+    const result = makeResult({ summary: { filesChecked: 2542, errors: 0, warnings: 0, infos: 0, passed: true, rulesSelected: 11, rulesApplied: 0, inapplicableRules: ['r1'] } });
+    const full = formatResult(result, 'full');
+    expect(full).toContain('No rule applies to this target');
+    expect(full).toContain('0 of 11 selected rules matched any file here');
+    expect(full).toContain('Lint a parent directory');
+    expect(formatResult(result, 'summary')).toContain('this is not a clean result');
   });
 });

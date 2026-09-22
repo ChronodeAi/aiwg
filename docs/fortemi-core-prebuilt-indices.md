@@ -13,7 +13,11 @@ privacy classification, and SHA-256 checksum.
 
 This prebuilt export is the compact metadata/capability projection used so
 framework discovery can work from the npm distribution without shipping the full
-framework source body corpus.
+framework source body corpus. General source frontmatter is removed during
+compaction, except for the allowlisted `search.frontmatter.aiwg_script` field.
+That normalized declaration is runtime-critical: it preserves the entrypoint,
+runtime, working-directory policy, and argument hint needed by `aiwg run skill`
+when discovery is using only the packaged index.
 
 `aiwg index discover ... --graph framework` first uses a valid local cache under
 `.aiwg/.index/fortemi-core/`. If no compatible local framework cache exists, it
@@ -27,6 +31,12 @@ slice.
 
 The older `fortemi` storage backend in `.aiwg/storage.config` remains an alpha MCP
 persistence adapter and is deprecated for discovery/search routing.
+
+`AIWG_FORTEMI_CORE_LIVE` is a legacy test-only placeholder retained in historical
+migration evidence. It does not contact Fortemi, supply credentials, or enable a
+live-server gate. Do not use it for qualification. Live MCP storage qualification
+uses `AIWG_FORTEMI_LIVE_URL` and the read-only-by-default contract documented in
+[`storage/backends/fortemi.md`](storage/backends/fortemi.md).
 
 Regenerate the release artifact before packing:
 
@@ -59,7 +69,9 @@ That command validates the query matrix against local and Fortemi Core backends,
 runs `npm pack` through `prepack`, verifies the prebuilt export and manifest are
 included in the npm tarball, checks manifest checksum/schema and size ceiling,
 and confirms Fortemi-backed discovery can answer from the packaged fallback with
-an empty local cache.
+an empty local cache. It also compares source script declarations with packaged
+records and executes representative script-bearing skills by both canonical name
+and stable artifact ID from a production-only tarball install.
 
 The npm tarball allowlist includes the top-level `prebuilt/` directory, and the
 publish workflows run the Fortemi package verification before publishing. That

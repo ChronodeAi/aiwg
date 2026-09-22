@@ -19,6 +19,21 @@ AIWG ships four cryptographic verifications you can run on any release:
    transitive dep level. Applies to the first release published after
    #1288 (A13, Wave 6 of #1278) and forward.
 
+Web-consumed YAML, flow bundles, and selected indices additionally use adjacent
+cross-asset attestations. These are not a fifth substitute for the controls
+above: consumers first verify the existing signed channel/release manifest,
+then its artifact and attestation descriptors, then the sidecar's DSSE/in-toto
+policy. The signed descriptor includes each object's path, media type, exact
+byte length, and SHA-256 digest. HTTP cache and discovery headers are never
+signature or digest evidence.
+
+The repository-owned [`agentic.yaml`](../../agentic.yaml) is the reviewed
+agent-handoff source. It requires local verification of the exact public setup
+bytes before an agent may inspect or execute them. Release publication reads
+both manifests from the verified signed tag; absence of either file or sidecar
+is an explicit unpublished state, not a reason to accept an unsigned or
+generated substitute.
+
 This doc walks through all four verifications and shows what each one
 rules out.
 
@@ -258,9 +273,11 @@ untrusted.
 
 ### What it proves
 
-The signed SBOM discloses what AIWG ships at release time: the exact
-direct + transitive npm deps, their versions, and any non-npm components
-syft detected in the tree. The SBOM bytes are signed with the same
+The signed SBOM discloses the installed release graph observed by CI: the
+exact direct + transitive npm deps, their versions, and any non-npm components
+syft detected in the release workspace. npm dependency packages are fetched as
+separate archives during installation; they are not copied into the `aiwg`
+tarball merely because they appear in this SBOM. The SBOM bytes are signed with the same
 keyless OIDC identity that signed the tarball (Verification 3), so the
 SBOM can be trusted to the same extent and via the same chain as the
 tarball itself.
@@ -306,6 +323,12 @@ jq '.components | length' aiwg-X.Y.Z.cdx.json
 # Component names + versions, sorted
 jq -r '.components[] | "\(.name)@\(.version)"' aiwg-X.Y.Z.cdx.json | sort
 ```
+
+The `aiwg` and `@aiwg/cli` package archives also ship
+`THIRD_PARTY_NOTICES.md`. It identifies the reviewed AGPL-licensed Fortemi and
+Bytecask runtime dependencies, immutable source references, and commands for
+checking the versions npm actually resolved. The detailed boundary decision is
+in [`fortemi-agpl-runtime-boundary.md`](../contributing/fortemi-agpl-runtime-boundary.md).
 
 ### Feeding into an SCA scanner
 
@@ -361,6 +384,21 @@ GitHub-as-OIDC-issuer or npmjs.org-as-registry. It is the cryptographic
 anchor that makes the other two trustworthy even if a registry or OIDC
 provider is itself attacked.
 
+## Future common asset attestation
+
+The four release checks above remain the supported release-verification
+baseline. The accepted [cross-asset authenticity
+contract](../research/asset-authenticity-and-provenance.md) will additionally
+project the same artifact digest, immutable source, builder, publisher, and
+freshness claims into a DSSE-signed in-toto Statement. Existing Cosign bundles
+are supported verification material for that envelope; they are not replaced.
+
+Until the separately tracked verifier and publisher phases ship, the presence
+of the schema or a sidecar filename must not be presented as a verified release.
+See the [architecture
+decision](../architecture/adr-cross-asset-attestation-envelope.md) for the
+migration and failure-state contract.
+
 ## What if a verification fails
 
 1. **Stop the install.** Do not proceed with `npm install` or `git
@@ -408,11 +446,12 @@ at `$(npm root -g)/aiwg/` or wherever your global npm prefix points).
 - [#1287](https://git.integrolabs.net/roctinam/aiwg/issues/1287) — tarball Sigstore signing (A8, Wave 5)
 - [#1288](https://git.integrolabs.net/roctinam/aiwg/issues/1288) — publish-time evidence: tarball audit + audit signatures + SBOM (A11/A12/A13, Wave 6)
 - [`SECURITY.md`](https://github.com/jmagly/aiwg/blob/main/SECURITY.md) — maintainer key fingerprint(s), private reporting channel
-- [`.aiwg/architecture/adr-npmjs-org-via-github-actions.md`](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/adr-npmjs-org-via-github-actions.md) — A5 ADR
-- [`.aiwg/architecture/adr-signed-tag-verify.md`](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/adr-signed-tag-verify.md) — A9 ADR
-- [`.aiwg/architecture/adr-gitea-release-compensating-controls.md`](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/adr-gitea-release-compensating-controls.md) — A10 ADR
-- [`.aiwg/architecture/adr-tarball-cosign-signing.md`](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/adr-tarball-cosign-signing.md) — A8 ADR
-- [`.aiwg/architecture/adr-publish-time-evidence.md`](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/adr-publish-time-evidence.md) — A11+A12+A13 ADR
+- [Cross-asset attestation ADR](../architecture/adr-cross-asset-attestation-envelope.md) — common envelope and compatibility decision
+- [#1283](https://git.integrolabs.net/roctinam/aiwg/issues/1283) — A5 npm OIDC decision history
+- [#1299](https://git.integrolabs.net/roctinam/aiwg/issues/1299) — A9 signed-tag decision history
+- [#1286](https://git.integrolabs.net/roctinam/aiwg/issues/1286) — A10 Gitea controls decision history
+- [#1287](https://git.integrolabs.net/roctinam/aiwg/issues/1287) — A8 Cosign decision history
+- [#1288](https://git.integrolabs.net/roctinam/aiwg/issues/1288) — A11+A12+A13 evidence decision history
 - [CycloneDX specification](https://cyclonedx.org/specification/overview/)
 - [syft](https://github.com/anchore/syft)
 - [npm Trusted Publishers documentation](https://docs.npmjs.com/trusted-publishers)

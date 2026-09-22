@@ -10,10 +10,24 @@
  * project` are mutually exclusive; default is `project`.
  */
 
+import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
+import { resolveHermesHome, resolveHermesHomePath } from '../providers/hermes-home.js';
+import { resolveGrokbotSkillsDir } from '../providers/grokbot-paths.js';
+import { resolveGrokHome } from '../providers/grok-build-paths.js';
+
+export const hermesHome = resolveHermesHome;
 
 export type Scope = 'project' | 'user';
+
+function piAgentDir(): string {
+  const configured = process.env.PI_CODING_AGENT_DIR;
+  if (!configured) return path.join(homedir(), '.pi', 'agent');
+  if (configured === '~') return homedir();
+  if (configured.startsWith('~/')) return path.join(homedir(), configured.slice(2));
+  return configured;
+}
 
 /**
  * User-scope deploy paths per provider per ADR-4 §2. Each path is absolute
@@ -48,6 +62,24 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
     commands: path.join(homedir(), '.codex', 'prompts'),
     rules: '',
     behaviors: '',
+  },
+  get omp() {
+    const { agentDir } = resolveOmpPaths();
+    return { agents: path.join(agentDir, 'agents'), skills: path.join(agentDir, 'skills'),
+      commands: path.join(agentDir, 'prompts'), rules: path.join(agentDir, 'rules'),
+      behaviors: path.join(agentDir, 'extensions') };
+  },
+  pi: {
+    // Pi's global resource root is configurable. Unlike project deployment,
+    // user-scope resources belong under the effective agent directory. Keep
+    // skills on this single native path instead of also copying them to
+    // ~/.agents/skills, which would create duplicate Pi discovery entries.
+    // PI_CODING_AGENT_DIR is configuration only and is not runtime evidence.
+    agents: '',
+    skills: path.join(piAgentDir(), 'skills'),
+    commands: path.join(piAgentDir(), 'prompts'),
+    rules: '',
+    behaviors: path.join(piAgentDir(), 'extensions'),
   },
   copilot: {
     // #1160 — Non-applicable for filesystem user-scope discovery.
@@ -163,7 +195,10 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
   },
   hermes: {
     agents: '',
-    skills: path.join(homedir(), '.hermes', 'skills'),
+    // #2119: honor HERMES_HOME so `--scope user` deploys land under the same
+    // root the running Hermes session scans, matching the hermes provider's
+    // paths.skills resolution.
+    skills: resolveHermesHomePath('skills'),
     commands: '',
     rules: '',
     behaviors: '',
@@ -185,6 +220,30 @@ export const USER_SCOPE_PATHS: Record<string, { agents: string; skills: string; 
     commands: '',
     rules: path.join(homedir(), '.openhuman', '.aiwg', 'rules'),
     behaviors: '',
+  },
+  get grokbot() {
+    // Fail-closed: skills path is empty until AIWG_GROKBOT_SKILLS_DIR is set.
+    // Never invent ~/.grokbot. See adr-grokbot-provider-target / #205/#207.
+    const skills = resolveGrokbotSkillsDir() || '';
+    return {
+      agents: '',
+      skills,
+      commands: '',
+      rules: '',
+      behaviors: '',
+    };
+  },
+  get 'grok-build'() {
+    // Skills mirror to $GROK_HOME/skills. Agents/rules writers deferred #2577 —
+    // leave those user paths empty so mirroring does not invent empty trees.
+    const home = resolveGrokHome();
+    return {
+      agents: '',
+      skills: home ? path.join(home, 'skills') : '',
+      commands: '',
+      rules: '',
+      behaviors: '',
+    };
   },
   factory: {
     // #1164 — Verified against Factory docs (docs.factory.ai/cli/configuration/skills).

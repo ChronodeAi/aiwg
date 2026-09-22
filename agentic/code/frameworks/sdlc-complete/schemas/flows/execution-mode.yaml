@@ -220,5 +220,5 @@ references:
   implementation:
     - "#114"
   related:
-    - "@agentic/code/addons/ralph/schemas/checkpoint.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/checkpoint.yaml"
     - "@agentic/code/frameworks/sdlc-complete/schemas/provenance/prov-record.yaml"

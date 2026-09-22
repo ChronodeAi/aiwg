@@ -12,7 +12,7 @@ const fixtures = path.resolve(
 );
 
 function run(...args: string[]) {
-  return spawnSync(process.execPath, [tool, ...args], {
+  return spawnSync(process.execPath, [tool, ...args], { timeout: 60_000,
     cwd: path.resolve('.'),
     encoding: 'utf8',
   });

@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import {
   ClaudeSessionAdapter,
   CodexSessionAdapter,
@@ -9,10 +10,14 @@ import {
   DevinDesktopSessionAdapter,
   FactorySessionAdapter,
   GenericSessionInterchangeAdapter,
+  GrokbotSessionAdapter,
   HermesSessionAdapter,
+  DeepSeekHarnessSessionAdapter,
   OpenClawSessionAdapter,
   OpenCodeSessionAdapter,
   OpenHumanSessionAdapter,
+  PiSessionAdapter,
+  OmpSessionAdapter,
   SESSION_PROVIDER_IDS,
   WarpSessionAdapter,
   type SelectedSource,
@@ -48,7 +53,7 @@ const matrixPath = resolve(root,
   'docs/planning/session-intelligence/provider-conformance-matrix.json');
 const matrix = JSON.parse(readFileSync(matrixPath, 'utf8')) as Matrix;
 
-describe('twelve-provider session release conformance', () => {
+describe('sixteen-provider session release conformance', () => {
   it.each(matrix.providers)('$provider matrix claims match the executable adapter contract', (entry) => {
     const adapter = adapterFor(entry.provider);
     expect(adapter.provider).toBe(entry.provider);
@@ -116,14 +121,14 @@ describe('twelve-provider session release conformance', () => {
 
   it('maps every canonical provider exactly once to issue, status, operations, fixtures, tests, and docs', () => {
     expect(matrix.contractVersion).toBe('1.0.0');
-    expect(matrix.canonicalProviderCount).toBe(12);
+    expect(matrix.canonicalProviderCount).toBe(16);
     expect(matrix.providers.map((entry) => entry.provider)).toEqual(SESSION_PROVIDER_IDS);
-    expect(new Set(matrix.providers.map((entry) => entry.provider)).size).toBe(12);
-    expect(new Set(matrix.providers.map((entry) => entry.issue)).size).toBe(12);
+    expect(new Set(matrix.providers.map((entry) => entry.provider)).size).toBe(16);
+    expect(new Set(matrix.providers.map((entry) => entry.issue)).size).toBe(16);
 
     for (const entry of matrix.providers) {
-      expect(entry.issue).toBeGreaterThanOrEqual(1910);
-      expect(entry.issue).toBeLessThanOrEqual(1921);
+      expect(entry.issue === 215 || entry.issue >= 1910).toBe(true);
+      expect(entry.issue <= 1921 || [215, 2152, 2165, 2253].includes(entry.issue)).toBe(true);
       expect(entry.operations).toContain('inspect');
       expect(entry.operations).toContain('stream');
       for (const path of [entry.fixtures, entry.tests, entry.documentation]) {
@@ -161,12 +166,18 @@ describe('twelve-provider session release conformance', () => {
   });
 
   it('keeps the provider matrix and session gates in required CI', () => {
-    const workflow = readFileSync(resolve(root, '.gitea/workflows/ci.yml'), 'utf8');
-    expect(workflow).toContain('npm run test:ci');
-    expect(workflow).toContain('npm run test:sessions:sqlite');
-    expect(workflow).toMatch(/name:\s+Test/);
-    expect(workflow).toMatch(/name:\s+Build/);
-    expect(workflow).toMatch(/needs:\s+\[test\]/);
+    const workflow = parseYaml(readFileSync(resolve(root, '.gitea/workflows/ci.yml'), 'utf8'));
+    const testJob = workflow.jobs.test;
+    expect(testJob.name).toBe('Test');
+    const commands = testJob.steps.map((step: { run?: string }) => step.run ?? '');
+    // Substring, not equality: the gate is "the full suite runs in required
+    // CI", and the step is wrapped by the hang reporter (#2521). Pinning the
+    // exact invocation would break on any such wrapper without the contract
+    // this test exists to protect having changed.
+    expect(commands.some((command) => command.includes('npm run test:ci'))).toBe(true);
+    expect(commands).toContain('npm run test:sessions:sqlite');
+    expect(workflow.jobs.build.name).toBe('Build');
+    expect(workflow.jobs.build.needs).toContain('test');
   });
 });
 
@@ -176,12 +187,16 @@ function adapterFor(provider: string): SessionSourceAdapter {
     codex: () => new CodexSessionAdapter(),
     copilot: () => new CopilotSessionAdapter(),
     cursor: () => new CursorSessionAdapter(),
+    'deepseek-harness': () => new DeepSeekHarnessSessionAdapter(),
     factory: () => new FactorySessionAdapter(),
     generic: () => new GenericSessionInterchangeAdapter(),
+    grokbot: () => new GrokbotSessionAdapter(),
     hermes: () => new HermesSessionAdapter(),
     openclaw: () => new OpenClawSessionAdapter(),
     opencode: () => new OpenCodeSessionAdapter(),
     openhuman: () => new OpenHumanSessionAdapter(),
+    pi: () => new PiSessionAdapter(),
+    omp: () => new OmpSessionAdapter(),
     warp: () => new WarpSessionAdapter(),
     'devin-desktop': () => new DevinDesktopSessionAdapter(),
   };

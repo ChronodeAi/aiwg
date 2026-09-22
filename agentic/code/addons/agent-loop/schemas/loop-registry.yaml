@@ -285,6 +285,6 @@ references:
   implementation:
     - "#268"  # Multi-loop registry schemas
   related:
-    - "@agentic/code/addons/ralph/schemas/loop-state.yaml"
-    - "@agentic/code/addons/ralph/schemas/checkpoint.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/loop-state.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/checkpoint.yaml"
     - "@tools/ralph-external/"

@@ -16,7 +16,8 @@ For runtime costs after a Claude Code skill or subagent is invoked, see
 | Claude Code | `skillListingBudgetFraction` in `~/.claude/settings.json` | `0.01` (1% of context) | Raise to `0.05` (5%) |
 | Claude Code | `skillListingMaxDescChars` | `1536` | Lower to `1024` to keep more skills full-length |
 | Codex (OpenAI) | `project_doc_max_bytes` for AGENTS.md | 32 KiB | Nest AGENTS.md per-subdir; do not raise blindly |
-| Codex | Skill listing cap | ~2% of context / 8000 chars | Built-in; reduce skill count or split workspaces |
+| Codex | Skill listing cap (upstream) | ~2% of context / 8000 chars | Fixed by Codex; reduce skill count or split workspaces |
+| Codex | AIWG startup-listing cap | 8,000 chars | `--listing-cap <chars>` or `AIWG_CODEX_LISTING_CAP` (`0` disables) |
 | Cursor / Warp / Windsurf | Aggregated AGENTS.md | platform-defined | See "Reduce footprint" below |
 
 ---
@@ -79,8 +80,12 @@ Codex uses **progressive disclosure**: only skill `name`, `description`, and fil
 
 | Limit | Value | Setting |
 |-------|-------|---------|
-| Skill listing in initial context | ~2% of model context, or ~8,000 chars | Built-in; not user-configurable |
+| Skill listing in initial context (Codex's own ceiling) | ~2% of model context, or ~8,000 chars | Fixed by Codex; not user-configurable |
+| AIWG's enforced startup-listing cap | 8,000 chars | `--listing-cap <chars>`, or `AIWG_CODEX_LISTING_CAP` (`0` disables) |
 | Per-AGENTS.md size | 32 KiB | `project_doc_max_bytes` (advanced config) |
+
+Codex's ceiling is not adjustable. AIWG's cap — the budget the deployer enforces
+so it never writes past that ceiling — is.
 
 When the AGENTS.md size limit is hit, **Codex stops adding files silently** ([openai/codex#7138](https://github.com/openai/codex/issues/7138), [#13386](https://github.com/openai/codex/issues/13386)). Instructions near the end of an oversized file are ignored without warning.
 
@@ -89,6 +94,28 @@ When the AGENTS.md size limit is hit, **Codex stops adding files silently** ([op
 1. **Nest AGENTS.md per subdirectory** rather than one giant root file. Codex respects nearest-ancestor first.
 2. **Don't blindly raise `project_doc_max_bytes`** — it lifts the cap but doesn't help if descriptions are bloated.
 3. **Reduce framework count** if you see truncation (see below).
+4. **Let the deployer place overflow on the standard tier.** `aiwg use` keeps the
+   startup listing (`.agents/skills/`) under the 8,000-char cap by default: when a
+   bundle's skills would push it over, the largest non-kernel entries are written
+   to `.codex/.aiwg/skills/` instead and named in the deploy output. They stay
+   reachable through `aiwg discover` / `aiwg show`. Re-running
+   `aiwg use <bundle> --provider codex` (no `--force`) re-places an existing
+   over-cap deployment the same way; `--force` only overwrites unmanaged files and
+   is never the budget fix.
+
+   Controls:
+
+   | Control | Effect |
+   |---------|--------|
+   | `AIWG_CODEX_LISTING_CAP=<chars>` | Set the cap (default `8000`); `0` disables budgeting |
+   | `--listing-cap <chars>` (deploy script) | Same, per invocation; passing it also activates the budget |
+   | `--listing-budget` (deploy script) | Honor the cap even when `--copy-all` is in effect |
+
+   Activation rule: `aiwg use` passes `--listing-budget` only on the
+   project-local path, where the deployer forces `--copy-all` itself so bundle
+   skills are reachable at all. An operator's own `--copy-all` means "everything
+   in the listing" and is not budgeted unless `--listing-cap` is given
+   explicitly.
 
 ---
 

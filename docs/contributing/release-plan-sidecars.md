@@ -56,6 +56,31 @@ A sidecar can define:
 - post-release verification commands
 - delivery override behavior
 
-See `.aiwg/releases/aiwg-npm.yaml` for an AIWG package-release example covering
-build commands, publish targets, signing/SBOM/provenance expectations, and
-post-release verification.
+For a stable release mirrored to GitHub, post-release verification must fail
+until exactly one Announcements discussion exists for the version and links the
+GitHub release, npm package, versioned release notes, and CHANGELOG. AIWG's
+reference sidecar enforces this with
+`tools/release/verify-github-release-discussion.mjs`; `--no-mirror` is the only
+configured skip path.
+
+The discussion itself is created by
+`tools/release/publish-github-release-discussion.mjs`, which the release config's
+`create_github_announcement_discussion` action names in its `run` field. The
+publisher refuses to run before the GitHub release is published, validates the
+four required links and the no-attribution policy in the drafted body, reuses an
+existing discussion for the version instead of creating a duplicate, writes
+preflight/request/result evidence under `releases/evidence/<version>/`, and
+finishes by running the verifier. A release is not complete until the sidecar's
+`post_release_verification` commands exit 0; a flow that reports completion
+without them has skipped a hard gate (this is how 2026.9.7 and 2026.9.9 shipped
+without their announcements).
+
+The shipped, schema-validated reference examples are:
+
+- `agentic/code/frameworks/sdlc-complete/schemas/flows/examples/aiwg.release.config.yaml`
+- `agentic/code/frameworks/sdlc-complete/schemas/flows/examples/aiwg-npm.release-plan.yaml`
+
+AIWG keeps its attached operational copies at `.aiwg/release.config` and
+`.aiwg/releases/aiwg-npm.yaml`. The public examples keep clean clones and CI
+validating the exact configuration shape even when the project artifact corpus
+is attached through `.aiwg-location`.

@@ -36,6 +36,12 @@ import type {
   AgentSkillImportResult,
 } from './types.js';
 import { validateAgentSkillContent } from './validator.js';
+import { resolveHermesHomePath } from '../providers/hermes-home.js';
+import {
+  GROKBOT_SKILLS_DIR_ENV,
+  grokbotMissingRootRemediation,
+  resolveGrokbotSkillsDir,
+} from '../providers/grokbot-paths.js';
 
 export const AGENT_SKILL_MANAGED_MARKER = '.aiwg-managed';
 export const AGENT_SKILL_DEPLOYMENT_SIDECAR = '.aiwg-agent-skill.json';
@@ -172,9 +178,31 @@ function resolvePolicy(
       appendToDescription = namespace.appendToDescription;
       reasons.push('applies the Factory description guidance before strict validation');
       break;
+    case 'grokbot': {
+      // Fail closed: never invent ~/grokbot-skills or ~/.grokbot.
+      const configured = resolveGrokbotSkillsDir(process.env);
+      if (!configured) {
+        root = '';
+        status = 'unsupported';
+        supported = false;
+        reasons.push(grokbotMissingRootRemediation(process.env));
+        warnings.push(
+          `Agent Skills deploy for grokbot requires absolute ${GROKBOT_SKILLS_DIR_ENV}; no filesystem root was invented`,
+        );
+      } else {
+        root = configured;
+        reasons.push(
+          `uses the operator-configured ${GROKBOT_SKILLS_DIR_ENV} skills root with strict managed ownership markers`,
+        );
+      }
+      break;
+    }
     case 'hermes':
+      if (options.homeDir === undefined) {
+        root = resolveHermesHomePath('skills');
+      }
       reasons.push(
-        'uses the user-global ~/.hermes/skills bundle surface with strict managed ownership markers',
+        'uses the active HERMES_HOME skills surface with strict managed ownership markers',
       );
       break;
     case 'openhuman':
@@ -448,6 +476,20 @@ function readDeploymentSidecar(
   }
 }
 
+/**
+ * Codex, Antigravity, and DeepSeek Harness intentionally consume the same
+ * portable project skill surface. A projection written for any member is
+ * managed ownership for the others when the desired payload is otherwise
+ * byte-identical.
+ */
+function providersShareProjectionSurface(
+  actual: Platform,
+  expected: Platform,
+): boolean {
+  const shared = new Set<Platform>(['antigravity', 'codex', 'deepseek-harness']);
+  return actual === expected || (shared.has(actual) && shared.has(expected));
+}
+
 function buildProjectionPlan(
   record: AgentSkillImportResult,
   options: AgentSkillDeploymentOptions,
@@ -514,17 +556,16 @@ function isManagedTarget(
   try {
     const targetStat = fs.lstatSync(targetPath);
     const marker = path.join(targetPath, AGENT_SKILL_MANAGED_MARKER);
+    const sidecar = readDeploymentSidecar(targetPath, expectedName);
     return (
       targetStat.isDirectory()
       && !targetStat.isSymbolicLink()
       && fs.lstatSync(marker).isFile()
       && !fs.lstatSync(marker).isSymbolicLink()
       && fs.readFileSync(marker, 'utf8') === MARKER_CONTENT
-      && readDeploymentSidecar(
-        targetPath,
-        expectedName,
-        expectedProvider,
-      ) !== undefined
+      && sidecar !== undefined
+      && (expectedProvider === undefined
+        || providersShareProjectionSurface(sidecar.provider, expectedProvider))
     );
   } catch {
     return false;
@@ -560,6 +601,17 @@ function targetMatches(
   if (!walk(targetPath, '')) return false;
   if (actual.size !== desired.length) return false;
   return desired.every((entry) => {
+    if (
+      entry.kind === 'file'
+      && entry.relativePath === AGENT_SKILL_DEPLOYMENT_SIDECAR
+    ) {
+      const sidecar = readDeploymentSidecar(targetPath, name);
+      return sidecar !== undefined
+        && providersShareProjectionSurface(sidecar.provider, provider)
+        && sidecar.sourceDigest === JSON.parse(
+          entry.bytes.toString('utf8'),
+        ).sourceDigest;
+    }
     const value = actual.get(entry.relativePath);
     return entry.kind === 'directory'
       ? value === 'directory'

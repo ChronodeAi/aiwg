@@ -74,10 +74,10 @@ Copy seed files to your project's memory directory:
 
 ```bash
 # For current project
-cp agentic/code/addons/auto-memory/seeds/*.md ~/.claude/projects/$(basename $(pwd))/memory/
+cp ${CLAUDE_PLUGIN_ROOT}/seeds/*.md ~/.claude/projects/$(basename $(pwd))/memory/
 
 # For specific project
-cp agentic/code/addons/auto-memory/seeds/*.md ~/.claude/projects/my-project/memory/
+cp ${CLAUDE_PLUGIN_ROOT}/seeds/*.md ~/.claude/projects/my-project/memory/
 ```
 
 ### Verification
@@ -304,7 +304,7 @@ Memory has evolved with:
 
 - **Claude Code Automatic Memory**: [Documentation](https://docs.anthropic.com/claude/docs/automatic-memory) (Claude Code v2.1.32+)
 - **AIWG CLAUDE.md**: `@CLAUDE.md` - Static project instructions
-- **Agent Loop Debug Memory**: `@$AIWG_ROOT/agentic/code/addons/ralph/schemas/debug-memory.yaml` - Loop-specific debugging state
+- **Agent Loop Debug Memory**: `@$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/debug-memory.yaml` - Loop-specific debugging state
 - **AIWG Scaffolding**: `@$AIWG_ROOT/tools/scaffold/` - Project scaffolding implementation
 
 ## Version History

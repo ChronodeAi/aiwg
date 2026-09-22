@@ -2,6 +2,11 @@
 
 # AIWG Cockpit
 
+Cockpit's agentic-sandbox management API version, upstream A2A protocol
+version, and extension `/v1` URI suffixes are independent. See
+[A2A protocol compatibility](../../docs/a2a-protocol-compatibility.md) for the
+0.3/1.0 selection and qualification contract.
+
 **Local control plane for AIWG and multi-stack agentic sessions**
 
 Observe live agent work, attach to sessions, handle approvals, launch runtime
@@ -13,7 +18,7 @@ supported provider first:
 
 ```text
 Install or repair AIWG for this project by following
-https://raw.githubusercontent.com/jmagly/aiwg/main/setup.aiwg.yaml
+https://aiwg.io/setup.aiwg.yaml
 Explain the plan before changing anything, preserve my existing work, and ask
 me only for choices you cannot safely determine.
 ```
@@ -21,8 +26,6 @@ me only for choices you cannot safely determine.
 ```bash
 npm i -g aiwg        # install the base AIWG CLI
 aiwg use all --provider <provider>
-aiwg index build --all
-aiwg regenerate --provider <provider>
 aiwg use cockpit     # install the opt-in Cockpit package, version-locked to AIWG
 aiwg cockpit         # launch the local Bridge + web UI
 ```
@@ -41,6 +44,22 @@ aiwg cockpit         # launch the local Bridge + web UI
 
 ## Quick Start
 
+For the complete Cockpit + Agentic Sandbox path, including a host audit,
+prerequisite installation, runtime-policy choices, repair handling, and
+end-to-end verification, paste this into a supported AI provider:
+
+```text
+Install or repair AIWG Cockpit and Agentic Sandbox by following
+https://aiwg.io/agentic-sandbox/setup.aiwg.yaml
+Install the required prerequisites, explain the plan before changing anything,
+preserve my existing work, and ask me about the isolation, network, storage,
+and access choices you cannot safely determine.
+```
+
+The manifest defaults to local-only Cockpit and executor endpoints and asks
+before enabling remote access, services, privileged runtime prerequisites, or
+custom mounts and network policy.
+
 The recommended path is through the base `aiwg` CLI. It installs Cockpit outside
 the base package footprint, under `~/.aiwg/cockpit/package`, and pins the Cockpit
 version to the installed AIWG version.
@@ -48,8 +67,6 @@ version to the installed AIWG version.
 ```bash
 npm i -g aiwg
 aiwg use all --provider <provider>
-aiwg index build --all
-aiwg regenerate --provider <provider>
 aiwg use cockpit
 aiwg cockpit --status
 aiwg cockpit
@@ -602,6 +619,7 @@ The detailed review script and screenshot commands live in
 
 ## See also
 
+- [Desktop identity integration](bridge/DESKTOP-IDENTITY.md) — provider contract and remaining desktop work
 - `apps/cockpit/RELEASE.md` — cockpit release pattern (channels, publish leg, config-defaults gate)
 - `.aiwg/architecture/adr-cockpit-session-control-not-cli-runner.md` — the core model
 - `.aiwg/architecture/cockpit-sad.md` + `cockpit-instance-control-interface.md`

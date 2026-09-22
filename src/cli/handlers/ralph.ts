@@ -23,6 +23,13 @@ import {
 } from './ralph-launcher.js';
 import { handlerResultFromError } from '../errors.js';
 
+/** Parse a complete positive decimal value without truncating counter limits. */
+function parsePositiveLimit(raw: string | undefined, integer = false): number | undefined {
+  if (typeof raw !== 'string' || !/^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(raw)) return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 && (!integer || Number.isSafeInteger(value)) ? value : undefined;
+}
+
 /**
  * Parse Ralph command arguments
  */
@@ -67,8 +74,8 @@ function parseRalphArgs(args: string[]): {
   // Present-but-invalid numeric values are a hard usage error: an operator who
   // typed --max-total-cost expects a ceiling to exist (#1770).
   const positiveNumber = (flag: string, raw: string | undefined, integer = false): number | undefined => {
-    const value = integer ? parseInt(raw ?? '', 10) : parseFloat(raw ?? '');
-    if (!Number.isFinite(value) || value <= 0) {
+    const value = parsePositiveLimit(raw, integer);
+    if (value === undefined) {
       result.invalidFlags.push(`${flag} (got '${raw ?? ''}')`);
       return undefined;
     }
@@ -168,7 +175,7 @@ export class RalphHandler implements CommandHandler {
   name = 'Agent Loop';
   description = 'Execute iterative task loop with automatic completion detection';
   category = 'ralph' as const;
-  aliases = ['ralph', '-ralph', '--ralph'];
+  aliases = ['agent-loop', '--agent-loop', 'ralph', '-ralph', '--ralph'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const parsed = parseRalphArgs(ctx.args);
@@ -309,7 +316,8 @@ LFD LOOP CONTROLS (hard cumulative ceilings; loop stops with a best-output repor
                           Spawnable: claude, opencode, codex, hermes
   --dangerous             Enable unrestricted mode for the selected provider.
                           Passes the provider's native flag (e.g. --dangerously-skip-permissions
-                          for claude/opencode, --full-auto for codex). No effect if the
+                          for claude/opencode,
+                          --dangerously-bypass-approvals-and-sandbox for codex). No effect if the
                           provider doesn't have a dangerous mode flag.
   --params "<args>"       Pass arbitrary args verbatim to the agent binary.
                           Appended after all other flags. Quoted segments preserved.
@@ -358,7 +366,7 @@ export class RalphStatusHandler implements CommandHandler {
   name = 'Ralph Status';
   description = 'Show Agent loop status and iteration history';
   category = 'ralph' as const;
-  aliases = ['ralph-status'];
+  aliases = ['agent-loop-status', 'ralph-status'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const showAll = ctx.args.includes('--all') || ctx.args.includes('-a');
@@ -438,7 +446,7 @@ export class RalphAbortHandler implements CommandHandler {
   name = 'Ralph Abort';
   description = 'Abort currently running Agent loop';
   category = 'ralph' as const;
-  aliases = ['ralph-abort'];
+  aliases = ['agent-loop-abort', 'ralph-abort'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Parse --loop-id if provided
@@ -468,7 +476,7 @@ export class RalphResumeHandler implements CommandHandler {
   name = 'Ralph Resume';
   description = 'Resume previously aborted Agent loop';
   category = 'ralph' as const;
-  aliases = ['ralph-resume'];
+  aliases = ['agent-loop-resume', 'ralph-resume'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     // Parse arguments
@@ -479,8 +487,11 @@ export class RalphResumeHandler implements CommandHandler {
       const arg = ctx.args[i];
       if (arg === '--loop-id' && ctx.args[i + 1]) {
         loopId = ctx.args[++i];
-      } else if (arg === '--max-iterations' && ctx.args[i + 1]) {
-        maxIterations = parseInt(ctx.args[++i], 10);
+      } else if (arg === '--max-iterations') {
+        maxIterations = parsePositiveLimit(ctx.args[++i], true);
+        if (maxIterations === undefined) {
+          return { exitCode: 1, message: 'Error: --max-iterations requires a positive safe integer. Loop not resumed.' };
+        }
       }
     }
 
@@ -537,7 +548,7 @@ export const ralphExternalHandler: CommandHandler = {
   name: 'Agent Loop External',
   description: 'Crash-resilient external loop with state persistence and CI/CD integration',
   category: 'ralph',
-  aliases: ['ralph-external', '--ralph-external', '--agent-loop-ext'],
+  aliases: ['agent-loop-ext', '--agent-loop-ext', 'ralph-external', '--ralph-external'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -556,7 +567,7 @@ export const ralphMemoryHandler: CommandHandler = {
   name: 'Ralph Memory',
   description: 'Manage Ralph semantic memory entries (list, query, clear)',
   category: 'ralph',
-  aliases: ['--ralph-memory'],
+  aliases: ['--agent-loop-memory', '--ralph-memory'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -574,7 +585,7 @@ export const ralphConfigHandler: CommandHandler = {
   name: 'Ralph Config',
   description: 'View and configure Agent loop settings (show, set, reset, preset)',
   category: 'ralph',
-  aliases: ['--ralph-config'],
+  aliases: ['--agent-loop-config', '--ralph-config'],
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const runner = createScriptRunner(ctx.frameworkRoot);
@@ -593,7 +604,7 @@ export class RalphAttachHandler implements CommandHandler {
   name = 'Ralph Attach';
   description = 'Attach to a running Agent loop\'s live output stream';
   category = 'ralph' as const;
-  aliases = ['ralph-attach'];
+  aliases = ['agent-loop-attach', 'ralph-attach'];
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     let loopId: string | undefined;

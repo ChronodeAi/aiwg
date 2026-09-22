@@ -10,6 +10,7 @@ import { importAgentSkill } from '../../../src/skills/importer.js';
 const roots: string[] = [];
 
 afterEach(() => {
+  delete process.env.AIWG_GROKBOT_SKILLS_DIR;
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -83,6 +84,10 @@ describe('Agent Skills doctor section', () => {
     const source = path.join(root, 'healthy-skill');
     fs.mkdirSync(projectDir);
     fs.mkdirSync(homeDir);
+    process.env.AIWG_GROKBOT_SKILLS_DIR = path.join(
+      homeDir,
+      'configured-grokbot-skills',
+    );
     fs.mkdirSync(path.join(source, 'references'), { recursive: true });
     fs.writeFileSync(path.join(source, 'SKILL.md'), [
       '---',

@@ -1,10 +1,21 @@
 # Voice Framework Addon
 
-Voice profile system for crafting and applying consistent writing voices. Define custom voices, apply them to content, and create new voices on demand.
+Voice profile and composable output-mode system for crafting and applying consistent writing. Define custom voices, apply runtime language constraints, and create personal or project styles.
 
 ## Overview
 
 The Voice Framework replaces pattern-avoidance approaches (like banned-patterns lists) with positive voice definition. Instead of listing what to avoid, define the voice you want and let the framework apply it consistently.
+
+## Author-controlled writing
+
+[Writing workflows](docs/writing-workflows.md) documents the local plan/proofread
+CLI, five channel packs, bounded revision, explicit learning, scoped MCP reads
+and separate receipts. These are opt-in consumers with explicit state reporting.
+Selection alone does not apply a profile to provider responses.
+
+Legacy YAML voices below remain supported as expression presets. Their numeric
+tone fields are not evidence-confidence or authorship measures, and signature
+phrase examples are optional author choices rather than automatic insertions.
 
 ## Installation
 
@@ -29,7 +40,7 @@ Located in `voices/templates/`:
 
 ## Skills
 
-The Voice Framework provides 4 skills (auto-applied based on context):
+The Voice Framework provides 5 skills discoverable from task context:
 
 ### voice-apply
 
@@ -67,6 +78,19 @@ Analyze content's current voice characteristics.
 - "What voice is this written in?"
 - "Analyze the tone of this document"
 - "How formal is this content?"
+
+### output-mode-guide
+
+Configure, apply, troubleshoot, or extend composable output modes (also called output masks).
+
+**Triggers:**
+- "Use the Wittgenstein-inspired output mode"
+- "Apply engineering standards language"
+- "Create my preferred syntax style"
+- "Why is this output mask not changing anything?"
+
+See `docs/output-modes.md` for the user guide and links to custom-profile,
+integration, and troubleshooting guidance.
 
 ## Voice Profile Locations
 
@@ -207,3 +231,7 @@ To add new built-in voices:
 ## License
 
 MIT - See [LICENSE](../../../../LICENSE)
+
+## Reviewed voice transformation
+
+See the [selected workflow and output impact](docs/voice-output-impact.md) for the development default, neutral profile policy, measured acceptance, fallback behavior and qualification limits.

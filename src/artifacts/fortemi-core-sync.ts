@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 import type { GraphType } from "./types.js";
 import { GRAPH_CONFIGS, getProjectIndexRoot, loadGlobalGraphConfigs } from "./types.js";
 import {
@@ -36,6 +38,18 @@ export interface FortemiCoreSyncManifest {
   source_index_built_at: string | null;
 }
 
+interface FortemiCorePrebuiltManifest {
+  schema_version: "aiwg.fortemi.prebuilt.v1";
+  backend: "fortemi-core";
+  graph: string;
+  generated_at: string;
+  export_path: "aiwg-fortemi-index-v2.json";
+  export_schema_version: "aiwg.fortemi.index.export.v2";
+  export_checksum: string;
+  item_count: number;
+  source_index_built_at: string | null;
+}
+
 export interface FortemiCoreSyncStatus {
   optedIn: boolean;
   source: "local" | "prebuilt" | "none";
@@ -50,6 +64,12 @@ export interface FortemiCoreSyncStatus {
   generatedAt: string | null;
   sourceIndexBuiltAt: string | null;
   reason: string | null;
+}
+
+export interface FortemiCoreExecutableSkillStatus {
+  sourceExecutableCount: number;
+  packagedExecutableCount: number;
+  missing: string[];
 }
 
 function syncDir(cwd: string, graph: string): string {
@@ -73,7 +93,7 @@ function findPackageRoot(startDir: string): string | null {
 }
 
 function prebuiltDir(graph: string): string | null {
-  const moduleDir = path.dirname(new URL(import.meta.url).pathname);
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
   const packageRoot = findPackageRoot(moduleDir);
   if (!packageRoot) return null;
   return path.join(packageRoot, "prebuilt", "fortemi-core", graph);
@@ -297,6 +317,7 @@ export function getFortemiCorePrebuiltStatus(
       reason: manifestReadReason,
     };
   }
+  const prebuiltManifest = manifest as unknown as FortemiCorePrebuiltManifest;
 
   const exportExists = fs.existsSync(exportPath);
   let reason: string | null = null;
@@ -304,10 +325,22 @@ export function getFortemiCorePrebuiltStatus(
     try {
       const exportText = fs.readFileSync(exportPath, "utf-8");
       const exported = JSON.parse(exportText) as AiwgFortemiIndexExport;
-      if (sha256(exportText) !== manifest.export_checksum) {
+      if (
+        prebuiltManifest.schema_version !== "aiwg.fortemi.prebuilt.v1" ||
+        prebuiltManifest.backend !== "fortemi-core" ||
+        prebuiltManifest.graph !== graph ||
+        prebuiltManifest.export_path !== "aiwg-fortemi-index-v2.json" ||
+        prebuiltManifest.export_schema_version !== "aiwg.fortemi.index.export.v2"
+      ) {
+        reason = "prebuilt manifest is incompatible with the requested graph";
+      } else if (sha256(exportText) !== prebuiltManifest.export_checksum) {
         reason = "prebuilt export checksum does not match manifest";
-      } else if (exported.schema_version !== manifest.export_schema_version) {
-        reason = `prebuilt export schema '${exported.schema_version}' does not match manifest '${manifest.export_schema_version}'`;
+      } else if (exported.schema_version !== prebuiltManifest.export_schema_version) {
+        reason = `prebuilt export schema '${exported.schema_version}' does not match manifest '${prebuiltManifest.export_schema_version}'`;
+      } else if (exported.source?.graph !== graph) {
+        reason = `prebuilt export graph '${exported.source?.graph ?? "unknown"}' does not match requested graph '${graph}'`;
+      } else if (!Array.isArray(exported.items) || exported.items.length !== prebuiltManifest.item_count) {
+        reason = "prebuilt export item count does not match manifest";
       }
     } catch (err) {
       reason = `prebuilt export file is unreadable: ${err instanceof Error ? err.message : String(err)}`;
@@ -323,10 +356,43 @@ export function getFortemiCorePrebuiltStatus(
     exportPath,
     built: exportExists,
     stale: !exportExists || reason !== null,
-    itemCount: manifest.item_count,
-    exportChecksum: manifest.export_checksum,
-    generatedAt: manifest.generated_at,
-    sourceIndexBuiltAt: manifest.source_index_built_at,
+    itemCount: prebuiltManifest.item_count,
+    exportChecksum: prebuiltManifest.export_checksum,
+    generatedAt: prebuiltManifest.generated_at,
+    sourceIndexBuiltAt: prebuiltManifest.source_index_built_at,
     reason: !exportExists ? "prebuilt manifest exists but export file is missing" : reason,
   };
+}
+
+/**
+ * Compare source script declarations with their compact prebuilt records.
+ * This is deliberately independent of cache freshness: a checksum-valid index
+ * can still be operationally broken when compaction drops runtime metadata.
+ */
+export function getFortemiCoreExecutableSkillStatus(
+  graph: string = "framework",
+  packageRoot?: string,
+): FortemiCoreExecutableSkillStatus {
+  const root = packageRoot ?? findPackageRoot(path.dirname(fileURLToPath(import.meta.url)));
+  if (!root) return { sourceExecutableCount: 0, packagedExecutableCount: 0, missing: [] };
+  const exportPath = path.join(root, "prebuilt", "fortemi-core", graph, "aiwg-fortemi-index-v2.json");
+  if (!fs.existsSync(exportPath)) return { sourceExecutableCount: 0, packagedExecutableCount: 0, missing: [] };
+
+  const exported = JSON.parse(fs.readFileSync(exportPath, "utf-8")) as AiwgFortemiIndexExport;
+  let sourceExecutableCount = 0;
+  let packagedExecutableCount = 0;
+  const missing: string[] = [];
+  for (const item of exported.items ?? []) {
+    if (item.type !== "aiwg.skill" || typeof item.source?.path !== "string") continue;
+    const sourcePath = path.join(root, item.source.path);
+    if (!fs.existsSync(sourcePath)) continue;
+    const match = fs.readFileSync(sourcePath, "utf-8").match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+    if (!match) continue;
+    const script = (parseYaml(match[1]) as { script?: unknown } | null)?.script;
+    if (!script) continue;
+    sourceExecutableCount += 1;
+    if (item.search?.frontmatter?.aiwg_script) packagedExecutableCount += 1;
+    else missing.push(item.name ?? item.id);
+  }
+  return { sourceExecutableCount, packagedExecutableCount, missing };
 }

@@ -1,0 +1,90 @@
+{
+  "apiVersion": "decision.aiwg.io/v1alpha1",
+  "kind": "DecisionBinding",
+  "metadata": {
+    "id": "example-binding-jev",
+    "version": "1.0.0",
+    "description": "example binding jev"
+  },
+  "spec": {
+    "ruleset": {
+      "id": "example-triage",
+      "version": "1.0.0",
+      "digest": "sha256:8619b985cd193f223caa35092e9ca44d4afc2e5fd7be53ae99277f8f55071b0c"
+    },
+    "totalTimeoutMs": 45000,
+    "maxAttempts": 3,
+    "concurrency": 1,
+    "evaluations": {
+      "category": {
+        "targets": [
+          {
+            "adapter": "jev",
+            "adapterVersion": "1.0.0",
+            "model": "jev-latest",
+            "requiredCapabilities": [
+              "choice"
+            ],
+            "acceptance": {
+              "mode": "typed-value"
+            },
+            "timeoutMs": 15000,
+            "retry": {
+              "maxRetries": 0,
+              "initialDelayMs": 250,
+              "maxDelayMs": 2000
+            },
+            "credentialRef": "typesafe-api"
+          }
+        ],
+        "fallbackOn": []
+      },
+      "severity": {
+        "targets": [
+          {
+            "adapter": "jev",
+            "adapterVersion": "1.0.0",
+            "model": "jev-latest",
+            "requiredCapabilities": [
+              "ordinal-score"
+            ],
+            "acceptance": {
+              "mode": "typed-value"
+            },
+            "timeoutMs": 15000,
+            "retry": {
+              "maxRetries": 0,
+              "initialDelayMs": 250,
+              "maxDelayMs": 2000
+            },
+            "credentialRef": "typesafe-api"
+          }
+        ],
+        "fallbackOn": []
+      },
+      "core_unavailable": {
+        "targets": [
+          {
+            "adapter": "jev",
+            "adapterVersion": "1.0.0",
+            "model": "jev-latest",
+            "requiredCapabilities": [
+              "truth-probability"
+            ],
+            "acceptance": {
+              "mode": "typed-value"
+            },
+            "timeoutMs": 15000,
+            "retry": {
+              "maxRetries": 0,
+              "initialDelayMs": 250,
+              "maxDelayMs": 2000
+            },
+            "credentialRef": "typesafe-api"
+          }
+        ],
+        "fallbackOn": []
+      }
+    }
+  }
+}

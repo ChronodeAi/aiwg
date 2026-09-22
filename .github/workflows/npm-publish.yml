@@ -13,6 +13,9 @@
 # - Trusted publishing replaces the long-lived NPMJS_TOKEN with short-lived
 #   OIDC tokens that npmjs.org verifies against the workflow's
 #   id-token claims. No secret to rotate, no secret to leak.
+# - OIDC authorizes publication with one dist-tag (`latest` for stable tags).
+#   The legacy `next` alias is retired separately through an authenticated
+#   npm account session; trusted publishing cannot remove a dist-tag.
 # - `npm publish --provenance` produces a cryptographic attestation linking
 #   the published tarball to (a) the GitHub Actions workflow run that
 #   produced it and (b) the source commit SHA. Anyone can verify via
@@ -84,14 +87,9 @@ on:
   workflow_dispatch:
     inputs:
       tag_to_publish:
-        description: 'Existing tag to re-attempt publish for (must already exist on this branch)'
+        description: 'Existing tag to re-attempt publish for (dispatch with --ref set to the same tag)'
         required: false
         type: string
-      remove_cli_bootstrap_tag:
-        description: 'Maintenance only: remove the deprecated @aiwg/cli bootstrap dist-tag without republishing'
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
   group: npmjs-publish-${{ github.ref }}
@@ -104,13 +102,16 @@ permissions:
 jobs:
   publish-to-npmjs-org:
     name: Publish to npmjs.org with provenance
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.remove_cli_bootstrap_tag }}
+    if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || github.event_name == 'workflow_dispatch' }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.release_source.outputs.commit }}
     runs-on: ubuntu-latest
     # Container pinned by digest per .gitea/workflows/README.md ("CI Pinning
     # Policy"). Same discipline as the Gitea workflows — no mutable tags.
     # Row in ci/digests.txt.
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
-    timeout-minutes: 15
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -144,13 +145,26 @@ jobs:
           echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "Resolved release tag: $RELEASE_TAG"
 
+      - name: Verify workflow identity is tag-bound
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.release_tag.outputs.release_tag }}'
+          EXPECTED_REF="refs/tags/${TAG}"
+          if [ "$GITHUB_REF" != "$EXPECTED_REF" ]; then
+            echo "Release signing requires a tag-bound workflow identity." >&2
+            echo "Observed GITHUB_REF: $GITHUB_REF" >&2
+            echo "Expected GITHUB_REF: $EXPECTED_REF" >&2
+            echo "Recovery: gh workflow run npm-publish.yml --ref '$TAG' -f tag_to_publish='$TAG'" >&2
+            exit 1
+          fi
+          echo "Workflow identity is bound to $EXPECTED_REF"
+
       - name: Fetch tag object for signature verification
         # actions/checkout@v4 on tag-push uses --no-tags by default
         # and writes refs/tags/<tag> as a commit ref, not the tag
         # object. `git tag -v` then fails with "cannot verify a non-
         # tag object of type commit". Force-fetch the tag object
-        # explicitly. See .gitea/workflows/npm-publish.yml prerelease
-        # job for the full post-mortem.
+        # explicitly. The Gitea workflow uses the same tag-object fetch.
         #
         # The safe.directory line is required on GH Actions runners
         # (containerized; runner uid ≠ workspace owner uid → git
@@ -171,18 +185,22 @@ jobs:
         # halts the workflow before npm sees the publish request. See
         # tools/ci/verify-signed-tag.sh and docs/contributing/versioning.md.
         env:
-          # workflow_dispatch runs on the selected branch, so GitHub leaves
-          # GITHUB_REF as refs/heads/<branch> even after we detach to the
-          # requested tag. GitHub also protects GITHUB_REF from shell-level
-          # override, so pass an explicit verifier-only tag ref.
+          # Explicit input still protects tag selection on a recovery dispatch;
+          # the identity gate above additionally requires the workflow itself
+          # to have been dispatched with --ref <tag>.
           AIWG_VERIFY_TAG_REF: refs/tags/${{ steps.release_tag.outputs.release_tag }}
         run: bash tools/ci/verify-signed-tag.sh
 
       - name: Checkout release tag
+        id: release_source
         run: |
           set -o pipefail
           TAG='${{ steps.release_tag.outputs.release_tag }}'
           git checkout --detach "refs/tags/${TAG}"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Verify source-bound storage benchmark claims (#2191)
+        run: npm run verify:storage-claims
 
       - name: Setup Node.js with npmjs.org registry
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5.0.0 (ci/digests.txt) — Node 24
@@ -232,7 +250,24 @@ jobs:
         # Test failures must block stable publish. `continue-on-error: true`
         # was removed from the Gitea workflow per #1280 (A2); the same
         # discipline applies here.
+        env:
+          # Shared-runner policy: paired Node baselines, median of 7 samples.
+          AIWG_PERF_BUDGET_VERSION_MS: "300"
+          AIWG_PERF_BUDGET_HELP_MS: "750"
+          AIWG_PERF_SAMPLE_COUNT: "7"
+          # Deployment tests replace HOME to prove clean-user behavior. Pass
+          # the container workspace trust as command-level Git config so their
+          # nested Git probes retain it without polluting those isolated homes.
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: ${{ github.workspace }}
         run: npm test -- --run --testTimeout=120000
+
+      - name: Verify packaged SQLite feature installation (#182)
+        # Hard release gate: install the packed CLI without optional peers,
+        # use the documented scoped feature installer, verify the native
+        # module loads, and open an empty session catalog.
+        run: npm run test:sessions:feature-install
 
       - name: Extract and verify version against tag
         id: version
@@ -245,23 +280,15 @@ jobs:
             echo "Error: Tag ($TAG_VERSION) does not match package.json ($VERSION)"
             exit 1
           fi
-          # Pre-release detection — first dash in the version means alpha/
-          # beta/rc/nightly. Trusted publishing emits provenance for both.
           BASE="${VERSION%%-*}"
           if [ "$VERSION" != "$BASE" ]; then
-            PRERELEASE=true
-            NPM_TAG=next
-            if echo "$VERSION" | grep -qiE '\-nightly\.'; then
-              NPM_TAG=nightly
-            fi
-          else
-            PRERELEASE=false
-            NPM_TAG=latest
+            echo "npm publication accepts stable versions only: $VERSION"
+            exit 1
           fi
+          NPM_TAG=latest
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
-          echo "Version: $VERSION (pre-release: $PRERELEASE, dist-tag: $NPM_TAG)"
+          echo "Version: $VERSION (dist-tag: $NPM_TAG)"
 
       - name: Check package contents
         run: |
@@ -454,146 +481,52 @@ jobs:
         run: |
           set -o pipefail
           VERSION='${{ steps.version.outputs.version }}'
-          echo "Waiting 10s for npmjs.org propagation..."
-          sleep 10
-          # `npm view` returns JSON; `.dist.attestations` is non-null when
-          # provenance is present. A missing attestations field means the
-          # publish landed but provenance did not — a configuration
-          # regression we must catch here, not at audit time.
-          ATTESTATIONS=$(npm view "aiwg@${VERSION}" --json 2>/dev/null | jq -r '.dist.attestations // empty')
-          if [ -z "$ATTESTATIONS" ]; then
-            echo "✗ No provenance attestation found for aiwg@${VERSION} on npmjs.org"
-            echo "  The publish step reported success, but the provenance"
-            echo "  flag did not produce an attestation. This usually means"
-            echo "  OIDC trusted publishing is mis-configured upstream."
-            exit 1
-          fi
-          echo "✓ Provenance attestation present for aiwg@${VERSION}"
-          ATTESTATION_PREVIEW=$(mktemp)
-          printf '%s\n' "$ATTESTATIONS" | jq '.' > "$ATTESTATION_PREVIEW"
-          head -40 "$ATTESTATION_PREVIEW"
+          # npm may accept a publish and keep a large package in processing
+          # after smaller workspace packages are already queryable. Retry the
+          # registry lookup so that normal processing latency does not skip all
+          # signing, SBOM, and release-asset steps. Keep npm-view failures out
+          # of errexit command substitutions so the final error is actionable.
+          verify_attestations() {
+            local package="$1"
+            local attestations=""
+            local attempt
+            for attempt in $(seq 1 90); do
+              attestations=$(npm view "${package}@${VERSION}" --json --prefer-online 2>/dev/null \
+                | jq -r '.dist.attestations // empty' || true)
+              if [ -n "$attestations" ]; then
+                echo "✓ Provenance attestation present for ${package}@${VERSION}"
+                if [ "$package" = "aiwg" ]; then
+                  local preview
+                  preview=$(mktemp)
+                  printf '%s\n' "$attestations" | jq '.' > "$preview"
+                  head -40 "$preview"
+                fi
+                return 0
+              fi
+              echo "Attempt ${attempt}/90: ${package}@${VERSION} or its provenance is not visible."
+              if [ "$attempt" -lt 90 ]; then sleep 10; fi
+            done
+            echo "✗ No provenance attestation found for ${package}@${VERSION} on npmjs.org after 15 minutes"
+            echo "  The publish was accepted but the package or attestation did not become queryable."
+            return 1
+          }
 
-          COCKPIT_ATTESTATIONS=$(npm view "@aiwg/cockpit@${VERSION}" --json 2>/dev/null | jq -r '.dist.attestations // empty')
-          if [ -z "$COCKPIT_ATTESTATIONS" ]; then
-            echo "✗ No provenance attestation found for @aiwg/cockpit@${VERSION} on npmjs.org"
-            exit 1
-          fi
-          echo "✓ Provenance attestation present for @aiwg/cockpit@${VERSION}"
+          verify_attestations aiwg
+          verify_attestations @aiwg/cockpit
+          verify_attestations @aiwg/cli
 
-          CLI_ATTESTATIONS=$(npm view "@aiwg/cli@${VERSION}" --json 2>/dev/null | jq -r '.dist.attestations // empty')
-          if [ -z "$CLI_ATTESTATIONS" ]; then
-            echo "✗ No provenance attestation found for @aiwg/cli@${VERSION} on npmjs.org"
-            exit 1
-          fi
-          echo "✓ Provenance attestation present for @aiwg/cli@${VERSION}"
-
-      - name: Verify dist-tag points at this version
-        # Defense-in-depth against the dist-tag drift the Gitea workflow
-        # was hardened against (#1247, #1280). Even on first OIDC publish
-        # we confirm the dist-tag we asked for actually resolves to the
-        # version we just shipped.
+      - name: Verify stable dist-tag policy
+        # Confirm every published package resolves through `latest` and that the
+        # retired `next` alias has not been recreated.
         run: |
-          set -o pipefail
+          set -euo pipefail
           VERSION='${{ steps.version.outputs.version }}'
           NPM_TAG='${{ steps.version.outputs.npm_tag }}'
-          for i in 1 2 3 4 5; do
-            CURRENT=$(npm view "aiwg@${NPM_TAG}" version 2>/dev/null || echo "")
-            if [ "$CURRENT" = "$VERSION" ]; then
-              echo "✓ aiwg@${NPM_TAG} = ${VERSION} on npmjs.org"
-              break
-            fi
-            echo "Attempt $i: aiwg@${NPM_TAG} = ${CURRENT:-<missing>}, expected ${VERSION}; retrying in 10s..."
-            sleep 10
-            if [ "$i" = "5" ]; then
-              echo "✗ dist-tag verification exhausted retries (aiwg@${NPM_TAG} did not resolve to ${VERSION})"
-              exit 1
-            fi
-          done
-          for i in 1 2 3 4 5; do
-            CURRENT=$(npm view "@aiwg/cockpit@${NPM_TAG}" version 2>/dev/null || echo "")
-            if [ "$CURRENT" = "$VERSION" ]; then
-              echo "✓ @aiwg/cockpit@${NPM_TAG} = ${VERSION} on npmjs.org"
-              break
-            fi
-            echo "Attempt $i: @aiwg/cockpit@${NPM_TAG} = ${CURRENT:-<missing>}, expected ${VERSION}; retrying in 10s..."
-            sleep 10
-            if [ "$i" = "5" ]; then
-              echo "✗ dist-tag verification exhausted retries (@aiwg/cockpit@${NPM_TAG} did not resolve to ${VERSION})"
-              exit 1
-            fi
-          done
-          for i in 1 2 3 4 5; do
-            CURRENT=$(npm view "@aiwg/cli@${NPM_TAG}" version 2>/dev/null || echo "")
-            if [ "$CURRENT" = "$VERSION" ]; then
-              echo "✓ @aiwg/cli@${NPM_TAG} = ${VERSION} on npmjs.org"
-              break
-            fi
-            echo "Attempt $i: @aiwg/cli@${NPM_TAG} = ${CURRENT:-<missing>}, expected ${VERSION}; retrying in 10s..."
-            sleep 10
-            if [ "$i" = "5" ]; then
-              echo "✗ dist-tag verification exhausted retries (@aiwg/cli@${NPM_TAG} did not resolve to ${VERSION})"
-              exit 1
-            fi
-          done
-
-      - name: Advance @next dist-tag on stable releases
-        # On a stable publish (--tag latest), @next is still pointing at
-        # whatever pre-release we cut last. Consumers tracking `aiwg@next`
-        # would resolve to stale code. After a stable lands, advance @next
-        # to point at the same stable version so the channel never lags.
-        #
-        # IMPORTANT: OIDC trusted-publishing tokens are publish-scoped only;
-        # `npm dist-tag` requires a regular auth token. This step uses a
-        # narrowly-scoped automation token (`NPM_DIST_TAG_TOKEN` — package
-        # management scope on all three AIWG packages, NOT the old NPMJS_TOKEN).
-        # When the token is absent the step warns and continues — the
-        # tarball + signatures are already published, only the @next
-        # channel lags until an operator advances it manually.
-        # success() keeps @next advancement behind the publish and verification
-        # gates, so a pre-publish failure cannot attempt to tag a version that
-        # does not exist on npmjs.org yet.
-        # This was the v2026.6.3 failure mode (#1648 cascade stranded @next).
-        if: ${{ success() && steps.version.outputs.prerelease == 'false' }}
-        env:
-          # setup-node generates an npmrc at $NPM_CONFIG_USERCONFIG that
-          # references ${NODE_AUTH_TOKEN}, so dropping the granular dist-tag
-          # token into NODE_AUTH_TOKEN authenticates without rewriting any
-          # config file. The previous publish step ran OIDC (no auth env);
-          # this step's NODE_AUTH_TOKEN binding is scoped to this step only.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
-        run: |
-          set -o pipefail
-          VERSION='${{ steps.version.outputs.version }}'
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "⚠ NPM_DIST_TAG_TOKEN not configured — @next will lag @latest."
-            echo "  Operator follow-up: issue a granular automation token with"
-            echo "  package management scope on aiwg, @aiwg/cli, and @aiwg/cockpit,"
-            echo "  store it as NPM_DIST_TAG_TOKEN,"
-            echo "  then re-run this workflow OR run manually:"
-            echo "    npm dist-tag add aiwg@${VERSION} next"
-            echo "    npm dist-tag add @aiwg/cli@${VERSION} next"
-            echo "    npm dist-tag add @aiwg/cockpit@${VERSION} next"
-            exit 0
-          fi
-          for PACKAGE in aiwg @aiwg/cli @aiwg/cockpit; do
-            echo "Advancing ${PACKAGE}@next → ${VERSION}"
-            npm dist-tag add "${PACKAGE}@${VERSION}" next
-            # Cache-bust the verify (npm view caches dist-tags; right after a
-            # mutation the local cache can return the pre-mutation value).
-            for i in 1 2 3 4 5; do
-              CURRENT_NEXT=$(npm view "${PACKAGE}@next" version --prefer-online --no-update-notifier 2>/dev/null || echo "")
-              if [ "$CURRENT_NEXT" = "$VERSION" ]; then
-                echo "✓ ${PACKAGE}@next = ${VERSION}"
-                break
-              fi
-              echo "Attempt $i: ${PACKAGE}@next = ${CURRENT_NEXT:-<missing>}, expected ${VERSION}; retrying in 5s..."
-              sleep 5
-              if [ "$i" = "5" ]; then
-                echo "✗ ${PACKAGE}@next verification exhausted retries"
-                exit 1
-              fi
-            done
-          done
+          [ "$NPM_TAG" = latest ] || {
+            echo "Stable publication must use the latest dist-tag; observed $NPM_TAG" >&2
+            exit 1
+          }
+          bash tools/release/verify-npm-dist-tags.sh "$VERSION"
 
       # ============================================================
       # Tarball Sigstore signing — #1287 / A8 (Wave 5 of #1278)
@@ -607,13 +540,24 @@ jobs:
       # provenance attestation — same chain of trust, portable artifact.
 
       - name: Install cosign (keyless signing)
-        uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5  # v3.10.1 (ci/digests.txt)
-        with:
-          # Pinned to the latest v2.x; v3.x requires cosign-installer v4.
-          # The keyless `sign-blob --bundle` / `verify-blob --bundle` API
-          # is identical across v2.x and v3.x — upgrade path is a digest
-          # bump in ci/digests.txt plus this string.
-          cosign-release: 'v2.6.1'
+        # Install the pinned binary directly instead of relying on a third-party
+        # setup action. GitHub resolves every `uses:` action before the first
+        # job step, so repeated codeload 429/503 responses for
+        # sigstore/cosign-installer prevented the publish job from starting at
+        # all. The release binary and its immutable SHA-256 are tracked in
+        # ci/digests.txt; retries cover transient release-download failures.
+        run: |
+          set -euo pipefail
+          COSIGN_VERSION='v2.6.1'
+          COSIGN_SHA256='064954c5d8c7e3b28188eee5b1727b31c411550bc5fefd41aa672d3c761d103a'
+          COSIGN_TMP="$(mktemp)"
+          trap 'rm -f "$COSIGN_TMP"' EXIT
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" \
+            -o "$COSIGN_TMP"
+          printf '%s  %s\n' "$COSIGN_SHA256" "$COSIGN_TMP" | sha256sum -c -
+          install -m 0755 "$COSIGN_TMP" /usr/local/bin/cosign
+          cosign version
 
       - name: Generate tarball + cosign sign + manifest
         id: sign
@@ -762,45 +706,26 @@ jobs:
       #   tool to a workflow whose entire point is reducing dep surface.
       #   See .aiwg/architecture/adr-publish-time-evidence.md.
       #
-      # Pin strategy: install via syft's official install.sh at a pinned
-      # version tag, with the install script's SHA-256 verified inline
-      # against the value in ci/digests.txt before execution. This gives
-      # us a content-addressed installer without depending on a separate
-      # action SHA we can't easily verify from inside the AIWG repo.
-      # Follow-up #1310-class: switch to the syft GitHub Action once it
-      # has a stable SHA-pinning surface that matches our other pins.
+      # Pin strategy: download Syft's official release archive at a pinned
+      # version and verify its immutable SHA-256 from ci/digests.txt before
+      # installing the binary. This avoids executing a remotely fetched
+      # installer and tolerates transient release-download failures.
 
       - name: Install syft (SBOM generator)
         # syft v1.18.0 — see ci/digests.txt "Standalone tools" section.
-        #
-        # Pinning model: we fetch the install script from a TAG-pinned raw
-        # GitHub URL (raw.githubusercontent.com/anchore/syft/<tag>/install.sh).
-        # GitHub serves the file at the exact commit the tag points at, so
-        # the URL itself is content-addressed via the tag — equivalent to
-        # pinning a Docker image by digest for the install script's bytes.
-        # An attacker who can rotate the tag would also need to push to
-        # the anchore/syft repo, which has its own access controls and
-        # tag-protection rules.
-        #
-        # SHA-256 of the install script is logged on every run so the
-        # operator can spot a drift (e.g., if anchore force-pushes the
-        # tag, which they shouldn't but the workflow surfaces it). To
-        # graduate to enforced SHA verification, set ENFORCE_INSTALL_SHA
-        # to the observed value and uncomment the strict check below.
-        # Follow-up #1310-class: replace with anchore/sbom-action once it
-        # has a clean SHA-pinnable surface matching our other action pins.
         run: |
           set -euo pipefail
           SYFT_VERSION='v1.18.0'
-          INSTALL_URL="https://raw.githubusercontent.com/anchore/syft/${SYFT_VERSION}/install.sh"
-          curl -fsSL "$INSTALL_URL" -o /tmp/syft-install.sh
-          OBSERVED_SHA=$(sha256sum /tmp/syft-install.sh | awk '{print $1}')
-          echo "syft install.sh SHA-256 (observed): $OBSERVED_SHA"
-          # ENFORCE_INSTALL_SHA='' # set to OBSERVED_SHA value once verified
-          # if [ -n "$ENFORCE_INSTALL_SHA" ] && [ "$OBSERVED_SHA" != "$ENFORCE_INSTALL_SHA" ]; then
-          #   echo "✗ install.sh SHA mismatch (expected $ENFORCE_INSTALL_SHA)"; exit 1
-          # fi
-          sh /tmp/syft-install.sh -b /usr/local/bin "$SYFT_VERSION"
+          SYFT_ARCHIVE='syft_1.18.0_linux_amd64.tar.gz'
+          SYFT_SHA256='0b6fd1e0dd5b00b19585e5cde8e1c1f4ef60dc8fba8b41fab55f00852a2fbb8d'
+          SYFT_TMP_DIR="$(mktemp -d)"
+          trap 'find "$SYFT_TMP_DIR" -type f -delete; rmdir "$SYFT_TMP_DIR"' EXIT
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/${SYFT_ARCHIVE}" \
+            -o "$SYFT_TMP_DIR/$SYFT_ARCHIVE"
+          printf '%s  %s\n' "$SYFT_SHA256" "$SYFT_TMP_DIR/$SYFT_ARCHIVE" | sha256sum -c -
+          tar -xzf "$SYFT_TMP_DIR/$SYFT_ARCHIVE" -C "$SYFT_TMP_DIR" syft
+          install -m 0755 "$SYFT_TMP_DIR/syft" /usr/local/bin/syft
           syft version
 
       - name: Generate CycloneDX SBOM
@@ -909,13 +834,6 @@ jobs:
           INSTALLER='${{ steps.release_files.outputs.installer }}'
           CHECKSUMS='${{ steps.release_files.outputs.checksums }}'
 
-          # Pre-release detection (same logic as the version step above).
-          if [ "$VERSION" != "${VERSION%%-*}" ]; then
-            PRERELEASE_FLAG="--prerelease"
-          else
-            PRERELEASE_FLAG=""
-          fi
-
           # Ensure the release exists; create it if not. `gh release view`
           # exits non-zero on miss, which `|| true` swallows for the test.
           if ! gh release view "$TAG" >/dev/null 2>&1; then
@@ -923,7 +841,6 @@ jobs:
             gh release create "$TAG" \
               --title "$TAG" \
               --notes "Release $TAG. Signed assets attached (cosign keyless, GitHub Actions OIDC). Verify with: cosign verify-blob --bundle ${TARBALL}.sigstore --certificate-identity-regexp '^https://github.com/jmagly/aiwg/.github/workflows/npm-publish.yml@refs/tags/v' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ${TARBALL}" \
-              $PRERELEASE_FLAG
           else
             echo "Release $TAG exists — uploading signed assets."
           fi
@@ -994,48 +911,12 @@ jobs:
           ============================================================
           EOF
 
-  remove-deprecated-cli-bootstrap-tag:
-    name: Remove deprecated @aiwg/cli bootstrap tag
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.remove_cli_bootstrap_tag }}
-    runs-on: ubuntu-latest
-    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
-    timeout-minutes: 5
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Configure npmjs.org
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Remove bootstrap dist-tag and verify
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_DIST_TAG_TOKEN is required for dist-tag maintenance"
-            exit 1
-          fi
-
-          CURRENT=$(npm view @aiwg/cli dist-tags --json --prefer-online --no-update-notifier)
-          if node -e 'const tags=JSON.parse(process.argv[1]); process.exit(Object.hasOwn(tags, "bootstrap") ? 0 : 1)' "$CURRENT"; then
-            npm dist-tag rm @aiwg/cli bootstrap
-          else
-            echo "@aiwg/cli@bootstrap is already absent"
-          fi
-
-          for attempt in 1 2 3 4 5; do
-            CURRENT=$(npm view @aiwg/cli dist-tags --json --prefer-online --no-update-notifier)
-            if node -e 'const tags=JSON.parse(process.argv[1]); process.exit(Object.hasOwn(tags, "bootstrap") ? 1 : 0)' "$CURRENT"; then
-              echo "✓ @aiwg/cli bootstrap dist-tag is absent"
-              exit 0
-            fi
-            echo "Attempt ${attempt}: bootstrap tag still visible; retrying in 5s"
-            sleep 5
-          done
-
-          echo "::error::@aiwg/cli bootstrap dist-tag remained visible after removal"
-          exit 1
+  socket-post-publish:
+    name: Audit published packages with Socket
+    needs: publish-to-npmjs-org
+    uses: ./.github/workflows/socket-post-publish.yml
+    with:
+      version: ${{ needs.publish-to-npmjs-org.outputs.version }}
+      commit: ${{ needs.publish-to-npmjs-org.outputs.commit }}
+    secrets:
+      SOCKET_API_TOKEN: ${{ secrets.SOCKET_API_TOKEN }}

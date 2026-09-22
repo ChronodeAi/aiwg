@@ -199,6 +199,50 @@ describe('UAT: Orchestrator — LFD loop controls', () => {
     expect(analyticsReport).toContain('Best Quality / Minute');
   });
 
+  // #1766: token and spend ceilings were previously uncovered here — only
+  // wall-clock was exercised — because the stub reported no usage at all.
+  // UAT_STUB_USAGE makes the provider report usage through the real
+  // stream-parse path, so these ceilings become observable and enforceable.
+  for (const [dimension, limits, trigger, observedField, observedAtLeast] of [
+    ['token', { total_tokens: 100 }, 'total_tokens_exhausted', 'total_tokens', 500],
+    ['spend', { spend_usd: 0.10 }, 'spend_exhausted', 'spend_usd', 0.25],
+  ] as const) {
+    it(`stops on hard ${dimension} budget exhaustion once the provider reports usage`, async () => {
+      process.env.UAT_STUB_USAGE = '500:0.25';
+      try {
+        const orc = new Orchestrator(testDir);
+        const result = await orc.execute({
+          ...BASE_CONFIG,
+          objective: `${dimension} budget-stop UAT`,
+          completionCriteria: 'Stub succeeds, then the hard budget check stops the loop',
+          maxIterations: 3,
+          enableAnalytics: true,
+          enableBestOutput: true,
+          budgetStopPolicy: 'budget-wins',
+          budgetLimits: limits,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.reason).toContain(`Budget exhausted: ${trigger}`);
+        expect(result.iterations).toBe(1);
+        expect(result.budgetStopReport?.stop_reason).toBe(trigger);
+
+        // The ceiling fired against real reported usage, not a constant zero.
+        expect(result.budgetStopReport?.budgets.observed[observedField])
+          .toBeGreaterThanOrEqual(observedAtLeast);
+        // A reported dimension must never be filed as unobservable (#1766).
+        expect(result.budgetStopReport?.budgets.unobservable ?? [])
+          .not.toContain(observedField);
+
+        const state = orc.stateManager.load();
+        expect(state.status).toBe('budget_exhausted');
+        expect(existsSync(join(orc.stateManager.getStateDir(), 'budget-stop-report.json'))).toBe(true);
+      } finally {
+        delete process.env.UAT_STUB_USAGE;
+      }
+    });
+  }
+
   it('reports success when the completing iteration crosses a ceiling (completion-wins default, #1767)', async () => {
     const orc = new Orchestrator(testDir);
 

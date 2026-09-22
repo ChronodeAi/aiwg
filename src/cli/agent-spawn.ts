@@ -37,6 +37,11 @@ export interface ProviderConfig {
 }
 
 export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
+  antigravity: {
+    binary: 'agy',
+    dangerousFlag: '--dangerously-skip-permissions',
+    name: 'Google Antigravity CLI',
+  },
   claude: {
     binary: 'claude',
     dangerousFlag: '--dangerously-skip-permissions',
@@ -52,9 +57,17 @@ export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
   },
   codex: {
     binary: 'codex',
-    // Codex supports --full-auto (no approval prompts) and --approval-mode full-auto
-    dangerousFlag: '--full-auto',
+    // Current Codex releases use the explicit bypass flag for unrestricted,
+    // non-interactive execution. Keep this centralized so every launcher maps
+    // AIWG's --dangerous option consistently.
+    dangerousFlag: '--dangerously-bypass-approvals-and-sandbox',
     name: 'OpenAI Codex',
+  },
+  'deepseek-harness': {
+    binary: 'dsh',
+    dangerousFlag: null,
+    name: 'DeepSeek Harness',
+    promptPrefix: ['--profile', 'headless'],
   },
   hermes: {
     // Hermes is a model series (NousResearch), not a confirmed standalone CLI.
@@ -211,9 +224,18 @@ export function splitParams(params: string): string[] {
 
 // ── Provider helpers ──────────────────────────────────────────
 
-/** Get config for a provider, falling back to claude for unknown values. */
+const SPAWN_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  agy: 'antigravity',
+  dsh: 'deepseek-harness',
+};
+
+/** Get config for a provider. Unknown values fail closed instead of launching another harness. */
 export function getProviderConfig(provider: string): ProviderConfig {
-  return PROVIDER_CONFIGS[provider] ?? PROVIDER_CONFIGS['claude']!;
+  const candidate = provider.trim().toLowerCase();
+  const canonical = SPAWN_PROVIDER_ALIASES[candidate] ?? candidate;
+  const config = PROVIDER_CONFIGS[canonical];
+  if (!config) throw new Error(`Unsupported provider '${provider}'`);
+  return config;
 }
 
 /** Returns true if the provider has a CLI binary that can be spawned. */

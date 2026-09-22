@@ -44,6 +44,7 @@ Writes are atomic: the loader writes to a randomly-suffixed temp sibling, then
 | `installed`     | `Record<string, InstalledEntry>` | yes      | Frameworks and addons currently deployed, keyed by the name passed to `aiwg use`. Defaults to `{}`.                                                   |
 | `scripts`       | `Record<string, string>`         | yes      | User-defined scripts, run via `aiwg run <name>`. Executed with `sh -c "<command>"` (or `cmd /c` on Windows). Defaults to `{}`.                        |
 | `security`      | `SecurityConfig`                 | optional | Project-owned deterministic security policy. See [Threat Assessment](#threat-assessment).                                                         |
+| `artifact_outputs` | `ArtifactOutputsConfig`       | optional | Canonical storage and optional provider-native presentation/export policy. Safe default: AIWG canonical + explicit-only. See [Artifact Outputs](#artifact-outputs). |
 | `workspace`     | `WorkspaceConfig`                | optional | General workspace metadata or an external-member back-reference. See [Workspace Repositories](#workspace-repositories).                               |
 | `repos`         | `WorkspaceRepoConfig[]`          | optional | Canonical member list and per-member allowed operations. Requires `workspace.name`.                                                                   |
 | `externalLinks` | `Record<string, ExternalLink>`   | optional | Named public resources that travel with the project and appear in provider-facing context. See [External Links](#external-links).                     |
@@ -51,9 +52,66 @@ Writes are atomic: the loader writes to a randomly-suffixed temp sibling, then
 | `remotes`       | `RemotesConfig`                  | optional | Repo origin topology. When absent, agents treat `origin` as primary. See [Remotes Block](#remotes-block).                                             |
 | `delivery`      | `DeliveryConfig`                 | optional | Repo control / delivery policy. When absent, runtime defaults apply. See [Delivery Block](#delivery-block).                                           |
 | `build`         | `BuildConfig`                    | optional | Project build policy, including large-build host resource preflight. See [Build Block](#build-block).                                                 |
+| `uhp`           | `UhpConfig`                      | optional | Explicit experimental UHP client profiles. See [UHP Client Profiles](#uhp-client-profiles).                                                           |
 
-Valid `providers` values: `claude`, `factory`, `codex`, `opencode`, `copilot`, `cursor`,
-`warp`, `windsurf`, `hermes`, `openclaw`.
+Valid `providers` values: `antigravity` (alias `agy`), `claude`, `codex`,
+`copilot`, `cursor`, `deepseek-harness`, `factory`, `grokbot`, `hermes`, `opencode`, `openclaw`, `openhuman`,
+`omp`, `pi`, `warp`, and `windsurf`.
+
+## UHP Client Profiles
+
+The optional `uhp` block configures the experimental, client-only Unified
+Harness Protocol transport. UHP profiles are not AIWG providers and are never
+selected implicitly by provider, A2A, or MCP routing.
+
+```json
+{
+  "uhp": {
+    "enabled": true,
+    "profiles": {
+      "research": {
+        "endpoint": "https://harness.example.com",
+        "version": "2026-08-11",
+        "credential": { "source": "env", "name": "AIWG_UHP_RESEARCH_TOKEN" },
+        "defaultHarness": "chrn_research",
+        "defaultModel": "example-model",
+        "experimental": true,
+        "trust": {
+          "allowedHosts": ["harness.example.com"],
+          "allowPrivateNetwork": false,
+          "allowInsecureLoopback": false,
+          "allowRedirects": false
+        },
+        "limits": {
+          "requestTimeoutMs": 600000,
+          "inactivityTimeoutMs": 45000,
+          "maxTaskSeconds": 3600,
+          "maxUploadBytes": 52428800,
+          "maxArtifactBytes": 104857600,
+          "maxArtifactCount": 100,
+          "maxRetries": 3
+        }
+      }
+    }
+  }
+}
+```
+
+Profile names begin with a lowercase letter and contain at most 64 lowercase
+letters, digits, underscores, or hyphens. `version` must be `2026-08-11` and
+`experimental` must be `true`. The only credential form is an environment
+locator with an uppercase variable name; inline `token`, `bearer`, `apiKey`,
+and `authorization` fields are rejected. Every configured limit is a positive
+integer and unknown limit names are rejected.
+
+HTTPS is required except when a loopback address and
+`trust.allowInsecureLoopback: true` are both present. Private addresses require
+`allowPrivateNetwork`; redirects default to denied; `allowedHosts` restricts the
+resolved endpoint host. Authenticated cross-origin redirects always fail before
+credential forwarding.
+
+See the [experimental UHP client guide](../uhp-client.md) for routing, operation,
+recovery, artifacts, security, limitations, and upgrades.
 
 ## Threat Assessment
 
@@ -70,6 +128,92 @@ its own trust posture and does not inherit this block from a workspace parent.
 See [Threat-assessment policy](../security/threat-assessment-policy.md) for the
 schema, precedence model, examples, CLI operations, migration behavior, and
 provider/platform safety boundary.
+
+## Artifact Outputs
+
+`artifact_outputs` separates durable canonical storage from optional provider-native presentation or export surfaces:
+
+```json
+{
+  "artifact_outputs": {
+    "canonical": "aiwg",
+    "provider_native": "explicit-only",
+    "destinations": {
+      "claude-code.design": {
+        "enabled": true,
+        "use_when": "user-requested"
+      }
+    }
+  }
+}
+```
+
+`canonical` is currently `aiwg`; an export never replaces it. `provider_native`
+is `disabled`, `explicit-only`, or `project-default`. Each stable destination
+ID can be disabled, restricted to `user-requested`, or declared as a
+`project-default`. Legacy configs with no block resolve to the safe
+`aiwg`/`explicit-only` behavior.
+
+Project policy is the ceiling. Within it, an explicit task request outranks a
+user preference, and provider defaults are lowest authority. Unknown or
+unsupported destinations fail safe. Dual output writes the canonical artifact
+first and records the presentation reference in artifact-output provenance.
+See [the architecture decision](../architecture/adr-artifact-output-destinations.md)
+for migration, degraded-mode, precedence, and provenance details.
+
+## Project Block — data classification
+
+`project` declares what the repository holds and how its contents may be handled.
+It accepts the historical bare string (the project name) or an object:
+
+```json
+{
+  "project": {
+    "name": "bizops",
+    "description": "Restricted storage for money and executed agreements",
+    "classification": "private",
+    "pii": true,
+    "handling": { "excerptable": false, "publishable": false, "mirror": false }
+  }
+}
+```
+
+`classification` uses the same vocabulary as the per-artifact privacy field on the
+Fortemi index export: `private`, `sanitized`, `public`.
+
+| Field | Meaning |
+|---|---|
+| `classification` | What the repo holds |
+| `pii` | Repo holds personally identifiable information |
+| `handling.excerptable` | May content be quoted outside the repo (decks, docs, messages)? |
+| `handling.publishable` | May content be published? |
+| `handling.mirror` | May the repo be mirrored to a secondary remote? |
+
+**Defaults.** When `handling` is omitted, a `private` classification defaults every
+flag to `false` and every other classification defaults them to `true`. Declaring a
+classification therefore never silently loosens a repo, and omitting one never
+silently tightens an existing project. Any flag can be set explicitly to override
+the default in either direction.
+
+**Why this exists.** Without it, the difference between a repo that is routinely
+excerpted for partners and one holding executed agreements is carried only by prose
+in a README, a free-text `notes` string, and the repo being private on the forge —
+none of which an agent can reason over. An agent asked to pull settlement terms into
+a deck has no structured signal that the source is restricted.
+
+`aiwg doctor` reports the declared classification, and warns when a declaration
+contradicts the remotes — a repo declared `private` while a `remotes.secondary[]`
+entry carries `push_on_release: true` is publishing the thing it says must not be
+published:
+
+```
+⚠ Data Classification: classification=private pii=true excerptable=false
+  publishable=false mirror=false; handling.mirror=false but remotes.secondary
+  pushes on release: github
+```
+
+An undeclared `project` is reported as `info`, not a warning: classification is
+opt-in.
 
 ## Project Local Block
 
@@ -296,6 +440,19 @@ with the per-field defaults below.
 - `own-branch-only` — OK on the agent's own feature branch, never to default branch
 - `allowed` — escape hatch for tooling that needs it
 
+`main-only-blocked` is accepted as a **deprecated alias** for `own-branch-only`.
+`resolveDelivery` normalizes it, `aiwg config set` writes the current spelling, and
+`doctor` reports the deprecation with the remedy rather than rejecting the config.
+
+The permission narrowed with the rename: `main-only-blocked` allowed force-push on
+*any* feature branch, `own-branch-only` only on the agent's own. That is why the alias
+is surfaced rather than migrated silently — accepting it quietly would change what an
+agent is permitted to do. Update with:
+
+```bash
+aiwg config set --project delivery.force_push_policy own-branch-only
+```
+
 ### `branch_naming` defaults
 
 ```json
@@ -429,9 +586,10 @@ Example, auto-detected defaults with one project override:
 ## Remotes Block
 
 The `remotes` block declares repo topology — which git remote drives CI and PRs
-(primary), where issues live, and which secondary remotes are mirrors or publishing
-targets. Defaults: `primary: origin`, `issue_tracker: primary`, `ci: primary`,
-`secondary: []`.
+(primary), where internal engineering issues live, an optional customer-facing
+issue intake tracker, and which secondary remotes are mirrors or publishing
+targets. Defaults: `primary: origin`, `issue_tracker: primary`, no customer
+tracker, `ci: primary`, `secondary: []`.
 
 ### Fields
 
@@ -439,8 +597,12 @@ targets. Defaults: `primary: origin`, `issue_tracker: primary`, `ci: primary`,
 | --------------- | ----------------------- | --------- | ----------------------------------------------------------------------------------- |
 | `primary`       | string                  | `origin`  | Git remote name driving CI and PRs by default. Must match a name from `git remote`. |
 | `issue_tracker` | string                  | `primary` | Where issues live.                                                                  |
+| `issue_provider`| enum                    | unset     | Explicit tracker provider for self-hosted or local trackers (`gitea`, `github`, `local`). |
 | `ci`            | string                  | `primary` | Where CI runs.                                                                      |
 | `tracker_actor` | `TrackerActorConfig`    | unset     | Forge login and tool route for issue, PR, comment, label, and closure writes.       |
+| `customer_issue_tracker` | string          | unset     | Optional customer-facing issue intake remote; does not become CI or delivery authority. |
+| `customer_issue_provider` | enum            | unset     | Explicit provider hint for the customer tracker.                                    |
+| `customer_tracker_actor` | `TrackerActorConfig` | unset | Forge login and tool route for customer acknowledgements, comments, and closures.   |
 | `transport`     | `RemoteTransportConfig` | unset     | Login, protocol, helper, and public SSH fingerprint used for Git pushes.            |
 | `secondary`     | `SecondaryRemote[]`     | `[]`      | Mirrors, fork bases, publishing targets.                                            |
 
@@ -469,6 +631,26 @@ writes and Git pushes may authenticate through different mechanisms.
 `transport.protocol` accepts `ssh` or `https`. A configured helper should fail
 closed when the authenticated account or public key fingerprint does not match.
 
+When customer intake and internal delivery use different forges, declare both
+roles explicitly. For example, AIWG keeps engineering and CI on Gitea while
+responding to customer reports on GitHub:
+
+```json
+{
+  "issue_tracker": "origin",
+  "issue_provider": "gitea",
+  "tracker_actor": { "login": "roctinam", "via": "tea" },
+  "customer_issue_tracker": "github",
+  "customer_issue_provider": "github",
+  "customer_tracker_actor": { "login": "jmagly", "via": "gh" }
+}
+```
+
+Internal implementation, delivery, and CI-sensitive issue state remains on
+`issue_tracker`. Customer acknowledgement, follow-up, and closure route to
+`customer_issue_tracker`. Projects without customer fields retain the existing
+single-tracker behavior.
+
 ### `SecondaryRemote` shape
 
 | Field             | Type   | Description                                                                     |
@@ -484,7 +666,7 @@ The loader exposes `resolveRemoteProvider(url)` which classifies a remote URL by
 - `github.com` → `github`
 - `gitlab.com` or self-hosted GitLab → `gitlab`
 - Hosts containing `gitea` → `gitea`
-- Anything else → `unknown` (callers fall back to the configured provider list)
+- Anything else → `unknown` (callers use `remotes.issue_provider` when set, or ask for an explicit provider)
 
 ## Worked Examples
 

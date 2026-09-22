@@ -49,7 +49,7 @@ Models are defined in `models.json` files with the following priority:
 
   "claude": {
     "reasoning": {
-      "model": "claude-opus-4-6",
+      "model": "claude-opus-4-7",
       "description": "Best for complex reasoning, architecture design"
     },
     "coding": {
@@ -57,20 +57,20 @@ Models are defined in `models.json` files with the following priority:
       "description": "Best for code generation, implementation"
     },
     "efficiency": {
-      "model": "claude-haiku-3-5",
+      "model": "claude-haiku-4-5",
       "description": "Best for quick tasks, simple edits"
     }
   },
 
   "factory": {
     "reasoning": {
-      "model": "claude-opus-4-6"
+      "model": "heavy"
     },
     "coding": {
-      "model": "claude-sonnet-4-6"
+      "model": "medium"
     },
     "efficiency": {
-      "model": "claude-haiku-3-5"
+      "model": "light"
     }
   },
 
@@ -87,9 +87,9 @@ Models are defined in `models.json` files with the following priority:
   },
 
   "shorthand": {
-    "opus": "claude-opus-4-6",
+    "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-3-5",
+    "haiku": "claude-haiku-4-5",
     "inherit": "inherit"
   }
 }
@@ -110,6 +110,16 @@ An explicit identifier outside a recognized family remains `unknown`. Role
 filters do not silently include it in the coding population, and provider
 transforms preserve it instead of rewriting it as a coding model. Omitted model
 metadata retains the legacy coding default during deployment.
+
+Claude deployments compile bare aliases by default. A source agent that says
+`model: sonnet` deploys to `.claude/agents/` as `model: claude-sonnet-4-6` (the
+`claude.coding.model` tier in `models.json`; `opus` → `claude-opus-4-7`,
+`haiku` → `claude-haiku-4-5`). A bare alias would otherwise inherit the parent
+session's variant, and under a 1M-context parent every subagent dispatch then
+hits the usage-credit gate (#1442, #2563). Source frontmatter stays
+provider-neutral; already-pinned ids, `inherit`, and explicit `sonnet[1m]` /
+`opus[1m]` opt-ins are deployed unchanged, and `--coding-model` /
+`--reasoning-model` / `--efficiency-model` overrides still win.
 
 ## Provider compilation examples
 
@@ -232,7 +242,7 @@ Create `models.json` in your project root:
   "factory": {
     "reasoning": { "model": "claude-opus-custom-finetuned" },
     "coding": { "model": "claude-sonnet-4-6" },
-    "efficiency": { "model": "claude-haiku-3-5" }
+    "efficiency": { "model": "claude-haiku-4-5" }
   }
 }
 ```
@@ -261,14 +271,14 @@ mkdir -p ~/.config/aiwg
 cat > ~/.config/aiwg/models.json <<'EOF'
 {
   "factory": {
-    "reasoning": { "model": "claude-opus-4-6" },
+    "reasoning": { "model": "claude-opus-4-7" },
     "coding": { "model": "claude-sonnet-4-6" },
-    "efficiency": { "model": "claude-haiku-3-5" }
+    "efficiency": { "model": "claude-haiku-4-5" }
   },
   "shorthand": {
-    "opus": "claude-opus-4-6",
+    "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-3-5"
+    "haiku": "claude-haiku-4-5"
   }
 }
 EOF
