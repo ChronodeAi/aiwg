@@ -120,4 +120,11 @@ describe('runMeta (git-backed)', () => {
     commit(dir, 'expired');
     expect(codes()).toEqual(['suppression-unjustified']);
   }, 60_000);
+
+  it('ignores suppressions in files outside the measured scope', () => {
+    write(dir, '.aiwg/iterations/check.py', 'import os  # noqa\n');
+    write(dir, 'tests/test_a.py', 'import os  # noqa\n');
+    commit(dir, 'evidence scripts');
+    expect(codes()).toEqual([]);
+  }, 60_000);
 });

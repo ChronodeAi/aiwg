@@ -5,9 +5,10 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { GATE_CONFIG_PATH, defaultGateConfig, globToRegExp, loadGateConfig, matchesAny, parseGateConfig } from './config.mjs';
+import {
+  GATE_CONFIG_PATH, defaultGateConfig, globToRegExp, isMeasured, loadGateConfig, matchesAny, parseGateConfig,
+} from './config.mjs';
 import { diffAgainstBase, git, gitLines, readFileAtRef } from './git.mjs';
-import { hasLizardExtension } from './lizard.mjs';
 
 export const EVALUATOR_MESSAGE = 'Evaluator surfaces changed. Evaluator changes are human governance work: land them in '
   + 'their own commit citing an ADR already on the base branch, reviewed by someone other than the author. '
@@ -261,7 +262,8 @@ function checkSuppressions(root, mergeBase, cfg, surfaces) {
   const today = new Date().toISOString().slice(0, 10);
   for (const file of diffAgainstBase(root, mergeBase)) {
     const target = file.newPath;
-    if (!target || !hasLizardExtension(target) || matchesAny(target, surfaces)) continue;
+    // Same scope as the ratchet: measured source (include/exclude), never evaluator surfaces.
+    if (!target || !isMeasured(target, cfg) || matchesAny(target, surfaces)) continue;
     const removed = new Set(file.hunks.flatMap((h) => h.removed.map((t) => t.trim())));
     let headLines = null;
     for (const hunk of file.hunks) {
