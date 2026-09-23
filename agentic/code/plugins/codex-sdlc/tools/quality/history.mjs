@@ -4,6 +4,7 @@
  */
 
 import path from 'node:path';
+import { matchesAny } from './config.mjs';
 import { git } from './git.mjs';
 
 export const HISTORY_HEADER = 'prioritisation only — not defect prediction';
@@ -29,16 +30,28 @@ function moduleNameOf(file) {
 export function hasImportEdge(fromFile, fromText, toFile) {
   if (fromText === null || fromText === undefined) return null;
   if (fromFile.endsWith('.py') && toFile.endsWith('.py')) {
-    const full = moduleNameOf(toFile);
-    const parts = full.split('.');
-    // Accept any suffix of the dotted path (src-layout packages drop leading directories).
-    const suffixes = parts.map((_, i) => parts.slice(i).join('.'));
+    const parts = moduleNameOf(toFile).split('.');
+    // Source roots map to package names (`src/reactor/x.py` imported as `pkg.reactor.x`),
+    // so compare module-path tails: a single-segment tail must match exactly, a longer
+    // tail may follow any package prefix.
+    const tails = parts.map((_, i) => parts.slice(i));
+    const targets = (mod) => tails.some((tail) => {
+      const joined = tail.join('.');
+      return mod === joined || (tail.length >= 2 && mod.endsWith(`.${joined}`));
+    });
+    const fromPackage = moduleNameOf(fromFile).split('.').slice(0, -1);
+    const absolute = (mod) => {
+      const dots = /^\.*/.exec(mod)[0].length;
+      if (dots === 0) return mod;
+      const base = fromPackage.slice(0, Math.max(0, fromPackage.length - (dots - 1)));
+      return [...base, mod.slice(dots)].filter(Boolean).join('.');
+    };
     return fromText.split('\n').some((line) => {
       const m = /^\s*(?:from\s+([\w.]+)\s+import\s+([\w, ()*]+)|import\s+([\w.]+))/.exec(line);
       if (!m) return false;
-      const mod = m[1] ?? m[3];
-      if (suffixes.includes(mod)) return true;
-      if (m[2]) return m[2].split(/[,\s()]+/).some((name) => name && suffixes.includes(`${mod}.${name}`));
+      const mod = absolute(m[1] ?? m[3]);
+      if (targets(mod)) return true;
+      if (m[2]) return m[2].split(/[,\s()]+/).some((name) => name && targets(`${mod}.${name}`));
       return false;
     });
   }
@@ -55,8 +68,11 @@ export function hasImportEdge(fromFile, fromText, toFile) {
   return null;
 }
 
-/** Pure analysis over units. readFile(path) → text|null for import-edge lookups. */
-export function analyseHistory(allUnits, settings, readFile = () => null) {
+/**
+ * Pure analysis over units. readFile(path) → text|null for import-edge lookups; keep(path)
+ * selects the files reported (units are still sized and counted on every path they touched).
+ */
+export function analyseHistory(allUnits, settings, readFile = () => null, keep = () => true) {
   const units = allUnits.filter((u) => u.files.length > 0 && u.files.length <= settings.max_files_per_commit);
   if (units.length < settings.min_commits) {
     return { insufficient: true, units: units.length };
@@ -65,7 +81,7 @@ export function analyseHistory(allUnits, settings, readFile = () => null) {
   const authors = new Map();
   const co = new Map();
   for (const unit of units) {
-    const files = [...new Set(unit.files)].sort();
+    const files = [...new Set(unit.files.filter(keep))].sort();
     for (const file of files) {
       touches.set(file, (touches.get(file) || 0) + 1);
       if (!authors.has(file)) authors.set(file, new Set());
@@ -103,7 +119,12 @@ export function runHistory(root, cfg, { readFile } = {}) {
     '-c', 'core.quotePath=false', 'log', '--first-parent', '--diff-merges=first-parent', '-n', String(settings.window_commits),
     '--name-only', '--format=%x1e%H%x00%an%x00%ct%x00%s',
   ], { allowFail: true }) ?? '';
-  const result = analyseHistory(parseHistoryLog(log), settings, readFile ?? ((file) => git(root, ['show', `HEAD:${file}`], { allowFail: true })));
+  const result = analyseHistory(
+    parseHistoryLog(log),
+    settings,
+    readFile ?? ((file) => git(root, ['show', `HEAD:${file}`], { allowFail: true })),
+    (file) => !matchesAny(file, cfg.exclude),
+  );
   const lines = [HISTORY_HEADER];
   if (result.insufficient) {
     lines.push(`insufficient history (<${settings.min_commits} commits): ${result.units} usable units`);

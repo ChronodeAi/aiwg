@@ -297,7 +297,6 @@ export function runRatchet(root, cfgBase, { mergeBase }) {
 export function distributionReport(functions, bands) {
   const total = functions.reduce((sum, fn) => sum + fn.nloc, 0) || 1;
   const lines = [];
-  const verdicts = [];
   for (const [metric, key] of METRICS) {
     const band = bands[key];
     const buckets = { '≤p70': 0, 'p70–p80': 0, 'p80–p90': 0, '>p90': 0 };
@@ -314,9 +313,6 @@ export function distributionReport(functions, bands) {
     .sort((a, b) => b.ccn - a.ccn || b.nloc - a.nloc)
     .slice(0, 20);
   lines.push(`above p90 (top ${above.length}):`);
-  for (const fn of above) {
-    lines.push(`  ${fn.file}:${fn.startLine} ${fn.name} nloc=${fn.nloc} ccn=${fn.ccn}`);
-    verdicts.push({ level: 'NOTE', code: 'above-band', file: fn.file, function: fn.name, metrics: fnMetrics(fn), message: 'above p90' });
-  }
-  return { lines, verdicts };
+  for (const fn of above) lines.push(`  ${fn.file}:${fn.startLine} ${fn.name} nloc=${fn.nloc} ccn=${fn.ccn}`);
+  return { lines, above: above.map((fn) => ({ file: fn.file, function: fn.name, ...fnMetrics(fn) })) };
 }

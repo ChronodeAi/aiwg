@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { defaultGateConfig } from '../../../tools/quality/config.mjs';
-import { runHistory } from '../../../tools/quality/history.mjs';
+import { analyseHistory, hasImportEdge, runHistory } from '../../../tools/quality/history.mjs';
 
 function git(dir: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: dir, timeout: 60_000, encoding: 'utf8' });
@@ -76,4 +76,33 @@ describe('runHistory (git-backed)', () => {
     expect(result.insufficient).toBe(true);
     expect(result.lines.join('\n')).toContain('insufficient history (<50 commits)');
   }, 60_000);
+});
+
+describe('hasImportEdge (Python)', () => {
+  it('matches a src/ tree imported under its package name', () => {
+    const text = 'from kairos.reactor.vocab_constants import canonicalize\n';
+    expect(hasImportEdge('src/reactor/vocab_seed.py', text, 'src/reactor/vocab_constants.py')).toBe(true);
+  });
+
+  it('resolves relative imports against the importing package', () => {
+    expect(hasImportEdge('src/reactor/vocab_seed.py', 'from .vocab_constants import X\n', 'src/reactor/vocab_constants.py')).toBe(true);
+    expect(hasImportEdge('src/reactor/vocab_seed.py', 'from . import vocab_constants\n', 'src/reactor/vocab_constants.py')).toBe(true);
+  });
+
+  it('does not match a same-named module in another package by its last segment alone', () => {
+    expect(hasImportEdge('src/a/x.py', 'from other.constants import X\n', 'src/reactor/constants.py')).toBe(false);
+  });
+});
+
+describe('analyseHistory file selection', () => {
+  it('reports only kept files while counting every unit', () => {
+    const units = Array.from({ length: 4 }, (_, i) => ({
+      sha: String(i), author: 'a', time: i, subject: 's', files: ['src/a.py', '.aiwg/log.md'],
+    }));
+    const settings = { ...defaultGateConfig().history, min_commits: 1, min_cochange: 1 };
+    const result = analyseHistory(units, settings, () => null, (file: string) => !file.startsWith('.aiwg/'));
+    expect(result.units).toBe(4);
+    expect(result.hotspots.map((h: { file: string }) => h.file)).toEqual(['src/a.py']);
+    expect(result.pairs).toEqual([]);
+  });
 });
