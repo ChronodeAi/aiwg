@@ -5,7 +5,7 @@ metadata:
   name: e2c-architecture-stability
   labels: { domain: phase-transition }
 spec:
-  description: Assess architecture stability since the ABM — measure architectural change rate, ADR frequency, component-boundary violations, and prototype divergence; emit an Architecture Stability Report with a STABLE/UNSTABLE status and recommendations.
+  description: Assess architecture stability since the ABM — measure architectural change rate, ADR frequency, component-boundary violations (from `aiwg run skill codebase-health -- --architecture --format json` — contract result and frozen-edge trend base→head), and prototype divergence; emit an Architecture Stability Report with a STABLE/UNSTABLE status and recommendations.
   version: "1.0.0"
   inputs: []
   outputs:

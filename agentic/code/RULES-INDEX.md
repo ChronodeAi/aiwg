@@ -9,10 +9,10 @@ Scan component indexes to find relevant rules; load the full rule file via @-lin
 
 | Component | Type | Rules | Index |
 |-----------|------|-------|-------|
-| sdlc-complete | framework | 33 | @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/RULES-INDEX.md |
+| sdlc-complete | framework | 32 | @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/RULES-INDEX.md |
 | aiwg-utils | addon (core) | 14 | @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/RULES-INDEX.md |
 
-**Total**: 47 rules across 2 components
+**Total**: 46 rules across 2 components
 
 ---
 
@@ -22,7 +22,7 @@ Combined context table across all components. Use to identify which component in
 
 | Task Type | Component | Key Rules |
 |-----------|-----------|-----------|
-| **Writing code** | sdlc-complete | no-attribution, executable-feedback, anti-laziness, agent-friendly-code |
+| **Writing code** | sdlc-complete | no-attribution, executable-feedback, anti-laziness, code-shape |
 | **Running tests** | sdlc-complete | executable-feedback, anti-laziness, reproducibility |
 | **Creating artifacts** | sdlc-complete | mention-wiring, provenance-tracking, qualified-references, artifact-discovery |
 | **Phase transitions** | sdlc-complete | hitl-gates, sdlc-orchestration, human-gate-display |
@@ -41,5 +41,5 @@ Combined context table across all components. Use to identify which component in
 
 ---
 
-*Assembled from 2 component indexes — 47 rules total*
+*Assembled from 2 component indexes — 46 rules total*
 *Each component index contains full rule summaries with @-links to complete rule files*

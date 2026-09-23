@@ -64,7 +64,7 @@ Core rules are non-negotiable defaults deployed to every AIWG installation.
 
 ---
 
-## SDLC Rules (24 rules — active with framework)
+## SDLC Rules (23 rules — active with framework)
 
 SDLC rules enforce workflow quality when the SDLC framework is deployed via `aiwg use sdlc`.
 
@@ -104,13 +104,9 @@ SDLC rules enforce workflow quality when the SDLC framework is deployed via `aiw
 **When to apply**: Phase transitions, workflow execution, natural language skill routing, agent coordination
 **Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/sdlc-orchestration.md
 
-#### agent-friendly-code
-**Summary**: Quantitative thresholds (300 LOC warning, 500 error) and qualitative patterns for agent-processable code.
-**Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md
-
-#### agent-generation-guardrails
-**Summary**: Runtime guardrails for code-generating agents.
-**Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-generation-guardrails.md
+#### code-shape
+**Summary**: Change-scoped, repo-calibrated code-shape gates run by `codebase-health`; volume and naming conventions.
+**Full rule**: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/code-shape.md
 
 #### artifact-discovery
 **Summary**: Agent protocol for using `aiwg index` CLI as self-service artifact discovery tool.
@@ -237,7 +233,7 @@ Rules contributed by installed addons. Load the component index for full rule su
 
 | Task Type | Relevant Rules |
 |-----------|---------------|
-| **Writing code** | no-attribution, executable-feedback, anti-laziness, agent-friendly-code, agent-generation-guardrails, config-in-environment, logs-as-event-streams |
+| **Writing code** | no-attribution, executable-feedback, anti-laziness, code-shape, config-in-environment, logs-as-event-streams |
 | **Service/process design** | stateless-processes, disposable-processes, config-in-environment, logs-as-event-streams |
 | **Deployment/operations** | disposable-processes, logs-as-event-streams, config-in-environment |
 | **Running tests** | executable-feedback, anti-laziness, reproducibility, reproducibility-validation |
@@ -255,5 +251,5 @@ Rules contributed by installed addons. Load the component index for full rule su
 
 ---
 
-*Generated from manifest.json v2.0.0 — 37 rules across 4 tiers*
+*Generated from manifest.json v2.0.0 — 36 rules across 4 tiers*
 *Full rule files: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/*

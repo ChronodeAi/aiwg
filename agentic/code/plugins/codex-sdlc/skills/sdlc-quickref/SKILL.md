@@ -80,6 +80,8 @@ aiwg discover "architecture evolution"         # → flow-architecture-evolution
 aiwg discover "iteration dual track"           # → flow-iteration-dual-track
 aiwg discover "delivery track"                 # → flow-delivery-track
 aiwg discover "discovery track"                # → flow-discovery-track
+aiwg discover "define data shape"              # → schema-intake (schema-governance addon)
+aiwg discover "change an existing schema"      # → schema-evolve (schema-governance addon)
 ```
 
 ### Quality gates
@@ -89,6 +91,7 @@ aiwg discover "phase gate check"               # → flow-gate-check
 aiwg discover "gate evaluation"                # → gate-evaluation
 aiwg discover "traceability check"             # → check-traceability
 aiwg discover "handoff checklist"              # → flow-handoff-checklist
+aiwg discover "calibrate code-shape gates"   # → codebase-health
 ```
 
 ### Team & process
@@ -154,6 +157,8 @@ All SDLC artifacts go under `.aiwg/`:
 ├── testing/       # Test strategy, plans
 ├── security/      # Threat models, security gates
 ├── deployment/    # Deployment plans, runbooks
+├── quality/       # gate.json — code-shape evaluator config (judged from the base ref)
+├── gates/         # Gate reports, abm-baseline.json
 ├── working/       # Temporary scratch (safe to delete)
 └── reports/       # Generated reports
 ```

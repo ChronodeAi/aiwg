@@ -5,7 +5,7 @@ metadata:
   name: c2t-ocm-validation
   labels: { domain: transition }
 spec:
-  description: Validate Construction exit criteria (Operational Capability Milestone) — features implemented, tests passing, coverage met, zero P0/P1 defects, performance/security passing, CI/CD operational, deployment plan approved, ORR passed. Emit OCM validation report with GO/NO-GO decision.
+  description: Validate Construction exit criteria (Operational Capability Milestone) — features implemented, tests passing, coverage met, zero P0/P1 defects, performance/security passing, CI/CD operational, deployment plan approved, ORR passed, and architecture_conformance (contracts pass and no band, frozen-edge or suppression loosening since the commit in .aiwg/gates/abm-baseline.json except ADR-cited evaluator-change commits, via `aiwg run skill codebase-health -- --architecture --meta --base <abm commit> --ci`; N/A when gate.json was absent at ABM). Emit OCM validation report with GO/NO-GO decision.
   version: "1.0.0"
   inputs:
     - { name: guidance, type: string, required: false }

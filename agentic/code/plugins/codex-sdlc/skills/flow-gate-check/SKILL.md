@@ -71,6 +71,7 @@ You recognize these as requests for this orchestration flow.
 - `documentation` - Documentation completeness
 - `traceability` - Requirements → code → tests
 - `12-factor` - 12-factor app methodology compliance (opt-in, cloud-native targets)
+- `structure` - Declared dependency direction, cycle freedom and evaluator immutability (opt-in; requires .aiwg/quality/gate.json; replaces the removed complexity gate skill)
 
 **Special Gates**:
 - `all` - Run all applicable gates
@@ -680,6 +681,52 @@ elif gate == "12-factor":
         Save to: .aiwg/gates/12-factor-deployment-review.md
         """
     )
+
+elif gate == "structure":
+    # Structure gate (opt-in; requires .aiwg/quality/gate.json).
+    # Layer 1 is deterministic and decides the gate; Layer 2 is advisory only —
+    # an LLM verdict never blocks.
+    # <ref> = the PR base branch (default origin/main), or the ABM baseline
+    # commit from .aiwg/gates/abm-baseline.json when checking phase conformance.
+
+    # Layer 1: Deterministic contract + evaluator meta-check
+    Task(
+        subagent_type="project-manager",
+        description="Run code-shape architecture and meta checks",
+        prompt="""
+        Run the deterministic structure checks:
+
+        Command: aiwg run skill codebase-health -- --architecture --meta --base <ref> --format json --ci
+
+        Exit 0 = PASS. Exit 1 = FAIL: list every FAIL verdict (contracts,
+        frozen-edges-increased, evaluator-surface-changed, band-loosened,
+        quality-step-*, suppression-*) with its file/sha and message, plus every
+        EXCEPTION evaluator-change line. Exit 2 = tool/config error: report the
+        message verbatim (missing gate.json prints the bootstrap sequence).
+        Do not edit .aiwg/quality/gate.json or any evaluator surface to pass.
+
+        Pass criteria: exit code 0.
+        Save to: .aiwg/gates/structure-lint-report.md
+        """
+    )
+
+    # Layer 2: Architecture review — ADVISORY ONLY, never blocks the gate
+    Task(
+        subagent_type="architecture-designer",
+        description="Compare declared dependency direction with contracts",
+        prompt="""
+        Compare the dependency contract file (contracts.frozen_edges_file and the
+        contracts.command config in .aiwg/quality/gate.json) with SAD Section 5a
+        (Declared Dependency Direction) in .aiwg/architecture/software-architecture-doc.md.
+
+        For each declared layer order and invariant: PASS | GAP | RISK
+        - GAP: SAD §5a declares a direction the contract does not enforce, or vice versa
+        - RISK: frozen edges exist that contradict §5a with no ADR retiring them
+
+        This review is advisory. It does not change the Layer 1 verdict.
+        Save to: .aiwg/gates/structure-architecture-review.md
+        """
+    )
 ```
 
 ### Step 4: Synthesize Results
@@ -837,7 +884,7 @@ Starting validation...
 
 Supported gates:
 - Phase gates: inception, elaboration, construction, transition
-- Workflow gates: security, reliability, test-coverage, documentation, traceability, 12-factor
+- Workflow gates: security, reliability, test-coverage, documentation, traceability, 12-factor, structure
 - Special: all, pre-deploy, orr
 
 Please specify a valid gate.

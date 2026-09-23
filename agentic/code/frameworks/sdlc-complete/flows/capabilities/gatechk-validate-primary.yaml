@@ -11,6 +11,10 @@ spec:
     gate (LOM/ABM/IOC/PR or workflow gate), validate each criterion, and emit a
     PASS | FAIL | CONDITIONAL validation report with missing artifacts, failed
     criteria, signoff status, and remediation actions (flow-gate-check Step 2).
+    For the `structure` gate this is Layer 1 (deterministic): run
+    `aiwg run skill codebase-health -- --architecture --meta --base <ref>
+    --format json --ci`, save .aiwg/gates/structure-lint-report.md, and PASS
+    only when it exits 0.
   version: "1.0.0"
   inputs:
     - { name: gate_type, type: string, required: true }

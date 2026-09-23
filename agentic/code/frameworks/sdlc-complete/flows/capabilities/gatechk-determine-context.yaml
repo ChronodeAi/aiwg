@@ -7,8 +7,10 @@ metadata:
 spec:
   description: >-
     Resolve the requested gate parameter to a gate type (phase milestone
-    LOM/ABM/IOC/PR, workflow gate, or special gate) and scan `.aiwg/` for phase
-    indicators to detect the current project phase (flow-gate-check Step 1).
+    LOM/ABM/IOC/PR, workflow gate, or special gate such as `12-factor` or the
+    opt-in `structure` gate, which requires .aiwg/quality/gate.json) and scan
+    `.aiwg/` for phase indicators to detect the current project phase
+    (flow-gate-check Step 1).
   version: "1.0.0"
   inputs:
     - { name: gate, type: string, required: true }

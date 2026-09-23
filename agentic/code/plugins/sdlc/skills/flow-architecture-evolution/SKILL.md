@@ -339,7 +339,7 @@ Task(
     - Option matrix (preferred option)
 
     Create comprehensive ADR using template:
-    $AIWG_ROOT/templates/analysis-design/architecture-decision-record-template.md
+    $AIWG_ROOT/agentic/code/frameworks/sdlc-complete/templates/architecture/adr-with-tot.md
 
     Structure:
     1. Title: Clear, descriptive (e.g., "Migration from PostgreSQL to DynamoDB")
@@ -639,6 +639,11 @@ Task(
        5. Security Architecture (if security changes)
        6. Data Architecture (if data model changes)
        7. Reference new ADR in decisions section
+       8. If the ADR changes layering: after the ADR is merged, update the contract
+          file (`contracts.frozen_edges_file`) and SAD §5a in a separate commit with
+          trailer `Evaluator-Change: ADR-NNN`;
+          `aiwg run skill codebase-health -- --architecture --meta --base <ref> --ci`
+          must exit 0.
 
        Maintain version history.
        Mark sections as "Updated: {date}".
@@ -880,7 +885,7 @@ This orchestration succeeds when:
 ## References
 
 **Templates** (via $AIWG_ROOT):
-- ADR: `templates/analysis-design/architecture-decision-record-template.md`
+- ADR: `$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/templates/architecture/adr-with-tot.md`
 - Impact Assessment: `templates/management/impact-assessment-template.md`
 - Migration Plan: `templates/deployment/migration-plan-template.md`
 - Rollback Plan: `templates/deployment/rollback-plan-template.md`

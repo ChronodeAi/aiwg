@@ -250,7 +250,7 @@ Based on regression analysis, recommend tests that would have caught the issue:
 ### High-Risk Area Identification
 
 Score each module for risk and flag the high-risk ones. Risk factors: test
-coverage < 80%, cyclomatic complexity > 10, change frequency > 5, and prior
+coverage < 80%, cyclomatic complexity above the repo p90 band, change frequency > 5, and prior
 regression count > 2 for the path. Emit `HighRiskArea` records (`path`,
 `riskFactors[]`, `regressionHistory`, `testCoverage`, `complexityScore`,
 `recommendation`), keep only modules with ≥1 risk factor, and sort by risk-factor

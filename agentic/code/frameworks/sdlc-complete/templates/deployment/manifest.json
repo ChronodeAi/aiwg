@@ -6,6 +6,8 @@
     "automated-quality-gate-template.md",
     "bill-of-materials-template.md",
     "ci-cd-pipeline-template.md",
+    "code-shape-gate.gitea.yml",
+    "code-shape-gate.github.yml",
     "deployment-environment-template.md",
     "deployment-plan-template.md",
     "feature-toggle-card.md",

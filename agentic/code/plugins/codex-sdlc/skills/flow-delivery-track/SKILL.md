@@ -580,7 +580,7 @@ Progress: {completed}/{total} tasks complete
 
        Gate criteria:
        - Code coverage ≥80% (or project standard)
-       - Cyclomatic complexity <10
+       - `aiwg run skill codebase-health -- --base <ref> --ci` exits 0
        - No critical linting errors
        - Public APIs documented
 

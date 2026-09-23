@@ -66,6 +66,8 @@ Operationalizes the ceiling above. Rules 1–8 forbid destructive shortcuts; Rul
 
 **When Rule 9 yields**: `human-authorization` outranks it when completing would expand scope or take an irreversible action without authorization; `scoped-reasoning` outranks it when completing would pull in out-of-scope periods/entities/operations; after 3 honest failed attempts, the Rule 6 recovery protocol applies — escalate, don't workaround.
 
+Completeness means the requested behaviour plus its tests and verification. Unrequested functionality, speculative abstractions and duplicate helpers are not completeness; adjacent structural work becomes a filed issue or a separate tidy commit.
+
 ## Test Analysis
 
 Test-failure investigation is analysis, not a binary. Categorize and fix the root cause — never suppress/delete/skip:

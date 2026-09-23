@@ -91,6 +91,7 @@ aiwg discover "phase gate check"               # → flow-gate-check
 aiwg discover "gate evaluation"                # → gate-evaluation
 aiwg discover "traceability check"             # → check-traceability
 aiwg discover "handoff checklist"              # → flow-handoff-checklist
+aiwg discover "calibrate code-shape gates"   # → codebase-health
 ```
 
 ### Team & process
@@ -156,6 +157,8 @@ All SDLC artifacts go under `.aiwg/`:
 ├── testing/       # Test strategy, plans
 ├── security/      # Threat models, security gates
 ├── deployment/    # Deployment plans, runbooks
+├── quality/       # gate.json — code-shape evaluator config (judged from the base ref)
+├── gates/         # Gate reports, abm-baseline.json
 ├── working/       # Temporary scratch (safe to delete)
 └── reports/       # Generated reports
 ```
