@@ -281,10 +281,14 @@ export function extractFrameworkSlug(srcPath) {
  * Priority: Project models.json > User ~/.config/aiwg/models.json > AIWG defaults
  */
 export function loadModelConfig(srcRoot) {
+  // An addon/framework/bundle `--source` is not the AIWG root, so resolve the
+  // shipped defaults through the corpus root; otherwise addon deploys fell
+  // through to the hardcoded fallback and deployed bare aliases (#2563).
+  const aiwgRoot = (srcRoot && resolveAiwgRoot(srcRoot)) || srcRoot;
   const locations = [
     { path: path.join(process.cwd(), 'models.json'), label: 'project' },
     { path: path.join(process.env.HOME || process.env.USERPROFILE, '.config', 'aiwg', 'models.json'), label: 'user' },
-    { path: path.join(srcRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'config', 'models.json'), label: 'AIWG defaults' }
+    { path: path.join(aiwgRoot, 'agentic', 'code', 'frameworks', 'sdlc-complete', 'config', 'models.json'), label: 'AIWG defaults' }
   ];
 
   for (const loc of locations) {
@@ -302,9 +306,9 @@ export function loadModelConfig(srcRoot) {
   // Fallback to hardcoded defaults if no config found
   return {
     claude: {
-      reasoning: { model: 'opus' },
-      coding: { model: 'sonnet' },
-      efficiency: { model: 'haiku' }
+      reasoning: { model: 'claude-opus-4-7' },
+      coding: { model: 'claude-sonnet-4-6' },
+      efficiency: { model: 'claude-haiku-4-5' }
     },
     factory: {
       reasoning: { model: 'heavy' },
@@ -312,9 +316,9 @@ export function loadModelConfig(srcRoot) {
       efficiency: { model: 'light' }
     },
     shorthand: {
-      'opus': 'claude-opus-4-6',
+      'opus': 'claude-opus-4-7',
       'sonnet': 'claude-sonnet-4-6',
-      'haiku': 'claude-haiku-4-5-20251001',
+      'haiku': 'claude-haiku-4-5',
       'inherit': 'inherit'
     },
     claude_shorthand: {
@@ -476,6 +480,41 @@ export function injectPlatformInContent(content, targetPlatform) {
  * copies destined for such providers must drop the field entirely. An
  * absent field is the documented "compatible with all platforms" default.
  */
+/**
+ * Remove the `triggers:` field from a deployed rule's frontmatter.
+ *
+ * Rules declare trigger phrases so `aiwg discover` can reach them by the
+ * question an agent asks rather than by their policy name (#2544). That is
+ * index-time metadata: no provider matches a *rule* by trigger, and the agent
+ * reading the deployed rule gains nothing from the list. Shipping it spends
+ * startup context on noise, which is exactly the budget #2540 is defending —
+ * ~2KB across the 16 rules covered today, and ~16KB if every rule adopts.
+ *
+ * Skills are untouched: several providers do match skills by trigger.
+ */
+export function stripTriggersFromContent(content) {
+  const fmMatch = content.match(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))([\s\S]*)$/);
+  if (!fmMatch) return content;
+
+  const [, open, fm, close, body] = fmMatch;
+  // Block list form:
+  //   triggers:
+  //     - "am I allowed to do this"
+  let updated = fm.replace(
+    /^triggers:[ \t]*\r?\n(?:[ \t]+-[ \t]+\S[^\r\n]*(?:\r?\n|$))*/m,
+    '',
+  );
+  // Inline form: triggers: ["a", "b"]
+  if (updated === fm) updated = fm.replace(/^triggers:[^\r\n]*(?:\r?\n|$)/m, '');
+
+  if (updated === fm) return content;
+  // An otherwise-empty frontmatter block is dropped rather than left as `---\n---`.
+  if (updated.trim().length === 0) return body.replace(/^\r?\n/, '');
+  // Removing a block mid-frontmatter can leave a trailing blank line before the
+  // closing fence; the deployed file should not carry it.
+  return open + updated.replace(/\s+$/, '') + close + body;
+}
+
 export function stripPlatformsFromContent(content) {
   const fmMatch = content.match(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))([\s\S]*)$/);
   if (!fmMatch) return content;
@@ -726,6 +765,13 @@ export function deployFiles(files, destDir, opts, transformFn) {
     // and the collision-vs-duplicate distinction)
     const srcContent = fs.readFileSync(f, 'utf8');
     let transformedContent = transformFn ? transformFn(f, srcContent, opts) : srcContent;
+
+    // Rule triggers are index metadata, not something the reading agent needs.
+    // Keyed on the source path so every provider's rule deploy gets it without
+    // eight call sites opting in, and so skill triggers are never touched (#2544).
+    if (/(?:^|[\\/])rules[\\/][^\\/]+$/.test(f)) {
+      transformedContent = stripTriggersFromContent(transformedContent);
+    }
 
     // Inject target platform into agent .md files that use platforms: [all]
     if (injectPlatform && provider && /platforms:\s*\[all\]/.test(transformedContent)) {
@@ -2405,9 +2451,137 @@ export function getAddonSkillDirs(srcRoot, excludeAddons = []) {
  */
 export function ruleEnforcementLevel(content) {
   const m = content.match(/^---\n([\s\S]*?)\n---/);
-  if (!m) return null;
-  const e = m[1].match(/^enforcement:\s*([A-Za-z]+)/m);
-  return e ? e[1].toLowerCase() : null;
+  if (m) {
+    const e = m[1].match(/^enforcement:\s*([A-Za-z]+)/m);
+    if (e) return e[1].toLowerCase();
+  }
+  // Rules without frontmatter declare the level in the body header.
+  const body = content.match(/^\*\*Enforcement Level\*\*:\s*([A-Za-z]+)/m);
+  return body ? body[1].toLowerCase() : null;
+}
+
+/**
+ * Default inline rule budget (#2562). Every inlined rule is loaded into every
+ * session AND every subagent dispatch, so the always-on set must leave room
+ * for the agent definition, the system prompt, and the task itself inside the
+ * standard 200K window. 64K tokens (~256 KB) keeps a full CRITICAL+HIGH
+ * deployment dispatchable; `AIWG_RULES_INLINE_BUDGET_TOKENS=0` disables the
+ * budget, any other value overrides it.
+ */
+export const DEFAULT_RULES_INLINE_BUDGET_TOKENS = 64_000;
+const RULE_CHARS_PER_TOKEN = 4;
+
+export function resolveRulesInlineBudgetTokens(env = process.env) {
+  const raw = env.AIWG_RULES_INLINE_BUDGET_TOKENS;
+  if (raw === undefined || raw === '') return DEFAULT_RULES_INLINE_BUDGET_TOKENS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return DEFAULT_RULES_INLINE_BUDGET_TOKENS;
+  return parsed;
+}
+
+/** Sidecar recording which rules the inline budget moved on demand (#2562). */
+export const RULE_BUDGET_SIDECAR = '.aiwg-rules-budget.json';
+
+export function readRuleBudgetSidecar(destDir) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(destDir, RULE_BUDGET_SIDECAR), 'utf8'));
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.demoted)) return null;
+    return { budgetTokens: Number(parsed.budgetTokens) || 0, demoted: parsed.demoted.map(String) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Keep a provider rule directory under the inline budget (#2562).
+ *
+ * Rules reach the directory over several deploy passes (the framework pass,
+ * then one per addon), so the budget is enforced against what is actually on
+ * disk after each pass rather than against any single pass's file list. When
+ * the inlined set exceeds the budget, the largest HIGH rules (then unlabelled
+ * ones; never CRITICAL or the indexes) are removed from the directory and
+ * recorded in the sidecar; the next pass skips re-deploying them and the
+ * on-demand index lists them as binding rules fetched via `aiwg show rule`.
+ * A changed budget invalidates the sidecar so the set is recomputed.
+ *
+ * Returns `{ demoted, removed }` — all demoted stems (sidecar state) and the
+ * stems removed by this call.
+ */
+export function reconcileInlineRuleBudget(destDir, budgetTokens = resolveRulesInlineBudgetTokens(), opts = {}) {
+  const sidecarPath = path.join(destDir, RULE_BUDGET_SIDECAR);
+  if (!budgetTokens || budgetTokens <= 0) {
+    if (fs.existsSync(sidecarPath) && !opts.dryRun) fs.rmSync(sidecarPath, { force: true });
+    return { demoted: [], removed: [] };
+  }
+  const previous = readRuleBudgetSidecar(destDir);
+  const carried = previous && previous.budgetTokens === budgetTokens ? previous.demoted : [];
+  let files = [];
+  try {
+    files = fs.readdirSync(destDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .map((entry) => path.join(destDir, entry.name))
+      .filter((file) => {
+        const base = path.basename(file);
+        if (base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md') return false;
+        try { return MANAGED_MARKER_RE.test(fs.readFileSync(file, 'utf8')); } catch { return false; }
+      });
+  } catch {
+    return { demoted: carried, removed: [] };
+  }
+  const { demoted } = applyInlineRuleBudget(files, budgetTokens);
+  const removed = demoted.map((file) => artifactStem(path.basename(file)));
+  if (!opts.dryRun) {
+    for (const file of demoted) fs.rmSync(file, { force: true });
+  }
+  const all = [...new Set([...carried, ...removed])].sort();
+  if (!opts.dryRun) {
+    if (all.length > 0) {
+      fs.writeFileSync(sidecarPath, `${JSON.stringify({ budgetTokens, demoted: all }, null, 2)}\n`, 'utf8');
+    } else if (fs.existsSync(sidecarPath)) {
+      fs.rmSync(sidecarPath, { force: true });
+    }
+  }
+  return { demoted: all, removed };
+}
+
+/**
+ * Fit an always-on rule set under the inline budget (#2562).
+ *
+ * CRITICAL rules and the generated indexes are never demoted. When the
+ * remaining set still exceeds the budget, HIGH rules are demoted largest-first
+ * (fewest rules leave the always-on set), then rules with no declared level.
+ * Demoted rules stay reachable via `aiwg show rule <name>` and are listed in
+ * RULES-ONDEMAND.md under their own heading. Returns `{ inline, demoted }`
+ * with the original order preserved for `inline`.
+ */
+export function applyInlineRuleBudget(ruleFiles, budgetTokens = resolveRulesInlineBudgetTokens()) {
+  const files = [...(ruleFiles || [])];
+  if (!budgetTokens || budgetTokens <= 0) return { inline: files, demoted: [] };
+  const sized = files.map((file) => {
+    const base = path.basename(file);
+    let content = '';
+    try { content = fs.readFileSync(file, 'utf8'); } catch { /* unreadable → keep inline */ }
+    const level = base === 'RULES-INDEX.md' || base === 'RULES-ONDEMAND.md' ? 'critical' : ruleEnforcementLevel(content);
+    return { file, tokens: Math.ceil(Buffer.byteLength(content, 'utf8') / RULE_CHARS_PER_TOKEN), level };
+  });
+  let total = sized.reduce((sum, item) => sum + item.tokens, 0);
+  if (total <= budgetTokens) return { inline: files, demoted: [] };
+  const demotable = sized
+    .filter((item) => item.level !== 'critical')
+    .sort((a, b) => {
+      const rank = (level) => (level === 'high' ? 0 : level === null ? 1 : 2);
+      return rank(a.level) - rank(b.level) || b.tokens - a.tokens;
+    });
+  const demoted = new Set();
+  for (const item of demotable) {
+    if (total <= budgetTokens) break;
+    demoted.add(item.file);
+    total -= item.tokens;
+  }
+  return {
+    inline: files.filter((file) => !demoted.has(file)),
+    demoted: files.filter((file) => demoted.has(file)),
+  };
 }
 
 /**
@@ -2505,8 +2679,9 @@ export function renderOnDemandRuleSection(onDemandFiles, opts = {}) {
  */
 export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
   const indexPath = path.join(destDir, 'RULES-ONDEMAND.md');
-  const names = onDemandRuleNames(onDemandFiles);
-  if (names.length === 0) {
+  const demotedNames = [...new Set([...onDemandRuleNames(opts.demotedFiles || []), ...(opts.demotedNames || [])])].sort();
+  const names = onDemandRuleNames(onDemandFiles, demotedNames);
+  if (names.length === 0 && demotedNames.length === 0) {
     try {
       if (fs.existsSync(indexPath) && !opts.dryRun) fs.rmSync(indexPath);
     } catch { /* ignore */ }
@@ -2526,10 +2701,25 @@ export function writeOnDemandRuleIndex(destDir, onDemandFiles, opts = {}) {
     ...names.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
     '',
   ];
+  if (demotedNames.length > 0) {
+    // HIGH rules that did not fit the inline budget (#2562). They remain
+    // binding; they are fetched on demand so subagent dispatch keeps working.
+    lines.push(
+      '## Binding rules moved on demand to fit the inline budget',
+      '',
+      'These HIGH-enforcement rules still apply in full. They are not inlined because the',
+      `always-on rule set would otherwise exceed the ${(opts.inlineBudgetTokens ?? DEFAULT_RULES_INLINE_BUDGET_TOKENS).toLocaleString()}-token inline budget`,
+      '(AIWG_RULES_INLINE_BUDGET_TOKENS) and break subagent dispatch with "Prompt is too long".',
+      'Fetch any of them before work they govern:',
+      '',
+      ...demotedNames.map((n) => `- \`${n}\` — \`aiwg show rule ${n}\``),
+      '',
+    );
+  }
   let content = lines.join('\n');
   content = addManagedMarker(content, opts.deployVersion || 'unknown', opts.deploySource || 'bundled');
   if (!opts.dryRun) fs.writeFileSync(indexPath, content, 'utf8');
-  return names.length;
+  return names.length + demotedNames.length;
 }
 
 export function getAddonRuleFiles(srcRoot, excludeAddons = []) {
@@ -3025,8 +3215,47 @@ export function cleanupOldRuleFiles(rulesDir, opts = {}) {
  * @param {boolean} opts.skipCommandsMigration - User opted out; warn about duplicates instead
  * @returns {boolean} true if any AIWG command file was removed (or would be in dry-run)
  */
+/**
+ * Commands directories already warned about this process. The stale-command
+ * condition belongs to the directory, not to each deployed framework/addon, so
+ * `aiwg use all` must not repeat it once per unit (#2541).
+ */
+const warnedCommandsDirs = new Set();
+
+/**
+ * AIWG-managed command filenames in a directory — sidecar entries or files
+ * carrying the managed marker. Operator-authored commands and current
+ * skill-command wrappers are excluded.
+ */
+function listManagedCommandFiles(commandsDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(commandsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const sidecar = readSidecarManifest(commandsDir) || { managed: {} };
+  const managed = sidecar.managed || {};
+  const names = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!entry.name.toLowerCase().endsWith('.md')) continue;
+    if (managed[entry.name]?.kind === 'skill-command') continue;
+    let owned = Object.prototype.hasOwnProperty.call(managed, entry.name);
+    if (!owned) {
+      try {
+        owned = MANAGED_MARKER_RE.test(fs.readFileSync(path.join(commandsDir, entry.name), 'utf8'));
+      } catch {
+        owned = false;
+      }
+    }
+    if (owned) names.push(entry.name);
+  }
+  return names;
+}
+
 export function migrateCommandsDirectory(commandsDir, opts = {}) {
-  const { dryRun = false, skipCommandsMigration = false, verbose = false } = opts;
+  const { dryRun = false, skipCommandsMigration = false, verbose = false, warnOnSkip = true } = opts;
 
   if (!fs.existsSync(commandsDir)) return false;
 
@@ -3034,11 +3263,27 @@ export function migrateCommandsDirectory(commandsDir, opts = {}) {
   if (entries.length === 0) return false;
 
   if (skipCommandsMigration) {
+    // Structural opt-outs (project-local addon bundles) skip the migration because
+    // it does not apply to them, not because the operator declined it. Warning
+    // there is noise, and it fired once per bundle (#2541).
+    if (!warnOnSkip) return false;
+
     const rel = path.relative(process.cwd(), commandsDir);
+    // The condition is a property of the directory, not of each deployed unit;
+    // emit it once per run no matter how many units pass through.
+    if (warnedCommandsDirs.has(commandsDir)) return false;
+    warnedCommandsDirs.add(commandsDir);
+
+    const stale = listManagedCommandFiles(commandsDir);
+    if (stale.length === 0) return false;
+
     console.warn(`\nWarning: commands migration skipped for ${rel}`);
-    console.warn('  Duplicate entries may appear in the command palette because old command');
-    console.warn('  files overlap with newly deployed skills. Remove AIWG command files manually');
-    console.warn(`  to fix: rm ${rel}/<command>.md`);
+    console.warn('  Duplicate entries may appear in the command palette because these old');
+    console.warn('  AIWG command files overlap with newly deployed skills:');
+    for (const name of stale) console.warn(`    ${path.join(rel, name)}`);
+    console.warn('  Resolve automatically by re-running without --skip-commands-migration,');
+    console.warn('  or remove them directly:');
+    console.warn(`    rm ${stale.map((name) => path.join(rel, name)).join(' ')}`);
     return false;
   }
 

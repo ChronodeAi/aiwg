@@ -417,4 +417,4 @@ references:
     - "#98"
   related:
     - "@agentic/code/frameworks/sdlc-complete/schemas/research/quality-assessment.yaml"
-    - "@agentic/code/addons/ralph/schemas/actionable-feedback.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml"

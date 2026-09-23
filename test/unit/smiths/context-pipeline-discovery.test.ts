@@ -189,10 +189,12 @@ describe('provider policy', () => {
     expect(shouldEmitContextFiles('pi')).toBe(true);
     expect(shouldEmitContextFiles('omp')).toBe(true);
     expect(shouldEmitContextFiles('deepseek-harness')).toBe(true);
+    expect(shouldEmitContextFiles('grokbot')).toBe(true);
+    expect(shouldEmitContextFiles('grok-build')).toBe(true);
     expect(shouldEmitContextFiles('openhuman')).toBe(false);
     expect([...AGENTS_MD_PROVIDERS].sort()).toEqual([
       'antigravity', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'dsh',
-      'factory', 'hermes', 'opencode', 'pi', 'warp', 'windsurf',
+      'factory', 'grok-build', 'grokbot', 'hermes', 'opencode', 'pi', 'warp', 'windsurf',
     ].sort());
   });
 

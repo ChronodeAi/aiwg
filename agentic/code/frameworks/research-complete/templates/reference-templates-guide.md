@@ -85,6 +85,8 @@ media template, then cross-reference the two REFs.
 | `pdf_hash` | yes when PDF exists | string | SHA-256 of the PDF — the load-bearing integrity check |
 | `affiliation-primary` | optional | string or PROF-O ID | Primary author's institution |
 | `status` | optional | enum | `placeholder`, `pending-acquisition`, `acquisition-deficit` for partial inductions |
+| `acquisition-obstacle` | required when status is `pending-acquisition`/`acquisition-deficit` | object | `state` (`not-attempted`, `credential-required`, `structurally-unobtainable`, `artifact-absent`), `detail` (the specific obstacle), `paths-tried` (each path and what it returned). A bare boolean cannot be triaged |
+| `bibliography` | recommended on citation sidecars | object | `source` (`bbl`, `inline-thebibliography`, `pdf-reference-list`), `count`, `count-method`, optional `unique-count`. Counts come from the compiled bibliography, never `.bib` size or a sum of artifacts |
 | `transcript_path` | media | string | Path to timestamped transcript sidecar |
 | `transcript_hash` | media | string | SHA-256 of canonical transcript payload |
 | `media_storage.policy` | media | enum | `copied`, `lfs`, `object-storage`, or `hash-only` |

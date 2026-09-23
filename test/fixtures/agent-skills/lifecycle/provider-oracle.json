@@ -94,6 +94,24 @@
       "descriptionSuffix": "Use when relevant to the task."
     },
     {
+      "id": "grokbot",
+      "location": "configured",
+      "root": "",
+      "status": "native",
+      "outcome": "deployed",
+      "validator": "pass",
+      "resources": "exact"
+    },
+    {
+      "id": "grok-build",
+      "location": "project",
+      "root": ".grok/skills",
+      "status": "native",
+      "outcome": "deployed",
+      "validator": "pass",
+      "resources": "exact"
+    },
+    {
       "id": "hermes",
       "location": "home",
       "root": ".hermes/skills",

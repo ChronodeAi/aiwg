@@ -22,7 +22,7 @@ import {
 // Import the functions we need to test
 // We test the provider mapModel functions directly since deploy-agents.mjs
 // is a script entry point (harder to unit test)
-import { mapModel as claudeMapModel } from '../../../tools/agents/providers/claude.mjs';
+import { mapModel as claudeMapModel, transformAgent as claudeTransformAgent, pinBareModelAlias } from '../../../tools/agents/providers/claude.mjs';
 import { mapModel as factoryMapModel } from '../../../tools/agents/providers/factory.mjs';
 import { loadModelConfig } from '../../../tools/agents/providers/base.mjs';
 
@@ -173,10 +173,14 @@ describe('loadModelConfig', () => {
     expect(config.factory.efficiency).toBeDefined();
   });
 
-  it('should keep Claude Code sonnet on the non-1M alias by default', () => {
+  it('pins Claude Code tiers to standard-context variants by default, keeping 1M an explicit opt-in (#2563)', () => {
     const repoRoot = process.cwd();
     const config = loadModelConfig(repoRoot);
-    expect(config.claude.coding.model).toBe('sonnet');
+    // A bare alias inherits a 1M-context parent and subagent dispatch then
+    // hits the usage-credit gate (#1442); the defaults are pinned variants.
+    expect(config.claude.reasoning.model).toBe('claude-opus-4-7');
+    expect(config.claude.coding.model).toBe('claude-sonnet-4-6');
+    expect(config.claude.efficiency.model).toBe('claude-haiku-4-5');
     expect(config.claude_shorthand.sonnet).toBe('sonnet');
     expect(config.claude_shorthand['sonnet-1m']).toBe('sonnet[1m]');
     expect(config.shorthand.sonnet).toBe('claude-sonnet-4-6');
@@ -231,5 +235,36 @@ describe('Blanket --model flag behavior', () => {
     expect(cfg.reasoningModel).toBe('opus');
     expect(cfg.codingModel).toBe('haiku');
     expect(cfg.efficiencyModel).toBe('inherit');
+  });
+});
+
+describe('Claude default alias compilation (#2563)', () => {
+  const modelsConfig = {
+    claude: {
+      reasoning: { model: 'claude-opus-4-7' },
+      coding: { model: 'claude-sonnet-4-6' },
+      efficiency: { model: 'claude-haiku-4-5' },
+    },
+  };
+  const agent = (model: string) => `---\nname: x\ndescription: y\nmodel: ${model}\ntools: Read\n---\n\n# X\n`;
+
+  it('pins bare aliases from the models.json claude tiers when no override is given', () => {
+    expect(claudeTransformAgent('x.md', agent('sonnet'), { modelsConfig })).toContain('model: claude-sonnet-4-6');
+    expect(claudeTransformAgent('x.md', agent('opus'), { modelsConfig })).toContain('model: claude-opus-4-7');
+    expect(claudeTransformAgent('x.md', agent('haiku'), { modelsConfig })).toContain('model: claude-haiku-4-5');
+    expect(claudeTransformAgent('x.md', agent('Sonnet'), { modelsConfig })).toContain('model: claude-sonnet-4-6');
+  });
+
+  it('leaves pinned ids, inherit, 1M opt-ins, and placeholders untouched', () => {
+    for (const value of ['claude-sonnet-4-6', 'inherit', 'sonnet[1m]', 'opus-1m', '<recommended-model>', 'claude-opus-4-7[1m]']) {
+      expect(claudeTransformAgent('x.md', agent(value), { modelsConfig })).toBe(agent(value));
+    }
+    expect(claudeTransformAgent('x.md', '# no frontmatter\nmodel: sonnet\n', { modelsConfig })).toBe('# no frontmatter\nmodel: sonnet\n');
+  });
+
+  it('does nothing without a claude tier block and honors explicit overrides first', () => {
+    expect(claudeTransformAgent('x.md', agent('sonnet'), {})).toBe(agent('sonnet'));
+    expect(claudeTransformAgent('x.md', agent('sonnet'), { modelsConfig, codingModel: 'my-sonnet' })).toContain('model: my-sonnet');
+    expect(pinBareModelAlias(agent('sonnet'), { coding: 'sonnet' })).toBe(agent('sonnet'));
   });
 });

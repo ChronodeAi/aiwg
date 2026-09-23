@@ -1,7 +1,30 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { fmtId } from '../util';
+import { DesktopApiError, desktopCapability } from '../desktop-api';
+import { isDesktopUuid } from '../../../bridge/src/desktop-contract.mjs';
+import { unsupportedReason } from '../useDesktopSession';
 import type { BootstrapTrustPosture, Instance, SandboxRuntimeCapabilityId } from '../types';
+
+/** Open Desktop readiness per instance (#2547): decided by the backend capability only. */
+interface DesktopReadiness { enabled: boolean; reason?: string; incarnation?: string; checkedAt: number }
+const DESKTOP_CAPABILITY_TTL_MS = 30_000;
+
+async function desktopReadiness(instanceId: string): Promise<DesktopReadiness> {
+  const checkedAt = Date.now();
+  if (!isDesktopUuid(instanceId)) return { enabled: false, reason: 'Desktop requires a gateway instance id', checkedAt };
+  try {
+    const capability = await desktopCapability(instanceId);
+    if ('state' in capability && capability.state === 'unsupported') return { enabled: false, reason: unsupportedReason(capability.reason), checkedAt };
+    if (!('supported' in capability)) return { enabled: false, reason: 'Desktop readiness unknown', checkedAt };
+    if (!capability.supported) return { enabled: false, reason: capability.reason_codes.join(', ') || 'This instance does not support desktop assistance', incarnation: capability.incarnation, checkedAt };
+    if (capability.readiness === 'ready') return { enabled: true, incarnation: capability.incarnation, checkedAt };
+    if (capability.readiness === 'not_ready') return { enabled: false, reason: ['Desktop is still getting ready', ...capability.reason_codes].join(': '), incarnation: capability.incarnation, checkedAt };
+    return { enabled: false, reason: 'Desktop readiness unknown', incarnation: capability.incarnation, checkedAt };
+  } catch (error) {
+    return { enabled: false, reason: error instanceof DesktopApiError ? error.message : 'Desktop assistance is temporarily unavailable.', checkedAt };
+  }
+}
 
 interface Inv { count: number; fetched_at: string; instances: Instance[]; bootstrap_trust?: BootstrapTrustPosture }
 interface OperationStatus {
@@ -20,15 +43,38 @@ interface FastStartAction {
   reason?: string;
 }
 
-export function Inventory({ onStartSession, onLaunchInstance, refreshTick = 0, refreshMs = 5_000 }: { onStartSession?: (instanceId?: string) => void; onLaunchInstance?: () => void; refreshTick?: number; refreshMs?: number }) {
+export function Inventory({ onStartSession, onLaunchInstance, onOpenDesktop, refreshTick = 0, refreshMs = 5_000 }: { onStartSession?: (instanceId?: string) => void; onLaunchInstance?: () => void; onOpenDesktop?: (instanceId: string) => void; refreshTick?: number; refreshMs?: number }) {
   const [data, setData] = useState<Inv | null>(null);
   const [err, setErr] = useState('');
   const [actionErr, setActionErr] = useState('');
   const [actionMsg, setActionMsg] = useState('');
+  const [desktopReady, setDesktopReady] = useState<Record<string, DesktopReadiness>>({});
+  const desktopReadyRef = useRef<Record<string, DesktopReadiness>>({});
+  const desktopEnabled = typeof onOpenDesktop === 'function';
+
+  // Refresh Open Desktop readiness for running instances on the inventory poll,
+  // reusing a capability answer for 30 s per instance. A failed lookup only
+  // disables the button with its reason; it never breaks the inventory poll.
+  const refreshDesktopReadiness = useCallback((instances: Instance[]) => {
+    if (!desktopEnabled) return;
+    const now = Date.now();
+    const running = instances.filter((i) => i.state === 'running');
+    const stale = running.filter((i) => {
+      const cached = desktopReadyRef.current[i.id];
+      return !cached || now - cached.checkedAt >= DESKTOP_CAPABILITY_TTL_MS;
+    });
+    if (!stale.length) return;
+    void Promise.all(stale.map(async (i) => [i.id, await desktopReadiness(i.id)] as const)).then((entries) => {
+      const next = { ...desktopReadyRef.current };
+      for (const [id, readiness] of entries) next[id] = readiness;
+      desktopReadyRef.current = next;
+      setDesktopReady(next);
+    });
+  }, [desktopEnabled]);
 
   const load = useCallback(() => {
-    api<Inv>('/api/inventory').then((d) => { setData(d); setErr(''); }).catch((e) => setErr((e as Error).message));
-  }, []);
+    api<Inv>('/api/inventory').then((d) => { setData(d); setErr(''); refreshDesktopReadiness(d.instances); }).catch((e) => setErr((e as Error).message));
+  }, [refreshDesktopReadiness]);
   // Poll (and react to the app-wide refreshTick) so instances launched after this
   // tab first mounted appear without a manual reload — matches the other data tabs.
   useEffect(() => {
@@ -208,6 +254,21 @@ export function Inventory({ onStartSession, onLaunchInstance, refreshTick = 0, r
                     Session
                   </button>
                 )}{' '}
+                {i.state === 'running' && onOpenDesktop && (() => {
+                  const readiness = desktopReady[i.id];
+                  const enabled = readiness?.enabled === true;
+                  const title = readiness ? readiness.reason : 'Checking desktop capability…';
+                  return (
+                    <button
+                      aria-label={`Open desktop for ${fmtId(i.id)}`}
+                      disabled={!enabled}
+                      title={enabled ? 'Open the guest desktop panel for this instance.' : title}
+                      onClick={() => onOpenDesktop(i.id)}
+                    >
+                      Open Desktop
+                    </button>
+                  );
+                })()}{' '}
                 {reconnectable && (
                   <button
                     aria-label={`Reconnect agent for ${fmtId(i.id)}`}

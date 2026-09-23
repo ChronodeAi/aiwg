@@ -128,7 +128,7 @@ describe('global install native lifecycle-script policy', () => {
       pack = spawnSync(
         process.platform === 'win32' ? 'npm.cmd' : 'npm',
         ['pack', '--ignore-scripts', '--json', '--pack-destination', tempRoot],
-        { cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+        { timeout: 60_000, cwd: PROJECT_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
       );
     } finally {
       await releasePackLock();
@@ -226,7 +226,7 @@ describe('global install native lifecycle-script policy', () => {
         `typeof api.resolveWebRelease !== 'function' || ` +
         `typeof api.fetchVerifiedRawResource !== 'function') process.exit(2);` +
         `process.exit(0);`,
-    ], { encoding: 'utf8' });
+    ], { timeout: 60_000, encoding: 'utf8' });
     expect(probe.status, probe.stderr).toBe(0);
   });
 

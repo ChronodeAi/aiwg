@@ -85,7 +85,7 @@ function expectImportError(
 }
 
 function git(args: string[], cwd: string): string {
-  const result = spawnSync('git', args, {
+  const result = spawnSync('git', args, { timeout: 60_000,
     cwd,
     encoding: 'utf8',
     env: {

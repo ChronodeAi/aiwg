@@ -85,6 +85,8 @@ function parseArgs(args: string[]): LintOptions {
       options.recursive = true;
     } else if (arg === '--no-recursive') {
       options.recursive = false;
+    } else if (arg === '--no-gitignore') {
+      options.respectGitignore = false;
     } else if (!arg.startsWith('-') && !options.target) {
       options.target = arg;
     }
@@ -131,7 +133,7 @@ export async function main(args: string[]): Promise<void> {
 
   // Require a target for actual linting
   if (!options.target) {
-    console.error('Usage: aiwg lint <target> [--ruleset <name>] [--format full|summary|json] [--ci] [--fail-on error|warn|info]');
+    console.error('Usage: aiwg lint <target> [--ruleset <name>] [--format full|summary|json] [--ci] [--fail-on error|warn|info] [--no-gitignore]');
     console.error('       aiwg lint --list-rulesets');
     console.error('       aiwg lint --list-rules <ruleset>');
     process.exitCode = 1;
@@ -173,6 +175,7 @@ export async function main(args: string[]): Promise<void> {
   const result = await runLint(targetDir, selectedRulesets, {
     recursive: options.recursive,
     failOn: options.failOn,
+    respectGitignore: options.respectGitignore ?? true,
   });
 
   // Output results

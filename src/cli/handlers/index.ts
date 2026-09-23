@@ -142,6 +142,8 @@ import { evidenceHandler } from './evidence.js';
 import { artifactVerifyHandler } from './artifact-verify.js';
 import { writingHandler } from './writing.js';
 import { writerProfileHandler } from './writer-profile.js';
+import { botHandoffHandler } from './bot-handoff.js';
+import { buildVerifyHandler } from './build-verify.js';
 import { outputModeHandler } from './output-mode.js';
 import { installationHandler } from './installation.js';
 import { uhpHandler } from './uhp.js';
@@ -185,6 +187,8 @@ export {
   artifactVerifyHandler,
   outputModeHandler,
   writerProfileHandler,
+  botHandoffHandler,
+  buildVerifyHandler,
   writingHandler,
   schemaHandler,
   datasetHandler,
@@ -377,6 +381,8 @@ export const allHandlers: CommandHandler[] = [
   artifactVerifyHandler,
   outputModeHandler,
   writerProfileHandler,
+  botHandoffHandler,
+  buildVerifyHandler,
   writingHandler,
   schemaHandler,
   datasetHandler,

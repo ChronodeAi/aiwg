@@ -182,7 +182,7 @@ describe('source graph index', () => {
     for (const tool of optionalTools) {
       const bin = (() => {
       try {
-          return execFileSync('which', [tool], { encoding: 'utf-8' }).trim();
+          return execFileSync('which', [tool], { timeout: 60_000, encoding: 'utf-8' }).trim();
       } catch {
         return '';
       }
@@ -192,7 +192,7 @@ describe('source graph index', () => {
         continue;
       }
       const args = tool === 'madge' ? ['--json', 'src'] : ['--output-type', 'json', 'src'];
-      const output = execFileSync(bin, args, { cwd: tmpDir, encoding: 'utf-8' });
+      const output = execFileSync(bin, args, { timeout: 60_000, cwd: tmpDir, encoding: 'utf-8' });
       expect(() => JSON.parse(output)).not.toThrow();
     }
   });

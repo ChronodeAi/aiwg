@@ -1,5 +1,10 @@
 ---
 enforcement: high
+triggers:
+  - "how many subagents should I spawn"
+  - "should I delegate this"
+  - "how do I split this work"
+  - "parallel agents"
 ---
 
 # Subagent Scoping Rules

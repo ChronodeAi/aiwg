@@ -1,0 +1,48 @@
+[
+  {
+    "uuid": "web-conversation-1",
+    "name": "Refactor the auth module",
+    "created_at": "2026-08-01T09:00:00.000Z",
+    "updated_at": "2026-08-01T09:05:00.000Z",
+    "account": { "uuid": "account-synthetic" },
+    "futureConversationField": "preserved",
+    "chat_messages": [
+      {
+        "uuid": "web-msg-1",
+        "sender": "human",
+        "text": "Can you review src/auth/token.ts?",
+        "created_at": "2026-08-01T09:00:00.000Z",
+        "futureMessageField": "preserved"
+      },
+      {
+        "uuid": "web-msg-2",
+        "sender": "assistant",
+        "created_at": "2026-08-01T09:01:00.000Z",
+        "content": [
+          { "type": "text", "text": "I reviewed the token refresh logic." }
+        ],
+        "attachments": [
+          {
+            "file_name": "token.ts",
+            "file_type": "text/typescript",
+            "file_size": 2048,
+            "extracted_content": "export function refreshToken() { /* ... */ }"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "uuid": "web-conversation-2",
+    "name": "Second conversation in the same export",
+    "created_at": "2026-08-02T09:00:00.000Z",
+    "chat_messages": [
+      {
+        "uuid": "web-msg-3",
+        "sender": "human",
+        "text": "Unrelated question in a second conversation.",
+        "created_at": "2026-08-02T09:00:00.000Z"
+      }
+    ]
+  }
+]

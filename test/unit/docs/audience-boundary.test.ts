@@ -99,7 +99,7 @@ describe('documentation audience boundary', () => {
 
   it('publishes provider quickstarts as prompt-first journeys', () => {
     const output = path.join(outputRoot, 'prompt-first-provider-docs');
-    execFileSync(process.execPath, ['tools/docs/build-public-source.mjs', output], {
+    execFileSync(process.execPath, ['tools/docs/build-public-source.mjs', output], { timeout: 60_000,
       cwd: root,
       stdio: 'pipe',
     });
@@ -118,7 +118,7 @@ describe('documentation audience boundary', () => {
 
   it('publishes user CLI landing pages without exact agent references', () => {
     const output = path.join(outputRoot, 'public-docs-source');
-    execFileSync(process.execPath, ['tools/docs/build-public-source.mjs', output], {
+    execFileSync(process.execPath, ['tools/docs/build-public-source.mjs', output], { timeout: 60_000,
       cwd: root,
       stdio: 'pipe',
     });
@@ -148,7 +148,7 @@ describe('documentation audience boundary', () => {
 
   it('keeps all onboarding surfaces classified and removes command-first public entry points', () => {
     const output = path.join(outputRoot, 'docs-audience-audit.json');
-    execFileSync(process.execPath, ['tools/docs/audit-audiences.mjs', output], {
+    execFileSync(process.execPath, ['tools/docs/audit-audiences.mjs', output], { timeout: 60_000,
       cwd: root,
       stdio: 'pipe',
     });
@@ -173,12 +173,12 @@ describe('documentation audience boundary', () => {
 
   it('labels every retained public operator-command page in staged output', () => {
     const output = path.join(outputRoot, 'public-command-guidance');
-    execFileSync(process.execPath, ['tools/docs/build-public-source.mjs', output], {
+    execFileSync(process.execPath, ['tools/docs/build-public-source.mjs', output], { timeout: 60_000,
       cwd: root,
       stdio: 'pipe',
     });
     const auditOutput = path.join(outputRoot, 'public-command-audit.json');
-    execFileSync(process.execPath, ['tools/docs/audit-audiences.mjs', auditOutput], {
+    execFileSync(process.execPath, ['tools/docs/audit-audiences.mjs', auditOutput], { timeout: 60_000,
       cwd: root,
       stdio: 'pipe',
     });

@@ -17,6 +17,27 @@ export interface WatchEvent {
 
 export type WatchCallback = (event: WatchEvent) => Promise<void>;
 
+/**
+ * What the watcher observed about its own lifecycle. A caller that saw no
+ * events can tell whether chokidar ever reported ready, whether every target
+ * was armed when `start()` resolved, and what errors the watch raised (#2553).
+ */
+export interface WatchDiagnostics {
+  /** chokidar emitted `ready` (initial scan complete). */
+  ready: boolean;
+  readyAt?: Date;
+  /** Every requested target was present in `getWatched()` when `start()` resolved. */
+  armed: boolean;
+  /** Requested targets that were not armed when `start()` resolved. */
+  missingTargets: string[];
+  /** Most recent chokidar `error` messages, oldest first (bounded). */
+  errors: string[];
+  /** Live `getWatched()` snapshot, or `{}` when no watcher exists. */
+  watched: Record<string, string[]>;
+}
+
+const MAX_RECORDED_ERRORS = 20;
+
 export interface WatchStats {
   filesWatched: number;
   eventsProcessed: number;
@@ -35,6 +56,9 @@ export class WatchService {
   private debounceMs = 500;
   private stats: WatchStats;
   private isRunning = false;
+  private readyAt: Date | undefined;
+  private missingTargets: string[] = [];
+  private recordedErrors: string[] = [];
 
   constructor() {
     this.stats = {
@@ -73,15 +97,22 @@ export class WatchService {
 
     this.watcher.on('error', (error) => {
       this.stats.errors++;
+      this.recordError(error);
       console.error('Watch error:', error);
     });
 
     this.isRunning = true;
+    this.readyAt = undefined;
+    this.missingTargets = [];
+    this.recordedErrors = [];
 
     // Wait for ready
     await new Promise<void>((resolve) => {
       if (this.watcher) {
-        this.watcher.on('ready', () => resolve());
+        this.watcher.on('ready', () => {
+          this.readyAt = new Date();
+          resolve();
+        });
       } else {
         resolve();
       }
@@ -94,6 +125,7 @@ export class WatchService {
     // Resolving `start()` only once every target appears in `getWatched()`
     // makes readiness mean armed.
     await this.waitUntilArmed(patterns);
+    this.missingTargets = this.unarmedTargets(patterns);
 
     const watched = this.watcher?.getWatched() ?? {};
     this.stats.filesWatched = Object.values(watched).reduce(
@@ -128,8 +160,13 @@ export class WatchService {
 
   /** True when chokidar reports a watch covering every requested target. */
   private allTargetsArmed(patterns: string[]): boolean {
+    return this.unarmedTargets(patterns).length === 0;
+  }
+
+  /** Requested targets that `getWatched()` does not yet cover. */
+  private unarmedTargets(patterns: string[]): string[] {
     if (!this.watcher) {
-      return true;
+      return [];
     }
 
     const watched = this.watcher.getWatched();
@@ -147,7 +184,17 @@ export class WatchService {
 
     // A directory target is keyed directly; a file target is listed under its
     // parent. Either spelling resolves into the same set.
-    return patterns.every((pattern) => armed.has(path.resolve(pattern)));
+    return patterns
+      .map((pattern) => path.resolve(pattern))
+      .filter((target) => !armed.has(target));
+  }
+
+  private recordError(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.recordedErrors.push(message);
+    if (this.recordedErrors.length > MAX_RECORDED_ERRORS) {
+      this.recordedErrors.splice(0, this.recordedErrors.length - MAX_RECORDED_ERRORS);
+    }
   }
 
   /**
@@ -205,6 +252,22 @@ export class WatchService {
    */
   getStats(): WatchStats {
     return { ...this.stats };
+  }
+
+  /**
+   * What the watcher has observed about its own lifecycle. Intended for the
+   * failure path: a caller that waited for an event that never came reports
+   * this instead of a bare "no events" (#2553).
+   */
+  getDiagnostics(): WatchDiagnostics {
+    return {
+      ready: this.readyAt !== undefined,
+      readyAt: this.readyAt,
+      armed: this.missingTargets.length === 0,
+      missingTargets: [...this.missingTargets],
+      errors: [...this.recordedErrors],
+      watched: this.watcher ? this.watcher.getWatched() : {},
+    };
   }
 
   /**

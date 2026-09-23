@@ -92,7 +92,7 @@ not silently install extension dependencies or modify Pi package settings.
 | Role/agent | Agent Skill | Declarative projection |
 | Tool policy | `tool_call` extension hook | Deny is blocking and reported |
 | Headless worker | `--mode json --no-approve` | Strict JSONL stdout; diagnostics on stderr |
-| Cancellation | RPC `abort`, then bounded TERM/KILL | Waits before escalation |
+| Cancellation | Bounded TERM/KILL; stdin closed | `--mode json` has no stdin command channel and blocks on an open pipe until EOF, so no `abort` frame is sent (#2550) |
 | MCP | None in Pi core | Unsupported unless an operator separately installs and verifies a compatible extension |
 | TUI APIs | `ctx.hasUI` guard | Never prompts or hangs headless |
 
@@ -134,7 +134,11 @@ major versions, malformed/truncated input, duplicates, and resource-limit
 violations fail closed. See [Pi session acquisition](../../providers/pi-sessions.md).
 
 Pi offers default print mode, `--mode json` event output, and bidirectional
-`--mode rpc`. RPC clients must parse stdout strictly as one JSON object per
+`--mode rpc`. Only `--mode rpc` reads commands (`prompt`, `abort`, `get_state`)
+from stdin; `--mode json` treats a non-TTY stdin as piped prompt text and
+waits for EOF before starting, so a headless json-mode child must be spawned
+with stdin closed (verified against 0.85.0 `dist/main.js` `readPipedStdin`,
+#2550). RPC clients must parse stdout strictly as one JSON object per
 line and keep stderr separate. Do not infer final completion from `agent_end`:
 `agent_settled` means no retry, compaction retry, or queued continuation
 remains. Pi specifies those semantics in the [RPC
@@ -170,6 +174,12 @@ you intend to remove. AIWG owns only receipted outputs. Removal preserves
 `.pi/npm/`, `.pi/git/`, session files, credentials, and trust decisions.
 
 ## Diagnostics
+
+The external agent-loop adapter accepts only the qualified Pi versions listed
+in `PI_SUPPORTED_VERSIONS` (`tools/ralph-external/lib/pi-adapter.mjs`,
+currently `0.85.0`); any other `pi --version` makes the provider unavailable
+until the new release is qualified with `npm run smoke:pi:live` and the range
+is updated.
 
 ```bash
 pi --version

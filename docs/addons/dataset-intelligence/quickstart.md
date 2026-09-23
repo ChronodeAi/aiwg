@@ -88,9 +88,8 @@ enumeration, canonical/derived distinctions, holds, tombstones, bulk threshold,
 and rollback limits. Nothing is deleted by an agent or skill. The shared service
 performs only the approved operation and returns reconciliation evidence.
 
-Local JSONL/CSV adapters are stable and the checked-in local orchestration,
-offline, provenance, and standards cells are qualified. Pre-stable migration,
-Fortemi Core parity, and live Fortemi Server persistence remain pending. See
-the [task guide support matrix](task-guide.md#support-status) and consult `aiwg
-dataset --help` for the installed action surface. The aggregate conformance
-receipt is not stable-eligible while those three cells remain pending.
+Local file, directory, JSONL, and CSV adapters are stable. Checked-in local
+orchestration, offline, provenance, standards, and `v2026.9.17` migration cells
+are qualified. Fortemi Core and live Fortemi Server evidence remain
+mode-dependent. See the [task guide support matrix](task-guide.md#support-status)
+and consult `aiwg dataset --help` for the installed action surface.

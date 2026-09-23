@@ -105,10 +105,11 @@ describe('helpHandler.execute', () => {
     expect(allGroups).toMatch(/FRAMEWORK/i);
     expect(allGroups).toMatch(/WORKSPACE/i);
     expect(allGroups).toMatch(/MAINTENANCE/i);
-    expect(allGroups).toMatch(/RALPH/i);
+    // Loop category is mid-rename RALPH LOOP -> AGENT LOOP (#705, #558); accept either.
+    expect(allGroups).toMatch(/(RALPH|AGENT) LOOP/i);
   });
 
-  it('includes key commands in output (use, doctor, version, ralph)', async () => {
+  it('includes key commands in output (use, doctor, version, agent-loop)', async () => {
     const output: string[] = [];
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation((s) => output.push(String(s ?? '')));
     await helpHandler.execute(makeCtx());
@@ -118,7 +119,7 @@ describe('helpHandler.execute', () => {
     expect(combined).toMatch(/use/);
     expect(combined).toMatch(/doctor/);
     expect(combined).toMatch(/version/);
-    expect(combined).toMatch(/ralph/);
+    expect(combined).toMatch(/(ralph|agent-loop)-status/);
     expect(combined).toMatch(/sessions <command>.*normalized session catalog/);
   });
 

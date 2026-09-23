@@ -65,7 +65,7 @@ When invoked, perform the executable feedback loop per REF-013 MetaGPT:
 ## References
 
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md - Executable feedback rules
-- @$AIWG_ROOT/agentic/code/addons/ralph/docs/executable-feedback-guide.md - Implementation guide
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/debug-memory.yaml - Debug memory schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/docs/executable-feedback-guide.md - Implementation guide
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/debug-memory.yaml - Debug memory schema
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/schemas/flows/executable-feedback.yaml - Workflow schema
 - @.aiwg/research/findings/REF-013-metagpt.md - Research foundation

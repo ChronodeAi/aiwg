@@ -58,6 +58,18 @@ export interface UserScopeProviderDeploy extends DeployedArtifactCounts {
  * never set this — it exists so the test suite can avoid clobbering the real
  * `~/.aiwg/installed.json` on the developer's machine.
  */
+/** True when AIWG_USER_REGISTRY_PATH redirects away from ~/.aiwg/installed.json. */
+export function isUserRegistryPathOverrideActive(): boolean {
+  return Boolean(process.env.AIWG_USER_REGISTRY_PATH?.trim());
+}
+
+/**
+ * Operator-facing warning for a leftover test override (#246).
+ * Docs mark AIWG_USER_REGISTRY_PATH as test-only; doctor/status/use must surface it.
+ */
+export const USER_REGISTRY_PATH_OVERRIDE_WARN =
+  'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json';
+
 export function userRegistryPath(): string {
   const override = process.env.AIWG_USER_REGISTRY_PATH;
   if (override) return override;

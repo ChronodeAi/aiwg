@@ -605,4 +605,4 @@ This orchestration succeeds when:
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/agents/ — Agent catalog for agent dispatch
 - @$AIWG_ROOT/src/cli/handlers/sdlc-accelerate.ts — Command handler
 - @$AIWG_ROOT/docs/cli-reference.md — CLI reference entry for this command
-- @$AIWG_ROOT/agentic/code/addons/ralph/skills/ralph/SKILL.md — Agent loop pattern (used in doc generation refinement)
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/skills/ralph/SKILL.md — Agent loop pattern (used in doc generation refinement)

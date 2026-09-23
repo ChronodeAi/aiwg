@@ -100,6 +100,28 @@ Review code.
     expect(formatStartupContext(result)).toContain('Startup context budget');
   });
 
+  it('includes ancestor directories CLAUDE.md and rules, which Claude Code also inlines (#2562)', async () => {
+    const workspace = await makeTemporaryRoot('aiwg-startup-ancestor-');
+    await write(workspace, 'CLAUDE.md', 'w'.repeat(4000));
+    await write(workspace, '.claude/rules/workspace-rule.md', 'r'.repeat(40000));
+    const project = join(workspace, 'nested', 'project');
+    await mkdir(project, { recursive: true });
+    await write(project, '.claude/rules/project-rule.md', 'p'.repeat(40000));
+
+    const result = await scanStartupContext({ rootDir: project });
+    const labels = result.components.map((c) => c.label);
+    expect(labels).toContain('.claude/rules/*.md');
+    expect(labels).toContain('../../.claude/rules/*.md');
+    expect(labels).toContain('../../CLAUDE.md');
+    // 84K chars / 4 = 21K tokens, 11K of which come from the ancestor.
+    expect(result.totalTokens).toBe(21000);
+    expect(result.ancestorTokens).toBe(11000);
+
+    const projectOnly = await scanStartupContext({ rootDir: project, includeAncestors: false });
+    expect(projectOnly.totalTokens).toBe(10000);
+    expect(projectOnly.ancestorTokens).toBe(0);
+  });
+
   it('flags startup context that exceeds the standard Sonnet budget', async () => {
     const root = await makeTemporaryRoot('aiwg-startup-over-');
     // ~210k tokens of rules — over the 200k standard window.

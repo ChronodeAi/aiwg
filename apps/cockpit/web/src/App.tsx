@@ -8,6 +8,7 @@ import { Inventory } from './components/Inventory';
 import { Running } from './components/Running';
 import { Missions } from './components/Missions';
 import { Sessions } from './components/Sessions';
+import { Desktop } from './components/Desktop';
 import { Approvals } from './components/Approvals';
 import { Explore } from './components/Explore';
 import { Library } from './components/Library';
@@ -33,7 +34,16 @@ const TABS = [
   { id: 'memory', label: 'Memory' },
   { id: 'actions', label: 'Actions' },
 ] as const;
-type TabId = (typeof TABS)[number]['id'];
+// Desktop is a runtime-gated tab (#2547): listed only when the Bridge reports
+// both the identity verifier and the desktop backend configured.
+const DESKTOP_TAB = { id: 'desktop', label: 'Desktop' } as const;
+type TabId = (typeof TABS)[number]['id'] | typeof DESKTOP_TAB['id'];
+const ALL_TABS: ReadonlyArray<{ id: TabId; label: string }> = [...TABS, DESKTOP_TAB];
+function visibleTabs(desktopEnabled: boolean): ReadonlyArray<{ id: TabId; label: string }> {
+  if (!desktopEnabled) return TABS;
+  const index = TABS.findIndex((t) => t.id === 'sessions') + 1;
+  return [...TABS.slice(0, index), DESKTOP_TAB, ...TABS.slice(index)];
+}
 interface ChromeStatus {
   executor: string;
   instances: number;
@@ -50,8 +60,12 @@ const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
 export function App() {
   const [tab, setTab] = useState<TabId>(() => {
     const hash = window.location.hash.replace(/^#/, '');
-    return TABS.some((t) => t.id === hash) ? hash as TabId : 'welcome';
+    return ALL_TABS.some((t) => t.id === hash) ? hash as TabId : 'welcome';
   });
+  const [desktopEnabled, setDesktopEnabled] = useState<boolean>(() => import.meta.env.VITE_COCKPIT_DESKTOP === '1');
+  const [desktopInstanceId, setDesktopInstanceId] = useState('');
+  const tabs = visibleTabs(desktopEnabled);
+  const requestOpenDesktop = (instanceId: string) => { setDesktopInstanceId(instanceId); setTab('desktop'); };
   const session = useSession();
   const sessionRegistry = useSessionRegistry();
   const registryResponses = registryResponseNeededItems(sessionRegistry).filter((response) => response.id !== `pty:${sessionRegistry.activeKey}`);
@@ -78,10 +92,11 @@ export function App() {
         // enrichment that a real executor may not expose (#1638) — degrade each
         // independently so the header stays live instead of "Bridge checking".
         const [health, inv] = await Promise.all([
-          api<{ executor_url: string }>('/api/health'),
+          api<{ executor_url: string; desktop?: { configured?: boolean } }>('/api/health'),
           api<{ instances: Instance[] }>('/api/inventory'),
         ]);
         if (cancelled) return;
+        if (health.desktop?.configured === true) setDesktopEnabled(true);
         const [run, apr] = await Promise.all([
           api<{ count: number }>('/api/running').catch(() => ({ count: 0 })),
           api<{ approvals: Approval[] }>('/api/approvals?status=pending').catch(() => ({ approvals: [] as Approval[] })),
@@ -162,7 +177,7 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       const hash = window.location.hash.replace(/^#/, '');
-      if (TABS.some((t) => t.id === hash)) setTab(hash as TabId);
+      if (ALL_TABS.some((t) => t.id === hash)) setTab(hash as TabId);
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -239,7 +254,7 @@ export function App() {
         <button className="meta" onClick={copyLaunchCommand}>Copy CLI</button>
       </header>
       <div role="tablist" aria-label="Cockpit views">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button key={t.id} role="tab" id={`tab-${t.id}`} aria-controls={`panel-${t.id}`}
             aria-selected={tab === t.id} tabIndex={tab === t.id ? 0 : -1} onClick={() => setTab(t.id)}>
             {t.label}
@@ -248,9 +263,22 @@ export function App() {
       </div>
       <main>
         <Panel id="welcome" tab={tab}><Welcome onStartSession={() => requestStart()} onLaunchInstance={() => setLaunchOpen(true)} goTo={(t) => setTab(t as TabId)} /></Panel>
-        <Panel id="inventory" tab={tab}><Inventory onStartSession={requestStart} onLaunchInstance={() => setLaunchOpen(true)} refreshTick={refreshTick} /></Panel>
+        <Panel id="inventory" tab={tab}><Inventory onStartSession={requestStart} onLaunchInstance={() => setLaunchOpen(true)} onOpenDesktop={desktopEnabled ? requestOpenDesktop : undefined} refreshTick={refreshTick} /></Panel>
         <Panel id="running" tab={tab}><Running refreshTick={refreshTick} /></Panel>
         <Panel id="missions" tab={tab}><Missions refreshTick={refreshTick} /></Panel>
+        {desktopEnabled && (
+          <Panel id="desktop" tab={tab}>
+            {desktopInstanceId
+              ? <Desktop instanceId={desktopInstanceId} onBack={() => setTab('inventory')} />
+              : (
+                <section className="empty-state">
+                  <h2>No desktop selected</h2>
+                  <p className="hint">Choose a running instance under Inventory and use Open Desktop.</p>
+                  <button className="cta" onClick={() => setTab('inventory')}>Go to Inventory</button>
+                </section>
+              )}
+          </Panel>
+        )}
         {/* Sessions stays mounted so the WebSocket survives tab switches */}
         <section id="panel-sessions" role="tabpanel" aria-labelledby="tab-sessions" hidden={tab !== 'sessions'}>
           <Sessions session={session} composer={composer} setComposer={setComposer} onRequestStart={requestStart} refreshTick={refreshTick} />

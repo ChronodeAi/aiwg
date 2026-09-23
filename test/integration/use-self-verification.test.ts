@@ -165,7 +165,9 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
       expect(result.stderr).toBe('');
       expect(result.payload).toMatchObject({
         schema: 'aiwg.use.result.v1',
-        outcome: 'ready-restart-required',
+        // Codex refreshes deployed skills between turns, so a successful
+        // deployment is simply ready — no restart is a precondition (#2309).
+        outcome: 'ready',
         exitClassification: 'success',
         exitCode: 0,
       });
@@ -223,9 +225,13 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
 
     expect(result.exitCode, result.stderr || result.stdout).toBe(0);
     expect(result.stderr).toBe('');
-    expect(result.stdout).toContain('AIWG ready — provider reload required');
+    expect(result.stdout).toContain('AIWG ready');
+    expect(result.stdout).not.toContain('provider reload required');
     expect(result.stdout).toContain('Deployed to OpenAI Codex (codex)');
     expect(result.stdout).toContain('Indexed for discovery');
+    // The conditional fallback still appears; the imperative restart does not (#2309).
+    expect(result.stdout).toContain('If something is missing');
+    expect(result.stdout).not.toContain('Restart or reopen Codex');
     expect(result.stdout).not.toContain('Registered ');
     expect(result.stdout).not.toContain('reload rationale');
     expect(result.stdout).not.toMatch(/\x1b\[/);
@@ -269,10 +275,16 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     const result = runUse(projectRoot, homeRoot, ['--providers', 'codex,claude']);
 
     expect(result.exitCode, result.stderr || result.stdout).toBe(0);
+    // Claude Code still requires a restart, so the aggregate does too — the
+    // multi-provider outcome is the strictest of its members (#2309).
     expect(result.payload.outcome).toBe('ready-restart-required');
     expect(result.payload.providers.map((provider: { provider: string }) => provider.provider)).toEqual(['codex', 'claude']);
-    expect(result.payload.providers.every(
-      (provider: { outcome: string }) => provider.outcome === 'ready-restart-required',
-    )).toBe(true);
+    expect(result.payload.providers.map(
+      (provider: { provider: string; outcome: string; reloadPolicy: string }) =>
+        [provider.provider, provider.outcome, provider.reloadPolicy],
+    )).toEqual([
+      ['codex', 'ready', 'live-refresh'],
+      ['claude', 'ready-restart-required', 'restart-required'],
+    ]);
   }, 90_000);
 });

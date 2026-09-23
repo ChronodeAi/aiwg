@@ -17,7 +17,7 @@ import { main } from '../../../src/config/cli.js';
 function makeTmpRepo(): string {
   const dir = join(tmpdir(), `aiwg-show-project-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   mkdirSync(dir, { recursive: true });
-  execSync('git init --quiet', { cwd: dir });
+  execSync('git init --quiet', { timeout: 60_000, cwd: dir });
   return dir;
 }
 
@@ -97,7 +97,7 @@ describe('aiwg config show --project (#999)', () => {
   });
 
   it('shows resolved remote URLs when remotes are present', async () => {
-    execSync('git remote add origin https://example.com/owner/repo.git', { cwd: tmp });
+    execSync('git remote add origin https://example.com/owner/repo.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       remotes: { primary: 'origin' },
     });
@@ -108,8 +108,8 @@ describe('aiwg config show --project (#999)', () => {
   });
 
   it('shows secondary remotes with purpose and push_on_release flags', async () => {
-    execSync('git remote add origin https://primary/r.git', { cwd: tmp });
-    execSync('git remote add github https://github.com/o/r.git', { cwd: tmp });
+    execSync('git remote add origin https://primary/r.git', { timeout: 60_000, cwd: tmp });
+    execSync('git remote add github https://github.com/o/r.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       remotes: {
         primary: 'origin',
@@ -125,8 +125,8 @@ describe('aiwg config show --project (#999)', () => {
   });
 
   it('shows a distinct customer issue tracker', async () => {
-    execSync('git remote add origin https://primary/r.git', { cwd: tmp });
-    execSync('git remote add github https://github.com/o/r.git', { cwd: tmp });
+    execSync('git remote add origin https://primary/r.git', { timeout: 60_000, cwd: tmp });
+    execSync('git remote add github https://github.com/o/r.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       remotes: {
         primary: 'origin',
@@ -140,7 +140,7 @@ describe('aiwg config show --project (#999)', () => {
   });
 
   it('emits stable JSON with --json', async () => {
-    execSync('git remote add origin https://example.com/owner/repo.git', { cwd: tmp });
+    execSync('git remote add origin https://example.com/owner/repo.git', { timeout: 60_000, cwd: tmp });
     writeConfig(tmp, {
       remotes: { primary: 'origin', secondary: [{ name: 'mirror' }] },
     });

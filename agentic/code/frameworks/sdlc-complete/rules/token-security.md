@@ -1,5 +1,11 @@
 ---
 enforcement: critical
+triggers:
+  - "how do I handle a token safely"
+  - "where do I put an api key"
+  - "load a secret in a script"
+  - "token security"
+  - "credential handling"
 ---
 
 # Token Security Rules

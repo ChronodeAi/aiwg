@@ -53,7 +53,7 @@ describe('cockpit base-npm footprint guard (#1593)', () => {
   it('the cockpit tarball dry-run names @aiwg/cockpit and excludes node_modules', () => {
     const npmCache = '/tmp/aiwg-npm-cache';
     mkdirSync(npmCache, { recursive: true });
-    const out = execFileSync('npm', ['pack', '--dry-run', '--json'], {
+    const out = execFileSync('npm', ['pack', '--dry-run', '--json'], { timeout: 60_000,
       encoding: 'utf8',
       cwd: new URL('../../apps/cockpit', import.meta.url),
       env: {

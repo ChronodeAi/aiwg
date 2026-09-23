@@ -395,7 +395,7 @@ describe('Workspace CLI Commands', () => {
         'await new Promise(resolve => setTimeout(resolve, 750));',
       ].join('\n');
 
-      execFileSync(process.execPath, ['--input-type=module', '--eval', probe], {
+      execFileSync(process.execPath, ['--input-type=module', '--eval', probe], { timeout: 60_000,
         cwd: testDir,
         stdio: 'pipe',
       });

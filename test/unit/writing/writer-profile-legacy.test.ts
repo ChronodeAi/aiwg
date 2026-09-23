@@ -12,7 +12,7 @@ import { importLegacyWriterProfile, exportLegacyWriterProfile, validateLegacyWri
 const addon = resolve('agentic/code/addons/voice-framework');
 const calibration = JSON.parse(readFileSync(resolve('src/writing/voice-profiles.json'), 'utf8'));
 const templates = ['technical-authority', 'friendly-explainer', 'executive-brief', 'casual-conversational', 'ethical-cypherpunk'];
-const pythonAvailable = spawnSync('python3', ['--version'], { encoding: 'utf8' }).status === 0;
+const pythonAvailable = spawnSync('python3', ['--version'], { timeout: 60_000, encoding: 'utf8' }).status === 0;
 
 function checkRoundTrip(raw: string | Uint8Array, format: 'yaml' | 'json', kind: string) {
   const bytes = typeof raw === 'string' ? Buffer.from(raw) : Buffer.from(raw);
@@ -93,7 +93,7 @@ profiles=[
 ]
 print(json.dumps(profiles,ensure_ascii=False))
 `;
-    const result = spawnSync('python3', ['-B', '-c', script], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
+    const result = spawnSync('python3', ['-B', '-c', script], { timeout: 60_000, encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
     expect(result.status, result.stderr).toBe(0);
     for (const [kind, raw] of JSON.parse(result.stdout)) checkRoundTrip(raw, 'yaml', kind);
   });

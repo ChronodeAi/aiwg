@@ -6,11 +6,11 @@ which schema, adapter, index, or provenance vocabulary to choose.
 ## Delivery status
 
 The dataset contracts, source-adapter SDK, projections, declarative addon, and
-thirteen-action orchestration CLI are shipped. Local JSONL and CSV adapters are
-stable; local orchestration, offline, provenance, and standards cells are
-qualified. Pre-stable migration, Fortemi Core parity, and live Fortemi Server
-persistence remain pending for the reasons in [support status](#support-status).
-The aggregate conformance receipt therefore reports `stableEligible: false`.
+thirteen-action orchestration CLI are shipped. Local file, directory, JSONL,
+and CSV adapters are stable; local orchestration, offline, provenance,
+standards, and prior-stable migration cells are qualified. Fortemi Core and
+live Fortemi Server evidence remain mode-dependent as described in
+[support status](#support-status).
 
 | Task | Required evidence | Safe outcome |
 |---|---|---|
@@ -60,12 +60,13 @@ emit the `aiwg.dataset-orchestration/v1` envelope with `--json`.
 |---|---|---|
 | local JSONL and CSV real sources | stable | bounded reference adapters only |
 | local plan/replay/checkpoint/security/offline/provenance/standards | qualified | checked-in deterministic fixtures; not live-server evidence |
-| pre-stable migration | pending | no stable predecessor exists |
-| Fortemi Core parity | pending | requires a pinned compatible Fortemi dependency |
-| Fortemi Server live persistence | pending | requires explicit live authorization and cross-repository receipt |
+| prior-stable migration | qualified | exact `v2026.9.17` schema, checkpoint, plan, receipt, and profile fixture |
+| Fortemi Core parity | mode-dependent | passes only with the pinned compatible Fortemi checkout |
+| Fortemi Server live persistence | mode-dependent | passes only with an authorized, verified live receipt |
 
-Nine cells pass and three remain pending; the aggregate release gate is not
-stable-eligible while any required pending evidence remains unresolved.
+The local receipt reports 13 pass and 2 mode-dependent pending cells. The
+pinned cross-repository receipt reports 14 pass and 1 experimental live pending
+cell and is stable-eligible; live qualification remains separately evidence-bound.
 
 ## Default routing
 

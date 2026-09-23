@@ -84,6 +84,30 @@ describe('test conformance inventory and source identity', () => {
     expect(report.spec.complete).toBe(false);
     expect(report.spec.diagnostics).toContainEqual(expect.objectContaining({ code: 'RUNNER_MISMATCH_CANDIDATE', path: 'test/native.test.mjs' }));
   });
+  it('does not flag a pytest file that merely imports unittest.mock', async () => {
+    const p = protocol();
+    p.spec.tests.include = ['test/**/*.py'];
+    p.spec.areas = [{ id: 'unit', include: ['test/**/*.py'] }];
+    p.spec.lanes = [{ id: 'unit', runner: 'pytest', include: ['test/**/*.py'], exclude: [], command: { argv: ['node', '--version'], timeoutMs: 1000 }, result: { format: 'vitest' }, required: true }];
+    await writeFile(join(root, 'test/test_from_import.py'), 'from unittest.mock import patch\n\ndef test_it():\n    with patch("x"):\n        pass\n');
+    await writeFile(join(root, 'test/test_module_import.py'), 'import unittest.mock\n\ndef test_it():\n    pass\n');
+    await writeFile(join(root, 'test/test_comment_mention.py'), '# exercises unittest-style behavior without the unittest runner\n\ndef test_it():\n    assert True\n');
+    const report = await inventoryWorkspace(root, p);
+    for (const path of ['test/test_from_import.py', 'test/test_module_import.py', 'test/test_comment_mention.py']) {
+      expect(report.spec.files.find((f: any) => f.path === path)).toMatchObject({ runnerHint: 'pytest' });
+      expect(report.spec.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'RUNNER_MISMATCH_CANDIDATE', path }));
+    }
+  });
+  it('still flags a real unittest.TestCase subclass as a runner-mismatch candidate on a pytest lane', async () => {
+    const p = protocol();
+    p.spec.tests.include = ['test/**/*.py'];
+    p.spec.areas = [{ id: 'unit', include: ['test/**/*.py'] }];
+    p.spec.lanes = [{ id: 'unit', runner: 'pytest', include: ['test/**/*.py'], exclude: [], command: { argv: ['node', '--version'], timeoutMs: 1000 }, result: { format: 'vitest' }, required: true }];
+    await writeFile(join(root, 'test/test_case.py'), 'import unittest\n\nclass T(unittest.TestCase):\n    def test_it(self):\n        self.assertTrue(True)\n');
+    const report = await inventoryWorkspace(root, p);
+    expect(report.spec.files.find((f: any) => f.path === 'test/test_case.py')).toMatchObject({ runnerHint: 'unittest' });
+    expect(report.spec.diagnostics).toContainEqual(expect.objectContaining({ code: 'RUNNER_MISMATCH_CANDIDATE', path: 'test/test_case.py' }));
+  });
   it('retains empty and omitted scopes as explicit defects', async () => {
     const p = protocol(); p.spec.lanes[0].include = ['test/absent*.mjs'];
     expect((await inventoryWorkspace(root, p)).spec.diagnostics).toContainEqual(expect.objectContaining({ code: 'NO_DECLARED_LANE' }));

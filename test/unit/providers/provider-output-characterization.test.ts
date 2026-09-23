@@ -108,6 +108,17 @@ const USE_PATH_GOLDENS = {
     },
     kernelSkills: '.factory/skills',
   },
+  grokbot: {
+    deployTarget: 'mixed',
+    artifacts: {
+      agents: null,
+      commands: null,
+      skills: null,
+      rules: null,
+      behaviors: null,
+    },
+    kernelSkills: null,
+  },
   hermes: {
     deployTarget: 'mixed',
     artifacts: {
@@ -193,6 +204,7 @@ const REGENERATE_FILE_GOLDENS: Record<string, string[]> = {
   copilot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.github/copilot-instructions.md'],
   cursor: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   factory: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
+  grokbot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   // Hermes 0.21 alignment: NO .hermes.md twin — it sat at the top of Hermes's
   // first-match context chain and suppressed AGENTS.md on every turn. The
   // regenerate path now emits AGENTS.md with the CRITICAL rules inline and

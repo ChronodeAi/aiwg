@@ -58,9 +58,16 @@ describe('Artifact Query Engine', () => {
   let tmpDir: string;
   let consoleSpy: ReturnType<typeof vi.spyOn>;
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let previousXdgDataHome: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiwg-query-test-'));
+    // Resolution consults the USER-GLOBAL framework index as well as the fixture
+    // index below. Unsandboxed, a real `aiwg-steward` entry there changes which
+    // duplicate wins, so the outcome depends on whatever another test happened to
+    // leave in ~/.local/share/aiwg. Pin it per test (#2544).
+    previousXdgDataHome = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = path.join(tmpDir, 'xdg');
 
     // Create mock index
     const indexDir = path.join(tmpDir, INDEX_DIR);
@@ -105,6 +112,8 @@ describe('Artifact Query Engine', () => {
   });
 
   afterEach(() => {
+    if (previousXdgDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = previousXdgDataHome;
     fs.rmSync(tmpDir, { recursive: true, force: true });
     consoleSpy.mockRestore();
     consoleErrorSpy.mockRestore();

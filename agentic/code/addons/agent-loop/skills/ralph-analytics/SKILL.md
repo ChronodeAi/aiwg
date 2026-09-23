@@ -47,6 +47,6 @@ When invoked, analyze agent loop data and present metrics:
 
 ## References
 
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/reflection-memory.json - Reflection schema
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/debug-memory.yaml - Debug memory schema
-- @$AIWG_ROOT/agentic/code/addons/ralph/docs/reflection-memory-guide.md - Guide
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/reflection-memory.json - Reflection schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/debug-memory.yaml - Debug memory schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/docs/reflection-memory-guide.md - Guide

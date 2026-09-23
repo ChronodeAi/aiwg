@@ -4,19 +4,43 @@ import { homedir } from 'os';
 import { join } from 'path';
 import { ProviderAdapter, registerProvider } from './provider-adapter.mjs';
 
+/**
+ * Pi CLI versions this adapter is qualified against. `isAvailable()` fails
+ * closed outside this list (#2550): Pi's `--mode json` contract (stdin
+ * handling, JSONL framing, `agent_settled`) is verified per version by
+ * `npm run smoke:pi:live`, and an unqualified release must not be driven by
+ * an unattended loop on the strength of `pi --version` exiting 0.
+ */
+export const PI_SUPPORTED_VERSIONS = Object.freeze(['0.85.0']);
+
+export function normalizePiVersion(version) {
+  return String(version ?? '').trim().replace(/^pi\s+/i, '').replace(/^v/, '');
+}
+
+export function isSupportedPiVersion(version) {
+  return PI_SUPPORTED_VERSIONS.includes(normalizePiVersion(version));
+}
+
 export class PiAdapter extends ProviderAdapter {
   getBinary() { return process.env.AIWG_PI_BIN || 'pi'; }
   getName() { return 'pi'; }
   getCapabilities() {
+    // rpcAbort is false on purpose. Pi 0.85.0 reads stdin commands only in
+    // `--mode rpc`; in `--mode json` it reads piped stdin as prompt text and
+    // blocks until EOF (readPipedStdin in dist/main.js). Opening a stdin pipe
+    // to send an abort frame therefore keeps the session from ever starting,
+    // so the launcher must leave stdin closed and cancel with the bounded
+    // TERM/KILL path (#2550).
     return { streamJson: true, sessionResume: true, budgetControl: false,
       systemPrompt: true, agentMode: false, mcpConfig: false, maxTurns: false,
-      rpcAbort: true };
+      rpcAbort: false };
   }
   async isAvailable() {
     const node = spawnSync(process.execPath, ['-p', 'process.versions.node'], { encoding: 'utf8' });
     const [major, minor] = String(node.stdout).trim().split('.').map(Number);
     if (node.status !== 0 || major < 22 || (major === 22 && minor < 19)) return false;
-    return super.isAvailable();
+    if (!await super.isAvailable()) return false;
+    return isSupportedPiVersion(await this.getVersion());
   }
   buildSessionArgs(options) {
     const args = ['--mode', 'json', '--no-approve'];
@@ -34,7 +58,8 @@ export class PiAdapter extends ProviderAdapter {
   buildAnalysisArgs(options) { return this.buildSessionArgs(options); }
   mapModel(model) { return model; }
   getEnvOverrides() { return { CI: 'true', NO_COLOR: '1' }; }
-  getAbortInput() { return `${JSON.stringify({ type: 'abort', id: 'aiwg-abort' })}\n`; }
+  /** No stdin abort in `--mode json`; see getCapabilities() (#2550). */
+  getAbortInput() { return null; }
   getTranscriptPath(sessionId) {
     if (!sessionId) return null;
     if (sessionId.endsWith('.jsonl') || sessionId.includes('/')) return sessionId;

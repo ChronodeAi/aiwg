@@ -93,6 +93,15 @@ aiwg discover "check collection completeness"  # → check-completeness
 aiwg discover "gap documentation"              # → gap-documentation
 ```
 
+### Open-weight model archival
+
+```bash
+aiwg discover "archive open-weight language models"   # → llm-model-archivist (agent)
+aiwg discover "preserve original model weights"       # → llm-model-archivist (agent)
+aiwg discover "archive huggingface model weights"      # → llm-model-archivist / archive-acquisition
+aiwg discover "rank open models by benchmarks"        # → llm-model-archivist (agent)
+```
+
 ### Integrity & export
 
 ```bash

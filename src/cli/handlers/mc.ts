@@ -415,7 +415,13 @@ Drain queued missions in a session by launching each as a ralph loop. Missions
 without --completion criteria are skipped with a warning.
 
   --accept-cost   Skip the cost-warning gate (required for non-TTY contexts
-                  when estimated cumulative cost exceeds $5). See #1450.`,
+                  when estimated cumulative cost exceeds $5). See #1450.
+
+The estimate is the cumulative iteration floor (missions x max-iterations x
+~$1.60 cache cost per headless iteration). A mission's --max-total-cost caps its
+share of that estimate only on a provider that reports spend; on a provider that
+reports none the ceiling is inert (#1766), so it is reported but not subtracted.
+See #2522.`,
 
   status: `Usage: aiwg mc status [<session-id>] [--json]
 
@@ -688,6 +694,94 @@ async function mcDispatch(ctx: HandlerContext): Promise<HandlerResult> {
  *   detached process, so they DO run in parallel after launch — the loop here
  *   is just for orderly dispatch, not for parallel scheduling)
  */
+/**
+ * Per-iteration cache-creation floor for a headless claude session (sonnet
+ * baseline; opus is ~$3.90).
+ */
+export const SONNET_CACHE_USD = 1.60;
+
+/** Estimate at or above which `mc run` warns and refuses in non-TTY contexts. */
+export const COST_WARNING_THRESHOLD_USD = 5.0;
+
+/**
+ * Providers whose headless stream reports spend, so a declared `--max-total-cost`
+ * ceiling can actually fire mid-loop.
+ *
+ * Only `claude` emits cost on its stream-json events, which is what
+ * `SessionLauncher._extractUsageStats` reads. Adapters without stream-json
+ * (codex, factory, opencode, deepseek) emit no usage events at all — #1766
+ * recorded that a spend ceiling on those is inert and never fires. Adapters that
+ * do stream JSON but have not been observed carrying cost fields (omp, pi) stay
+ * out of this set deliberately: assuming an observability we have not seen would
+ * weaken the gate in exactly the case where the operator has least protection.
+ */
+export const COST_REPORTING_PROVIDERS: ReadonlySet<string> = new Set(['claude']);
+
+export interface MissionRunCostEstimate {
+  /** Estimated cumulative spend, in USD, used for the warning threshold. */
+  estimateUsd: number;
+  /** Uncapped iteration floor, for comparison against `estimateUsd`. */
+  iterationFloorUsd: number;
+  /** Sum of every declared `maxTotalCost`, whether or not it can fire. */
+  declaredCeilingUsd: number;
+  /** Missions whose declared ceiling was applied to the estimate. */
+  cappedMissions: number;
+  /** Missions declaring a ceiling that cannot fire on this provider. */
+  inertCeilingMissions: number;
+  /** Whether the target provider reports spend. */
+  spendObservable: boolean;
+}
+
+/**
+ * Estimate cumulative spend for a set of queued missions (#2522).
+ *
+ * The floor for each mission is `maxIterations × SONNET_CACHE_USD`. A declared
+ * `maxTotalCost` bounds that floor **only** when the target provider reports
+ * spend — on a provider that reports none, the ceiling is inert (#1766), so
+ * subtracting it would make the warning weaker precisely where the operator has
+ * no enforced protection. Those ceilings are counted and surfaced instead.
+ */
+export function estimateMissionRunCost(
+  missions: ReadonlyArray<Pick<Mission, 'maxIterations' | 'maxTotalCost'>>,
+  provider: string,
+): MissionRunCostEstimate {
+  const spendObservable = COST_REPORTING_PROVIDERS.has(provider);
+  let estimateUsd = 0;
+  let iterationFloorUsd = 0;
+  let declaredCeilingUsd = 0;
+  let cappedMissions = 0;
+  let inertCeilingMissions = 0;
+
+  for (const mission of missions) {
+    const floor = mission.maxIterations * SONNET_CACHE_USD;
+    iterationFloorUsd += floor;
+    const ceiling = typeof mission.maxTotalCost === 'number' && Number.isFinite(mission.maxTotalCost)
+      ? mission.maxTotalCost
+      : undefined;
+    if (ceiling === undefined) {
+      estimateUsd += floor;
+      continue;
+    }
+    declaredCeilingUsd += ceiling;
+    if (spendObservable) {
+      cappedMissions += 1;
+      estimateUsd += Math.min(floor, ceiling);
+    } else {
+      inertCeilingMissions += 1;
+      estimateUsd += floor;
+    }
+  }
+
+  return {
+    estimateUsd,
+    iterationFloorUsd,
+    declaredCeilingUsd,
+    cappedMissions,
+    inertCeilingMissions,
+    spendObservable,
+  };
+}
+
 async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   const positional = getPositionalArgs(ctx.args);
   const sessionId = positional[0];
@@ -705,25 +799,31 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
     return { exitCode: 0 };
   }
 
-  // #1450 P0: cost warning gate.
+  // #1450 P0: cost warning gate, with declared ceilings honored (#2522).
   //
   // Each headless claude session pays a ~$1.60 cache-creation cost on iteration
   // 1 before any user-meaningful work (sonnet baseline; opus is ~$3.90). Across
   // N missions × M iterations the floor compounds quickly. Warn before launch
   // and refuse in non-TTY contexts unless --accept-cost is set.
-  //
-  // Estimate is intentionally conservative: cumulative iteration floor =
-  // missions × max_iterations × sonnet_cache_cost. Real spend may be lower if
-  // missions complete in fewer iterations.
   const eligible = queued.filter(m => m.mode !== 'pty-orchestrator' && !!m.completion);
-  const SONNET_CACHE_USD = 1.60;
-  const iterFloor = eligible.reduce((sum, m) => sum + m.maxIterations, 0);
-  const estimateUsd = iterFloor * SONNET_CACHE_USD;
-  const COST_WARNING_THRESHOLD_USD = 5.0;
 
-  if (estimateUsd >= COST_WARNING_THRESHOLD_USD && !acceptCost) {
+  const projectRoot = ctx.cwd || process.cwd();
+  const frameworkRoot = ctx.frameworkRoot;
+  const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
+  const cfg = await readAiwgConfig(projectRoot).catch(() => null);
+  const provider = cfg?.providers[0] ?? 'unknown';
+
+  const estimate = estimateMissionRunCost(eligible, provider);
+
+  if (estimate.estimateUsd >= COST_WARNING_THRESHOLD_USD && !acceptCost) {
     ui.blank();
-    ui.warn(`Cost estimate: ~$${estimateUsd.toFixed(2)} (${eligible.length} missions × iteration floors × ~$${SONNET_CACHE_USD.toFixed(2)} cache cost per claude headless iter).`);
+    ui.warn(`Cost estimate: ~$${estimate.estimateUsd.toFixed(2)} (${eligible.length} missions × iteration floors × ~$${SONNET_CACHE_USD.toFixed(2)} cache cost per claude headless iter).`);
+    if (estimate.cappedMissions > 0) {
+      ui.warn(`Declared ceilings: $${estimate.declaredCeilingUsd.toFixed(2)} across ${estimate.cappedMissions} mission(s) — counted toward the estimate because ${provider} reports spend.`);
+    }
+    if (estimate.inertCeilingMissions > 0) {
+      ui.warn(`${estimate.inertCeilingMissions} mission(s) declare --max-total-cost totalling $${estimate.declaredCeilingUsd.toFixed(2)}, but ${provider} does not report spend — those ceilings cannot fire and are NOT subtracted from this estimate (#1766).`);
+    }
     ui.warn('Actual spend may be lower if missions complete early, higher if model is opus or context grows.');
     if (!process.stdout.isTTY) {
       ui.error('Refusing to launch in non-interactive context. Re-run with `--accept-cost` to proceed.');
@@ -747,12 +847,7 @@ async function mcRun(ctx: HandlerContext): Promise<HandlerResult> {
   let launched = 0;
   let skipped = 0;
   let failed = 0;
-  const projectRoot = ctx.cwd || process.cwd();
-  const frameworkRoot = ctx.frameworkRoot;
-  const { readAiwgConfig, resolveParallelism } = await import('../../config/aiwg-config.js');
   const { FileAdmissionStore, SharedHostScheduler, loadAdmissionLeasePolicy, fileHeartbeatProbe } = await import('../../serve/shared-host-scheduler.js');
-  const cfg = await readAiwgConfig(projectRoot).catch(() => null);
-  const provider = cfg?.providers[0] ?? 'unknown';
   const maxConcurrent = resolveParallelism(cfg?.parallelism, provider).max_parallel_mc_missions;
 
   // ADR-003: dispatch-time budget validation — the single validation seam.

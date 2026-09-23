@@ -346,5 +346,5 @@ references:
     - "#135"
     - "#137"
   related:
-    - "@agentic/code/addons/ralph/schemas/mcp-task.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/mcp-task.yaml"
     - "@src/mcp/server.ts"

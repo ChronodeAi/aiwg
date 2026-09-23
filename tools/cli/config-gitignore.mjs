@@ -29,6 +29,8 @@ const GITIGNORE_PROBE_BASENAME = '.aiwg-ignore-probe';
 
 const AIWG_RUNTIME_PATTERNS = [
   '.aiwg/working/',
+  // Transactional preimages written before AIWG rewrites operator files (#248 / #2542).
+  '.aiwg/backups/',
   '.aiwg/.index/',
   '.aiwg/ralph/',
   '.aiwg/ralph-external/',
@@ -37,6 +39,8 @@ const AIWG_RUNTIME_PATTERNS = [
 
 const CLAUDE_SESSION_PATTERNS = [
   '.claude/settings.local.json',
+  // Timestamped backups AIWG writes before merging hook entries (#2542).
+  '.claude/settings.json.bak.*',
 ];
 
 const PROVIDER_CONVENTIONAL_PATTERNS = [

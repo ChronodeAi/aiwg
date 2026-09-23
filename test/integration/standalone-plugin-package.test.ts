@@ -49,7 +49,7 @@ function installArchive(archive: string, repository: string, provider: 'claude' 
   fs.mkdirSync(path.join(repository, '.git'), { recursive: true });
   const pluginRoot = path.join(repository, `.${provider}`, 'plugins');
   fs.mkdirSync(pluginRoot, { recursive: true });
-  execFileSync('tar', ['-xzf', archive, '-C', pluginRoot]);
+  execFileSync('tar', ['-xzf', archive, '-C', pluginRoot], { timeout: 60_000 });
   return path.join(pluginRoot, 'team-tools');
 }
 

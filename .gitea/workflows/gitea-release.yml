@@ -20,7 +20,7 @@ on:
         type: string
 
 concurrency:
-  group: release
+  group: gitea-release
   cancel-in-progress: false
 
 jobs:

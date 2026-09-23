@@ -16,10 +16,13 @@ import {
   readAiwgConfig,
   writeAiwgConfig,
   updateInstalled,
+  ensureProviderListed,
   hashManifest,
   resolveRemotes,
   resolveRemoteProvider,
   resolveDelivery,
+  normalizeForcePushPolicy,
+  FORCE_PUSH_POLICY_ALIAS_NOTE,
   resolveParallelism,
   resolveIssueLabels,
   validateExternalLinks,
@@ -376,6 +379,32 @@ describe('aiwg-config', () => {
       expect(updated.installed['sdlc'].manifestHash).toBe('sha256:original');
     });
 
+
+    it('appends a missing provider to providers[] (#247)', () => {
+      const cfg = emptyConfig(['cursor']);
+      const updated = updateInstalled(cfg, 'sdlc', 'grokbot', { agents: 1, commands: 0, skills: 2, rules: 0 }, {
+        version: '2026.9.16',
+        source: 'bundled',
+      });
+      expect(updated.providers).toEqual(['cursor', 'grokbot']);
+    });
+
+    it('promotes explicit provider to primary without wiping others (#247)', () => {
+      const cfg = emptyConfig(['cursor', 'claude']);
+      const updated = updateInstalled(cfg, 'sdlc', 'grokbot', { agents: 1, commands: 0, skills: 2, rules: 0 }, {
+        version: '2026.9.16',
+        source: 'bundled',
+        asPrimary: true,
+      });
+      expect(updated.providers).toEqual(['grokbot', 'cursor', 'claude']);
+    });
+
+    it('ensureProviderListed is idempotent when already primary', () => {
+      const cfg = emptyConfig(['grokbot', 'cursor']);
+      ensureProviderListed(cfg, 'grokbot', { asPrimary: true });
+      expect(cfg.providers).toEqual(['grokbot', 'cursor']);
+    });
+
     // Project-local (#1035)
     describe('project-local entries', () => {
       it('writes localPath/localType/manifestVersion when source=project-local', () => {
@@ -668,6 +697,23 @@ describe('aiwg-config', () => {
   // ── resolveDelivery (#995) ─────────────────────────────────────────────────
 
   describe('resolveDelivery', () => {
+    it('normalizes the deprecated main-only-blocked force-push alias (#2532)', () => {
+      expect(resolveDelivery({ force_push_policy: 'main-only-blocked' } as never).force_push_policy)
+        .toBe('own-branch-only');
+      const normalized = normalizeForcePushPolicy('main-only-blocked');
+      expect(normalized.policy).toBe('own-branch-only');
+      expect(normalized.deprecatedFrom).toBe('main-only-blocked');
+      // The rename narrowed the permission, so the note must say so.
+      expect(FORCE_PUSH_POLICY_ALIAS_NOTE).toContain('narrowed');
+    });
+
+    it('passes current force-push values through unchanged (#2532)', () => {
+      for (const policy of ['never', 'own-branch-only', 'allowed'] as const) {
+        expect(normalizeForcePushPolicy(policy)).toEqual({ policy });
+      }
+      expect(normalizeForcePushPolicy(undefined).policy).toBeUndefined();
+    });
+
     it('returns conservative defaults when delivery is undefined', () => {
       const r = resolveDelivery(undefined);
       expect(r.mode).toBe('pr-required');
@@ -883,6 +929,11 @@ describe('aiwg-config', () => {
 
     it('getProviderParallelismDefaults returns fallback for unknown', () => {
       const r = getProviderParallelismDefaults('totally-unknown');
+      expect(r.max_parallel_subagents).toBe(4);
+    });
+
+    it('getProviderParallelismDefaults returns grokbot=4 (#249)', () => {
+      const r = getProviderParallelismDefaults('grokbot');
       expect(r.max_parallel_subagents).toBe(4);
     });
   });

@@ -5,6 +5,13 @@ severity: HIGH
 safety-critical: true
 applies_to: [all-agents]
 tags: [authorization, scope, safety]
+triggers:
+  - "am I allowed to do this"
+  - "do I need permission for this"
+  - "can I delete this"
+  - "should I close this issue"
+  - "acting on a finding"
+  - "is this in scope"
 ---
 
 # Human Authorization Rules

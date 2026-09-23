@@ -141,12 +141,13 @@ When the budget is exceeded, Codex degrades in three stages:
 By default, `aiwg use ... --provider codex` deploys the canonical 25-skill
 kernel/quickref inventory to `.agents/skills/`; the remaining skills stay
 index-discoverable through `aiwg discover` and `aiwg show`. The listing budget
-is normally exceeded only after an explicit `--copy-all`, or when unrelated
-user/plugin skills also consume the cap.
+is normally exceeded only after an explicit `--copy-all`, when project-local
+bundles add their own skills, or when unrelated user/plugin skills consume the
+cap.
 
 #### What you can do
 
-The 2% ceiling is hardcoded — there is no env var, CLI flag, or config knob to raise it. Tracked upstream as [openai/codex#19679](https://github.com/openai/codex/issues/19679). The supported levers are:
+Codex's 2% ceiling is hardcoded — there is no env var, CLI flag, or config knob to raise it. Tracked upstream as [openai/codex#19679](https://github.com/openai/codex/issues/19679). AIWG's own enforced cap, which keeps the deployer from writing past that ceiling, *is* adjustable (lever 5). The supported levers are:
 
 1. **Disable unused skills in `~/.codex/config.toml`:**
    ```toml
@@ -163,6 +164,17 @@ The 2% ceiling is hardcoded — there is no env var, CLI flag, or config knob to
    Codex skill root. Re-run `aiwg use` to repair AIWG-managed entries.
 
 4. **Use a larger-context model.** 2% of 1M is 20k tokens versus 4k on a 200k-context model — the budget scales linearly with the configured context window.
+
+5. **Let AIWG's own cap place the overflow.** The deployer keeps the startup
+   listing under 8,000 chars: when a bundle's skills would push it over, the
+   largest non-kernel entries are written to the standard tier
+   (`.codex/.aiwg/skills/`) instead and named in the deploy output. Kernel skills
+   are never demoted, and demoted skills stay reachable through `aiwg discover`
+   and `aiwg show`. Re-running `aiwg use <bundle> --provider codex` (no
+   `--force`) re-places an existing over-cap deployment. Adjust with
+   `AIWG_CODEX_LISTING_CAP=<chars>` (`0` disables) or, per invocation,
+   `--listing-cap <chars>`; `--listing-budget` applies the cap even under
+   `--copy-all`. See [the skills budget guide](../../skills-budget-guide.md).
 
 ---
 

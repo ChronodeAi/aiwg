@@ -99,6 +99,9 @@ jobs:
       - name: Verify test runner ownership
         run: npm run lint:test-registration
 
+      - name: Verify test child-process timeouts
+        run: npm run lint:test-process-timeouts
+
       - name: Enforce measured testing-quality and audit-foundation coverage
         run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement
 
@@ -208,13 +211,25 @@ jobs:
           path: test-results/session-performance.json
           if-no-files-found: error
 
+      - name: Record runner headroom (#2553)
+        # The real-filesystem watcher test has timed out five times under CI
+        # load reporting "no events"; one of those logs also carried a
+        # "disk full" append failure. Print disk, inode, inotify, memory and
+        # load headroom into the job log before the suite so the next
+        # recurrence carries its environment evidence. Read-only; never fails.
+        run: node tools/ci/runner-headroom.mjs .
+
       - name: Run tests
         env:
           # Shared-runner policy: paired Node baselines, median of 7 samples.
           AIWG_PERF_BUDGET_VERSION_MS: "300"
           AIWG_PERF_BUDGET_HELP_MS: "750"
           AIWG_PERF_SAMPLE_COUNT: "7"
-        run: npm run test:ci
+        # See #2521 — bound the full suite below this job's 15m cap so a hang is
+        # reported with a process tree rather than dying anonymously. Healthy
+        # Test runs measured 6.2-6.3 min end to end, so 10m is ~2x headroom on
+        # the whole job for a step that is only part of it.
+        run: node tools/ci/run-with-hang-report.mjs --timeout 10m -- npm run test:ci
 
       - name: Run tier-3 integration suite (#1174)
         # Spawns aiwg serve via bin/aiwg.mjs on an ephemeral port. The

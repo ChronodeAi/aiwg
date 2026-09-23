@@ -20,6 +20,507 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   cordis.yml plugin, so no JSON injection adapter ships. Aliases: `deepseek`,
   `deepseek-harness`. Provider reference: `docs/agents/providers/deepseek-harness.md`.
 
+## [2026.9.20] - 2026-09-21 - "Stable channels and exact-source evidence"
+
+### Changed
+
+- Stable releases use `latest` as the only stable dist-tag for `aiwg`,
+  `@aiwg/cli`, and `@aiwg/cockpit`. The legacy `next` alias is retired from
+  npmjs.org and the Gitea package mirror, with release verification requiring
+  it to be absent.
+
+### Fixed
+
+- Post-publish Socket evidence is bound to the exact signed release source:
+  tag publication passes the release version and source commit directly to the
+  fail-closed audit workflow instead of relying on the public mirror's default
+  branch history (#2635).
+
+## [2026.9.19] - 2026-09-21 - "Decision backends and provider handoffs"
+
+### Added
+
+- Normalized `decision.aiwg.io/v1alpha1` definitions, rulesets, bindings,
+  decision results, and ruleset results with schema/semantic validation,
+  immutable pins, deterministic composition, bounded retry/fallback, and
+  replay-safe receipts (#2573).
+- Interchangeable Jev and ordinary LLM-subagent decision adapters behind one
+  AIWG-owned contract, plus backend-swap examples, fixture-only conformance
+  tests, the opt-in `decision-engine` addon, and a separately gated live Jev
+  smoke command.
+- `aiwg bot-handoff` creates reviewable, provider-neutral drafts for routines,
+  teammate profiles, connector recommendations, and memory references.
+- `aiwg build-verify` checks deployment and discovery before provider-driven
+  build or CI work; Grok Build additionally requires native inspection.
+- Optional Grok Bot native adapter scaffolding for routines, teammates,
+  connector install profiles, registered machine health, and memory references.
+
+### Changed
+
+- Stable publication aligns and verifies both `latest` and `next` dist-tags
+  for all three packages on npmjs.org and the Gitea package mirror.
+
+### Fixed
+
+- Tag-bound npm publication invokes the fail-closed Socket audit directly as a
+  reusable workflow instead of depending on the public mirror's divergent
+  default branch. The v2026.9.19 run exposed an annotated-tag versus peeled-
+  commit binding defect corrected in v2026.9.20 (#2635).
+
+### Documentation
+
+- Decision architecture, evaluation semantics, confidence provenance,
+  migration/rollback guidance, runtime credential boundaries, and FlowGraph
+  integration guidance.
+- Provider-neutral bot handoff and build verification guides, plus Grok Build
+  CI setup and Grok Bot product guidance.
+
+## [2026.9.18] - 2026-09-21 - "Dataset conformance binds prior stable evidence"
+
+### Added
+
+- The Dataset Intelligence matrix executes adversarial, replay, checkpoint,
+  provenance, privacy, offline, standards, and parity corpus cases instead of
+  accepting fixture presence as evidence.
+- A digest-bound copy of the v2026.9.17 dataset contract now drives an
+  executable prior-stable migration cell covering schema validation,
+  capability negotiation, plan and receipt integrity, and checkpoint upgrade.
+
+### Changed
+
+- Dataset Intelligence documentation reports the mode-specific matrix totals:
+  13 local passes with two controlled cells pending, and 14 cross-repository
+  passes with the live-server cell still pending.
+- The million-record discovery-reader memory assertion runs in an isolated
+  garbage-collected process and measures retained memory rather than transient
+  full-suite allocation pressure.
+
+### Fixed
+
+- JSONL discovery rejects records that exceed the configured nesting limit,
+  including adversarially deep arrays and objects.
+
+## [2026.9.17] - 2026-09-20 - "Dataset contracts ship with the runtime"
+
+### Added
+
+- The supported `aiwg/dataset` package entry exposes the dataset runtime to
+  clean-installed consumers instead of requiring source-tree imports.
+- Fortemi dataset capability manifests, schemas, negotiation vectors, and wire
+  vectors are included in the published package.
+
+### Changed
+
+- Dataset conformance CI installs and exercises the packed package, validates
+  all 20 version and 11 wire vectors, and pins cross-repository qualification
+  to the final signed Fortemi React Lane B source.
+- The public provider inventory, Agent Skills matrix, and context bridge
+  expectations include the experimental Grok Build provider added immediately
+  before this release.
+
+### Fixed
+
+- The clean-install dataset packaging gate seeds the exact lockfile-bound
+  `@fortemi/core` archive from the offline npm cache instead of requiring an
+  unavailable registry packument.
+- Provider indexed-access tests distinguish an explicitly unsupported surface
+  from a missing indexed artifact.
+
+## [2026.9.16] - 2026-09-17 – "Grok Bot goes stable"
+
+### Added
+
+- Native **grokbot** provider (stable): Agent Skills deploy with a fail-closed
+  skills root, wizard/schema allowlists, model policy, manual-export session
+  import, quickstart docs, and a cloud-session global-install path so Grok Bot
+  loads AIWG like other harnesses (#196, #210, #211, #209 evidence track).
+- `aiwg sessions export build --include-bytes` embeds locally available
+  session-event attachments and registered-output files as native Fortemi
+  BLAKE3 blob sidecars; `export unpack` verifies and recovers their exact bytes.
+
+### Fixed
+
+- Session export refuses to overwrite an existing shard or receipt unless
+  `--force` is explicit, binds catalog tags and full session metadata into the
+  reviewed plan, and rejects post-plan registered-output or attachment drift.
+- Hermes JSONL session exports are accepted by the current importer shape.
+- Grok Bot clean-install steward gaps: registry-path warning, `providers[]`
+  update on `aiwg use --provider`, doctor parallelism sync, and
+  `.aiwg/backups/` gitignore (#246–#249).
+- Cockpit verifies browser-bound desktop delegation over mTLS (issuer binding).
+
+### Documentation
+
+- Grok Bot provider docs, evidence catalog for optional natives (#209), and
+  cloud-session global AIWG install runbook notes.
+
+## [2026.9.15] - 2026-09-15 – "Give the slow path room to finish"
+
+### Fixed
+
+- The npm-publish provider-integration test's full `bin/aiwg.mjs use sdlc
+  --provider codex` invocation now allows 150s (test timeout 180s) instead of
+  60s. That call is the only one in the file that goes through the router's
+  cold `tsx` compile path rather than invoking `deploy-agents.mjs` directly;
+  under CPU contention from adjacent heavy integration suites on the
+  npm-publish GitHub Actions runner, 60s was measured too tight and produced a
+  deterministic `spawnSync ETIMEDOUT`, blocking npm publication of 2026.9.14
+  three times in a row with no code-level regression (the identical commit's
+  full suite passed cleanly on the project's own CI). This release carries no
+  functional changes beyond that timeout and the version bump; see 2026.9.14
+  below for the actual release contents.
+
+## [2026.9.14] - 2026-09-15 – "Session evidence leaves the repository"
+
+### Added
+
+- `aiwg sessions export plan/build/verify/unpack` packages selected catalog
+  sessions into portable, lossless `full-v1`/`2.0.0` Fortemi Knowledge Shards
+  using `@fortemi/core`'s real conversion APIs, with a reviewable plan bound
+  to exact session/event digests that rejects stale or cross-workspace
+  selections before writing.
+- Claude web/account exports (`conversations.json`) import through a new
+  `manual-export` acquisition mode on the Claude adapter, matching the
+  existing Copilot/Cursor pattern -- distinct from the local JSONL/hook
+  session source, with explicit format detection and duplicate-id rejection.
+- Registered analysis outputs (#2003) are discovered and matched to selected
+  sessions by explicit source reference and carried through the export
+  pipeline as `aiwg.session-output` shard records, never inferred from a
+  filename.
+- A synthetic export-manifest record preserves the shard's index-level
+  `source.repo`/`privacy` metadata through the same native `tags`/
+  `provenance_events` mechanism every other record uses, closing the one gap
+  a full-v1 archive otherwise has no native place to carry.
+
+### Fixed
+
+- `test-conformance inventory` no longer flags a `.py` test file as a
+  runner mismatch just for importing `unittest.mock`; the classifier now
+  requires actual unittest-runner usage (`unittest.TestCase`, `unittest.main()`,
+  a real `import unittest`) (#202).
+- `test-conformance collect --mode controls` accepts a `--control <id>`
+  selector so negative controls can be collected one at a time, keeping any
+  single receipt from growing with every control declared on a lane and
+  avoiding the 16 MiB evidence-document ceiling (#201).
+
+### Documentation
+
+- `docs/sessions/cli.md` — worked guide for the full
+  import → select → export → verify → recover workflow, with a support
+  matrix listing only combinations backed by an actual test run.
+- `docs/providers/claude-code-sessions.md` — acquisition prerequisites and
+  known limitations for the Claude web/account export adapter.
+- `agentic/code/addons/testing-quality/docs/conformance-workflow.md` —
+  documents the controls-receipt size ceiling and the `--control` selector
+  workaround.
+
+## [2026.9.12] - 2026-09-15 – "Release workflows get their own lanes"
+
+### Fixed
+
+- Gitea release, plugin packaging, npm, and site-notification workflows now
+  use distinct concurrency groups. A tag push previously placed unrelated
+  workflows in the same literal `release` group, causing Gitea to cancel
+  release creation and plugin packaging while another release workflow ran.
+- npm provenance verification now waits up to fifteen minutes for the large
+  root package to leave npm's processing state. The publication job timeout
+  increased to forty-five minutes so artifact signing, SBOM generation,
+  checksums, and release upload still have time after the bounded wait.
+
+## [2026.9.11] - 2026-09-14 – "A release waits until the evidence arrives"
+
+### Fixed
+
+- GitHub release publication now retries npm provenance lookups for up to three
+  minutes after an accepted publish. Large packages can remain in npm's
+  processing state after smaller workspace packages are visible; the old
+  single lookup after ten seconds failed the job and skipped cosign signatures,
+  the SBOM, checksums, installer, and GitHub release assets. Lookup failures are
+  now retained through the retry loop so the final diagnostic explains which
+  package or attestation remained unavailable.
+- The OMP native conformance workflow now pins checkout, Bun setup, and artifact
+  upload actions to immutable commits, closing the remaining floating action
+  references found by the release-cut CI supply-chain audit.
+- Cockpit's in-process Bridge integration now supplies a deterministic artifact
+  index command seam. The test no longer inherits whichever global `aiwg`
+  installation happens to be on the runner, which previously produced a 502
+  when that installation was absent or identity-gated.
+- The steward delivery helper's signal-cleanup regression test now allows the
+  terminated shell's filesystem cleanup to become observable before asserting
+  that its temporary directory is gone, removing a runner-dependent race at
+  process close.
+
+## [2026.9.10] - 2026-09-14 – "Nothing that looks clean is quietly empty"
+
+### Added
+
+- Fortemi dataset execution now validates the advertised capability descriptor
+  and binds negotiation to it (#2242; Fortemi #1128, Fortemi React #422). AIWG
+  pins the Core capability-validation 1.0.1 schema and its shared SemVer and
+  wire vectors under `schemas/dataset/fortemi-capability-validation/1.0.1/`
+  and reimplements the rules independently, so agreement with the producer is
+  established by shared vectors rather than shared code. The execution client
+  rejects an invalid or absent descriptor before preview, refuses a requirement
+  the descriptor cannot satisfy without dispatching preview, rejects a reported
+  decision or runtime that disagrees with the advertised descriptor, and binds
+  the receipt's capability decision to the independently negotiated one. The
+  live qualification report records the capability authority revision, commit,
+  manifest digest, and the decision AIWG negotiated. Scope is unchanged: this
+  is source-consumer adoption, not clean-installed, released, or live session
+  evidence, and the suite audit remains NO-GO.
+- Cockpit desktop panel and inventory entry, control-API-backed (#2547).
+  `/api/health` advertises `desktop.configured` only when both the identity
+  verifier and the dedicated desktop backend are configured, and the web
+  app lists a Desktop tab only on that runtime gate (or
+  `VITE_COCKPIT_DESKTOP=1` for local dev). Inventory shows Open Desktop on
+  running instances, enabled only when the backend capability reports
+  supported and ready and otherwise disabled with the backend's reason. The
+  panel drives a guest session through `desktop-api` (capability, Connect
+  with the backend-granted mode and a caller-owned idempotency key,
+  polling) and shows loading, live, reconnecting with backoff, disconnected,
+  expired, denied, guest-ended, failed, stale-incarnation, handoff-waiting
+  and closing states plus cleanup status; Disconnect, Revoke access and
+  Sign out guest are distinct actions; effective capabilities render from
+  the backend policy only, and Observe/Take Control appear only when
+  granted and stay disabled until a display transport exists. No renderer
+  is embedded and no live qualification is claimed.
+- `apps/cockpit/bridge/src/desktop-identity-keycloak.mjs`: a Keycloak (OIDC)
+  verifier for the desktop identity boundary against the internal section9
+  realm (#2545). Login evidence is signature-checked against the realm JWKS
+  with issuer and exact audience pinned; every bind, status and authorization
+  re-introspects the Keycloak session with the confidential client; a lapsed
+  access token is refreshed once; section9 groups and `desktop:<action>`
+  roles map to desktop rights; the gateway delegation is minted by RFC 8693
+  token exchange; the client secret is read from a mode-0600 file at point of
+  use. Back-channel logout tokens convert to issuer-scoped revoke selectors.
+  Covered by an in-memory Keycloak suite; live realm and gateway
+  qualification remain open.
+- `llm-model-archivist`, a media-curator agent that discovers, evaluates,
+  ranks, and preserves open-weight language models in original-precision
+  weights (#2554). It reuses `find-sources`, `archive-acquisition`/`acquire`,
+  `integrity-verification`, `verify-archive`, `provenance-tracking`, and
+  `check-completeness`; the model-specific pieces ship as
+  `tools/media-curator/llm-model-archive.mjs` (self-verifying
+  `CHECKSUMS.sha256`, PROV-O + PREMIS `PROVENANCE.jsonld`, a verify pass that
+  fails on a missing or corrupted shard) and
+  `tools/media-curator/llm-model-report.mjs` (inventory validation and
+  rendering, report rendering, and a lint that rejects unsourced benchmark
+  figures and hub credentials). Quantized-only candidates are flagged, not
+  archived. Registered in the framework manifest, the quickref discovery
+  phrases, and the media-curator docs.
+- `tools/release/publish-github-release-discussion.mjs` creates the stable-release
+  GitHub Announcements discussion from a drafted body: it refuses to run before
+  the GitHub release is published, validates the four required links and the
+  no-attribution policy, reuses an existing discussion for the version instead
+  of duplicating it, records preflight/request/result evidence, and finishes by
+  running the verifier. The release config's
+  `create_github_announcement_discussion` action now carries a `run` field
+  naming it, and the `flow-release` skill treats the sidecar's
+  `post_release_verification` commands as a completion gate.
+
+### Changed
+
+- The bounded iterative execution mode is now called the **agent loop** in
+  user-facing surfaces. CLI commands `agent-loop`, `agent-loop-status`,
+  `agent-loop-abort`, `agent-loop-resume`, `agent-loop-attach`,
+  `agent-loop-ext`, `--agent-loop-memory` and `--agent-loop-config` are the
+  primary names; every legacy `ralph*` spelling remains accepted as an alias
+  and help says so. Addon documentation, skills, schemas, hooks, plugin
+  manifests and framework agents now use the agent-loop vocabulary and the
+  `agentic/code/addons/agent-loop/` paths (#1534).
+
+### Fixed
+
+- `aiwg lint` no longer silently disables a rule when the target is the
+  directory the rule's glob names (#2555). Rule globs are written from the
+  project root while the walk is rooted at the target, so
+  `aiwg lint documentation/references --ruleset research` matched nothing and
+  reported PASS while the same rules found 34 findings from the repo root. Globs
+  now resolve against the target-relative path and each ancestor-prefixed form,
+  so a rule selects the same files wherever the walk starts. Output names how
+  many of the selected rules applied and says plainly that a run where none
+  applied is not a clean result. Files git ignores are skipped by default
+  (`--no-gitignore` opts back in) so regenerated trees stop producing findings,
+  and `research/citation-resolves` treats a reference beside an absence marker
+  (unallocated, not in corpus, skipped, retired, withdrawn, deliberately absent,
+  never allocated, deduplication) as documentation of a deliberate gap rather
+  than a dangling reference. Phrases that describe a broken reference, such as
+  "does not exist", are not markers.
+- `research/uncertainty-registered` accepts the recommended dated retraction
+  whatever the length of the struck text (#2556). A struck span followed by a
+  dated outcome on the same line is a completed retraction, so
+  `~~<limitation>~~ **Done YYYY-MM-DD (<what closed it>).** <evidence>` no longer
+  fails when the struck text carries a bold lead-in and a second sentence. An
+  explicit dated closure now discharges an uncertainty outside a struck span
+  too, and the fix hint names the retraction form instead of only listing
+  obstacles.
+- Installation identity drift no longer blocks the read-only recovery
+  commands (#2559). `version`, `status` (including `--probe --json`),
+  `doctor`, `runtime-info`, `discover`, `show`, and `index query|deps|stats`
+  run under a recorded/actual mismatch and print the drift on stderr first;
+  `version` reports a same-root method mismatch and the status probe carries
+  an `installation` block with `mutations_blocked`. `update`, `refresh`,
+  `use`, deployment, channel switches, and `index build` stay fail-closed.
+  `aiwg discover --backend local "<phrase>"` (flag-first, as the steward
+  documents it) no longer fails with "requires a search phrase". Launcher
+  integration tests cover both mismatch directions.
+- `aiwg doctor` no longer reports every project-local artifact as drifted
+  after a clean `aiwg use` (#2560). "Deployed file differs from source" is
+  now judged against the source: a deployed copy that equals its source plus
+  the managed marker matches whichever of the recorded deployed hash, the
+  recorded source hash, or the current source file it agrees with.
+- Codex deploys respect the 8,000-char startup skill-listing cap by default
+  (#2561). When a bundle's skills would push `.agents/skills/` over the cap,
+  the largest non-kernel entries are placed on the standard tier
+  (`.codex/.aiwg/skills/`, reachable through `aiwg discover`/`aiwg show`)
+  and named in the deploy output; a plain redeploy re-places an over-cap
+  deployment without `--force`. `aiwg doctor` and the post-deploy
+  verification stop recommending `--force` as the budget fix; the
+  unmanaged-file advisory lists up to ten files and points at a
+  `--force --dry-run` preview. Override with `AIWG_CODEX_LISTING_CAP`
+  (`0` disables).
+- Rule deployment budgets for subagent dispatch (#2562). The always-on
+  `.claude/rules/` set is reconciled against a 64K-token inline budget after
+  every deploy pass: the largest HIGH rules beyond it move on demand (never
+  CRITICAL), are recorded in `.claude/rules/.aiwg-rules-budget.json`, and are
+  listed as binding rules in `RULES-ONDEMAND.md` with their fetch hint
+  (`AIWG_RULES_INLINE_BUDGET_TOKENS` overrides; `0` disables). The startup
+  scan now counts ancestor directories' `CLAUDE.md` and `.claude/rules`,
+  which Claude Code inlines too, and doctor adds a `Subagent Dispatch` check
+  that fails when the inlined surface leaves no room for a Task dispatch.
+- `aiwg doctor`'s Permissions warning has a resolution path (#2563): a
+  project with no legacy permission sources gets an informational line
+  pointing at `aiwg steward permissions migrate --apply`, which now says it
+  writes the initial default-deny block. Claude deploys compile bare model
+  aliases to pinned variants (`sonnet` → `claude-sonnet-4-6`, `opus` →
+  `claude-opus-4-7`, `haiku` → `claude-haiku-4-5`) so subagent dispatch never
+  inherits a 1M-context parent; addon deploys resolve `models.json` through
+  the corpus root instead of the hardcoded fallback. Source frontmatter stays
+  provider-neutral; pinned ids, `inherit`, and `[1m]` opt-ins deploy unchanged.
+- `aiwg regenerate --existing-project` ports operator content from provider
+  startup files into the WORKSPACE.md operator block, verbatim and attributed,
+  instead of writing it to `.aiwg/context/providers/` where no bootstrap
+  loaded it (#2558). Links to previously migrated provider files survive
+  `aiwg use` and `aiwg regenerate`, doctor reports such files as
+  `provider-context-not-loaded`, and identical directives shared by two
+  files are reported once per file pair (informational when the files are
+  identical stubs) rather than once per line.
+- The external agent-loop Pi adapter no longer opens the child's stdin to send
+  an RPC-style `abort` frame. Pi 0.85.0 reads stdin commands only in
+  `--mode rpc`; in `--mode json` it drains a piped stdin to EOF before the
+  prompt runs, so the open pipe kept every real session from starting until
+  the loop timeout fired. `rpcAbort` is now `false`, cancellation is the
+  bounded TERM/KILL path, `isAvailable()` fails closed outside the qualified
+  `PI_SUPPORTED_VERSIONS` range (`0.85.0`), and the launcher's TERM/KILL
+  escalation timers are `unref`'d and cleared once the child settles, so a
+  settled loop exits promptly. `smoke:pi:live` derives its pinned version from
+  the adapter range (#2550).
+- `WatchService` now records what chokidar reported about its own lifecycle
+  (`ready`, armed/missing targets, error messages, the live watched snapshot)
+  and exposes it as `getDiagnostics()`; the real-filesystem watcher tests
+  print that snapshot instead of a bare "no events" when an event never
+  arrives, and the CI Test job prints disk, inode, inotify, memory and load
+  headroom (`tools/ci/runner-headroom.mjs`) before the suite so the next
+  recurrence carries its environment evidence (#2553).
+- `address-issues-threat-assess` no longer rejects or flags an issue because of
+  the orchestrator's own prior AL CYCLE comments (#2549). Comments authored by
+  the configured tracker actor that carry the cycle header are classified
+  `orchestrator-status`, status prose about delivered work is classified
+  `descriptive` rather than `requested`, fenced code blocks count as quoted
+  evidence, and every finding and signal now carries `source` (author, comment
+  id). `assess.mjs` gains `--surface` for outbound cycle comments and
+  `--trusted-actor`; trusted logins resolve from `remotes.tracker_actor`. The
+  corpus evaluation and every existing true-positive fixture are unchanged.
+
+- Releases 2026.9.7 and 2026.9.9 shipped without their GitHub Announcements
+  discussions because the post-release action was prose the agent was expected
+  to perform by hand, left no evidence, and nothing gated completion on the
+  verifier. Both discussions are now published (#198, #199); the action is
+  tool-backed and verification is mandatory before a stable release is reported
+  complete.
+- `aiwg init` interactive provider picker now resolves registered provider
+  aliases such as `dsh` to their canonical id instead of warning "Unknown
+  provider"; the DeepSeek Harness guide and quickstart publish the upstream
+  Node engine requirement and launcher and record the 0.1.5-rc.x upstream
+  drift as fail-closed pending the release-age window (#2161).
+- Pi documentation no longer describes the runtime and session adapters as
+  unimplemented: the conformance and manual provider-testing guides now state
+  what the delivered `pi` external agent-loop adapter and v3 session importer
+  do, the CLI reference, README, and cross-platform overview name the
+  trust-gated extension bridge instead of reserved extensions, and the Pi
+  session page is registered in the docs manifest with a dated official
+  source (#2154).
+
+## [2026.9.9] - 2026-09-13 – "Say what is actually there"
+
+> v2026.9.8 was tagged but never published: its npm publish failed on a test the
+> release itself exposed, and the fix landed after the tag. This release supersedes it.
+> The tag remains on both remotes and carries nothing.
+
+### Added
+
+- Declare project data classification in `aiwg.config`. `project` accepts the historical bare
+  string or an object carrying `classification` (private | sanitized | public), `pii`, and
+  `handling.{excerptable,publishable,mirror}`. `doctor` reports the declaration and warns when it
+  contradicts the remotes — a repo declared private while a secondary remote pushes on release.
+- `aiwg repo-access add`, `remove`, and `audit`. The access manifest was mandatory and
+  default-deny with no write path, so registering a repo meant hand-editing JSON; `audit` reports
+  git subdirectories with no manifest entry and exits non-zero so it can gate CI.
+- `installation show` prints the shell step that actually resolves drift, tailored to its
+  direction. `switch` and `adopt` are declaration-only and cannot change which binary is on PATH.
+- `migrate --dry-run` reports, per source, how much operator content moves and to which scope,
+  and flags provider-named sources carrying enough content to be a scope decision.
+- A bibliographic-services reference for the research corpus: per-service operating
+  characteristics, failure modes, and the OpenAlex citation-count trap.
+- The bibliography resolver now extracts what it counts. Checked against real e-prints it
+  returned no title on 52 of 66 entries of an ACL paper, none on a biblatex one, and "ArXiv
+  preprint" as a title; it now reads acl_natbib `\href {url} {Title}`, biblatex `\field`,
+  plain natbib, and — the gap the report missed — brace-delimited `.bib` fields, which had
+  never parsed. Unresolved entries say so (`confirmedBy: unresolved`, `ref: null`); a title
+  that matches more than one corpus REF is resolved deterministically and the twins reported
+  in `ambiguous`. Titles 204/205 and years 204/205 across four dialect cases; 57 of 60
+  hand-resolved sidecar edges recovered, the rest corpus-side duplicates.
+- Discovery triggers on the 16 rules an agent most needs mid-task, phrased as the question
+  being asked rather than the policy name — so `aiwg discover "can I commit to main"` reaches
+  `delivery-policy` instead of an unrelated skill. Rules have always supported triggers; 2 of
+  168 used them. `docs/development/rule-creation-guide.md` documents the mechanism and
+  `npm run lint:rule-triggers` reports coverage.
+
+### Changed
+
+- `aiwg version` reports the binary that is executing, not the config-declared install, and
+  surfaces drift inline when the two disagree.
+- `aiwg refresh --dry-run` lists orphaned artifacts instead of printing only "Checking for stale
+  deployments...".
+- `adopt` refuses to abandon a declared install without `--yes`, showing both sides first.
+
+### Fixed
+
+- Stop the SessionStart hook printing its usage block into every session, and stop registering
+  it twice. A no-argument invocation is now a silent no-op; help moved behind `help`/`--help`.
+- Prune orphaned rules on refresh. Rules were never in scope for the target-provider prune, so
+  long-lived projects accumulated every rule any past version deployed — enough to exceed the
+  startup-context budget on their own.
+- Stop backing up a `.claude/settings.json` AIWG created seconds earlier in the same run, and add
+  the backup artifacts to the recommended gitignore patterns.
+- Emit the stale-commands warning once per run naming the actual files, instead of once per
+  deployed unit with an unexpanded `<command>.md` placeholder.
+- `workspace-context doctor` no longer reports `unsafe-link` for relative paths inside fenced
+  code blocks or inline code spans.
+- Accept `main-only-blocked` as a deprecated alias for `own-branch-only`, naming the semantic
+  narrowing rather than rejecting configs that were valid when written.
+- Route `--help` to real usage for the `installation`, `repo-access`, and `steward permissions`
+  namespaces instead of a "no detailed help" stub.
+- Name the install root when the framework graph cannot be built, so the documented repair is
+  run where it works rather than in a consumer project.
+- Keep rule discovery triggers out of deployed startup context. Deployed rules retain their
+  frontmatter, so trigger phrases would have shipped into every project — index metadata the
+  reading agent has no use for, against the budget the prune above defends.
+- Stop `test/unit/artifacts/discover.test.ts` overwriting the developer's user-global framework
+  index. It built that graph 18 times from two-artifact fixtures with only 4 calls sandboxed,
+  replacing a 4,130-artifact index with a 2-artifact one and silently breaking `aiwg discover`
+  host-wide until the next rebuild.
+
 ## [2026.9.7] - 2026-09-12 – "Only what the run owns"
 
 ### Added
@@ -4039,7 +4540,9 @@ The 2026.5.0 stable tag. The 2026.4.0 stable tag was never cut — the rc series
 - New unit tests: 7 for `aiwg skill-lint` rubric (perfect/stub/no-triggers/agent-only/broken-YAML fixtures + threshold modes). Behavior-loader and concierge integration tests updated for canonical metadata.* shape.
 - `.agents/` deployment directory is now gitignored, mirroring `.claude/` and `.codex/` (#949). 395 generated files removed from the index; regenerable via `aiwg use`.
 
-[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.8.26...HEAD
+[Unreleased]: https://github.com/jmagly/aiwg/compare/v2026.9.12...HEAD
+[2026.9.12]: https://github.com/jmagly/aiwg/compare/v2026.9.11...v2026.9.12
+[2026.9.11]: https://github.com/jmagly/aiwg/compare/v2026.9.10...v2026.9.11
 [2026.8.26]: https://github.com/jmagly/aiwg/compare/v2026.8.25...v2026.8.26
 [2026.8.25]: https://github.com/jmagly/aiwg/compare/v2026.8.20...v2026.8.25
 [2026.8.20]: https://github.com/jmagly/aiwg/compare/v2026.8.19...v2026.8.20

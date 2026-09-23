@@ -155,11 +155,12 @@ function displayHelp(): void {
     ['promote <name>', 'Graduate project-local bundle to upstream (--to upstream|corpus, --dry-run, --cleanup)'],
   ]);
 
-  helpGroup('RALPH LOOP', [
-    ['ralph "<task>"', 'Execute iterative task loop (--completion, --max-iterations)'],
-    ['ralph-status', 'Check current loop status'],
-    ['ralph-abort', 'Abort running loop'],
-    ['ralph-resume', 'Resume interrupted loop'],
+  helpGroup('AGENT LOOP', [
+    ['agent-loop "<task>"', 'Execute iterative task loop (--completion, --max-iterations)'],
+    ['agent-loop-status', 'Check current loop status'],
+    ['agent-loop-abort', 'Abort running loop'],
+    ['agent-loop-resume', 'Resume interrupted loop'],
+    ['', 'Legacy ralph* names remain accepted as aliases'],
   ]);
 
   helpGroup('MAINTENANCE', [

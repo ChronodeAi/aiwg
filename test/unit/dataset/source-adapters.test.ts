@@ -123,6 +123,13 @@ describe('dataset source adapter SDK (#2240)', () => {
     expect(malformed.at(-1)).toMatchObject({ kind: 'diagnostic', diagnostic: { code: 'ADAPTER_SCHEMA_DRIFT' } })
     const limited = await events(file, request('limited', { path: 'plain.txt' }, { offline: true, allowedRoot: sourceRoot }, { maxBytes: 2, maxRecordBytes: 2 }))
     expect(limited[0]).toMatchObject({ kind: 'diagnostic', diagnostic: { code: 'ADAPTER_RESOURCE_LIMIT' } })
+
+    const nestedDirectory = await mkdtemp(resolve(tmpdir(), 'aiwg-adapter-nesting-')); temporary.push(nestedDirectory)
+    let nested: unknown = 'leaf'
+    for (let depth = 0; depth < 4; depth += 1) nested = { nested }
+    await writeFile(resolve(nestedDirectory, 'nested.jsonl'), `${JSON.stringify(nested)}\n`)
+    const excessiveNesting = await events(new JsonlAdapter(), request('nested', { path: 'nested.jsonl' }, { offline: true, allowedRoot: nestedDirectory }, { maxDepth: 3 }))
+    expect(excessiveNesting.at(-1)).toMatchObject({ kind: 'diagnostic', diagnostic: { code: 'ADAPTER_RESOURCE_LIMIT' } })
   })
 
   it('fails before reading on cancellation and incompatible checkpoints', async () => {

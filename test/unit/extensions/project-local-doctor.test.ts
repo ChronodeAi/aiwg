@@ -252,6 +252,29 @@ describe('project-local-doctor (DC-1)', () => {
     expect(r.hasFailures).toBe(true);
   });
 
+  it('does not report drift when the deployed file equals its source plus the managed marker, even if the registry recorded another rendering (#2560)', async () => {
+    writeBundle(projectDir, 'marker-only', { ruleBody: 'rule body' });
+    // Deployed copy: source verbatim plus the deploy-time managed marker.
+    deployRule(projectDir, '<!-- aiwg:managed v0.1.0 project-local -->\nrule body');
+    // Registry captured a transformed rendering from an earlier deploy path.
+    const config = makeConfig('marker-only', { 'rules/r1.md': sha256('rule body') });
+    config.installed['marker-only'].deployedArtifactHashes = { claude: { 'rules/r1.md': sha256('some other rendering') } };
+
+    const r = await buildProjectLocalDoctorSection({ projectDir, frameworkRoot, config });
+    expect(r.output).not.toContain('marker-only ::');
+    expect(r.output).not.toContain('deployed file differs from source');
+  });
+
+  it('does not report drift when the deployed file equals the current source even if both recorded hashes are stale (#2560)', async () => {
+    writeBundle(projectDir, 'stale-registry', { ruleBody: 'current source body' });
+    deployRule(projectDir, '<!-- aiwg:managed v0.1.0 project-local -->\ncurrent source body');
+    const config = makeConfig('stale-registry', { 'rules/r1.md': sha256('older source body') });
+
+    const r = await buildProjectLocalDoctorSection({ projectDir, frameworkRoot, config });
+    expect(r.output).not.toContain('stale-registry ::');
+    expect(r.output).not.toContain('deployed file differs from source');
+  });
+
   it('detects drift when deployed file differs from registered hash', async () => {
     writeBundle(projectDir, 'foo');
     await deployProjectQuickref(projectDir, 'claude');

@@ -52,6 +52,28 @@ discovery v1 receipts remain verifiable; new discovery emits v2 receipts for the
 implemented tool and its lifecycle actions. Discovery remains distinct from
 execution evidence and does not attest persistence.
 
+Once the bounded run and cleanup are complete, the matrix consumes the
+sanitized qualification wrapper and its separately persisted canonical run
+receipt with `qualify:dataset -- --mode live`. The exact Fortemi source commit
+is mandatory. The importer independently verifies receipt structure and digest,
+single-record limits, redaction, replay/archive outcomes, process and scratch
+cleanup, and source identity before marking `parity.fortemi-server-live` passed.
+Importing evidence does not authorize a mutation or replace the execution
+window's containment controls.
+
+Discovery must also advertise a capability descriptor. AIWG validates that
+descriptor before any preview or execute call, negotiates the request against it
+independently, and refuses to continue when the server reports a decision the
+advertised descriptor does not support. The receipt's capability decision is
+bound to the same independent negotiation, so a run cannot claim a capability
+the descriptor never advertised. The capability wire authority is Fortemi Core
+`packages/core/schemas/dataset-execution-capabilities/validation/1.0.1`, tracked
+by [Fortemi React #422](https://git.integrolabs.net/Fortemi/fortemi-react/issues/422);
+AIWG pins that schema and its shared vectors under
+`schemas/dataset/fortemi-capability-validation/1.0.1/` and implements the rules
+in `src/dataset/fortemi-capability.ts` without importing the producer's
+validator.
+
 The schema authority is Fortemi
 `contracts/dataset-execution/validation/1.0.1`, tracked by
 [Fortemi #1131](https://git.integrolabs.net/Fortemi/fortemi/issues/1131).

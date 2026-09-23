@@ -1,5 +1,10 @@
 ---
 enforcement: high
+triggers:
+  - "what did the user actually ask for"
+  - "did I follow the instructions"
+  - "the user repeated themselves"
+  - "user says that is not what I asked"
 ---
 
 # Instruction Comprehension Rules

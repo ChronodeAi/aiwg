@@ -6,11 +6,24 @@
   "providers": {
     "antigravity": {
       "roles": {
-        "reasoning": { "id": "configured/reasoning", "status": "unverified", "observed": false },
-        "coding": { "id": "configured/coding", "status": "unverified", "observed": false },
-        "efficiency": { "id": "configured/efficiency", "status": "unverified", "observed": false }
+        "reasoning": {
+          "id": "configured/reasoning",
+          "status": "unverified",
+          "observed": false
+        },
+        "coding": {
+          "id": "configured/coding",
+          "status": "unverified",
+          "observed": false
+        },
+        "efficiency": {
+          "id": "configured/efficiency",
+          "status": "unverified",
+          "observed": false
+        }
       },
-      "sourceUrl": "https://antigravity.google/docs/cli/overview/", "verifiedAt": "2026-09-04"
+      "sourceUrl": "https://antigravity.google/docs/cli/overview/",
+      "verifiedAt": "2026-09-04"
     },
     "claude": {
       "roles": {
@@ -161,19 +174,45 @@
     },
     "pi": {
       "roles": {
-        "reasoning": { "id": "configured/reasoning", "status": "unverified", "observed": false },
-        "coding": { "id": "configured/coding", "status": "unverified", "observed": false },
-        "efficiency": { "id": "configured/efficiency", "status": "unverified", "observed": false }
+        "reasoning": {
+          "id": "configured/reasoning",
+          "status": "unverified",
+          "observed": false
+        },
+        "coding": {
+          "id": "configured/coding",
+          "status": "unverified",
+          "observed": false
+        },
+        "efficiency": {
+          "id": "configured/efficiency",
+          "status": "unverified",
+          "observed": false
+        }
       },
-      "sourceUrl": "https://github.com/earendil-works/pi/tree/main/packages/coding-agent#providers--models", "verifiedAt": "2026-09-04"
+      "sourceUrl": "https://github.com/earendil-works/pi/tree/main/packages/coding-agent#providers--models",
+      "verifiedAt": "2026-09-04"
     },
     "deepseek-harness": {
       "roles": {
-        "reasoning": { "id": "configured/reasoning", "status": "unverified", "observed": false },
-        "coding": { "id": "configured/coding", "status": "unverified", "observed": false },
-        "efficiency": { "id": "configured/efficiency", "status": "unverified", "observed": false }
+        "reasoning": {
+          "id": "configured/reasoning",
+          "status": "unverified",
+          "observed": false
+        },
+        "coding": {
+          "id": "configured/coding",
+          "status": "unverified",
+          "observed": false
+        },
+        "efficiency": {
+          "id": "configured/efficiency",
+          "status": "unverified",
+          "observed": false
+        }
       },
-      "sourceUrl": "https://github.com/deepseek-ai/deepseek-harness", "verifiedAt": "2026-09-05"
+      "sourceUrl": "https://github.com/deepseek-ai/deepseek-harness",
+      "verifiedAt": "2026-09-05"
     },
     "warp": {
       "roles": {
@@ -237,6 +276,27 @@
       },
       "sourceUrl": "https://docs.openclaw.ai/tools/subagents",
       "verifiedAt": "2026-07-20"
+    },
+    "grokbot": {
+      "roles": {
+        "reasoning": {
+          "id": "global-delegation-model",
+          "status": "unverified",
+          "observed": false
+        },
+        "coding": {
+          "id": "global-delegation-model",
+          "status": "unverified",
+          "observed": false
+        },
+        "efficiency": {
+          "id": "global-delegation-model",
+          "status": "unverified",
+          "observed": false
+        }
+      },
+      "sourceUrl": "https://github.com/jmagly/aiwg/blob/main/docs/architecture/adr-grokbot-provider-target.md",
+      "verifiedAt": "2026-09-15"
     },
     "hermes": {
       "roles": {

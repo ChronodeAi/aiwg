@@ -19,7 +19,7 @@ import type { MarketplaceProvenanceEnvelope } from '../../../src/marketplace/pro
 import { sha256 } from '../../../src/security/artifact-trust.js';
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { timeout: 60_000, cwd, encoding: 'utf8' }).trim();
 }
 
 describe('marketplace cross-asset bridge', () => {
@@ -43,7 +43,7 @@ describe('marketplace cross-asset bridge', () => {
     envelope = await createProvenanceEnvelope({
       checkoutPath: root,
       artifactPath: root,
-      manifest: JSON.parse(execFileSync('git', ['show', 'HEAD:manifest.json'], { cwd: root, encoding: 'utf8' })),
+      manifest: JSON.parse(execFileSync('git', ['show', 'HEAD:manifest.json'], { timeout: 60_000, cwd: root, encoding: 'utf8' })),
       requestedRef: 'main',
       publisher: 'acme',
       now: new Date('2026-08-16T12:00:00.000Z'),

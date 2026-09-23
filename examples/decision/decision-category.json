@@ -1,0 +1,46 @@
+{
+  "apiVersion": "decision.aiwg.io/v1alpha1",
+  "kind": "DecisionDefinition",
+  "metadata": {
+    "id": "example-category",
+    "version": "1.0.0",
+    "description": "example category"
+  },
+  "spec": {
+    "purpose": "Triage a synthetic support report without performing any action.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "question": "Classify the reported problem.",
+    "answer": {
+      "kind": "choice",
+      "options": [
+        {
+          "id": "documentation",
+          "description": "Documentation or help content is broken."
+        },
+        {
+          "id": "runtime",
+          "description": "The application fails during use."
+        },
+        {
+          "id": "other",
+          "description": "Neither category applies."
+        }
+      ]
+    },
+    "requiredCapabilities": [
+      "choice"
+    ]
+  }
+}

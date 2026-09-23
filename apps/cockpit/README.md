@@ -619,6 +619,7 @@ The detailed review script and screenshot commands live in
 
 ## See also
 
+- [Desktop identity integration](bridge/DESKTOP-IDENTITY.md) — provider contract and remaining desktop work
 - `apps/cockpit/RELEASE.md` — cockpit release pattern (channels, publish leg, config-defaults gate)
 - `.aiwg/architecture/adr-cockpit-session-control-not-cli-runner.md` — the core model
 - `.aiwg/architecture/cockpit-sad.md` + `cockpit-instance-control-interface.md`

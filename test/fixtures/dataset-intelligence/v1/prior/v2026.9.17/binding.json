@@ -1,0 +1,10 @@
+{
+  "tag": "v2026.9.17",
+  "tagObject": "b110d50d68e8539c9ad2de6a230014e0c01e1950",
+  "sourceCommit": "10b5f9eca8eeafec6ac2f179ebafdb71721dbd53",
+  "packageVersion": "2026.9.17",
+  "contractVersion": "aiwg.dataset/v1",
+  "corpusVersion": "1.0.0",
+  "fixture": "test/fixtures/dataset-intelligence/v1/prior/v2026.9.17/contracts.json",
+  "fixtureDigest": "sha256:937feadd475d5c1e56528170d4990595d719b62098f925717e74d985c0e05d1c"
+}

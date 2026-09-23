@@ -186,6 +186,26 @@ function parseArgs(args) {
     i++;
   }
 
+  // #1766: budget stops and the exploration quota live inside the analytics
+  // subsystem, so --no-analytics silently voids every declared ceiling. The
+  // coupling is documented; warn at parse time so an operator cannot believe a
+  // limit applies while the loop runs uncapped.
+  if (options.enableAnalytics === false) {
+    const voided = Object.entries(options.budgetLimits || {})
+      .filter(([, limit]) => Number.isFinite(Number(limit)) && Number(limit) > 0)
+      .map(([name]) => name);
+    if (options.explorationQuota && options.explorationQuota.enabled === true) {
+      voided.push('exploration_quota');
+    }
+    if (voided.length > 0) {
+      console.warn(
+        `[External Ralph] --no-analytics disables the analytics subsystem, which owns budget ` +
+        `enforcement and the exploration quota. Declared control(s) will NOT fire: ${voided.join(', ')}. ` +
+        `Remove --no-analytics to enforce them.`
+      );
+    }
+  }
+
   return options;
 }
 

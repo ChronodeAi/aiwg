@@ -1,0 +1,528 @@
+import { randomUUID } from 'node:crypto';
+import { composeRuleset } from './compose.js';
+import { DecisionPreDispatchError, decisionInvocationFingerprint, nextReceipt } from './receipts.js';
+import { admitEntry, EntryAdmissionError } from './entry.js';
+import { DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED } from './types.js';
+import type {
+  AdapterObservation,
+  ArtifactPin,
+  DecisionAdapter,
+  DecisionAttempt,
+  DecisionDefinition,
+  DecisionEvaluationRequest,
+  DecisionFailureReason,
+  DecisionResult,
+  DecisionReceipt,
+  DecisionStatus,
+  ExecutionTarget,
+  RulesetResult,
+} from './types.js';
+import {
+  artifactPin,
+  assertArtifactPin,
+  DecisionValidationError,
+  resolveJsonPointer,
+  validateAgainstSchema,
+  validateBinding,
+  validateDecisionValue,
+  validateDefinition,
+  validateDistribution,
+  validateRuleset,
+} from './validate.js';
+
+const RETRIABLE = new Set<DecisionFailureReason>([
+  'timeout', 'network-transient', 'rate-limited', 'overloaded', 'service-error',
+]);
+
+export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest): Promise<RulesetResult> {
+  let rulesetPin: ArtifactPin;
+  let bindingPin: ArtifactPin;
+  let base: RulesetResult | undefined;
+  let resolved: Array<{ alias: string; definition: DecisionDefinition; pin: ArtifactPin; input: unknown }>;
+  let admissionStage: 'artifact' | 'input' = 'artifact';
+  try {
+    admitEntry(request.ruleset);
+    admitEntry(request.binding);
+    admitEntry(request.definitions);
+    admissionStage = 'input';
+    admitEntry(request.input);
+    admissionStage = 'artifact';
+    validateRuleset(request.ruleset);
+    rulesetPin = artifactPin(request.ruleset);
+    bindingPin = artifactPin(request.binding);
+    // Pin and execute immutable snapshots; adapters receive separate per-attempt copies.
+    request = {
+      ...request,
+      ruleset: structuredClone(request.ruleset), binding: structuredClone(request.binding),
+      definitions: structuredClone(request.definitions), input: structuredClone(request.input),
+    };
+    base = resultBase(request, rulesetPin, bindingPin);
+    validateBinding(request.binding, request.ruleset);
+    validateAgainstSchema(request.ruleset.spec.inputSchema, request.input, 'ruleset input');
+    resolved = resolveDefinitions(request);
+  } catch (error) {
+    const reason = error instanceof EntryAdmissionError && admissionStage === 'input'
+      ? 'invalid-input' : classifyValidationFailure(error);
+    return failureResult(base ?? invalidResultBase(request), reason);
+  }
+  if (!base) return failureResult(invalidResultBase(request), 'invalid-definition');
+
+  const fingerprint = decisionInvocationFingerprint({
+    invocationId: request.invocationId,
+    value: request.input,
+    definitions: resolved.map(item => item.pin),
+    ruleset: rulesetPin,
+    binding: bindingPin,
+    policy: request.policyPin,
+    calibration: request.calibrationPin,
+  });
+  let receipt: DecisionReceipt | undefined;
+  let reconciled: AdapterObservation | null = null;
+  const projectId = request.receiptProjectId ?? 'default';
+  if (request.receiptStore) {
+    try {
+      const acquisition = await request.receiptStore.acquire(request.invocationId, projectId, fingerprint);
+      if (!acquisition.owner) {
+        if (acquisition.receipt.fingerprint !== fingerprint) return failureResult(base, 'replay-mismatch');
+        if (acquisition.receipt.state === 'completed') return structuredClone(acquisition.receipt.result!);
+        if (acquisition.receipt.state === 'failed' || acquisition.receipt.state === 'execution-uncertain') return failureResult(base, 'execution-uncertain');
+        try {
+          const terminal = await request.receiptStore.waitForTerminal(request.invocationId, projectId, fingerprint,
+            AbortSignal.timeout(request.binding.spec.totalTimeoutMs + 1000));
+          return terminal.state === 'completed' ? structuredClone(terminal.result!) : failureResult(base, 'execution-uncertain');
+        } catch {
+          try {
+            const pending = await request.receiptStore.read(request.invocationId, projectId);
+            if (pending?.state === 'completed') return structuredClone(pending.result!);
+            if (pending && pending.fingerprint === fingerprint && (pending.state === 'remote-handle-known' || pending.state === 'observation-received')
+              && pending.pending && pending.remoteHandles.length && request.reconcileRemote) {
+              const authorized = await request.receiptStore.read(request.invocationId, projectId);
+              if (!authorized || authorized.revision !== pending.revision || authorized.fingerprint !== fingerprint) {
+                throw new ReceiptPersistenceError();
+              }
+              reconciled = await request.reconcileRemote(pending.remoteHandles.at(-1)!, request.signal ?? new AbortController().signal);
+              if (reconciled?.status === 'success') {
+                receipt = pending;
+              }
+            }
+            if (!receipt && pending && pending.fingerprint === fingerprint && pending.state !== 'execution-uncertain' && pending.state !== 'failed') {
+              await request.receiptStore.compareAndSwap(request.invocationId, projectId, pending.revision, nextReceipt(pending, 'execution-uncertain'));
+            }
+          } catch { return failureResult(base, 'persistence-error'); }
+          if (!receipt) return failureResult(base, 'execution-uncertain');
+        }
+      }
+      if (acquisition.owner) receipt = acquisition.receipt;
+    } catch {
+      return failureResult(base, 'persistence-error');
+    }
+  }
+
+  const advance = async (state: DecisionReceipt['state'], extra: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending'>> = {}): Promise<void> => {
+    if (!request.receiptStore || !receipt) return;
+    try {
+      const next = nextReceipt(receipt, state, extra);
+      if (!await request.receiptStore.compareAndSwap(request.invocationId, projectId, receipt.revision, next)) {
+        throw new ReceiptPersistenceError();
+      }
+      receipt = next;
+    } catch {
+      throw new ReceiptPersistenceError();
+    }
+  };
+
+  const now = request.now ?? Date.now;
+  const totalDeadline = now() + request.binding.spec.totalTimeoutMs;
+  const totalTimeout = AbortSignal.timeout(request.binding.spec.totalTimeoutMs);
+  const totalAbort = AbortSignal.any([request.signal ?? new AbortController().signal, totalTimeout]);
+  const evaluations: Record<string, DecisionResult> = structuredClone(receipt?.evaluations ?? {});
+  let attemptsUsed = Object.values(evaluations).reduce((sum, result) => sum + result.spec.attempts.length, 0);
+
+  try {
+  if (reconciled && receipt?.pending) {
+    const pending = receipt.pending;
+    const item = resolved.find(candidate => candidate.alias === pending.alias);
+    const target = request.binding.spec.evaluations[pending.alias]?.targets[pending.targetIndex];
+    if (!item || !target) throw new RemoteUncertainError();
+    let observation: AdapterObservation;
+    try { observation = normalizeObservation(item.definition, target, reconciled); }
+    catch { throw new RemoteUncertainError(); }
+    if (observation.status !== 'success') throw new RemoteUncertainError();
+    const context: OneContext = { request, item, rulesetPin, bindingPin, totalDeadline, signal: totalAbort, totalTimeout,
+      attemptsAvailable: request.binding.spec.maxAttempts, now, advance };
+    const attempts = [...pending.attempts, toAttempt(target, pending.ordinal, observation, 0)];
+    evaluations[item.alias] = decisionResult(context, observation, attempts);
+    attemptsUsed += attempts.length;
+    await advance('observation-received', { evaluations, pending: null });
+  }
+  for (const item of resolved) {
+    if (evaluations[item.alias]) continue;
+    if (totalAbort.aborted) {
+      const reason = request.signal?.aborted ? 'cancelled' : 'timeout';
+      evaluations[item.alias] = emptyDecisionResult(request, item, rulesetPin, bindingPin, reason === 'cancelled' ? 'cancelled' : 'error', reason);
+      continue;
+    }
+    const execution = await evaluateOne({
+      request,
+      item,
+      rulesetPin,
+      bindingPin,
+      totalDeadline,
+      signal: totalAbort,
+      totalTimeout,
+      attemptsAvailable: request.binding.spec.maxAttempts - attemptsUsed,
+      now,
+      advance,
+    });
+    attemptsUsed += execution.spec.attempts.length;
+    evaluations[item.alias] = execution;
+    await advance('observation-received', { evaluations, pending: null });
+  }
+
+  if (receipt?.state === 'execution-uncertain') return failureResult(base, 'execution-uncertain', evaluations);
+
+  let result: RulesetResult;
+  if (totalAbort.aborted) {
+    const reason = request.signal?.aborted ? 'cancelled' : 'timeout';
+    result = { ...base, spec: { ...base.spec, status: reason === 'cancelled' ? 'cancelled' : 'error', reason, matchedRules: [], evaluations } };
+  } else {
+    try {
+      const composition = composeRuleset(request.ruleset, request.input, evaluations);
+      result = {
+        ...base,
+        spec: {
+          ...base.spec,
+          status: composition.status,
+          reason: composition.reason as DecisionFailureReason,
+          ...(composition.outcome !== undefined ? { outcome: composition.outcome } : {}),
+          matchedRules: composition.matchedRules,
+          evaluations,
+        },
+      };
+    } catch {
+      result = { ...base, spec: { ...base.spec, status: 'error', reason: 'invalid-output', matchedRules: [], evaluations } };
+    }
+  }
+
+  await advance('composed');
+  await advance('completed', { result });
+  return result;
+  } catch (error) {
+    if (error instanceof RemoteUncertainError) {
+      try { await advance('execution-uncertain'); } catch { return failureResult(base, 'persistence-error', evaluations); }
+      return failureResult(base, 'execution-uncertain', evaluations);
+    }
+    return failureResult(base, 'persistence-error', evaluations);
+  }
+}
+
+class ReceiptPersistenceError extends Error {}
+class RemoteUncertainError extends Error {}
+
+interface OneContext {
+  request: DecisionEvaluationRequest;
+  item: { alias: string; definition: DecisionDefinition; pin: ArtifactPin; input: unknown };
+  rulesetPin: ArtifactPin;
+  bindingPin: ArtifactPin;
+  totalDeadline: number;
+  signal: AbortSignal;
+  totalTimeout: AbortSignal;
+  attemptsAvailable: number;
+  now: () => number;
+  advance: (state: DecisionReceipt['state'], extra?: Partial<Pick<DecisionReceipt, 'result' | 'remoteHandles' | 'evaluations' | 'pending'>>) => Promise<void>;
+}
+
+async function evaluateOne(context: OneContext): Promise<DecisionResult> {
+  const evaluation = context.request.binding.spec.evaluations[context.item.alias]!;
+  const attempts: DecisionAttempt[] = [];
+  let final: AdapterObservation = observationFailure('budget-exhausted');
+
+  for (let targetIndex = 0; targetIndex < evaluation.targets.length; targetIndex += 1) {
+    const target = evaluation.targets[targetIndex]!;
+    if (context.signal.aborted || context.now() >= context.totalDeadline) {
+      final = interruption(context);
+      break;
+    }
+    if (attempts.length >= context.attemptsAvailable) {
+      final = observationFailure('budget-exhausted');
+      break;
+    }
+    const adapter = context.request.adapters[target.adapter];
+    const capabilityFailure = await checkCapabilities(adapter, target, context.item.definition);
+    if (capabilityFailure) {
+      final = capabilityFailure;
+      attempts.push(toAttempt(target, attempts.length + 1, final, 0));
+    } else {
+      for (let retry = 0; retry <= target.retry.maxRetries; retry += 1) {
+        if (context.signal.aborted || context.now() >= context.totalDeadline) {
+          final = interruption(context);
+          break;
+        }
+        if (attempts.length >= context.attemptsAvailable) {
+          final = observationFailure('budget-exhausted');
+          break;
+        }
+        const started = context.now();
+        const attemptDeadline = Math.min(context.totalDeadline, started + target.timeoutMs);
+        try {
+          await context.advance('dispatched', { pending: { alias: context.item.alias, targetIndex, ordinal: attempts.length + 1, attempts } });
+          try {
+            final = await invokeWithDeadline(context, adapter!, target, attemptDeadline, attempts.length + 1);
+          } catch (error) {
+            if (context.request.receiptStore && !(error instanceof DecisionPreDispatchError)) throw new RemoteUncertainError();
+            await context.advance('observation-received');
+            throw error;
+          }
+          if (context.request.receiptStore && final.status !== 'success'
+            && final.dispatchCertainty !== 'terminal-response' && final.dispatchCertainty !== 'not-sent') {
+            throw new RemoteUncertainError();
+          }
+          await context.advance('observation-received');
+          final = normalizeObservation(context.item.definition, target, final);
+        } catch (error) {
+          if (error instanceof ReceiptPersistenceError || error instanceof RemoteUncertainError) throw error;
+          final = observationFailure(error instanceof DecisionValidationError ? 'invalid-output' : 'service-error');
+        }
+        attempts.push(toAttempt(target, attempts.length + 1, final, Math.max(0, context.now() - started)));
+        if (final.status === 'success') break;
+        if (!RETRIABLE.has(final.reason) || retry === target.retry.maxRetries) break;
+        const remaining = Math.max(0, context.totalDeadline - context.now());
+        const baseDelay = Math.min(target.retry.maxDelayMs,
+          final.retryAfterMs ?? target.retry.initialDelayMs * 2 ** retry);
+        const random = context.request.random?.() ?? Math.random();
+        const jitter = Number.isFinite(random) ? Math.min(1, Math.max(0, random)) : 0.5;
+        const jittered = final.retryAfterMs === undefined ? Math.round(baseDelay * (0.75 + 0.5 * jitter)) : baseDelay;
+        const delayMs = Math.min(remaining, target.retry.maxDelayMs, Math.max(0, jittered));
+        if (context.signal.aborted || remaining <= delayMs) { final = interruption(context); break; }
+        attempts[attempts.length - 1]!.retryDelayMs = delayMs;
+        try {
+          await (context.request.delay ?? abortableDelay)(delayMs, context.signal);
+        } catch {
+          final = interruption(context);
+          break;
+        }
+        if (context.signal.aborted || context.now() >= context.totalDeadline) { final = interruption(context); break; }
+      }
+    }
+    if (final.status === 'success' || final.reason === 'cancelled') break;
+    const hasNext = targetIndex + 1 < evaluation.targets.length;
+    if (!hasNext || !evaluation.fallbackOn.includes(final.reason)) break;
+  }
+
+  return decisionResult(context, final, attempts);
+}
+
+async function invokeWithDeadline(
+  context: OneContext,
+  adapter: DecisionAdapter,
+  target: ExecutionTarget,
+  deadlineEpochMs: number,
+  ordinal: number,
+): Promise<AdapterObservation> {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([context.signal, controller.signal]);
+  const timeoutMs = Math.max(1, deadlineEpochMs - context.now());
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener = (): void => undefined;
+  const boundary = new Promise<AdapterObservation>(resolve => {
+    timer = setTimeout(() => {
+      controller.abort(new DOMException('Decision target timed out', 'TimeoutError'));
+      resolve(context.request.signal?.aborted ? interruption(context) : observationFailure('timeout', 'error', undefined, 'target-timeout'));
+    }, timeoutMs);
+    const cancelled = (): void => resolve(interruption(context));
+    if (context.signal.aborted) cancelled();
+    else {
+      context.signal.addEventListener('abort', cancelled, { once: true });
+      removeAbortListener = () => context.signal.removeEventListener('abort', cancelled);
+    }
+  });
+  try {
+    const observed = await Promise.race([
+      adapter.evaluate({
+        alias: context.item.alias,
+        definition: structuredClone(context.item.definition),
+        input: structuredClone(context.item.input),
+        target: structuredClone(target),
+        invocationId: `${context.request.invocationId}:${context.item.alias}:${ordinal}`,
+        deadlineEpochMs,
+        signal,
+        callerSignal: context.request.signal ?? new AbortController().signal,
+        totalSignal: context.signal,
+        resolveCredential: context.request.resolveCredential ?? unauthorizedCredential,
+        onRemoteHandle: async handle => {
+          try {
+            const previous = await context.request.receiptStore?.read(context.request.invocationId, context.request.receiptProjectId ?? 'default');
+            if (previous && !previous.remoteHandles.includes(handle)) await context.advance('remote-handle-known', { remoteHandles: [...previous.remoteHandles, handle] });
+          } catch { throw new ReceiptPersistenceError(); }
+        },
+      }),
+      boundary,
+    ]);
+    return context.request.signal?.aborted ? observationFailure('cancelled', 'cancelled', observed, 'caller-cancelled') : observed;
+  } finally {
+    if (timer) clearTimeout(timer);
+    removeAbortListener();
+  }
+}
+
+function interruption(context: OneContext): AdapterObservation {
+  if (context.request.signal?.aborted) return observationFailure('cancelled', 'cancelled', undefined, 'caller-cancelled');
+  return observationFailure('timeout', 'error', undefined,
+    context.totalTimeout.aborted || context.now() >= context.totalDeadline ? 'total-deadline' : 'target-timeout');
+}
+
+function resolveDefinitions(request: DecisionEvaluationRequest): Array<{ alias: string; definition: DecisionDefinition; pin: ArtifactPin; input: unknown }> {
+  const values = Object.values(request.definitions);
+  return request.ruleset.spec.evaluations.map(evaluation => {
+    const definition = values.find(candidate => candidate.metadata.id === evaluation.decision.id);
+    if (!definition) throw new DecisionValidationError(`missing decision '${evaluation.decision.id}'`);
+    validateDefinition(definition);
+    assertArtifactPin(definition, evaluation.decision, `decision ${evaluation.alias}`);
+    const projection = resolveJsonPointer(request.input, evaluation.inputPointer);
+    if (!projection.found) throw new DecisionValidationError(`input projection for '${evaluation.alias}' is missing`);
+    validateAgainstSchema(definition.spec.inputSchema, projection.value, `${evaluation.alias} input`);
+    return { alias: evaluation.alias, definition, pin: evaluation.decision, input: structuredClone(projection.value) };
+  });
+}
+
+async function checkCapabilities(
+  adapter: DecisionAdapter | undefined,
+  target: ExecutionTarget,
+  definition: DecisionDefinition,
+): Promise<AdapterObservation | null> {
+  if (!adapter || adapter.id !== target.adapter || adapter.version !== target.adapterVersion) return observationFailure('executor-unavailable');
+  const capabilities = await adapter.capabilities();
+  if (!capabilities.executable || !capabilities.answerKinds.includes(definition.spec.answer.kind)) return observationFailure('unsupported-capability', 'unsupported');
+  if (definition.apiVersion === DECISION_API_VERSION_STRUCTURED && !capabilities.features.includes('structured-entries')) {
+    return observationFailure('unsupported-capability', 'unsupported');
+  }
+  const required = new Set([...definition.spec.requiredCapabilities, ...target.requiredCapabilities]);
+  const available = new Set([...capabilities.answerKinds, ...capabilities.features]);
+  if ([...required].some(capability => !available.has(capability))) return observationFailure('unsupported-capability', 'unsupported');
+  if (definition.spec.answer.kind === 'choice' && capabilities.maxOptions !== null && definition.spec.answer.options.length > capabilities.maxOptions) {
+    return observationFailure('unsupported-capability', 'unsupported');
+  }
+  if (definition.spec.answer.kind === 'ordinal-score' && capabilities.maxLevels !== null && definition.spec.answer.levels.length > capabilities.maxLevels) {
+    return observationFailure('unsupported-capability', 'unsupported');
+  }
+  if (target.acceptance.mode === 'confidence-threshold' && !capabilities.confidenceProfiles.includes(target.acceptance.profile)) {
+    return observationFailure('confidence-profile-mismatch', 'abstained');
+  }
+  return null;
+}
+
+function normalizeObservation(definition: DecisionDefinition, target: ExecutionTarget, observation: AdapterObservation): AdapterObservation {
+  if (observation.status !== 'success') return observation;
+  validateDecisionValue(definition, observation.value);
+  if (observation.uncertainty?.distribution) validateDistribution(definition, observation.uncertainty.distribution);
+  if (target.acceptance.mode === 'typed-value') return observation;
+  if (!observation.uncertainty || observation.uncertainty.confidence === null) return observationFailure('missing-confidence', 'abstained', observation);
+  if (observation.uncertainty.profile !== target.acceptance.profile) return observationFailure('confidence-profile-mismatch', 'abstained', observation);
+  if (observation.uncertainty.confidence * 10_000 < target.acceptance.minimumBps) return observationFailure('low-confidence', 'abstained', observation);
+  return observation;
+}
+
+function decisionResult(context: OneContext, observation: AdapterObservation, attempts: DecisionAttempt[]): DecisionResult {
+  return {
+    apiVersion: resultVersion(context.request), kind: 'DecisionResult',
+    metadata: { id: `${context.request.invocationId}-${context.item.alias}`, version: '1.0.0', description: `Decision result for ${context.item.alias}` },
+    spec: {
+      decision: context.item.pin, ruleset: context.rulesetPin, binding: context.bindingPin,
+      alias: context.item.alias, runId: context.request.runId, invocationId: context.request.invocationId,
+      status: observation.status, ...(observation.status === 'success' ? { value: observation.value! } : {}),
+      reason: observation.reason, uncertainty: observation.uncertainty, attempts,
+    },
+  };
+}
+
+function emptyDecisionResult(
+  request: DecisionEvaluationRequest,
+  item: OneContext['item'],
+  rulesetPin: ArtifactPin,
+  bindingPin: ArtifactPin,
+  status: DecisionStatus,
+  reason: DecisionFailureReason,
+): DecisionResult {
+  return decisionResult({ request, item, rulesetPin, bindingPin, totalDeadline: 0, signal: new AbortController().signal,
+    totalTimeout: new AbortController().signal, attemptsAvailable: 0, now: Date.now, advance: async () => undefined }, observationFailure(reason, status), []);
+}
+
+function resultBase(request: DecisionEvaluationRequest, ruleset: ArtifactPin, binding: ArtifactPin): RulesetResult {
+  return {
+    apiVersion: resultVersion(request), kind: 'RulesetResult',
+    metadata: { id: request.invocationId, version: '1.0.0', description: `Ruleset result for ${request.ruleset.metadata.id}` },
+    spec: { ruleset, binding, runId: request.runId, invocationId: request.invocationId, status: 'error', reason: 'evaluation-failed', matchedRules: [], evaluations: {} },
+  };
+}
+
+function resultVersion(request: DecisionEvaluationRequest): typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED {
+  if (request.ruleset.apiVersion === DECISION_API_VERSION_STRUCTURED || request.binding.apiVersion === DECISION_API_VERSION_STRUCTURED
+    || Object.values(request.definitions).some(definition => definition.apiVersion === DECISION_API_VERSION_STRUCTURED)) {
+    return DECISION_API_VERSION_STRUCTURED;
+  }
+  return DECISION_API_VERSION;
+}
+
+function invalidResultBase(request: DecisionEvaluationRequest): RulesetResult {
+  const invalidPin: ArtifactPin = { id: 'invalid', version: '0.0.0', digest: `sha256:${'0'.repeat(64)}` };
+  return {
+    apiVersion: DECISION_API_VERSION, kind: 'RulesetResult',
+    metadata: { id: request.invocationId, version: '1.0.0', description: 'Rejected decision evaluation' },
+    spec: { ruleset: invalidPin, binding: invalidPin, runId: request.runId, invocationId: request.invocationId,
+      status: 'error', reason: 'invalid-definition', matchedRules: [], evaluations: {} },
+  };
+}
+
+function failureResult(base: RulesetResult, reason: DecisionFailureReason, evaluations: Record<string, DecisionResult> = {}): RulesetResult {
+  return { ...base, spec: { ...base.spec, status: reason === 'cancelled' ? 'cancelled' : 'error', reason, matchedRules: [], evaluations } };
+}
+
+function observationFailure(
+  reason: DecisionFailureReason,
+  status: DecisionStatus = reason === 'cancelled' ? 'cancelled' : reason === 'unsupported-capability' ? 'unsupported' : 'error',
+  inherit?: AdapterObservation,
+  termination?: DecisionAttempt['termination'],
+): AdapterObservation {
+  return {
+    status, reason, uncertainty: inherit?.uncertainty ?? null,
+    actualModel: inherit?.actualModel ?? null,
+    usage: inherit?.usage ?? { inputTokens: null, outputTokens: null, costUsd: null },
+    requestId: inherit?.requestId ?? null,
+    ...(termination ? { termination } : {}),
+  };
+}
+
+function toAttempt(target: ExecutionTarget, ordinal: number, observation: AdapterObservation, durationMs: number): DecisionAttempt {
+  return {
+    ordinal, adapter: target.adapter, adapterVersion: target.adapterVersion, requestedModel: target.model,
+    actualModel: observation.actualModel, subagent: target.subagent ?? null, status: observation.status,
+    reason: observation.reason, durationMs, usage: observation.usage, requestId: observation.requestId,
+    ...(observation.requestIdSource ? { requestIdSource: observation.requestIdSource } : {}),
+    ...(observation.httpStatus !== undefined ? { httpStatus: observation.httpStatus } : {}),
+    ...(observation.termination ? { termination: observation.termination } : {}),
+    ...(observation.remoteExecution ? { remoteExecution: observation.remoteExecution } : {}),
+  };
+}
+
+function classifyValidationFailure(error: unknown): DecisionFailureReason {
+  if (!(error instanceof DecisionValidationError)) return 'invalid-definition';
+  if (/digest/.test(error.message)) return 'digest-mismatch';
+  if (/input|projection/.test(error.message)) return 'invalid-input';
+  return 'invalid-definition';
+}
+
+async function unauthorizedCredential(): Promise<Uint8Array> {
+  throw new DecisionValidationError('credential resolver is not configured');
+}
+
+async function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+  });
+}
+
+export function createDecisionInvocationId(prefix = 'decision'): string {
+  return `${prefix}-${randomUUID()}`;
+}

@@ -335,6 +335,15 @@
   },
   {
     "kind": "addons",
+    "name": "decision-engine",
+    "source": "agentic/code/addons/decision-engine/docs",
+    "dest": "docs/addons/decision-engine",
+    "files": [
+      "operations.md"
+    ]
+  },
+  {
+    "kind": "addons",
     "name": "graph-pattern",
     "source": "agentic/code/addons/graph-pattern/docs",
     "dest": "docs/addons/graph-pattern",

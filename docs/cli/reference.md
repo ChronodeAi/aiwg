@@ -260,7 +260,7 @@ aiwg doctor [--provider <name>] [--all-providers] [--project-local] [--quiet]
 
 **Flags:**
 
-- `--provider <name>` — Inspect a specific provider's deployment paths (claude, codex, copilot, cursor, factory, hermes, opencode, openclaw, openhuman, omp, pi, warp, or devin). Defaults to auto-detect across deployed providers.
+- `--provider <name>` — Inspect a specific provider's deployment paths (claude, codex, copilot, cursor, factory, grokbot, hermes, opencode, openclaw, openhuman, omp, pi, warp, or devin). Defaults to auto-detect across deployed providers.
 - `--all-providers` — Enumerate every supported provider, including ones with nothing deployed.
 - `--project-local` — Show only the project-local artifacts section. Exit code reflects only project-local findings.
 - `--quiet` — Suppress informational subsections (counts, shadows). Show only failures.
@@ -285,6 +285,14 @@ aiwg doctor [--provider <name>] [--all-providers] [--project-local] [--quiet]
 - System dependencies (git, jq, etc.)
 - `memory.topology` contracts — runs `validateMemoryTopology()` against every installed framework/addon manifest; flags missing required fields, invalid `crossRefStyle` values (must be `at-mention | wikilink | markdown-link | yaml-ref`), namespaces not under `.aiwg/`, empty `derivedPages`, and wrong array shapes for `lintRules`/`ingestRequires` (per ADR-021)
 - **Provider context/memory firewall** — separately measures memory, rules, skills, agents, generated bridges, and project-local context; reports deployed/package drift, trust labels, changed reviewed files, and poisoning signals. See the [operator guide](../security/context-memory-firewall.md).
+- **Subagent Dispatch** (Claude Code) — measures whether the context inlined at
+  session start, including each ancestor directory's `CLAUDE.md` and
+  `.claude/rules`, leaves room for a Task dispatch after its agent definition and
+  the harness baseline. Fails when a dispatch cannot fit (the `Prompt is too long`
+  condition), warns below 40K tokens of working room, and names the ancestor
+  contribution when one applies. Remedy: redeploy so HIGH rules beyond the inline
+  budget move to `RULES-ONDEMAND.md`, lower `AIWG_RULES_INLINE_BUDGET_TOKENS`, or
+  prune ancestor rule deployments.
 - **Project-local artifacts** ([design](https://github.com/jmagly/aiwg/blob/main/.aiwg/architecture/design-doctor-log-promote.md)) — per-type counts, manifest validation, active shadows (informational vs blocking), denylist violations, deploy-state drift (deployed file hash vs registered `artifactHashes`), provider deployment matrix. Section is suppressed entirely when no project-local content exists.
 
 **Doctor exits 0 when:** no validation errors, no denylist violations, no drift. Shadows alone do not fail doctor — they're informational by design.
@@ -552,7 +560,7 @@ aiwg use <framework|addon>
 
 **Options:**
 
-- `--provider <name>` - Target platform (claude, copilot, factory, cursor, devin, warp, codex, opencode, hermes, openclaw, openhuman, pi, local)
+- `--provider <name>` - Target platform (claude, copilot, factory, cursor, devin, warp, codex, opencode, grokbot, hermes, openclaw, openhuman, pi, local)
 - `--scope user` / `--user` - Additively deploy to the project and mirror the
   artifacts into the provider's user-level discovery paths.
 - `--global` - Install framework and kernel assets into provider user-level
@@ -738,7 +746,7 @@ reload are shown with `--verbose`.
 | -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------- | --------- |
 | Google Antigravity CLI (experimental) | `antigravity` (`agy`) | `.agents/agents/`, `.agents/skills/`, project `AGENTS.md`; global skills unsupported | — |
 | Oh My Pi (experimental) | `omp` (`oh-my-pi`) | `.omp/agents/`, `.omp/prompts/`, `.omp/rules/`, `.agents/skills/`, `.omp/AGENTS.md` | Explicit extension bridge |
-| Pi Coding Agent (experimental) | `pi` | `.agents/skills/`, `.pi/prompts/`, `.pi/.aiwg/skills/`, project `AGENTS.md` | — |
+| Pi Coding Agent (experimental) | `pi` | `.agents/skills/`, `.pi/prompts/`, `.pi/.aiwg/skills/`, `.pi/extensions/aiwg-bridge.ts`, project `AGENTS.md` | Trust-gated extension bridge (tool policy only) |
 | Claude Code    | `claude`        | `.claude/agents/`, `.claude/commands/`, `.claude/skills/`, `.claude/rules/`                                           | —         |
 | GitHub Copilot | `copilot`       | `.github/agents/`, `.github/copilot-rules/`, `.github/skills/`                                                        | —         |
 | Factory AI     | `factory`       | `.factory/droids/`, `.factory/commands/`, `.factory/skills/`, `.factory/rules/`                                       | —         |
@@ -747,7 +755,7 @@ reload are shown with `--verbose`.
 | Warp Terminal  | `warp`          | `.warp/agents/`, `.warp/commands/`, `.warp/skills/`, `.warp/rules/`, `WARP.md` (aggregated)                           | —         |
 | OpenAI/Codex   | `codex`         | `.codex/agents/`, `~/.codex/prompts/`, `.agents/skills/`, `.codex/rules/`                                             | —         |
 | OpenCode       | `opencode`      | `.opencode/agent/`, `.opencode/commands/`, `.opencode/skill/`, `.opencode/rule/`                                      | —         |
-| Hermes         | `hermes`        | `~/.hermes/skills/`, `AGENTS.md` (lean)                                                                               | —         |
+| Hermes         | `grokbot`, `hermes`        | `~/.hermes/skills/`, `AGENTS.md` (lean)                                                                               | —         |
 | OpenClaw       | `openclaw`      | `~/.openclaw/agents/`, `~/.openclaw/commands/`, `~/.openclaw/skills/`, `~/.openclaw/rules/`, `~/.openclaw/behaviors/` | ✓         |
 | OpenHuman      | `openhuman`     | `~/.openhuman/skills/`, `~/.openhuman/.aiwg/rules/`, optional `~/.openhuman/agents/aiwg_*.toml`, project `AGENTS.md`  | —         |
 | Local/Ollama   | `local`         | Same as `claude` (local model, Claude Code paths)                                                                     | —         |
@@ -2342,6 +2350,7 @@ Lint AIWG artifacts against declarative rule sets discovered from installed fram
 ```bash
 aiwg lint <target> [--ruleset <name>] [--format full|summary|json]
                    [--ci] [--fail-on error|warn|info] [--dry-run]
+                   [--no-gitignore]
 aiwg lint --list-rulesets
 aiwg lint --list-rules <ruleset>
 ```
@@ -2359,6 +2368,15 @@ aiwg lint --list-rules <ruleset>
 - `--dry-run` - Report what would run without executing rules
 - `--list-rulesets` - List all discovered rulesets
 - `--list-rules <name>` - List rules contained in a ruleset
+- `--no-gitignore` - Lint files git ignores too. By default they are skipped, so
+  regenerated trees do not produce findings about their own generated text
+
+**Output:**
+
+A run reports `Rules applied: N of M` and names any rule whose glob matched no
+file in the target. When no rule applies, the run says so explicitly — a target
+that excludes every rule is not a clean result, and rule globs are written from
+the project root, so lint a parent directory or check `--ruleset` (#2555).
 
 **Capabilities:** cli, lint, validation, quality
 **Tools:** Bash, Read, Glob, Grep
@@ -2915,6 +2933,10 @@ aiwg mission-control <subcommand> [options]
 - `--budget-stop-policy <p>` - `completion-wins` (default) | `budget-wins`
 
 > Invalid numeric budget values are a hard usage error — `mc dispatch` refuses rather than dispatching an unbounded mission (#1770). `--flag=value` syntax is accepted.
+
+**`mc run` cost gate** (#1450, #2522). Before launching, `mc run` estimates cumulative spend as the iteration floor — `missions x --max-iterations x ~$1.60` cache cost per headless iteration. At or above `$5` it warns, and in a non-TTY context it refuses unless `--accept-cost` is passed.
+
+A mission's `--max-total-cost` caps its share of that estimate **only** when the target provider reports spend. On a provider that reports none, the ceiling is inert and never fires (#1766), so it is reported in the warning but deliberately not subtracted — capping the estimate by a ceiling that cannot fire would weaken the gate exactly where the operator has no enforced protection. Today `claude` is the only provider counted as reporting spend.
 
 **Examples:**
 
@@ -4182,7 +4204,7 @@ and the
 
 ### Best-practice usage guidance
 
-Discovery is the operator surface that makes the **kernel + on-demand model** work across all 16 named provider integrations (Google Antigravity CLI, Claude Code, OpenAI Codex, GitHub Copilot, Cursor, DeepSeek Harness, Factory AI, Hermes, OpenCode, OpenClaw, OpenHuman, Pi Coding Agent from pi.dev, Oh My Pi, Warp Terminal, and Devin Desktop). Each provider deploys a small kernel set on its supported skill surface; everything else is reached via `aiwg discover`.
+Discovery is the operator surface that makes the **kernel + on-demand model** work across all 18 named provider integrations (Google Antigravity CLI, Claude Code, OpenAI Codex, GitHub Copilot, Cursor, DeepSeek Harness, Factory AI, Grok Bot, Grok Build, Hermes, OpenCode, OpenClaw, OpenHuman, Pi Coding Agent from pi.dev, Oh My Pi, Warp Terminal, and Devin Desktop). Each provider deploys a small kernel set on its supported skill surface; everything else is reached via `aiwg discover`.
 
 **Lead with discovery, not with memory.** When a user describes a capability, query first:
 

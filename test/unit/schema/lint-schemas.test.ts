@@ -15,7 +15,7 @@ afterEach(() => {
 
 describe('schema lint control-plane report', () => {
   it('keeps the generated repository catalog deterministic and current', () => {
-    expect(() => execFileSync(process.execPath, ['tools/scripts/build-schema-catalog.mjs', '--check'], { cwd: projectRoot, stdio: 'pipe' })).not.toThrow()
+    expect(() => execFileSync(process.execPath, ['tools/scripts/build-schema-catalog.mjs', '--check'], { timeout: 60_000, cwd: projectRoot, stdio: 'pipe' })).not.toThrow()
   })
 
   it('uses the composed catalog, denies network resolution, and emits deterministic inventory fields', () => {
@@ -23,7 +23,7 @@ describe('schema lint control-plane report', () => {
     temporaryDirectories.push(directory)
     const reportPath = join(directory, 'report.json')
 
-    execFileSync(process.execPath, ['tools/scripts/lint-schemas.mjs', '--report-json', reportPath], {
+    execFileSync(process.execPath, ['tools/scripts/lint-schemas.mjs', '--report-json', reportPath], { timeout: 60_000,
       cwd: projectRoot,
       stdio: 'pipe',
     })

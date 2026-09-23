@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
   qualifyFortemiDatasetLivePreflight,
+  verifyFortemiDatasetExecutionQualification,
   verifyFortemiDatasetLiveReceipt,
   writeFortemiDatasetLiveReceipt,
 } from "../../../src/dataset/fortemi-live-qualification.js";
 import { fortemiReceiptDigest } from "../../../src/storage/fortemi-qualification-receipt.js";
+import { fortemiDatasetDigest } from "../../../src/dataset/fortemi-run-receipt.js";
 
 const commit = "a".repeat(40);
 const compatibleTools = [{
@@ -226,5 +228,99 @@ describe("Fortemi dataset live preflight", () => {
     await expect(
       writeFortemiDatasetLiveReceipt(path, receipt),
     ).rejects.toThrow();
+  });
+});
+
+describe("Fortemi dataset execution qualification evidence", () => {
+  async function validEvidence() {
+    const fixture = JSON.parse(await readFile(
+      "test/fixtures/dataset/fortemi-run-receipt/degraded-run-receipt.json",
+      "utf8",
+    ));
+    const { receiptDigest: _oldDigest, ...payload } = {
+      ...fixture,
+      bindings: { ...fixture.bindings, sourceRevision: commit },
+    };
+    const runReceipt = { ...payload, receiptDigest: fortemiDatasetDigest(payload) };
+    const qualification = {
+      schemaVersion: "fortemi.lane-b.dataset-live-qualification.v1",
+      status: "PASS",
+      boundedUnit: "fortemi-local-test-1000-018fd1a0-0000-7000-8000-000000001128.service",
+      source: commit,
+      release: "v2026.9.10",
+      executableSha256: "b".repeat(64),
+      checks: [
+        "published API identity and clean migrated destination",
+        "MCP initialize and capability discovery agree",
+        "schema-bound preview has no side effects",
+        "execute commits one synthetic record with valid redacted receipt",
+        "status, checkpoint, resume, and exact in-process replay are stable",
+        "fresh MCP process reconstructs byte-equivalent durable replay receipt",
+        "namespace-scoped archive cleanup is complete and idempotent",
+      ],
+      mcpSessions: [
+        { label: "initial", pid: 1001, stderrBytes: 0, closed: true },
+        { label: "restart", pid: 1002, stderrBytes: 0, closed: true },
+      ],
+      boundary: "Synthetic single-record Community dataset execution against a private ephemeral PostgreSQL destination. No shared Fortemi, vLLM, Ollama, GPU, personal container, or persistent data is used.",
+      apiPid: 1000,
+      health: { status: "healthy", version: "2026.9.10", git_sha: commit, lifecycle: { ready: true } },
+      migrations: 160,
+      descriptorSha256: "c".repeat(64),
+      run: {
+        runId: runReceipt.runId,
+        namespaceId: runReceipt.namespaceId,
+        requestDigest: runReceipt.requestDigest,
+        receiptDigest: runReceipt.receiptDigest,
+        state: runReceipt.state,
+        verification: "verified",
+        checkpointSequence: 1,
+        archive: { namespaceId: runReceipt.namespaceId, archived: 1, alreadyArchived: 0, unresolved: [], complete: true, reasonCodes: [] },
+        contentSha256: `sha256:${"d".repeat(64)}`,
+        sourceContentRetained: false,
+      },
+      finalDatabase: { visibleNotes: 0, archivedNotes: 1 },
+      apiExit: { code: 0, signal: null },
+      apiPidAbsent: true,
+      apiOutputBytes: 100,
+      apiOutputSha256: "e".repeat(64),
+      scratchRemoved: true,
+    };
+    return { qualification, runReceipt };
+  }
+
+  it("binds the strong qualification to its canonical run receipt", async () => {
+    const { qualification, runReceipt } = await validEvidence();
+    expect(verifyFortemiDatasetExecutionQualification({
+      qualification,
+      runReceipt,
+      expectedFortemiCommit: commit,
+    })).toEqual([]);
+  });
+
+  it("rejects a wrapper whose cleanup or receipt binding was altered", async () => {
+    const { qualification, runReceipt } = await validEvidence();
+    qualification.scratchRemoved = false;
+    runReceipt.bindings.sourceRevision = "f".repeat(40);
+    expect(verifyFortemiDatasetExecutionQualification({
+      qualification,
+      runReceipt,
+      expectedFortemiCommit: commit,
+    })).toEqual(expect.arrayContaining([
+      "CONFORMANCE_FORTEMI_EXECUTION_RECEIPT_MISMATCH",
+      "CONFORMANCE_FORTEMI_EXECUTION_CLEANUP_INVALID",
+      "CONFORMANCE_FORTEMI_RUN_RECEIPT_INVALID",
+    ]));
+  });
+
+  it("rejects hollow evidence before it can promote the live cell", () => {
+    expect(verifyFortemiDatasetExecutionQualification({
+      qualification: { status: "PASS" },
+      runReceipt: {},
+      expectedFortemiCommit: commit,
+    })).toEqual(expect.arrayContaining([
+      "CONFORMANCE_FORTEMI_EXECUTION_EVIDENCE_SHAPE_INVALID",
+      "CONFORMANCE_FORTEMI_RUN_RECEIPT_INVALID",
+    ]));
   });
 });

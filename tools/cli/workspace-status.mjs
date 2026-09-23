@@ -525,6 +525,18 @@ async function buildVerificationProbe(projectRoot) {
   const ready = workspace.workspace.exists && frameworkCount > 0 && providerCount > 0;
   const partial = workspace.workspace.exists && (frameworkCount > 0 || providerCount > 0 || malformedConfig);
 
+  const userRegistryOverride = Boolean(process.env.AIWG_USER_REGISTRY_PATH && String(process.env.AIWG_USER_REGISTRY_PATH).trim());
+  if (userRegistryOverride) {
+    workspace.health.issues.push({
+      severity: 'warning',
+      message: 'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json',
+      action: 'unset AIWG_USER_REGISTRY_PATH',
+    });
+    if (workspace.health.overall !== 'error') {
+      workspace.health.overall = 'warning';
+    }
+  }
+
   return {
     schema: 'aiwg.status.probe.v1',
     generated_at: new Date().toISOString(),
@@ -539,6 +551,7 @@ async function buildVerificationProbe(projectRoot) {
       malformed_config: malformedConfig,
       artifact_health: workspace.artifactHealth.classification,
       external_artifact_reachable: workspace.artifactHealth.external_reachable,
+      user_registry_path_override: userRegistryOverride,
     },
     verification: {
       required: true,

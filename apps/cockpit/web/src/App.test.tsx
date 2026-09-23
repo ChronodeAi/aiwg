@@ -692,6 +692,51 @@ describe('App shell (rendered DOM)', () => {
   });
 });
 
+describe('Desktop tab runtime gate (#2547)', () => {
+  const gatewayId = '11111111-1111-4111-8111-111111111111';
+  const policy = { observe: false, control: true, sharing: false, clipboard_copy: false, clipboard_paste: false, file_transfer: false, audio: false, recording: false, isolation_tier: 'cooperative', generation: 1 };
+  const runningInstance = {
+    id: gatewayId, runtime: 'vm', loadout: 'full-suite', state: 'running', tenant: 'default', card_url: '',
+    runtime_posture: { kind: 'vm', isolation: 'strong', label: 'VM' }, host_daemon: { status: 'available' },
+    transport: { mode: 'mtls', trust: 'secure', label: 'mTLS', source: 'test' }, launch_context: { name: 'vm-one', loadout: 'full-suite' },
+    session_backends: [{ mode: 'managed', backend: 'zellij', available: true, drive: true }],
+  };
+  function stubBridge(desktopConfigured: boolean) {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/health')) return jsonResponse({ executor_url: 'http://127.0.0.1:8122', ...(desktopConfigured ? { desktop: { configured: true } } : {}) });
+      if (url.includes('/api/inventory')) return jsonResponse({ count: 1, fetched_at: '2026-09-13T00:00:00Z', instances: [runningInstance] });
+      if (url.includes('/api/running')) return jsonResponse({ count: 0, running: [] });
+      if (url.includes('/api/approvals')) return jsonResponse({ approvals: [] });
+      if (url.includes('/api/cost')) return jsonResponse({ total: { input_tokens: 0, output_tokens: 0, usd: 0 }, per_instance: [] });
+      if (url.endsWith('/capability')) return jsonResponse({ schema_version: 'rdp-cockpit.v1', instance_id: gatewayId, incarnation: 'boot-1', policy, supported: true, readiness: 'ready', reason_codes: [] });
+      return jsonResponse({});
+    }) as typeof fetch;
+  }
+
+  it('hides the Desktop tab unless the Bridge reports the desktop feature configured', async () => {
+    stubBridge(false);
+    render(<App />);
+    await screen.findByTitle('Runtime target coverage');
+    expect(screen.getAllByRole('tab')).toHaveLength(TAB_LABELS.length);
+    expect(screen.queryByRole('tab', { name: 'Desktop' })).toBeNull();
+  });
+
+  it('lists the Desktop tab when configured and opens the panel from Inventory', async () => {
+    stubBridge(true);
+    render(<App />);
+    expect(await screen.findByRole('tab', { name: 'Desktop' })).toBeTruthy();
+    expect(screen.getAllByRole('tab')).toHaveLength(TAB_LABELS.length + 1);
+    fireEvent.click(screen.getByRole('tab', { name: 'Inventory' }));
+    const open = await screen.findByRole('button', { name: /open desktop for/i }) as HTMLButtonElement;
+    await waitFor(() => expect(open.disabled).toBe(false));
+    fireEvent.click(open);
+    expect(screen.getByRole('tab', { name: 'Desktop' }).getAttribute('aria-selected')).toBe('true');
+    expect(await screen.findByRole('region', { name: /desktop for/i })).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('Ready to connect'));
+  });
+});
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,

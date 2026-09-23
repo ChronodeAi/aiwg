@@ -7,6 +7,7 @@ import {
   endpointFingerprint,
   fortemiReceiptDigest,
 } from "../storage/fortemi-qualification-receipt.js";
+import { verifyFortemiDatasetRunReceipt } from "./fortemi-run-receipt.js";
 
 export const FORTEMI_DATASET_LIVE_CONTRACT =
   "aiwg.fortemi-dataset-live-qualification/v2" as const;
@@ -56,6 +57,20 @@ const REQUIRED_TOOLS = [FORTEMI_DATASET_EXECUTION_TOOL] as const;
 const REQUIRED_ACTIONS = ["capabilities", "preview", "execute", "status", "checkpoint", "cancel", "resume", "retry", "verify", "archive"];
 const MAX_TOOL_COUNT = 256;
 const MAX_SCHEMA_BYTES = 1_048_576;
+const SENSITIVE = /(?:(?:password|passwd|api[-_]?key|authorization)\s*[:=]\s*[^\s"}]+|bearer\s+[a-z0-9._~+/-]+|-----BEGIN [A-Z ]+PRIVATE KEY-----)/iu;
+const EXECUTION_QUALIFICATION_CONTRACT =
+  "fortemi.lane-b.dataset-live-qualification.v1" as const;
+const EXECUTION_CHECKS = [
+  "published API identity and clean migrated destination",
+  "MCP initialize and capability discovery agree",
+  "schema-bound preview has no side effects",
+  "execute commits one synthetic record with valid redacted receipt",
+  "status, checkpoint, resume, and exact in-process replay are stable",
+  "fresh MCP process reconstructs byte-equivalent durable replay receipt",
+  "namespace-scoped archive cleanup is complete and idempotent",
+] as const;
+const EXECUTION_BOUNDARY =
+  "Synthetic single-record Community dataset execution against a private ephemeral PostgreSQL destination. No shared Fortemi, vLLM, Ollama, GPU, personal container, or persistent data is used.";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -71,6 +86,149 @@ function exactKeys(
   return (
     keys.length === allowed.length && keys.every((key) => allowed.includes(key))
   );
+}
+
+/**
+ * Verify the independently captured, mutating Fortemi dataset qualification.
+ * The caller supplies the separately persisted run receipt so a wrapper cannot
+ * claim a successful execution without the receipt's canonical digest checks.
+ */
+export function verifyFortemiDatasetExecutionQualification(input: {
+  qualification: unknown;
+  runReceipt: unknown;
+  expectedFortemiCommit: string;
+}): string[] {
+  const errors: string[] = [];
+  const qualification = record(input.qualification);
+  const runReceipt = record(input.runReceipt);
+  if (!COMMIT.test(input.expectedFortemiCommit))
+    return ["CONFORMANCE_INVALID_FORTEMI_COMMIT"];
+  if (!qualification || !runReceipt)
+    return ["CONFORMANCE_FORTEMI_EXECUTION_EVIDENCE_INVALID"];
+
+  if (
+    !exactKeys(qualification, [
+      "schemaVersion", "status", "boundedUnit", "source", "release",
+      "executableSha256", "checks", "mcpSessions", "boundary", "apiPid",
+      "health", "migrations", "descriptorSha256", "run", "finalDatabase",
+      "apiExit", "apiPidAbsent", "apiOutputBytes", "apiOutputSha256",
+      "scratchRemoved",
+    ])
+  ) errors.push("CONFORMANCE_FORTEMI_EXECUTION_EVIDENCE_SHAPE_INVALID");
+
+  const source = qualification.source;
+  const release = qualification.release;
+  const checks = qualification.checks;
+  const sessions = qualification.mcpSessions;
+  const health = record(qualification.health);
+  const run = record(qualification.run);
+  const archive = record(run?.archive);
+  const finalDatabase = record(qualification.finalDatabase);
+  const apiExit = record(qualification.apiExit);
+  const receiptBindings = record(runReceipt.bindings);
+  const receiptCounts = record(runReceipt.counts);
+  const receiptEnvelope = record(runReceipt.resourceEnvelope);
+  const receiptRedaction = record(runReceipt.redaction);
+
+  if (SENSITIVE.test(JSON.stringify(qualification)) || SENSITIVE.test(JSON.stringify(runReceipt)))
+    errors.push("CONFORMANCE_FORTEMI_EXECUTION_SENSITIVE_VALUE");
+
+  if (
+    qualification.schemaVersion !== EXECUTION_QUALIFICATION_CONTRACT ||
+    qualification.status !== "PASS" ||
+    source !== input.expectedFortemiCommit ||
+    typeof release !== "string" ||
+    !/^v\d{4}\.\d+\.\d+$/u.test(release) ||
+    typeof qualification.boundedUnit !== "string" ||
+    !/^fortemi-local-test-1000-[0-9a-f-]+\.service$/u.test(qualification.boundedUnit) ||
+    typeof qualification.apiPid !== "number" ||
+    !Number.isInteger(qualification.apiPid) || qualification.apiPid < 1 ||
+    qualification.boundary !== EXECUTION_BOUNDARY ||
+    typeof qualification.executableSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(qualification.executableSha256) ||
+    typeof qualification.descriptorSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(qualification.descriptorSha256) ||
+    typeof qualification.apiOutputSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(qualification.apiOutputSha256)
+  ) errors.push("CONFORMANCE_FORTEMI_EXECUTION_BINDING_INVALID");
+
+  if (
+    !Array.isArray(checks) ||
+    checks.length !== EXECUTION_CHECKS.length ||
+    !EXECUTION_CHECKS.every((check, index) => checks[index] === check)
+  ) errors.push("CONFORMANCE_FORTEMI_EXECUTION_CHECKS_INCOMPLETE");
+
+  if (
+    !Array.isArray(sessions) ||
+    sessions.length !== 2 ||
+    !sessions.every((value, index) => {
+      const session = record(value);
+      return session &&
+        exactKeys(session, ["label", "pid", "stderrBytes", "closed"]) &&
+        session.label === (index === 0 ? "initial" : "restart") &&
+        typeof session.pid === "number" && Number.isInteger(session.pid) && session.pid > 0 &&
+        typeof session.stderrBytes === "number" && Number.isInteger(session.stderrBytes) && session.stderrBytes >= 0 &&
+        session.stderrBytes <= 65_536 && session.closed === true;
+    })
+  ) errors.push("CONFORMANCE_FORTEMI_EXECUTION_SESSION_INVALID");
+
+  if (
+    !health || health.status !== "healthy" || health.git_sha !== source ||
+    health.version !== String(release).slice(1) ||
+    record(health.lifecycle)?.ready !== true ||
+    typeof qualification.migrations !== "number" ||
+    !Number.isInteger(qualification.migrations) || qualification.migrations < 1
+  ) errors.push("CONFORMANCE_FORTEMI_EXECUTION_RUNTIME_INVALID");
+
+  const receiptErrors = verifyFortemiDatasetRunReceipt(runReceipt);
+  if (receiptErrors.length)
+    errors.push("CONFORMANCE_FORTEMI_RUN_RECEIPT_INVALID", ...receiptErrors);
+  if (
+    !run || !archive ||
+    !exactKeys(run, [
+      "runId", "namespaceId", "requestDigest", "receiptDigest", "state",
+      "verification", "checkpointSequence", "archive", "contentSha256",
+      "sourceContentRetained",
+    ]) ||
+    !exactKeys(archive, [
+      "namespaceId", "archived", "alreadyArchived", "unresolved", "complete",
+      "reasonCodes",
+    ]) ||
+    run.runId !== runReceipt.runId ||
+    run.namespaceId !== runReceipt.namespaceId ||
+    run.requestDigest !== runReceipt.requestDigest ||
+    run.receiptDigest !== runReceipt.receiptDigest ||
+    run.state !== runReceipt.state ||
+    run.verification !== "verified" ||
+    runReceipt.verification !== "verified" ||
+    run.checkpointSequence !== 1 ||
+    run.sourceContentRetained !== false ||
+    archive.namespaceId !== run.namespaceId || archive.complete !== true ||
+    archive.archived !== 1 || archive.alreadyArchived !== 0 ||
+    !Array.isArray(archive.unresolved) || archive.unresolved.length !== 0 ||
+    !Array.isArray(archive.reasonCodes) || archive.reasonCodes.length !== 0 ||
+    receiptBindings?.sourceRevision !== source ||
+    receiptCounts?.attempted !== 1 || receiptCounts?.committed !== 1 ||
+    receiptCounts?.rejected !== 0 || receiptEnvelope?.maxRecords !== 1 ||
+    receiptEnvelope?.allowOutboundNetwork !== false ||
+    receiptRedaction?.sourceContentIncluded !== false ||
+    receiptRedaction?.logicalIdentifiersIncluded !== false ||
+    receiptRedaction?.connectionDetailsIncluded !== false
+  ) errors.push("CONFORMANCE_FORTEMI_EXECUTION_RECEIPT_MISMATCH");
+
+  if (
+    !finalDatabase || finalDatabase.visibleNotes !== 0 ||
+    !exactKeys(finalDatabase, ["visibleNotes", "archivedNotes"]) ||
+    finalDatabase.archivedNotes !== 1 || !apiExit || apiExit.code !== 0 ||
+    !exactKeys(apiExit, ["code", "signal"]) ||
+    apiExit.signal !== null || qualification.apiPidAbsent !== true ||
+    qualification.scratchRemoved !== true ||
+    typeof qualification.apiOutputBytes !== "number" ||
+    !Number.isInteger(qualification.apiOutputBytes) ||
+    qualification.apiOutputBytes < 0 || qualification.apiOutputBytes > 262_144
+  ) errors.push("CONFORMANCE_FORTEMI_EXECUTION_CLEANUP_INVALID");
+
+  return [...new Set(errors)];
 }
 
 function material(

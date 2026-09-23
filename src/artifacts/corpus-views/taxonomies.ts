@@ -119,7 +119,7 @@ export const PIPELINE_STAGES: ReadonlyArray<readonly [title: string, blurb: stri
   ['4. Mixture-of-Experts & Sparse Architectures', 'Sparsely activated models as a parallel pretraining strategy.', ['REF-007']],
   ['5. Instruction Tuning & SFT', 'Supervised fine-tuning on instructions to convert base models into assistants.', ['REF-055', 'REF-435', 'REF-470']],
   ['6. RLHF, DPO, and Preference Optimization', 'Aligning models with human and AI feedback.', ['REF-025', 'REF-055', 'REF-449']],
-  ['7. RLVR & Reasoning RL', 'Verifiable-reward RL for reasoning, math, and code.', ['REF-819', 'REF-957', 'REF-457']],
+  ['7. RLVR & Reasoning RL', 'Verifiable-reward RL for reasoning, math, and code.', ['REF-394', 'REF-957', 'REF-457']],
   ['8. PEFT / LoRA / Adapter-Based Adaptation', 'Parameter-efficient fine-tuning when full SFT is impractical.', ['REF-049']],
   ['9. Quantization, Pruning & Compression', 'Shrinking trained models for inference deployment.', ['REF-051']],
   ['10. Inference Serving & Optimization', 'Productionizing trained models: batching, KV cache, throughput.', ['REF-101', 'REF-102', 'REF-312', 'REF-313']],

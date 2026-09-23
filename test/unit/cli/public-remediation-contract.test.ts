@@ -23,6 +23,7 @@ const EXEMPTIONS: Exemption[] = [
   { path: /^src\/cli\/handlers\/session\.ts$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'session recovery can repair a broken base install' },
   { path: /^src\/cli\/handlers\/use\.ts$/, text: /^'  npm install -g aiwg',$/, classification: 'bootstrap', rationale: 'switching from the corpus-free @aiwg/cli distribution to full aiwg requires package installation; self-update retains the current distribution' },
   { path: /^tools\/cli\/doctor\.mjs$/, text: /(?:npm install -g aiwg|npx aiwg)/, classification: 'bootstrap', rationale: 'doctor must recover when the public CLI install is missing or broken' },
+  { path: /^src\/cli\/handlers\/installation\.ts$/, text: /npm install -g aiwg/, classification: 'bootstrap', rationale: 'restoring a declared npm install requires npm; no public aiwg command can change which binary is on PATH (#2534)' },
   { path: /^tools\/cli\/doctor\.mjs$/, text: /npm run (?:build:cli|release:fortemi-index)/, classification: 'contributor', rationale: 'source and release-package maintenance only' },
   { path: /^src\/cli\/handlers\/ralph-launcher\.ts$/, text: /npm run build.*dev repo/, classification: 'contributor', rationale: 'explicit development-checkout recovery' },
   { path: /^src\/cli\/git-hooks\.ts$/, text: /node tools\/cli\/aiwg\.mjs workflow/, classification: 'embedded-dispatch', rationale: 'generated Git hook uses a repository-local deterministic entrypoint, not operator guidance' },

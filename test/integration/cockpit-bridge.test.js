@@ -37,7 +37,16 @@ beforeAll(async () => {
   await rm(testAuditDir, { recursive: true, force: true });
   mock = createExecutor();
   await new Promise((r) => mock.listen(0, '127.0.0.1', r));
-  bridge = createBridge({ executorUrl: `http://127.0.0.1:${mock.address().port}`, allowMockExecutor: true });
+  bridge = createBridge({
+    executorUrl: `http://127.0.0.1:${mock.address().port}`,
+    allowMockExecutor: true,
+    aiwgCommand: async (args) => {
+      if (args.join(' ') === 'index status --json') {
+        return JSON.stringify({ summary: { total: 0 }, graphs: [] });
+      }
+      throw new Error(`unexpected aiwg command: ${args.join(' ')}`);
+    },
+  });
   await new Promise((r) => bridge.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${bridge.address().port}`;
   token = bridge.cockpitToken;
@@ -418,6 +427,8 @@ describe('cockpit Bridge — control surface', () => {
     expect(h).toMatchObject({ status: 'ok' });
     expect(h.executor_url).toMatch(/^http:\/\/127\.0\.0\.1:/);
     expect(h).not.toHaveProperty('mock');
+    // Desktop panel gate (#2547): off without both desktop adapters.
+    expect(h.desktop).toEqual({ configured: false });
   });
 
   it('loads declarative contributions whose actions inject commands (no Bridge CLI run)', async () => {

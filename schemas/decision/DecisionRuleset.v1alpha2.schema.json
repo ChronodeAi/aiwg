@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionRuleset.v1alpha2.schema.json",
+  "type": "object",
+  "properties": {
+    "apiVersion": {
+      "const": "decision.aiwg.io/v1alpha2"
+    },
+    "kind": {
+      "const": "DecisionRuleset"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "description"
+      ],
+      "additionalProperties": false
+    },
+    "spec": {
+      "type": "object",
+      "properties": {
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputSchema": {
+          "type": "object"
+        },
+        "evaluations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "alias": {
+                "type": "string",
+                "minLength": 1
+              },
+              "decision": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                  },
+                  "digest": {
+                    "type": "string",
+                    "pattern": "^sha256:[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "id",
+                  "version",
+                  "digest"
+                ],
+                "additionalProperties": false
+              },
+              "inputPointer": {
+                "type": "string",
+                "pattern": "^(|/(?:[^~]|~[01])*)$"
+              }
+            },
+            "required": [
+              "alias",
+              "decision",
+              "inputPointer"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "priority": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "when": {
+                "$ref": "#/$defs/predicate"
+              },
+              "outcome": {}
+            },
+            "required": [
+              "id",
+              "priority",
+              "when",
+              "outcome"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "composition": {
+          "enum": [
+            "first-match",
+            "collect"
+          ]
+        },
+        "conflict": {
+          "enum": [
+            "error",
+            "review"
+          ]
+        },
+        "defaultOutcome": {},
+        "failureOutcome": {},
+        "outputSchema": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "purpose",
+        "inputSchema",
+        "evaluations",
+        "rules",
+        "composition",
+        "conflict",
+        "defaultOutcome",
+        "failureOutcome",
+        "outputSchema"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "spec"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "predicate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "enum": [
+                "eq",
+                "ne",
+                "lt",
+                "lte",
+                "gt",
+                "gte",
+                "exists"
+              ]
+            },
+            "left": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "enum": [
+                    "input",
+                    "decision"
+                  ]
+                },
+                "alias": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "pointer": {
+                  "type": "string",
+                  "pattern": "^(|/(?:[^~]|~[01])*)$"
+                }
+              },
+              "required": [
+                "source",
+                "pointer"
+              ],
+              "additionalProperties": false,
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "source": {
+                        "const": "decision"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "alias": {}
+                    },
+                    "required": [
+                      "alias"
+                    ]
+                  },
+                  "else": {
+                    "not": {
+                      "properties": {
+                        "alias": {}
+                      },
+                      "required": [
+                        "alias"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "right": {}
+          },
+          "required": [
+            "op",
+            "left"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "op": {
+                    "const": "exists"
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "properties": {
+                    "right": {}
+                  },
+                  "required": [
+                    "right"
+                  ]
+                }
+              },
+              "else": {
+                "properties": {
+                  "right": {}
+                },
+                "required": [
+                  "right"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "all": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/predicate"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "all"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "any": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/predicate"
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "any"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "not": {
+              "$ref": "#/$defs/predicate"
+            }
+          },
+          "required": [
+            "not"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

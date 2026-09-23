@@ -1,6 +1,6 @@
 # Provider Inventory
 
-AIWG has **16 named provider integrations**. The source-of-truth registry is
+AIWG has **18 named provider integrations**. The source-of-truth registry is
 `src/providers/provider-definitions.ts`; capability details are maintained in
 `agentic/code/providers/capability-matrix.yaml`.
 
@@ -13,6 +13,8 @@ AIWG has **16 named provider integrations**. The source-of-truth registry is
 | `cursor` | Cursor IDE | Stable | Project |
 | `deepseek-harness` | [DeepSeek Harness](deepseek-harness.md) | Experimental | Project |
 | `factory` | Factory AI | Stable | Project |
+| `grokbot` | [Grok Bot](../integrations/grokbot-quickstart.md) | Stable | Mixed project/user (skills fail-closed until `AIWG_GROKBOT_SKILLS_DIR`) |
+| `grok-build` | [Grok Build](../architecture/adr-grokbot-provider-target.md) | Experimental | Mixed project/user (`$GROK_HOME`; kernel skills + AGENTS.md; agents/rules indexed until #2577) |
 | `hermes` | Hermes | Stable | Mixed project/user |
 | `opencode` | OpenCode | Stable | Project |
 | `openclaw` | OpenClaw | Stable | User |
@@ -31,8 +33,10 @@ executable; their AIWG provider selectors are deliberately distinct.
 `oh-my-pi` is an alias for `omp`; OMP is distinct from the original `pi` provider.
 The `pi` provider targets Pi Coding Agent, the minimal agent harness published
 at [pi.dev](https://pi.dev/); it remains one provider identity.
-`devin` is an alias for `windsurf`, not an additional provider. The `generic`
-adapter is a seventeenth registry entry used to emit portable files for custom
+`devin` is an alias for `windsurf`, not an additional provider. Bare `grok` is deliberately not an AIWG provider alias because it names the xAI model/API category; use `grokbot` for Grok Bot and `grok-build` for the xAI Grok Build CLI/TUI.
+
+The `generic`
+adapter is a nineteenth registry entry used to emit portable files for custom
 or unknown harnesses; it is deliberately excluded from the named-integration
 count. Product interfaces, model APIs, MCP servers, and aliases are likewise
 not counted as separate provider integrations.

@@ -57,7 +57,8 @@ describe('local-source user-scope use/status receipt integration (#2137)', () =>
     expect(use.status, use.stderr).toBe(0);
     expect(use.json).toMatchObject({
       scope: 'user',
-      outcome: 'ready-restart-required',
+      // Codex refreshes deployed skills live; no restart is claimed (#2309).
+      outcome: 'ready',
       findings: expect.arrayContaining([expect.objectContaining({
         id: 'provider-drift:policy-exempt:0',
         severity: 'info',
@@ -68,7 +69,7 @@ describe('local-source user-scope use/status receipt integration (#2137)', () =>
     expect(status.status, status.stderr).toBe(0);
     expect(status.json).toMatchObject({
       project_root: PROJECT_ROOT,
-      status: 'ready-restart-required',
+      status: 'ready',
       checks: { health: 'healthy' },
       deployment_verification: {
         scope: 'user',

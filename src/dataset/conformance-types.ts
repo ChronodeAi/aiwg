@@ -29,6 +29,7 @@ export interface DatasetConformanceManifest {
 export interface DatasetConformanceBinding {
   aiwgCommit: string
   fortemiCommit?: string
+  fortemiServerCommit?: string
   packageDigests: Record<string, string>
   schemaDigests: Record<string, string>
   fixtureDigest: string
@@ -61,6 +62,8 @@ export type DatasetConformanceDiagnosticCode =
   | 'CONFORMANCE_MANIFEST_INVALID'
   | 'CONFORMANCE_CELL_DUPLICATE'
   | 'CONFORMANCE_REQUIRED_CELL_MISSING'
+  | 'CONFORMANCE_RESULT_DUPLICATE'
+  | 'CONFORMANCE_RESULT_UNEXPECTED'
   | 'CONFORMANCE_FIXTURE_DIGEST_MISMATCH'
   | 'CONFORMANCE_RECEIPT_STALE'
   | 'CONFORMANCE_RECEIPT_UNVERIFIABLE'

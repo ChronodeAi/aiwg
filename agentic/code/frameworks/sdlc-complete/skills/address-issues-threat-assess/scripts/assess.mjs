@@ -5,20 +5,53 @@ import {
   formatThreatAssessment,
 } from '../../../../../../../tools/security/threat-assessment.mjs';
 
+/** Header the address-issues renderer emits on every cycle comment. */
+export const AL_CYCLE_MARKER = /(?:^|\n)[^\n]{0,40}?AL CYCLE #\d+\s*[\u2013\u2014-]/;
+/** Hidden marker some renderers add so cycle comments can be found by machines. */
+export const ADDRESS_ISSUES_CYCLE_MARKER = /<!--\s*aiwg-address-issues:cycle-/;
+
 function parseArgs(argv) {
-  const args = { format: 'text', text: '', issueJson: '', configJson: '' };
+  const args = { format: 'text', text: '', issueJson: '', configJson: '', surface: '', trustedActors: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--format' && argv[index + 1]) args.format = argv[++index];
     else if (arg === '--text' && argv[index + 1]) args.text = argv[++index];
     else if (arg === '--issue-json' && argv[index + 1]) args.issueJson = argv[++index];
     else if (arg === '--config-json' && argv[index + 1]) args.configJson = argv[++index];
+    else if (arg === '--surface' && argv[index + 1]) args.surface = argv[++index];
+    else if (arg === '--trusted-actor' && argv[index + 1]) args.trustedActors.push(argv[++index]);
     else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: assess.mjs [--issue-json <file>] [--text <body>] [--config-json <file>] [--format text|json]');
+      console.log('Usage: assess.mjs [--issue-json <file>] [--text <body>] [--surface <surface>] [--trusted-actor <login>]... [--config-json <file>] [--format text|json]');
       process.exit(0);
     }
   }
   return args;
+}
+
+/**
+ * Logins whose AL CYCLE comments are the orchestrator reporting on itself.
+ * Resolved from the project's tracker-actor configuration so the exemption is
+ * bound to the identity address-issues writes with, not to a hard-coded name.
+ */
+export function resolveTrustedActors(aiwgConfig) {
+  const remotes = aiwgConfig?.remotes ?? {};
+  return [remotes.tracker_actor?.login, remotes.customer_tracker_actor?.login]
+    .filter(login => typeof login === 'string' && login.trim())
+    .map(login => login.trim().toLowerCase());
+}
+
+/**
+ * True for a comment the orchestrator itself posted as cycle status: it must
+ * be authored by a trusted tracker actor AND carry the AL CYCLE header or the
+ * hidden cycle marker. Either condition alone is not enough — a trusted
+ * maintainer's ordinary comment is still assessed, and an untrusted author
+ * cannot exempt text by pasting the header.
+ */
+export function isOrchestratorStatusComment(comment, trustedActors = []) {
+  const author = String(comment?.author ?? '').trim().toLowerCase();
+  if (!author || !trustedActors.includes(author)) return false;
+  const body = String(comment?.body ?? '');
+  return AL_CYCLE_MARKER.test(body) || ADDRESS_ISSUES_CYCLE_MARKER.test(body);
 }
 
 function loadInput(args) {
@@ -37,6 +70,20 @@ function loadInput(args) {
   return { title: '', body: fs.readFileSync(0, 'utf8'), author: '', labels: [], comments: [] };
 }
 
+function commentPart(comment, index, trustedActors) {
+  const orchestrator = isOrchestratorStatusComment(comment, trustedActors);
+  return {
+    id: `comment-${index + 1}`,
+    text: String(comment.body || ''),
+    source: {
+      kind: orchestrator ? 'orchestrator-cycle-comment' : 'issue-comment',
+      author: comment.author || '',
+      ...(comment.id !== undefined ? { commentId: comment.id } : {}),
+    },
+    ...(orchestrator ? { context: 'orchestrator-status' } : {}),
+  };
+}
+
 function legacySeverity(finding) {
   return {
     informational: 1,
@@ -50,21 +97,48 @@ function legacySeverity(finding) {
 /**
  * Compatibility wrapper for address-issues callers. New integrations should
  * call assessThreat() with an explicit forge surface.
+ *
+ * `options.trustedActors` lists the tracker logins address-issues writes with;
+ * their AL CYCLE comments are classified `orchestrator-status` and never drive
+ * the verdict (#2549). Every finding carries `source` (author, comment id) so
+ * a self-referential hit is visible at a glance.
  */
-export function assessIssue(issue, threatAssessmentConfig) {
+export function assessIssue(issue, threatAssessmentConfig, options = {}) {
+  const trustedActors = (options.trustedActors ?? []).map(login => String(login).trim().toLowerCase());
   const report = assessThreat({
     surface: 'issue-body',
     parts: [
-      { id: 'title', text: issue.title || '' },
-      { id: 'body', text: issue.body || '' },
+      { id: 'title', text: issue.title || '', source: { kind: 'issue-title', author: issue.author || '' } },
+      { id: 'body', text: issue.body || '', source: { kind: 'issue-body', author: issue.author || '' } },
       ...(issue.comments ?? [])
-        .filter(comment => !comment.isBot)
-        .map((comment, index) => ({ id: `comment-${index + 1}`, text: `${comment.author || ''}\n${comment.body || ''}` })),
+        .map((comment, index) => ({ comment, index }))
+        .filter(({ comment }) => !comment.isBot)
+        .map(({ comment, index }) => commentPart(comment, index, trustedActors)),
     ],
     source: { kind: 'forge-issue', id: issue.number },
     actor: { id: issue.author || '', trust: 'untrusted' },
     requestedAction: 'issue-triage-and-implementation',
   }, threatAssessmentConfig);
+  return toLegacyReport(report, issue);
+}
+
+/**
+ * Assess free text on an explicit surface (for example the rendered AL CYCLE
+ * comment on `outbound-maintainer-comment` before it is posted). Same report
+ * shape as assessIssue so callers can reuse the verdict handling.
+ */
+export function assessText(text, surface, threatAssessmentConfig, options = {}) {
+  const report = assessThreat({
+    surface,
+    content: String(text ?? ''),
+    source: options.source ?? { kind: surface === 'outbound-maintainer-comment' ? 'orchestrator-comment' : 'text' },
+    actor: options.actor ?? { trust: surface === 'outbound-maintainer-comment' ? 'orchestrator' : 'untrusted' },
+    requestedAction: options.requestedAction ?? (surface === 'outbound-maintainer-comment' ? 'post-maintainer-comment' : 'consume-as-data'),
+  }, threatAssessmentConfig);
+  return toLegacyReport(report, { title: '', author: '', labels: [] });
+}
+
+function toLegacyReport(report, issue) {
   const action = report.decision.action;
   const verdict = action === 'reject'
     ? 'reject'
@@ -77,6 +151,7 @@ export function assessIssue(issue, threatAssessmentConfig) {
       evidence: [finding.evidence],
       context: finding.context,
       taxonomy: finding.taxonomy,
+      source: { partId: finding.partId, ...(finding.source ?? {}) },
     }));
   const why = report.decision.matchedMandatoryRule
     ? `This is reject rather than flag because mandatory policy rule '${report.decision.matchedMandatoryRule}' matched.`
@@ -141,10 +216,12 @@ export function runCli(argv = process.argv.slice(2)) {
     const issue = loadInput(args);
     const defaultConfig = `${process.cwd()}/.aiwg/aiwg.config`;
     const configPath = args.configJson || (fs.existsSync(defaultConfig) ? defaultConfig : '');
-    const config = configPath
-      ? JSON.parse(fs.readFileSync(configPath, 'utf8')).security?.threatAssessment
-      : undefined;
-    const report = assessIssue(issue, config);
+    const aiwgConfig = configPath ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+    const config = aiwgConfig.security?.threatAssessment;
+    const trustedActors = [...resolveTrustedActors(aiwgConfig), ...args.trustedActors];
+    const report = args.surface
+      ? assessText(issue.body, args.surface, config)
+      : assessIssue(issue, config, { trustedActors });
     if (args.format === 'json') console.log(JSON.stringify(report, null, 2));
     else printText(report);
   } catch (error) {

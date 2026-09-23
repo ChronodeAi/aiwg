@@ -35,8 +35,8 @@ async function writeConfig(repoPath: string, config: AiwgConfig): Promise<void> 
 }
 
 function initRemote(repoPath: string, name: string, url: string): void {
-  execFileSync('git', ['init', '-q', repoPath]);
-  execFileSync('git', ['-C', repoPath, 'remote', 'add', name, url]);
+  execFileSync('git', ['init', '-q', repoPath], { timeout: 60_000 });
+  execFileSync('git', ['-C', repoPath, 'remote', 'add', name, url], { timeout: 60_000 });
 }
 
 describe('workspace repository resolution', () => {
@@ -54,7 +54,7 @@ describe('workspace repository resolution', () => {
     await fs.mkdir(externalRepo, { recursive: true });
 
     initRemote(githubRepo, 'origin', 'git@github.com:example/widget.git');
-    execFileSync('git', ['-C', githubRepo, 'remote', 'add', 'customers', 'https://github.com/example/widget-support.git']);
+    execFileSync('git', ['-C', githubRepo, 'remote', 'add', 'customers', 'https://github.com/example/widget-support.git'], { timeout: 60_000 });
     initRemote(externalRepo, 'primary', 'ssh://git@gitea.example.net/ops/sysops.git');
     initRemote(externalRepo, 'tickets', 'https://gitlab.example.net/ops/sysops.git');
 
@@ -168,7 +168,7 @@ describe('workspace repository resolution', () => {
   });
 
   it('uses remotes.issue_provider for ambiguous self-hosted issue trackers', async () => {
-    execFileSync('git', ['-C', externalRepo, 'remote', 'set-url', 'tickets', 'git@git.integrolabs.net:ops/sysops.git']);
+    execFileSync('git', ['-C', externalRepo, 'remote', 'set-url', 'tickets', 'git@git.integrolabs.net:ops/sysops.git'], { timeout: 60_000 });
     await writeConfig(externalRepo, baseConfig({
       workspace: { member_of: '../home' },
       remotes: {

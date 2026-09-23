@@ -116,9 +116,9 @@ describeLive('direct PostgreSQL live qualification (#2195)', () => {
       const before = await source.readAll();
       await source.close();
       try {
-        execFileSync('pg_dump', ['--format=custom', '--file', dump, '--dbname', sourceDb], { env: pgEnv, stdio: 'pipe' });
-        execFileSync('createdb', [restoredDb], { env: pgEnv, stdio: 'pipe' });
-        execFileSync('pg_restore', ['--single-transaction', '--dbname', restoredDb, dump], { env: pgEnv, stdio: 'pipe' });
+        execFileSync('pg_dump', ['--format=custom', '--file', dump, '--dbname', sourceDb], { timeout: 60_000, env: pgEnv, stdio: 'pipe' });
+        execFileSync('createdb', [restoredDb], { timeout: 60_000, env: pgEnv, stdio: 'pipe' });
+        execFileSync('pg_restore', ['--single-transaction', '--dbname', restoredDb, dump], { timeout: 60_000, env: pgEnv, stdio: 'pipe' });
 
         const restoredUrl = new URL(live!);
         restoredUrl.pathname = `/${restoredDb}`;
@@ -132,7 +132,7 @@ describeLive('direct PostgreSQL live qualification (#2195)', () => {
         expect(after).toEqual(before);
         expect(after.filter(record => record.tombstone)).toHaveLength(1);
       } finally {
-        try { execFileSync('dropdb', ['--if-exists', restoredDb], { env: pgEnv, stdio: 'pipe' }); } catch { /* disposable qualification cleanup */ }
+        try { execFileSync('dropdb', ['--if-exists', restoredDb], { timeout: 60_000, env: pgEnv, stdio: 'pipe' }); } catch { /* disposable qualification cleanup */ }
         delete process.env.AIWG_POSTGRES_BACKUP_SOURCE;
         delete process.env.AIWG_POSTGRES_BACKUP_RESTORED;
         rmSync(root, { recursive: true, force: true });
@@ -225,7 +225,7 @@ describeLive('direct PostgreSQL live qualification (#2195)', () => {
       PGUSER: decodeURIComponent(sourceUrl.username),
       PGPASSWORD: decodeURIComponent(sourceUrl.password),
     };
-    execFileSync('createdb', [database], { env: pgEnv, stdio: 'pipe' });
+    execFileSync('createdb', [database], { timeout: 60_000, env: pgEnv, stdio: 'pipe' });
     const isolated = new URL(live!);
     isolated.pathname = `/${database}`;
     process.env.AIWG_POSTGRES_SCHEMA_LIVE = isolated.toString();
@@ -258,7 +258,7 @@ describeLive('direct PostgreSQL live qualification (#2195)', () => {
       }
     } finally {
       try { await store.close(); } catch { /* isolated cleanup */ }
-      try { execFileSync('dropdb', ['--if-exists', database], { env: pgEnv, stdio: 'pipe' }); } catch { /* disposable qualification cleanup */ }
+      try { execFileSync('dropdb', ['--if-exists', database], { timeout: 60_000, env: pgEnv, stdio: 'pipe' }); } catch { /* disposable qualification cleanup */ }
       delete process.env.AIWG_POSTGRES_SCHEMA_LIVE;
     }
   }, 30_000);

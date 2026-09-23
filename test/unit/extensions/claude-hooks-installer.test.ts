@@ -411,6 +411,64 @@ describe('installAiwgHooks', () => {
     expect(r?.backupPath).toBeUndefined();
     expect(r?.migratedFromLegacy).toBe(true);
   });
+
+  it('adopts a pre-existing untagged entry instead of registering the hook twice (#2543)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    // An operator (or an older AIWG) already wired the same script, untagged.
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: 'command', command: 'node .claude/hooks/aiwg-session.cjs' }] },
+          ],
+        },
+      }),
+      'utf8',
+    );
+
+    await installAiwgHooks({ projectPath, frameworkRoot });
+    const settings = await readSettings();
+    const sessionEntries = (settings.hooks?.SessionStart ?? [])
+      .flatMap((group) => group.hooks ?? [])
+      .filter((entry) => entry.command.includes('aiwg-session'));
+
+    expect(sessionEntries).toHaveLength(1);
+    expect(sessionEntries[0]._aiwg_managed).toBe(true);
+    expect(sessionEntries[0]._aiwg_id).toBe('aiwg-session');
+  });
+
+  it('does not back up a settings.json AIWG created itself (#2542)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    // Exactly what tools/agents/providers/claude.mjs writes on a greenfield deploy.
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({ version: '1.0', created: new Date().toISOString(), aiwg: { enabled: true, mode: 'all' } }),
+      'utf8',
+    );
+
+    const r = await installAiwgHooks({ projectPath, frameworkRoot });
+    expect(r?.backupPath).toBeUndefined();
+    const entries = await fs.readdir(claudeDir);
+    expect(entries.filter((name) => name.includes('.bak.'))).toHaveLength(0);
+  });
+
+  it('still backs up genuinely operator-authored settings (#2542)', async () => {
+    const claudeDir = path.join(projectPath, '.claude');
+    await fs.mkdir(claudeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(claudeDir, 'settings.json'),
+      JSON.stringify({ env: { OPERATOR: 'yes' } }),
+      'utf8',
+    );
+
+    const r = await installAiwgHooks({ projectPath, frameworkRoot });
+    expect(r?.backupPath).toBeDefined();
+    const entries = await fs.readdir(claudeDir);
+    expect(entries.filter((name) => name.includes('.bak.')).length).toBeGreaterThan(0);
+  });
 });
 
 describe('restoreSettingsBackup', () => {

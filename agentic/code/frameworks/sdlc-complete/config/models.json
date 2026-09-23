@@ -8,16 +8,16 @@
 
   "claude": {
     "reasoning": {
-      "model": "opus",
-      "description": "Claude Code opus alias - Best for complex reasoning, architecture design, strategic decisions. Use opus[1m] only when explicitly opting into 1M context."
+      "model": "claude-opus-4-7",
+      "description": "Claude Opus 4.7 (pinned 500K-context variant) - Best for complex reasoning, architecture design, strategic decisions. Bare aliases inherit the parent session's variant and hit the credit-gated 1M path under a 1M parent (#1442); opt into 1M explicitly with --reasoning-model opus[1m]."
     },
     "coding": {
-      "model": "sonnet",
-      "description": "Claude Code sonnet alias - Best for code generation, implementation, debugging. Defaults to the non-1M Sonnet path; use sonnet[1m] only when extra long-context usage is available."
+      "model": "claude-sonnet-4-6",
+      "description": "Claude Sonnet 4.6 (pinned 500K-context variant) - Best for code generation, implementation, debugging. Pinned so subagent dispatch never inherits a 1M-context parent (#1442, #2563); opt into 1M explicitly with --coding-model sonnet[1m]."
     },
     "efficiency": {
-      "model": "haiku",
-      "description": "Claude Code haiku alias - Best for quick tasks, file operations, simple edits"
+      "model": "claude-haiku-4-5",
+      "description": "Claude Haiku 4.5 (pinned variant) - Best for quick tasks, file operations, simple edits."
     }
   },
 
@@ -87,9 +87,9 @@
   },
 
   "shorthand": {
-    "opus": "claude-opus-4-6",
+    "opus": "claude-opus-4-7",
     "sonnet": "claude-sonnet-4-6",
-    "haiku": "claude-haiku-4-5-20251001",
+    "haiku": "claude-haiku-4-5",
     "inherit": "inherit"
   },
 
@@ -110,6 +110,6 @@
     "location": "Place custom models.json in project root to override defaults",
     "precedence": "Project models.json > User ~/.config/aiwg/models.json > AIWG defaults",
     "documentation": "See docs/configuration/model-configuration.md for details",
-    "claudeLongContext": "Claude Code documents sonnet and sonnet[1m] as separate selectors. AIWG defaults to sonnet because Sonnet 1M context requires extra usage; opt in with --coding-model sonnet[1m] or sonnet-1m."
+    "claudeLongContext": "Claude Code documents sonnet and sonnet[1m] as separate selectors. AIWG deploys pinned standard-context variants (claude-sonnet-4-6 etc.) because a bare alias inherits a 1M-context parent and subagent dispatch then hits the usage-credit gate (#1442, #2563); opt into 1M with --coding-model sonnet[1m] or sonnet-1m."
   }
 }

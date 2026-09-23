@@ -177,7 +177,7 @@ Baselines included GPT-4 direct generation, best-of-k sampling, and CoT promptin
 **Implemented:**
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/actionable-feedback.md - Structured feedback schema
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/best-output-selection.md - Non-monotonic quality handling
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/actionable-feedback.yaml - Feedback format
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml - Feedback format
 
 **Key Design Decisions Informed:**
 1. agent loops prioritize feedback quality over iteration count
@@ -302,7 +302,7 @@ Generate an improved version that addresses all feedback points.
 - @.aiwg/research/sources/[PDF-filename].pdf - Original paper
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/actionable-feedback.md - AIWG implementation
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/best-output-selection.md - Non-monotonic handling
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/actionable-feedback.yaml - Schema
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/actionable-feedback.yaml - Schema
 - @.aiwg/research/findings/REF-015-self-refine.md - Literature note
 
 ## Template Usage Notes

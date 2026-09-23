@@ -1,9 +1,14 @@
+import { readFileSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { FortemiDatasetExecutionClient, fortemiDatasetRequestDigest } from "../../src/dataset/fortemi-dataset-execution.js";
 import { canonicalFortemiDatasetJson, verifyFortemiDatasetRunReceipt } from "../../src/dataset/fortemi-run-receipt.js";
+
+const CAPABILITY_AUTHORITY = JSON.parse(readFileSync(
+  new URL("../../schemas/dataset/fortemi-capability-validation/1.0.1/authority.json", import.meta.url), "utf8",
+)) as { revision: string; authority: { commit: string; manifestSha256: string } };
 
 async function main(): Promise<void> {
   const requestPath = process.env.AIWG_DATASET_REQUEST_FILE;
@@ -37,6 +42,7 @@ async function main(): Promise<void> {
     }
     const receipt = await connection.client.execute(request, digest);
     if (!["committed", "degraded"].includes(receipt.state)) throw new Error("CONFORMANCE_DATASET_EXECUTION_UNRESOLVED");
+    const negotiated = connection.client.capabilityDecision(receipt.runId);
     await mkdir(evidence!, { recursive: true, mode: 0o700 });
     const prefix = join(evidence!, `dataset-${receipt.runId}`);
     await writeFile(`${prefix}.receipt.json`, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o600 });
@@ -55,6 +61,12 @@ async function main(): Promise<void> {
     if (archive.complete !== true || canonicalFortemiDatasetJson(archive) !== canonicalFortemiDatasetJson(archivedAgain)) throw new Error("CONFORMANCE_DATASET_ARCHIVE_INCOMPLETE");
     const report = { contract: "aiwg.fortemi-dataset-execution-qualification/v1", requestDigest: digest, receiptDigest: receipt.receiptDigest,
       namespaceId: receipt.namespaceId, runId: receipt.runId, independentVerification: verifyFortemiDatasetRunReceipt(receipt),
+      capabilityValidation: {
+        revision: CAPABILITY_AUTHORITY.revision,
+        authorityCommit: CAPABILITY_AUTHORITY.authority.commit,
+        authorityManifestSha256: CAPABILITY_AUTHORITY.authority.manifestSha256,
+        negotiated,
+      },
       replay: true, resumed: true, durableReplay: true, archive, profile: "live-remote-persistence", maturity: "alpha" };
     await writeFile(`${prefix}.qualification.json`, `${JSON.stringify(report, null, 2)}\n`, { flag: "wx", mode: 0o600 });
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
@@ -64,7 +76,9 @@ async function main(): Promise<void> {
 }
 
 main().catch(error => {
-  const code = error instanceof Error && /^CONFORMANCE_[A-Z0-9_]+$/.test(error.message) ? error.message : "CONFORMANCE_DATASET_QUALIFICATION_FAILED";
+  // Preserve the stable prefix when a diagnostic carries detail after a colon.
+  const stable = error instanceof Error ? /^(CONFORMANCE_[A-Z0-9_]+)(?::|$)/.exec(error.message) : null;
+  const code = stable ? stable[1] : "CONFORMANCE_DATASET_QUALIFICATION_FAILED";
   process.stderr.write(`${JSON.stringify({ outcome: "failed", diagnostic: code })}\n`);
   process.exitCode = 1;
 });

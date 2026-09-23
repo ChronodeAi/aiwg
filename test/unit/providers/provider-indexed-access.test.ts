@@ -12,6 +12,10 @@ describe('provider artifact availability audit', () => {
       const adapter = await import(pathToFileURL(resolve(directory, file)).href);
       if (!adapter.support) continue;
       for (const kind of ['agents', 'commands', 'skills', 'rules']) {
+        if (adapter.support[kind] === false) {
+          expect(adapter.paths?.[kind], `${file}: ${kind} unsupported with an indexed path`).toBeFalsy();
+          continue;
+        }
         expect(adapter.support[kind], `${file}: ${kind}`).toBeTruthy();
         expect(['none', 'unsupported'], `${file}: ${kind}`).not.toContain(adapter.support[kind]);
       }

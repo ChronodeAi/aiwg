@@ -33,9 +33,9 @@ describe('SnapshotManager', () => {
 
     // Initialize git repository
     try {
-      execSync('git init', { cwd: testDir, stdio: 'ignore' });
-      execSync('git config user.email "test@example.com"', { cwd: testDir, stdio: 'ignore' });
-      execSync('git config user.name "Test User"', { cwd: testDir, stdio: 'ignore' });
+      execSync('git init', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+      execSync('git config user.email "test@example.com"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+      execSync('git config user.name "Test User"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
       isGitRepo = true;
     } catch (e) {
       isGitRepo = false;
@@ -71,8 +71,8 @@ describe('SnapshotManager', () => {
 
       // Create and commit a file
       writeFileSync(join(testDir, 'test.txt'), 'content');
-      execSync('git add test.txt', { cwd: testDir, stdio: 'ignore' });
-      execSync('git commit -m "initial"', { cwd: testDir, stdio: 'ignore' });
+      execSync('git add test.txt', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+      execSync('git commit -m "initial"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
 
       const snapshot = snapshotManager.capturePreSnapshot(testDir, iterationDir);
 
@@ -150,8 +150,8 @@ describe('SnapshotManager', () => {
       writeFileSync(join(testDir, 'package.json'), '{}');
 
       if (isGitRepo) {
-        execSync('git add .', { cwd: testDir, stdio: 'ignore' });
-        execSync('git commit -m "initial" --allow-empty', { cwd: testDir, stdio: 'ignore' });
+        execSync('git add .', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+        execSync('git commit -m "initial" --allow-empty', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
       }
 
       snapshotManager.capturePreSnapshot(testDir, iterationDir);
@@ -182,8 +182,8 @@ describe('SnapshotManager', () => {
 
       // Create and commit new file
       writeFileSync(join(testDir, 'new-file.ts'), 'export const x = 1;');
-      execSync('git add new-file.ts', { cwd: testDir, stdio: 'ignore' });
-      execSync('git commit -m "add new file"', { cwd: testDir, stdio: 'ignore' });
+      execSync('git add new-file.ts', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+      execSync('git commit -m "add new file"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
 
       const snapshot = snapshotManager.capturePostSnapshot(testDir, iterationDir);
 
@@ -197,8 +197,8 @@ describe('SnapshotManager', () => {
 
       // Modify and commit file
       writeFileSync(join(testDir, 'package.json'), JSON.stringify({ version: '2.0.0' }));
-      execSync('git add package.json', { cwd: testDir, stdio: 'ignore' });
-      execSync('git commit -m "update version"', { cwd: testDir, stdio: 'ignore' });
+      execSync('git add package.json', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+      execSync('git commit -m "update version"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
 
       const snapshot = snapshotManager.capturePostSnapshot(testDir, iterationDir);
 
@@ -213,12 +213,12 @@ describe('SnapshotManager', () => {
 
       // Make multiple commits
       writeFileSync(join(testDir, 'file1.ts'), 'content1');
-      execSync('git add file1.ts', { cwd: testDir, stdio: 'ignore' });
-      execSync('git commit -m "first commit"', { cwd: testDir, stdio: 'ignore' });
+      execSync('git add file1.ts', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+      execSync('git commit -m "first commit"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
 
       writeFileSync(join(testDir, 'file2.ts'), 'content2');
-      execSync('git add file2.ts', { cwd: testDir, stdio: 'ignore' });
-      execSync('git commit -m "second commit"', { cwd: testDir, stdio: 'ignore' });
+      execSync('git add file2.ts', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+      execSync('git commit -m "second commit"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
 
       const snapshot = snapshotManager.capturePostSnapshot(testDir, iterationDir);
 

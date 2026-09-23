@@ -1,7 +1,10 @@
 #!/usr/bin/env node
+// Verify that exactly one GitHub Announcements discussion exists for a stable release and links every required surface.
 
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+
+export const VERSION_PATTERN = /^v?\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 export function parseArgs(argv) {
   const options = { repo: 'jmagly/aiwg', category: 'Announcements' };
@@ -13,7 +16,7 @@ export function parseArgs(argv) {
     options[name.slice(2)] = argv[index + 1];
     index += 1;
   }
-  if (!/^v?\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(options.version ?? '')) {
+  if (!VERSION_PATTERN.test(options.version ?? '')) {
     throw new Error('--version must be an AIWG CalVer release such as 2026.8.19');
   }
   if (!/^[^/]+\/[^/]+$/.test(options.repo)) throw new Error('--repo must be owner/repo');
@@ -21,22 +24,34 @@ export function parseArgs(argv) {
   return options;
 }
 
-export function verifyDiscussion(nodes, { version, repo }) {
+export function releaseTitlePattern(version) {
   const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const matching = nodes.filter(({ title }) => new RegExp(`^AIWG ${escaped}(?:\\s|:|—|–|-)`).test(title));
+  return new RegExp(`^AIWG ${escaped}(?:\\s|:|—|–|-)`);
+}
+
+export function requiredLinks({ version, repo, npmPackage = 'aiwg' }) {
+  const tag = `v${version}`;
+  return {
+    github_release: `https://github.com/${repo}/releases/tag/${tag}`,
+    npm_version: `https://www.npmjs.com/package/${npmPackage}/v/${version}`,
+    release_notes: `https://github.com/${repo}/blob/${tag}/docs/releases/${tag}-announcement.md`,
+    changelog: `https://github.com/${repo}/blob/${tag}/CHANGELOG.md`,
+  };
+}
+
+export function missingRequiredLinks(body, options) {
+  return Object.values(requiredLinks(options)).filter((link) => !body.includes(link));
+}
+
+export function verifyDiscussion(nodes, { version, repo }) {
+  const pattern = releaseTitlePattern(version);
+  const matching = nodes.filter(({ title }) => pattern.test(title));
   if (matching.length !== 1) {
     throw new Error(`Expected exactly one GitHub announcement discussion for AIWG ${version}; found ${matching.length}.`);
   }
 
   const discussion = matching[0];
-  const tag = `v${version}`;
-  const requiredLinks = [
-    `https://github.com/${repo}/releases/tag/${tag}`,
-    `https://www.npmjs.com/package/aiwg/v/${version}`,
-    `https://github.com/${repo}/blob/${tag}/docs/releases/${tag}-announcement.md`,
-    `https://github.com/${repo}/blob/${tag}/CHANGELOG.md`,
-  ];
-  const missing = requiredLinks.filter((link) => !discussion.body.includes(link));
+  const missing = missingRequiredLinks(discussion.body, { version, repo });
   if (missing.length) throw new Error(`Release discussion ${discussion.url} is missing required links: ${missing.join(', ')}`);
   return discussion;
 }

@@ -59,6 +59,23 @@ function describeEvents(events: WatchEvent[]): string {
   return events.map(event => `${event.type}:${resolve(event.path)}`).join(', ');
 }
 
+/**
+ * Failure message for the real-filesystem cases: the events that did arrive
+ * plus what chokidar reported about its own lifecycle. "no events" alone
+ * cannot distinguish a watch that never armed, one that raised an error, or
+ * one whose runner had no inotify headroom (#2553).
+ */
+function describeObserved(events: WatchEvent[], service: WatchService): string {
+  const diagnostics = service.getDiagnostics();
+  return `${describeEvents(events)}; watcher ${JSON.stringify({
+    ready: diagnostics.ready,
+    armed: diagnostics.armed,
+    missingTargets: diagnostics.missingTargets,
+    errors: diagnostics.errors,
+    watched: diagnostics.watched,
+  })}`;
+}
+
 describe('WatchService', () => {
   let service: WatchService;
   let testDir: string;
@@ -131,15 +148,15 @@ describe('WatchService', () => {
       await service.start(config.patterns, config);
 
       // Create file
-      const filePath = resolve(testDir, 'new.md');
+      let filePath = resolve(testDir, 'new.md');
       await writeFile(filePath, 'Content', 'utf-8');
 
-      // A create landing before the watch is armed is reported by neither the
-      // initial scan (`ignoreInitial: true`) nor the watch, so the `add` is
-      // absent rather than late and no wait budget can recover it (#2518).
-      // Re-writing an untracked file makes the watcher discover it and emit
-      // `add`, which turns that window into a retry instead of a red build.
-      // A healthy watcher never reaches this: it has already emitted by now.
+      // A container filesystem can still drop a directory notification after
+      // chokidar reports the watch armed, leaving the `add` absent rather than
+      // late so additional wait budget alone cannot recover it (#2518).
+      // A fresh filename changes the watched directory entry on every retry.
+      // Rewriting one inode is not enough on container filesystems that missed
+      // the original directory edge. A healthy watcher never reaches this.
       let recoveryTouches = 0;
       const sawAdd = () => events.some(event => event.type === 'add');
 
@@ -148,6 +165,7 @@ describe('WatchService', () => {
           await waitFor(sawAdd, WATCHER_LATENCY_FLOOR_MS * 4, 25, () => describeEvents(events));
         } catch {
           recoveryTouches++;
+          filePath = resolve(testDir, `new-recovery-${recoveryTouches}.md`);
           await writeFile(filePath, `Content ${recoveryTouches}`, 'utf-8');
         }
       }
@@ -156,7 +174,7 @@ describe('WatchService', () => {
         sawAdd,
         FS_EVENT_TIMEOUT_MS,
         25,
-        () => `${describeEvents(events)} (after ${recoveryTouches} recovery touch(es))`,
+        () => `${describeObserved(events, service)}; recoveryCreates=${recoveryTouches}`,
       );
 
       expect(events.length).toBeGreaterThan(0);
@@ -177,12 +195,33 @@ describe('WatchService', () => {
       await service.start(config.patterns, config);
 
       // Modify file
-      await writeFile(filePath, 'Modified', 'utf-8');
+      await writeFile(filePath, 'Modified once', 'utf-8');
+      let recoveryWrites = 0;
+      const sawChange = () => events.some(event => event.type === 'change');
+
+      // Some container filesystems can lose an immediate first notification
+      // even after chokidar reports the file as watched. Varying the file size
+      // and retrying a bounded number of times distinguishes a missed edge from
+      // a watcher that cannot detect changes at all.
+      while (!sawChange() && recoveryWrites < 3) {
+        try {
+          await waitFor(
+            sawChange,
+            WATCHER_LATENCY_FLOOR_MS * 4,
+            25,
+            () => describeObserved(events, service),
+          );
+        } catch {
+          recoveryWrites++;
+          await writeFile(filePath, `Modified recovery ${recoveryWrites}${'.'.repeat(recoveryWrites)}`, 'utf-8');
+        }
+      }
+
       await waitFor(
-        () => events.some(event => event.type === 'change'),
+        sawChange,
         FS_EVENT_TIMEOUT_MS,
         25,
-        () => describeEvents(events),
+        () => `${describeObserved(events, service)}; recoveryWrites=${recoveryWrites}`,
       );
 
       expect(events.some(e => e.type === 'change')).toBe(true);
@@ -206,7 +245,7 @@ describe('WatchService', () => {
         () => events.some(event => event.type === 'unlink'),
         FS_EVENT_TIMEOUT_MS,
         25,
-        () => describeEvents(events),
+        () => describeObserved(events, service),
       );
 
       expect(events.some(e => e.type === 'unlink')).toBe(true);
@@ -327,6 +366,59 @@ describe('WatchService', () => {
 
       expect(service.running()).toBe(true);
       expect(Date.now() - startedAt).toBeGreaterThanOrEqual(400);
+    }, 5000);
+
+    it('reports ready, armed targets, and recorded errors through getDiagnostics()', async () => {
+      const watcher = controlledWatcher(() => ({ [testDir]: [] }));
+
+      expect(service.getDiagnostics()).toEqual({
+        ready: false,
+        readyAt: undefined,
+        armed: true,
+        missingTargets: [],
+        errors: [],
+        watched: {},
+      });
+
+      const started = service.start(config.patterns, config);
+      watcher.emit('ready');
+      await started;
+
+      const armed = service.getDiagnostics();
+      expect(armed.ready).toBe(true);
+      expect(armed.readyAt).toBeInstanceOf(Date);
+      expect(armed.armed).toBe(true);
+      expect(armed.missingTargets).toEqual([]);
+      expect(armed.errors).toEqual([]);
+      expect(armed.watched).toEqual({ [testDir]: [] });
+
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      watcher.emit('error', new Error('ENOSPC: System limit for number of file watchers reached'));
+      watcher.emit('error', 'EMFILE: too many open files');
+
+      const errored = service.getDiagnostics();
+      expect(errored.errors).toEqual([
+        'ENOSPC: System limit for number of file watchers reached',
+        'EMFILE: too many open files',
+      ]);
+      expect(service.getStats().errors).toBe(2);
+      expect(consoleError).toHaveBeenCalledTimes(2);
+      // Snapshots are copies: mutating one must not alter the service.
+      errored.errors.push('mutated');
+      expect(service.getDiagnostics().errors).toHaveLength(2);
+    }, 5000);
+
+    it('names the targets that never armed when start() gives up waiting', async () => {
+      const watcher = controlledWatcher(() => ({}));
+
+      const started = service.start(config.patterns, config);
+      watcher.emit('ready');
+      await started;
+
+      const diagnostics = service.getDiagnostics();
+      expect(diagnostics.ready).toBe(true);
+      expect(diagnostics.armed).toBe(false);
+      expect(diagnostics.missingTargets).toEqual([resolve(testDir)]);
     }, 5000);
 
     it('treats a file target listed under its parent directory as armed', async () => {

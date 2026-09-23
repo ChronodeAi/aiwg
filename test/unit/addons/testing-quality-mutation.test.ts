@@ -21,7 +21,7 @@ function runPreflight(...args: string[]) {
   return spawnSync(
     'python3',
     [path.join(addonRoot, scriptRelative), ...args, '--format', 'json'],
-    { cwd: root, encoding: 'utf8' },
+    { timeout: 60_000, cwd: root, encoding: 'utf8' },
   );
 }
 

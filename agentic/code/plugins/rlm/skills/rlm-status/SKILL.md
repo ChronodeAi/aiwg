@@ -568,7 +568,7 @@ rlm:
 - @$AIWG_ROOT/${CLAUDE_PLUGIN_ROOT}/schemas/rlm-task-tree.yaml - Task tree structure
 - @$AIWG_ROOT/${CLAUDE_PLUGIN_ROOT}/schemas/rlm-cost.yaml - Cost tracking schema
 - @$AIWG_ROOT/${CLAUDE_PLUGIN_ROOT}/schemas/rlm-trajectory.yaml - Execution trajectory
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/loop-state.yaml - agent loop state reference
-- @$AIWG_ROOT/agentic/code/addons/ralph/commands/ralph-status.md - Al status command
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/loop-state.yaml - agent loop state reference
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/commands/ralph-status.md - Al status command
 - @.aiwg/research/findings/REF-089-recursive-language-models.md - RLM research foundation
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/tao-loop.md - TAO loop structure underlying RLM

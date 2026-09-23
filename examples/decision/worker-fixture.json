@@ -1,0 +1,7 @@
+{
+  "metadata": {
+    "id": "example-decision-worker",
+    "version": "1.0.0"
+  },
+  "task": "Return one structured decision; no tools or side effects."
+}

@@ -245,14 +245,30 @@ Each action is interpreted by the skill:
 - `update_release_entry: <tracker>` — create or update the release entry (Gitea/GitHub) with the announcement body.
 - `create_github_announcement_discussion` — after GitHub release publication
   is verified, create one discussion in the configured category for stable
-  releases. Resolve the repository and category node IDs, then use GitHub's
-  GraphQL `createDiscussion` mutation. Search that category for the exact
-  release title first and reuse the existing discussion so retries are
-  idempotent. Fail with an actionable message when Discussions are disabled,
-  the category is absent, or authentication lacks Discussions write access.
-  Respect `required_for_channels`, `hard_stop`, and `skip_when_flag`; the
-  reference release uses `hard_stop: true` so a stable release is not reported
-  complete without its discussion.
+  releases. **This action is tool-backed, not prose.** Draft the body, write it
+  to `{evidence_dir}/discussion.md`, then run the action's `run` command
+  (reference: `tools/release/publish-github-release-discussion.mjs`). The
+  publisher refuses to run until the GitHub release is published and not a
+  draft, validates the four required links and the `no_ai_attribution` policy
+  in the body, resolves the repository and category node IDs, searches the
+  category for an existing discussion titled `AIWG {version}…` and reuses it
+  so retries are idempotent (updating the body only when required links are
+  missing or `--update` is passed), issues GitHub's GraphQL `createDiscussion`
+  mutation, writes `discussion-preflight.json`, `discussion-request.json`, and
+  `discussion-result.json` beside the body, and finishes by running
+  `verify-github-release-discussion.mjs`. It fails with an actionable message
+  when Discussions are disabled, the category is absent, the release is
+  missing, or authentication lacks Discussions write access. Respect
+  `required_for_channels`, `hard_stop`, and `skip_when_flag`; the reference
+  release uses `hard_stop: true`, so a non-zero exit halts the flow and the
+  stable release is **not** reported complete without its discussion. Do not
+  substitute a hand-run GraphQL call or skip the step because the gate that
+  contains it is `hard_stop: false`; the action-level flag governs.
+
+  `{evidence_dir}` resolves to `<artifact_root>/releases/evidence/{version}`,
+  where `<artifact_root>` comes from `aiwg artifacts path --json`. Create it at
+  the start of the release run and write every gate's log there; a release run
+  that leaves no evidence directory is itself a defect to report.
 
   The discussion is a companion to the durable release records, not another
   copy of them. Its body must link to the GitHub release, the published npm
@@ -264,8 +280,26 @@ Each action is interpreted by the skill:
   `style: conversational-impact-guidance`, prefer direct language, concrete
   examples close to claims, varied sentence length, and useful analogies only
   when they clarify the change. Avoid corporate filler, hype, and exhaustive
-  restatement. Optional `voice_sources` refine that style when readable;
-  absence of a local voice file must not block an otherwise valid release.
+  restatement. Keep raw install commands out of the body and point at the
+  release notes for upgrade steps; that keeps the `release-note` threat
+  assessment at `proceed`. Optional `voice_sources` refine that style when
+  readable; absence of a local voice file must not block an otherwise valid
+  release.
+
+## Completion gate: post-release verification is mandatory
+
+A stable release is **not complete** until every command in the active release
+plan sidecar's `post_release_verification` list has exited 0 (respecting
+`required_for_channels` and `skip_when_flag`). For AIWG that means both
+`release-publication-verify` and
+`node tools/release/verify-github-release-discussion.mjs --version {version}`.
+Run them after the `post-release` gate, record their output in
+`{evidence_dir}`, and only then report the release done or close release
+issues. If a verification command fails, apply the anti-laziness recovery
+protocol: fix the missing surface (for example, run the discussion publisher)
+and re-verify. Never report completion with a failing or unexecuted
+verification; 2026.9.7 and 2026.9.9 shipped without their announcement
+discussions because this gate was skipped.
 
 > **Verify publication before closing release-completion issues.** After the
 > `release` gate pushes the tag and the release workflows run, invoke the

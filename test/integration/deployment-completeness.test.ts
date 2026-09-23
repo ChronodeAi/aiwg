@@ -33,7 +33,7 @@ const TEST_BASE = path.join(os.tmpdir(), 'aiwg-deploy-completeness');
 function canInitGit(): boolean {
   const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-dc-git-'));
   try {
-    execFileSync('git', ['init'], { cwd: tmpDir, stdio: 'pipe' });
+    execFileSync('git', ['init'], { timeout: 60_000, cwd: tmpDir, stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -50,7 +50,7 @@ async function createTestEnv(label: string): Promise<{ projectDir: string; homeD
   const homeDir = path.join(TEST_BASE, `${label}-home-${ts}`);
   await fs.mkdir(projectDir, { recursive: true });
   await fs.mkdir(homeDir, { recursive: true });
-  execFileSync('git', ['init'], { cwd: projectDir, stdio: 'pipe' });
+  execFileSync('git', ['init'], { timeout: 60_000, cwd: projectDir, stdio: 'pipe' });
   return { projectDir, homeDir };
 }
 

@@ -1,5 +1,9 @@
 ---
 enforcement: high
+triggers:
+  - "can I add this dependency"
+  - "is this package source safe"
+  - "git dependency"
 ---
 
 # Dependency Source Policy

@@ -55,6 +55,47 @@ export async function currentBundledAgentBasenames(frameworkRoot: string): Promi
   return new Set((await collectPackagedAgentInventory(frameworkRoot)).keys());
 }
 
+/**
+ * Basenames of every rule the current package can deploy.
+ *
+ * Symmetric to {@link currentBundledAgentBasenames}. A rule absent from this set
+ * is residue from a deploy model that no longer writes it (#2540).
+ *
+ * Every group that can ship a `rules/` directory must be listed here: the set is
+ * the prune's definition of "still shipped", so a missed group makes live rules
+ * look orphaned and deletes them. `extensions` ships 22 rules and was the group
+ * this nearly lost.
+ */
+export const BUNDLED_RULE_SOURCE_GROUPS = ['frameworks', 'addons', 'plugins', 'extensions'] as const;
+
+export async function currentBundledRuleBasenames(frameworkRoot: string): Promise<Set<string>> {
+  const names = new Set<string>();
+  const codeRoot = path.join(frameworkRoot, 'agentic', 'code');
+
+  for (const group of BUNDLED_RULE_SOURCE_GROUPS) {
+    let units;
+    try {
+      units = await fs.readdir(path.join(codeRoot, group), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const unit of units) {
+      if (!unit.isDirectory()) continue;
+      const rulesDir = path.join(codeRoot, group, unit.name, 'rules');
+      let entries;
+      try {
+        entries = await fs.readdir(rulesDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith('.md')) names.add(entry.name);
+      }
+    }
+  }
+  return names;
+}
+
 export interface ProviderStaleAgentRemoval {
   provider: string;
   paths: string[];
@@ -278,6 +319,7 @@ export async function pruneStaleManagedAgentFiles(options: {
   allowTrackedDeletes?: boolean;
 }): Promise<ProviderStalePruneResult> {
   const desired = await currentBundledAgentBasenames(options.frameworkRoot);
+  const desiredRules = await currentBundledRuleBasenames(options.frameworkRoot);
   const currentVersion = options.currentVersion ?? await readFrameworkVersion(options.frameworkRoot);
   const crossProvider = options.crossProvider ?? 'skip';
   const removals: ProviderStaleAgentRemoval[] = [];
@@ -297,7 +339,10 @@ export async function pruneStaleManagedAgentFiles(options: {
     // Non-target trees are pruned as a unit or not at all; the refreshed
     // provider only drops agents whose source no longer ships them.
     if (!isTargetProvider && crossProvider === 'skip') continue;
-    const kinds = isTargetProvider ? (['agents'] as const) : PRUNABLE_ARTIFACT_KINDS;
+    // Rules were excluded from the target-provider pass, so a project carried
+    // every rule any past version ever deployed. On long-lived projects that is
+    // the bulk of the startup-context budget (#2540).
+    const kinds = isTargetProvider ? (['agents', 'rules'] as const) : PRUNABLE_ARTIFACT_KINDS;
 
     const hits = await collectManagedProviderArtifacts(options.projectRoot, provider, kinds);
     const eligible = hits.filter((hit) => {
@@ -306,6 +351,7 @@ export async function pruneStaleManagedAgentFiles(options: {
         // marker to the top-level package version makes a successful refresh
         // delete freshly restored addon agents, so the active provider removes
         // only artifacts absent from current sources.
+        if (hit.kind === 'rules') return !desiredRules.has(path.basename(hit.relativePath));
         return !desired.has(hit.artifactName);
       }
       return currentVersion !== null && isOlderManagedVersion(hit.version, currentVersion);
@@ -673,7 +719,11 @@ export const refreshHandler: CommandHandler = {
     }
     let staleAgentRemovals: ProviderStaleAgentRemoval[] = [];
     let trackedSkipped: ProviderStaleAgentRemoval[] = [];
-    if (!dryRun && deploymentFailures.length === 0) {
+    // A dry run still reports what a real run would remove. Skipping the pass
+    // entirely meant `refresh --dry-run` printed "Checking for stale deployments..."
+    // and nothing else, so orphaned artifacts were invisible until they had
+    // pushed the project over its context budget (#2540).
+    if (deploymentFailures.length === 0) {
       try {
         const pruneResult = await pruneStaleManagedAgentFiles({
           projectRoot: ctx.cwd,
@@ -681,6 +731,7 @@ export const refreshHandler: CommandHandler = {
           provider: detectedProvider,
           crossProvider: pruneOtherProviders ? 'prune' : 'skip',
           allowTrackedDeletes: pruneTracked,
+          dryRun,
         });
         staleAgentRemovals = pruneResult.removals;
         trackedSkipped = pruneResult.trackedSkipped;
@@ -702,7 +753,7 @@ export const refreshHandler: CommandHandler = {
         if (staleAgentRemovals.length > 0 && !quiet) {
           const total = staleAgentRemovals.reduce((sum, item) => sum + item.paths.length, 0);
           ui.warn(
-            `Removed ${total} stale AIWG-managed file${total === 1 ? '' : 's'} ` +
+            `${dryRun ? 'Would remove' : 'Removed'} ${total} stale AIWG-managed file${total === 1 ? '' : 's'} ` +
             `across ${staleAgentRemovals.length} provider${staleAgentRemovals.length === 1 ? '' : 's'}`,
           );
           for (const removal of staleAgentRemovals) {
@@ -712,16 +763,21 @@ export const refreshHandler: CommandHandler = {
               `    ${removal.provider}: ${removal.paths.length} (${shown}${remainder > 0 ? `, ...and ${remainder} more` : ''})`,
             );
           }
-          ui.dim('    Review `git status` before committing — deployed artifacts may be tracked.');
+          ui.dim(dryRun
+            ? '    Re-run without --dry-run to remove them.'
+            : '    Review `git status` before committing — deployed artifacts may be tracked.');
         }
         // #2506: keep the recorded deployment state consistent with what the
         // prune actually left on disk, so a later run does not trust counts
-        // for artifacts that no longer exist.
-        await reconcileDeployedToAfterPrune(
-          ctx.cwd,
-          staleAgentRemovals,
-          pruneOtherProviders ? detectedProvider : null,
-        );
+        // for artifacts that no longer exist. A dry run deleted nothing, so the
+        // recorded state is already accurate.
+        if (!dryRun) {
+          await reconcileDeployedToAfterPrune(
+            ctx.cwd,
+            staleAgentRemovals,
+            pruneOtherProviders ? detectedProvider : null,
+          );
+        }
       } catch {
         if (!quiet) ui.dim('  Agent orphan cleanup skipped (non-critical)');
       }
@@ -788,7 +844,9 @@ export const refreshHandler: CommandHandler = {
             // #2506: a run that deleted artifacts is not an "up to date" run.
             const removed = staleAgentRemovals.reduce((sum, item) => sum + item.paths.length, 0);
             if (!quiet) {
-              ui.warn(`Deployments current, but ${removed} stale artifact(s) were removed this run — review the list above`);
+              ui.warn(dryRun
+                ? `Deployments current, but ${removed} stale artifact(s) would be removed — review the list above`
+                : `Deployments current, but ${removed} stale artifact(s) were removed this run — review the list above`);
             }
           } else {
             if (!quiet) ui.success('All deployments up to date');

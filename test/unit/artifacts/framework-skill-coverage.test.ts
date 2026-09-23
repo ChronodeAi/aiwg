@@ -101,7 +101,9 @@ describe('framework graph skill coverage', () => {
     } finally {
       fs.rmSync(outputDir, { recursive: true, force: true });
     }
-  });
+    // Same full-corpus walk as the test above; the default 5s budget is not
+    // enough once the suite runs in parallel (#2544).
+  }, 120_000);
 
   it('keeps repo-maintainer threat assessment applied to PRs and communications', () => {
     const skill = fs.readFileSync(

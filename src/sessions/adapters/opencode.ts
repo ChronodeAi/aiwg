@@ -410,7 +410,21 @@ function normalizeMessage(
         toolCallId: part.callID,
         toolState: part.state,
         attachment: part.type === 'file'
-          ? { mime: part.mime, filename: part.filename, urlPresent: Boolean(part.url) }
+          ? {
+              mime: part.mime,
+              filename: part.filename,
+              displayName: part.filename,
+              urlPresent: Boolean(part.url),
+              // Preserve only locally recoverable byte locators. Remote URLs
+              // remain presence-only metadata and are never fetched by export.
+              dataBytes: part.url?.startsWith('data:')
+                ? [...Buffer.from(
+                    part.url.slice(part.url.indexOf(',') + 1),
+                    part.url.includes(';base64,') ? 'base64' : 'utf8',
+                  )]
+                : undefined,
+              fileUrl: part.url?.startsWith('file:') ? part.url : undefined,
+            }
           : undefined,
         opaqueContent: !['text', 'reasoning', 'tool', 'file'].includes(part.type),
         unknownFields: unknownFields(part, PART_KEYS),

@@ -310,6 +310,99 @@ export interface WorkspaceRepoConfig {
   notes?: string;
 }
 
+/**
+ * Project-scope data classification. Same vocabulary as the per-artifact
+ * `AiwgPrivacyClassification` used by the Fortemi index export, lifted to the
+ * repository so agents have a structured signal for what a repo holds — rather
+ * than prose in a README and a free-text `notes` string (#2535).
+ */
+export type ProjectClassification = 'private' | 'sanitized' | 'public';
+
+/** How a repository's contents may be handled. Every field defaults to permissive. */
+export interface ProjectHandling {
+  /** May content be quoted into decks, docs, or messages outside the repo? */
+  excerptable?: boolean;
+  /** May content be published, including to a public site or package? */
+  publishable?: boolean;
+  /** May the repo be mirrored to a secondary remote? */
+  mirror?: boolean;
+}
+
+/**
+ * Project metadata. Accepts a bare string (the historical shape, a name) or the
+ * object form carrying classification and handling policy.
+ */
+export interface ProjectConfig {
+  name?: string;
+  description?: string;
+  classification?: ProjectClassification;
+  /** Whether the repo holds personally identifiable information. */
+  pii?: boolean;
+  handling?: ProjectHandling;
+}
+
+export const PROJECT_CLASSIFICATIONS: readonly ProjectClassification[] = ['private', 'sanitized', 'public'];
+
+/** Normalize the string-or-object `project` field to the object form. */
+/**
+ * Validate the `project` block. Accepts the bare-string form unconditionally so
+ * existing configs keep loading (#2535).
+ */
+export function validateProjectConfig(project: unknown): string[] {
+  const errors: string[] = [];
+  if (project === undefined || typeof project === 'string') return errors;
+  if (typeof project !== 'object' || project === null || Array.isArray(project)) {
+    errors.push('project: must be a string (name) or an object');
+    return errors;
+  }
+  const value = project as Record<string, unknown>;
+  if (value.classification !== undefined
+    && !PROJECT_CLASSIFICATIONS.includes(value.classification as ProjectClassification)) {
+    errors.push(`project.classification: must be one of ${PROJECT_CLASSIFICATIONS.join(' | ')}`);
+  }
+  for (const key of ['name', 'description'] as const) {
+    if (value[key] !== undefined && typeof value[key] !== 'string') {
+      errors.push(`project.${key}: must be a string`);
+    }
+  }
+  if (value.pii !== undefined && typeof value.pii !== 'boolean') {
+    errors.push('project.pii: must be a boolean');
+  }
+  if (value.handling !== undefined) {
+    if (typeof value.handling !== 'object' || value.handling === null || Array.isArray(value.handling)) {
+      errors.push('project.handling: must be an object');
+    } else {
+      const handling = value.handling as Record<string, unknown>;
+      for (const key of ['excerptable', 'publishable', 'mirror'] as const) {
+        if (handling[key] !== undefined && typeof handling[key] !== 'boolean') {
+          errors.push(`project.handling.${key}: must be a boolean`);
+        }
+      }
+    }
+  }
+  return errors;
+}
+
+export function resolveProject(project: string | ProjectConfig | undefined): ProjectConfig | undefined {
+  if (project === undefined) return undefined;
+  if (typeof project === 'string') return { name: project };
+  return project;
+}
+
+/**
+ * Handling defaults derived from the classification when not stated explicitly.
+ * A `private` repo is closed by default; anything else stays permissive, so
+ * declaring a classification never silently tightens an existing project.
+ */
+export function resolveProjectHandling(project: ProjectConfig | undefined): Required<ProjectHandling> {
+  const closed = project?.classification === 'private';
+  return {
+    excerptable: project?.handling?.excerptable ?? !closed,
+    publishable: project?.handling?.publishable ?? !closed,
+    mirror: project?.handling?.mirror ?? !closed,
+  };
+}
+
 export interface ResolvedIssueLabel extends IssueLabelDefinition {
   role: string;
   resolved_name: string;
@@ -397,6 +490,12 @@ export interface AiwgConfig {
    * @implements #1764
    */
   workspace?: WorkspaceConfig;
+
+  /**
+   * Project identity and data classification. A bare string is the project name
+   * (historical shape); the object form adds classification and handling policy.
+   */
+  project?: string | ProjectConfig;
 
   /**
    * Workspace members. Each member keeps its own `.aiwg/aiwg.config`, which is
@@ -581,6 +680,40 @@ export type MergeStyle = 'rebase-merge' | 'squash' | 'merge' | 'fast-forward-onl
 export type ForcePushPolicy = 'never' | 'own-branch-only' | 'allowed';
 
 /**
+ * Pre-rename spelling of {@link ForcePushPolicy}. Accepted as a deprecated alias so
+ * configs written before the rename keep validating (#2532).
+ */
+export type LegacyForcePushPolicy = 'main-only-blocked';
+
+/** Deprecated spellings mapped to their current value. */
+export const FORCE_PUSH_POLICY_ALIASES: Record<string, ForcePushPolicy> = {
+  'main-only-blocked': 'own-branch-only',
+};
+
+/**
+ * The rename also narrowed the permission: `main-only-blocked` allowed force-push on
+ * *any* feature branch, `own-branch-only` restricts it to the agent's own. Callers
+ * surface this rather than migrating silently, because accepting the alias quietly
+ * would change what an agent is permitted to do.
+ */
+export const FORCE_PUSH_POLICY_ALIAS_NOTE =
+  "'main-only-blocked' is a deprecated alias for 'own-branch-only'. The permission also narrowed: "
+  + 'the old value allowed force-push on any feature branch, the new one only on the agent\'s own branch.';
+
+/**
+ * Normalize a force-push policy, mapping deprecated spellings forward. Returns the
+ * canonical value and the alias it came from, if any.
+ */
+export function normalizeForcePushPolicy(
+  value: ForcePushPolicy | LegacyForcePushPolicy | string | undefined,
+): { policy: ForcePushPolicy | undefined; deprecatedFrom?: string } {
+  if (value === undefined) return { policy: undefined };
+  const alias = FORCE_PUSH_POLICY_ALIASES[value];
+  if (alias) return { policy: alias, deprecatedFrom: value };
+  return { policy: value as ForcePushPolicy };
+}
+
+/**
  * Branch-naming convention. `{issue}` and `{slug}` are interpolated by skills.
  */
 export interface BranchNaming {
@@ -691,7 +824,7 @@ export function resolveDelivery(delivery: DeliveryConfig | undefined): ResolvedD
     committer: delivery?.committer,
     signing: delivery?.signing,
     release_signing: delivery?.release_signing,
-    force_push_policy: delivery?.force_push_policy ?? 'never',
+    force_push_policy: normalizeForcePushPolicy(delivery?.force_push_policy).policy ?? 'never',
     auto_close_issues: delivery?.auto_close_issues ?? true,
     issue_comment_on_cycle: delivery?.issue_comment_on_cycle ?? true,
   };
@@ -746,6 +879,8 @@ export interface ResolvedParallelism {
  *     less aggressive at small fan-outs (10 is a safe middle ground)
  *   - hermes: MCP sidecar; rate-limit depends on upstream provider, operator
  *     should tune. Conservative 10 default.
+ *   - grokbot: desktop multi-agent; conservative 4 until native evidence.
+*   - grok-build: experimental; conservative 4 until Wave 2/3 evidence.
  *   - unknown: conservative 4 default.
  */
 export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> = {
@@ -760,6 +895,14 @@ export const PROVIDER_PARALLELISM_DEFAULTS: Record<string, ResolvedParallelism> 
   windsurf: { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   openclaw: { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
   hermes:   { max_parallel_subagents: 10, max_parallel_ralph_loops: 3, max_parallel_mc_missions: 6 },
+  // Desktop multi-agent; conservative until native concurrency evidence exists.
+  grokbot:  { max_parallel_subagents: 4,  max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  'grok-build': { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  // Conservative defaults for remaining stable/experimental harnesses (#249).
+  openhuman: { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  omp:      { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  pi:       { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
+  'deepseek-harness': { max_parallel_subagents: 4, max_parallel_ralph_loops: 2, max_parallel_mc_missions: 4 },
 };
 
 const UNKNOWN_PROVIDER_PARALLELISM: ResolvedParallelism = {
@@ -1536,7 +1679,10 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
     throw new Error(`Invalid .aiwg/aiwg.config:\n${authorizationErrors.map(item => item.message).join('\n')}`);
   }
 
-  const threatAssessmentErrors = validateThreatAssessmentConfig(parsed.security?.threatAssessment);
+  const threatAssessmentErrors = [
+    ...validateThreatAssessmentConfig(parsed.security?.threatAssessment),
+    ...validateProjectConfig(parsed.project),
+  ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }
@@ -1556,7 +1702,10 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
  * sync so split-root health remains deterministic.
  */
 export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): Promise<void> {
-  const threatAssessmentErrors = validateThreatAssessmentConfig(config.security?.threatAssessment);
+  const threatAssessmentErrors = [
+    ...validateThreatAssessmentConfig(config.security?.threatAssessment),
+    ...validateProjectConfig(config.project),
+  ];
   if (threatAssessmentErrors.length > 0) {
     throw new Error(`Invalid .aiwg/aiwg.config:\n${threatAssessmentErrors.join('\n')}`);
   }
@@ -1601,6 +1750,37 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   }
 }
 
+
+/**
+ * Ensure `provider` appears in `config.providers` without wiping others (#247).
+ * First entry is the primary provider for parallelism/doctor labels.
+ * When `asPrimary` is true (explicit `--provider` deploy), move the provider to the front.
+ */
+export function ensureProviderListed(
+  config: AiwgConfig,
+  provider: string,
+  opts: { asPrimary?: boolean } = {},
+): AiwgConfig {
+  const normalized = provider.trim();
+  if (!normalized) return config;
+  const providers = Array.isArray(config.providers) ? [...config.providers] : [];
+  const idx = providers.indexOf(normalized);
+  if (opts.asPrimary) {
+    if (idx === 0) {
+      config.providers = providers;
+      return config;
+    }
+    if (idx > 0) providers.splice(idx, 1);
+    providers.unshift(normalized);
+  } else if (idx < 0) {
+    providers.push(normalized);
+  } else {
+    return config;
+  }
+  config.providers = providers;
+  return config;
+}
+
 /**
  * Update the `installed` record for a framework after a successful deployment.
  * Returns the updated config (does not write to disk — caller must call writeAiwgConfig).
@@ -1624,6 +1804,11 @@ export function updateInstalled(
     artifactHashes?: Record<string, string>;
     /** Provider-specific hashes captured from the deployed files (#1998). */
     deployedArtifactHashes?: Record<string, string>;
+    /**
+     * When true (explicit `--provider` deploy), move this provider to the front
+     * of `providers[]` so doctor/parallelism treat it as primary (#247).
+     */
+    asPrimary?: boolean;
   }
 ): AiwgConfig {
   // Project-local invariant: `source: 'project-local'` requires localPath + localType
@@ -1688,6 +1873,8 @@ export function updateInstalled(
   }
 
   config.installed[name] = existing;
+  // Keep providers[] aligned with deployedTo so doctor/parallelism see the right primary (#247).
+  ensureProviderListed(config, provider, { asPrimary: opts.asPrimary === true });
   return config;
 }
 

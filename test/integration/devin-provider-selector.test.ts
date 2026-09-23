@@ -34,7 +34,7 @@ function deploy(selector: string): Map<string, string> {
     '--deploy-skills',
     '--deploy-rules',
     '--quiet',
-  ], { cwd: REPO_ROOT, encoding: 'utf8' });
+  ], { timeout: 60_000, cwd: REPO_ROOT, encoding: 'utf8' });
 
   expect(result.status, `${selector}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
   return new Map(filesUnder(target).map((file) => [

@@ -6,6 +6,7 @@ export const packagingFiles = [
   'test/integration/cli-package-webmode.test.ts',
   'test/integration/global-install-native-policy.test.ts',
   'test/integration/tarball-allowlist-packaging.test.ts',
+  'test/integration/dataset-contract-packaging.test.ts',
 ];
 export const artifactIndexFiles = [
   'test/integration/artifacts/dependency-graph.test.ts',
@@ -18,4 +19,5 @@ export const nodeFiles = [
   'test/contract/agentic-publication-source.test.mjs',
   'test/contract/setup-manifest-site-dispatch.test.mjs',
   'test/contract/site-manifest-release-dispatch.test.mjs',
+  'test/contract/socket-post-publish-workflow.test.mjs',
 ];

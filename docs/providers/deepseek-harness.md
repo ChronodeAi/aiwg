@@ -29,9 +29,35 @@ install:
 npx -y @deepseek-ai/dsh@0.1.3-alpha.1 --version
 ```
 
+### Package acquisition
+
+Last verified 2026-09-13 against upstream `master` commit
+[`c291e7961a515f6d7af9304e7fd1d257929aef26`](https://github.com/deepseek-ai/deepseek-harness/commit/c291e7961a515f6d7af9304e7fd1d257929aef26)
+(root `package.json` version `0.1.5-rc.2`):
+
+- Runtime: the root `package.json` `engines.node` field is
+  `^22.19.0 || >=24.0.0`.
+- Published launcher: the upstream README's entry point is
+  `npx @deepseek-ai/dsh web`. That command resolves the npm `latest` dist-tag
+  and starts the web surface. It is upstream's user-facing launcher, not the
+  version AIWG has qualified; AIWG automation uses the exact-version
+  invocation above so the launcher and the qualified contract can differ.
+
 Supply-chain policy may intentionally delay a newly published prerelease. Do
 not disable a configured minimum-release-age gate merely to make the command
 succeed.
+
+### Upstream drift (2026-09-13)
+
+npm `@deepseek-ai/dsh` has published beyond the qualified baseline:
+`0.1.3-alpha.2` (2026-09-07), `0.1.5-alpha.1` (2026-09-08), `0.1.5-alpha.2`
+(2026-09-09), `0.1.5-rc.1` (2026-09-10, the current `latest` dist-tag), and
+`0.1.5-rc.2` (2026-09-10). None of these is in the reviewed wire-contract set
+(`0.1.1-rc.2`, `0.1.2-rc.1`, `0.1.3-alpha.1`), so AIWG fails closed on them.
+They become eligible for qualification review only after the seven-day
+[release-age window](../contributing/versioning.md#release-age-policy-wave-7--a15-1290)
+has elapsed since publication; qualification is a separate reviewed change
+and is not implied by this note.
 
 ## Preview, deploy, and verify
 

@@ -33,15 +33,13 @@ describe('session SQLite feature release gate', () => {
 
   it('runs the packed-install smoke before every npm publication lane', () => {
     expect(githubWorkflow.match(/npm run test:sessions:feature-install/g)).toHaveLength(1);
-    expect(giteaWorkflow.match(/npm run test:sessions:feature-install/g)).toHaveLength(2);
+    expect(giteaWorkflow.match(/npm run test:sessions:feature-install/g)).toHaveLength(1);
 
     expect(githubWorkflow.indexOf('npm run test:sessions:feature-install'))
       .toBeLessThan(githubWorkflow.indexOf('- name: Publish to npmjs.org'));
 
-    const giteaSmokes = [...giteaWorkflow.matchAll(/npm run test:sessions:feature-install/g)]
-      .map(match => match.index);
-    expect(giteaSmokes[0]).toBeLessThan(giteaWorkflow.indexOf('- name: Publish pre-release'));
-    expect(giteaSmokes[1]).toBeLessThan(giteaWorkflow.indexOf('- name: Publish to Gitea npm registry'));
+    expect(giteaWorkflow.indexOf('npm run test:sessions:feature-install'))
+      .toBeLessThan(giteaWorkflow.indexOf('- name: Publish to Gitea npm registry'));
   });
 
   it('exercises the documented feature installer and an empty session catalog', () => {

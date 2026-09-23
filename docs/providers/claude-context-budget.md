@@ -22,23 +22,44 @@ Claude Code inlines the following into every session before any user prompt:
 - the base Claude Code system prompt and tool definitions,
 - `CLAUDE.md` and its `@`-includes (`AIWG.md`, `.aiwg/AIWG.md`), plus `AGENTS.md`,
 - every file in `.claude/rules/*.md` (full body),
+- **each ancestor directory's `CLAUDE.md` and `.claude/rules/*.md`** — a project
+  nested under a workspace with its own deployment starts with both sets,
 - the name + description of each listed skill and agent.
 
-Measured on a full `aiwg use all` deployment (June 2026), the AIWG-controlled
-portion alone was **~193K tokens** against the 200K window:
+Measured on a full `aiwg use all` deployment (June 2026), before the inline rule
+budget shipped, the AIWG-controlled portion alone was **~193K tokens** against
+the 200K window:
 
 | Component | ~Tokens | Share |
 |-----------|---------|-------|
-| `.claude/rules/*.md` (95 files) | ~170K | 88% |
+| `.claude/rules/*.md` (95 files, unbudgeted) | ~170K | 88% |
 | `AIWG.md` + `CLAUDE.md` + `AGENTS.md` + `.aiwg/AIWG.md` | ~24K | 12% |
 
 With only ~7K of headroom left for the base system prompt, tool definitions, and
-skill/agent listings, a fresh in-repo session exceeds the standard window before
-work begins — which is what produced the #1672 exhaustion. **This is the dominant
-driver; bounding individual workflows is necessary but not sufficient.** The
-deployed standing-rules set must also shrink (fewer always-on rules, pointer or
-index form rather than full-text inlining) for heavy deployments to run on
-standard Sonnet. Measure it with `npm run lint:claude-context -- --startup`.
+skill/agent listings, a fresh in-repo session exceeded the standard window before
+work began — which is what produced the #1672 exhaustion, and later the
+`Prompt is too long` subagent-dispatch failures of #2562.
+
+### The inline rule budget
+
+Rule deployment now reconciles `.claude/rules/` against a **64K-token inline
+budget** after every deploy pass. HIGH rules beyond the budget move on demand —
+never CRITICAL, never the generated indexes — are recorded in
+`.claude/rules/.aiwg-rules-budget.json`, skipped by later passes, and listed in
+`RULES-ONDEMAND.md` under "Binding rules moved on demand to fit the inline
+budget" with their `aiwg show rule <name>` fetch hint. **They remain binding**;
+only their delivery changes from always-on to on-demand.
+
+| Control | Effect |
+|---------|--------|
+| `AIWG_RULES_INLINE_BUDGET_TOKENS=<tokens>` | Set the budget (default `64000`) |
+| `AIWG_RULES_INLINE_BUDGET_TOKENS=0` | Disable budgeting; inline every always-on rule |
+
+Bounding individual workflows remains necessary but is not sufficient on its own.
+Measure the startup surface with `npm run lint:claude-context -- --startup`, and
+check dispatch headroom with `aiwg doctor` — its **Subagent Dispatch** check
+fails when the inlined surface leaves no room for a Task dispatch, and names the
+ancestor contribution when one applies.
 
 ## Sources
 

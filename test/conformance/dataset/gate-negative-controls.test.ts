@@ -16,6 +16,8 @@ describe('dataset conformance release gate negative controls', () => {
 
   it.each([
     ['missing cell', (value: DatasetConformanceReceipt) => { value.results.pop(); value.resultDigest = resultDigest(value.results); value.summary.pending -= 1 }, 'CONFORMANCE_REQUIRED_CELL_MISSING'],
+    ['duplicate cell', (value: DatasetConformanceReceipt) => { value.results.push(structuredClone(value.results[0]!)); value.resultDigest = resultDigest(value.results); value.summary.passed += 1 }, 'CONFORMANCE_RESULT_DUPLICATE'],
+    ['unexpected cell', (value: DatasetConformanceReceipt) => { value.results.push({ ...structuredClone(value.results[0]!), cellId: 'undeclared.cell' }); value.resultDigest = resultDigest(value.results); value.summary.passed += 1 }, 'CONFORMANCE_RESULT_UNEXPECTED'],
     ['stale manifest', (value: DatasetConformanceReceipt) => { value.manifestDigest = `sha256:${'0'.repeat(64)}` }, 'CONFORMANCE_RECEIPT_STALE'],
     ['digest substitution', (value: DatasetConformanceReceipt) => { value.resultDigest = `sha256:${'0'.repeat(64)}` }, 'CONFORMANCE_RESULT_DIGEST_MISMATCH'],
     ['sensitive output', (value: DatasetConformanceReceipt) => { value.results[0]!.diagnostic = 'password=hunter2'; value.resultDigest = resultDigest(value.results) }, 'CONFORMANCE_SENSITIVE_VALUE'],

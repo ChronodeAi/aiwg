@@ -1,5 +1,10 @@
 ---
 enforcement: high
+triggers:
+  - "which library should I use"
+  - "why does this keep failing"
+  - "I am guessing at this api"
+  - "before I decide"
 ---
 
 # Research Before Decision Rules

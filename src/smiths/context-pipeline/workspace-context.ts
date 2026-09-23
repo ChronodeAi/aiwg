@@ -46,6 +46,13 @@ const LEGACY_ROOT_FILES = [
   'AIWG.md',
 ] as const;
 
+/**
+ * Operator-content volume above which a provider-named source is surfaced for a scope
+ * decision instead of being routed on filename alone (#2537). A genuine provider adapter
+ * is a few hundred bytes; a migrated project contract is tens of KB.
+ */
+const SCOPE_REVIEW_BYTES = 4096;
+
 const GENERATED_BLOCKS: Array<[string, string]> = [
   [PROVIDER_BOOTSTRAP_START, PROVIDER_BOOTSTRAP_END],
   ['<!-- AIWG:context-hook:start -->', '<!-- AIWG:context-hook:end -->'],
@@ -103,7 +110,20 @@ export interface WorkspaceContextAudit {
     nestedSources: string[];
     projectSources: string[];
     outputs: string[];
+    /** Per-source destination and volume, so a dry run says what moves where (#2537). */
+    routing: WorkspaceContextRouting[];
+    /** Provider-named sources carrying enough operator content to warrant a scope decision (#2537). */
+    scopeReview: WorkspaceContextRouting[];
   };
+}
+
+export interface WorkspaceContextRouting {
+  source: string;
+  operatorBytes: number;
+  destination: string;
+  /** `project-neutral` is read by every provider; `<provider>-only` is read by one. */
+  scope: string;
+  provider: string | null;
 }
 
 export interface ExistingProjectContext {
@@ -480,7 +500,8 @@ export function buildWorkspaceManagedBlock(projectPath: string, providerFiles: s
     '',
     '- Edit project-neutral notes only inside the protected Project Context section below.',
     '- Keep detailed policies, runbooks, hooks, and quickrefs in linked files.',
-    '- Keep provider-only directives in `.aiwg/context/providers/`.',
+    '- `.aiwg/context/providers/` is reference only: no provider bootstrap auto-loads it.',
+    '  Put directives you want read into Project Context above.',
     '- Never store secrets, tokens, credentials, or machine-local sensitive values here.',
     '',
     '### Artifact Routing',
@@ -523,12 +544,17 @@ export async function ensureWorkspaceContext(
   const workspacePath = path.join(projectPath, 'WORKSPACE.md');
   const warnings: string[] = [];
   const existing = await readOptional(workspacePath);
+  // `aiwg use` and `aiwg regenerate` rebuild the managed block without
+  // knowing about earlier migrations. Rediscover the migrated provider files
+  // so their links survive every regeneration instead of only the one that
+  // wrote them (#2558).
+  const providerFiles = options.providerFiles ?? await migratedProviderFiles(projectPath);
   if (existing === null) {
-    await atomicWrite(workspacePath, buildWorkspaceDocument(projectPath, '', options.providerFiles));
+    await atomicWrite(workspacePath, buildWorkspaceDocument(projectPath, '', providerFiles));
     return { path: workspacePath, action: 'created', warnings };
   }
 
-  const block = buildWorkspaceManagedBlock(projectPath, options.providerFiles);
+  const block = buildWorkspaceManagedBlock(projectPath, providerFiles);
   if (existing.includes(WORKSPACE_MANAGED_START) || existing.includes(WORKSPACE_MANAGED_END)) {
     let updated = replaceBlock(existing, WORKSPACE_MANAGED_START, WORKSPACE_MANAGED_END, block) as string;
 
@@ -558,7 +584,7 @@ export async function ensureWorkspaceContext(
 
   const backupPath = `${workspacePath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
   await fs.writeFile(backupPath, existing, 'utf8');
-  await atomicWrite(workspacePath, buildWorkspaceDocument(projectPath, existing, options.providerFiles));
+  await atomicWrite(workspacePath, buildWorkspaceDocument(projectPath, existing, providerFiles));
   return { path: workspacePath, action: 'updated', backupPath, warnings };
 }
 
@@ -807,14 +833,30 @@ export async function auditWorkspaceContext(projectPath: string): Promise<Worksp
     .map(([key, values]) => ({ key, sources: values.map(({ path: sourcePath, directive }) => ({ path: sourcePath, directive })).sort((a, b) => a.path.localeCompare(b.path)) }));
 
   const rootOperator = sources.filter((source) => source.scope === 'root' && source.operatorContent.trim());
-  // Provider startup roots remain attributed provider context even when one
-  // directive is duplicated elsewhere. Promoting an entire root file because
-  // of one matching line can copy large provider/framework bodies into the
-  // provider-neutral WORKSPACE.md operator region.
-  const neutralSources = rootOperator.filter((source) => source.path === 'WORKSPACE.md').map((source) => source.path);
-  const providerSources = rootOperator.filter((source) => source.path !== 'WORKSPACE.md' && !neutralSources.includes(source.path)).map((source) => source.path);
-  const providerOutputs = providerSources.map((source) => providerContextOutput(projectPath, source));
+  // Provider startup files (CLAUDE.md, AGENTS.md, WARP.md, …) are bootstrap
+  // surfaces: AIWG rewrites them to a managed bootstrap that `@`-imports
+  // WORKSPACE.md. The operator content they carried therefore ports into the
+  // WORKSPACE.md operator block, which every provider bootstrap loads and
+  // which `aiwg use` and `aiwg regenerate` preserve byte-for-byte. Routing
+  // it to `.aiwg/context/providers/` instead left it linked but never
+  // loaded, and a later `aiwg use` dropped even the link (#2558).
+  const neutralSources = rootOperator.map((source) => source.path);
+  const providerSources: string[] = [];
+  const providerOutputs: string[] = [];
   const workspaceExists = sources.some((source) => source.path === 'WORKSPACE.md');
+
+  // Report volume and destination per source. A substantial provider-named
+  // body is still surfaced for review (#2537): it now lands where every
+  // provider reads it, so anything genuinely provider-only should be moved to
+  // `.aiwg/context/providers/` by the operator after migration.
+  const routing: WorkspaceContextRouting[] = rootOperator.map((source) => ({
+    source: source.path,
+    operatorBytes: Buffer.byteLength(source.operatorContent, 'utf8'),
+    destination: 'WORKSPACE.md',
+    scope: 'project-neutral',
+    provider: source.path === 'WORKSPACE.md' ? null : source.provider,
+  })).sort((a, b) => b.operatorBytes - a.operatorBytes);
+  const scopeReview = routing.filter((entry) => entry.source !== 'WORKSPACE.md' && entry.operatorBytes >= SCOPE_REVIEW_BYTES);
 
   return {
     version: 1,
@@ -827,6 +869,8 @@ export async function auditWorkspaceContext(projectPath: string): Promise<Worksp
     conflicts,
     sensitiveFindings,
     plan: {
+      routing,
+      scopeReview,
       neutralSources,
       providerSources,
       nestedSources: sources.filter((source) => source.scope === 'nested').map((source) => source.path),
@@ -840,36 +884,46 @@ function projectOutputPath(projectPath: string, absPath: string): string {
   return path.relative(projectPath, absPath).replace(/\\/g, '/');
 }
 
-function providerContextOutput(projectPath: string, sourcePath: string): string {
-  return projectOutputPath(
-    projectPath,
-    projectAiwgPath(projectPath, 'context', 'providers', sourcePath.replace(/[^A-Za-z0-9.-]+/g, '-').replace(/^-+/, '')),
-  );
-}
+const LEGACY_PROJECT_CONTEXT_PLACEHOLDER = [
+  '## Project Context',
+  '',
+  'Add provider-neutral project conventions and links here.',
+].join('\n');
 
+/**
+ * Operator content for the WORKSPACE.md operator block after migration.
+ *
+ * Existing WORKSPACE.md operator content is kept verbatim; the operator body
+ * of each provider startup file is appended once, verbatim, under an
+ * attributed heading. Tables, procedures, and code blocks survive intact —
+ * the earlier line-flattened directive list lost exactly the runbook content
+ * operators keep in CLAUDE.md (#2558). Re-running the migration is a no-op:
+ * a body that already appears in the block is not appended again.
+ */
 function neutralMigrationContent(audit: WorkspaceContextAudit): string {
-  const selected = audit.sources.filter((source) => audit.plan.neutralSources.includes(source.path));
-  const seen = new Set<string>();
-  const lines: string[] = ['## Project Context', ''];
-  for (const source of selected) {
-    const unique = directives(source.operatorContent).filter((directive) => !seen.has(directive));
-    for (const directive of unique) seen.add(directive);
-    if (unique.length === 0) continue;
-    lines.push(`### From ${source.path}`, '', ...unique.map((directive) => `- ${directive}`), '');
+  const workspace = audit.sources.find((source) => source.path === 'WORKSPACE.md');
+  let base = workspace?.operatorContent.trim() ?? '';
+  if (base === PROJECT_CONTEXT_PLACEHOLDER || base === LEGACY_PROJECT_CONTEXT_PLACEHOLDER) base = '';
+  const sections: string[] = [];
+  let accumulated = base;
+  for (const source of audit.sources) {
+    if (source.path === 'WORKSPACE.md' || !audit.plan.neutralSources.includes(source.path)) continue;
+    const body = source.operatorContent.trim();
+    if (!body || accumulated.includes(body)) continue;
+    sections.push([
+      `### Migrated from ${source.path}`,
+      '',
+      `Source attribution: migrated from \`${source.path}\`; checksum \`${source.checksum}\`.`,
+      '',
+      body,
+    ].join('\n'));
+    accumulated = `${accumulated}\n${body}`;
   }
-  if (lines.length === 2) lines.push('Add project conventions, local hook/context pointers, and links to deeper project documents here.');
-  return lines.join('\n').trim();
-}
-
-function providerMigrationContent(source: WorkspaceContextSource): string {
-  return [
-    `# Provider-specific context from ${source.path}`,
-    '',
-    `Source attribution: migrated from \`${source.path}\`; checksum \`${source.checksum}\`.`,
-    '',
-    source.operatorContent.trim() || '(No operator-authored content remained after managed blocks were removed.)',
-    '',
-  ].join('\n');
+  const parts = [base || '## Project Context', ...sections];
+  if (!base && sections.length === 0) {
+    parts.push('Add project conventions, local hook/context pointers, and links to deeper project documents here.');
+  }
+  return parts.join('\n\n').trim();
 }
 
 async function configuredProviders(projectPath: string): Promise<string[]> {
@@ -888,17 +942,10 @@ async function stageMigrationWrites(
   options: { extractProject?: boolean; includeGeneratedContext?: boolean } = {},
 ): Promise<Map<string, string>> {
   const writes = new Map<string, string>();
-  for (const source of audit.sources.filter((item) => audit.plan.providerSources.includes(item.path))) {
-    writes.set(providerContextOutput(projectPath, source.path), providerMigrationContent(source));
-  }
-  const providerFiles = [...new Set([
-    ...audit.sources.filter((source) => source.path.replace(/\\/g, '/').includes('/context/providers/')).map((source) => source.path),
-    ...writes.keys(),
-  ])].sort();
-  const existingWorkspace = audit.sources.find((source) => source.path === 'WORKSPACE.md');
-  let workspaceOperatorContent = existingWorkspace?.managed
-    ? existingWorkspace.operatorContent
-    : neutralMigrationContent(audit);
+  const providerFiles = [...new Set(
+    audit.sources.filter((source) => source.path.replace(/\\/g, '/').includes('/context/providers/')).map((source) => source.path),
+  )].sort();
+  let workspaceOperatorContent = neutralMigrationContent(audit);
   if (options.extractProject) {
     const extracted = await extractExistingProjectContext(projectPath);
     workspaceOperatorContent = mergeProjectExtraction(workspaceOperatorContent, extracted.content);
@@ -1076,8 +1123,36 @@ export async function rollbackWorkspaceContext(projectPath: string, requestedId?
   return { id, restored: manifest.files.map((file) => file.path) };
 }
 
+/**
+ * Blank out fenced code blocks and inline code spans, preserving offsets and line
+ * structure, so link extraction sees only prose. Illustrative paths inside an
+ * example block are documentation, not context links the graph should resolve (#2536).
+ */
+function maskCodeRegions(content: string): string {
+  const lines = content.split('\n');
+  let fence: { marker: string; length: number } | null = null;
+  const masked = lines.map((line) => {
+    const openOrClose = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      // A closing fence uses the same character, is at least as long, and carries no info string.
+      if (openOrClose && openOrClose[1][0] === fence.marker && openOrClose[1].length >= fence.length && openOrClose[2].trim() === '') {
+        fence = null;
+      }
+      return ' '.repeat(line.length);
+    }
+    if (openOrClose) {
+      fence = { marker: openOrClose[1][0], length: openOrClose[1].length };
+      return ' '.repeat(line.length);
+    }
+    // Inline code spans: a run of N backticks closes on the next run of exactly N.
+    return line.replace(/(`+)(?:[^`]|(?!\1)`)*?\1/g, (span) => ' '.repeat(span.length));
+  });
+  return masked.join('\n');
+}
+
 function markdownLinks(content: string): string[] {
-  return [...content.matchAll(/\[[^\]]+\]\((\.\/?[^)#]+)(?:#[^)]+)?\)/g)].map((match) => match[1]);
+  const prose = maskCodeRegions(content);
+  return [...prose.matchAll(/\[[^\]]+\]\((\.\/?[^)#]+)(?:#[^)]+)?\)/g)].map((match) => match[1]);
 }
 
 export async function workspaceLinkedFiles(projectPath: string): Promise<string[]> {
@@ -1132,8 +1207,35 @@ export async function diagnoseWorkspaceContext(projectPath: string): Promise<Wor
   for (const conflict of audit.conflicts) {
     diagnostics.push({ severity: 'error', code: 'directive-conflict', message: `Conflicting duplicate directive group '${conflict.key}' appears in ${conflict.sources.map((source) => source.path).join(', ')}.` });
   }
+  // One diagnostic per source pair, not one per duplicated line: a shared
+  // pointer stub otherwise reports every line as a separate policy conflict
+  // and degrades the workspace over content that agrees with itself (#2558).
+  const duplicatesByPair = new Map<string, number>();
   for (const overlap of audit.identical) {
-    diagnostics.push({ severity: 'warning', code: 'duplicate-directive', message: `Identical directive is duplicated across ${overlap.sources.join(', ')}.` });
+    const key = overlap.sources.join(', ');
+    duplicatesByPair.set(key, (duplicatesByPair.get(key) ?? 0) + overlap.directives.length);
+  }
+  const operatorBodies = new Map(audit.sources.map((source) => [source.path, source.operatorContent.trim()]));
+  for (const [pair, count] of duplicatesByPair) {
+    const paths = pair.split(', ');
+    const bodies = paths.map((item) => operatorBodies.get(item) ?? '');
+    const wholeFileDuplicate = bodies.every((body) => body.length > 0 && body === bodies[0]);
+    diagnostics.push({
+      severity: wholeFileDuplicate ? 'info' : 'warning',
+      code: 'duplicate-directive',
+      message: wholeFileDuplicate
+        ? `${pair} carry identical operator content (${count} directive(s)); keep one copy or accept the shared stub.`
+        : `${count} identical directive(s) duplicated across ${pair}.`,
+    });
+  }
+  for (const source of audit.sources) {
+    if (!source.path.replace(/\\/g, '/').includes('/context/providers/') || !source.operatorContent.trim()) continue;
+    diagnostics.push({
+      severity: 'info',
+      code: 'provider-context-not-loaded',
+      message: `${source.path} is linked from WORKSPACE.md but no provider bootstrap auto-loads it; move its operator content into the WORKSPACE.md Project Context section (\`aiwg regenerate --existing-project\` ports startup files there) or keep it as reference only.`,
+      path: source.path,
+    });
   }
   for (const finding of audit.sensitiveFindings) {
     diagnostics.push({ severity: 'error', code: 'possible-secret', message: 'Possible credential value found in context; remove it.', path: finding.path });

@@ -509,6 +509,22 @@ export class SessionLauncher extends EventEmitter {
       // Handle timeout
       let timeoutId = null;
       let timedOut = false;
+      // Escalation timers armed by the timeout path. They are unref'd so a
+      // child that settles during the abort grace window does not hold the
+      // loop process open for the full TERM/KILL schedule, and cleared on
+      // close so nothing fires against a reaped pid (#2550).
+      const escalationTimers = new Set();
+      const armEscalation = (fn, delayMs) => {
+        const timer = setTimeout(() => { escalationTimers.delete(timer); fn(); }, delayMs);
+        if (typeof timer.unref === 'function') timer.unref();
+        escalationTimers.add(timer);
+        return timer;
+      };
+      const clearEscalation = () => {
+        for (const timer of escalationTimers) clearTimeout(timer);
+        escalationTimers.clear();
+      };
+      this.pendingEscalationTimers = escalationTimers;
 
       if (options.timeoutMs) {
         timeoutId = setTimeout(() => {
@@ -516,9 +532,9 @@ export class SessionLauncher extends EventEmitter {
           this.emit('timeout');
           if (abortInput && child.stdin?.writable) child.stdin.write(abortInput);
           const terminateDelay = abortInput ? 2000 : 0;
-          setTimeout(() => terminate('SIGTERM'), terminateDelay);
+          armEscalation(() => terminate('SIGTERM'), terminateDelay);
           // Force kill after bounded graceful-abort and termination windows.
-          setTimeout(() => {
+          armEscalation(() => {
             if (child.exitCode === null && child.signalCode === null) {
               terminate('SIGKILL');
             }
@@ -532,6 +548,7 @@ export class SessionLauncher extends EventEmitter {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
+        clearEscalation();
 
         const duration = Date.now() - this.startTime;
         this.currentProcess = null;
@@ -558,6 +575,7 @@ export class SessionLauncher extends EventEmitter {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
+        clearEscalation();
 
         const duration = Date.now() - this.startTime;
         this.currentProcess = null;

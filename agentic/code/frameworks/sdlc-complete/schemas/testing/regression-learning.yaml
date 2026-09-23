@@ -702,7 +702,7 @@ integration:
 
   debug_memory:
     enabled: true
-    integration_path: "@agentic/code/addons/ralph/schemas/debug-memory.yaml"
+    integration_path: "@agentic/code/addons/agent-loop/schemas/debug-memory.yaml"
     cross_session_learning: true
 
   regression_schema:
@@ -816,9 +816,9 @@ references:
     - "@.aiwg/research/findings/REF-015-self-refine.md"
 
   schemas:
-    - "@agentic/code/addons/ralph/schemas/debug-memory.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/debug-memory.yaml"
     - "@agentic/code/frameworks/sdlc-complete/schemas/testing/regression.yaml"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"
 
   rules:
     - "@.claude/rules/executable-feedback.md"

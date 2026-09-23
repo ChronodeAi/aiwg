@@ -83,7 +83,7 @@ describe('OpenCode Deployment', () => {
   describe('Agent Deployment', () => {
     it('should deploy agents to .opencode/agent/ directory', () => {
       // OpenCode discovers agents via glob within .opencode/agent/ directory.
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -94,7 +94,7 @@ describe('OpenCode Deployment', () => {
     it('should NOT deploy commands to legacy .opencode/commands/', () => {
       // OpenCode's generated command surface is .opencode/command/ (singular);
       // .opencode/commands/ is not scanned.
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-commands`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-commands`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -105,7 +105,7 @@ describe('OpenCode Deployment', () => {
 
   describe('Skill Deployment', () => {
     it('should deploy skills to .opencode/skill/ directory', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -117,7 +117,7 @@ describe('OpenCode Deployment', () => {
     });
 
     it('should deploy skills with SKILL.md files', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -135,7 +135,7 @@ describe('OpenCode Deployment', () => {
 
   describe('AGENTS.md Generation', () => {
     it('should create AGENTS.md when --create-agents-md is specified', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -153,10 +153,10 @@ describe('OpenCode Deployment', () => {
       fs.writeFileSync(agentsMdPath, '# Project Agents\n\nExisting content.\n');
 
       // Deploy twice
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, { timeout: 60_000,
         encoding: 'utf-8'
       });
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --create-agents-md`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -180,7 +180,7 @@ describe('OpenCode Deployment', () => {
     it('should deploy skills without errors (model config applies to MCP, not file artifacts)', () => {
       // OpenCode agents are config-only — model format is validated via opencode.json, not file deployment.
       // Skills are the deployable artifacts; verify they deploy cleanly.
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --deploy-skills`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -191,7 +191,7 @@ describe('OpenCode Deployment', () => {
 
   describe('Marketing Mode', () => {
     it('should deploy marketing skills when mode is marketing', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode marketing --deploy-skills`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode marketing --deploy-skills`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -206,7 +206,7 @@ describe('OpenCode Deployment', () => {
 
   describe('Dry Run', () => {
     it('should not write files in dry-run mode', () => {
-      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --dry-run`, {
+      execSync(`node ${deployScript} --target ${testDir} --provider opencode --mode sdlc --dry-run`, { timeout: 60_000,
         encoding: 'utf-8'
       });
 
@@ -232,7 +232,7 @@ describe('OpenCode MCP Configuration', () => {
 
   it('should generate opencode.json with MCP configuration', () => {
     // Use cwd option instead of process.chdir (not supported in workers)
-    execSync(`node ${cliPath} install opencode ${testDir}`, {
+    execSync(`node ${cliPath} install opencode ${testDir}`, { timeout: 60_000,
       encoding: 'utf-8',
       cwd: testDir
     });
@@ -259,7 +259,7 @@ describe('OpenCode MCP Configuration', () => {
     }, null, 2));
 
     // Use cwd option instead of process.chdir
-    execSync(`node ${cliPath} install opencode ${testDir}`, {
+    execSync(`node ${cliPath} install opencode ${testDir}`, { timeout: 60_000,
       encoding: 'utf-8',
       cwd: testDir
     });

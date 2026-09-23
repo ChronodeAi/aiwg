@@ -37,8 +37,8 @@ echo ""
 echo "## Local AIWG index (aiwg discover)"
 echo ""
 if command -v aiwg >/dev/null 2>&1; then
-  DISCOVER_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/steward-prep-discover.XXXXXX")"
-  DISCOVER_JSON="${DISCOVER_TMP_DIR}/discover.json"
+  DISCOVER_TMP_DIR=""
+  DISCOVER_JSON=""
   DISCOVER_PID=""
   cleanup_discover_tmp() {
     if [ -n "${DISCOVER_TMP_DIR:-}" ] && [ -d "${DISCOVER_TMP_DIR}" ]; then
@@ -63,6 +63,9 @@ if command -v aiwg >/dev/null 2>&1; then
   trap 'handle_discover_signal 129' HUP
   trap 'handle_discover_signal 130' INT
   trap 'handle_discover_signal 143' TERM
+
+  DISCOVER_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/steward-prep-discover.XXXXXX")"
+  DISCOVER_JSON="${DISCOVER_TMP_DIR}/discover.json"
 
   # Keep ownership of the discovery child so signal cleanup does not depend on
   # the caller creating and signalling a separate process group. @implements #2107
