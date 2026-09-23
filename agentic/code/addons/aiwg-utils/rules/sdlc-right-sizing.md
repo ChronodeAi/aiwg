@@ -110,6 +110,16 @@ Before invoking any SDLC flow command (`flow-inception-to-elaboration`, `flow-ar
 
 The `sdlc-orchestration` rule layers this step in explicitly.
 
+### Rule 7: Rule files are artifacts
+
+Always-loaded rule files cost context in every session, so right-size them like any other artifact:
+
+1. A new always-loaded rule passes the two-trigger test framed for rules: it states a non-standard convention the model cannot infer from the code, AND no mechanical check can carry it
+2. Adding a rule retires or shrinks an existing one
+3. Prefer a check (linter, gate script, CI step) over prose
+4. Detailed guidance goes to on-demand skills, not always-loaded rules
+5. The inline budget in `tools/agents/providers/base.mjs` (`DEFAULT_RULES_INLINE_BUDGET_TOKENS`) is the ceiling — do not add a second budgeting mechanism
+
 ## Signals from the user
 
 | User says | Interpret as |

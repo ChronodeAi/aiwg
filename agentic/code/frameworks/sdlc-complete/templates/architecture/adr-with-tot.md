@@ -2,7 +2,7 @@
 
 ---
 template_id: adr-with-tot
-version: 2.1.0
+version: 2.2.0
 reasoning_required: true
 ---
 
@@ -183,6 +183,14 @@ This option scored **XX/100** against evaluation criteria, exceeding the minimum
 [When should we reconsider this decision? Define conditions that would trigger re-evaluation]
 - [Trigger 1: Specific condition]
 - [Trigger 2: Specific condition]
+
+### Contract and Band Impact
+
+[Complete when the decision changes dependency direction, frozen edges, or code-shape bands; otherwise write "None".]
+- **Contracts / frozen edges:** [Which import contracts (`contracts.command`) or frozen edges (`contracts.frozen_edges_file`) change, and in which direction]
+- **Bands:** [Which `bands` in `.aiwg/quality/gate.json` change, and why]
+- **Follow-up commit:** [After this ADR merges, the evaluator change lands in its own commit touching only evaluator surfaces, with trailer `Evaluator-Change: ADR-NNN`]
+- **Reviewer:** [Someone other than the author]
 
 ## Action Items
 

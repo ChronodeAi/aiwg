@@ -11,6 +11,10 @@ spec:
     defined, security/performance architecture complete, architecture risks
     retired via POCs. Report READY | GAPS | BLOCKED (flow-gate-check Step 2.2 ABM
     architecture review; also drives the 12-factor process-architecture review).
+    For the `structure` gate this is Layer 2: compare the contract file with SAD
+    §5a (Declared Dependency Direction) and report PASS | GAP | RISK to
+    .aiwg/gates/structure-architecture-review.md — advisory only; an LLM verdict
+    never blocks the gate.
   version: "1.0.0"
   inputs:
     - { name: gate_type, type: string, required: true }

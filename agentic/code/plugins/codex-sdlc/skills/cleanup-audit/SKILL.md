@@ -236,5 +236,5 @@ Output as JSON:
 
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/agents/dead-code-analyzer.md
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/cleanup-audit/SKILL.md
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/code-shape.md
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/anti-laziness.md

@@ -949,7 +949,7 @@ them. They prevent common agent failure modes and define review boundaries.
 
 | Domain | Examples |
 |--------|----------|
-| **SDLC** | HITL gates, provenance tracking, artifact discovery, phase gates, reproducibility validation, agent-friendly code, fallback, review, and handoff rules |
+| **SDLC** | HITL gates, provenance tracking, artifact discovery, phase gates, reproducibility validation, code-shape, fallback, review, and handoff rules |
 | **Forensics** | Evidence integrity, chain of custody, forensic reporting, and authorized investigation boundaries |
 | **Security Engineering** | Cryptographic decision boundaries, runtime secret hygiene, supply-chain trust, physical-access threat modeling, and DFIR readiness handoff |
 | **Ops** | Ops safety, executable runbook format, evidence governance, issue tracking, and cross-repo reference rules |

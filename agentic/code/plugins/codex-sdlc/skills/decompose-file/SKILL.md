@@ -2,132 +2,85 @@
 namespace: aiwg
 name: decompose-file
 platforms: [all]
-description: Analyze large source files and produce decomposition plans, optionally executing refactoring with import updates and test verification
-
+description: Plan and execute a source-file split along one stated responsibility, with sibling-cycle and ratchet verification after the split
+triggers:
+  - "this file is too large"
+  - "split into modules"
+  - "decompose this file"
+  - "split this file along a responsibility"
+script:
+  entrypoint: scripts/plan.mjs
+  runtime: node
+  cwd: project-root
+  argsHint: "<file> --responsibility \"<one sentence>\" [--dry-run] [--execute]"
 ---
 
 # decompose-file
 
-Analyze a large source file and produce a concrete decomposition plan, optionally executing the refactoring with import updates and test verification.
-
-## Triggers
-
-
-Alternate expressions and non-obvious activations (primary phrases are matched automatically from the skill description):
-
-- "this file is too large" → file decomposition trigger
-- "split into modules" → modular decomposition
+Plan a source-file split along one stated responsibility, optionally execute it with import updates, and verify it with the code-shape ratchet.
 
 ## Purpose
 
-When `/codebase-health` identifies files exceeding agent-friendly thresholds (300 LOC warning, 500 LOC error), this skill provides guided decomposition. It analyzes file structure, identifies logical groupings, maps internal dependencies, proposes a split plan, and optionally executes the refactoring.
+Candidates come from `codebase-health`: files the ratchet flags (`function-worsened`, `file-growth`) or hotspots from `--history`. Size alone is not a reason to split. A split is justified only by a responsibility — the file's reason to change, stated in one sentence.
 
-The doc-splitter skill handles documentation splitting. This skill handles source code splitting — a fundamentally different problem requiring dependency analysis, import rewiring, and test verification.
+The doc-splitter skill handles documentation. This skill handles source code: dependency analysis, import rewiring and test verification.
+
+## Required input: `--responsibility`
+
+`--responsibility "<one sentence>"` names the reason to change that the extracted module will own. Refuse to plan or execute without it. The script exits 2 when it is missing.
+
+```bash
+aiwg run skill decompose-file -- src/extensions/registry.ts --responsibility "Validate extension manifests before registration"
+```
+
+The script prints the file's function table (`codebase-health --functions <file> --format json`: name, lines, NLOC, CCN) as the starting map.
+
+## Mirage test
+
+A split is wrong when either holds:
+
+- it adds imports between the new siblings (the parts still depend on each other), or
+- the parts co-change in nearly every commit — check the pairs from `aiwg run skill codebase-health -- --history`.
+
+Moving code between files without separating a reason to change is a split mirage: the function count rises and total complexity does not fall (`split-mirage-candidate` in the ratchet).
 
 ## Behavior
 
-When triggered, this skill:
-
-1. **Analyze file structure**:
-   - Parse the file to identify logical sections (classes, function groups, export clusters)
-   - Measure each section's size in LOC
-   - Identify the file's primary language and applicable parsing strategy
-   - Report current file size vs. agent-friendly thresholds
-
-2. **Map internal dependencies**:
-   - Trace references between identified sections
-   - Identify shared state (module-level variables, constants)
-   - Detect circular dependency risks in proposed splits
-   - Catalog all exports and their consumers
-
-3. **Propose split plan**:
-   - Assign each section to a proposed output file
-   - Name output files descriptively (no generic names)
-   - Ensure each output file is under the warning threshold (300 LOC)
-   - Include shared dependencies in the most logical location
-   - Add a purpose statement for each proposed file
-
-4. **Show dependency graph**:
-   - Visualize which proposed modules depend on which
-   - Verify no circular dependencies exist
-   - Show import direction between new modules
-
-5. **Execute refactoring** (if `--execute` or user approves):
-   - Create new files with proper imports
-   - Update the original file to re-export if needed for backward compatibility
-   - Find and update all import statements across the codebase
-   - Add module-level purpose statements to each new file
-   - Run tests to verify no breakage
-
-## Analysis Strategies
-
-### Language-Specific Parsing
-
-| Language | Strategy | Boundaries |
-|----------|----------|------------|
-| TypeScript/JavaScript | AST via function/class/export declarations | `export`, `class`, `function`, `const` |
-| Python | AST via `ast` module | `class`, `def`, top-level assignments |
-| Go | Package-level function/type declarations | `func`, `type`, `var` blocks |
-| Rust | `mod`, `fn`, `struct`, `impl` blocks | Module and impl boundaries |
-| Java | Class and method declarations | `class`, `interface`, `enum` |
-
-### Heuristic Fallback
-
-For unsupported languages or when AST parsing is unavailable:
-
-1. **Blank line groups** — consecutive blank lines often separate logical sections
-2. **Comment blocks** — section header comments (`// --- Section Name ---`)
-3. **Indentation changes** — top-level declarations at zero indentation
-4. **Export clusters** — groups of exports at file end
+1. **Analyze**: read the function table; group functions by the stated responsibility vs. the rest; identify shared state and exports with their consumers.
+2. **Map dependencies**: trace references between the groups; detect cycles; list every import of the original file.
+3. **Propose split**: one new module owning the stated responsibility (descriptive name, no `utils/helpers/common`); the rest stays. Each output file starts with a one-line purpose statement — for the new module, the responsibility sentence.
+4. **Show dependency graph**: import direction between the original and the new module; no cross-sibling cycles.
+5. **Execute** (with `--execute` or user approval): create the module, update imports across the codebase (re-export from the original only when external consumers require it), run tests.
+6. **Verify**:
+   ```bash
+   aiwg run skill codebase-health -- --base HEAD~1 --architecture --ci
+   ```
+   Moved functions pair with their origin, so an honest move passes. A FAIL means the split worsened a function or increased above-band functions; a `split-mirage-candidate` WARN means the mirage test above failed.
 
 ## Decomposition Plan Format
 
 ```
-Decomposition Plan for src/extensions/registry.ts (847 lines)
+Decomposition Plan for src/extensions/registry.ts
+Responsibility: Validate extension manifests before registration
 
-Current Structure:
-  1. Imports and type definitions (lines 1-45)
-  2. ExtensionRegistry class (lines 47-320)
-     2a. Constructor and initialization (lines 47-85)
-     2b. register() — registers an extension (lines 87-145)
-     2c. lookup() — finds extension by name (lines 147-210)
-     2d. listByType() — returns extensions of a type (lines 212-260)
-     2e. unregister() — removes an extension (lines 262-320)
-  3. Validation functions (lines 322-480)
-     3a. validateExtension() (lines 322-390)
-     3b. validateManifest() (lines 392-440)
-     3c. checkDependencies() (lines 442-480)
-  4. Discovery helpers (lines 482-620)
-  5. Deployment logic (lines 622-847)
+Function table (from codebase-health --functions):
+  register        87-145   nloc=48 ccn=9
+  validateManifest 392-440 nloc=41 ccn=12
+  checkDependencies 442-480 nloc=33 ccn=7
+  ...
 
 Proposed Split:
-
-  1. src/extensions/registry.ts (185 lines)
-     — ExtensionRegistry class (core registration, lookup, list, unregister)
-     — Imports from: validation, discovery, deployment
-
-  2. src/extensions/extension-validator.ts (160 lines)
+  1. src/extensions/extension-validator.ts
+     — purpose: Validate extension manifests before registration
      — validateExtension(), validateManifest(), checkDependencies()
-     — No internal dependencies
-
-  3. src/extensions/extension-discovery.ts (140 lines)
-     — discoverExtensions(), globForType(), resolveExtensionPath()
-     — Imports from: extension-validator
-
-  4. src/extensions/extension-deployer.ts (227 lines)
-     — deployToProvider(), buildProviderConfig(), writeDeploymentFiles()
-     — Imports from: registry, extension-validator
+     — imports from: none
+  2. src/extensions/registry.ts (remainder)
+     — imports from: extension-validator
 
 Dependency Graph:
   registry → extension-validator
-  registry → extension-discovery
-  registry → extension-deployer
-  extension-discovery → extension-validator
-  extension-deployer → registry, extension-validator
-
-Circular Dependencies: NONE ✓
-
-All proposed files under 300 LOC warning threshold ✓
+Cross-sibling cycles: NONE
+Co-change (--history): registry.ts <-> extension-validator.ts not a pair
 ```
 
 ## Arguments
@@ -135,151 +88,32 @@ All proposed files under 300 LOC warning threshold ✓
 | Argument | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `<file-path>` | Yes | — | File to decompose |
-| `--max-lines <n>` | No | 300 | Target max lines per output file |
+| `--responsibility "<sentence>"` | Yes | — | Reason to change the extracted module owns |
 | `--dry-run` | No | true | Show plan without executing |
-| `--execute` | No | false | Execute the plan automatically |
-| `--language <lang>` | No | auto-detect | Override language detection |
-| `--strategy <type>` | No | auto | `function`, `class`, or `responsibility` |
-| `--preserve-exports` | No | true | Maintain backward-compatible re-exports |
-
-## Execution Workflow
-
-When `--execute` is used:
-
-```
-┌─────────────────────────────────────────────┐
-│ 1. ANALYZE                                   │
-│    • Parse file structure                    │
-│    • Identify logical sections               │
-│    • Map dependencies                        │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 2. PLAN                                      │
-│    • Propose split into N files              │
-│    • Verify no circular dependencies         │
-│    • Show plan to user                       │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 3. EXECUTE                                   │
-│    • Create new files with content           │
-│    • Add purpose statements                  │
-│    • Update original file (re-exports)       │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 4. REWIRE                                    │
-│    • Find all imports of original file       │
-│    • Update to point to new modules          │
-│    • Handle re-exports for compat            │
-└──────────────┬──────────────────────────────┘
-               ▼
-┌─────────────────────────────────────────────┐
-│ 5. VERIFY                                    │
-│    • Run tests                               │
-│    • Check for import errors                 │
-│    • Report pass/fail                        │
-└─────────────────────────────────────────────┘
-```
-
-## Usage Examples
-
-### Dry Run (Default)
-
-```
-User: "decompose src/extensions/registry.ts"
-
-Skill analyzes the file and produces:
-- Current structure map with line ranges
-- Proposed split into 4 files
-- Dependency graph
-- Verification: no circular dependencies
-
-Output shows the plan without making changes.
-```
-
-### Execute with Verification
-
-```
-User: "/decompose-file src/extensions/registry.ts --execute"
-
-Skill:
-1. Analyzes and shows plan
-2. Creates 4 new files
-3. Updates registry.ts to re-export for compatibility
-4. Finds 23 files importing from registry.ts
-5. Updates imports to point to specific modules
-6. Runs test suite: 247 passed, 0 failed ✓
-
-Output:
-"Decomposition complete. 1 file (847 lines) → 4 files (avg 178 lines).
- All tests passing. 23 import statements updated."
-```
-
-### Custom Strategy
-
-```
-User: "/decompose-file src/services/user-service.ts --strategy class --max-lines 200"
-
-Skill splits by class boundaries, targeting 200 lines per output file.
-```
+| `--execute` | No | false | Execute the plan |
+| `--preserve-exports` | No | true | Keep re-exports for external consumers |
 
 ## Error Handling
 
-### File Too Small
-
-```
-File src/utils/helper.ts is 85 lines — below the warning threshold (300).
-No decomposition needed. Use --max-lines to override if desired.
-```
-
-### Circular Dependencies Detected
-
-```
-⚠ Proposed split would create circular dependency:
-  module-a → module-b → module-a
-
-Suggestions:
-1. Extract shared code into a common module
-2. Merge module-a and module-b sections
-3. Use dependency injection to break the cycle
-
-Adjusted plan: [shows revised plan]
-```
-
-### Tests Fail After Split
-
-```
-🚫 Tests failed after decomposition.
-
-Failures:
-  test/unit/registry.test.ts:42 — Cannot find module './registry'
-
-Root cause: Import path not updated in test file.
-Fix: Updating test imports...
-
-Re-running tests: 247 passed, 0 failed ✓
-```
+- **No responsibility**: stop; ask for the one-sentence reason to change. Do not infer one from file size.
+- **Circular dependency in the proposal**: the grouping is wrong; regroup along the responsibility rather than adding a shared `common` module.
+- **Tests fail after split**: fix import paths, re-run tests, then re-run the ratchet.
 
 ## Integration
 
-This skill uses:
-- `agent-friendly-code` rule: Target thresholds for output file sizes
-- `agent-generation-guardrails` rule: Prevents creating new large files during split
-- `executable-feedback` rule: Runs tests after execution to verify no breakage
-- `anti-laziness` rule: Does not skip the split because it is complex
-- `/codebase-health` command: Identifies candidates for decomposition
+- `code-shape` rule: file-growth justification and conventions (purpose line, specific names)
+- `codebase-health` skill: candidates, function table, history pairs, post-split ratchet
+- `executable-feedback` rule: run tests after execution
+- `anti-laziness` rule: do not skip the split because it is complex
 
 ## Output Locations
 
 - Decomposition plan: `.aiwg/working/decompose-{filename}-{date}.md`
-- New source files: Same directory as original file (or user-specified)
+- New source files: same directory as the original (or user-specified)
 
 ## References
 
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md — Threshold definitions
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-generation-guardrails.md — Runtime guardrails
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/code-shape.md — Code-shape policy
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/executable-feedback.md — Test after changes
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/commands/codebase-health.md — Identifies candidates
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/codebase-health/SKILL.md — Candidates and verification
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/code-chunker/SKILL.md — Navigate large files before splitting
