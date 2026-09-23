@@ -24,6 +24,7 @@ export * from '../writing/contextual-diagnostics.js';
 export * from '../schema/index.js';
 export * from '../dataset/index.js';
 export * from '../network-analysis/index.js';
+export * from '../decision/index.js';
 export {
   ARTIFACT_TRUST_ROOT_MEDIA_TYPE,
   ARTIFACT_TRUST_ROOT_SCHEMA_VERSION,

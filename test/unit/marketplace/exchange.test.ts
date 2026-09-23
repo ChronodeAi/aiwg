@@ -52,7 +52,7 @@ import type {
 } from '../../../src/marketplace/provenance-types.js';
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  return execFileSync('git', args, { timeout: 60_000, cwd, encoding: 'utf8' }).trim();
 }
 
 function createKey(publisher: string) {
@@ -212,7 +212,7 @@ describe('marketplace exchange', () => {
   }
 
   function exactGitTreeBytes(): Buffer {
-    return execFileSync('git', ['ls-tree', '-r', '--full-tree', '-z', 'HEAD'], {
+    return execFileSync('git', ['ls-tree', '-r', '--full-tree', '-z', 'HEAD'], { timeout: 60_000,
       cwd: repo,
       encoding: 'buffer',
     });

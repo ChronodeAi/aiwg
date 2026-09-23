@@ -76,7 +76,7 @@ describe('Agent Schema Wiring - Reproducibility', () => {
 
     it('should reference checkpoint schema', async () => {
       const content = await readFile(agentPath, 'utf-8');
-      expect(content).toContain('@$AIWG_ROOT/agentic/code/addons/ralph/schemas/checkpoint.yaml');
+      expect(content).toContain('@$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/checkpoint.yaml');
     });
 
     it('should have Reproducibility & Execution Modes section', async () => {
@@ -115,7 +115,7 @@ describe('Agent Schema Wiring - Reproducibility', () => {
 
     it('should reference checkpoint schema', async () => {
       const content = await readFile(agentPath, 'utf-8');
-      expect(content).toContain('@$AIWG_ROOT/agentic/code/addons/ralph/schemas/checkpoint.yaml');
+      expect(content).toContain('@$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/checkpoint.yaml');
     });
   });
 });

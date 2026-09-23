@@ -230,6 +230,6 @@ User: "address issues 17, 18, 19 — they're all related to the auth refactor"
 
 - @.aiwg/planning/issue-driven-ralph-loop-design.md - Design document
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/address-issues/SKILL.md - Command definition
-- @$AIWG_ROOT/agentic/code/addons/ralph/skills/ralph/SKILL.md - Agent loop command
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/skills/ralph/SKILL.md - Agent loop command
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/issue-auto-sync/SKILL.md - Issue sync skill
 - @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/context-budget.md - Parallel subagent limits

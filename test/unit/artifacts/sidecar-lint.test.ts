@@ -130,6 +130,46 @@ describe('lintSidecars + findOrphans over a corpus root (#1503)', () => {
     expect(ids).not.toContain('REF-001'); // has an outgoing edge
     expect(orphans.find((o) => o.ref === 'REF-003')!.title).toBe('Lonely Paper Title');
   });
+
+  it('does not count a Rejected Candidates section as edges (#2525)', () => {
+    // scanEdges is lenient by design — any REF id inside an edge section counts.
+    // The template's `## Rejected Candidates` names REF ids on purpose, so a
+    // sidecar whose only REF tokens are rejections must still read as an orphan;
+    // treating them as edges would make the record of a rejection assert the edge.
+    sidecar('REF-010', [
+      '---', 'ref: REF-010', 'title: Rejections only', 'type: citation', '---', '',
+      '## Outgoing: Papers This Work Cites', 'None.', '',
+      '## Rejected Candidates',
+      '| # | Title | Why rejected |',
+      '|---|-------|--------------|',
+      '| 1 | Wrong node | author-year collision (REF-233) |',
+      '| 2 | Library entry | `.bib`-only (REF-543) |', '',
+      '## Incoming: Papers That Cite This Work', 'None.', '',
+    ].join('\n'));
+    refDoc('REF-010', '# REF-010: Rejections Only\n\nbody\n');
+
+    const orphans = findOrphans(root).map((o) => o.ref);
+    expect(orphans).toContain('REF-010');
+  });
+
+  it('still counts real edges when a Rejected Candidates section sits between them (#2525)', () => {
+    sidecar('REF-011', [
+      '---', 'ref: REF-011', 'title: Mixed', 'type: citation', '---', '',
+      '## Outgoing: Papers This Work Cites',
+      '| # | Title | Inducted REF | Confirmed by |',
+      '|---|-------|--------------|--------------|',
+      '| 1 | Real | REF-012 | printed-entry |', '',
+      '## Rejected Candidates',
+      '| # | Title | Why rejected |',
+      '|---|-------|--------------|',
+      '| 1 | Not cited | `.bib`-only (REF-543) |', '',
+      '## Incoming: Papers That Cite This Work', 'None.', '',
+    ].join('\n'));
+    refDoc('REF-011', '# REF-011: Mixed\n\nbody\n');
+
+    const orphans = findOrphans(root).map((o) => o.ref);
+    expect(orphans).not.toContain('REF-011');
+  });
 });
 
 describe('parseAuthors / extractCitationBlock (#1503)', () => {

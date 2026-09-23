@@ -104,6 +104,13 @@ Use this recovery ladder:
    work and ask the operator to choose `aiwg installation adopt` or the
    explicit `aiwg installation switch --root ... --method ...` recovery path.
 
+   These read-only commands — `version`, `status`, `doctor`, `runtime-info`,
+   `discover`, `show`, and `index query|deps|stats` — keep running under drift
+   and print the drift warning on stderr first. Mutating commands (`update`,
+   `refresh`, `use`, `regenerate`, `index build`, channel switches) fail closed
+   with `AIWG_INSTALLATION_DRIFT` until the identity is repaired, so do not
+   retry them; repair the identity, then continue the ladder.
+
 3. Preview cleanup before changing files:
 
    ```bash
@@ -124,14 +131,23 @@ Use this recovery ladder:
    aiwg regenerate
    ```
 
-5. If discovery itself is stale after source edits or a failed deploy, rebuild
-   the index and verify the route:
+5. If discovery itself is stale after source edits, a failed deploy, or an
+   install-root change (`npm link`), rebuild the index and verify the route.
+   **The framework graph indexes the AIWG corpus and can only be built at the
+   install root** — running the build step in a consumer project fails with
+   "No scan directories found". Only the sync step runs in the project:
 
    ```bash
+   cd "$(aiwg installation show --json | jq -r .actualRoot)"   # or the known install root
    aiwg index build --graph framework --force
+
+   cd <your project>
    aiwg index sync --backend fortemi-core --graph framework
    aiwg discover "<original user need>"
    ```
+
+   `aiwg discover --backend local` works as an immediate workaround while the
+   framework graph is unavailable.
 
 6. Reload the provider session when `aiwg use`, `aiwg refresh`, or
    `aiwg regenerate` changes provider-facing files.

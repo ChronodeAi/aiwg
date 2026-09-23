@@ -58,4 +58,37 @@ describe('address-issues AL CYCLE comment contract (#2206)', () => {
       expect(readFileSync(resolve(`agentic/code/plugins/${plugin}/templates/issue-comments/al-cycle.md`), 'utf8')).toBe(template);
     }
   });
+
+  // #2520: values were substituted as replacement strings, so $& reinserted the
+  // placeholder (tripping the unresolved-field guard) and $$ / $` / $' silently
+  // rewrote the comment with template text.
+  it('inserts dollar replacement tokens literally in every field', () => {
+    const tokens = ['$$', '$&', '$`', "$'"];
+    const marked = {
+      cycle: 3,
+      status: 'Progress',
+      actions: `- actions ${tokens.join(' ')}`,
+      checklist: `- [x] checklist ${tokens.join(' ')}`,
+      blockers: `blockers ${tokens.join(' ')}`,
+      openQuestions: `questions ${tokens.join(' ')}`,
+      nextSteps: `next ${tokens.join(' ')}`,
+    };
+    const rendered = renderCycleComment(marked);
+    for (const field of ['actions', 'checklist', 'blockers', 'questions', 'next']) {
+      expect(rendered).toContain(`${field} ${tokens.join(' ')}`);
+    }
+    // No placeholder survived, and no template text was duplicated into a value:
+    // $` would inject the preceding template and $' the following template.
+    expect(rendered).not.toContain('{{');
+    for (const heading of REQUIRED_SECTIONS) {
+      expect(rendered.split(`### ${heading}`).length - 1).toBe(1);
+    }
+    expect(rendered.split('AL CYCLE').length - 1).toBe(1);
+    expect(validateCycleComment(rendered)).toEqual({ valid: true, errors: [] });
+  });
+
+  it('still rejects a genuinely unresolved template field', () => {
+    // The guard must keep firing for real substitution gaps, not just for $&-induced ones.
+    expect(() => renderCycleComment({ ...cycle, status: 'Nonsense' })).toThrow(/unsupported status/);
+  });
 });

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, basename, extname, resolve, sep, isAbsolute, parse } from 'node:path';
 import { storeCockpitToken } from '../../shell-core/keychain.mjs';
 import { assertActivityEvent } from './activity-contract.mjs';
+import { createDesktopHttpHandler } from './desktop-http.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 // Primary seam for roctinam/aiwg#1589: Cockpit talks to a real agentic-sandbox
@@ -147,6 +148,29 @@ function validBrowserOrigin(req) {
       isLocalHostName(host.hostname) &&
       o.hostname === host.hostname &&
       o.port === host.port;
+  } catch {
+    return false;
+  }
+}
+
+/** Desktop local-mode boundary. The listening socket anchors Host/port; client
+ * forwarding headers never establish authority. Hosted mode needs its own
+ * explicit HTTPS/proxy policy and is not enabled by this local validator. */
+export function validDesktopBrowserOrigin(req, { allowSameOriginFetch = false } = {}) {
+  try {
+    const scheme = req.socket.encrypted ? 'https:' : 'http:';
+    const hostHeader = req.headers.host;
+    if (typeof hostHeader !== 'string') return false;
+    const expected = new URL(`${scheme}//${hostHeader}`);
+    const port = Number(expected.port || (scheme === 'https:' ? 443 : 80));
+    if (!isLocalHostName(expected.hostname) || expected.host !== hostHeader || port !== req.socket.localPort) return false;
+    const origin = req.headers.origin;
+    if (origin === undefined) {
+      // Browsers omit Origin on some same-origin GETs. Fetch Metadata supplies
+      // the browser boundary in that case; WebSocket and mutations require it.
+      return allowSameOriginFetch && ['GET', 'HEAD'].includes(req.method) && req.headers['sec-fetch-site'] === 'same-origin';
+    }
+    return typeof origin === 'string' && origin === expected.origin;
   } catch {
     return false;
   }
@@ -2916,7 +2940,15 @@ export function createBridge({
   aiwgCommand,
   corpusRoots,
   contributionDirs,
+  // Trusted embedding seam; no default verifier and no operator-token fallback.
+  desktopIdentity,
+  desktopBackend,
 } = {}) {
+  if (desktopIdentity !== undefined && (!desktopIdentity ||
+      ['bind', 'status', 'authorize', 'withDelegation', 'logout', 'onInvalidate'].some((method) => typeof desktopIdentity[method] !== 'function'))) {
+    throw new TypeError('desktopIdentity must implement authoritative desktop identity operations');
+  }
+  if (desktopBackend !== undefined && (!desktopBackend || typeof desktopBackend.request !== 'function')) throw new TypeError('desktopBackend must implement desktop requests');
   if (typeof mcpTokenFile !== 'string') throw new TypeError('mcpTokenFile must be a string');
   if (typeof localDockerFallback !== 'boolean' || (localLibvirtFallback !== undefined && typeof localLibvirtFallback !== 'boolean')) {
     throw new TypeError('local fallback options must be booleans');
@@ -2961,13 +2993,15 @@ export function createBridge({
   };
   const sessionAuth = (req) => {
     const id = cookies(req).cockpit_session ?? '';
-    const session = browserSessions.get(digest(id));
+    const sessionId = digest(id);
+    const session = browserSessions.get(sessionId);
     if (!session) return null;
-    if (session.expiresAt < Date.now()) {
-      browserSessions.delete(digest(id));
+    if (session.expiresAt <= Date.now()) {
+      browserSessions.delete(sessionId);
+      desktopIdentity?.logout(sessionId);
       return null;
     }
-    return { kind: 'session', csrf: session.csrf };
+    return { kind: 'session', csrf: session.csrf, sessionId, desktopAudience: `cockpit:${sessionId}` };
   };
   const requestAuth = (req) => bearerAuthed(req, TOKEN)
     ? { kind: 'bearer', csrf: TOKEN }
@@ -3045,6 +3079,39 @@ export function createBridge({
         res.setHeader('cache-control', 'no-store');
         return json(res, 200, { csrf: auth.csrf });
       }
+      if (url.pathname === '/bootstrap/session' && req.method === 'DELETE') {
+        const auth = sessionAuth(req);
+        if (!auth) return json(res, 401, { error: 'unauthorized' });
+        if (!validDesktopBrowserOrigin(req)) return json(res, 403, { error: 'forbidden_origin' });
+        if (!validCsrf(req, auth)) return json(res, 403, { error: 'csrf_required' });
+        // Remove local authority first so pending binds cannot resurrect it.
+        browserSessions.delete(auth.sessionId);
+        desktopIdentity?.logout(auth.sessionId);
+        res.writeHead(204, {
+          'cache-control': 'no-store',
+          'set-cookie': 'cockpit_session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0',
+        });
+        return res.end();
+      }
+      if (url.pathname === '/api/desktop-identity') {
+        const auth = sessionAuth(req); // A native/operator bearer is insufficient.
+        if (!auth) return json(res, 401, { error: 'unauthorized' });
+        if (!validDesktopBrowserOrigin(req, { allowSameOriginFetch: true })) return json(res, 403, { error: 'forbidden_origin' });
+        if (req.method !== 'GET') return json(res, 405, { error: 'method_not_allowed' });
+        res.setHeader('cache-control', 'no-store');
+        if (!desktopIdentity) return json(res, 200, { state: 'unsupported', reason: 'desktop_identity_not_configured' });
+        try {
+          const identity = await desktopIdentity.status(auth.sessionId);
+          if (sessionAuth(req)?.sessionId !== auth.sessionId) return json(res, 401, { error: 'unauthorized' });
+          return json(res, 200, identity);
+        } catch (err) {
+          // Never forward issuer response bodies, delegation, or diagnostics.
+          return json(res, err?.code === 'identity_unavailable' ? 503 : 403, {
+            error: err?.code === 'identity_unavailable' ? 'desktop_identity_unavailable' : 'desktop_identity_denied',
+          });
+        }
+      }
+      if (await desktopHttp.handle(req, res, url)) return;
       if (url.pathname.startsWith('/api/') && !validBrowserOrigin(req)) {
         return json(res, 403, { error: 'forbidden_origin' });
       }
@@ -3527,6 +3594,10 @@ export function createBridge({
           fallback_enabled: Boolean(allowA2AProtocolFallback),
         },
         executor: await getExecutorCapabilities(upstreamUrl),
+        // Runtime feature gate for the desktop panel (#2547): the browser shows
+        // desktop controls only when both the identity verifier and the
+        // dedicated desktop backend are configured on this Bridge.
+        desktop: { configured: Boolean(desktopIdentity && desktopBackend) },
       });
       if (url.pathname === '/' || url.pathname === '/index.html') {
         const distIndex = join(WEB_DIST, 'index.html');
@@ -3584,7 +3655,39 @@ export function createBridge({
     },
   ));
   server.cockpitToken = TOKEN; // exposed for shells/tests
+  const desktopHttp = createDesktopHttpHandler({ identity: desktopIdentity, backend: desktopBackend,
+    getAuth: sessionAuth, validOrigin: validDesktopBrowserOrigin, validCsrf, json });
   server.issueBootstrapNonce = issueBootstrapNonce;
+  // Called by a trusted organizational login adapter after code/device-flow
+  // completion. No public request route accepts raw identity binding fields.
+  server.bindDesktopIdentity = async (req, { workspaceId, evidence }) => {
+    const auth = sessionAuth(req);
+    if (!auth || !desktopIdentity) throw executorAuthError('desktop_identity_denied', 'desktop identity unavailable');
+    const result = await desktopIdentity.bind({
+      browserSessionId: auth.sessionId, audience: auth.desktopAudience, workspaceId, evidence,
+    });
+    if (!sessionAuth(req)) {
+      desktopIdentity.logout(auth.sessionId);
+      throw executorAuthError('desktop_identity_denied', 'desktop identity unavailable');
+    }
+    return result;
+  };
+  const expireDesktopSessions = desktopIdentity ? setInterval(() => {
+    for (const [id, session] of browserSessions) {
+      if (session.expiresAt <= Date.now()) {
+        browserSessions.delete(id);
+        desktopIdentity.logout(id);
+      }
+    }
+  }, 1000) : null;
+  expireDesktopSessions?.unref();
+  server.once('close', () => {
+    desktopHttp.close();
+    if (expireDesktopSessions) clearInterval(expireDesktopSessions);
+    for (const id of browserSessions.keys()) desktopIdentity?.logout(id);
+    browserSessions.clear();
+    bootstrapNonces.clear();
+  });
   return server;
 }
 

@@ -67,6 +67,11 @@
     "integrations/opencode-quickstart",
     "integrations/warp-terminal-quickstart",
     "integrations/windsurf-quickstart",
+    "integrations/grokbot-quickstart",
+    "integrations/grokbot-cloud-session-global-install",
+    "integrations/grokbot-native-surfaces-evidence",
+    "integrations/grokbot-linux-puw",
+    "migration/grokbot-from-cursor-workaround",
     "integrations/hermes-quickstart",
     "integrations/openhuman-quickstart",
     "integrations/openclaw-quickstart",
@@ -97,6 +102,7 @@
     "reports/agentskills-standard-audit-2026-07-25",
     "configuration/aiwg-config",
     "architecture/adr-deepseek-harness-runtime",
+    "architecture/adr-grokbot-provider-target",
     "architecture/adr-artifact-output-destinations",
     "context-tier-model",
     "context-engineering-contract",
@@ -105,6 +111,7 @@
     "skills-budget-guide",
     "security/threat-assessment-policy",
     "security/context-memory-firewall",
+    "security/grokbot-path-security-review",
     "security/repo-access-manifest",
     "fortemi-core-prebuilt-indices",
     "user-level-indices",
@@ -337,6 +344,7 @@
     "providers/omp",
     "providers/omp-verification",
     "providers/omp-sessions",
+    "providers/pi-sessions",
     "project-local/overview",
     "mcp/profiles",
     "mcp/codex-profiles",
@@ -525,7 +533,8 @@
     "addons/network-analysis/offline-analysis",
     "addons/network-analysis/operator-guide",
     "addons/network-analysis/release-checklist",
-    "addons/network-analysis/termshark-handoff"
+    "addons/network-analysis/termshark-handoff",
+    "releases/grokbot-stable-promotion-notes"
   ],
   "sections": [
     {
@@ -755,6 +764,27 @@
       "title": "Devin Desktop",
       "summary": "Setup for Devin Desktop using the Windsurf compatibility adapter",
       "file": "integrations/windsurf-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-quickstart",
+      "title": "Grok Bot",
+      "summary": "Connect AIWG to Grok Bot (stable, fail-closed skill root)",
+      "file": "integrations/grokbot-quickstart.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-cloud-session-global-install",
+      "title": "Grok Bot Cloud Session Global Install",
+      "summary": "Install AIWG on the Grok Bot shared cloud computer without inventing native paths",
+      "file": "integrations/grokbot-cloud-session-global-install.md",
+      "parent": "integrations"
+    },
+    {
+      "id": "integrations/grokbot-native-surfaces-evidence",
+      "title": "Grok Bot Native Surfaces Evidence",
+      "summary": "Evidence and automation gates for optional Grok Bot native integrations",
+      "file": "integrations/grokbot-native-surfaces-evidence.md",
       "parent": "integrations"
     },
     {
@@ -1034,6 +1064,13 @@
       "parent": "reference"
     },
     {
+      "id": "architecture/adr-grokbot-provider-target",
+      "title": "ADR: Grok Bot provider target",
+      "summary": "Runtime, lifecycle, credential, and session-import decisions for the experimental provider",
+      "file": "architecture/adr-grokbot-provider-target.md",
+      "parent": "reference"
+    },
+    {
       "id": "architecture/adr-artifact-output-destinations",
       "title": "Artifact Output Destinations",
       "summary": "Canonical storage, optional provider-native presentation, precedence, and provenance",
@@ -1154,7 +1191,7 @@
     },
     {
       "id": "soul-md-guide",
-      "title": "SOUL.md — Agent Identity",
+      "title": "SOUL.md \u2014 Agent Identity",
       "summary": "Give agents persistent character: worldview, opinions, reasoning traits. soul-create, soul-enable, soul-blend.",
       "file": "soul-md-guide.md",
       "parent": "reference"
@@ -1169,7 +1206,7 @@
     {
       "id": "behaviors-guide",
       "title": "Behaviors",
-      "summary": "Behavior bundles — directives and toolsets for daemon-governed agents",
+      "summary": "Behavior bundles \u2014 directives and toolsets for daemon-governed agents",
       "file": "behaviors-guide.md",
       "parent": "reference"
     },
@@ -1288,6 +1325,13 @@
       "title": "Creating Skills",
       "summary": "Build reusable skills",
       "file": "development/skill-creation-guide.md",
+      "parent": "development"
+    },
+    {
+      "id": "development/rule-creation-guide",
+      "title": "Creating Rules",
+      "summary": "Write rules agents can actually find",
+      "file": "development/rule-creation-guide.md",
       "parent": "development"
     },
     {
@@ -1410,7 +1454,7 @@
     },
     {
       "id": "blog/2026-6-aiwg-june-2026-report",
-      "title": "AIWG — June 2026 Report",
+      "title": "AIWG \u2014 June 2026 Report",
       "summary": "A month-end report covering Cockpit, OpenHuman support, plain-words search, media research notes, and leaner startup context.",
       "file": "blog/2026-6-aiwg-june-2026-report.md",
       "parent": "blog"
@@ -1519,49 +1563,49 @@
     },
     {
       "id": "releases/v2026.5.11-announcement",
-      "title": "v2026.5.11 — Provider Detection + Local Issue Sync",
+      "title": "v2026.5.11 \u2014 Provider Detection + Local Issue Sync",
       "summary": "Codex-aware provider detection, local issue sync documentation, media transcript sidecars, and release doc-sync hygiene.",
       "file": "releases/v2026.5.11-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.10-announcement",
-      "title": "v2026.5.10 — Beginner Onboarding Wizard + Docs",
+      "title": "v2026.5.10 \u2014 Beginner Onboarding Wizard + Docs",
       "summary": "Guided onboarding wizard, deterministic workspace engagement status, and beginner docs for first-run success.",
       "file": "releases/v2026.5.10-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.9-announcement",
-      "title": "v2026.5.9 — Workspace-Aware Deploy Fix",
+      "title": "v2026.5.9 \u2014 Workspace-Aware Deploy Fix",
       "summary": "Fix workspace-aware aiwg use all to deploy selected sources directly without repeating full framework post-deploy flow.",
       "file": "releases/v2026.5.9-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.8-announcement",
-      "title": "v2026.5.8 — Fleet Discipline + Release Hygiene",
+      "title": "v2026.5.8 \u2014 Fleet Discipline + Release Hygiene",
       "summary": "Fleet behavior policies, status export, repo-access preflight, model-tier routing, serve reliability, and install hygiene.",
       "file": "releases/v2026.5.8-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.7-announcement",
-      "title": "v2026.5.7 — RLM Search Reliability + Internal Loop Routing",
+      "title": "v2026.5.7 \u2014 RLM Search Reliability + Internal Loop Routing",
       "summary": "RLM search reliability, single-chunk prep coverage, and internal agent-loop routing.",
       "file": "releases/v2026.5.7-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.6-announcement",
-      "title": "v2026.5.6 — Agent-loop Completion Inference + Auto-Compact Discipline",
+      "title": "v2026.5.6 \u2014 Agent-loop Completion Inference + Auto-Compact Discipline",
       "summary": "Agent-loop completion inference, auto-compact discipline, and publish workflow ordering fixes.",
       "file": "releases/v2026.5.6-announcement.md",
       "parent": "releases"
     },
     {
       "id": "releases/v2026.5.5-announcement",
-      "title": "v2026.5.5 — Cross-provider Discover-first Parity",
+      "title": "v2026.5.5 \u2014 Cross-provider Discover-first Parity",
       "summary": "Discover-first deployment parity, project-isolation warning, and novice-user adoption study artifacts.",
       "file": "releases/v2026.5.5-announcement.md",
       "parent": "releases"
@@ -1603,7 +1647,7 @@
     },
     {
       "id": "releases/v2026.4.0-announcement",
-      "title": "v2026.4.0 — Autonomous Systems",
+      "title": "v2026.4.0 \u2014 Autonomous Systems",
       "summary": "Major release: corpus architecture, daemon, Mission Control, behaviors, SOUL.md, OpenClaw, Hermes, ops-complete, and more.",
       "file": "releases/v2026.4.0-announcement.md",
       "parent": "releases"
@@ -1887,7 +1931,7 @@
     {
       "id": "frameworks/sdlc-complete",
       "title": "SDLC Complete",
-      "summary": "Full lifecycle framework — internal docs and deep guides",
+      "summary": "Full lifecycle framework \u2014 internal docs and deep guides",
       "collapsed": true,
       "parent": "frameworks"
     },
@@ -1985,7 +2029,7 @@
     {
       "id": "addons/ralph",
       "title": "Ralph Addon",
-      "summary": "Iterative loop execution — quickstart, best practices, troubleshooting",
+      "summary": "Iterative loop execution \u2014 quickstart, best practices, troubleshooting",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2034,7 +2078,7 @@
     {
       "id": "addons/rlm",
       "title": "RLM Addon",
-      "summary": "Recursive Language Model — deployment, multi-provider, integration guides",
+      "summary": "Recursive Language Model \u2014 deployment, multi-provider, integration guides",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2083,7 +2127,7 @@
     {
       "id": "tools/ralph-external",
       "title": "External Ralph",
-      "summary": "Crash-resilient external loop — snapshot manager and provider API",
+      "summary": "Crash-resilient external loop \u2014 snapshot manager and provider API",
       "collapsed": true,
       "parent": "tools"
     },
@@ -2125,7 +2169,7 @@
     {
       "id": "frameworks/ops-complete",
       "title": "Ops Complete",
-      "summary": "Operational infrastructure framework — YAML-native with sys, it, dev, stream extensions",
+      "summary": "Operational infrastructure framework \u2014 YAML-native with sys, it, dev, stream extensions",
       "collapsed": true,
       "parent": "frameworks"
     },
@@ -2139,7 +2183,7 @@
     {
       "id": "frameworks/ops-complete/overview",
       "title": "Overview",
-      "summary": "ops-complete is the operational infrastructure layer for AIWG — a framework for AI agents working in",
+      "summary": "ops-complete is the operational infrastructure layer for AIWG \u2014 a framework for AI agents working in",
       "file": "frameworks/ops-complete/overview.md",
       "parent": "frameworks/ops-complete"
     },
@@ -2174,14 +2218,14 @@
     {
       "id": "addons/aiwg-dev",
       "title": "AIWG Dev",
-      "summary": "Developer toolkit — validate-component, dev-doctor, link-check, devkit scaffolding",
+      "summary": "Developer toolkit \u2014 validate-component, dev-doctor, link-check, devkit scaffolding",
       "collapsed": true,
       "parent": "addons"
     },
     {
       "id": "addons/aiwg-dev/overview",
       "title": "Overview",
-      "summary": "aiwg-dev is the developer toolkit for contributors building AIWG itself — adding new addons, framewo",
+      "summary": "aiwg-dev is the developer toolkit for contributors building AIWG itself \u2014 adding new addons, framewo",
       "file": "addons/aiwg-dev/overview.md",
       "parent": "addons/aiwg-dev"
     },
@@ -2195,7 +2239,7 @@
     {
       "id": "addons/aiwg-utils",
       "title": "AIWG Utils",
-      "summary": "Core utility rules — subagent scoping, context budget, instruction comprehension",
+      "summary": "Core utility rules \u2014 subagent scoping, context budget, instruction comprehension",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2237,7 +2281,7 @@
     {
       "id": "addons/auto-memory",
       "title": "Auto Memory",
-      "summary": "Automatic memory management — seed templates, memory evolution, cross-session persistence",
+      "summary": "Automatic memory management \u2014 seed templates, memory evolution, cross-session persistence",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2251,7 +2295,7 @@
     {
       "id": "addons/daemon",
       "title": "Daemon Addon",
-      "summary": "Persistent background agent — web UI, YAML profiles, scheduled tasks, Telegram",
+      "summary": "Persistent background agent \u2014 web UI, YAML profiles, scheduled tasks, Telegram",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2293,14 +2337,14 @@
     {
       "id": "addons/prose-integration",
       "title": "Prose Integration",
-      "summary": "OpenProse contract-driven execution — five skills, obligation semantics",
+      "summary": "OpenProse contract-driven execution \u2014 five skills, obligation semantics",
       "collapsed": true,
       "parent": "addons"
     },
     {
       "id": "addons/prose-integration/overview",
       "title": "Overview",
-      "summary": "The prose-integration addon provides AIWG tools for working with OpenProse programs — Markdown files",
+      "summary": "The prose-integration addon provides AIWG tools for working with OpenProse programs \u2014 Markdown files",
       "file": "addons/prose-integration/overview.md",
       "parent": "addons/prose-integration"
     },
@@ -2370,7 +2414,7 @@
     {
       "id": "addons/voice-framework",
       "title": "Voice Framework",
-      "summary": "Voice profile documentation — four built-in voices, custom profiles, blending",
+      "summary": "Voice profile documentation \u2014 four built-in voices, custom profiles, blending",
       "collapsed": true,
       "parent": "addons"
     },
@@ -2410,7 +2454,7 @@
     {
       "id": "cockpit/architecture",
       "title": "Architecture",
-      "summary": "Shells, Bridge, executor — control vs data plane, ports, components",
+      "summary": "Shells, Bridge, executor \u2014 control vs data plane, ports, components",
       "file": "cockpit/architecture.md",
       "parent": "cockpit"
     },
@@ -2652,6 +2696,13 @@
       "parent": "providers"
     },
     {
+      "id": "providers/pi-sessions",
+      "title": "Pi Session Acquisition",
+      "summary": "Authorized discovery and fail-closed import of Pi v3 JSONL session trees",
+      "file": "providers/pi-sessions.md",
+      "parent": "providers"
+    },
+    {
       "id": "project-local/overview",
       "title": "Project-Local Overview",
       "summary": "Per-project bundles",
@@ -2776,7 +2827,7 @@
     {
       "id": "frameworks/knowledge-base/overview",
       "title": "Overview",
-      "summary": "AIWG's existing frameworks — research-complete, media-curator, sdlc-complete — are purpose-built for",
+      "summary": "AIWG's existing frameworks \u2014 research-complete, media-curator, sdlc-complete \u2014 are purpose-built for",
       "file": "frameworks/knowledge-base/overview.md",
       "parent": "frameworks/knowledge-base"
     },
@@ -3644,7 +3695,7 @@
     {
       "id": "frameworks/media-marketing-kit/design-operations-examples",
       "title": "Design Operations Examples",
-      "summary": "These examples use the same lifecycle—constraints, history, research, five comparable candidates, hu",
+      "summary": "These examples use the same lifecycle\u2014constraints, history, research, five comparable candidates, hu",
       "file": "frameworks/media-marketing-kit/design-operations-examples.md",
       "parent": "frameworks/media-marketing-kit"
     },
@@ -3693,7 +3744,7 @@
     {
       "id": "addons/civic-action/research/aiwg-design-patterns",
       "title": "Aiwg Design Patterns",
-      "summary": "Status: implementation design input for AIWG issues #2213–#2222",
+      "summary": "Status: implementation design input for AIWG issues #2213\u2013#2222",
       "file": "addons/civic-action/research/aiwg-design-patterns.md",
       "parent": "addons/civic-action/research"
     },
@@ -3798,7 +3849,7 @@
     {
       "id": "addons/dataset-intelligence/overview",
       "title": "Overview",
-      "summary": "Dataset Intelligence gives every AIWG domain the same governed path from “use",
+      "summary": "Dataset Intelligence gives every AIWG domain the same governed path from \u201cuse",
       "file": "addons/dataset-intelligence/overview.md",
       "parent": "addons/dataset-intelligence"
     },
@@ -3908,6 +3959,13 @@
       "parent": "frameworks/research-complete"
     },
     {
+      "id": "frameworks/research-complete/bibliographic-services",
+      "title": "Bibliographic Services",
+      "summary": "What each citation and retraction service is good for, and where each will mislead you",
+      "file": "frameworks/research-complete/bibliographic-services.md",
+      "parent": "frameworks/research-complete"
+    },
+    {
       "id": "frameworks/security-engineering",
       "title": "Security Engineering",
       "summary": "",
@@ -3990,6 +4048,34 @@
       "summary": "Design background from external research, separate from AIWG performance claims",
       "file": "overview/reading-list.md",
       "parent": "getting-started"
+    },
+    {
+      "id": "security/grokbot-path-security-review",
+      "title": "Grok Bot Path Security Review",
+      "summary": "Fail-closed skill-root policy, containment, and #210 verification fixes",
+      "file": "security/grokbot-path-security-review.md",
+      "parent": "reference"
+    },
+    {
+      "id": "migration/grokbot-from-cursor-workaround",
+      "title": "Migrate Grok Bot from Cursor Workaround",
+      "summary": "Move Grok fleets to --provider grokbot; keep Cursor IDE on cursor",
+      "file": "migration/grokbot-from-cursor-workaround.md",
+      "parent": "reference"
+    },
+    {
+      "id": "releases/grokbot-stable-promotion-notes",
+      "title": "Grok Bot Stable Promotion Notes",
+      "summary": "Release notes for grokbot experimental \u2192 stable (#210)",
+      "file": "releases/grokbot-stable-promotion-notes.md",
+      "parent": "reference"
+    },
+    {
+      "id": "integrations/grokbot-linux-puw",
+      "title": "Grok Bot Linux PUW (#210)",
+      "summary": "Linux PUW evidence for grokbot stable; macOS/Windows waived by maintainer",
+      "file": "integrations/grokbot-linux-puw.md",
+      "parent": "reference"
     }
   ],
   "pages": [

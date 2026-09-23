@@ -22,26 +22,33 @@ passing all help requests through normal execution would lose that protection.
 After these fixes, an audit enumerated `allHandlers` from
 `src/cli/handlers/index.ts`, selected handlers without `help`, and invoked
 `run([handler.id, '--help'])` from `src/cli/router.ts` for each. All 107 selected
-handlers returned the generic fallback. This includes namespace commands such
+handlers returned the generic fallback at the time of that audit. This includes namespace commands such
 as `packages`, `models`, `index`, `skills`, `config`, `storage`, and `sandbox`.
 The inventory below records routing behavior, not a claim that every command
 already has its own usage renderer. These remaining handlers need separate
 callback work and command-specific verification.
 
-`help`, `version`, `auth`, `context-firewall`, `update`, `installation`, `regenerate`, `workspace-context`,
-`use`, `list`, `remove`, `promote`, `install`, `packages`, `marketplace`, `new-bundle`,
-`quickref`, `new`, `init`, `setup`, `setup-generate`, `setup-run`, `setup-validate`, `issue`,
-`issue-audit`, `run`, `job`, `cost-report`, `evidence`, `status`, `wizard`, `migrate-workspace`,
-`rollback-workspace`, `aiwg-mcp-server`, `models`, `versions`, `index`, `artifacts`, `corpus`, `discover`,
-`show`, `features`, `skills`, `runtime-info`, `agentcard`, `uhp`, `prefill-cards`, `contribute-start`,
-`validate-metadata`, `skill-lint`, `cockpit`, `install-plugin`, `uninstall-plugin`, `plugin-status`, `package-all-plugins`, `add-agent`,
-`add-command`, `add-skill`, `add-behavior`, `add-template`, `scaffold-addon`, `scaffold-extension`, `scaffold-framework`, `ralph`,
-`ralph-status`, `ralph-abort`, `ralph-resume`, `ralph-attach`, `agent-loop-ext`, `ralph-memory`, `ralph-config`, `mc`,
-`mission`, `team`, `steward`, `sdlc-accelerate`, `best-practices-audit`, `behavior`, `daemon-init`, `config`,
-`execution-mode`, `ops`, `storage`, `activity-log`, `command-log`, `skill-usage`, `kb`, `memory`,
-`reflections`, `provenance`, `research-store`, `research-query`, `chunk`, `fanout`, `rlm-prep`, `rlm-search`,
-`rlm-status`, `rlm-cache`, `serve`, `local-executor`, `local-executor-serve`, `sandbox`, `diagnose`, `lint`,
-`feedback`, `session`, `repo-access`.
+`help`, `version`, `auth`, `context-firewall`, `update`, `regenerate`, `workspace-context`, `use`,
+`list`, `remove`, `promote`, `install`, `packages`, `marketplace`, `new-bundle`, `quickref`,
+`new`, `init`, `setup`, `setup-generate`, `setup-run`, `setup-validate`, `issue`, `issue-audit`,
+`run`, `job`, `cost-report`, `evidence`, `status`, `wizard`, `migrate-workspace`, `rollback-workspace`,
+`aiwg-mcp-server`, `models`, `versions`, `index`, `artifacts`, `corpus`, `discover`, `show`,
+`features`, `skills`, `runtime-info`, `agentcard`, `uhp`, `prefill-cards`, `contribute-start`, `validate-metadata`,
+`skill-lint`, `cockpit`, `install-plugin`, `uninstall-plugin`, `plugin-status`, `package-all-plugins`, `add-agent`, `add-command`,
+`add-skill`, `add-behavior`, `add-template`, `scaffold-addon`, `scaffold-extension`, `scaffold-framework`, `ralph`, `ralph-status`,
+`ralph-abort`, `ralph-resume`, `ralph-attach`, `agent-loop-ext`, `ralph-memory`, `ralph-config`, `mc`, `mission`,
+`team`, `sdlc-accelerate`, `best-practices-audit`, `behavior`, `daemon-init`, `config`, `execution-mode`, `ops`,
+`storage`, `activity-log`, `command-log`, `skill-usage`, `kb`, `memory`, `reflections`, `provenance`,
+`research-store`, `research-query`, `chunk`, `fanout`, `rlm-prep`, `rlm-search`, `rlm-status`, `rlm-cache`,
+`serve`, `local-executor`, `local-executor-serve`, `sandbox`, `diagnose`, `lint`, `feedback`, `session`.
+
+### Since that audit (#2533)
+
+`installation`, `steward`, and `repo-access` now carry their own `help` callbacks and
+no longer return the generic fallback, leaving 104 handlers in the inventory below.
+`steward`'s callback is sub-namespace aware: `steward permissions --help` renders the
+permissions usage rather than the top-level block, and bare `steward permissions`
+prints usage instead of erroring.
 
 ## Regression coverage
 

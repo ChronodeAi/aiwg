@@ -1,15 +1,78 @@
+import { createHash } from 'node:crypto'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
-import { FileAdapter, HttpAdapter, JsonlAdapter } from '../../src/dataset/adapters.js'
+import { createBuiltinAdapterRegistry, FileAdapter, HttpAdapter, JsonlAdapter } from '../../src/dataset/adapters.js'
 import { request } from '../../src/dataset/adapter-sdk.js'
-import { computeProcessingPlanDigest } from '../../src/dataset/contracts.js'
+import {
+  computeProcessingPlanDigest,
+  computeRunReceiptDigest,
+  negotiateDatasetCapabilities,
+  validateCheckpointAncestry,
+  validateDatasetContract,
+  validateDatasetContractSet,
+  verifyProcessingPlanDigest,
+  verifyRunReceiptDigest,
+} from '../../src/dataset/contracts.js'
 import { LocalDatasetExecutionBackend } from '../../src/dataset/local-execution-backend.js'
 import { MemoryDatasetOrchestrationRepository } from '../../src/dataset/orchestration-repository.js'
 import { DatasetOrchestrationService } from '../../src/dataset/orchestration-service.js'
-import { DATASET_CONTRACT_VERSION, type CapabilityProfile, type ProcessingPlan } from '../../src/dataset/types.js'
+import {
+  DATASET_CONTRACT_VERSION,
+  type CapabilityProfile,
+  type Checkpoint,
+  type DatasetContract,
+  type ProcessingPlan,
+  type RunReceipt,
+} from '../../src/dataset/types.js'
 import { exportStandard, importStandard } from '../../src/dataset/standards.js'
 
 const ROOT = process.cwd()
 const SOURCE = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/sources/records.jsonl')
+const REPLAY_CORPUS = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/incremental/replay.json')
+const ADVERSARIAL_CORPUS = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/security/adversarial.json')
+const PRIOR_STABLE_BINDING = resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/prior/v2026.9.17/binding.json')
+
+type ReplayItem = { id: string; cursor: number; tombstone?: boolean }
+type ReplayCorpus = {
+  initial: ReplayItem[]
+  replay: ReplayItem[]
+  duplicates: ReplayItem[]
+  sameCursorTie: ReplayItem[]
+  late: ReplayItem[]
+  next: ReplayItem[]
+  tombstones: ReplayItem[]
+  schemaChange: { before: Record<string, unknown>; after: Record<string, unknown> }
+  malformed: unknown[]
+}
+type AdversarialCorpus = {
+  sentinel: string
+  paths: [string, string]
+  urls: [string, string]
+  limits: { compressedBytes: number; expandedBytes: number; records: number; nesting: number }
+}
+type PriorStableBinding = {
+  tag: string
+  tagObject: string
+  sourceCommit: string
+  packageVersion: string
+  contractVersion: string
+  corpusVersion: string
+  fixture: string
+  fixtureDigest: string
+}
+
+async function readJson<T>(path: string): Promise<T> {
+  return JSON.parse(await readFile(path, 'utf8')) as T
+}
+
+function isReplayItem(value: unknown): value is ReplayItem {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  return typeof candidate.id === 'string' && candidate.id.length > 0
+    && Number.isInteger(candidate.cursor) && Number(candidate.cursor) >= 0
+    && (candidate.tombstone === undefined || typeof candidate.tombstone === 'boolean')
+}
 const profile = (optional = false): CapabilityProfile => ({
   contractVersion: DATASET_CONTRACT_VERSION, kind: 'CapabilityProfile', id: `profile:conformance:${optional}`,
   capabilities: [
@@ -40,6 +103,19 @@ export async function qualifyCapabilityBinding(): Promise<void> {
 }
 
 export async function qualifyReplay(): Promise<void> {
+  const corpus = await readJson<ReplayCorpus>(REPLAY_CORPUS)
+  const requiredArrays = [corpus.initial, corpus.replay, corpus.duplicates, corpus.sameCursorTie, corpus.late, corpus.next, corpus.tombstones, corpus.malformed]
+  if (requiredArrays.some(items => !Array.isArray(items) || items.length === 0)) throw new Error('CONFORMANCE_REPLAY_CORPUS_INCOMPLETE')
+  if (JSON.stringify(corpus.initial) !== JSON.stringify(corpus.replay)) throw new Error('CONFORMANCE_REPLAY_CORPUS_NOT_EXACT')
+  if (![...corpus.initial, ...corpus.replay, ...corpus.duplicates, ...corpus.sameCursorTie, ...corpus.late, ...corpus.next, ...corpus.tombstones].every(isReplayItem)) throw new Error('CONFORMANCE_REPLAY_CORPUS_RECORD_INVALID')
+  if (corpus.malformed.some(isReplayItem)) throw new Error('CONFORMANCE_REPLAY_CORPUS_MALFORMED_CASE_ACCEPTED')
+  if (new Set(corpus.duplicates.map(item => `${item.cursor}:${item.id}`)).size === corpus.duplicates.length) throw new Error('CONFORMANCE_REPLAY_CORPUS_DUPLICATE_MISSING')
+  const tied = [...corpus.sameCursorTie].sort((left, right) => left.cursor - right.cursor || left.id.localeCompare(right.id))
+  if (tied.some((item, index) => item.id !== corpus.sameCursorTie[index]?.id)) throw new Error('CONFORMANCE_REPLAY_CORPUS_TIE_UNORDERED')
+  const initialCursor = Math.max(...corpus.initial.map(item => item.cursor))
+  if (!corpus.late.some(item => item.cursor <= initialCursor) || !corpus.next.every(item => item.cursor > initialCursor)) throw new Error('CONFORMANCE_REPLAY_CORPUS_INCREMENTAL_BOUNDARY_MISSING')
+  if (!corpus.tombstones.some(item => item.tombstone && item.cursor > initialCursor) || JSON.stringify(corpus.schemaChange.before) === JSON.stringify(corpus.schemaChange.after)) throw new Error('CONFORMANCE_REPLAY_CORPUS_BOUNDARY_MISSING')
+
   const { repo, service, plan } = await planned()
   const first = await service.ingest({ planId: plan.id, planDigest: plan.planDigest.value, idempotencyKey: 'conformance:once' })
   const replay = await service.ingest({ planId: plan.id, planDigest: plan.planDigest.value, idempotencyKey: 'conformance:once' })
@@ -84,15 +160,114 @@ export async function qualifyOfflineMatrix(): Promise<void> {
 }
 
 export async function qualifyAdversarialAdapters(): Promise<void> {
-  const secret = await new HttpAdapter().configure({ url: 'https://allowed.example/data', password: 'SYNTHETIC_CREDENTIAL_DO_NOT_LOG' })
-  if (secret.ok || secret.diagnostics[0]?.code !== 'ADAPTER_SECRET_REJECTED') throw new Error('CONFORMANCE_SECRET_REJECTION_FAILED')
-  const traversal = await new FileAdapter().check(request('traversal', { path: '../escape' }, { offline: true, allowedRoot: resolve(ROOT, 'test/fixtures/dataset-intelligence/v1/sources') }))
-  if (traversal.diagnostics[0]?.code !== 'ADAPTER_PATH_ESCAPE') throw new Error('CONFORMANCE_TRAVERSAL_NOT_REJECTED')
-  let fetches = 0
-  const ssrf = new HttpAdapter(async () => { fetches += 1; return new Response('{}') }, async () => [{ address: '127.0.0.1' }])
-  const configured = await ssrf.configure({ url: 'https://allowed.example/data' })
-  const checked = await ssrf.check(request('ssrf', configured.config!, { offline: false, allowedHosts: ['allowed.example'] }))
-  if (checked.diagnostics[0]?.code !== 'ADAPTER_NETWORK_PROHIBITED' || fetches !== 0) throw new Error('CONFORMANCE_SSRF_NOT_REJECTED_PRECONNECT')
+  const corpus = await readJson<AdversarialCorpus>(ADVERSARIAL_CORPUS)
+  if (!corpus.sentinel || corpus.paths.length !== 2 || corpus.urls.length !== 2 || corpus.limits.expandedBytes <= corpus.limits.compressedBytes) throw new Error('CONFORMANCE_ADVERSARIAL_CORPUS_INCOMPLETE')
+  const temporary = await mkdtemp(resolve(tmpdir(), 'aiwg-dataset-adversarial-'))
+  try {
+    const secret = await new HttpAdapter().configure({ url: 'https://allowed.example/data', password: corpus.sentinel })
+    if (secret.ok || secret.diagnostics[0]?.code !== 'ADAPTER_SECRET_REJECTED' || JSON.stringify(secret).includes(corpus.sentinel)) throw new Error('CONFORMANCE_SECRET_REJECTION_FAILED')
+
+    const traversal = await new FileAdapter().check(request('traversal', { path: corpus.paths[0] }, { offline: true, allowedRoot: temporary }))
+    if (traversal.diagnostics[0]?.code !== 'ADAPTER_PATH_ESCAPE') throw new Error('CONFORMANCE_TRAVERSAL_NOT_REJECTED')
+    const linkedDirectory = resolve(temporary, 'link')
+    await mkdir(linkedDirectory)
+    const symlinkTarget = resolve(temporary, 'symlink-target.txt')
+    await writeFile(symlinkTarget, 'synthetic target')
+    await symlink(symlinkTarget, resolve(temporary, corpus.paths[1]))
+    const linked = await new FileAdapter().check(request('symlink', { path: corpus.paths[1] }, { offline: true, allowedRoot: temporary }))
+    if (linked.diagnostics[0]?.code !== 'ADAPTER_UNSAFE_SYMLINK') throw new Error('CONFORMANCE_SYMLINK_NOT_REJECTED')
+
+    const oversizedPath = resolve(temporary, 'oversized.txt')
+    await writeFile(oversizedPath, 'x'.repeat(corpus.limits.compressedBytes + 1))
+    const oversized = await new FileAdapter().preview({ ...request('bytes', { path: 'oversized.txt' }, { offline: true, allowedRoot: temporary }, { maxBytes: corpus.limits.compressedBytes }), count: 1 })
+    if (oversized.diagnostics[0]?.code !== 'ADAPTER_RESOURCE_LIMIT') throw new Error('CONFORMANCE_BYTE_LIMIT_NOT_ENFORCED')
+
+    const repeatedPath = resolve(temporary, 'records.jsonl')
+    await writeFile(repeatedPath, `${JSON.stringify({ id: 'a', declaredLimit: corpus.limits.records })}\n${JSON.stringify({ id: 'b', declaredLimit: corpus.limits.records })}\n`)
+    let recordLimitCode: string | undefined
+    for await (const event of new JsonlAdapter().read(request('records', { path: 'records.jsonl' }, { offline: true, allowedRoot: temporary }, { maxRecords: 1 }))) {
+      if (event.kind === 'diagnostic') recordLimitCode = event.diagnostic.code
+    }
+    if (recordLimitCode !== 'ADAPTER_RESOURCE_LIMIT') throw new Error('CONFORMANCE_RECORD_LIMIT_NOT_ENFORCED')
+
+    let nested: unknown = 'leaf'
+    for (let depth = 0; depth < corpus.limits.nesting; depth += 1) nested = { nested }
+    await writeFile(resolve(temporary, 'nested.jsonl'), `${JSON.stringify(nested)}\n`)
+    let nestingCode: string | undefined
+    for await (const event of new JsonlAdapter().read(request('nesting', { path: 'nested.jsonl' }, { offline: true, allowedRoot: temporary }, { maxDepth: corpus.limits.nesting - 1 }))) {
+      if (event.kind === 'diagnostic') nestingCode = event.diagnostic.code
+    }
+    if (nestingCode !== 'ADAPTER_RESOURCE_LIMIT') throw new Error('CONFORMANCE_NESTING_LIMIT_NOT_ENFORCED')
+
+    let protocolFetches = 0
+    const protocol = new HttpAdapter(async () => { protocolFetches += 1; return new Response('{}') })
+    const protocolResult = await protocol.check(request('protocol-downgrade', { url: corpus.urls[0] }, { offline: false, allowedHosts: ['127.0.0.1'] }))
+    if (protocolResult.diagnostics[0]?.code !== 'ADAPTER_NETWORK_PROHIBITED' || protocolFetches !== 0) throw new Error('CONFORMANCE_PROTOCOL_DOWNGRADE_NOT_REJECTED')
+
+    let ssrfFetches = 0
+    const ssrf = new HttpAdapter(async () => { ssrfFetches += 1; return new Response('{}') }, async () => [{ address: '127.0.0.1' }])
+    const configured = await ssrf.configure({ url: 'https://allowed.example/data' })
+    const checked = await ssrf.check(request('ssrf', configured.config!, { offline: false, allowedHosts: ['allowed.example'] }))
+    if (checked.diagnostics[0]?.code !== 'ADAPTER_NETWORK_PROHIBITED' || ssrfFetches !== 0) throw new Error('CONFORMANCE_SSRF_NOT_REJECTED_PRECONNECT')
+
+    let redirectFetches = 0
+    const redirect = new HttpAdapter(async () => { redirectFetches += 1; return new Response('', { status: 302, headers: { location: corpus.urls[0] } }) }, async () => [{ address: '203.0.113.10' }])
+    const redirected = await redirect.check(request('redirect-downgrade', { url: corpus.urls[1] }, { offline: false, allowedHosts: ['allowed.example'] }))
+    if (redirected.diagnostics[0]?.code !== 'ADAPTER_NETWORK_PROHIBITED' || redirectFetches !== 1) throw new Error('CONFORMANCE_REDIRECT_DOWNGRADE_NOT_REJECTED')
+
+    const archiveKinds = /archive|compressed|gzip|tar|zip/iu
+    if (createBuiltinAdapterRegistry().manifests.some(item => item.sourceKinds.some(kind => archiveKinds.test(kind)))) throw new Error('CONFORMANCE_UNQUALIFIED_DECOMPRESSION_SURFACE')
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
+}
+
+export async function qualifyPriorStableMigration(): Promise<void> {
+  const binding = await readJson<PriorStableBinding>(PRIOR_STABLE_BINDING)
+  if (binding.tag !== 'v2026.9.17'
+    || binding.tagObject !== 'b110d50d68e8539c9ad2de6a230014e0c01e1950'
+    || binding.sourceCommit !== '10b5f9eca8eeafec6ac2f179ebafdb71721dbd53'
+    || binding.packageVersion !== '2026.9.17'
+    || binding.contractVersion !== DATASET_CONTRACT_VERSION
+    || binding.corpusVersion !== '1.0.0'
+    || binding.fixture !== 'test/fixtures/dataset-intelligence/v1/prior/v2026.9.17/contracts.json'
+    || binding.fixtureDigest !== 'sha256:937feadd475d5c1e56528170d4990595d719b62098f925717e74d985c0e05d1c') {
+    throw new Error('CONFORMANCE_PRIOR_STABLE_BINDING_INVALID')
+  }
+  const fixturePath = resolve(ROOT, binding.fixture)
+  const fixtureBytes = await readFile(fixturePath)
+  if (`sha256:${createHash('sha256').update(fixtureBytes).digest('hex')}` !== binding.fixtureDigest) {
+    throw new Error('CONFORMANCE_PRIOR_STABLE_FIXTURE_DRIFT')
+  }
+  const fixture = JSON.parse(fixtureBytes.toString('utf8')) as { contracts: unknown[] }
+  const contracts = fixture.contracts.map((value) => {
+    const validated = validateDatasetContract(value)
+    if (!validated.valid || !validated.value) throw new Error('CONFORMANCE_PRIOR_STABLE_SCHEMA_MIGRATION_FAILED')
+    return validated.value
+  })
+  if (validateDatasetContractSet(contracts).length > 0) throw new Error('CONFORMANCE_PRIOR_STABLE_SCHEMA_SET_INVALID')
+
+  const requireContract = <T extends DatasetContract['kind']>(kind: T) => {
+    const contract = contracts.find(value => value.kind === kind)
+    if (!contract) throw new Error(`CONFORMANCE_PRIOR_STABLE_${kind.toUpperCase()}_MISSING`)
+    return contract as Extract<DatasetContract, { kind: T }>
+  }
+  const profile = requireContract('CapabilityProfile') as CapabilityProfile
+  const priorPlan = requireContract('ProcessingPlan') as ProcessingPlan
+  const priorCheckpoint = requireContract('Checkpoint') as Checkpoint
+  const priorReceipt = requireContract('RunReceipt') as RunReceipt
+  const plan = { ...priorPlan, planDigest: computeProcessingPlanDigest(priorPlan) }
+  const checkpoint = { ...priorCheckpoint, planDigest: plan.planDigest }
+  const receiptWithoutDigest = { ...priorReceipt, planDigest: plan.planDigest }
+  const receipt = { ...receiptWithoutDigest, receiptDigest: computeRunReceiptDigest(receiptWithoutDigest) }
+
+  if (!verifyProcessingPlanDigest(plan) || !verifyRunReceiptDigest(receipt)) throw new Error('CONFORMANCE_PRIOR_STABLE_DIGEST_MIGRATION_FAILED')
+  if (!validateDatasetContract(checkpoint).valid || !validateDatasetContract(receipt).valid) throw new Error('CONFORMANCE_PRIOR_STABLE_CONTRACT_MIGRATION_FAILED')
+  if (validateCheckpointAncestry(checkpoint).length > 0) throw new Error('CONFORMANCE_PRIOR_STABLE_CHECKPOINT_MIGRATION_FAILED')
+  const decision = negotiateDatasetCapabilities(profile, [{ name: 'incremental-read', version: '1' }])
+  if (decision.satisfied.join(',') !== 'incremental-read' || decision.degraded[0]?.capability !== 'vector-index') {
+    throw new Error('CONFORMANCE_PRIOR_STABLE_PROFILE_MIGRATION_FAILED')
+  }
 }
 
 export async function qualifyStandardsGoldens(): Promise<void> {

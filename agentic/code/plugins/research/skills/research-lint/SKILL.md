@@ -64,13 +64,14 @@ This checks all 11 rules in the research ruleset:
 | `ref-frontmatter` | error | Required frontmatter fields present |
 | `ref-id-unique` | error | No duplicate REF-XXX identifiers |
 | `ref-id-format` | warn | REF identifiers follow `REF-NNN` naming |
-| `citation-resolves` | error | Whole REF IDs point to exact or slugged notes anywhere in the lint target |
+| `citation-resolves` | error | Whole REF IDs point to exact or slugged notes anywhere in the lint target, unless the reference sits beside an explicit absence marker (unallocated, not in corpus, skipped, retired, withdrawn, deliberately absent, never allocated, deduplication) |
 | `grade-present` | warn | GRADE quality assessment in frontmatter |
 | `provenance-present` | warn | Provenance metadata present |
 | `cross-ref-bidirectional` | info | Related refs linked both ways |
 | `orphan-detection` | info | Notes with no inbound references |
 | `frontmatter-date-format` | warn | Dates follow ISO 8601 |
 | `source-file-exists` | error | Referenced source files exist |
+| `uncertainty-registered` | warn | A stated unperformed check against a verification target names an obstacle or records a dated outcome. A struck span followed by a dated outcome on the same line — `~~<limitation>~~ **Done YYYY-MM-DD (<what closed it>).** <evidence>` — is a completed retraction at any struck-text length |
 
 ### Phase 2: Report Results
 

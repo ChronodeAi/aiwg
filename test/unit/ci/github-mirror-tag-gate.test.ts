@@ -43,7 +43,7 @@ esac
 
 function runGate(mode: 'retry' | 'lightweight' | 'mismatch' | 'missing', attempts = 3) {
   const fixture = fakeGh(mode)
-  const result = spawnSync(process.execPath, [gate, '--repo', 'owner/repo', '--tag', 'v1.2.3', '--expected-sha', 'abc123', '--attempts', String(attempts), '--delay-seconds', '0'], {
+  const result = spawnSync(process.execPath, [gate, '--repo', 'owner/repo', '--tag', 'v1.2.3', '--expected-sha', 'abc123', '--attempts', String(attempts), '--delay-seconds', '0'], { timeout: 60_000,
     encoding: 'utf8',
     env: {
       ...process.env,

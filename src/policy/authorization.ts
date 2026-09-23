@@ -212,7 +212,7 @@ export function evaluateAuthorization(
 }
 
 export function validateAuthorization(model: AuthorizationConfig | undefined): AuthorizationDiagnostic[] {
-  if (!model) return [{ severity: 'warning', code: 'authorization-missing', message: 'No normalized authorization block; run steward permissions audit.' }];
+  if (!model) return [{ severity: 'warning', code: 'authorization-missing', message: 'No normalized authorization block; default deny applies. Write one with `aiwg steward permissions migrate --apply`.' }];
   const out: AuthorizationDiagnostic[] = [];
   if (model.version !== '1') out.push({ severity: 'error', code: 'version', message: `Unsupported authorization version: ${model.version}` });
   if (model.default_effect !== 'deny') out.push({ severity: 'error', code: 'default-effect', message: 'Authorization must default to deny.' });

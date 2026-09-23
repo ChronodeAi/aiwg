@@ -852,14 +852,25 @@ export function nextStepsFor(framework: Framework, provider: string = 'claude'):
  * Steward FAQ so operators stop hitting the "fallback to general-purpose"
  * path silently.
  */
-const SESSION_RELOAD_NOTICE: Record<string, { action: string; rationale: string; symptom?: string }> = {
+const SESSION_RELOAD_NOTICE: Record<string, {
+  action: string;
+  rationale: string;
+  symptom?: string;
+  /**
+   * `false` when the client rescans between turns, so a reload is a fallback
+   * rather than a precondition for using what was just deployed (#2309).
+   */
+  required?: boolean;
+}> = {
   claude: {
     action: 'Restart your Claude Code session (close and reopen) to load the newly deployed agents.',
     rationale: 'Claude Code reads .claude/agents/ at session start. A running session retains its old registry until reloaded.',
   },
   codex: {
-    action: 'Restart/open Codex in this target workspace so it picks up newly deployed agents and .agents/skills entries.',
-    rationale: 'Codex caches its agent and skill registry per session. Project .agents/skills/ and .codex/agents/ are scanned from the Codex working directory up to the repo root on startup.',
+    required: false,
+    action: 'No restart needed for deployed skills — Codex exposes them on the next turn. Reopen Codex in this workspace only if a deployed skill or agent is still missing after that.',
+    rationale: 'A running Codex desktop session listed the newly deployed project skills on the very next user turn without any restart (#2309). Custom agent registry and MCP server changes were not observed to refresh live, so reopening remains the fallback for those.',
+    symptom: 'If a deployed skill or agent stays absent after the next turn, the registry did not rescan — reopen Codex in this workspace.',
   },
   copilot: {
     action: 'Reload the VS Code window (`Developer: Reload Window`) so Copilot picks up the new .github/agents/ entries.',
@@ -901,7 +912,8 @@ function printSessionReloadNotice(provider: string): void {
   if (!notice) return;
   const defaultSymptom =
     'Until reloaded, the Agent/Task tool will report "Agent type not found" for the newly deployed agents.';
-  ui.section('Session reload required:', [
+  const required = notice.required !== false;
+  ui.section(required ? 'Session reload required:' : 'Session reload (only if something is missing):', [
     notice.action,
     `Why: ${notice.rationale}`,
     notice.symptom ?? defaultSymptom,
@@ -1472,6 +1484,10 @@ async function deployOneProjectLocalBundle(opts: {
       // never reach <provider>/.aiwg/skills/, leaving them invisible to
       // both the platform and the index.
       '--copy-all',
+      // That copy-all is the deployer's doing, not the operator's, so the
+      // provider's startup listing cap still applies; overflow lands on the
+      // standard tier instead of over the cap (#2561).
+      '--listing-budget',
       // Provenance for the managed marker (#2502). Without this the deployer
       // stamps `bundled`/`unknown`, and `aiwg refresh`'s stale-artifact prune —
       // whose desired set is the packaged framework corpus — deletes every
@@ -1486,7 +1502,9 @@ async function deployOneProjectLocalBundle(opts: {
     if (quiet && !verbose) args.push('--quiet');
     // Project-local bundles are addon-shaped — never trigger the legacy commands
     // migration prompt (which is only relevant for full-framework deploys).
-    args.push('--skip-commands-migration');
+    // This is a structural opt-out, not the operator declining, so suppress the
+    // duplicate-commands warning too: it fired once per bundle (#2541).
+    args.push('--skip-commands-migration', '--no-commands-warning');
 
     const captureOpts = quiet && !verbose ? { capture: true } : {};
     // Inject AIWG_ROOT so the deploy subprocess can resolve the upstream AIWG
@@ -3440,6 +3458,7 @@ export class UseHandler implements CommandHandler {
             version: manifest.version ?? (await getVersionInfo()).version,
             source: 'bundled',
             manifestHash: await hashManifest(manifestPath),
+            asPrimary: Boolean(explicitAddonProvider),
           });
           await writeAiwgConfig(projectDir, updated);
           config = updated;
@@ -3577,6 +3596,12 @@ export class UseHandler implements CommandHandler {
     }
     if (scope === 'user' && verbose) {
       ui.dim(`  --scope user: deploy targets mirror to home-rooted paths per ADR-4 §2`);
+      if (process.env.AIWG_USER_REGISTRY_PATH?.trim()) {
+        ui.warn(
+          'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json'
+          + ` (active: ${process.env.AIWG_USER_REGISTRY_PATH})`,
+        );
+      }
     }
     const filteredArgs = deployArgs.filter(
       a => a !== '--no-utils' && a !== '--no-project-local' && a !== '--ci-hooks-enabled' && a !== '--force' && a !== '--skip-conflicts' && a !== '--no-harness-agents'
@@ -3681,6 +3706,15 @@ export class UseHandler implements CommandHandler {
           exitCode: 1,
           message: `--scope user not supported for provider '${provider}' — see docs/customization/user-scope-deployment.md for the supported list`,
         };
+      }
+      if (provider === 'grokbot') {
+        const { isGrokbotUserScopeConfigured, grokbotMissingRootRemediation } = await import('../../providers/grokbot-paths.js');
+        if (!isGrokbotUserScopeConfigured()) {
+          return {
+            exitCode: 1,
+            message: grokbotMissingRootRemediation(),
+          };
+        }
       }
     }
 
@@ -4211,7 +4245,12 @@ export class UseHandler implements CommandHandler {
           commands: counts.commands,
           skills: counts.skills,
           rules: counts.rules,
-        }, { version: versionInfo.version, source: 'bundled', manifestHash: mHash });
+        }, {
+          version: versionInfo.version,
+          source: 'bundled',
+          manifestHash: mHash,
+          asPrimary: Boolean(explicitProvider),
+        });
         await writeAiwgConfig(projectDir, updatedConfig);
       } catch {
         // Non-fatal: config tracking failure must not block deployment

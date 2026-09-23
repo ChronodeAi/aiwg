@@ -14,6 +14,8 @@ import fs from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
 import { load as loadYaml } from 'js-yaml';
+import { validateDecisionDocument } from '../decision/validate.js';
+import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
 import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
 import {
   DEFAULT_INDEX_EXTENSIONS,
@@ -203,6 +205,49 @@ interface SchemaDocMetadata {
   name?: string;
   capability?: string;
   searchTerms: string[];
+}
+
+interface DecisionDocMetadata {
+  type: 'decision-definition' | 'decision-ruleset' | 'decision-binding';
+  kind: 'DecisionDefinition' | 'DecisionRuleset' | 'DecisionBinding';
+  name: string;
+  description: string;
+  capability: string;
+  tags: string[];
+  searchTerms: string[];
+}
+
+/** Classify and schema-check authored decision-system documents. */
+export function parseDecisionDoc(content: string, relativePath: string): DecisionDocMetadata | null {
+  if (!/\.(json|ya?ml)$/i.test(relativePath)) return null;
+  if (Buffer.byteLength(content, 'utf8') > 262_144) return null;
+  let document: unknown;
+  try {
+    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : parseDecisionYaml(content);
+    validateDecisionDocument(document);
+  } catch {
+    return null;
+  }
+  const value = document as {
+    kind: DecisionDocMetadata['kind'];
+    metadata: { id: string; version: string; description: string };
+    spec: Record<string, unknown>;
+  };
+  if (!['DecisionDefinition', 'DecisionRuleset', 'DecisionBinding'].includes(value.kind)) return null;
+  const type = ({
+    DecisionDefinition: 'decision-definition',
+    DecisionRuleset: 'decision-ruleset',
+    DecisionBinding: 'decision-binding',
+  } as const)[value.kind];
+  const purpose = typeof value.spec.purpose === 'string' ? value.spec.purpose : value.metadata.description;
+  const terms = new Set<string>([
+    value.kind, value.metadata.id, value.metadata.version, purpose,
+    ...Object.keys(value.spec),
+  ]);
+  return {
+    type, kind: value.kind, name: value.metadata.id, description: value.metadata.description,
+    capability: purpose.slice(0, 240), tags: ['decision-system', value.kind], searchTerms: [...terms],
+  };
 }
 
 function parseSchemaDoc(content: string, relativePath: string): SchemaDocMetadata | null {
@@ -785,6 +830,30 @@ export function parseFlowDoc(
   };
 }
 
+/**
+ * Best-effort absolute path to the AIWG install root, for error text that must
+ * name where the framework graph can actually be built (#2530).
+ */
+function resolveInstallRootHint(): string {
+  try {
+    // The running module lives under the install root; walk up to the package.
+    let dir = path.dirname(new URL(import.meta.url).pathname);
+    for (let i = 0; i < 10; i += 1) {
+      const pkg = path.join(dir, 'package.json');
+      if (fs.existsSync(pkg)) {
+        try {
+          const content = JSON.parse(fs.readFileSync(pkg, 'utf8')) as { name?: string };
+          if (content.name === 'aiwg' || content.name === '@aiwg/cli') return dir;
+        } catch { /* keep walking */ }
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  } catch { /* fall through */ }
+  return '<aiwg install root>';
+}
+
 export async function buildIndex(
   cwd: string,
   options: BuildOptions = {}
@@ -826,7 +895,21 @@ export async function buildIndex(
       return;
     }
     console.error(`Error: No scan directories found: ${scanDirs.join(', ')}`);
-    console.log('Run this command from a project with the required directories.');
+    // The framework graph scans the AIWG corpus, which only exists at the install
+    // root — never in a consumer project. Saying "run from a project with the
+    // required directories" sends the operator looking in the wrong place (#2530).
+    if (graph === 'framework') {
+      const installRoot = resolveInstallRootHint();
+      console.log('The framework graph indexes the AIWG corpus and can only be built at the');
+      console.log('install root, not in a consumer project. Build it there, then sync here:');
+      console.log('');
+      console.log(`  cd ${installRoot} && aiwg index build --graph framework --force`);
+      console.log(`  cd ${cwd} && aiwg index sync --backend fortemi-core --graph framework`);
+      console.log('');
+      console.log("As an immediate workaround, discovery also works with '--backend local'.");
+    } else {
+      console.log('Run this command from a project with the required directories.');
+    }
     process.exit(1);
   }
 
@@ -974,15 +1057,16 @@ export async function buildIndex(
       // markdown+frontmatter — detect them up front so they classify and
       // become discoverable (#1540).
       const flow = parseFlowDoc(content, relativePath);
+      const decision = flow ? null : parseDecisionDoc(content, relativePath);
       const inferredType = inferType(data, relativePath);
       const physicalType = inferType({ ...data, type: undefined }, relativePath);
-      const runbook = flow ? null : parseRunbookDoc(data, body, relativePath);
+      const runbook = flow || decision ? null : parseRunbookDoc(data, body, relativePath);
       const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
-      const title = flow?.name ?? schemaDoc?.title ?? extractTitle(data, body);
+      const title = flow?.name ?? decision?.name ?? schemaDoc?.title ?? extractTitle(data, body);
       const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
-      const type = flow?.type ?? (runbook ? 'runbook' : inferredType);
-      const tags = flow ? flow.tags : (Array.isArray(data.tags) ? data.tags.map(String) : []);
-      const summary = flow?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
+      const type = flow?.type ?? decision?.type ?? (runbook ? 'runbook' : inferredType);
+      const tags = flow?.tags ?? decision?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
+      const summary = flow?.description ?? decision?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
       const dependencies = extractMentions(content);
       const markdownLinks = extractMarkdownLinks(content);
 
@@ -995,10 +1079,10 @@ export async function buildIndex(
       // Declarative processes have no trigger phrases — they rely on their
       // capability and structure-aware search terms.
       const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
-      const capability = flow?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
-      const kind = flow?.kind ?? runbook?.kind;
+      const capability = flow?.capability ?? decision?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
+      const kind = flow?.kind ?? decision?.kind ?? runbook?.kind;
       const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
-      const searchTerms = flow?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
+      const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
       const kernel =
         data.kernel === true || data.kernel === 'true' ? true : undefined;
       // Script entrypoint metadata is meaningful for skills only (#1227).
@@ -1008,7 +1092,7 @@ export async function buildIndex(
       // Canonical short name (#1233) — used by the scorer to floor exact-name
       // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
       // remain searchable even when the rendered title strips the hyphen.
-      const name = flow ? flow.name : schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
+      const name = flow?.name ?? decision?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
 
       entry = {
         path: relativePath,

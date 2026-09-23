@@ -50,10 +50,10 @@ describe('generated docs discoverability and drift auditor', () => {
 
   it('uses CI-friendly exit codes while allowing explicit report-only runs', () => {
     const args = ['tools/docs/audit-discoverability.mjs', '--root', root, '--now', now.toISOString(), '--json'];
-    const failed = spawnSync(process.execPath, args, { cwd: path.resolve(import.meta.dirname, '../..'), encoding: 'utf8' });
+    const failed = spawnSync(process.execPath, args, { timeout: 60_000, cwd: path.resolve(import.meta.dirname, '../..'), encoding: 'utf8' });
     expect(failed.status).toBe(1);
     expect(JSON.parse(failed.stdout)).toMatchObject({ schema: DOCS_DISCOVERABILITY_REPORT_SCHEMA, status: 'fail' });
-    const output = execFileSync(process.execPath, [...args, '--no-fail'], { cwd: path.resolve(import.meta.dirname, '../..'), encoding: 'utf8' });
+    const output = execFileSync(process.execPath, [...args, '--no-fail'], { timeout: 60_000, cwd: path.resolve(import.meta.dirname, '../..'), encoding: 'utf8' });
     expect(JSON.parse(output)).toMatchObject({ status: 'fail' });
   });
 });

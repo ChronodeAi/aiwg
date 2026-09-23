@@ -32,7 +32,7 @@ describe('Hermes deployment', () => {
     const projectDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-hermes-project-'));
     const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-hermes-home-'));
     try {
-      execFileSync('git', ['init'], { cwd: projectDir, stdio: 'pipe' });
+      execFileSync('git', ['init'], { timeout: 60_000, cwd: projectDir, stdio: 'pipe' });
       deployHermes(projectDir, homeDir);
 
       const agentsMd = await fs.readFile(path.join(projectDir, 'AGENTS.md'), 'utf8');

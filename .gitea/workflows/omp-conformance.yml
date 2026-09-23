@@ -45,7 +45,7 @@ jobs:
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1 (ci/digests.txt)
       - run: npm ci
       - name: Acquire reviewed binary and verify immutable digest
         shell: bash
@@ -61,7 +61,7 @@ jobs:
         run: node tools/providers/omp-conformance.mjs --binary /tmp/aiwg-omp-conformance --require --output artifacts/omp-native-conformance.json
       - name: Native MCP lifecycle and loopback-model contracts
         run: node tools/providers/omp-mcp-conformance.mjs /tmp/aiwg-omp-conformance artifacts/omp-mcp-conformance.json
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2 (ci/digests.txt)
         with:
           bun-version: 1.3.14
       - name: Pinned source SDK bridge typecheck
@@ -76,7 +76,7 @@ jobs:
         run: node tools/providers/omp-precedence-conformance.mjs --binary /tmp/aiwg-omp-conformance --source /tmp/aiwg-omp-source --output artifacts/omp-precedence-conformance.json
       - name: Retain versioned evidence including explicit unverified checks
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20 (ci/digests.txt)
         with:
           name: omp-linux-x64-conformance
           path: artifacts/omp-*-conformance.json

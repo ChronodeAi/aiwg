@@ -422,9 +422,9 @@ describe('project memory registry (#1750)', () => {
   it.each(['unique', 'ambiguous', 'unmatched'])('resolves a local Git remote with %s mapping', async mode => {
     const { resolveProjectMemoryRoot, registerProjectMemory } = await import('../../../src/memory/project-registry.js');
     // Local metadata only: no fetch, push, or contact with the synthetic remote.
-    execFileSync('git', ['init', '--quiet', '--template=', workspace]);
+    execFileSync('git', ['init', '--quiet', '--template=', workspace], { timeout: 60_000 });
     const remote = 'https://example.test/org/fixture.git';
-    execFileSync('git', ['-C', workspace, 'remote', 'add', 'origin', remote]);
+    execFileSync('git', ['-C', workspace, 'remote', 'add', 'origin', remote], { timeout: 60_000 });
     const entry = await registerProjectMemory({ id: 'one', workspaceRoot: path.join(tmp, 'registered-elsewhere'),
       gitRemotes: [mode === 'unmatched' ? 'git@example.test:org/other.git' : 'git@example.test:org/fixture.git'] });
     if (mode === 'ambiguous') await registerProjectMemory({ id: 'two', workspaceRoot: path.join(tmp, 'second-elsewhere'),
@@ -435,7 +435,7 @@ describe('project memory registry (#1750)', () => {
         ? `Multiple project memory entries match remote '${remote}'` : 'no registered user-level project memory entry' };
     expect(await resolveProjectMemoryRoot(workspace)).toEqual(expected);
     expect(await fs.readdir(workspace)).toEqual(['.git']);
-    expect(execFileSync('git', ['-C', workspace, 'remote', 'get-url', 'origin'], { encoding: 'utf8' }).trim()).toBe(remote);
+    expect(execFileSync('git', ['-C', workspace, 'remote', 'get-url', 'origin'], { timeout: 60_000, encoding: 'utf8' }).trim()).toBe(remote);
   });
 
   it('uses user-level memory for storage only when project-local .aiwg is absent', async () => {

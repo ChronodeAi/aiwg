@@ -734,4 +734,4 @@ references:
   related:
     - "@agentic/code/addons/rlm/schemas/rlm-state.yaml"
     - "@agentic/code/addons/rlm/schemas/rlm-trajectory.yaml"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"

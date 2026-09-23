@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
+import { fortemiPinnedSchemaPath } from "./fortemi-schema-path.js";
 
 /** Independent implementation of the Fortemi wire canonicalization contract. */
 export function canonicalFortemiDatasetJson(value: unknown): string {
@@ -22,24 +21,12 @@ export function fortemiDatasetDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(canonicalFortemiDatasetJson(value), "utf8").digest("hex")}`;
 }
 
-function schemaPath(): string {
-  let directory = dirname(fileURLToPath(import.meta.url));
-  for (;;) {
-    try {
-      const metadata = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as { name?: string };
-      if (metadata.name === "aiwg" || metadata.name === "@aiwg/cli") {
-        return join(directory, "schemas/dataset/fortemi-run-receipt/validation-1.0.1/run-receipt.schema.json");
-      }
-    } catch { /* Source and built installations have different depths. */ }
-    const parent = dirname(directory);
-    if (parent === directory) throw new Error("FORTEMI_RECEIPT_SCHEMA_UNAVAILABLE");
-    directory = parent;
-  }
-}
-
 const ajv = new Ajv2020({ strict: true, allErrors: true });
 addFormats(ajv);
-const validate = ajv.compile(JSON.parse(readFileSync(schemaPath(), "utf8")));
+const validate = ajv.compile(JSON.parse(readFileSync(
+  fortemiPinnedSchemaPath("schemas/dataset/fortemi-run-receipt/validation-1.0.1/run-receipt.schema.json"),
+  "utf8",
+)));
 
 interface Checkpoint {
   sequence: number;
@@ -57,7 +44,7 @@ export interface FortemiDatasetRunReceipt {
   effects: Array<{ outcome: "committed" | "conflict" | "rejected" | "unverifiable" }>;
   counts: { attempted: number; committed: number; rejected: number };
   checkpoint: { before?: Checkpoint; after: Checkpoint };
-  capabilityDecision: { selected: string[]; degradations: unknown[] };
+  capabilityDecision: { accepted: boolean; selected: string[]; degradations: unknown[] };
   resourceEnvelope: { maxRecords: number };
   state: "running" | "committed" | "degraded" | "failed" | "cancelled" | "ambiguous";
   verification: "pending" | "verified" | "failed" | "unverifiable";

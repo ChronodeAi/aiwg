@@ -1,6 +1,6 @@
 {
   "name": "aiwg",
-  "version": "2026.9.7",
+  "version": "2026.9.20",
   "description": "Reusable project context and specialist workflows for the AI tools you already use. AIWG places agents, skills, commands, and rules in provider-readable locations, with optional utilities for artifact memory, workflow orchestration, recovery, and discovery.",
   "type": "module",
   "bin": {
@@ -24,6 +24,16 @@
       "types": "./dist/src/governance/index.d.ts",
       "import": "./dist/src/governance/index.js",
       "default": "./dist/src/governance/index.js"
+    },
+    "./dataset": {
+      "types": "./dist/src/dataset/index.d.ts",
+      "import": "./dist/src/dataset/index.js",
+      "default": "./dist/src/dataset/index.js"
+    },
+    "./decision": {
+      "types": "./dist/src/decision/index.d.ts",
+      "import": "./dist/src/decision/index.js",
+      "default": "./dist/src/decision/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -50,6 +60,8 @@
     "smoke:omp:live": "node tools/providers/omp-live-smoke.mjs",
     "smoke:antigravity:live": "node tools/providers/antigravity-live-smoke.mjs",
     "smoke:deepseek-harness:live": "node tools/providers/deepseek-harness-live-smoke.mjs",
+    "smoke:grokbot:live": "node tools/providers/grokbot-live-smoke.mjs",
+    "smoke:decision:jev:live": "npm run build:cli && node tools/decision/jev-live-smoke.mjs",
     "validate-metadata": "aiwg validate-metadata",
     "package-plugins": "node tools/plugin/package-plugins.mjs --all",
     "package-plugins:clean": "node tools/plugin/package-plugins.mjs --all --clean",
@@ -129,6 +141,7 @@
     "lint:claude-context": "node tools/lint/claude-context-inventory.mjs",
     "lint:generated-artifacts": "node tools/lint/tracked-generated-artifacts.mjs",
     "lint:discovery-coverage": "node tools/manifest/check-discovery-coverage.mjs --report test-results/discovery-component-coverage.json",
+    "lint:rule-triggers": "node tools/lint/rule-triggers.mjs",
     "lint:vault-migration": "node ci/verify-vault-migration.mjs",
     "provision:vault-migration": "node ci/provision-vault-migration.mjs",
     "provision:vault-approle": "node ci/provision-vault-approle.mjs",
@@ -146,10 +159,11 @@
     "test:integration:serve:flake-gate": "node tools/scripts/integration-flake-gate.mjs",
     "qualify:dataset:fortemi-execute": "tsx tools/qualification/dataset-fortemi-execute.ts",
     "test:contract:vitest": "vitest run --config config/vitest.contract.config.js",
-    "test:contract:node": "node --test test/contract/agentic-publication-source.test.mjs test/contract/setup-manifest-site-dispatch.test.mjs test/contract/site-manifest-release-dispatch.test.mjs",
+    "test:contract:node": "node --test test/contract/agentic-publication-source.test.mjs test/contract/setup-manifest-site-dispatch.test.mjs test/contract/site-manifest-release-dispatch.test.mjs test/contract/socket-post-publish-workflow.test.mjs",
     "test:packaging": "vitest run --config config/vitest.packaging.config.js",
     "test:conformance:example": "node tools/testing/run-conformance-example.mjs",
     "lint:test-registration": "node tools/testing/check-test-registration.mjs",
+    "lint:test-process-timeouts": "node tools/testing/check-sync-child-process-timeouts.mjs",
     "test:coverage:testing-quality": "vitest run --config config/vitest.testing-quality-coverage.config.js",
     "test:coverage:audit-foundations": "vitest run --config config/vitest.audit-foundations-coverage.config.js",
     "test:coverage:enforcement": "node tools/testing/verify-coverage-enforcement.mjs",
@@ -162,6 +176,7 @@
     "!dist/**/*.d.ts",
     "!dist/**/*.map",
     "dist/src/api/index.d.ts",
+    "dist/src/decision/**/*.d.ts",
     "dist/src/writing/contextual-diagnostics.d.ts",
     "dist/src/writing/writer-profile.d.ts",
     "dist/src/writing/channel-packs.d.ts",
@@ -201,6 +216,7 @@
     "schemas/activity/",
     "schemas/dataset/",
     "schemas/deploy/",
+    "schemas/decision/",
     "schemas/flow/",
     "schemas/uhp/",
     "schemas/mission-v1.schema.json",
@@ -209,6 +225,7 @@
     "schemas/policy/",
     "schemas/storage/",
     "schemas/network-analysis/",
+    "test/fixtures/dataset/fortemi-capability/",
     "test/fixtures/network-analysis/manifest.v1.json",
     "test/fixtures/network-analysis/conformance-report.v1.json",
     "test/conformance/activity-v1/fixtures/",

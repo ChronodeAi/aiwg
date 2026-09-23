@@ -28,6 +28,9 @@ const GITIGNORE_PROBE_BASENAME = '.aiwg-ignore-probe';
  */
 export const AIWG_RUNTIME_PATTERNS = [
   '.aiwg/working/',
+  // Transactional preimages written before AIWG rewrites operator files.
+  // Recoverable local evidence, not project content (#2542).
+  '.aiwg/backups/',
   // .aiwg/.index/ is the artifact graph index (JSON nodes/edges + checksum
   // manifest). It is a pure build artifact, fully regenerable from corpus
   // content via `aiwg index build --all`, so it is ignored rather than committed.
@@ -62,6 +65,8 @@ export const PROVIDER_CONVENTIONAL_PATTERNS = [
  */
 export const CLAUDE_SESSION_PATTERNS = [
   '.claude/settings.local.json',
+  // Timestamped backups AIWG writes before merging hook entries (#2542).
+  '.claude/settings.json.bak.*',
 ];
 
 /** All recommended patterns combined */

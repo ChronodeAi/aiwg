@@ -164,6 +164,17 @@ async function handleSet(config: UserConfig, args: string[]): Promise<void> {
 // delivery.merge_style, delivery.force_push_policy, remotes.issue_provider)
 // before writing.
 
+/** Deprecated values accepted on `set` and normalized to their current spelling. */
+const ENUM_ALIASES: Record<string, Record<string, string>> = {
+  'delivery.force_push_policy': { 'main-only-blocked': 'own-branch-only' },
+};
+
+/** Extra context printed alongside an alias normalization, where semantics also changed. */
+const ENUM_ALIAS_NOTES: Record<string, string> = {
+  'delivery.force_push_policy':
+    "The permission also narrowed: the old value allowed force-push on any feature branch, the new one only on the agent's own branch.",
+};
+
 const ENUM_RULES: Record<string, readonly string[]> = {
   'delivery.mode': ['direct', 'feature-branch', 'pr-required'],
   'delivery.merge_style': ['rebase-merge', 'squash', 'merge', 'fast-forward-only'],
@@ -244,8 +255,17 @@ async function projectConfigSet(key: string, raw: string, args: string[]): Promi
   } = await import('./aiwg-config.js');
   const projectDir = getProjectDir(undefined, args);
 
-  // Validate enum fields before writing
+  // Validate enum fields before writing. Deprecated spellings normalize forward with a
+  // notice rather than failing, so a config written before a rename stays settable (#2532).
   const allowed = ENUM_RULES[key];
+  const aliased = ENUM_ALIASES[key]?.[raw];
+  if (aliased) {
+    process.stderr.write(
+      `Note: '${raw}' is a deprecated alias for '${aliased}'; writing '${aliased}'.\n`
+      + (ENUM_ALIAS_NOTES[key] ? `      ${ENUM_ALIAS_NOTES[key]}\n` : ''),
+    );
+    raw = aliased;
+  }
   if (allowed && !allowed.includes(raw)) {
     throw new AiwgError({
       code: 'ERR_INVALID_VALUE',

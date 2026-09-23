@@ -184,7 +184,7 @@ When operating within Al iteration loops:
 4. **On detection**: Trigger PAUSE→DIAGNOSE→ADAPT→RETRY protocol
 5. **On escalation**: Hand off to human with full context
 
-See @$AIWG_ROOT/agentic/code/addons/ralph/schemas/iteration-analytics.yaml for iteration tracking.
+See @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml for iteration tracking.
 
 ## References
 

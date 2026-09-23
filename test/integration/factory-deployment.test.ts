@@ -50,7 +50,7 @@ function runScript(scriptPath: string, args: string[] = []): string {
     USERPROFILE: TEST_HOME_DIR,
   };
 
-  return execSync(`node ${path.join(REPO_ROOT, scriptPath)} ${args.join(' ')}`, {
+  return execSync(`node ${path.join(REPO_ROOT, scriptPath)} ${args.join(' ')}`, { timeout: 60_000,
     cwd: TEST_PROJECT_DIR,
     env,
     encoding: 'utf-8',
@@ -95,7 +95,7 @@ describe('Factory AI Integration', () => {
     );
 
     // Initialize as git repo
-    execSync('git init', { cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
+    execSync('git init', { timeout: 60_000, cwd: TEST_PROJECT_DIR, stdio: 'pipe' });
   });
 
   afterEach(async () => {
@@ -636,7 +636,7 @@ describe('Factory CLI Integration', () => {
       const homeDir = process.env.HOME || process.env.USERPROFILE || '';
       const droidsDir = path.join(homeDir, '.factory', 'droids');
 
-      execSync(`node ${path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs')} --provider factory --mode sdlc --force`, {
+      execSync(`node ${path.join(REPO_ROOT, 'tools/agents/deploy-agents.mjs')} --provider factory --mode sdlc --force`, { timeout: 60_000,
         encoding: 'utf-8',
         stdio: 'pipe',
       });

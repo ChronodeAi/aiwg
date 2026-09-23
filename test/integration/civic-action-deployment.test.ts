@@ -96,7 +96,7 @@ describe('civic-action addon deployment', () => {
     const executed = spawnSync(process.execPath, [
       deployedScript,
       path.join(REPO_ROOT, 'agentic/code/addons/civic-action/examples/valid/source-registry.json'),
-    ], {
+    ], { timeout: 60_000,
       cwd: projectDir,
       env: { ...process.env, AIWG_ROOT: REPO_ROOT },
       encoding: 'utf8',

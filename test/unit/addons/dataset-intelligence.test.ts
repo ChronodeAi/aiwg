@@ -144,10 +144,10 @@ describe('dataset-intelligence addon', () => {
     const statuses = Object.fromEntries(conformance.cells.map((cell: any) => [cell.id, cell.expected.result]))
     expect(statuses['adapter.jsonl.real']).toBe('pass')
     expect(statuses['adapter.csv.real']).toBe('pass')
-    expect(statuses['migration.pre-stable']).toBe('pending')
+    expect(statuses['migration.prior-stable']).toBe('pass')
     expect(statuses['parity.fortemi-core']).toBe('pending')
     expect(statuses['parity.fortemi-server-live']).toBe('pending')
-    for (const phrase of ['Pre-stable migration', 'Fortemi Core parity', 'Fortemi Server']) expect(guide).toContain(phrase)
+    for (const phrase of ['prior-stable migration', 'Fortemi Core', 'Fortemi Server']) expect(guide).toContain(phrase)
     const migration = read('docs/migration-guide.md')
     for (const surface of ['index.graphs', 'memory-ingest', 'research provenance', 'marketplace provenance', 'mention edges', 'SDLC traceability']) {
       expect(migration).toContain(surface)

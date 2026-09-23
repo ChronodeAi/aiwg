@@ -329,6 +329,8 @@ validated Agent Skills name.
 | `cursor` | `<project>/.cursor/skills/<name>` | `native` | exact | Recursive native bundle |
 | `deepseek-harness` | `<project>/.agents/skills/<name>` | `native` | exact | DeepSeek Harness native filesystem skill surface, shared with other `.agents/skills` consumers |
 | `factory` | `<project>/.factory/skills/<name>` | `projected` | exact | Adds Factory description guidance, then strictly reparses |
+| `grokbot` | `$AIWG_GROKBOT_SKILLS_DIR/<name>` | `native` | exact | Uses only the explicitly configured absolute skill root; unset or invalid roots fail closed |
+| `grok-build` | `<project>/.grok/skills/<name>` | `native` | exact | Experimental project-local native recursive bundle; distinct from Grok Bot and the xAI model/API category |
 | `hermes` | `~/.hermes/skills/<name>` | `native` | exact | User-global recursive bundle with managed ownership sidecars |
 | `opencode` | `<project>/.opencode/skill/<name>` | `native` | exact | Recursive native bundle |
 | `openclaw` | `~/.openclaw/skills/<name>` | `native` | exact | Global recursive native bundle |

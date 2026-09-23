@@ -12,7 +12,12 @@ import { pathToFileURL } from 'url';
 import { execFileSync, execSync } from 'child_process';
 import chalk from 'chalk';
 import { importImpl } from '../_resolve-impl.mjs';
-import { scanStartupContext } from '../lint/claude-context-inventory.mjs';
+import { scanStartupContext,
+  subagentDispatchHeadroom,
+  SUBAGENT_AGENT_DEF_TOKENS,
+  SUBAGENT_SYSTEM_PROMPT_TOKENS,
+  SUBAGENT_MIN_WORKING_TOKENS,
+} from '../lint/claude-context-inventory.mjs';
 import { scanContextMemoryFirewall } from '../security/context-memory-firewall.mjs';
 
 const { getFrameworkRoot, getPackageRoot, getVersionInfo } = await importImpl(
@@ -52,7 +57,7 @@ const { auditLegacyPermissions } = await importImpl(
   import.meta.url,
   'policy/authorization.js'
 );
-const { readAiwgConfig } = await importImpl(
+const { readAiwgConfig, getProviderParallelismDefaults } = await importImpl(
   import.meta.url,
   'config/aiwg-config.js'
 );
@@ -103,6 +108,7 @@ const PROVIDER_LABELS = {
   openhuman: 'OpenHuman',
   omp: 'Oh My Pi',
   hermes:   'Hermes',
+  grokbot:  'Grok Bot',
 };
 
 // Quick-detect dirs (agents-only) — used when no --provider flag is given.
@@ -381,7 +387,7 @@ async function checkTotalDeployedSkillBudgetForProvider(provName, label, provide
       check(
         `${label} Deployed Skill Count`,
         'warn',
-        `${stats.count} startup-visible skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's ${budgetLabel} (${budgetChars.toLocaleString()} chars). Run \`aiwg use all --provider codex --force\` to restore the kernel-only deployment, or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
+        `${stats.count} startup-visible skills estimate ${stats.totalChars.toLocaleString()} chars, above Codex's ${budgetLabel} (${budgetChars.toLocaleString()} chars). Re-run \`aiwg use <bundle> --provider codex\` (no --force) to move bundle skills over the cap to the standard tier, or \`aiwg list --deployed\` to inspect include/exclude reasons.`,
       );
     }
   }
@@ -438,7 +444,11 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
       ? `${budgetChars.toLocaleString()}-char project override in ${override.source.replace(os.homedir(), '~')}`
       : `${CODEX_DEFAULT_LISTING_CHAR_CAP.toLocaleString()}-char default cap`;
     if (usage > budget) {
-      recommendations.push('run `aiwg use all --provider codex --force` to restore the kernel-only deployment');
+      // `--force` overwrites unmanaged files and is not a budget lever (#2561).
+      // The startup listing is the kernel dir; bundle skills that landed there
+      // are what push it over, and a plain redeploy re-places them under the cap.
+      recommendations.push('re-run `aiwg use <bundle> --provider codex` (no --force) so bundle skills over the cap move to the standard tier (`.codex/.aiwg/skills`, reachable via `aiwg discover`)');
+      recommendations.push('or run `aiwg use all --provider codex` to redeploy the kernel set without touching unmanaged files');
       recommendations.push('use `aiwg list --deployed` to inspect include/exclude reasons');
       const verb = override ? 'raise' : 'set';
       recommendations.push(`${verb} codex.skillListingCharCap to ${Math.ceil((usage * 1.25) / 1000) * 1000} in .aiwg/aiwg.config`);
@@ -470,6 +480,46 @@ async function checkSkillBudgetForProvider(provName, label, skillsPathRel) {
   }
 }
 
+// Subagent dispatch headroom (#2562). A Task/subagent dispatch inherits the
+// same inlined startup context as the main session — the project's rules,
+// every ancestor directory's rules and CLAUDE.md — plus the agent definition
+// and the base system prompt, and it still needs room to work. When the
+// inlined surface leaves less than that, dispatch fails immediately with
+// "Prompt is too long" and the self-maintenance entry points (aiwg-steward,
+// aiwg-doctor, aiwg-refresh) become unreachable in exactly the projects that
+// need them. This is a real failure, so it is reported as an error; the
+// startup-context check above stays advisory.
+async function checkSubagentDispatchHeadroom(provName, label) {
+  if (provName !== 'claude') return;
+  let startup;
+  try {
+    startup = await scanStartupContext({ rootDir: process.cwd() });
+  } catch {
+    return;
+  }
+  if (!startup || startup.components.length === 0) return;
+  const k = (n) => `${Math.round(n / 1000)}K`;
+  const { headroom, status } = subagentDispatchHeadroom(startup);
+  const ancestors = startup.components.filter((c) => c.ancestor);
+  const ancestorNote = ancestors.length > 0
+    ? ` Ancestor directories contribute ~${k(startup.ancestorTokens)} of that (${[...new Set(ancestors.map((c) => c.ancestor))].join(', ')}); Claude Code inlines their CLAUDE.md and .claude/rules too.`
+    : '';
+  const detail = `~${k(startup.totalTokens)} tok inlined at startup leaves ~${k(Math.max(headroom, 0))} tok for a subagent ` +
+    `after a ${k(SUBAGENT_AGENT_DEF_TOKENS)} agent def and ~${k(SUBAGENT_SYSTEM_PROMPT_TOKENS)} system prompt (needs ≥${k(SUBAGENT_MIN_WORKING_TOKENS)}).`;
+  if (status === 'ok') {
+    check(`${label} Subagent Dispatch`, 'ok', detail);
+    return;
+  }
+  check(
+    `${label} Subagent Dispatch`,
+    status === 'fails' ? 'error' : 'warn',
+    `${status === 'fails' ? 'WILL FAIL' : 'AT RISK'} — ${detail}${ancestorNote} ` +
+      'Task dispatch to aiwg-steward/aiwg-doctor/aiwg-refresh fails with "Prompt is too long" until the inlined rule surface shrinks: ' +
+      'redeploy so HIGH rules beyond the inline budget move to RULES-ONDEMAND.md (`aiwg use all --provider claude`), ' +
+      'lower AIWG_RULES_INLINE_BUDGET_TOKENS, or prune ancestor rule deployments. Run `aiwg context-firewall scan --provider claude` for the attributed breakdown.',
+  );
+}
+
 // Startup-context budget (#1673). The skill-listing budget above covers skill
 // names/descriptions; this measures the aggregate context Claude Code inlines at
 // session start — memory files + every `.claude/rules/*.md` (full body, no
@@ -498,20 +548,28 @@ async function checkStartupContextBudget(provName, label) {
     `~${k(startup.totalTokens)} tok of ${k(startup.budgetTokens)} standard window ` +
     `(memory + .claude/rules); top: ${top}`;
 
+  // Long-lived projects carry artifacts from deploy models that no longer write
+  // them. The budget warning describes the symptom; name the likely cause and the
+  // command that reports it, so the operator is not left with a number (#2540).
+  const orphanHint =
+    ` Projects deployed under older versions accumulate agents/rules current AIWG no longer writes; ` +
+    `run \`aiwg refresh --dry-run\` to list orphaned artifacts before pruning.`;
+
   if (startup.status === 'over') {
     check(
       `${label} Startup Context`,
       'warn',
       `OVER budget — ${headline}. Exceeds the standard Sonnet window before any prompt; ` +
         `forces the credit-gated 1M tier or immediate exhaustion. Reduce always-on rules ` +
-        `(see the enforcement-tiered deployment ADR / #1673) or narrow the install.`,
+        `(see the enforcement-tiered deployment ADR / #1673) or narrow the install.` + orphanHint,
     );
   } else if (startup.status === 'warn') {
     check(
       `${label} Startup Context`,
       'warn',
       `tight — ${headline}. Limited headroom for real work on standard Sonnet. ` +
-        `Run \`aiwg context-firewall scan --provider claude\` for the attributed breakdown (#1673).`,
+        `Run \`aiwg context-firewall scan --provider claude\` for the attributed breakdown (#1673).` +
+        orphanHint,
     );
   } else {
     check(`${label} Startup Context`, 'ok', headline);
@@ -698,6 +756,16 @@ async function runDoctor() {
     installation.state === 'aligned' ? 'ok' : 'error',
     installation.state === 'aligned' ? installationDetail : `${installationDetail}. ${installation.drift.join('; ')}`,
   );
+
+  // 1a. Warn when test-only user-registry override is active (#246)
+  if (process.env.AIWG_USER_REGISTRY_PATH && String(process.env.AIWG_USER_REGISTRY_PATH).trim()) {
+    check(
+      'User Registry Path',
+      'warn',
+      'AIWG_USER_REGISTRY_PATH is set (test override active); user registry is not writing to default ~/.aiwg/installed.json'
+        + ` (active: ${process.env.AIWG_USER_REGISTRY_PATH})`,
+    );
+  }
 
   // 1b. Build state — surface a missing/incomplete dist/ as a clear error with
   // remediation instead of letting consumers hit cryptic MODULE_NOT_FOUND at
@@ -1050,6 +1118,7 @@ async function runDoctor() {
       await checkSkillBudgetForProvider(provName, label, budgetPath);
       await checkTotalDeployedSkillBudgetForProvider(provName, label, provider);
       await checkStartupContextBudget(provName, label);
+      await checkSubagentDispatchHeadroom(provName, label);
     }
 
     if (provName === 'openhuman') {
@@ -1065,7 +1134,7 @@ async function runDoctor() {
   if (!noBudgetCheck) {
     try {
       const supported = providersToCheck.filter((name) =>
-        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman'].includes(name),
+        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot'].includes(name),
       );
       const firewall = await scanContextMemoryFirewall({
         rootDir: process.cwd(),
@@ -1453,6 +1522,7 @@ async function runDoctor() {
   ];
 
   let discoverOk = false;
+  let discoveryDegraded = false;
   for (const probe of discoveryProbes) {
     const r = probeCommand(probe.label, probe.args, null, probe.validateStdout);
     if (probe.args[0] === 'discover') discoverOk = r.ok;
@@ -1466,8 +1536,21 @@ async function runDoctor() {
       check(probe.label, 'ok', 'no project-local index (global context) — discovery uses the framework index from the install root; run `aiwg index build` inside a project for project-scoped queries');
     } else {
       // Warn (not error) — discovery is degraded but doctor itself still works.
+      discoveryDegraded = true;
       check(probe.label, 'warn', `${probe.hint} — ${r.detail}`);
     }
+  }
+
+  // An install-root change (npm link) invalidates the framework graph for every
+  // consumer project, and the two-command repair runs in two different working
+  // directories — which is what made it hard to act on (#2530).
+  if (discoveryDegraded) {
+    const installRoot = AIWG_ROOT;
+    check('Discovery: repair', 'info',
+      `Rebuild the framework graph at the install root, then sync here: `
+      + `\`cd ${installRoot} && aiwg index build --graph framework --force\` then `
+      + `\`cd ${process.cwd()} && aiwg index sync --backend fortemi-core --graph framework\`. `
+      + `Immediate workaround: \`aiwg discover --backend local\`.`);
   }
 
   // 8d. Component-to-driver coverage (#1958).
@@ -1723,9 +1806,19 @@ async function runDoctor() {
           issues.push(`merge_style=${d.merge_style} (must be one of ${validMergeStyles.join(', ')})`);
         }
 
-        // force_push_policy validation
+        // force_push_policy validation. `main-only-blocked` is the pre-rename spelling;
+        // accept it as a deprecated alias and name the semantic narrowing, rather than
+        // rejecting a config that was valid when it was written (#2532).
         const validForcePush = ['never', 'own-branch-only', 'allowed'];
-        if (d.force_push_policy && !validForcePush.includes(d.force_push_policy)) {
+        const forcePushAliases = { 'main-only-blocked': 'own-branch-only' };
+        if (d.force_push_policy && forcePushAliases[d.force_push_policy]) {
+          const current = forcePushAliases[d.force_push_policy];
+          issues.push(
+            `force_push_policy=${d.force_push_policy} is a deprecated alias for '${current}' and will be removed; `
+            + 'the permission also narrowed (old: any feature branch, new: the agent\'s own branch only). '
+            + `Run "aiwg config set --project delivery.force_push_policy ${current}"`,
+          );
+        } else if (d.force_push_policy && !validForcePush.includes(d.force_push_policy)) {
           issues.push(`force_push_policy=${d.force_push_policy} (must be one of ${validForcePush.join(', ')})`);
         }
 
@@ -1766,6 +1859,44 @@ async function runDoctor() {
           check('Delivery Policy', 'ok', `mode=${mode} merge=${merge} default_branch=${defaultBranch}`);
         } else {
           check('Delivery Policy', 'warn', issues.join('; '));
+        }
+      }
+
+      // 11c-bis. Project data classification (#2535). Surface what the repo
+      // declares it holds, and flag a declaration that contradicts the remotes:
+      // a repo declared private while a secondary remote pushes on release is
+      // publishing the thing it says must not be published.
+      if (raw) {
+        const project = typeof raw.project === 'string' ? { name: raw.project } : raw.project;
+        if (!project || typeof project !== 'object') {
+          check('Data Classification', 'info',
+            'project not declared — agents have no structured signal for how this repo may be handled');
+        } else if (!project.classification) {
+          check('Data Classification', 'info',
+            `project '${project.name ?? '(unnamed)'}' declares no classification (private|sanitized|public)`);
+        } else {
+          const closed = project.classification === 'private';
+          const handling = project.handling ?? {};
+          const excerptable = handling.excerptable ?? !closed;
+          const publishable = handling.publishable ?? !closed;
+          const mirror = handling.mirror ?? !closed;
+          const summary = `classification=${project.classification}`
+            + `${project.pii ? ' pii=true' : ''}`
+            + ` excerptable=${excerptable} publishable=${publishable} mirror=${mirror}`;
+
+          const conflicts = [];
+          const releaseMirrors = (raw.remotes?.secondary ?? [])
+            .filter((entry) => entry && entry.push_on_release);
+          if (!mirror && releaseMirrors.length > 0) {
+            conflicts.push(
+              `handling.mirror=false but remotes.secondary pushes on release: ${releaseMirrors.map((entry) => entry.name ?? '(unnamed)').join(', ')}`,
+            );
+          }
+          if (!publishable && releaseMirrors.length > 0) {
+            conflicts.push('handling.publishable=false but a secondary remote pushes on release');
+          }
+          if (conflicts.length > 0) check('Data Classification', 'warn', `${summary}; ${conflicts.join('; ')}`);
+          else check('Data Classification', 'ok', summary);
         }
       }
 
@@ -1816,21 +1947,9 @@ async function runDoctor() {
         checkRange('max_parallel_ralph_loops', 1, 20);
         checkRange('max_parallel_mc_missions', 1, 20);
 
-        // Detect operator override vs provider default
+        // Detect operator override vs provider default — use shared map (#249)
         const primary = Array.isArray(raw.providers) ? raw.providers[0] : undefined;
-        const PROVIDER_DEFAULTS = {
-          claude:   { max_parallel_subagents: 4 },
-          codex:    { max_parallel_subagents: 10 },
-          copilot:  { max_parallel_subagents: 10 },
-          cursor:   { max_parallel_subagents: 10 },
-          factory:  { max_parallel_subagents: 10 },
-          opencode: { max_parallel_subagents: 10 },
-          warp:     { max_parallel_subagents: 10 },
-          windsurf: { max_parallel_subagents: 10 },
-          openclaw: { max_parallel_subagents: 10 },
-          hermes:   { max_parallel_subagents: 10 },
-        };
-        const expectedDefault = PROVIDER_DEFAULTS[primary]?.max_parallel_subagents ?? 4;
+        const expectedDefault = getProviderParallelismDefaults(primary).max_parallel_subagents;
         const isOverride =
           p.max_parallel_subagents !== undefined &&
           p.max_parallel_subagents !== expectedDefault;
@@ -1890,12 +2009,27 @@ async function runDoctor() {
       } else {
         const errors = diagnostics.filter(item => item.severity === 'error');
         const legacy = diagnostics.filter(item => item.code.startsWith('legacy-'));
-        const status = errors.length ? 'error' : 'warn';
-        check(
-          'Permissions',
-          status,
-          `${errors.length} error(s), ${legacy.length} legacy source(s) — run "aiwg steward permissions audit"`,
-        );
+        const missingOnly = diagnostics.length === 1 && diagnostics[0].code === 'authorization-missing';
+        if (missingOnly) {
+          // A project that never had legacy permissions has nothing to audit;
+          // pointing it at `audit` just re-emits this warning. The one action
+          // that clears it is writing the initial block (#2563).
+          check(
+            'Permissions',
+            'info',
+            'no authorization block yet (default deny applies) — write one with "aiwg steward permissions migrate --apply"',
+          );
+        } else {
+          const status = errors.length ? 'error' : 'warn';
+          const fix = errors.length
+            ? 'run "aiwg steward permissions audit" for the failing references'
+            : 'run "aiwg steward permissions migrate --dry-run" then "--apply" to normalize them';
+          check(
+            'Permissions',
+            status,
+            `${errors.length} error(s), ${legacy.length} legacy source(s) — ${fix}`,
+          );
+        }
       }
     }
   } catch (err) {

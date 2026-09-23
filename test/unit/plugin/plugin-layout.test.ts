@@ -159,7 +159,7 @@ describe('plugin repository layout', () => {
 
   it('does not retain checkout-only self references in standalone plugin payloads', async () => {
     const legacyRoots: Record<string, string[]> = {
-      'agent-loop': ['agentic/code/addons/agent-loop/', 'agentic/code/addons/ralph/'],
+      'agent-loop': ['agentic/code/addons/agent-loop/'],
       'agent-persistence': ['agentic/code/addons/agent-persistence/'],
       'testing-quality': ['agentic/code/addons/testing-quality/'],
       'aiwg-dev': ['agentic/code/addons/aiwg-dev/'],

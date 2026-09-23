@@ -12,9 +12,12 @@ npm install -g aiwg
 aiwg use all --provider codex
 ```
 
-The deployment command refreshes AIWG's shared project context and prints a verification result. Close and reopen
-Codex in this workspace if the `aiwg use` output says a reload is required. After that, ask OpenAI Codex to verify
-AIWG by reporting the project root, provider files it can read, installed frameworks, and one useful next action.
+The deployment command refreshes AIWG's shared project context and prints a verification result. A running Codex
+session picks up newly deployed skills on the next turn — no restart is needed to start using them. Reopen Codex in
+this workspace only as a fallback, if a deployed skill or agent is still missing after that next turn. Custom agent
+registry and MCP server changes have not been verified to refresh live, so reopening remains the reliable route for
+those. After that, ask OpenAI Codex to verify AIWG by reporting the project root, provider files it can read,
+installed frameworks, and one useful next action.
 
 Try one small task immediately after verification:
 

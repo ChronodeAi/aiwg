@@ -463,13 +463,13 @@ describe('External Ralph Loop Integration', () => {
       // Initialize a git repo so snapshots can capture git state
       const { execSync } = await import('child_process');
       try {
-        execSync('git init', { cwd: testDir, stdio: 'ignore' });
-        execSync('git config user.email "test@test.com"', { cwd: testDir, stdio: 'ignore' });
-        execSync('git config user.name "Test"', { cwd: testDir, stdio: 'ignore' });
+        execSync('git init', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+        execSync('git config user.email "test@test.com"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+        execSync('git config user.name "Test"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
         const { writeFileSync } = await import('fs');
         writeFileSync(join(testDir, 'init.txt'), 'init');
-        execSync('git add .', { cwd: testDir, stdio: 'ignore' });
-        execSync('git commit -m "init"', { cwd: testDir, stdio: 'ignore' });
+        execSync('git add .', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
+        execSync('git commit -m "init"', { timeout: 60_000, cwd: testDir, stdio: 'ignore' });
       } catch {
         // git not available, skip
         return;

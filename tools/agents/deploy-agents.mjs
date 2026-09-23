@@ -20,7 +20,7 @@
  *   --rules-only             Deploy only rules (skip agents)
  *   --dry-run                Show what would be deployed without writing
  *   --force                  Overwrite existing files
- *   --provider <name>        Target provider: antigravity (agy), claude (default), openai, codex, cursor, opencode, copilot, factory, pi, omp, deepseek-harness, dsh, warp, devin, hermes, or openclaw
+ *   --provider <name>        Target provider: antigravity (agy), claude (default), openai, codex, cursor, opencode, copilot, factory, grokbot, grok-build, pi, omp, deepseek-harness, dsh (alias: deepseek), warp, devin, hermes, openhuman, or openclaw
  *   --model <name>            Override model for all tiers (blanket)
  *   --reasoning-model <name> Override model for reasoning tasks
  *   --coding-model <name>    Override model for coding tasks
@@ -123,7 +123,7 @@ const PROVIDER_ALIASES = {
   'oh-my-pi': 'omp',
 };
 
-const AVAILABLE_PROVIDERS = ['antigravity', 'claude', 'factory', 'codex', 'opencode', 'copilot', 'cursor', 'pi', 'omp', 'deepseek-harness', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'dsh'];
+const AVAILABLE_PROVIDERS = ['antigravity', 'claude', 'factory', 'codex', 'opencode', 'copilot', 'cursor', 'pi', 'omp', 'deepseek-harness', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'grokbot', 'grok-build', 'dsh'];
 
 const UNSUPPORTED_PROVIDER_HINTS = {
   'devin-cli': [
@@ -505,11 +505,13 @@ function parseArgs() {
     asPlugin: false,        // Generate .factory-plugin/ bundle (Factory provider only)
     deployBehaviors: false, // Deploy behaviors in addition to agents
     skipCommandsMigration: false, // Skip commands → skills migration (warns about duplicates)
+    warnOnSkippedCommandsMigration: true, // Emit the duplicate warning when the migration is skipped
     // Managed-marker provenance (#2502). Deployers that are not shipping the
     // bundled framework corpus (project-local bundles, in particular) must
     // override these so `aiwg refresh` does not mistake their artifacts for
     // stale copies of packaged ones.
     deploySource: null,           // Managed-marker source; defaults to 'bundled'
+    listingBudget: false,         // Honor the provider startup-listing cap despite --copy-all (#2561)
     deployVersion: null           // Managed-marker version; defaults to srcRoot package.json
   };
   for (let i = 0; i < args.length; i++) {
@@ -544,8 +546,11 @@ function parseArgs() {
     else if (a === '--quiet' || a === '-q') cfg.quiet = true;
     else if (a === '--as-plugin') cfg.asPlugin = true;
     else if (a === '--skip-commands-migration') cfg.skipCommandsMigration = true;
+    // Structural opt-out: skip the migration without claiming the operator declined it (#2541).
+    else if (a === '--no-commands-warning') cfg.warnOnSkippedCommandsMigration = false;
     else if (a === '--copy-all' || a === '--copy-standard-skills') cfg.copyStandardSkills = true;
     else if (a === '--deploy-source' && args[i + 1]) cfg.deploySource = String(args[++i]);
+    else if (a === '--listing-budget') cfg.listingBudget = true;
     else if (a === '--deploy-version' && args[i + 1]) cfg.deployVersion = String(args[++i]);
     else if (a === '--help' || a === '-h') {
       printHelp();
@@ -589,6 +594,7 @@ Options:
   --as-agents-md               Aggregate to single AGENTS.md (Codex)
   --create-agents-md           Create/update AGENTS.md template
   --skip-commands-migration    Skip deleting the commands directory before skills deployment
+  --listing-budget             Honor the provider startup-listing cap even with --copy-all
   --deploy-source <name>       Managed-marker source stamped into deployed artifacts.
                                Defaults to 'bundled'. Deploys that do not ship the packaged
                                framework corpus (e.g. project-local bundles) MUST override
@@ -646,6 +652,8 @@ Providers (all deploy agents, commands, skills, and rules):
   dsh       - Fork DeepSeek Harness (alias: deepseek)
   devin     - Devin Desktop (preferred; aliases: devin-desktop, windsurf)
               Paths: .windsurf/agents/, .windsurf/workflows/, .windsurf/skills/, .windsurf/rules/
+  grokbot   - Grok Bot (AGENTS.md bridge; skills only with AIWG_GROKBOT_SKILLS_DIR)
+  grok-build - Grok Build (experimental; .grok paths + $GROK_HOME; no bare grok alias)
   hermes    - Hermes Agent (MCP-based integration)
               Skills: $HERMES_HOME/skills/ (user-global; defaults to ~/.hermes/skills/) | Agents: AGENTS.md
               Commands/Rules: served via MCP, not file-deployed
@@ -1088,11 +1096,13 @@ export async function main() {
     asPlugin: cfg.asPlugin,
     deployBehaviors: cfg.kernelOnly ? false : cfg.deployBehaviors,
     skipCommandsMigration: cfg.skipCommandsMigration,
+    warnOnSkip: cfg.warnOnSkippedCommandsMigration !== false,
     // #1217 / #1219: --copy-all flag forces legacy per-project mirror
     // for the standard tier. Default is no-copy + index-driven discovery.
     // Replaces the legacy AIWG_COPY_STANDARD_SKILLS env var (removed rc.30).
     // Default (#1217) is no-copy + index-driven discovery.
     copyStandardSkills: cfg.copyStandardSkills === true,
+    listingBudget: cfg.listingBudget === true,
     deployVersion: cfg.deployVersion || getDeployVersion(srcRoot),
     deploySource: cfg.deploySource || 'bundled',
   };

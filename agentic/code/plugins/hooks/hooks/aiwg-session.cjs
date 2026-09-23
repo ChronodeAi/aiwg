@@ -210,8 +210,28 @@ async function main() {
       break;
     }
 
+    case undefined:
+    case '':
+      // Invoked with no subcommand. This is the SessionStart hook path: anything
+      // printed here lands at the top of every session transcript, so stay silent
+      // and exit clean. Help is available explicitly via `help`/`--help`. (#2543)
+      break;
+
+    case 'help':
+    case '--help':
+    case '-h':
+      console.log(usage());
+      break;
+
     default:
-      console.log(`
+      console.error(`Unknown command: ${command}`);
+      console.error(usage());
+      process.exitCode = 1;
+  }
+}
+
+function usage() {
+  return `
 AIWG Session Manager
 
 Usage:
@@ -226,8 +246,7 @@ Examples:
 
   aiwg-session.cjs record aiwg-security-review-2025-01-15 --workflow security-review
   aiwg-session.cjs list
-`);
-  }
+`;
 }
 
 main().catch(err => {

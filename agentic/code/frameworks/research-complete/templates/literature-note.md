@@ -305,7 +305,7 @@ ReAct Loop:
 **AIWG Components Affected:**
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/tao-loop.md - Core loop structure
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/thought-protocol.md - Thought type taxonomy
-- @$AIWG_ROOT/agentic/code/addons/ralph/schemas/iteration-analytics.yaml - Logging format
+- @$AIWG_ROOT/agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml - Logging format
 - All tool-using agents in @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/agents/
 -->
 

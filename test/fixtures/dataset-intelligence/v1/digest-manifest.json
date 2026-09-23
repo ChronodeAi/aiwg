@@ -1,11 +1,14 @@
 {
-  "corpusVersion": "1.0.0",
+  "corpusVersion": "1.1.0",
   "seed": "dataset-intelligence-v1",
   "algorithm": "sha256",
   "files": {
     "incremental/replay.json": "57e49948d2915409a1d55e717173fb896e13309cbafece32c8adc464f860e151",
     "offline/cache.json": "a19c831f2e5fb87124112fa1c1eea194b7c05806c33d4724432e89466eb99960",
+    "prior/v2026.9.17/binding.json": "90367aa52ce1b4bdb4b5f0b423792dbbcb825a74a9792cfedb9fb30d1591ed1f",
+    "prior/v2026.9.17/contracts.json": "937feadd475d5c1e56528170d4990595d719b62098f925717e74d985c0e05d1c",
     "security/adversarial.json": "06b7a68645b74cc1cb6acc73a3082bf9ea1e6347e8e8fdc049cfa260b72808dc",
+    "sources/directory-manifest.json": "e2b53e419de80b3b1384a5e5af5c70e93d25c8619b0fb9191090ea24150240cc",
     "sources/directory/one.json": "5c6e8d8cd05a59ebf3874e6e3e6c160e46053d1fa7f262032ffe1ff49e587db3",
     "sources/directory/two.json": "db5d19d7662144eb09791072230ed35b926b5d09c8f7c42ae811a5b241097980",
     "sources/http-response.json": "be4852e14595a63494b748bebaa80547f56374223deedb926114fbd50b2b78e5",

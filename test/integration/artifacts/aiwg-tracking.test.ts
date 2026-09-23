@@ -34,7 +34,7 @@ describe('AIWG artifact root tracking and distribution (integration)', () => {
     });
 
     it('should not track repo-local .aiwg/ artifacts', () => {
-      const tracked = execFileSync('git', ['ls-files', '.aiwg/**'], {
+      const tracked = execFileSync('git', ['ls-files', '.aiwg/**'], { timeout: 60_000,
         cwd: REPO_ROOT,
         encoding: 'utf-8',
       }).trim();
@@ -184,7 +184,7 @@ describe('AIWG artifact root tracking and distribution (integration)', () => {
 
     it('should not track .aiwg/ or .aiwg-location files in the public repository', () => {
       const binaryExts = ['.exe', '.dll', '.so', '.dylib', '.bin', '.zip', '.tar', '.gz', '.png', '.jpg', '.jpeg'];
-      const trackedAiwg = execSync('git ls-files -z .aiwg .aiwg-location', { cwd: REPO_ROOT })
+      const trackedAiwg = execSync('git ls-files -z .aiwg .aiwg-location', { timeout: 60_000, cwd: REPO_ROOT })
         .toString('utf-8')
         .split('\0')
         .filter(Boolean);

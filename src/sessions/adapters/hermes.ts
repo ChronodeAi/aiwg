@@ -23,24 +23,34 @@ export interface HermesLocalSessionsTransport {
   snapshot(source: SelectedSource): Promise<unknown[]>;
 }
 
+const sqliteBoolean = z.union([z.boolean(), z.literal(0), z.literal(1)])
+  .transform((value) => Boolean(value));
+
+function nullableOptional<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value) => value === null ? undefined : value, schema.optional());
+}
+
 const MessageSchema = z.object({
   id: z.union([z.string(), z.number()]),
   role: z.string().min(1),
   content: z.unknown().optional(),
-  tool_call_id: z.string().optional(),
+  tool_call_id: nullableOptional(z.string()),
   tool_calls: z.unknown().optional(),
-  tool_name: z.string().optional(),
+  tool_name: nullableOptional(z.string()),
   timestamp: z.number().optional(),
-  token_count: z.number().optional(),
-  finish_reason: z.string().optional(),
-  reasoning: z.string().optional(),
-  reasoning_content: z.string().optional(),
+  token_count: nullableOptional(z.number()),
+  finish_reason: nullableOptional(z.string()),
+  reasoning: nullableOptional(z.string()),
+  reasoning_content: nullableOptional(z.string()),
   reasoning_details: z.unknown().optional(),
   codex_reasoning_items: z.unknown().optional(),
 }).passthrough();
 
 const ExportSchema = z.object({
-  schemaVersion: z.union([z.string(), z.number()]),
+  // Hermes CLI exports currently omit a schema marker. They use the same
+  // schema-23 record shape that the adapter already validates; explicit
+  // markers still pass through the major-version gate below.
+  schemaVersion: z.union([z.string(), z.number()]).default(HERMES_NATIVE_SCHEMA_VERSION),
   id: z.string().min(1),
   source: z.string().min(1),
   user_id: z.string().nullable().optional(),
@@ -51,8 +61,8 @@ const ExportSchema = z.object({
   started_at: z.number(),
   ended_at: z.number().nullable().optional(),
   end_reason: z.string().nullable().optional(),
-  archived: z.boolean().optional(),
-  inactive: z.boolean().optional(),
+  archived: sqliteBoolean.optional(),
+  inactive: sqliteBoolean.optional(),
   cwd: z.string().nullable().optional(),
   git_branch: z.string().nullable().optional(),
   routing_key: z.string().nullable().optional(),

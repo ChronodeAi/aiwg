@@ -1,5 +1,10 @@
 ---
 enforcement: high
+triggers:
+  - "does AIWG have a skill for this"
+  - "how do I find a capability"
+  - "is there a command for this"
+  - "AIWG does not seem to have"
 ---
 
 # Skill Discovery Rules

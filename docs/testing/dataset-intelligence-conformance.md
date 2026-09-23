@@ -17,6 +17,9 @@ from the canonical result digest.
 Fixtures contain only synthetic data. Tests must not enumerate environment
 variables, resolve real credentials, contact public SSRF targets, or record
 credential material. Controlled HTTP cases use injected fetch and DNS behavior.
+The matrix executes file, directory, JSONL, CSV, and HTTP adapter lifecycles.
+File, directory, JSONL, and CSV cells use committed real source files; the HTTP
+cell remains fixture-qualified and does not claim live network maturity.
 Fortemi Server recovery and load cells require the independent authorization,
 isolated tenant, endpoint, server version, and resource envelope tracked by
 #2194.
@@ -60,17 +63,34 @@ Live Fortemi Server work begins with the read-only contract preflight:
 npm run qualify:dataset:fortemi-live
 ```
 
+After a separately authorized execution window has produced both the sanitized
+qualification wrapper and its canonical run receipt, bind them into the matrix:
+
+```bash
+npm run qualify:dataset -- --mode live \
+  --fortemi-server-commit <40-hex-server-source> \
+  --live-qualification /path/to/qualification.json \
+  --live-run-receipt /path/to/run-receipt.json \
+  --report test-results/dataset-live.json
+```
+
+Live mode rejects incomplete cleanup, altered receipt digests, source mismatch,
+retained source content or connection details, outbound-network permission, and
+missing replay/archive checks. It consumes existing sanitized evidence; it does
+not itself authorize or start a mutating service run.
+
 The durable execution procedure and Community/Enterprise boundary are defined
 in the [Fortemi live dataset UAT plan](uat/fortemi-live-dataset-uat-plan.md).
-Until the authority contract tracked by Fortemi Server issue #1128 is
-available, the live dataset cell remains pending rather than passing or being
-skipped.
+The authority contract is available in released Fortemi `v2026.9.10`. Local and
+cross-repository modes still report the live-server cell as pending; source
+availability alone is not live evidence.
 
-The repository-local cells execute the canonical Dataset Orchestration Service
-for capability negotiation, replay, checkpoint boundaries, verified offline
-cache behavior, and provenance. Cross-repository mode executes the focused
-Fortemi capability, ingest, lineage, and materialization suites from an exact
-clean commit and binds that commit and lockfile digest into the receipt.
+The repository-local cells execute all five built-in adapter lifecycles and the
+canonical Dataset Orchestration Service for capability negotiation, replay,
+checkpoint boundaries, verified offline cache behavior, and provenance.
+Cross-repository mode executes the focused Fortemi capability, ingest, lineage,
+and materialization suites from the exact released React/Core source and binds
+that commit and lockfile digest into the receipt.
 Prior-version migration remains pending until a stable predecessor exists, and
 Fortemi Server remains pending without the separately authorized execution
 window and controlled infrastructure. Neither pending cell is silently skipped.

@@ -90,7 +90,7 @@ Agents and stewards setting up AIWG end-to-end should use the
 [![GitHub Stars](https://img.shields.io/github/stars/jmagly/aiwg?style=flat-square)](https://github.com/jmagly/aiwg/stargazers)
 [![Node Version](https://img.shields.io/badge/node-%E2%89%A520.0.0-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org)
-[![15 Providers](https://img.shields.io/badge/Providers-15-purple?style=flat-square)](#platform-support)
+[![17 Providers](https://img.shields.io/badge/Providers-17-purple?style=flat-square)](#platform-support)
 [![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/docs-aiwg-io)
 
 [![Built With AIWG](https://aiwg.io/assets/badges/built-with-aiwg-dark.png)](https://aiwg.io/badges)
@@ -164,7 +164,7 @@ guide](docs/troubleshooting/index.md) for the full recovery paths.
 
 AIWG gives your AI assistant reusable project context and specialist workflows. Its deployment layer connects those
 instructions to your provider: `aiwg use` copies markdown and YAML source files into the paths each provider reads, so
-one source of truth works across 16 named provider integrations. A seventeenth `generic` adapter emits portable files
+one source of truth works across 18 named provider integrations. A nineteenth `generic` adapter emits portable files
 for unrecognized or custom harnesses and is not counted as a named integration.
 
 Around that core, AIWG ships agent-facing utilities for work that benefits from additional structure: persistent
@@ -374,13 +374,13 @@ Each reviewer receives a defined responsibility and relevant context. The synthe
 conflicting findings, preserve uncertainty, and identify which conclusions were checked against sources or tests.
 Parallel reviews require the corresponding provider capability and available task budget.
 
-### 3. Learning — Closed-Loop Self-Correction (Ralph)
+### 3. Learning — Closed-Loop Self-Correction (Agent Loop)
 
-Ralph executes tasks iteratively and uses verification results to guide the next attempt. Its task record can preserve
+The agent loop executes tasks iteratively and uses verification results to guide the next attempt. Its task record can preserve
 failure analysis and revised strategies for subsequent iterations.
 
 ```
-Ralph Iteration:
+Agent Loop Iteration:
   1. Execute task with current strategy
   2. Verify results (tests pass, lint clean, types check)
   3. If failure: analyze root cause → extract structured learning → adapt strategy
@@ -388,7 +388,7 @@ Ralph Iteration:
   5. Repeat within configured limits; stop or escalate when required
 ```
 
-External Ralph adds process tracking, session persistence, and recovery controls. For long-running work, define a time
+The external agent loop (`agent-loop-ext`) adds process tracking, session persistence, and recovery controls. For long-running work, define a time
 or iteration budget and inspect the provider-specific recovery behavior; surviving a particular failure depends on how
 the runner and host are configured.
 
@@ -462,7 +462,7 @@ that fits their current state rather than repeating the entire lifecycle.
 
 **Memory**: Architecture doc, ADRs, threat model, test strategy accumulate in `.aiwg/`
 **Reasoning**: Multi-agent review panel — Architecture Designer drafts, Security Auditor + Performance Engineer + Test Architect critique in parallel, Documentation Synthesizer merges
-**Learning**: Ralph iterates on ADRs (generate options, evaluate against constraints, refine)
+**Learning**: The agent loop iterates on ADRs (generate options, evaluate against constraints, refine)
 **Style**: Technical documents use `technical-authority`, stakeholder summaries use `executive-brief`
 **Human Gate**: Architect reviews SAD, security team approves threat model
 
@@ -471,7 +471,7 @@ that fits their current state rather than repeating the entire lifecycle.
 > Turn the reviewed design into an implementation plan. Implement authentication, verify its acceptance criteria,
 > and run the relevant tests.
 
-**Learning**: Ralph handles implementation iterations — execute, verify (run tests), learn ("async race condition in token refresh"), adapt (add synchronization), retry
+**Learning**: The agent loop handles implementation iterations — execute, verify (run tests), learn ("async race condition in token refresh"), adapt (add synchronization), retry
 **Verification**: Code references requirements (`@implements UC-001`), tests reference code
 **Memory**: Test plans, implementation, deployment scripts accumulate across iterations
 **Human Gate**: Code review approves merges, QA approves test results
@@ -1299,7 +1299,7 @@ has a stable local MCP config format; other providers use the same server comman
 
 MCP integration does not make every AIWG operation model-backed. Catalog reads, status checks, link resolution, and
 local evidence inspection are ordinary local operations. Workflows that ask an assistant to reason, draft, call
-another provider, or continue a Ralph loop may use model calls depending on the connected host and selected provider.
+another provider, or continue an agent loop may use model calls depending on the connected host and selected provider.
 
 See also: [MCP server documentation](docs/mcp/README.md), [MCP capability
 audit](docs/integrations/mcp-capability-audit.md), and [cross-platform
@@ -1516,7 +1516,7 @@ AIWG’s automation layer is for long-running coordination, not for hiding work 
 explicit execution with visible status and evidence. Daemon, messaging, and mission-control setups should declare
 their trigger source, operator identity, workspace, budget limits, and completion criteria.
 
-The base CLI exposes current orchestration commands through Ralph and mission control. Messaging bridges and chat bots
+The base CLI exposes current orchestration commands through the agent loop and mission control. Messaging bridges and chat bots
 are advanced deployments described in the daemon and messaging docs; they require external service configuration and
 should not be assumed to exist in a fresh checkout.
 
@@ -1527,7 +1527,7 @@ For provider messaging, document the concrete external channel and approval boun
 webhook bridge should make it clear who can enqueue work, where logs are stored, and which operations require human
 approval before writing to external systems.
 
-See [daemon guide](docs/daemon-guide.md), [messaging guide](docs/messaging-guide.md), and [Mission Control](docs/addons/ralph/quickstart.md).
+See [daemon guide](docs/daemon-guide.md), [messaging guide](docs/messaging-guide.md), and [Mission Control](docs/addons/agent-loop/quickstart.md).
 
 ## See It In Action
 
@@ -1544,7 +1544,7 @@ check. The assistant discovers the relevant skill or provider surface and handle
 > Fix the failing authentication tests in a bounded loop. Stop after five iterations or forty-five minutes, and
 > report whether the relevant tests pass and what remains unresolved.
 
-Ralph is useful for bounded repair loops where the success condition is objective. It is not a guarantee that the
+The agent loop is useful for bounded repair loops where the success condition is objective. It is not a guarantee that the
 model will solve the task. Set wall-clock, token, tool-call, or cost limits for expensive providers.
 
 ### Recursive search over large code or docs
@@ -1602,10 +1602,17 @@ See [cross-platform overview](docs/integrations/cross-platform-overview.md) for 
 | GitHub Copilot | `aiwg use all --provider copilot` | `.github` assets | Prompts, instructions, agents, MCP config | Uses `.github/prompts/*.prompt.md`, `.github/instructions/*.instructions.md`, and `.github/agents/*.agent.md`. |
 | Devin | `aiwg use all --provider devin` | Devin-compatible context | Compatibility packaging | Uses compatibility paths where Devin can read project instructions. |
 | Factory | `aiwg use all --provider factory` | Factory context | Agents and commands where supported | Provider behavior depends on the installed Factory environment. |
+| Grok Bot | `aiwg use all --provider grokbot` | `AGENTS.md` | Discover-first skills when `AIWG_GROKBOT_SKILLS_DIR` is set | Stable; not Cursor / not xAI Grok Build. See [Grok Bot reference](docs/agents/providers/grokbot.md). |
+| Grok Build | `aiwg use all --provider grok-build` | `AGENTS.md` + `.grok/rules/*.md` | `.grok/skills/` kernel; `$GROK_HOME` user skills | Experimental; distinct from `grokbot`. Agents/rules writers deferred #2577. |
 | Oh My Pi | `aiwg use all --provider omp` | `.omp/AGENTS.md` | Agents, prompts, rules, skills | Dedicated OMP quickstart: [Oh My Pi quickstart](docs/providers/omp.md). |
-| Pi Coding Agent | `aiwg use all --provider pi` | Pi context | Markdown context and provider adapters | See [Pi quickstart](docs/integrations/pi-quickstart.md). |
+| Pi Coding Agent | `aiwg use all --provider pi` | `AGENTS.md` | Agent Skills, prompt templates, trust-gated extension bridge | Experimental; see [Pi quickstart](docs/integrations/pi-quickstart.md). |
 | Antigravity | `aiwg use all --provider antigravity` | `AGENTS.md` and `.agents/` | Agents, skills, indexed commands, MCP config when enabled | See [Antigravity provider docs](docs/providers/antigravity.md). |
 | Generic Markdown | `aiwg use all --provider generic` | `AIWG.md` / `WORKSPACE.md` | Markdown instructions | Use when a provider reads repo docs but has no dedicated integration. |
+
+For CI jobs, [build verification](docs/integrations/build-verify.md) checks
+deployment and provider discovery before the provider runs a task. For routines,
+teammates, connectors, or memory proposals, [bot handoffs](docs/integrations/bot-handoff.md)
+produce a draft to review in the selected provider.
 
 After deployment, check readiness with the assistant or run the health check:
 
@@ -1742,14 +1749,14 @@ aids with links back to the original files.
 
 ## Agent Loop — Autonomous Long-Running Agent Orchestration
 
-Ralph is AIWG’s bounded iterative agent loop. It is intended for tasks where the objective and completion criterion
+The agent loop is AIWG’s bounded iterative execution mode. It is intended for tasks where the objective and completion criterion
 can be checked: fixing tests, applying a migration, updating docs to match a report, or carrying a refactor through
 verification.
 
 > Update the provider quickstarts from the approved marketing audit. Verify Markdown links and keep changes
 > within scope. Stop after six iterations, sixty minutes, or 120 tool calls.
 
-Ralph records loop state so work can be inspected and resumed when supported by the selected provider and local environment.
+The agent loop records loop state so work can be inspected and resumed when supported by the selected provider and local environment.
 
 > Show the current loop’s progress and evidence. Resume its saved work if interrupted, or stop it when I ask.
 
@@ -1759,7 +1766,7 @@ Use budgets for any loop that may call a remote model or external provider:
 > runs, with a limit of 200,000 tokens and $10. Stop when either budget is exhausted.
 
 Long-running automation should still produce reviewable outputs: changed files, reports, evidence, status logs, and
-the exact checks run. Ralph can continue work within configured limits, but it cannot guarantee a solution, fixed
+the exact checks run. The agent loop can continue work within configured limits, but it cannot guarantee a solution, fixed
 runtime, or provider availability.
 
 Mission Control builds on the same principle for multiple bounded work items:
@@ -2094,7 +2101,7 @@ attestation, or substitute for domain-specific review.
 **Practitioners:**
 
 - [Quick Start Guide](docs/quickstart.md) — Hands-on first workflow
-- [Agent Loop Guide](docs/ralph-guide.md) — Iterative execution with explicit completion checks
+- [Agent Loop Guide](docs/agent-loop-guide.md) — Iterative execution with explicit completion checks
 - [Platform Guides](docs/integrations/) — Provider-specific setup and handoff details
 
 **Technical Leaders:**
@@ -2144,7 +2151,7 @@ cross-platform deployment for project-local and packaged capabilities:
 
 ### Advanced Topics
 
-- **[Agent Loop](docs/ralph-guide.md)** — Iterative task execution with crash recovery
+- **[Agent Loop](docs/agent-loop-guide.md)** — Iterative task execution with crash recovery
 - **[RLM Addon](agentic/code/addons/rlm/README.md)** — Recursive context decomposition
 - **[External Automation](docs/getting-started/daemon-and-automation.md)** — Current automation boundaries and
   external-job contracts

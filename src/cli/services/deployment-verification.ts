@@ -5,11 +5,16 @@ import { loadGraphIndexFile } from '../../artifacts/index-reader.js';
 import type { ArtifactIndex, IndexStats } from '../../artifacts/types.js';
 import { readAiwgConfig, type DeployedArtifactCounts } from '../../config/aiwg-config.js';
 import { readUserRegistry } from '../../config/user-registry.js';
+import { inspectInstallation } from '../../installation/manager.mjs';
+import { getPackageRoot } from '../../channel/manager.mjs';
 import {
   getProviderDefinition,
   normalizeProviderDefinitionId,
   resolveProviderPathValue,
 } from '../../providers/provider-definitions.js';
+import { resolveGrokbotSkillsDir } from '../../providers/grokbot-paths.js';
+import { resolveGrokHome } from '../../providers/grok-build-paths.js';
+import { runGrokInspect } from '../../providers/grok-build-inspect.js';
 import { diagnoseIntegratedProviderTransformationReceipt } from '../../providers/transformation-receipt-integration.js';
 import type { ProviderDriftKind } from '../../providers/transformation-receipt.js';
 import {
@@ -26,6 +31,14 @@ export type DeploymentOutcome =
   | 'degraded'
   | 'failed';
 export type DeploymentExitClassification = 'preview' | 'success' | 'degraded' | 'failure';
+/**
+ * How a provider picks up newly deployed artifacts.
+ *
+ * - `restart-required` — the running client keeps its old registry until it is restarted.
+ * - `live-refresh` — the running client rescans between turns; a restart is a fallback,
+ *   not a precondition for using what was just deployed (#2309).
+ */
+export type ProviderReloadPolicy = 'restart-required' | 'live-refresh';
 export type DeploymentPhaseState = 'planned' | 'passed' | 'skipped' | 'failed';
 export type DeploymentFindingSeverity = 'info' | 'advisory' | 'blocking';
 
@@ -47,12 +60,17 @@ export interface DeploymentVerificationFinding {
 }
 
 export interface ProviderDeploymentVerification {
+  /** Distinguishes on-disk/config evidence from documented native inspection. */
+  verificationLevel?: 'deployment' | 'native-inspection';
   provider: string;
   scope: DeploymentScope;
   outcome: DeploymentOutcome;
   restartRequired: boolean;
   restartAction: string | null;
   restartReason: string | null;
+  reloadPolicy: ProviderReloadPolicy;
+  /** Conditional guidance used only when a deployed artifact does not appear. */
+  reloadFallback: string | null;
   counts: DeployedArtifactCounts & { behaviors: number };
   phases: DeploymentPhaseResult[];
   findings: DeploymentVerificationFinding[];
@@ -84,6 +102,8 @@ export interface UseDeploymentResult {
 }
 
 export interface VerifyProviderDeploymentOptions {
+  /** CI gate: fail if a supported native inspector cannot verify the deployment. */
+  requireNativeInspection?: boolean;
   projectRoot: string;
   /** Provider output root when it is split from the local project control root. */
   outputRoot?: string;
@@ -99,40 +119,70 @@ export interface VerifyProviderDeploymentOptions {
   reportMissingReceipt?: boolean;
 }
 
-const RESTART_NOTICES: Readonly<Record<string, { action: string; reason: string }>> = {
+interface ReloadNotice {
+  /** Whether a restart is a precondition for using what was just deployed. */
+  policy: ProviderReloadPolicy;
+  /** Imperative next step. Only surfaced for `restart-required` providers. */
+  action: string;
+  reason: string;
+  /** Conditional guidance for `live-refresh` providers when an artifact does not appear. */
+  fallback?: string;
+}
+
+const RESTART_NOTICES: Readonly<Record<string, ReloadNotice>> = {
   claude: {
+    policy: 'restart-required',
     action: 'Restart Claude Code so the running session reloads deployed agents and skills.',
     reason: 'Claude Code reads its agent and skill registries when a session starts.',
   },
   codex: {
-    action: 'Restart or reopen Codex in this workspace so it reloads deployed agents and skills.',
-    reason: 'Codex scans project agent and skill registries when a session starts.',
+    policy: 'live-refresh',
+    action: 'Reopen Codex in this workspace if a deployed skill or agent does not appear.',
+    reason: 'Codex refreshes project skills between turns — a running session exposed newly deployed skills on the next turn without a restart (#2309).',
+    fallback: 'Codex picks up newly deployed skills on the next turn. Reopen Codex in this workspace only if a deployed skill or agent is still missing after that.',
   },
   copilot: {
+    policy: 'restart-required',
     action: 'Reload the VS Code window so Copilot reloads workspace agents and instructions.',
     reason: 'Copilot caches workspace agent definitions until the VS Code window reloads.',
   },
   cursor: {
+    policy: 'restart-required',
     action: 'Reload the Cursor workspace so it reloads agents and rules.',
     reason: 'Cursor reads workspace agents and rules when the workspace opens.',
   },
+  grokbot: {
+    policy: 'restart-required',
+    action: 'Start a new Grok Bot agent chat (or re-read skills) so deployed AIWG context and skills are visible.',
+    reason: 'Grok Bot skill/context reload behavior is not yet verified; AIWG does not claim live refresh.',
+  },
+  'grok-build': {
+    policy: 'restart-required',
+    action: 'Restart the Grok Build session so it reloads .grok skills and AGENTS.md.',
+    reason: 'Grok Build reload semantics are not yet verified for live refresh; treat deploys as restart-required.',
+  },
   factory: {
+    policy: 'restart-required',
     action: 'Restart the Factory droid runtime so it reloads deployed droids.',
     reason: 'Factory loads its droid registry when the runtime starts.',
   },
   opencode: {
+    policy: 'restart-required',
     action: 'Restart the OpenCode session so it reloads deployed agents.',
     reason: 'OpenCode scans its agent directory when the session starts.',
   },
   openclaw: {
+    policy: 'restart-required',
     action: 'Restart OpenClaw so it reloads its home-directory registry.',
     reason: 'OpenClaw loads its home-directory registry when the process starts.',
   },
   warp: {
+    policy: 'restart-required',
     action: 'Open a fresh Warp tab so it reloads project context.',
     reason: 'Warp reads project context when a tab starts.',
   },
   windsurf: {
+    policy: 'restart-required',
     action: 'Reload Devin Desktop so it reparses project context.',
     reason: 'Devin Desktop reads the Windsurf-compatible project context when the workspace opens.',
   },
@@ -500,14 +550,22 @@ async function collectRegistryFindings(
 export async function verifyProviderDeployment(
   options: VerifyProviderDeploymentOptions,
 ): Promise<ProviderDeploymentVerification> {
+  let verificationLevel: 'deployment' | 'native-inspection' = 'deployment';
   const normalized = normalizeProviderDefinitionId(options.provider) ?? options.provider;
   const definition = getProviderDefinition(normalized);
   const findings: DeploymentVerificationFinding[] = [];
   const counts = emptyCounts();
   const restartNotice = RESTART_NOTICES[normalized] ?? null;
-  const restartAction = restartNotice?.action ?? null;
+  // A provider with no notice gets no restart claim, which is what it got
+  // before this field existed. The label is the absence of a known restart
+  // requirement, not a positive claim that the client refreshes live.
+  const reloadPolicy: ProviderReloadPolicy = restartNotice?.policy ?? 'live-refresh';
+  const restartRequired = reloadPolicy === 'restart-required';
+  // Only a `restart-required` provider gets an imperative restart step. A
+  // `live-refresh` provider keeps its rationale and a conditional fallback (#2309).
+  const restartAction = restartRequired ? (restartNotice?.action ?? null) : null;
   const restartReason = restartNotice?.reason ?? null;
-  const restartRequired = restartAction !== null;
+  const reloadFallback = restartRequired ? null : (restartNotice?.fallback ?? null);
 
   if (!definition) {
     findings.push(finding(
@@ -544,7 +602,16 @@ export async function verifyProviderDeployment(
     const deploymentRoot = options.outputRoot ?? options.projectRoot;
     const artifactPaths = options.scope === 'user'
       ? USER_SCOPE_PATHS[normalized] ?? definition.paths.artifacts
-      : definition.paths.artifacts;
+      : { ...definition.paths.artifacts };
+    // Grok Bot: project-scope definition keeps skills null (fail-closed sentinel).
+    // When the operator configured AIWG_GROKBOT_SKILLS_DIR, count that absolute
+    // root so verification matches the deployer (#210 PUW).
+    if (normalized === 'grokbot') {
+      const configuredSkills = resolveGrokbotSkillsDir();
+      if (configuredSkills) {
+        (artifactPaths as { skills: string | null }).skills = configuredSkills;
+      }
+    }
     const writtenSince = options.invocationStartedAt
       ? Date.parse(options.invocationStartedAt)
       : Number.NaN;
@@ -560,8 +627,12 @@ export async function verifyProviderDeployment(
       if (!tally) continue;
       counts[flatKind] = tally.deployed;
       if (tally.unmanaged.length === 0) continue;
-      const shown = tally.unmanaged.slice(0, 3).join(', ');
-      const remainder = tally.unmanaged.length - 3;
+      // Name enough of the set that the operator can judge it, and make the
+      // overwrite previewable: `--force` replaces every listed file, so it is
+      // never the answer to an unrelated budget or listing warning (#2561).
+      const shown = tally.unmanaged.slice(0, 10).join(', ');
+      const remainder = tally.unmanaged.length - 10;
+      const bundle = options.requestedBundles[0] ?? 'all';
       findings.push(finding(
         normalized,
         `unmanaged-artifacts:${flatKind}`,
@@ -569,8 +640,9 @@ export async function verifyProviderDeployment(
         `${tally.unmanaged.length} unmanaged ${FLAT_ARTIFACT_NOUNS[flatKind]} file(s) left in place at ${artifactPaths[flatKind]}: `
         + `${shown}${remainder > 0 ? `, and ${remainder} more` : ''}. `
         + 'They are not managed by AIWG and were not counted as deployed.',
-        `Re-run aiwg use ${options.requestedBundles[0] ?? 'all'} --provider ${normalized} --force to replace them, `
-        + `or delete ${artifactPaths[flatKind]} so AIWG can reclaim the directory.`,
+        `Preview the overwrite set with aiwg use ${bundle} --provider ${normalized} --force --dry-run; `
+        + `then re-run aiwg use ${bundle} --provider ${normalized} --force to replace exactly those ${tally.unmanaged.length} file(s), `
+        + `or delete ${artifactPaths[flatKind]} so AIWG can reclaim the directory. Leave them in place if they are yours.`,
         { kind: flatKind, unmanaged: tally.unmanaged },
       ));
     }
@@ -582,14 +654,108 @@ export async function verifyProviderDeployment(
     if (kernelPath && kernelPath !== resolvedSkillsPath) counts.skills += kernelCount;
     const artifactTotal = Object.values(counts).reduce((sum, value) => sum + value, 0);
     if (artifactTotal === 0) {
-      findings.push(finding(
-        normalized,
-        'provider-artifacts-missing',
-        'blocking',
-        `No deployed provider or kernel artifacts were found for ${normalized}.`,
-        `Re-run aiwg use ${options.requestedBundles[0] ?? 'all'} --provider ${normalized}.`,
-        { kernelPath, kernelCount, counts },
-      ));
+      // Bridge-only providers (e.g. grokbot project scope without skills env)
+      // intentionally have null native artifact dirs and land AGENTS.md instead.
+      const bridgeName = definition.paths.configFile || definition.paths.contextFiles?.contextFile;
+      const bridgePath = bridgeName ? path.join(options.projectRoot, bridgeName) : '';
+      const bridgePresent = bridgePath ? await exists(bridgePath) : false;
+      const expectsNoNativeArtifacts = (
+        !definition.paths.artifacts.agents
+        && !definition.paths.artifacts.commands
+        && !definition.paths.artifacts.skills
+        && !definition.paths.artifacts.rules
+        && !definition.paths.artifacts.behaviors
+        && !definition.paths.kernelSkills
+      );
+      if (expectsNoNativeArtifacts && bridgePresent) {
+        findings.push(finding(
+          normalized,
+          'provider-bridge-only',
+          'info',
+          `No native artifact directories for ${normalized}; discover-first bridge ${bridgeName} is present.`,
+          'Set AIWG_GROKBOT_SKILLS_DIR (absolute) before --scope user / --global when native skill copies are required.',
+          { bridgePath, counts },
+        ));
+      } else {
+        findings.push(finding(
+          normalized,
+          'provider-artifacts-missing',
+          'blocking',
+          `No deployed provider or kernel artifacts were found for ${normalized}.`,
+          `Re-run aiwg use ${options.requestedBundles[0] ?? 'all'} --provider ${normalized}.`,
+          { kernelPath, kernelCount, counts },
+        ));
+      }
+    }
+
+    if (normalized === 'grok-build') {
+      const expectedSkillNames: string[] = [];
+      // Prefer validating against kernel skills actually present under .grok/skills.
+      try {
+        const { readdirSync, existsSync: existsSyncFs } = await import('node:fs');
+        const skillsDir = path.resolve(options.projectRoot, '.grok', 'skills');
+        if (existsSyncFs(skillsDir)) {
+          for (const entry of readdirSync(skillsDir, { withFileTypes: true })) {
+            if (entry.isDirectory() && existsSyncFs(path.resolve(skillsDir, entry.name, 'SKILL.md'))) {
+              expectedSkillNames.push(entry.name);
+            }
+          }
+        }
+      } catch {
+        // best-effort expected set
+      }
+      const inspect = runGrokInspect({
+        cwd: options.projectRoot,
+        expected: {
+          instructionPaths: options.requireNativeInspection ? [path.join(options.projectRoot, 'AGENTS.md')] : ['AGENTS.md'],
+          skillNames: options.requireNativeInspection ? expectedSkillNames : expectedSkillNames.slice(0, 32),
+        },
+      });
+      if (inspect.status === 'absent') {
+        findings.push(finding(
+          normalized,
+          'grok-inspect-absent',
+          options.requireNativeInspection ? 'blocking' : 'advisory',
+          'Grok Build CLI (`grok`) is not on PATH; skipped `grok inspect`.',
+          inspect.remediation,
+          { grokHome: resolveGrokHome(), cwd: options.projectRoot },
+        ));
+      } else if (inspect.status === 'failed') {
+        const mismatchSummary = (inspect.mismatches ?? [])
+          .slice(0, 8)
+          .map((item) => `${item.kind}:${item.expected}`)
+          .join('; ');
+        findings.push(finding(
+          normalized,
+          'grok-inspect-failed',
+          options.requireNativeInspection ? 'blocking' : 'advisory',
+          mismatchSummary
+            ? `\`grok inspect\` did not confirm expected AIWG artifacts (${mismatchSummary}).`
+            : `\`grok inspect\` exited ${inspect.exitCode ?? 'unknown'}.`,
+          'Fix the Grok Build installation or redeploy, then re-run aiwg status --probe or aiwg use for grok-build.',
+          {
+            exitCode: inspect.exitCode,
+            stderr: inspect.stderr.slice(0, 500),
+            cwd: inspect.cwd,
+            mismatches: inspect.mismatches?.slice(0, 12),
+          },
+        ));
+      } else {
+        verificationLevel = 'native-inspection';
+        findings.push(finding(
+          normalized,
+          'grok-inspect-ok',
+          'info',
+          '`grok inspect` confirmed expected AIWG artifacts in the deployment target.',
+          'No action required; restart the Grok Build session if newly deployed skills are not visible.',
+          {
+            binary: inspect.binary,
+            cwd: inspect.cwd,
+            parsedKeys: Object.keys(inspect.parsed).slice(0, 20),
+            checkedSkills: options.requireNativeInspection ? expectedSkillNames : expectedSkillNames.slice(0, 32),
+          },
+        ));
+      }
     }
   }
 
@@ -776,11 +942,14 @@ export async function verifyProviderDeployment(
 
   return {
     provider: normalized,
+    verificationLevel,
     scope: options.scope,
     outcome,
     restartRequired,
     restartAction,
     restartReason,
+    reloadPolicy,
+    reloadFallback,
     counts,
     phases,
     findings,
@@ -798,7 +967,9 @@ export function buildDryRunUseResult(options: {
   const providers = options.providers.map((provider) => {
     const normalized = normalizeProviderDefinitionId(provider) ?? provider;
     const restartNotice = RESTART_NOTICES[normalized] ?? null;
-    const restartAction = restartNotice?.action ?? null;
+    const reloadPolicy: ProviderReloadPolicy = restartNotice?.policy ?? 'live-refresh';
+    const restartRequired = reloadPolicy === 'restart-required';
+    const restartAction = restartRequired ? (restartNotice?.action ?? null) : null;
     const phases: DeploymentPhaseResult[] = [
       phase('resolve', 'planned', true, `Would resolve ${options.projectRoot}, ${normalized}, ${options.scope} scope.`),
       phase('deploy', 'planned', true, 'Would deploy the requested managed artifact surface.'),
@@ -811,9 +982,11 @@ export function buildDryRunUseResult(options: {
       provider: normalized,
       scope: options.scope,
       outcome: 'planned' as const,
-      restartRequired: restartAction !== null,
+      restartRequired,
       restartAction,
       restartReason: restartNotice?.reason ?? null,
+      reloadPolicy,
+      reloadFallback: restartRequired ? null : (restartNotice?.fallback ?? null),
       counts: emptyCounts(),
       phases,
       findings: [],
@@ -929,12 +1102,34 @@ export async function verifyConfiguredDeployments(
       restartRequired: false,
       restartAction: null,
       restartReason: null,
+      reloadPolicy: 'live-refresh',
+      reloadFallback: null,
       counts: emptyCounts(),
       phases: [phase('verify', 'failed', true, 'No installed provider deployment could be resolved.')],
       findings: [finding(fallback, 'deployment-not-configured', 'blocking', 'No installed provider deployment could be resolved.', 'Run aiwg use all --provider <provider>.')],
     });
   }
   return aggregateUseDeploymentResult({ projectRoot, frameworkRoot, scope: filters.scope ?? 'project', requestedBundles: bundles, providers: results });
+}
+
+/**
+ * Installation identity as the probe sees it. Read-only commands keep running
+ * under recorded/actual drift (#2559); the probe names that drift so an agent
+ * reading only the JSON does not treat a blocked installation as healthy.
+ */
+function probeInstallationIdentity(): Record<string, unknown> {
+  try {
+    const status = inspectInstallation({ actualRoot: getPackageRoot(), createIfMissing: false });
+    return {
+      state: status.state,
+      canonical: status.identity ? { method: status.identity.method, root: status.identity.root } : null,
+      actual: { method: status.actualMethod, root: status.actualRoot },
+      drift: status.drift,
+      mutations_blocked: status.state !== 'aligned' && status.state !== 'unrecorded',
+    };
+  } catch (error) {
+    return { state: 'unknown', drift: [error instanceof Error ? error.message : String(error)], mutations_blocked: true };
+  }
 }
 
 export async function buildDeploymentStatusProbe(
@@ -952,6 +1147,7 @@ export async function buildDeploymentStatusProbe(
     generated_at: result.generatedAt,
     project_root: result.projectRoot,
     engaged,
+    installation: probeInstallationIdentity(),
     status: notConfigured ? 'not-configured' : result.outcome === 'failed' ? 'needs-repair' : result.outcome,
     checks: {
       workspace_exists: await exists(path.join(projectRoot, '.aiwg')),
@@ -1094,6 +1290,14 @@ export function renderUseDeploymentResult(
     if (result.discovery) {
       lines.push(...wrapParagraph(`Framework index built: ${result.discovery.builtAt}`, width));
     }
+  }
+
+  const reloadFallbacks = result.providers
+    .filter((provider) => !provider.restartRequired && provider.reloadFallback)
+    .map((provider) => provider.reloadFallback as string);
+  if (reloadFallbacks.length > 0) {
+    lines.push('', 'If something is missing');
+    for (const note of reloadFallbacks) lines.push(...wrapParagraph(note, width));
   }
 
   const restartActions = result.providers

@@ -734,4 +734,4 @@ references:
   related:
     - "@${CLAUDE_PLUGIN_ROOT}/schemas/rlm-state.yaml"
     - "@${CLAUDE_PLUGIN_ROOT}/schemas/rlm-trajectory.yaml"
-    - "@agentic/code/addons/ralph/schemas/iteration-analytics.yaml"
+    - "@agentic/code/addons/agent-loop/schemas/iteration-analytics.yaml"

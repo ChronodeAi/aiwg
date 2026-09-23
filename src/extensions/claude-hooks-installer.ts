@@ -122,11 +122,17 @@ function normalizeHooks(
 }
 
 /**
- * Detect whether the existing settings carries the AIWG signature
- * (any hook entry tagged `_aiwg_managed: true`). Accepts both the
+ * Detect whether the existing settings carries the AIWG signature — either a hook
+ * entry tagged `_aiwg_managed: true`, or the top-level `aiwg` stamp written when
+ * AIWG creates the file itself (tools/agents/providers/claude.mjs). Without the
+ * latter, a greenfield deploy backs up the settings.json it created seconds
+ * earlier and reports it as protected operator content (#2542). Accepts both the
  * current object form and the legacy array form.
  */
 function hasAiwgMarker(settings: ClaudeSettings): boolean {
+  const stamp = (settings as { aiwg?: unknown }).aiwg;
+  if (stamp && typeof stamp === 'object') return true;
+
   const hooksField = settings.hooks;
   if (!hooksField) return false;
 
@@ -234,7 +240,7 @@ export async function installAiwgHooks(opts: InstallOptions): Promise<InstallRes
         const backup = `${result.settingsPath}.bak.${new Date().toISOString().replace(/[:.]/g, '-')}`;
         await fs.copyFile(result.settingsPath, backup);
         result.backupPath = backup;
-        result.warnings.push(`Backed up pre-existing settings.json to ${backup}`);
+        result.warnings.push(`Backed up operator-authored settings.json to ${backup}`);
       }
     } catch (err) {
       result.warnings.push(`Backup failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -272,16 +278,28 @@ export async function installAiwgHooks(opts: InstallOptions): Promise<InstallRes
       // those files no longer exist on disk after refresh, causing
       // `MODULE_NOT_FOUND` at `node:internal/modules/cjs/loader` on every
       // hook invocation. (Fixes regression report on Claude Code 2.1.157.)
+      // Match by `_aiwg_id` first, then by the script path. An entry invoking an
+      // AIWG-owned hook script without the managed tag is AIWG residue from an
+      // earlier install; appending a managed entry beside it registers the hook
+      // twice and runs it twice per event. Adopt it instead. (#2543)
       let updated = false;
       for (const group of groups) {
         if (!Array.isArray(group.hooks)) continue;
         for (const h of group.hooks) {
-          if (h._aiwg_id !== hookId) continue;
-          if (h.command !== command || h.type !== 'command' || h._aiwg_managed !== true) {
+          const sameId = h._aiwg_id === hookId;
+          const sameScript = typeof h.command === 'string' && h.command.includes(script);
+          if (!sameId && !sameScript) continue;
+          const adopting = !sameId && sameScript;
+          if (h.command !== command || h.type !== 'command' || h._aiwg_managed !== true || h._aiwg_id !== hookId) {
             h.type = 'command';
             h.command = command;
             h._aiwg_managed = true;
-            result.warnings.push(`Refreshed stale ${event} → ${hookId} command path`);
+            h._aiwg_id = hookId;
+            result.warnings.push(
+              adopting
+                ? `Adopted pre-existing untagged ${event} → ${hookId} entry instead of registering a duplicate`
+                : `Refreshed stale ${event} → ${hookId} command path`,
+            );
           }
           updated = true;
         }

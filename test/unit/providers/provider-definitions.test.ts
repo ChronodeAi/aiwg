@@ -19,6 +19,8 @@ const CURRENT_PLATFORM_IDS = [
   'cursor',
   'deepseek-harness',
   'factory',
+  'grokbot',
+  'grok-build',
   'hermes',
   'opencode',
   'openclaw',
@@ -122,6 +124,23 @@ describe('provider definition registry', () => {
     expect(pi?.adapters.hookBridge).toBeNull();
     expect(pi?.adapters.mcpInjection).toBeNull();
   });
+
+  it('registers stable grokbot without a bare grok alias', () => {
+    const grokbot = getProviderDefinition('grokbot');
+    expect(grokbot).toBeDefined();
+    expect(grokbot?.displayName).toBe('Grok Bot');
+    expect(grokbot?.status).toBe('stable');
+    expect(grokbot?.aliases).toEqual([]);
+    expect(normalizeProviderDefinitionId('grokbot')).toBe('grokbot');
+    expect(normalizeProviderDefinitionId('grok')).toBeNull();
+    expect(normalizeProviderDefinitionId('grok-build')).toBe('grok-build');
+    expect(normalizeProviderDefinitionId('grok')).toBeNull();
+    expect(grokbot?.detection).toMatchObject({ env: [], process: [], capabilityId: 'grokbot' });
+    expect(grokbot?.paths.contextFiles.agentsMd).toBe(true);
+    expect(grokbot?.context.loadMode).toBe('prose-directive');
+    expect(grokbot?.context.support).toBe('degraded');
+  });
+
 
   it('keeps capability matrix references resolvable for all non-generic providers', () => {
     for (const definition of listProviderDefinitions()) {

@@ -12,11 +12,11 @@ describe('public provider inventory', () => {
     const inventory = readFileSync(resolve(projectRoot, 'docs/providers/provider-inventory.md'), 'utf8');
     const documentedIds = [...inventory.matchAll(/^\| `([a-z-]+)` \|/gm)].map((match) => match[1]);
 
-    expect(namedProviders).toHaveLength(16);
-    expect(listProviderDefinitions()).toHaveLength(17);
+    expect(namedProviders).toHaveLength(18);
+    expect(listProviderDefinitions()).toHaveLength(19);
     expect(documentedIds).toEqual(namedProviders.map(({ id }) => id));
     expect(inventory).toContain(`**${namedProviders.length} named provider integrations**`);
-    expect(inventory).toMatch(/`generic`\s+adapter is a seventeenth registry entry/);
+    expect(inventory).toMatch(/`generic`\s+adapter is a nineteenth registry entry/);
     for (const provider of namedProviders) {
       const status = provider.status[0].toUpperCase() + provider.status.slice(1);
       expect(inventory, provider.id).toMatch(
@@ -25,7 +25,7 @@ describe('public provider inventory', () => {
     }
   });
 
-  it('keeps primary public surfaces on the same count and includes DeepSeek Harness, OMP, and Pi', () => {
+  it('keeps primary public surfaces on the same count and includes Grok Build, DeepSeek Harness, OMP, and Pi', () => {
     const publicFiles = [
       'README.md',
       'docs/config.json',
@@ -38,11 +38,13 @@ describe('public provider inventory', () => {
 
     for (const relativePath of publicFiles) {
       const content = readFileSync(resolve(projectRoot, relativePath), 'utf8');
-      expect(content, relativePath).toMatch(/16 (?:named )?provider integrations/i);
+      expect(content, relativePath).toMatch(/18 (?:named )?provider integrations/i);
       expect(content, relativePath).toMatch(/Antigravity/i);
       expect(content, relativePath).toMatch(/Pi Coding Agent/i);
       expect(content, relativePath).toMatch(/Oh My Pi/i);
       expect(content, relativePath).toMatch(/DeepSeek Harness/i);
+      expect(content, relativePath).toMatch(/Grok Bot/i);
+      expect(content, relativePath).toMatch(/Grok Build/i);
     }
   });
 
@@ -91,6 +93,7 @@ describe('public provider inventory', () => {
       'cursor-quickstart',
       'deepseek-harness-quickstart',
       'factory-quickstart',
+      'grokbot-quickstart',
       'hermes-quickstart',
       'opencode-quickstart',
       'openclaw-quickstart',
@@ -103,6 +106,7 @@ describe('public provider inventory', () => {
     expect(homepage).toContain('href="#integrations/omp-quickstart">Oh My Pi</a>');
     expect(homepage).toContain('href="#integrations/pi-quickstart">Pi Coding Agent (pi.dev)</a>');
     expect(homepage).toContain('href="#integrations/deepseek-harness-quickstart">DeepSeek Harness</a>');
+    expect(homepage).toContain('href="#integrations/grokbot-quickstart">Grok Bot</a>');
     expect(homepage).not.toMatch(/Local\/Ollama/);
   });
 });

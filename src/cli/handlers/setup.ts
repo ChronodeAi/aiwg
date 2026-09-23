@@ -10,6 +10,8 @@ import type {
 } from '../../config/aiwg-config.js';
 import {
   emptyConfig,
+  FORCE_PUSH_POLICY_ALIAS_NOTE,
+  normalizeForcePushPolicy as normalizeForcePushPolicyShared,
   getConfigPath,
   getProjectDir,
   readAiwgConfig,
@@ -245,13 +247,11 @@ function normalizeForcePushPolicy(
   value: DeliveryConfig['force_push_policy'] | LegacyForcePushPolicy | undefined,
   warnings: string[],
 ): ForcePushPolicy | undefined {
-  if (value === 'main-only-blocked') {
-    warnings.push(
-      'delivery.force_push_policy=main-only-blocked is a legacy alias; setup normalized it to own-branch-only.',
-    );
-    return 'own-branch-only';
+  const { policy, deprecatedFrom } = normalizeForcePushPolicyShared(value);
+  if (deprecatedFrom) {
+    warnings.push(`delivery.force_push_policy=${deprecatedFrom} is a legacy alias; setup normalized it to ${policy}. ${FORCE_PUSH_POLICY_ALIAS_NOTE}`);
   }
-  return value;
+  return policy;
 }
 
 function cloneConfig(config: AiwgConfig): AiwgConfig {

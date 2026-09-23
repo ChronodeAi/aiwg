@@ -92,6 +92,12 @@ const DISCOVER_TYPE_ORDER = new Map(
 function canonicalLocalityRank(entryPath: string): number {
   const normalized = entryPath.replace(/\\/g, '/');
   if (normalized.startsWith('.aiwg/') || normalized.includes('/.aiwg/')) return 0;
+  // Top-level persona mirrors are the least canonical source for a name a bundle
+  // also owns. Without this they fell into the catch-all below and scored 1,
+  // beating the bundle copy at 2 — the opposite of #1643. It only ever looked
+  // correct because a populated user index supplied provenance and `scopeRank`
+  // never reached this fallback (#2544).
+  if (normalized.startsWith('agentic/code/agents/') || normalized.includes('/agentic/code/agents/')) return 4;
   if (normalized.includes('/plugins/') || normalized.startsWith('agentic/code/plugins/')) return 3;
   if (
     normalized.includes('/frameworks/') ||
@@ -1745,7 +1751,7 @@ async function findCorpusArtifact(
   ];
 
   // (subdir, type, layout) — 'flat' = `<name>.md`, 'slug' = `<name>/SKILL.md`
-  const tries: Array<{ sub: string; type: string; layout: 'flat' | 'slug' }> = [
+  const tries: Array<{ sub: string; type: string; layout: 'flat' | 'slug'; extension?: '.md' | '.json' | '.yaml' }> = [
     { sub: 'skills', type: 'skill', layout: 'slug' },
     { sub: 'skills', type: 'skill', layout: 'flat' },
     { sub: 'agents', type: 'agent', layout: 'flat' },
@@ -1755,6 +1761,9 @@ async function findCorpusArtifact(
     { sub: 'behaviors', type: 'behavior', layout: 'flat' },
     { sub: 'flows', type: 'flow', layout: 'flat' },
     { sub: 'runbooks', type: 'runbook', layout: 'flat' },
+    { sub: 'decisions', type: 'decision-definition', layout: 'flat', extension: '.json' },
+    { sub: 'rulesets', type: 'decision-ruleset', layout: 'flat', extension: '.json' },
+    { sub: 'bindings', type: 'decision-binding', layout: 'flat', extension: '.json' },
   ];
 
   for (const group of groups) {
@@ -1771,7 +1780,7 @@ async function findCorpusArtifact(
         if (typeFilter.length > 0 && !typeFilter.includes(t.type)) continue;
         const candidate = t.layout === 'slug'
           ? path.join(group.dir, bundle, t.sub, name, 'SKILL.md')
-          : path.join(group.dir, bundle, t.sub, `${name}.md`);
+          : path.join(group.dir, bundle, t.sub, `${name}${t.extension ?? '.md'}`);
         try {
           const stat = await fsp.stat(candidate);
           if (stat.isFile()) {

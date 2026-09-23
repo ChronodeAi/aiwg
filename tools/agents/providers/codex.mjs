@@ -503,6 +503,9 @@ export async function deployCommands(targetDir, srcRoot, opts) {
     if (opts.force) args.push('--force');
     if (opts.mode) args.push('--mode', opts.mode);
     if (opts.copyStandardSkills === true) args.push('--copy-all');
+    // A copy-all the deployer forced on the caller's behalf (project-local
+    // bundles) still honors the startup listing cap (#2561).
+    if (opts.listingBudget === true) args.push('--listing-budget');
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
@@ -550,10 +553,16 @@ export async function deploySkills(targetDir, srcRoot, opts) {
       const aiwgRoot = resolveAiwgRoot(srcRoot);
       if (aiwgRoot) args.push('--aiwg-root', path.resolve(aiwgRoot));
     }
+    // Overflow past Codex's startup listing cap lands here instead of being
+    // deployed over the cap (#2561); the index still reaches these skills.
+    args.push('--standard-target', path.join(targetDir, ...paths.skills.split('/').filter(Boolean)));
     if (opts.dryRun) args.push('--dry-run');
     if (opts.force) args.push('--force');
     if (opts.mode) args.push('--mode', opts.mode);
     if (opts.copyStandardSkills === true) args.push('--copy-all');
+    // A copy-all the deployer forced on the caller's behalf (project-local
+    // bundles) still honors the startup listing cap (#2561).
+    if (opts.listingBudget === true) args.push('--listing-budget');
 
     const child = spawn('node', [scriptPath, ...args], {
       stdio: 'inherit',
