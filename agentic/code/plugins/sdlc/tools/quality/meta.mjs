@@ -39,7 +39,8 @@ export function judgeEvaluatorCommit(commit, surfaces, baseAdrPaths) {
   const trailer = TRAILER_RE.exec(commit.message);
   let adrOnBase = false;
   if (trailer) {
-    const adrRe = new RegExp(`^\\.aiwg/architecture/(?:.*/)?ADR-${escapeRe(trailer[1])}[^/]*\\.md$`);
+    // ADR file names vary in case (`ADR-012-x.md`, `adr-0012-x.md`); the id must end at a separator.
+    const adrRe = new RegExp(`^\\.aiwg/architecture/(?:.*/)?ADR-${escapeRe(trailer[1])}(?:[-_.][^/]*)?\\.md$`, 'i');
     adrOnBase = baseAdrPaths.some((p) => adrRe.test(p));
   }
   return {
@@ -372,12 +373,15 @@ export function runMeta(root, { baseRef, mergeBase }) {
   const headSteps = collectQualitySteps(root, 'HEAD', cfgBase.quality_commands);
   const baseProblems = new Set(baseSteps.filter((s) => s.problems.length).map(stepKey));
   for (const step of headSteps) {
-    if (step.problems.length && !baseProblems.has(stepKey(step))) {
-      verdicts.push({
-        level: 'FAIL', code: 'quality-step-suppressed', file: step.file,
-        message: `${step.file} job ${step.job} step ${step.name ?? step.run.split('\n')[0]}: ${step.problems.join('; ')}`,
-      });
-    }
+    if (!step.problems.length) continue;
+    // A suppression this change introduced blocks; one already on the base branch is
+    // legacy the change did not cause, reported so it is not invisible.
+    const introduced = !baseProblems.has(stepKey(step));
+    verdicts.push({
+      level: introduced ? 'FAIL' : 'WARN', code: 'quality-step-suppressed', file: step.file,
+      message: `${step.file} job ${step.job} step ${step.name ?? step.run.split('\n')[0]}: ${step.problems.join('; ')}`
+        + (introduced ? '' : ' (already on the base branch)'),
+    });
   }
   if (headSteps.length < baseSteps.length) {
     verdicts.push({
