@@ -25,6 +25,13 @@ const RELEASE_VERSION = JSON.parse(
   fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'),
 ).version;
 
+// Skill wrappers resolve the framework root as seven levels up from their scripts/ dir in the
+// source tree; inside a packaged plugin the root is three levels up.
+const QUALITY_WRAPPER_REWRITES = [
+  { file: 'skills/codebase-health/scripts/health.mjs', from: "'../../../../../../..'", to: "'../../..'" },
+  { file: 'skills/decompose-file/scripts/plan.mjs', from: "'../../../../../../..'", to: "'../../..'" },
+];
+
 // Plugin configurations
 const PLUGIN_CONFIGS = {
   'sdlc': {
@@ -38,14 +45,16 @@ const PLUGIN_CONFIGS = {
       skills: 'agentic/code/frameworks/sdlc-complete/skills'
     },
     extraCopy: [
-      { from: 'tools/security/threat-assessment.mjs', to: 'tools/security/threat-assessment.mjs' }
+      { from: 'tools/security/threat-assessment.mjs', to: 'tools/security/threat-assessment.mjs' },
+      { from: 'tools/quality', to: 'tools/quality' }
     ],
     rewrites: [
       {
         file: 'skills/address-issues-threat-assess/scripts/assess.mjs',
         from: '../../../../../../../tools/security/threat-assessment.mjs',
         to: '../../../tools/security/threat-assessment.mjs'
-      }
+      },
+      ...QUALITY_WRAPPER_REWRITES
     ],
     readme: `# AIWG SDLC Complete
 
@@ -273,6 +282,10 @@ Core AIWG utilities for context regeneration and workspace management.
     sources: {
       skills: 'agentic/code/frameworks/sdlc-complete/skills'
     },
+    extraCopy: [
+      { from: 'tools/quality', to: 'tools/quality' }
+    ],
+    rewrites: QUALITY_WRAPPER_REWRITES,
     readme: `# AIWG SDLC for Codex
 
 AIWG SDLC framework packaged as a Codex plugin.
@@ -840,6 +853,36 @@ function cleanPlugin(pluginDir) {
   }
 }
 
+// Copy extra files outside `sources` and rewrite source-tree-relative paths in packaged copies.
+function applyExtraCopyAndRewrites(name, config, pluginDir, options) {
+  for (const extra of config.extraCopy || []) {
+    const destPath = path.join(pluginDir, extra.to);
+    console.log(`  📁 Copying ${extra.to}...`);
+    const sourcePath = path.join(ROOT_DIR, extra.from);
+    let count;
+    if (fs.statSync(sourcePath).isFile()) {
+      count = 1;
+      if (!options.dryRun) {
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+        fs.copyFileSync(sourcePath, destPath);
+      }
+    } else {
+      count = copyDir(extra.from, destPath, options.dryRun);
+    }
+    console.log(`     ${count} files`);
+  }
+
+  for (const rewrite of config.rewrites || []) {
+    if (options.dryRun) continue;
+    const target = path.join(pluginDir, rewrite.file);
+    const body = fs.readFileSync(target, 'utf8');
+    if (!body.includes(rewrite.from)) {
+      throw new Error(`${name}: rewrite source not found in ${rewrite.file}`);
+    }
+    fs.writeFileSync(target, body.replaceAll(rewrite.from, rewrite.to), 'utf8');
+  }
+}
+
 // Package a single plugin
 function packagePlugin(name, config, options) {
   console.log(`\n📦 Packaging ${config.displayName}...`);
@@ -876,33 +919,7 @@ function packagePlugin(name, config, options) {
     console.log(`     ${count} files`);
   }
 
-  // Copy extra files
-  for (const extra of config.extraCopy || []) {
-    const destPath = path.join(pluginDir, extra.to);
-    console.log(`  📁 Copying ${extra.to}...`);
-    const sourcePath = path.join(ROOT_DIR, extra.from);
-    let count;
-    if (fs.statSync(sourcePath).isFile()) {
-      count = 1;
-      if (!options.dryRun) {
-        fs.mkdirSync(path.dirname(destPath), { recursive: true });
-        fs.copyFileSync(sourcePath, destPath);
-      }
-    } else {
-      count = copyDir(extra.from, destPath, options.dryRun);
-    }
-    console.log(`     ${count} files`);
-  }
-
-  for (const rewrite of config.rewrites || []) {
-    if (options.dryRun) continue;
-    const target = path.join(pluginDir, rewrite.file);
-    const body = fs.readFileSync(target, 'utf8');
-    if (!body.includes(rewrite.from)) {
-      throw new Error(`${name}: rewrite source not found in ${rewrite.file}`);
-    }
-    fs.writeFileSync(target, body.replaceAll(rewrite.from, rewrite.to), 'utf8');
-  }
+  applyExtraCopyAndRewrites(name, config, pluginDir, options);
 
   // Write README
   if (config.readme && !options.dryRun) {
@@ -1008,6 +1025,8 @@ async function packageCodexPlugin(name, config, options) {
     const count = copyDir(srcPath, destPath, options.dryRun);
     console.log(`     ${count} files`);
   }
+
+  applyExtraCopyAndRewrites(name, config, pluginDir, options);
 
   // Write README
   if (config.readme && !options.dryRun) {

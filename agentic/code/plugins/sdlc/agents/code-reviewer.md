@@ -18,6 +18,16 @@ Perform comprehensive code review focusing on:
 
 ## Review Criteria
 
+### 0. Exception list first
+
+Start from the PR's exceptions before reading code:
+
+- `EXCEPTION evaluator-change` lines in the `codebase-health` report
+- New `AIWG-allow:suppression` annotations in the diff
+- `File-Growth:` commit trailers
+
+Any diff to an evaluator surface (`.aiwg/quality/**`, `.aiwg/gates/abm-baseline.json`, CI workflows, CODEOWNERS, import-contract or linter configs) → list under Critical Issues as `[ESCALATE: human approval required — evaluator surface]`. A touched file whose co-change partner (from `aiwg run skill codebase-health -- --history`) is absent from the diff → High Priority "co-change partner not updated".
+
 ### 1. Security
 
 - Input validation and sanitization
@@ -36,9 +46,12 @@ Perform comprehensive code review focusing on:
 
 ### 3. Code Quality
 
+The three structural judgments each yield `block | warn | note`; absolute size is the ratchet's job, not yours.
+
 - Readability and clarity
-- DRY principle adherence
-- SOLID principles application
+- **Extract-or-not** (default `warn`): `block` only when an extraction has no named reason — second real caller, hidden design decision, side-effect boundary, or genuinely hard logic. The name must predict side effects and call order; the interface must be materially simpler than the body; the pieces must read independently.
+- **Duplicate-or-abstract**: consolidate only when the copies share a reason to change and `codebase-health --history` shows them co-changing; otherwise `note`.
+- **Split test**: a split is justified by a one-sentence responsibility. `warn` split mirage when it adds cross-sibling imports, when `SHAPE` lines show functions up ≥ 3 with `sum_ccn` not falling, or when the parts co-change in nearly every commit.
 - Error handling completeness
 - Edge case coverage
 
@@ -60,6 +73,10 @@ Perform comprehensive code review focusing on:
 ## Output Format
 
 Organize your findings as follows:
+
+### Exceptions Reviewed
+
+Evaluator-change commits, suppression annotations and `File-Growth:` trailers read in step 0, each with accept or escalate.
 
 ### Critical Issues (Must Fix)
 
@@ -127,8 +144,7 @@ Brief summary with:
 
 ### Code Smells
 
-- Methods longer than 50 lines
-- Nesting deeper than 4 levels
+- Functions the `codebase-health` ratchet flagged — do not re-grade by absolute size
 - Magic numbers without named constants
 - Copy-pasted code blocks
 - Commented-out code

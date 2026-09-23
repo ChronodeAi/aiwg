@@ -163,7 +163,15 @@ criteria:
     artifacts: [".aiwg/security/threat-model.md"]
     status: approved
     validator: security-architect
+
+  architecture_contracts:
+    description: Dependency-direction contracts declared (contracts.command in .aiwg/quality/gate.json) and passing; N/A with stated reason when the source tree has fewer than two top-level packages or no gate.json
+    artifacts: [".aiwg/quality/gate.json"]
+    check: "aiwg run skill codebase-health -- --architecture --ci exits 0"
+    validator: architecture-designer
 ```
+
+**ABM baseline**: when ABM evaluates to PASS, write `.aiwg/gates/abm-baseline.json` = `{"commit": "<git rev-parse HEAD>", "date": "<ISO-8601 date>"}`. IOC's `architecture_conformance` measures loosening from this commit. `.aiwg/gates/abm-baseline.json` is an evaluator surface (gate reports beside it are not): commit the baseline alone with an `Evaluator-Change: ADR-NNN` trailer, never mixed with code.
 
 ### IOC - Initial Operational Capability (Construction Exit)
 
@@ -208,6 +216,12 @@ criteria:
     artifacts: [".aiwg/deployment/deployment-plan.md"]
     status: approved
     validator: deployment-manager
+
+  architecture_conformance:
+    description: Contracts pass and no band, frozen-edge or suppression loosening since the ABM baseline commit, except ADR-cited evaluator-change commits; N/A when gate.json was absent at ABM
+    artifacts: [".aiwg/gates/abm-baseline.json"]
+    check: "aiwg run skill codebase-health -- --architecture --meta --base $(jq -r .commit .aiwg/gates/abm-baseline.json) --ci exits 0"
+    validator: architecture-designer
 ```
 
 ### PRM - Product Release Milestone (Transition Exit)
@@ -432,6 +446,7 @@ Examples:
 - `.aiwg/gates/elaboration-gate-report.md`
 - `.aiwg/gates/construction-gate-report.md`
 - `.aiwg/gates/transition-gate-report.md`
+- `.aiwg/gates/abm-baseline.json` (written on ABM PASS; baseline for IOC `architecture_conformance`)
 
 ## References
 

@@ -1,6 +1,6 @@
 ---
 name: quality-gate-watcher
-version: 1.0.0
+version: 1.1.0
 description: Enforce SDLC quality gate criteria on commits and pull requests.
 platforms:
 - claude-code
@@ -78,3 +78,14 @@ Comprehensive gate evaluation when a PR is opened:
 - Check test coverage thresholds
 - Validate security review status
 - Post gate status as PR comment
+- Run the code-shape ratchet, contracts and evaluator meta-check (`aiwg run skill codebase-health -- --base "$BASE_REF" --architecture --meta --ci`) — blocking where the runner honours exit 1 (OpenClaw); CI enforcement uses the shipped workflow template (`templates/deployment/code-shape-gate.github.yml` / `code-shape-gate.gitea.yml`)
+
+The code-shape step runs when `.aiwg/quality/gate.json` exists at the base ref or in the working tree (so deleting it in the PR cannot skip the check). It requires `aiwg` on `PATH` and `lizard` (`pipx install lizard`); a missing tool fails the check rather than skipping it.
+
+## Environment
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `PROJECT_ROOT` | `AIWG_PROJECT_DIR`, then `.` | Project root to check |
+| `AIWG_PROJECT_DIR` | — | Project root set by the OpenClaw runner |
+| `BASE_REF` | `origin/main` | Base ref whose `gate.json` judges the PR |

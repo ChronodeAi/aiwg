@@ -301,20 +301,11 @@
       "issue": "#1839"
     },
     {
-      "name": "agent-friendly-code",
-      "file": "agent-friendly-code.md",
+      "name": "code-shape",
+      "file": "code-shape.md",
       "enforcement": "high",
       "tier": "sdlc",
-      "description": "Quantitative thresholds and qualitative patterns for agent-processable code structure",
-      "issue": "#402"
-    },
-    {
-      "name": "agent-generation-guardrails",
-      "file": "agent-generation-guardrails.md",
-      "enforcement": "high",
-      "tier": "sdlc",
-      "description": "Runtime guardrails preventing agents from creating or enlarging files beyond agent-friendly limits",
-      "issue": "#405"
+      "description": "Change-scoped, calibrated code-shape gates and volume conventions"
     },
     {
       "name": "artifact-discovery",

@@ -5,7 +5,7 @@ metadata:
   name: e2c-abm-validation
   labels: { domain: phase-transition }
 spec:
-  description: Validate the Architecture Baseline Milestone (ABM) — confirm Elaboration exit criteria (baselined SAD, retired P0/P1 risks, behavioral/pseudo-code spec coverage, approved master test plan) and emit a PASS/FAIL ABM Validation Report with a GO/NO-GO decision.
+  description: Validate the Architecture Baseline Milestone (ABM) — confirm Elaboration exit criteria (baselined SAD with §5a declared dependency direction, retired P0/P1 risks, behavioral/pseudo-code spec coverage, approved master test plan, architecture_contracts passing via `aiwg run skill codebase-health -- --architecture --ci` or N/A with stated reason) and emit a PASS/FAIL ABM Validation Report with a GO/NO-GO decision; on PASS write .aiwg/gates/abm-baseline.json with the baseline commit and date.
   version: "1.0.0"
   inputs:
     - { name: project_directory, type: string, required: false, default: "." }

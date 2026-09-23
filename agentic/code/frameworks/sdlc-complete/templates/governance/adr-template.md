@@ -333,6 +333,22 @@ How does this affect day-to-day operations?
 - Incident count stable or decreased vs. previous solution
 -->
 
+### Contract and Band Impact
+
+Complete when the decision changes dependency direction, frozen edges, or code-shape bands; otherwise write "None".
+
+- **Contracts / frozen edges**: which import contracts (`contracts.command`) or frozen edges (`contracts.frozen_edges_file`) change, and in which direction
+- **Bands**: which `bands` in `.aiwg/quality/gate.json` change (recalibration or loosening) and why
+- **Follow-up commit**: after this ADR merges, land the evaluator change in its own commit touching only evaluator surfaces, with trailer `Evaluator-Change: ADR-NNN`
+- **Reviewer**: someone other than the author (name them)
+
+<!-- EXAMPLE:
+- Contracts: allow `application → infrastructure.cache`; frozen edge `billing → legacy.invoice` retired
+- Bands: none
+- Follow-up commit: update .importlinter and SAD §5a with trailer `Evaluator-Change: ADR-014`
+- Reviewer: @second-maintainer
+-->
+
 ### Related Decisions
 
 **Upstream Decisions** (decisions that led to this one):

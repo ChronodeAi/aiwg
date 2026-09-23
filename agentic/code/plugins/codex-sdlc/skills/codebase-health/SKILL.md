@@ -2,10 +2,23 @@
 namespace: aiwg
 name: codebase-health
 platforms: [all]
-description: Scan source code and report agent-readiness metrics with actionable recommendations
+description: Run the change-scoped code-shape ratchet, import-contract check, evaluator meta-check, hotspot routing and band calibration against a base ref; use before handing off any code change
+triggers:
+  - "codebase health"
+  - "code shape ratchet"
+  - "check import contracts"
+  - "calibrate code-shape gates"
+  - "hotspot report"
+  - "evaluator meta-check"
+  - "is this function too complex"
+script:
+  entrypoint: scripts/health.mjs
+  runtime: node
+  cwd: project-root
+  argsHint: "[--base <ref>] [--architecture] [--meta] [--history] [--calibrate [--write]] [--functions <file>] [--format text|json] [--ci]"
 commandHint:
-  argumentHint: '[path] [--threshold N] [--error-threshold N] [--format text|json|markdown] [--include glob] [--exclude glob] [--ci]'
-  allowedTools: 'Bash, Read, Glob, Grep, Write'
+  argumentHint: "[--base <ref>] [--architecture] [--meta] [--history] [--calibrate [--write]] [--functions <file>] [--format text|json] [--ci]"
+  allowedTools: 'Bash, Read'
   model: haiku
   category: code-analysis-testing
   modelRole: efficiency
@@ -14,284 +27,83 @@ commandHint:
 
 # Codebase Health
 
-You are a Codebase Health Analyst responsible for scanning source code and reporting on agent-readiness — whether the codebase structure is compatible with AI coding assistants working effectively within context windows.
+Mechanical code-shape gates. The script does the measuring (via `lizard`); do not re-grade code by absolute size in prose. Binding policy lives in the `code-shape` rule.
 
-## Your Task
-
-Scan a directory of source code and produce a health report covering:
-1. File size distribution (LOC per file)
-2. Largest files exceeding thresholds
-3. Directory LOC breakdown
-4. Complexity hotspots (if detectable)
-5. Agent readiness score
-6. Actionable recommendations
-
-## Parameters
-
-- **[path]** — Directory to scan (default: current working directory)
-- **--threshold N** — Warning threshold in LOC (default: 300)
-- **--error-threshold N** — Error threshold in LOC (default: 500)
-- **--format text|json|markdown** — Output format (default: text)
-- **--include glob** — File patterns to include (default: `**/*.{ts,js,mjs,py,go,rs,java,tsx,jsx}`)
-- **--exclude glob** — File patterns to exclude (default: `node_modules,dist,.git,vendor,build,.aiwg`)
-- **--ci** — Exit with code 1 if any files exceed error threshold
-
-## Workflow
-
-### Step 1: Discover Files
-
-Find all source files matching include/exclude patterns:
+## Commands
 
 ```bash
-# Count lines per file, excluding binary and generated files
-find ${path} -type f \( -name "*.ts" -o -name "*.js" -o -name "*.mjs" -o -name "*.py" -o -name "*.go" -o -name "*.rs" -o -name "*.java" -o -name "*.tsx" -o -name "*.jsx" \) \
-  ! -path "*/node_modules/*" ! -path "*/dist/*" ! -path "*/.git/*" ! -path "*/vendor/*" ! -path "*/build/*" ! -path "*/.aiwg/*" \
-  -exec wc -l {} + | sort -rn
+aiwg run skill codebase-health -- --base origin/main --architecture --meta --ci   # before hand-off / in CI
+aiwg run skill codebase-health -- --calibrate --write                             # create or refresh bands
+aiwg run skill codebase-health -- --history                                       # hotspots and co-change pairs
+aiwg run skill codebase-health -- --functions src/module.py --format json         # one file's function table
+aiwg run skill codebase-health --                                                 # distribution report
 ```
 
-### Step 2: Categorize Files
+Requires `lizard` (`pipx install lizard`) and git.
 
-Classify each file by size:
+## Modes
 
-| Category | LOC Range | Status |
-|----------|-----------|--------|
-| Excellent | 0-100 | Highly agent-friendly |
-| Good | 101-200 | Agent-friendly |
-| Acceptable | 201-300 | Within limits |
-| Warning | 301-500 | Approaching limits, consider splitting |
-| Error | 501+ | Too large for effective agent processing |
+| Flag | What runs |
+|------|-----------|
+| `--base <ref>` | Ratchet: changed files between the merge base and `HEAD`, base vs head per function |
+| `--architecture` | `contracts.command` and the frozen-edge count (base vs head) |
+| `--meta` | Evaluator immutability (requires `--base`) |
+| `--history` | First-parent churn hotspots and co-change pairs — prioritisation only, not defect prediction |
+| `--calibrate [--write]` | LOC-weighted p70/p80/p90 bands from this repo; `--write` persists them |
+| none | Share of NLOC per band and the largest above-p90 functions |
 
-### Step 3: Calculate Agent Readiness Score
+Order: ratchet → architecture → meta → history. `--format json` emits `{mode, verdicts, shape, exceptions, summary}`.
 
-Score formula (0-100):
+## Bands
 
-```
-score = 100
+Bands are this repository's LOC-weighted percentiles (p70/p80/p90), printed beside the SIG CCN benchmark (6/8/14). Fewer than 200 functions → `UNDERPOWERED`, bands provisional. Blocking applies only to non-additive function metrics (NLOC, CCN); file LOC is advisory.
 
-# Deduct for files over error threshold
-score -= (files_over_error * 5)
+**The config that judges a PR is the one on the base branch.** With `--base`, every section reads `.aiwg/quality/gate.json` at that ref; editing it in the change cannot pass the check.
 
-# Deduct for files in warning zone
-score -= (files_in_warning * 2)
+## Verdicts
 
-# Deduct for very large files (>1000 LOC)
-score -= (files_over_1000 * 10)
+| Code | Level | Meaning |
+|------|-------|---------|
+| `function-worsened` | FAIL | New function past both p90 bands, or a changed function worsened past either |
+| `function-worsened` | WARN / NOTE | Worsened past p80 / p70 |
+| `above-band-count-increased` | FAIL | More above-p90 functions across the changed set than at base |
+| `split-mirage-candidate` | WARN | Function count rose ≥ 3 while `sum_ccn` did not fall |
+| `file-growth` | ADVISORY | File above file-LOC p90 grew; `JUSTIFIED` by a `File-Growth: <path> — <reason>` trailer |
+| `contracts` | FAIL | Contract command exited non-zero |
+| `frozen-edges-increased` | FAIL | More frozen-edge lines than at base |
+| `gate-config-removed` | FAIL | `gate.json` present at base, absent at head |
+| `evaluator-surface-changed` | FAIL | Evaluator surface edited outside an evaluator-only commit citing an ADR on base |
+| `band-loosened` | FAIL | Bands raised, lists shrunk, or other config changed without an accepted evaluator commit |
+| `quality-step-suppressed` / `-removed` | FAIL | Workflow quality step made non-blocking or dropped |
+| `suppression-unjustified` / `-unused` | FAIL | New `noqa`/`eslint-disable`/… without a valid annotation; unused suppressions |
+| `codeowners` | FAIL / WARN | Multi-owner CODEOWNERS missing evaluator surfaces / single owner |
 
-# Bonus for good structure
-if (average_file_size < 150) score += 5
-if (no_barrel_files) score += 3
-if (max_directory_depth <= 3) score += 2
+Every changed file also prints `SHAPE <file> loc b→h functions b→h sum_ccn b→h max_ccn b→h`. Accepted evaluator commits print `EXCEPTION evaluator-change <sha> ADR-<id>`.
 
-# Clamp to 0-100
-score = max(0, min(100, score))
-```
+Suppression annotation (same line or line above):
+`AIWG-allow:suppression owner="…" expires="YYYY-MM-DD" reason="…"`
 
-### Step 4: Identify Hotspots
+## Exit codes
 
-For the top 10 largest files:
-- Report file path and LOC
-- Check for common anti-patterns:
-  - Barrel files (index.ts with only re-exports)
-  - Generic names (utils.ts, helpers.ts)
-  - Deep nesting (> 3 levels from src/)
+- `0` — pass (or report-only without `--ci`)
+- `1` — `--ci` and at least one FAIL
+- `2` — tool/config error: lizard missing, no merge base, no `gate.json` when a mode needs one
 
-### Step 5: Generate Report
+## Bootstrap
 
-#### Text Format (default)
+No `.aiwg/quality/gate.json`: (1) ADR adopting code-shape gates → merge; (2) `aiwg run skill codebase-health -- --calibrate --write`; (3) commit `gate.json` alone with trailer `Evaluator-Change: ADR-NNN`; (4) CI step from `templates/deployment/code-shape-gate.github.yml` or `code-shape-gate.gitea.yml`.
 
-```
-Codebase Health Report
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## On FAIL
 
-Agent Readiness Score: 72/100
+Fix the code, never the gate. Split along one named responsibility (`decompose-file`), reduce the function, or justify file growth with a trailer. Evaluator changes are human governance work: their own commit, an ADR already on base, a reviewer other than the author.
 
-Files scanned: 156
-Total LOC: 24,830
-Average file size: 159 lines
+## Limitations
 
-File Size Distribution:
-  Excellent (0-100):     68 files (44%)
-  Good (101-200):        45 files (29%)
-  Acceptable (201-300):  31 files (20%)
-  Warning (301-500):     9 files  (6%)
-  Error (501+):          3 files  (2%)
-
-Top 10 Largest Files:
-   1. src/extensions/registry.ts          847 lines  🚫
-   2. src/catalog/builtin-models.json      623 lines  🚫
-   3. tools/agents/providers/base.mjs      512 lines  🚫
-   4. src/extensions/commands/defs.ts      478 lines  ⚠
-   5. src/smiths/platform-paths.ts        445 lines  ⚠
-   6. tools/agents/deploy.mjs             398 lines  ⚠
-   7. src/catalog/catalog.ts              367 lines  ⚠
-   8. src/extensions/registry-utils.ts    342 lines  ⚠
-   9. tools/ralph-external/orchestrator.mjs 335 lines  ⚠
-  10. src/mcp/server.ts                   321 lines  ⚠
-
-Directory LOC Breakdown:
-  src/extensions/       4,230 lines (17%)
-  src/catalog/          3,100 lines (12%)
-  tools/agents/         2,800 lines (11%)
-  src/smiths/           2,100 lines  (8%)
-  src/mcp/              1,900 lines  (8%)
-
-Anti-Pattern Alerts:
-  ⚠ 2 barrel files detected (re-export only index.ts)
-  ⚠ 1 file with generic name (src/utils.ts)
-  ⚠ 0 files with deep nesting (>3 levels)
-
-Recommendations:
-  🚫 3 files need decomposition (>500 LOC)
-     → Run /decompose-file <path> for guided splitting
-  ⚠  9 files approaching limits (300-500 LOC)
-     → Monitor these files; extract when adding new code
-  📝 2 barrel files could be replaced with direct imports
-```
-
-#### JSON Format
-
-```json
-{
-  "score": 72,
-  "files_scanned": 156,
-  "total_loc": 24830,
-  "average_file_size": 159,
-  "distribution": {
-    "excellent": { "count": 68, "percentage": 44 },
-    "good": { "count": 45, "percentage": 29 },
-    "acceptable": { "count": 31, "percentage": 20 },
-    "warning": { "count": 9, "percentage": 6 },
-    "error": { "count": 3, "percentage": 2 }
-  },
-  "top_files": [
-    { "path": "src/extensions/registry.ts", "loc": 847, "status": "error" }
-  ],
-  "directory_breakdown": [
-    { "path": "src/extensions/", "loc": 4230, "percentage": 17 }
-  ],
-  "anti_patterns": {
-    "barrel_files": 2,
-    "generic_names": 1,
-    "deep_nesting": 0
-  },
-  "recommendations": [
-    {
-      "severity": "error",
-      "count": 3,
-      "message": "Files need decomposition (>500 LOC)",
-      "action": "Run /decompose-file <path> for guided splitting"
-    }
-  ]
-}
-```
-
-#### Markdown Format
-
-```markdown
-# Codebase Health Report
-
-**Agent Readiness Score**: 72/100
-**Files scanned**: 156 | **Total LOC**: 24,830 | **Average**: 159 lines
-
-## File Size Distribution
-
-| Category | Range | Count | % |
-|----------|-------|-------|---|
-| Excellent | 0-100 | 68 | 44% |
-| Good | 101-200 | 45 | 29% |
-| Acceptable | 201-300 | 31 | 20% |
-| Warning | 301-500 | 9 | 6% |
-| Error | 501+ | 3 | 2% |
-
-## Top 10 Largest Files
-
-| # | File | LOC | Status |
-|---|------|-----|--------|
-| 1 | src/extensions/registry.ts | 847 | Error |
-| ... |
-
-## Recommendations
-
-1. **3 files need decomposition** (>500 LOC) — Run `/decompose-file <path>`
-2. **9 files approaching limits** (300-500 LOC) — Monitor and extract
-```
-
-### Step 6: CI Mode
-
-If `--ci` flag is set:
-- After generating the report, check if any files exceed the error threshold
-- If yes: exit with code 1 and print summary of violations
-- If no: exit with code 0
-
-```bash
-# CI integration example
-aiwg codebase-health --ci --format json > health-report.json
-# Exit code 1 if violations exist
-```
-
-## Error Handling
-
-### No Source Files Found
-
-```
-No source files found in {path}.
-
-Check:
-- Path exists and contains source files
-- --include pattern matches your file types
-- --exclude pattern isn't filtering everything
-
-Try: /codebase-health --include "**/*.{py,go}"
-```
-
-### Path Not Found
-
-```
-Error: Directory {path} does not exist.
-```
-
-## Configuration
-
-Thresholds can be configured in `.aiwg/config.yaml`:
-
-```yaml
-codebase_health:
-  thresholds:
-    warning: 300
-    error: 500
-  include:
-    - "**/*.{ts,js,mjs,py,go,rs,java,tsx,jsx}"
-  exclude:
-    - "node_modules"
-    - "dist"
-    - ".git"
-    - "vendor"
-```
-
-## Integration
-
-- References: @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md (threshold definitions)
-- Complements: `/decompose-file` (remediation for identified violations)
-- Complements: `/complexity-gate` (CI enforcement)
-- Related: `project-health-check` (project-level metrics, not code structure)
-
-## Success Criteria
-
-This command succeeds when:
-
-- [x] All source files discovered and measured
-- [x] Agent readiness score calculated
-- [x] Top largest files identified
-- [x] Directory breakdown generated
-- [x] Anti-pattern alerts reported
-- [x] Actionable recommendations provided
-- [x] Output format matches requested format
-- [x] CI mode returns correct exit code
-- [x] Completes in <10s for codebases up to 50K LOC
+- Workflow scanning is line-wise over `.github/workflows` and `.gitea/workflows`; remote `uses:` reusable workflows are not inspected.
+- CCN stands in for cognitive complexity.
 
 ## References
 
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md — Threshold definitions (warning: 300 LOC, error: 500 LOC) that this skill enforces
-- @$AIWG_ROOT/agentic/code/addons/aiwg-utils/rules/research-before-decision.md — Scan codebase before calculating scores; check existing patterns before flagging anti-patterns
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/complexity-gate/SKILL.md — CI-friendly enforcement gate that pairs with this diagnostic skill
-
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/code-shape.md — binding policy
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/decompose-file/SKILL.md — responsibility-led splits
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/templates/deployment/code-shape-gate.github.yml — CI template
