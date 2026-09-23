@@ -1,9 +1,11 @@
 /**
  * Interactive `aiwg init` provider picker accepts registered provider aliases.
  *
- * The picker used to compare typed names against canonical ids only, so the
- * documented `dsh` alias for `deepseek-harness` was reported as an unknown
- * provider even though `--provider dsh` works everywhere else (#2161).
+ * The picker used to compare typed names against canonical ids only, so a
+ * registered alias was reported as an unknown provider even though
+ * `--provider <alias>` works everywhere else (#2161). In this fork `dsh` is its
+ * own provider id (the DeepSeek Harness preset integration) and `deepseek` is
+ * its registered alias.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, readFileSync, rmSync } from 'fs';
@@ -33,7 +35,7 @@ vi.mock('readline', () => ({
 }));
 
 // First string prompt is the provider selection; every yes/no prompt declines.
-const askString = vi.fn(async () => 'dsh, codex');
+const askString = vi.fn(async () => 'deepseek, codex');
 const askYesNo = vi.fn(async () => false);
 vi.mock('../../../../src/cli/prompt-utils.js', () => ({
   askString: (...args: unknown[]) => askString(...args),
@@ -76,12 +78,12 @@ describe('init interactive provider picker', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('resolves registered aliases such as dsh to their canonical provider id', async () => {
+  it('resolves registered aliases such as deepseek to their canonical provider id', async () => {
     const result = await initHandler.execute(makeCtx(tmpDir));
     expect(result.exitCode).toBe(0);
 
     const config = JSON.parse(readFileSync(join(tmpDir, '.aiwg', 'aiwg.config'), 'utf8'));
-    expect(config.providers).toEqual(['deepseek-harness', 'codex']);
+    expect(config.providers).toEqual(['dsh', 'codex']);
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('Unknown provider'));
   });
 });
