@@ -128,12 +128,14 @@ export function main(argv) {
     mergeBase = resolveMergeBase(root, opts.base);
     const cfgBase = loadGateConfig(root, { ref: opts.base });
     const cfgHeadCommitted = loadGateConfig(root, { ref: 'HEAD' });
-    if (!cfgBase && !cfgHeadCommitted && !cfgHead && !(opts.meta || opts.history)) {
-      throw new UsageError(BOOTSTRAP_MESSAGE);
-    }
+    const anyConfig = Boolean(cfgBase || cfgHeadCommitted || cfgHead);
+    const historyOnly = opts.history && !opts.meta && !opts.architecture;
+    // Before bootstrap there is no evaluator to judge with: every gated mode is a
+    // config error (exit 2), not a list of FAILs against defaults.
+    if (!anyConfig && !historyOnly) throw new UsageError(BOOTSTRAP_MESSAGE);
     cfg = cfgBase ?? defaultGateConfig();
-    if (!cfgBase) report.lines.push(`bootstrap: no gate.json at ${opts.base}; judging with defaults`);
-    if (cfgBase || cfgHeadCommitted || cfgHead) {
+    if (anyConfig) {
+      if (!cfgBase) report.lines.push(`bootstrap: no gate.json at ${opts.base}; judging with defaults`);
       report.mode.push('ratchet');
       const ratchet = runRatchet(root, cfg, { mergeBase });
       report.verdicts.push(...ratchet.verdicts);
