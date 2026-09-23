@@ -154,6 +154,7 @@ describe('direct project-local addon command migration guard', () => {
 
     expect(result.status, result.output).toBe(0);
     expect(result.output).toContain('Warning: commands migration skipped');
-    expect(result.output).toContain('Remove AIWG command files manually');
+    // Upstream #2541 names the stale managed files instead of a placeholder.
+    expect(result.output).toContain(path.join('.codex', 'commands', 'legacy.md'));
   });
 });
