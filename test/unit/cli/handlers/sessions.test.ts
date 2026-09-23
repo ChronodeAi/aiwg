@@ -9,6 +9,7 @@ import { buildHandlerMap } from '../../../../src/cli/handlers/index.js';
 import { sessionsHandler } from '../../../../src/cli/handlers/sessions.js';
 import { acquireImportLease } from '../../../../src/sessions/index.js';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
+import { describeWithSqlite } from '../../../helpers/sqlite.js';
 
 function context(args: string[], cwd = process.cwd()): HandlerContext {
   return { args, rawArgs: ['sessions', ...args], cwd, frameworkRoot: process.cwd() };
@@ -44,7 +45,7 @@ describe('sessions CLI contracts', () => {
       command: 'sessions.sources',
       status: 'ok',
       error: null,
-      data: { count: 12 },
+      data: { count: 15 },
     });
     expect(output.data.providers.map((item: any) => item.provider))
       .toEqual([...output.data.providers.map((item: any) => item.provider)].sort());
@@ -104,6 +105,8 @@ describe('sessions CLI contracts', () => {
         supportedOperations: ['inspect', 'stream'],
         acquisitionModes: ['jsonl'],
       });
+    expect(output.data.providers.find((item: any) => item.provider === 'pi'))
+      .toMatchObject({ disposition: 'implemented', supportedOperations: ['discover', 'inspect', 'stream'], acquisitionModes: ['jsonl'] });
     expect(output.data.providers.find((item: any) => item.provider === 'warp'))
       .toMatchObject({
         disposition: 'manual-only',
@@ -403,7 +406,7 @@ describe('sessions CLI contracts', () => {
   });
 });
 
-describe('sessions CLI catalog lifecycle', () => {
+describeWithSqlite('sessions CLI catalog lifecycle', () => {
   let root: string;
   let log: ReturnType<typeof vi.spyOn>;
 

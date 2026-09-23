@@ -44,6 +44,7 @@ import { routeModelTier } from '../../models/router.js';
 import { buildWrapperRouteEnvelope, type RoutedCapabilityType } from '../../models/wrapper-route.js';
 import {
   loadProviderModelCatalog,
+  type ModelPolicyProvider,
   type ProviderModelCatalog,
 } from '../../models/provider-policy.js';
 import {
@@ -52,6 +53,10 @@ import {
 } from '../../artifacts/capability-resolver.js';
 
 const BASELINE_PROVIDER = 'claude-code';
+
+function isModelPolicyProvider(provider: string): provider is ModelPolicyProvider {
+  return Object.hasOwn(loadProviderModelCatalog().providers, provider);
+}
 
 interface ResolvedStewardProvider {
   id: string;
@@ -123,7 +128,15 @@ function formatProvider(
     lines.push(`\n  ${featureId} — ${status}`);
     if (feat?.description) lines.push(`    ${feat.description}`);
     if (isNative) {
-      if (feat?.native_example) lines.push(`    example: ${feat.native_example}`);
+      if (id === 'omp' && featureId === 'mcp') {
+        lines.push('    OMP supplies the native client. AIWG persistent injection/removal is available for project and profile scope; ephemeral injection is unsupported.');
+        lines.push('    example: aiwg mcp inject --provider omp --servers local-tools');
+      } else if (id === 'omp' && featureId === 'behaviors') {
+        lines.push('    AIWG bridges selected handlers through an OMP extension; no default policy is installed. Permission-request and pre-compaction enforcement are unsupported.');
+      } else if (id === 'omp' && (featureId === 'tasks' || featureId === 'agent_teams')) {
+        lines.push('    OMP native leaf tasks use AIWG workspace admission limits and verified child results; nested requests share the same scheduler.');
+        lines.push('    example: aiwg team run --provider omp --body-file tasks.json');
+      } else if (feat?.native_example) lines.push(`    example: ${feat.native_example}`);
     } else if (isExternalStrategy(emulation)) {
       lines.push(`    trigger: system cron, systemd timer, or CI; AIWG does not own the clock`);
     } else if (emulation) {
@@ -250,7 +263,7 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
     aiwg steward permissions migrate --apply      Back up and atomically normalize config
 
   Providers:
-    claude-code, codex, copilot, cursor, factory, opencode, warp, windsurf, hermes, openclaw
+    antigravity (agy), claude-code, codex, copilot, cursor, deepseek-harness (dsh), factory, opencode, pi, omp, warp, windsurf, hermes, openclaw
 
   Features:
     cron, agent_teams, tasks, mcp, behaviors, mission_control, daemon
@@ -510,6 +523,12 @@ async function handleSteward(args: string[], ctx?: HandlerContext): Promise<void
         code: 'ERR_USAGE_UNKNOWN_PROVIDER',
         message: `Cannot compile a wrapper route for provider: ${rawProvider ?? '(undetected)'}`,
         hint: 'Pass --provider with a supported provider id.',
+        exitCode: EXIT_CODES.USAGE,
+      });
+      if (!isModelPolicyProvider(provider)) throw new AiwgError({
+        code: 'ERR_USAGE_UNSUPPORTED_PROVIDER',
+        message: `Model wrapper routing is not implemented for provider: ${provider}`,
+        hint: 'Use `aiwg steward capabilities --provider pi` for current Pi capability routing; model routing is tracked separately.',
         exitCode: EXIT_CODES.USAGE,
       });
       const capabilityType = flagValue('--capability-type') as RoutedCapabilityType | undefined;

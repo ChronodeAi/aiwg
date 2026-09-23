@@ -106,6 +106,8 @@ describe('UseHandler upstream addon and extension deploy flags', () => {
         '--dry-run',
         '--verbose',
         '--force',
+        // Explicitly selected bundles include their standard skills/scripts.
+        '--copy-all',
       ],
       {},
     );

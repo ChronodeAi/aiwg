@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import {
   getProviderDefinition,
@@ -8,15 +12,19 @@ import {
 } from '../../../src/providers/provider-definitions.js';
 
 const CURRENT_PLATFORM_IDS = [
+  'antigravity',
   'claude',
   'codex',
   'copilot',
   'cursor',
+  'deepseek-harness',
   'factory',
   'hermes',
   'opencode',
   'openclaw',
   'openhuman',
+  'pi',
+  'omp',
   'warp',
   'windsurf',
   'dsh',
@@ -51,7 +59,68 @@ describe('provider definition registry', () => {
     expect(normalizeProviderDefinitionId('devin-desktop')).toBe('windsurf');
     expect(normalizeProviderDefinitionId('devin-local')).toBe('windsurf');
     expect(normalizeProviderDefinitionId('cascade')).toBe('windsurf');
+    expect(normalizeProviderDefinitionId('pi-coding-agent')).toBe('pi');
+    expect(normalizeProviderDefinitionId('dsh')).toBe('dsh');
     expect(normalizeProviderDefinitionId('missing-provider')).toBeNull();
+  });
+
+  it('keeps fork and upstream deployment routes distinct in isolated real dry-runs', () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-dsh-route-'));
+    const home = join(root, 'home');
+    mkdirSync(home);
+    const projectRoot = resolve(import.meta.dirname, '../../..');
+    try {
+      for (const selector of ['dsh', 'deepseek', 'deepseek-harness']) {
+        const target = join(root, selector);
+        mkdirSync(target);
+        const result = spawnSync(process.execPath, [
+          join(projectRoot, 'tools/agents/deploy-agents.mjs'),
+          '--provider', selector, '--dry-run', '--target', target,
+        ], {
+          cwd: target,
+          env: {
+            PATH: process.env.PATH,
+            HOME: home,
+            DSH_HOME: join(home, '.dsh'),
+            DSH_AGENTS_HOME: join(home, '.agents'),
+            HERMES_HOME: join(home, '.hermes'),
+            AIWG_ROOT: projectRoot,
+          },
+          encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024,
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stderr).toBe(0);
+        if (selector === 'deepseek-harness') {
+          expect(result.stdout).toContain('Loaded provider: deepseek-harness');
+          expect(result.stdout).toContain('.dsh/aiwg.cordis.patch.yml');
+          expect(result.stdout).not.toContain('deploy preset');
+        } else {
+          expect(result.stdout).toContain('Loaded provider: dsh');
+          expect(result.stdout.match(/\[dry-run\] deploy preset /g)).toHaveLength(3);
+          expect(result.stdout).toContain(join(home, '.dsh/.agent-presets'));
+          expect(result.stdout).toContain('.dsh/.aiwg/skills');
+          expect(result.stdout).not.toContain('aiwg.cordis.patch.yml');
+        }
+        expect(readdirSync(target)).toEqual([]);
+        expect(readdirSync(home)).toEqual([]);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('models Pi native resources without claiming unimplemented bridges', () => {
+    const pi = getProviderDefinition('pi');
+    expect(pi).toBeDefined();
+    expect(pi?.status).toBe('experimental');
+    expect(pi?.detection).toMatchObject({ env: [], process: ['pi'], capabilityId: 'pi' });
+    expect(pi?.paths.kernelSkills).toBe('.agents/skills');
+    expect(pi?.paths.artifacts.commands).toBe('.pi/prompts');
+    expect(pi?.paths.artifacts.behaviors).toBe('.pi/extensions');
+    expect(pi?.context.startupFiles).toEqual(['AGENTS.override.md', 'AGENTS.md', 'CLAUDE.md']);
+    expect(pi?.context.verification.source).toContain('79680533c6b898894f2d2421c7f640b212d3dfdd');
+    expect(pi?.adapters.hookBridge).toBeNull();
+    expect(pi?.adapters.mcpInjection).toBeNull();
   });
 
   it('keeps capability matrix references resolvable for all non-generic providers', () => {
@@ -134,7 +203,15 @@ describe('provider definition registry', () => {
     expect(dsh).toBeDefined();
     expect(dsh?.displayName).toBe('DeepSeek Harness');
     expect(normalizeProviderDefinitionId('deepseek')).toBe('dsh');
-    expect(normalizeProviderDefinitionId('deepseek-harness')).toBe('dsh');
+    expect(normalizeProviderDefinitionId('deepseek-harness')).toBe('deepseek-harness');
+    expect(dsh?.aliases).toEqual(['deepseek']);
+    const upstream = getProviderDefinition('deepseek-harness');
+    expect(upstream?.id).toBe('deepseek-harness');
+    expect(upstream?.aliases).toEqual([]);
+    expect(upstream?.capabilities.matrixRef).toBe('deepseek-harness');
+    expect(upstream?.capabilities.emulation.mission_control).toBe('aiwg-mc');
+    expect(dsh?.capabilities.matrixRef).toBe('dsh');
+    expect(dsh?.capabilities.emulation.mission_control).toBeNull();
 
     // Skills are the only directory-deployed artifact class: the kernel
     // inventory deploys flat to `.agents/skills/` (natively scanned by DSH's

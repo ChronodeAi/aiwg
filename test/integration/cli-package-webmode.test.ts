@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildCliPackage } from '../../tools/release/build-cli-package.mjs';
+import { hasSevenDayReleaseAge } from '../helpers/npm-release-age.js';
 import {
   createWebResourceReleaseFixture,
   TEST_SKILL_BODY,
@@ -167,6 +168,36 @@ function runApi(args: string[]): Promise<{ code: number | null; stdout: string; 
   });
 }
 
+describe('packaging release-age policy interpretation', () => {
+  const start = Date.parse('2026-09-10T12:00:00.000Z');
+  const end = start + 1000;
+  it.each([
+    ['current npm', 'min-release-age=7\nbefore=null', true],
+    ['normalized lower boundary', 'min-release-age=null\nbefore=2026-09-03T12:00:00.000Z', true],
+    ['normalized upper boundary', 'min-release-age=null\nbefore=2026-09-03T12:00:01.000Z', true],
+    ['omitted policy', 'min-release-age=null\nbefore=null', false],
+    ['zero age', 'min-release-age=0\nbefore=null', false],
+    ['wrong age', 'min-release-age=6\nbefore=null', false],
+    ['normalized zero age', 'min-release-age=null\nbefore=2026-09-10T12:00:00.000Z', false],
+    ['cutoff too recent', 'min-release-age=null\nbefore=2026-09-03T12:00:01.001Z', false],
+    ['cutoff too old', 'min-release-age=null\nbefore=2026-09-03T11:59:59.999Z', false],
+    ['invalid cutoff', 'min-release-age=null\nbefore=invalid', false],
+    ['overriding cutoff', 'min-release-age=7\nbefore=2026-09-10T12:00:00.000Z', false],
+    ['missing cutoff', 'min-release-age=7', false],
+    ['duplicate age', 'min-release-age=7\nmin-release-age=7', false],
+  ])('%s', (_name, output, expected) => {
+    expect(hasSevenDayReleaseAge(output, start, end)).toBe(expected);
+  });
+  it.each([
+    ['Thu Sep 03 2026 12:00:00 GMT+0000 (Coordinated Universal Time)', true],
+    ['Thu Sep 03 2026 11:59:59 GMT+0000 (Coordinated Universal Time)', false],
+    ['Thu Sep 03 2026 12:00:01 GMT+0000 (Coordinated Universal Time)', false],
+    ['2026-09-03T12:00:00.000Z', false],
+  ])('preserves cutoff precision for %s', (before, expected) => {
+    expect(hasSevenDayReleaseAge(`min-release-age=null\nbefore=${before}`, start + 791, start + 950)).toBe(expected);
+  });
+});
+
 describe('@aiwg/cli packaged web distribution', () => {
   beforeAll(async () => {
     tempRoot = await mkdtemp(path.join(os.tmpdir(), 'aiwg-cli-package-'));
@@ -183,14 +214,24 @@ describe('@aiwg/cli packaged web distribution', () => {
     packMetadata = packed[0]!;
 
     const prefix = path.join(tempRoot, 'prefix');
-    const install = spawnSync(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      [
+    const installArgs = [
         'install', '--prefix', prefix,
         '--cache', path.join(tempRoot, 'npm-cache'),
-        '--ignore-scripts', '--no-audit', '--no-fund',
+        '--min-release-age=7', '--ignore-scripts', '--no-audit', '--no-fund',
         path.join(tempRoot, packed[0]!.filename),
-      ],
+    ];
+    // Probe the same options that will reach npm, not the repository's ambient config.
+    const policyStartedAt = Date.now();
+    const policy = spawnSync(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      ['config', 'get', 'min-release-age', 'before', ...installArgs.slice(1, -1)],
+      { cwd: tempRoot, env: isolatedNpmEnv(), encoding: 'utf8', timeout: 30_000 },
+    );
+    expect(policy.status, policy.stderr).toBe(0);
+    expect(hasSevenDayReleaseAge(policy.stdout, policyStartedAt, Date.now()), policy.stdout).toBe(true);
+    const install = spawnSync(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      installArgs,
       { cwd: tempRoot, env: isolatedNpmEnv(), encoding: 'utf8', timeout: 120_000 },
     );
     if (install.status !== 0) throw new Error(`${install.stdout}\n${install.stderr}`);
@@ -236,6 +277,7 @@ describe('@aiwg/cli packaged web distribution', () => {
       'tools/_resolve-impl.mjs',
       'tools/agents/deploy-agents.mjs',
       'tools/agents/providers/',
+      'tools/providers/antigravity-transport.mjs',
       'tools/commands/deploy-prompts-codex.mjs',
       'tools/plugin/package-plugins.mjs',
       'tools/skills/deploy-skills-codex.mjs',
@@ -258,6 +300,9 @@ describe('@aiwg/cli packaged web distribution', () => {
     expect(paths).toContain('agentic/code/providers/model-catalog.v1.json');
     expect(paths).toContain('tools/_resolve-impl.mjs');
     expect(paths).toContain('tools/agents/deploy-agents.mjs');
+    expect(paths).toContain('tools/agents/providers/antigravity.mjs');
+    expect(paths).toContain('tools/providers/antigravity-transport.mjs');
+    expect(paths).toContain('agentic/code/providers/antigravity/provider-contract.v1.json');
     expect(paths).toContain('tools/plugin/package-plugins.mjs');
     expect(paths).toContain('README.md');
     expect(installedReadme).toBe(sourceReadme);
@@ -288,6 +333,28 @@ describe('@aiwg/cli packaged web distribution', () => {
       expect(installed).toEqual(source);
     }
   });
+
+  it.each([
+    ['all-pi', ['use', 'all', '--provider', 'pi']],
+    ['sdlc-codex', ['use', 'sdlc', '--provider', 'codex']],
+    ['all-dry-run', ['use', 'all', '--dry-run']],
+  ])('rejects bundled setup %s with full-package guidance before project mutation', async (label, args) => {
+    const project = path.join(tempRoot, `bundled-setup-${label}`);
+    await mkdir(project, { recursive: true });
+    const original = '# Existing project\n\nPreserve operator content.\n';
+    await writeFile(path.join(project, 'README.md'), original);
+
+    const result = await runCli(args, project);
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.code, output).not.toBe(0);
+    expect(output).toContain('@aiwg/cli');
+    expect(output).toMatch(/full (?:aiwg )?package/i);
+    expect(output).toContain('npm install -g aiwg');
+    expect(output).not.toMatch(/ENOENT|Installing|scandir/i);
+    expect(await readdir(project), output).toEqual(['README.md']);
+    expect(await readFile(path.join(project, 'README.md'), 'utf8')).toBe(original);
+  }, 30_000);
 
   it('routes verify help through the installed CLI', async () => {
     const help = await runCli(['verify', '--help']);

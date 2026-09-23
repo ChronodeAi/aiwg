@@ -193,6 +193,9 @@ export class ProviderAdapter {
     return {};
   }
 
+  /** JSONL written to stdin before bounded process termination, when supported. */
+  getAbortInput() { return null; }
+
   /**
    * Get the path where the provider stores session transcripts.
    *
@@ -320,7 +323,19 @@ async function registerBuiltinProviders() {
     await import('./factory-adapter.mjs');
   } catch { /* ignore if not found */ }
   try {
-    await import('./dsh-adapter.mjs');
+    await import('./pi-adapter.mjs');
+  } catch { /* ignore if not found */ }
+  try {
+    await import('./omp-adapter.mjs');
+  } catch { /* ignore if not found */ }
+  try {
+    await import('./deepseek-harness-adapter.mjs');
+  } catch { /* ignore if not found */ }
+  try {
+    // Preserve the fork's credential-lease, fresh-session runtime for dsh.
+    // The canonical deepseek-harness name selects the upstream patch transport.
+    const { DshAdapter } = await import('./dsh-adapter.mjs');
+    registerProvider('dsh', () => new DshAdapter());
   } catch { /* ignore if not found */ }
   try {
     await import('./hermes-adapter.mjs');

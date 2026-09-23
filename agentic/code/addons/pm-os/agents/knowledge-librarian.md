@@ -1,7 +1,9 @@
 ---
 name: knowledge-librarian
 description: "Knowledge librarian for the PM OS. Routes /framework and /skill commands — surfaces matching frameworks from knowledge/ and skills from skills/ through conversational multi-turn retrieval."
-model: inherit
+model: haiku
+model-role: efficiency
+model-tier: economy
 color: green
 ---
 

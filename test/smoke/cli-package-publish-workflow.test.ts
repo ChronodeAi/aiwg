@@ -15,6 +15,10 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).toContain('GIT_CONFIG_KEY_0: safe.directory');
     expect(workflow).toContain('GIT_CONFIG_VALUE_0: ${{ github.workspace }}');
     expect(workflow).toContain('remove_cli_bootstrap_tag:');
+    expect(workflow).toContain('Verify workflow identity is tag-bound');
+    expect(workflow).toContain(
+      "gh workflow run npm-publish.yml --ref '$TAG' -f tag_to_publish='$TAG'",
+    );
     expect(workflow).toContain('npm dist-tag rm @aiwg/cli bootstrap');
     expect(workflow).toContain('Remove deprecated @aiwg/cli bootstrap tag');
     expect(workflow).not.toContain('npm dist-tag add @aiwg/cli bootstrap');
@@ -22,8 +26,11 @@ describe('@aiwg/cli release workflow wiring', () => {
 
   it('publishes and promotes the assembled package in the Gitea registry', () => {
     const workflow = readFileSync(path.join(ROOT, '.gitea/workflows/npm-publish.yml'), 'utf8');
+    const workflowHeader = workflow.slice(0, workflow.indexOf('\njobs:'));
 
     expect(workflow.match(/npm run package:cli/g)).toHaveLength(2);
+    expect(workflowHeader).not.toContain('GT_NPM_TOKEN_VAULT_FIELD');
+    expect(workflow.match(/GT_NPM_TOKEN_VAULT_FIELD: \$\{\{ vars\.GT_NPM_TOKEN_VAULT_FIELD \}\}/g)).toHaveLength(2);
     expect(workflow).toContain('npm publish ./dist/packages/cli --registry=');
     expect(workflow).toContain('npm dist-tag add "@aiwg/cli@${VERSION}" "${TAG}"');
     expect(workflow).toContain('npm dist-tag add "@aiwg/cli@${VERSION}" latest');
@@ -52,7 +59,19 @@ describe('@aiwg/cli release workflow wiring', () => {
 
   it('documents a dependency-safe Gitea mirror install in generated releases', () => {
     const workflow = readFileSync(path.join(ROOT, '.gitea/workflows/gitea-release.yml'), 'utf8');
+    const workflowHeader = workflow.slice(0, workflow.indexOf('\njobs:'));
 
+    expect(workflow).toContain('tag_to_publish:');
+    expect(workflow).toContain(
+      'AIWG_VERIFY_TAG_REF: refs/tags/${{ steps.release_tag.outputs.release_tag }}',
+    );
+    expect(workflow).toContain(
+      'git checkout --detach "refs/tags/${{ steps.release_tag.outputs.release_tag }}"',
+    );
+    expect(workflow.indexOf('Checkout release tag')).toBeLessThan(
+      workflow.indexOf('Verify source-bound storage benchmark claims'),
+    );
+    expect(workflowHeader).not.toContain('GT_RELEASE_TOKEN_VAULT_FIELD');
     expect(workflow).toContain(
       'api/packages/roctinam/npm/aiwg/-/%s/aiwg-%s.tgz',
     );
@@ -62,5 +81,13 @@ describe('@aiwg/cli release workflow wiring', () => {
     expect(workflow).not.toContain(
       'npm install -g aiwg@%s --registry=https://git.integrolabs.net/api/packages/roctinam/npm/',
     );
+  });
+
+  it('keeps Gitea release asset recovery idempotent when duplicate names are accepted', () => {
+    const workflow = readFileSync(path.join(ROOT, '.gitea/workflows/upload-release-sigs.yml'), 'utf8');
+
+    expect(workflow).toContain('delete_existing_assets "$name"');
+    expect(workflow).toContain("select(.name == $n) | .id");
+    expect(workflow).toContain('expected exactly one $f on Gitea release after upload');
   });
 });

@@ -1,6 +1,9 @@
 ---
 name: legal-risk-reviewer
 description: Reviews product documents for privacy, compliance, terms, licensing, security, and legal-review triggers. Use as a read-only subagent inside /review.
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 

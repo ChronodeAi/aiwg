@@ -37,6 +37,11 @@ export interface ProviderConfig {
 }
 
 export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
+  antigravity: {
+    binary: 'agy',
+    dangerousFlag: '--dangerously-skip-permissions',
+    name: 'Google Antigravity CLI',
+  },
   claude: {
     binary: 'claude',
     dangerousFlag: '--dangerously-skip-permissions',
@@ -58,16 +63,11 @@ export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     dangerousFlag: '--dangerously-bypass-approvals-and-sandbox',
     name: 'OpenAI Codex',
   },
-  dsh: {
-    // DeepSeek Harness headless profile: `dsh --profile headless "<task>"`
-    // (examples/headless-agent) — one nonblank task, fresh session, final
-    // assistant text on stdout, exit. Credentials via OPENROUTER_API_KEY
-    // (env or AGENTIC_CREDENTIAL_DIR lease); model via DSH_HOME settings
-    // (e.g. z-ai/glm-5.3-flash). No bypass flag: profile owns sandboxing.
+  'deepseek-harness': {
     binary: 'dsh',
-    promptPrefix: ['--profile', 'headless'],
     dangerousFlag: null,
-    name: 'DeepSeek Harness (dsh)',
+    name: 'DeepSeek Harness',
+    promptPrefix: ['--profile', 'headless'],
   },
   hermes: {
     // Hermes is a model series (NousResearch), not a confirmed standalone CLI.
@@ -224,9 +224,18 @@ export function splitParams(params: string): string[] {
 
 // ── Provider helpers ──────────────────────────────────────────
 
-/** Get config for a provider, falling back to claude for unknown values. */
+const SPAWN_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  agy: 'antigravity',
+  dsh: 'deepseek-harness',
+};
+
+/** Get config for a provider. Unknown values fail closed instead of launching another harness. */
 export function getProviderConfig(provider: string): ProviderConfig {
-  return PROVIDER_CONFIGS[provider] ?? PROVIDER_CONFIGS['claude']!;
+  const candidate = provider.trim().toLowerCase();
+  const canonical = SPAWN_PROVIDER_ALIASES[candidate] ?? candidate;
+  const config = PROVIDER_CONFIGS[canonical];
+  if (!config) throw new Error(`Unsupported provider '${provider}'`);
+  return config;
 }
 
 /** Returns true if the provider has a CLI binary that can be spawned. */

@@ -129,6 +129,13 @@ export interface ProviderDefinition {
   aliases: string[];
   status: ProviderStatus;
   builtIn: boolean;
+  upstream?: {
+    source: string;
+    version: string;
+    revision: string;
+    runtime: string;
+    lastVerified: string;
+  };
   surfaces: ProviderSurface;
   detection: ProviderDetection;
   paths: ProviderPaths;
@@ -153,15 +160,19 @@ const ArtifactPathsSchema = z.object({
 
 const ProviderDefinitionSchema = z.object({
   id: z.enum([
+    'antigravity',
     'claude',
     'codex',
     'copilot',
     'cursor',
+    'deepseek-harness',
     'factory',
     'hermes',
     'opencode',
     'openclaw',
     'openhuman',
+    'pi',
+    'omp',
     'warp',
     'windsurf',
     'dsh',
@@ -171,6 +182,13 @@ const ProviderDefinitionSchema = z.object({
   aliases: z.array(z.string().min(1)),
   status: z.enum(['stable', 'experimental', 'deprecated']),
   builtIn: z.boolean(),
+  upstream: z.object({
+    source: z.string().url(),
+    version: z.string().min(1),
+    revision: z.string().regex(/^[0-9a-f]{40}$/),
+    runtime: z.string().min(1),
+    lastVerified: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  }).optional(),
   surfaces: z.object({
     primary: z.string().min(1),
     compatibility: z.array(z.string().min(1)),
@@ -265,15 +283,19 @@ const ProviderDefinitionSchema = z.object({
 }) satisfies z.ZodType<ProviderDefinition>;
 
 export const PROVIDER_IDS: readonly Platform[] = [
+  'antigravity',
   'claude',
   'codex',
   'copilot',
   'cursor',
+  'deepseek-harness',
   'factory',
   'hermes',
   'opencode',
   'openclaw',
   'openhuman',
+  'pi',
+  'omp',
   'warp',
   'windsurf',
   'dsh',
@@ -293,6 +315,17 @@ type BuiltInSeed = Omit<ProviderDefinition, 'displayName' | 'status' | 'paths' |
 const VERIFIED_ON = '2026-07-21';
 
 const CONTEXT_CONTRACTS: Record<Platform, ProviderContextContract> = {
+  antigravity: {
+    startupFiles: ['AGENTS.md', 'GEMINI.md'],
+    precedence: ['provider/system', 'project AGENTS.md or GEMINI.md', 'nested project context when selected by the CLI'],
+    loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
+    bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: true, support: 'supported',
+    verification: {
+      method: 'official Antigravity CLI documentation and sanitized 1.1.26 help evidence',
+      source: 'https://antigravity.google/docs/cli/overview/',
+      lastVerified: '2026-09-04',
+    },
+  },
   claude: {
     startupFiles: ['CLAUDE.md', '.claude/CLAUDE.md'], precedence: ['provider/system', 'nested CLAUDE.md', 'root CLAUDE.md'],
     loadMode: 'native-include', includeSyntax: '@WORKSPACE.md\n@AIWG.md', configRegistration: null,
@@ -316,6 +349,17 @@ const CONTEXT_CONTRACTS: Record<Platform, ProviderContextContract> = {
     loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
     bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: 500, nestedContext: false, support: 'supported',
     verification: { method: 'official Cursor rules and CLI documentation', source: 'https://docs.cursor.com/context/rules-for-ai', lastVerified: VERIFIED_ON },
+  },
+  'deepseek-harness': {
+    startupFiles: ['AGENTS.md', 'CLAUDE.md'],
+    precedence: ['provider/system', 'project AGENTS.md or CLAUDE.md', 'nested project context'],
+    loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
+    bootstrapTargets: ['AGENTS.md'], maxContextBytes: 65536, recommendedMaxLines: null, nestedContext: true, support: 'supported',
+    verification: {
+      method: 'DeepSeek Harness instruction and filesystem-skill source review',
+      source: 'https://github.com/deepseek-ai/deepseek-harness',
+      lastVerified: '2026-09-05',
+    },
   },
   factory: {
     startupFiles: ['AGENTS.md', '~/.factory/AGENTS.md'], precedence: ['provider/system', 'nearest AGENTS.md', 'root AGENTS.md', 'personal override'],
@@ -347,6 +391,28 @@ const CONTEXT_CONTRACTS: Record<Platform, ProviderContextContract> = {
     bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: false, support: 'degraded',
     verification: { method: 'AIWG mixed-scope adapter contract; host loading remains capability-dependent', source: 'agentic/code/providers/capability-matrix.yaml', lastVerified: VERIFIED_ON },
   },
+  omp: {
+    startupFiles: ['.omp/AGENTS.md', 'AGENTS.md'],
+    precedence: ['provider/system', 'native nearest nonempty .omp', 'compatibility context ordered by depth; exact paragraph deduplication'],
+    loadMode: 'native-include', includeSyntax: '@<relative-path>', configRegistration: null,
+    bootstrapTargets: ['.omp/AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: true, support: 'supported',
+    verification: {
+      method: 'OMP 18.1.10 source and live context import smoke',
+      source: 'https://github.com/can1357/oh-my-pi/blob/5964a0f7649275bcde818f20073193fd032451f2/packages/coding-agent/src/system-prompt.ts#L451',
+      lastVerified: '2026-09-04',
+    },
+  },
+  pi: {
+    startupFiles: ['AGENTS.override.md', 'AGENTS.md', 'CLAUDE.md'],
+    precedence: ['provider/system', 'root-to-cwd context chain', 'AGENTS.override.md supersedes same-directory AGENTS.md and CLAUDE.md'],
+    loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
+    bootstrapTargets: ['AGENTS.md'], maxContextBytes: null, recommendedMaxLines: null, nestedContext: true, support: 'supported',
+    verification: {
+      method: 'Pi coding-agent resource loader and official README context-file documentation',
+      source: 'https://github.com/earendil-works/pi/blob/79680533c6b898894f2d2421c7f640b212d3dfdd/packages/coding-agent/README.md#context-files',
+      lastVerified: '2026-09-03',
+    },
+  },
   warp: {
     startupFiles: ['WARP.md', 'AGENTS.md'], precedence: ['provider/system', 'subdirectory rule', 'root rule', 'global rule'],
     loadMode: 'prose-directive', includeSyntax: null, configRegistration: null,
@@ -373,6 +439,42 @@ const CONTEXT_CONTRACTS: Record<Platform, ProviderContextContract> = {
 };
 
 const BUILT_IN_SEEDS: BuiltInSeed[] = [
+  {
+    id: 'antigravity',
+    displayName: 'Google Antigravity CLI',
+    aliases: ['agy'],
+    status: 'experimental',
+    builtIn: true,
+    surfaces: {
+      primary: 'antigravity',
+      compatibility: ['agy'],
+      precedence: ['AGENTS.md', 'GEMINI.md', '.agents/agents/', '.agents/skills/'],
+      related: [],
+    },
+    detection: { env: [], process: ['agy'], capabilityId: 'antigravity' },
+    paths: {
+      deployTarget: 'project',
+      artifacts: {
+        agents: '.agents/agents', commands: null, skills: '.agents/.aiwg/skills', rules: null, behaviors: null,
+      },
+      kernelSkills: '.agents/skills',
+      contextDiscovery: { agents: '.agents/agents', skills: '.agents/skills', rules: null, behaviors: null },
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: '.agents/agents', commands: null, skills: '.agents/skills', rules: null,
+      fileExtension: '.md', configFile: 'AGENTS.md', aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion', pathType: 'project', skillsBaseDir: '.agents/skills', subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'antigravity-markdown', hookBridge: null, mcpInjection: 'antigravity',
+      contextAggregation: 'agents-md', ruleFormat: null,
+    },
+    matrixRef: 'antigravity',
+  },
   {
     id: 'claude',
     displayName: 'Claude Code',
@@ -820,6 +922,116 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     matrixRef: 'openhuman',
   },
   {
+    id: 'deepseek-harness',
+    displayName: 'DeepSeek Harness',
+    aliases: [],
+    builtIn: true,
+    upstream: {
+      source: 'https://github.com/deepseek-ai/deepseek-harness',
+      version: 'dsh-v0.1.3-alpha.1',
+      revision: 'd347e703908d0406b7a7ef80e3a0e594d86b2215',
+      runtime: 'Node.js ^22.19.0 || >=24.0.0',
+      lastVerified: '2026-09-05',
+    },
+    surfaces: {
+      primary: 'dsh', compatibility: ['deepseek-harness'],
+      precedence: ['AGENTS.md', 'CLAUDE.md', '.agents/skills/', '.dsh/skills/', '.dsh/aiwg.cordis.patch.yml'], related: [],
+    },
+    // DSH_HOME relocates both integrations; it cannot identify a transport.
+    detection: { env: [], process: ['dsh'], capabilityId: 'deepseek-harness' },
+    paths: {
+      artifacts: { agents: '.agents/skills', commands: null, skills: '.agents/skills', rules: null, behaviors: null },
+      kernelSkills: '.agents/skills',
+      contextDiscovery: { agents: '.agents/skills', skills: '.agents/skills', rules: null, behaviors: null },
+      configFile: '.dsh/aiwg.cordis.patch.yml',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: { agents: '.agents/skills', commands: null, skills: '.agents/skills', rules: null, fileExtension: '.md', configFile: '.dsh/aiwg.cordis.patch.yml', aggregated: false },
+    skillNamespace: { deploymentGroup: 'deep-recursion', pathType: 'project', skillsBaseDir: '.agents/skills', subdirLayout: true },
+    adapters: { agentFormat: 'agents-md', hookBridge: null, mcpInjection: null, contextAggregation: 'agents-md', ruleFormat: 'agents-md-section' },
+    matrixRef: 'deepseek-harness',
+  },
+  {
+    id: 'omp',
+    aliases: ['oh-my-pi'],
+    builtIn: true,
+    surfaces: {
+      primary: 'omp', compatibility: ['oh-my-pi'],
+      precedence: ['.omp/AGENTS.md', 'AGENTS.md', '.agents/skills/', '.omp/skills/', '.omp/prompts/'], related: [],
+    },
+    detection: { env: [], process: ['omp', '@oh-my-pi/pi-coding-agent'], capabilityId: 'omp' },
+    paths: {
+      artifacts: { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules', behaviors: '.omp/extensions' },
+      kernelSkills: '.agents/skills',
+      contextDiscovery: { agents: '.omp/agents', skills: '.agents/skills', rules: '.omp/rules', behaviors: '.omp/extensions' },
+      configFile: '.omp/AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: false, claudeMdHook: false, hookFile: '.omp/AGENTS.md', contextFile: '.omp/AGENTS.md' },
+    },
+    smithPaths: { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules', fileExtension: '.md', configFile: '.omp/AGENTS.md', aggregated: false },
+    skillNamespace: { deploymentGroup: 'one-level', pathType: 'project', skillsBaseDir: '.omp/skills', subdirLayout: false },
+    adapters: { agentFormat: 'omp-markdown', hookBridge: 'omp', mcpInjection: 'omp', contextAggregation: 'agents-md', ruleFormat: 'omp-markdown' },
+    matrixRef: 'omp',
+  },
+  {
+    id: 'pi',
+    aliases: ['pi-coding-agent'],
+    builtIn: true,
+    surfaces: {
+      primary: 'pi',
+      compatibility: ['pi-coding-agent'],
+      precedence: ['AGENTS.override.md', 'AGENTS.md', '.agents/skills/', '.pi/skills/', '.pi/prompts/'],
+      related: [],
+    },
+    detection: {
+      // PI_CODING_AGENT_DIR only relocates configuration; it is deliberately
+      // not an active-runtime marker. Availability is proven by process or executable.
+      env: [],
+      process: ['pi'],
+      capabilityId: 'pi',
+    },
+    paths: {
+      artifacts: {
+        agents: '.agents/skills',
+        commands: '.pi/prompts',
+        skills: '.pi/.aiwg/skills',
+        rules: null,
+        behaviors: '.pi/extensions',
+      },
+      kernelSkills: '.agents/skills',
+      contextDiscovery: {
+        agents: '.agents/skills',
+        skills: '.agents/skills',
+        rules: null,
+        behaviors: '.pi/extensions',
+      },
+      configFile: 'AGENTS.md',
+      contextFiles: { aiwgMd: true, agentsMd: true, claudeMdHook: false, hookFile: null, contextFile: 'AGENTS.md' },
+    },
+    smithPaths: {
+      agents: '.agents/skills',
+      commands: '.pi/prompts',
+      skills: '.pi/skills',
+      rules: null,
+      fileExtension: '.md',
+      configFile: 'AGENTS.md',
+      aggregated: false,
+    },
+    skillNamespace: {
+      deploymentGroup: 'deep-recursion',
+      pathType: 'project',
+      skillsBaseDir: '.pi/skills',
+      subdirLayout: true,
+    },
+    adapters: {
+      agentFormat: 'agents-md',
+      hookBridge: null,
+      mcpInjection: null,
+      contextAggregation: 'agents-md',
+      ruleFormat: 'agents-md-section',
+    },
+    matrixRef: 'pi',
+  },
+  {
     id: 'warp',
     aliases: [],
     builtIn: true,
@@ -974,7 +1186,7 @@ const BUILT_IN_SEEDS: BuiltInSeed[] = [
     id: 'dsh',
     displayName: 'DeepSeek Harness',
     status: 'experimental',
-    aliases: ['deepseek', 'deepseek-harness'],
+    aliases: ['deepseek'],
     builtIn: true,
     surfaces: { primary: 'dsh', compatibility: ['deepseek'], precedence: ['.dsh/skills/', '.agents/skills/', 'AGENTS.md'], related: [] },
     detection: {

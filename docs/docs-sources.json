@@ -18,6 +18,7 @@
       "ai-assisted-forensics.md",
       "attack-mapping.md",
       "methodology.md",
+      "packet-evidence-integration.md",
       "research-guide.md",
       "tool-reference.md"
     ]
@@ -71,6 +72,7 @@
     "files": [
       "extensions-guide.md",
       "overview.md",
+      "packet-verification.md",
       "quickstart.md"
     ]
   },
@@ -88,6 +90,7 @@
       "agent-examples/research-acquisition-agent-examples.md",
       "corpus-data-model.md",
       "overview.md",
+      "packet-evidence.md",
       "quickstart.md",
       "source-tracking.md"
     ]
@@ -100,6 +103,7 @@
     "files": [
       "agent-design.md",
       "agent-examples.md",
+      "agent-examples/ai-ml-engineer-examples.md",
       "agent-examples/api-designer-examples.md",
       "agent-examples/api-documenter-examples.md",
       "agent-examples/architecture-designer-examples.md",
@@ -144,6 +148,15 @@
       "token-security.md",
       "vendor-detection.md",
       "workspace-cleanup-pattern.md"
+    ]
+  },
+  {
+    "kind": "frameworks",
+    "name": "security-engineering",
+    "source": "agentic/code/frameworks/security-engineering/docs",
+    "dest": "docs/frameworks/security-engineering",
+    "files": [
+      "network-control-review.md"
     ]
   },
   {
@@ -256,6 +269,35 @@
   },
   {
     "kind": "addons",
+    "name": "civic-action",
+    "source": "agentic/code/addons/civic-action/docs",
+    "dest": "docs/addons/civic-action",
+    "files": [
+      "issue-traceability.md",
+      "overview.md",
+      "quickstart.md",
+      "research/aiwg-design-patterns.md",
+      "research/civic-workflow-standards.md",
+      "research/control-source-matrix.md",
+      "research/legal-ethics-guardrails.md",
+      "research/synthesis-and-readiness.md"
+    ]
+  },
+  {
+    "kind": "addons",
+    "name": "composition-engine",
+    "source": "agentic/code/addons/composition-engine/docs",
+    "dest": "docs/addons/composition-engine",
+    "files": [
+      "composition-evaluation-research-matrix.md",
+      "composition-evaluation.md",
+      "polyrhythmic-reasoning.md",
+      "runtime-operations.md",
+      "schema-evolution.md"
+    ]
+  },
+  {
+    "kind": "addons",
     "name": "compound-memory",
     "source": "agentic/code/addons/compound-memory/docs",
     "dest": "docs/addons/compound-memory",
@@ -273,6 +315,31 @@
       "configuration-reference.md",
       "daemon-addon-guide.md",
       "quickstart.md"
+    ]
+  },
+  {
+    "kind": "addons",
+    "name": "dataset-intelligence",
+    "source": "agentic/code/addons/dataset-intelligence/docs",
+    "dest": "docs/addons/dataset-intelligence",
+    "files": [
+      "adapter-authoring.md",
+      "fortemi-boundaries.md",
+      "migration-guide.md",
+      "offline-troubleshooting.md",
+      "overview.md",
+      "quickstart.md",
+      "task-guide.md",
+      "worked-examples.md"
+    ]
+  },
+  {
+    "kind": "addons",
+    "name": "graph-pattern",
+    "source": "agentic/code/addons/graph-pattern/docs",
+    "dest": "docs/addons/graph-pattern",
+    "files": [
+      "decision-guide.md"
     ]
   },
   {
@@ -301,6 +368,21 @@
     "files": [
       "getting-started.md",
       "obsidian-integration.md"
+    ]
+  },
+  {
+    "kind": "addons",
+    "name": "network-analysis",
+    "source": "agentic/code/addons/network-analysis/docs",
+    "dest": "docs/addons/network-analysis",
+    "files": [
+      "integrations.md",
+      "maintainer-guide.md",
+      "offline-analysis.md",
+      "operator-guide.md",
+      "overview.md",
+      "release-checklist.md",
+      "termshark-handoff.md"
     ]
   },
   {
@@ -356,6 +438,10 @@
     "source": "agentic/code/addons/voice-framework/docs",
     "dest": "docs/addons/voice-framework",
     "files": [
+      "custom-output-modes.md",
+      "output-mode-integration.md",
+      "output-mode-troubleshooting.md",
+      "output-modes.md",
       "overview.md",
       "quickstart.md"
     ]

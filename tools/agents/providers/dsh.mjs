@@ -71,7 +71,7 @@ export const kernelSkillsPath = null; // Resolved per-target in deploy(): path.j
 // home-relative (user scope). Project scope resolves against the target.
 export const support = {
   agents: 'aggregated',      // Agents routed through the managed AGENTS.md section
-  commands: 'none',          // No AIWG slash-command file surface
+  commands: 'indexed',       // Full bodies via discover/show; no native command file loader
   skills: 'native',          // .agents/skills/ is the native project skill location
   rules: 'agents-md+cli',    // compressed in AGENTS.md; full bodies via CLI/MCP
 };

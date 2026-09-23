@@ -199,7 +199,7 @@ export function addManagedMarker(content, version, source, style = 'markdown') {
 /**
  * Compute SHA-256 hash of content (hex string).
  */
-function contentHash(content) {
+export function contentHash(content) {
   return createHash('sha256').update(content).digest('hex');
 }
 
@@ -240,9 +240,12 @@ export function updateSidecarManifest(dir, deployedEntries, opts) {
   const existing = readSidecarManifest(dir) || { managed: {} };
 
   for (const entry of deployedEntries) {
-    const { filename, hash, frameworkSlug } = entry;
+    const { filename, hash, frameworkSlug, kind } = entry;
     const sidecarEntry = { hash: `sha256:${hash}`, source, version };
     if (frameworkSlug) sidecarEntry.frameworkSlug = frameworkSlug;
+    // `kind` marks artifacts whose lifecycle is governed elsewhere — currently
+    // only `skill-command` wrappers, which follow their source skill (#2507).
+    if (kind) sidecarEntry.kind = kind;
     existing.managed[filename] = sidecarEntry;
   }
 
@@ -735,7 +738,7 @@ export function deployFiles(files, destDir, opts, transformFn) {
     // though their YAML frontmatter is removed during serialization.
     if (base.endsWith('.md') || base.endsWith('.mdc')) {
       transformedContent = addManagedMarker(transformedContent, deployVersion, deploySource);
-    } else if (base.endsWith('.toml')) {
+    } else if (base.endsWith('.toml') && opts.stampToml !== false) {
       transformedContent = addManagedMarker(
         transformedContent,
         deployVersion,
@@ -1407,6 +1410,39 @@ export function resolveAiwgRoot(srcRoot) {
 }
 
 /**
+ * Names of every skill AIWG ships, kernel and standard alike (#2511).
+ *
+ * `computeAllKernelNames` filters to kernel skills, but skill-command wrappers
+ * are generated from both tiers, so retiring an orphaned wrapper needs the full
+ * set. Anchored to the AIWG root rather than `srcRoot` for the same reason
+ * `computeAllArtifactBasenames` is: a bundle-scoped deploy must not produce an
+ * empty desired set and retire everything.
+ *
+ * @param {string} srcRoot AIWG repo / install root (or a subdir of it)
+ * @returns {Set<string>|null} skill directory names, or null when no AIWG tree
+ *   is found — callers MUST then skip pruning.
+ */
+export function computeAllSkillNames(srcRoot) {
+  const aiwgRoot = resolveAiwgRoot(srcRoot);
+  if (!aiwgRoot) return null;
+
+  const names = new Set();
+  for (const group of ['frameworks', 'addons']) {
+    const root = path.join(aiwgRoot, 'agentic', 'code', group);
+    if (!fs.existsSync(root)) continue;
+    for (const component of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!component.isDirectory()) continue;
+      const skillsDir = path.join(root, component.name, 'skills');
+      if (!fs.existsSync(skillsDir)) continue;
+      for (const skill of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+        if (skill.isDirectory()) names.add(skill.name);
+      }
+    }
+  }
+  return names;
+}
+
+/**
  * Holistic post-deploy prune of stale AIWG-managed flat artifacts
  * (agents / commands / rules). The flat-file analogue of
  * `pruneStaleAiwgSkills`.
@@ -1435,6 +1471,15 @@ export function resolveAiwgRoot(srcRoot) {
 export function pruneStaleAiwgFiles(destDir, desiredStems, opts = {}) {
   const { dryRun = false, verbose = false } = opts;
   const artifactExtensions = opts.artifactExtensions || ['.md', '.mdc'];
+  // When supplied, skill-command wrappers are retired against the set of skills
+  // that still exist rather than exempted outright (#2511). `null`/absent keeps
+  // the blanket exemption, so callers without a skill inventory cannot retire a
+  // wrapper by accident.
+  const skillCommandStems = opts.skillCommandStems instanceof Set
+    ? opts.skillCommandStems
+    : Array.isArray(opts.skillCommandStems)
+      ? new Set(opts.skillCommandStems)
+      : null;
   const removed = [];
   if (!destDir || !fs.existsSync(destDir)) return removed;
 
@@ -1460,6 +1505,15 @@ export function pruneStaleAiwgFiles(destDir, desiredStems, opts = {}) {
     if (!artifactExtensions.some(extension => lower.endsWith(extension))) continue;
 
     if (desired.has(artifactStem(name))) continue;
+
+    // Skill-command wrappers are named after skills, not command sources, so
+    // they are absent from the command desired set by construction — pruning
+    // them against it would delete wrappers the same deploy just wrote (#2507).
+    // They are retired against the skill inventory instead, when one is given
+    // (#2511); without one they stay exempt.
+    if (managed[name]?.kind === 'skill-command') {
+      if (!skillCommandStems || skillCommandStems.has(artifactStem(name))) continue;
+    }
 
     // Ownership gate — never delete a file AIWG didn't deploy.
     let owned = Object.prototype.hasOwnProperty.call(managed, name);
@@ -3000,6 +3054,11 @@ export function migrateCommandsDirectory(commandsDir, opts = {}) {
     const lower = entry.name.toLowerCase();
     if (!lower.endsWith('.md')) continue; // only command markdown files
     const filePath = path.join(commandsDir, entry.name);
+    // Skill-command wrappers ARE the current skill surface, not legacy command
+    // files superseded by it. Migrating them away deletes what the same deploy
+    // just wrote — and on a kernel-only run, which does not re-translate, they
+    // are never restored (#2507).
+    if (managed[entry.name]?.kind === 'skill-command') continue;
     let owned = Object.prototype.hasOwnProperty.call(managed, entry.name);
     if (!owned) {
       try {
@@ -3057,8 +3116,8 @@ export const ProviderInterface = {
   aliases: [],
 
   // ── Path Configuration ──────────────────────────────────────────────
-  // ALL four paths are REQUIRED for v2. Every provider deploys every artifact type.
-  // Provider dictates which directories to use; null paths are no longer allowed.
+  // Paths describe native or conventional deployment only. Empty paths mean
+  // indexed access via aiwg discover/show, not an unavailable artifact class.
   paths: {
     agents: null,
     commands: null,
@@ -3071,6 +3130,7 @@ export const ProviderInterface = {
   //   'native'       - Platform natively discovers and uses these files
   //   'conventional' - AIWG directory convention; available for @-mention context loading
   //   'aggregated'   - Content included in aggregated file AND deployed as discrete files
+  //   'indexed'      - Full source body available via aiwg discover/show without a native loader
   support: {
     agents: 'conventional',
     commands: 'conventional',

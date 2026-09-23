@@ -1,6 +1,9 @@
 ---
 name: devils-advocate-reviewer
 description: Reviews product documents by challenging problem framing, solution logic, metrics, assumptions, alternatives, and failure modes. Use as a read-only subagent inside /review.
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 

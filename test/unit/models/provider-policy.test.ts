@@ -13,8 +13,8 @@ describe('provider model registry', () => {
   it('covers every audited provider with sourced, dated capability entries', () => {
     const registry = loadProviderModelCapabilities();
     expect(Object.keys(registry.providers).sort()).toEqual([
-      'claude', 'codex', 'copilot', 'cursor', 'dsh', 'factory', 'hermes',
-      'openclaw', 'opencode', 'openhuman', 'warp', 'windsurf',
+      'antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'dsh', 'factory', 'hermes',
+      'omp', 'openclaw', 'opencode', 'openhuman', 'pi', 'warp', 'windsurf',
     ]);
     for (const capability of Object.values(registry.providers)) {
       expect(capability.sourceUrl).toMatch(/^https:\/\//);
@@ -38,6 +38,13 @@ describe('provider model registry', () => {
   });
 });
 describe('project/user model config validation', () => {
+  it.each(['dsh', 'deepseek-harness', 'antigravity', 'pi', 'omp'])(
+    'accepts legacy and upstream provider model configuration: %s', provider => {
+      expect(validateUserProjectModelConfig({
+        defaults: { provider, tier: 'standard' },
+      }).valid).toBe(true);
+    },
+  );
   it('accepts compatibility max-quality but rejects unknown providers and tiers', () => {
     expect(validateUserProjectModelConfig({
       defaults: { provider: 'codex', tier: 'max-quality' },
@@ -152,6 +159,8 @@ describe('provider-aware compilation', () => {
     ['opencode', 'native', true],
     ['openclaw', 'native', true],
     ['openhuman', 'compiled', true],
+    ['omp', 'native', true],
+    ['pi', 'native', true],
     ['warp', 'global-only', false],
     ['windsurf', 'unsupported', false],
   ] as const)(

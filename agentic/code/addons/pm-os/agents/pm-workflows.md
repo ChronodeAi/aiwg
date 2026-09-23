@@ -1,7 +1,9 @@
 ---
 name: pm-workflows
 description: "PM thinking partner with 11 sequenced workflows for strategy, research, decisions, measurement, stakeholder management, coaching, document review, and PRD construction. Use when the user wants to run a structured PM workflow end-to-end."
-model: inherit
+model: sonnet
+model-role: reasoning
+model-tier: standard
 color: blue
 ---
 

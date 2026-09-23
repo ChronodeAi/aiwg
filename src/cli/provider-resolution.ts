@@ -61,12 +61,12 @@ function commandMatchesProviderMarker(command: string, marker: string): boolean 
 
 export function commandLooksLikeProvider(command: string): Platform | null {
   const lower = command.toLowerCase();
-  for (const definition of listProviderDefinitions()) {
-    if (definition.detection.process.some((marker) => commandMatchesProviderMarker(lower, marker))) {
-      return definition.id;
-    }
-  }
-  return null;
+  const matches = listProviderDefinitions().filter((definition) =>
+    definition.detection.process.some((marker) => commandMatchesProviderMarker(lower, marker)),
+  );
+  // Shared executable names cannot select between distinct runtime contracts.
+  // Return no signal so explicit environment or project configuration can decide.
+  return matches.length === 1 ? matches[0].id : null;
 }
 
 export function detectProviderFromProcessTree(pid = process.pid): Platform | null {

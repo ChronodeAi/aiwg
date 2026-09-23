@@ -31,7 +31,7 @@ async function execute(ctx: HandlerContext): Promise<HandlerResult> {
     const resolved = await resolveOutputModes(ctx.cwd, ctx.frameworkRoot, invocation);
     if (resolved.modes.length === 0) return { exitCode: 0, rawOutput: true, message: 'Effective output mode: unaltered\nContext cost: 0 tokens\nNo transformations active.' };
     const lines = resolved.modes.map((p, i) => `${i + 1}. ${p.id} [${p.kind}/${p.stage}] source=${p.source} scope=${p.scope} validation=${p.validation.level} context≈${p.contextCost ?? 0}`);
-    return { exitCode: 0, rawOutput: true, message: `Effective ordered stack:\n${lines.join('\n')}\nEstimated context cost: ${resolved.modes.reduce((n, p) => n + (p.contextCost ?? 0), 0)} tokens` };
+    return { exitCode: 0, rawOutput: true, message: `Selected ordered stack (no provider interception):\n${lines.join('\n')}\nDelivered/applied/validated: not observed by this status command.\nEstimated context cost: ${resolved.modes.reduce((n, p) => n + (p.contextCost ?? 0), 0)} tokens` };
   }
   if (!['enable', 'disable', 'clear'].includes(action)) return { exitCode: 1, message: `Unknown output-mode action '${action}'.` };
   const scope = parseScope(ctx.args);
@@ -48,12 +48,29 @@ async function execute(ctx: HandlerContext): Promise<HandlerResult> {
     if (!registry.has(id)) return { exitCode: 1, message: `Unknown output mode '${id}'.` };
     modes = action === 'enable' ? [...new Set([...modes, id])] : modes.filter(value => value !== id);
   }
-  await resolveOutputModes(ctx.cwd, ctx.frameworkRoot, scope === 'session' ? modes : []);
+  await resolveOutputModes(ctx.cwd, ctx.frameworkRoot, [], { [scope]: modes });
   const path = await writeOutputModeState(ctx.cwd, scope, modes);
   return { exitCode: 0, message: `${action === 'clear' ? 'Cleared' : `${action}d`} ${scope} output modes (${modes.join(', ') || 'unaltered'}) at ${path}` };
 }
 
 export const outputModeHandler: CommandHandler = {
   id: 'output-mode', name: 'Output Modes', description: 'List, inspect, and select composable output modes', category: 'project', aliases: ['output-modes'],
+  async help() {
+    return {
+      exitCode: 0,
+      rawOutput: true,
+      message: [
+        'Usage:',
+        '  aiwg output-mode list',
+        '  aiwg output-mode show <id>',
+        '  aiwg output-mode enable <id> --scope invocation|session|project',
+        '  aiwg output-mode disable <id> --scope session|project',
+        '  aiwg output-mode clear --scope session|project',
+        '  aiwg output-mode status [--output-mode <id>]...',
+        '',
+        'Use repeated --output-mode flags with aiwg run for a one-command stack.',
+      ].join('\n'),
+    };
+  },
   async execute(ctx) { try { return await execute(ctx); } catch (error) { return { exitCode: 1, message: (error as Error).message }; } },
 };

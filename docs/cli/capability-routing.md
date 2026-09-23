@@ -12,7 +12,7 @@ stable_id: aiwg.agent-reference.capability-routing
 > [Start Here](../getting-started/start-here.md).
 
 > **Version**: 2026.5.0+
-> **Status**: Active — landed across all 11 supported providers
+> **Status**: Active — landed across all 15 named provider integrations
 > **Reference**: epics [#1212](https://git.integrolabs.net/roctinam/aiwg/issues/1212), [#1217](https://git.integrolabs.net/roctinam/aiwg/issues/1217), [#1218](https://git.integrolabs.net/roctinam/aiwg/issues/1218); [`skill-discovery`](../../agentic/code/addons/aiwg-utils/rules/skill-discovery.md) rule (HIGH)
 
 ## What changed and why
@@ -21,7 +21,7 @@ AIWG ships **480+ skills** across its frameworks. Agentic platforms (Claude Code
 
 Starting in 2026.5.0, AIWG splits its skill surface into two tiers, with discovery + on-demand fetch closing the loop:
 
-- **Kernel skills** — always-loaded into the platform's flat skill listing. 25 kernel skills total: 9 quickrefs (one per installed framework + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), and 14 self-maintenance ops, including the plan-first context firewall.
+- **Kernel skills** — always-loaded into the platform's flat skill listing. 27 kernel skills total: 10 quickrefs (one per installed framework/addon family + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), the `dataset-intelligence` routing entry point, and 14 self-maintenance ops, including the plan-first context firewall.
 - **Standard skills** — the other ~460 skills. Stay at `$AIWG_ROOT` and are **not copied per-project** by default (#1217). Reachable via `aiwg discover` (find) and `aiwg show` (fetch).
 - **Project quickref** — an optional, generated kernel skill synthesized from
   discovered project-local bundles. Operators can curate managed discovery with
@@ -283,7 +283,9 @@ Two-step pattern by design. **Discover** ranks candidates and returns metadata. 
 
 ## Per-provider deployment paths
 
-The kernel + standard split applies uniformly. All 11 providers honor the `--copy-all` flag for the standard tier.
+The kernel + standard split applies across all 15 named integrations. Each
+provider honors `--copy-all` on the skill surface defined by its registry
+entry.
 
 | Provider | Kernel skills | Standard skills (when opt-in) | Cross-agent dump |
 |---|---|---|---|
@@ -296,6 +298,9 @@ The kernel + standard split applies uniformly. All 11 providers honor the `--cop
 | Hermes | `~/.hermes/skills/` | `~/.hermes/.aiwg/skills/` | — |
 | OpenCode | `.opencode/skill/` | `.opencode/.aiwg/skill/` | `.agents/skills/` |
 | OpenClaw | `~/.openclaw/skills/aiwg/` | `~/.openclaw/.aiwg/skills/` | `.agents/skills/` |
+| OpenHuman | `~/.openhuman/skills/` | `~/.openhuman/.aiwg/skills/` | `.agents/skills/` |
+| Oh My Pi | `.agents/skills/` | `.agents/skills/` (with `--copy-all`) | `.agents/skills/` |
+| Pi Coding Agent (pi.dev) | `.agents/skills/` | `.pi/.aiwg/skills/` | `.agents/skills/` |
 | Codex | `.agents/skills/` | `.agents/skills/` (with `--copy-all`) | `.agents/skills/` |
 
 **Notes on the asymmetric providers:**
@@ -305,6 +310,9 @@ The kernel + standard split applies uniformly. All 11 providers honor the `--cop
   entries in legacy `~/.codex/skills/` are pruned to avoid duplicate discovery.
 - **OpenCode** uses singular `.opencode/skill/` (platform convention). Cross-agent dump at `.agents/skills/` honors the same env-var filter.
 - **OpenClaw** is user-scope only — pass `--scope user`, not `--target`. Kernel skills nest under `aiwg/` namespace at `~/.openclaw/skills/aiwg/` to avoid collisions with non-AIWG ClaWHub installs.
+- **Oh My Pi** uses one-level native Agent Skills in `.agents/skills/` for both
+  kernel and opted-in standard resources. OMP profiles relocate user-scope
+  resources without changing the project path.
 
 ## Verifying it's working
 

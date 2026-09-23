@@ -1,6 +1,9 @@
 ---
 name: prd-flaws-reviewer
 description: Reviews a PRD through a harsh critic lens — finds every flaw, inconsistency, strategic pitfall, and feasibility risk. Use as a read-only subagent inside /prd Step 7.
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 

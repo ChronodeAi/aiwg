@@ -361,7 +361,7 @@ providers:
 
   hermes:
     display_name: Hermes
-    status: experimental
+    status: stable
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
@@ -370,7 +370,7 @@ providers:
       # bridge. The "MCP:" entries below are the optional enrichment path, not a
       # requirement. Broader MCP modernization: #1533.
       agents: AGENTS.md
-      commands: "AGENTS.md bridge + aiwg discover/show (MCP command-run optional)"
+      commands: "Indexed: aiwg discover / aiwg show command (MCP command-run optional)"
       skills: "~/.hermes/skills/"
       skills_cross_agent: "~/.hermes/skills/.aiwg/"
       rules: "AGENTS.md ### Rule sections + aiwg show rule (MCP rule-list/rule-show optional)"
@@ -462,8 +462,8 @@ providers:
     daemon_tier: unsupported
     daemon_pty_adapter: false
     artifact_paths:
-      agents: ".agents/agents/"                          # markdown personas (workspace-scoped — the coding hosts OpenHuman drives); harness TOML is Tier-2 (#1559)
-      commands: "AGENTS.md bridge (no native command surface)"
+      agents: "Indexed: aiwg discover / aiwg show agent"   # native TOML harness agents are opt-in (#1559)
+      commands: "Indexed: aiwg discover / aiwg show command"
       skills: "~/.openhuman/skills/"                      # global/home-dir like OpenClaw — ungated user-scope native scan (ops_discover.rs); same root OpenHuman's own installer writes to (#1553)
       skills_cross_agent: "~/.openhuman/.aiwg/skills/"
       rules: "AGENTS.md ### Rule sections + aiwg show rule"
@@ -490,11 +490,96 @@ providers:
     deploy_target: mixed
     aggregated_output: true
 
+  antigravity:
+    display_name: Google Antigravity CLI
+    aliases:
+      - agy
+    status: experimental
+    executable: agy
+    qualified_version: 1.1.26
+    qualification_evidence: agentic/code/providers/antigravity/provider-contract.v1.json
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .agents/agents/
+      commands: "(not deployed; no qualified native command surface)"
+      skills: .agents/skills/
+      rules: AGENTS.md
+      behaviors: "(not supported)"
+      mcp_project: .agents/mcp_config.json
+      mcp_user: "~/.gemini/config/mcp_config.json"
+    native_features:
+      cron: false
+      agent_teams: false
+      tasks: false
+      mcp: true
+      behaviors: false
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: aiwg-mc
+      tasks: aiwg-mc
+      mcp: native
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      fallback: full-inject
+      context_file: AGENTS.md
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: No stable structured-question tool contract was qualified for CLI 1.1.26.
+    deploy_target: project
+    aggregated_output: false
+
+  deepseek-harness:
+    display_name: DeepSeek Harness
+    aliases: []
+    status: experimental
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .agents/skills/
+      commands: null
+      skills: .agents/skills/
+      rules: AGENTS.md
+      behaviors: null
+      cordis_patch: .dsh/aiwg.cordis.patch.yml
+    native_features:
+      cron: false
+      agent_teams: true
+      tasks: true
+      mcp: true
+      behaviors: true
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: native
+      tasks: native
+      mcp: native
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      fallback: full-inject
+      context_file: AGENTS.md
+      max_bytes: 65536
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: Headless and SDK profiles do not expose an interactive question UI.
+    deploy_target: project
+    aggregated_output: false
+
   dsh:
     display_name: DeepSeek Harness
     aliases:
       - deepseek
-      - deepseek-harness
     status: experimental
     # deepseek-ai/deepseek-harness — plugin-based agent harness on the Cordis
     # kernel ("everything is a plugin", developer preview). Skills are natively
@@ -543,7 +628,8 @@ providers:
       notes: >-
         Registered in the code, cordis, and standard CLI agent presets; the
         minimal benchmarking preset omits it. Base bundle registers the
-        ask-user service but not the tool plugin.
+        ask-user service but not the tool plugin. Headless and SDK profiles
+        do not expose an interactive question UI; use Markdown there.
     deploy_target: mixed
     aggregated_output: false
     agent_capabilities:
@@ -561,6 +647,88 @@ providers:
           timeout: retry_with_smaller_scope
     model_policy:
       route: "OpenRouter-first; z-ai/glm-5.3-flash is the primary route for ALL roles (reasoning, coding, efficiency - best cost-for-intelligence, frontier coding; operator amendment to tier-1 row 97cb2f83, dsh-aiwg-fleet). z-ai/glm-5.3 (non-flash) is an optional deeper alternative; premium OpenAI/Anthropic models sparingly, only for specific hyper-focused high-consequence tasks. Per-session single route via cordis.yml llm plugin; roles are documentation + aiwg models resolve, not runtime switches."
+
+  pi:
+    display_name: Pi Coding Agent
+    aliases:
+      - pi-coding-agent
+    status: experimental
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .agents/skills/
+      commands: .pi/prompts/
+      skills: .pi/skills/
+      skills_cross_agent: .agents/skills/
+      rules: AGENTS.md
+      behaviors: .pi/extensions/
+    native_features:
+      cron: false
+      agent_teams: false
+      tasks: false
+      mcp: false
+      behaviors: true
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: aiwg-mc
+      tasks: aiwg-mc
+      mcp: null
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: false
+      fallback: full-inject
+      context_file: AGENTS.md
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: Pi does not expose a built-in structured question tool.
+    deploy_target: project
+    aggregated_output: false
+
+  omp:
+    display_name: Oh My Pi
+    aliases:
+      - oh-my-pi
+    status: experimental
+    daemon_tier: unsupported
+    daemon_pty_adapter: false
+    artifact_paths:
+      agents: .omp/agents/
+      commands: .omp/prompts/
+      skills: .agents/skills/
+      skills_cross_agent: .agents/skills/
+      rules: .omp/rules/
+      behaviors: .omp/extensions/
+    native_features:
+      cron: false
+      agent_teams: true
+      tasks: true
+      mcp: true
+      behaviors: true
+      mission_control: false
+      daemon: false
+    emulation:
+      cron: external-trigger
+      agent_teams: null
+      tasks: null
+      mcp: null
+      behaviors: null
+      mission_control: aiwg-mc
+      daemon: null
+    hook_wiring:
+      at_link_support: true
+      fallback: full-inject
+      context_file: .omp/AGENTS.md
+    interaction:
+      structured_questions: none
+      fallback: markdown
+      notes: OMP integration uses Markdown questions; native UI questions require an interactive runtime.
+    deploy_target: project
+    aggregated_output: false
 
 # Feature definitions — documents what each feature key means and
 # what emulation strategies are available when native support is absent.

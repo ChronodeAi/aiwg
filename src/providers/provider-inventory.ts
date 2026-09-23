@@ -11,18 +11,22 @@ import {
 import type { Platform } from '../agents/types.js';
 
 const PROVIDER_EXECUTABLES: Partial<Record<Platform, string[]>> = {
+  antigravity: ['agy'],
   claude: ['claude'],
   codex: ['codex'],
   copilot: ['github-copilot-cli', 'copilot'],
   cursor: ['cursor'],
+  'deepseek-harness': ['dsh'],
+  dsh: ['dsh'],
   factory: ['droid'],
   hermes: ['hermes'],
   opencode: ['opencode'],
   openclaw: ['openclaw'],
   openhuman: ['openhuman'],
+  pi: ['pi'],
+  omp: ['omp'],
   warp: ['warp'],
   windsurf: ['windsurf'],
-  dsh: ['dsh'],
 };
 
 export type ProviderEvidenceKind =

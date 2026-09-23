@@ -36,6 +36,8 @@ const VALID_PROVIDERS = [
   'factory',
   'opencode',
   'openclaw',
+  'pi',
+  'omp',
   'warp',
   'windsurf',
   'generic',
@@ -78,7 +80,7 @@ const INTENT_CLUSTERS = [
   { match: /write|voice|draft|prose|copy/i, framework: 'writing', discover: 'apply voice profile' },
 ];
 
-const PROVIDER_PROMPT_ORDER = ['codex', 'claude', 'opencode', 'cursor', 'copilot', 'warp', 'windsurf', 'factory', 'openclaw', 'generic'];
+const PROVIDER_PROMPT_ORDER = ['codex', 'claude', 'deepseek-harness', 'pi', 'omp', 'opencode', 'cursor', 'copilot', 'warp', 'windsurf', 'factory', 'openclaw', 'generic'];
 
 function parseArgs(args) {
   const options = {

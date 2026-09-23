@@ -6,23 +6,57 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { writeFile, mkdir, rm } from 'fs/promises';
 import { resolve } from 'path';
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'node:events';
+import chokidar from 'chokidar';
 import { WatchService, WatchEvent } from '../../../src/cli/watch-service.ts';
 import { WatchConfig } from '../../../src/cli/config-loader.ts';
 
+/**
+ * Latency floor a real-filesystem watcher event cannot beat (#2510).
+ *
+ * `WatchService.start` configures chokidar with
+ * `awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 100 }`, so a
+ * `change` is only emitted after the file has been observed stable across a
+ * 200ms window sampled every 100ms; `handleEvent` then applies the service's
+ * own debounce. Every component is poll-driven, so the floor stretches
+ * proportionally when the vitest worker is CPU-starved — which a full-suite
+ * parallel run does and a single-file local run does not.
+ */
+const WATCHER_LATENCY_FLOOR_MS = 200 + 100 + 100;
+/** Headroom for a loaded CI runner. Generous on purpose: an event that never
+ *  arrives still fails, so the cost of a wide bound is seconds, while the cost
+ *  of a narrow one is a red build on unrelated work (#2419, #2501, #2510). */
+const FS_EVENT_TIMEOUT_MS = WATCHER_LATENCY_FLOOR_MS * 30;
+/** Kept above FS_EVENT_TIMEOUT_MS so vitest never cuts in before waitFor and
+ *  replaces a diagnosable message with a bare per-test timeout. */
+const FS_EVENT_TEST_TIMEOUT_MS = FS_EVENT_TIMEOUT_MS + 8000;
+
 async function waitFor(
   condition: () => boolean,
-  timeoutMs = 3000,
-  pollIntervalMs = 25
+  timeoutMs = 5000,
+  pollIntervalMs = 25,
+  describeObserved: () => string = () => 'no observation reporter supplied'
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  const started = Date.now();
 
   while (!condition()) {
     if (Date.now() >= deadline) {
-      throw new Error(`Condition was not met within ${timeoutMs}ms`);
+      // Report what did arrive. These cases only fail under CI load, where a
+      // local repro is unavailable and the log is the whole investigation.
+      throw new Error(
+        `Condition was not met within ${timeoutMs}ms (waited ${Date.now() - started}ms); observed: ${describeObserved()}`
+      );
     }
 
     await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
   }
+}
+
+/** Render collected watch events for a waitFor failure message. */
+function describeEvents(events: WatchEvent[]): string {
+  if (events.length === 0) return 'no events';
+  return events.map(event => `${event.type}:${resolve(event.path)}`).join(', ');
 }
 
 describe('WatchService', () => {
@@ -96,20 +130,38 @@ describe('WatchService', () => {
 
       await service.start(config.patterns, config);
 
-      // Give watcher time to initialize (must wait for ready event)
-      await new Promise(resolve => setTimeout(resolve, 200));
-
       // Create file
       const filePath = resolve(testDir, 'new.md');
       await writeFile(filePath, 'Content', 'utf-8');
 
-      // Wait for awaitWriteFinish (200ms stability + 100ms poll) + debounce + processing
-      // Total: ~500ms minimum
-      await new Promise(resolve => setTimeout(resolve, 600));
+      // A create landing before the watch is armed is reported by neither the
+      // initial scan (`ignoreInitial: true`) nor the watch, so the `add` is
+      // absent rather than late and no wait budget can recover it (#2518).
+      // Re-writing an untracked file makes the watcher discover it and emit
+      // `add`, which turns that window into a retry instead of a red build.
+      // A healthy watcher never reaches this: it has already emitted by now.
+      let recoveryTouches = 0;
+      const sawAdd = () => events.some(event => event.type === 'add');
+
+      while (!sawAdd() && recoveryTouches < 3) {
+        try {
+          await waitFor(sawAdd, WATCHER_LATENCY_FLOOR_MS * 4, 25, () => describeEvents(events));
+        } catch {
+          recoveryTouches++;
+          await writeFile(filePath, `Content ${recoveryTouches}`, 'utf-8');
+        }
+      }
+
+      await waitFor(
+        sawAdd,
+        FS_EVENT_TIMEOUT_MS,
+        25,
+        () => `${describeEvents(events)} (after ${recoveryTouches} recovery touch(es))`,
+      );
 
       expect(events.length).toBeGreaterThan(0);
       expect(events.some(e => e.type === 'add')).toBe(true);
-    }, 10000);
+    }, FS_EVENT_TEST_TIMEOUT_MS);
 
     it('should detect file changes', async () => {
       // Create file before watching
@@ -123,15 +175,18 @@ describe('WatchService', () => {
       });
 
       await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
 
       // Modify file
       await writeFile(filePath, 'Modified', 'utf-8');
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
+      await waitFor(
+        () => events.some(event => event.type === 'change'),
+        FS_EVENT_TIMEOUT_MS,
+        25,
+        () => describeEvents(events),
+      );
 
       expect(events.some(e => e.type === 'change')).toBe(true);
-    }, 10000);
+    }, FS_EVENT_TEST_TIMEOUT_MS);
 
     it('should detect file deletions', async () => {
       const filePath = resolve(testDir, 'delete.md');
@@ -144,15 +199,18 @@ describe('WatchService', () => {
       });
 
       await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
 
       // Delete file (use force option to avoid errors if file doesn't exist)
       await rm(filePath, { force: true });
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
+      await waitFor(
+        () => events.some(event => event.type === 'unlink'),
+        FS_EVENT_TIMEOUT_MS,
+        25,
+        () => describeEvents(events),
+      );
 
       expect(events.some(e => e.type === 'unlink')).toBe(true);
-    }, 10000);
+    }, FS_EVENT_TEST_TIMEOUT_MS);
   });
 
   describe('debouncing', () => {
@@ -167,7 +225,6 @@ describe('WatchService', () => {
       });
 
       await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
 
       // Make rapid changes
       for (let i = 0; i < 5; i++) {
@@ -175,12 +232,16 @@ describe('WatchService', () => {
         await new Promise(resolve => setTimeout(resolve, 20));
       }
 
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
+      await waitFor(
+        () => eventCount > 0,
+        FS_EVENT_TIMEOUT_MS,
+        25,
+        () => `eventCount=${eventCount}`,
+      );
 
       // Should have processed only once (debounced)
-      expect(eventCount).toBeLessThan(5);
-    }, 10000);
+      expect(eventCount).toBe(1);
+    }, FS_EVENT_TEST_TIMEOUT_MS);
 
     it('should respect custom debounce time', async () => {
       const filePath = resolve(testDir, 'custom-debounce.md');
@@ -195,7 +256,6 @@ describe('WatchService', () => {
       // Use 500ms debounce
       config.debounce = 500;
       await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
 
       await writeFile(filePath, 'Modified', 'utf-8');
 
@@ -206,140 +266,217 @@ describe('WatchService', () => {
 
       // Chokidar event delivery can be delayed under full-suite CI load. Wait for
       // the debounced callback instead of assuming it arrives in a fixed window.
-      await waitFor(() => processed);
+      // This case raises the service debounce to 500ms, so its floor is the
+      // highest of the real-filesystem set.
+      await waitFor(
+        () => processed,
+        FS_EVENT_TIMEOUT_MS,
+        25,
+        () => `processed=${processed}`,
+      );
       expect(processed).toBe(true);
-    }, 10000);
+    }, FS_EVENT_TEST_TIMEOUT_MS);
 
     it('should throw on negative debounce', () => {
       expect(() => service.debounce(-100)).toThrow('must be >= 0');
     });
   });
 
+  // `start()` waits for the watch to be armed, not merely scanned (#2518).
+  // These use a controlled watcher on REAL timers: the arming poll sleeps, and
+  // a faked clock would never advance it.
+  describe('arming the watch', () => {
+    function controlledWatcher(getWatched: () => Record<string, string[]>) {
+      const watcher = Object.assign(new EventEmitter(), {
+        getWatched,
+        close: async () => {},
+      });
+      vi.spyOn(chokidar, 'watch').mockReturnValue(
+        watcher as unknown as ReturnType<typeof chokidar.watch>
+      );
+      return watcher;
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('resolves start() once a target that arrives late is reported as armed', async () => {
+      let armed = false;
+      const watcher = controlledWatcher(() => (armed ? { [testDir]: [] } : {}));
+
+      const started = service.start(config.patterns, config);
+      watcher.emit('ready');
+      // Unarmed at `ready`: the poll must keep waiting rather than resolve.
+      setTimeout(() => { armed = true; }, 120);
+      await started;
+
+      expect(service.running()).toBe(true);
+      expect(service.getWatchedFiles()).toEqual([]);
+    }, 5000);
+
+    it('gives up waiting rather than hanging when a target is never armed', async () => {
+      // A target that does not exist on disk can never arm. start() must still
+      // return, bounded, instead of blocking the caller forever.
+      const watcher = controlledWatcher(() => ({}));
+
+      const startedAt = Date.now();
+      const started = service.start(config.patterns, config);
+      watcher.emit('ready');
+      await started;
+
+      expect(service.running()).toBe(true);
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(400);
+    }, 5000);
+
+    it('treats a file target listed under its parent directory as armed', async () => {
+      const filePath = resolve(testDir, 'existing.md');
+      const watcher = controlledWatcher(() => ({ [testDir]: ['existing.md'] }));
+
+      const startedAt = Date.now();
+      const started = service.start([filePath], config);
+      watcher.emit('ready');
+      await started;
+
+      expect(service.running()).toBe(true);
+      // Armed on the first check: no polling delay was incurred.
+      expect(Date.now() - startedAt).toBeLessThan(400);
+      expect(service.getWatchedFiles()).toEqual([filePath]);
+    }, 5000);
+  });
+
+  // Callback/statistics contracts use a controlled transport boundary. Real
+  // filesystem add/change/unlink and debounce qualification remain above.
+  async function withControlledWatcher(
+    check: (watcher: EventEmitter, emit: (type: WatchEvent['type'], name: string) => Promise<WatchEvent>) => Promise<void>
+  ): Promise<void> {
+    const watcher = Object.assign(new EventEmitter(), {
+      getWatched: () => ({ [testDir]: ['existing.md'] }),
+      close: async () => {},
+    });
+    const watch = vi.spyOn(chokidar, 'watch').mockReturnValue(
+      watcher as unknown as ReturnType<typeof chokidar.watch>
+    );
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const started = service.start(config.patterns, config);
+      watcher.emit('ready');
+      await started;
+      await check(watcher, async (type, name) => {
+        const path = resolve(testDir, name);
+        const timestamp = new Date(Date.now() + config.debounce);
+        watcher.emit(type, path);
+        await vi.advanceTimersByTimeAsync(config.debounce);
+        return { type, path, timestamp };
+      });
+    } finally {
+      try {
+        await service.stop();
+      } finally {
+        watch.mockRestore();
+        vi.useRealTimers();
+      }
+    }
+  }
+
   describe('callbacks', () => {
     it('should call registered callbacks', async () => {
-      let callback1Called = false;
-      let callback2Called = false;
-
-      // Register callbacks BEFORE starting
-      service.onFileChange(async () => {
-        callback1Called = true;
+      const callback1 = vi.fn(async (_event: WatchEvent) => {});
+      const callback2 = vi.fn(async (_event: WatchEvent) => {});
+      service.onFileChange(callback1);
+      service.onFileChange(callback2);
+      await withControlledWatcher(async (watcher) => {
+        const path = resolve(testDir, 'callback.md');
+        const timestamp = new Date(Date.now() + config.debounce);
+        watcher.emit('add', path);
+        await vi.advanceTimersByTimeAsync(config.debounce - 1);
+        expect(callback1).not.toHaveBeenCalled();
+        expect(callback2).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        const expected = { type: 'add', path, timestamp };
+        expect(callback1).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(callback2).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(callback2.mock.calls[0][0]).toBe(callback1.mock.calls[0][0]);
+        expect(service.getStats().eventsProcessed).toBe(1);
       });
-      service.onFileChange(async () => {
-        callback2Called = true;
-      });
-
-      await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      const filePath = resolve(testDir, 'callback.md');
-      await writeFile(filePath, 'Content', 'utf-8');
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      expect(callback1Called).toBe(true);
-      expect(callback2Called).toBe(true);
     }, 10000);
 
     it('should remove callbacks', async () => {
-      let callbackCalled = false;
-      const callback = async () => {
-        callbackCalled = true;
-      };
-
-      service.onFileChange(callback);
-      service.removeCallback(callback);
-
-      await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      const filePath = resolve(testDir, 'removed.md');
-      await writeFile(filePath, 'Content', 'utf-8');
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      expect(callbackCalled).toBe(false);
+      const removed = vi.fn(async (_event: WatchEvent) => {});
+      const retained = vi.fn(async (_event: WatchEvent) => {});
+      service.onFileChange(removed);
+      service.onFileChange(retained);
+      service.removeCallback(removed);
+      await withControlledWatcher(async (_watcher, emit) => {
+        const expected = await emit('add', 'removed.md');
+        expect(removed).not.toHaveBeenCalled();
+        expect(retained).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(service.getStats().eventsProcessed).toBe(1);
+      });
     }, 10000);
 
     it('should handle callback errors gracefully', async () => {
-      let errorThrown = false;
-
-      // Register callback BEFORE starting
-      service.onFileChange(async () => {
-        errorThrown = true;
-        throw new Error('Callback error');
+      const failure = new Error('Callback error');
+      const failing = vi.fn(async (_event: WatchEvent) => { throw failure; });
+      const following = vi.fn(async (_event: WatchEvent) => {});
+      service.onFileChange(failing);
+      service.onFileChange(following);
+      await withControlledWatcher(async (_watcher, emit) => {
+        const expected = await emit('add', 'error.md');
+        expect(failing).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(following).toHaveBeenCalledExactlyOnceWith(expected);
+        expect(following.mock.calls[0][0]).toBe(failing.mock.calls[0][0]);
+        expect(service.running()).toBe(true);
+        expect(service.getStats()).toMatchObject({ eventsProcessed: 1, errors: 1 });
       });
-
-      await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      const filePath = resolve(testDir, 'error.md');
-      await writeFile(filePath, 'Content', 'utf-8');
-      // Wait for awaitWriteFinish + debounce + processing + error handling
-      await new Promise(resolve => setTimeout(resolve, 800));
-
-      // Should not crash the service
-      expect(service.running()).toBe(true);
-
-      // Verify the callback was actually invoked
-      expect(errorThrown).toBe(true);
-
-      const stats = service.getStats();
-      expect(stats.errors).toBeGreaterThan(0);
     }, 10000);
   });
 
   describe('statistics', () => {
     it('should track events processed', async () => {
-      // Register callback BEFORE starting (even if empty, to track events)
-      service.onFileChange(async () => {});
-
-      await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      const filePath = resolve(testDir, 'stats.md');
-      await writeFile(filePath, 'Content', 'utf-8');
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      const stats = service.getStats();
-      expect(stats.eventsProcessed).toBeGreaterThan(0);
+      const callback = vi.fn(async (_event: WatchEvent) => {});
+      service.onFileChange(callback);
+      await withControlledWatcher(async (_watcher, emit) => {
+        expect(service.getStats()).toMatchObject({ eventsProcessed: 0, errors: 0 });
+        const first = await emit('add', 'stats.md');
+        expect(service.getStats()).toMatchObject({ eventsProcessed: 1, errors: 0, lastEvent: first.timestamp });
+        const second = await emit('change', 'stats.md');
+        expect(callback).toHaveBeenCalledTimes(2);
+        expect(callback).toHaveBeenNthCalledWith(1, first);
+        expect(callback).toHaveBeenNthCalledWith(2, second);
+        expect(service.getStats()).toMatchObject({ eventsProcessed: 2, errors: 0, lastEvent: second.timestamp });
+      });
     }, 10000);
 
     it('should track errors', async () => {
-      // Register callback BEFORE starting
-      service.onFileChange(async () => {
-        throw new Error('Test error');
+      const failing = vi.fn(async (_event: WatchEvent) => { throw new Error('Test error'); });
+      service.onFileChange(failing);
+      await withControlledWatcher(async (_watcher, emit) => {
+        expect(service.getStats().errors).toBe(0);
+        await emit('add', 'error-stats.md');
+        expect(service.getStats()).toMatchObject({ eventsProcessed: 1, errors: 1 });
+        await emit('change', 'error-stats.md');
+        expect(failing).toHaveBeenCalledTimes(2);
+        expect(service.getStats()).toMatchObject({ eventsProcessed: 2, errors: 2 });
       });
-
-      await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      const filePath = resolve(testDir, 'error-stats.md');
-      await writeFile(filePath, 'Content', 'utf-8');
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      const stats = service.getStats();
-      expect(stats.errors).toBeGreaterThan(0);
     }, 10000);
 
     it('should reset statistics', async () => {
-      // Register callback BEFORE starting
-      service.onFileChange(async () => {});
-
-      await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 200));
-
-      const filePath = resolve(testDir, 'reset.md');
-      await writeFile(filePath, 'Content', 'utf-8');
-      // Wait for awaitWriteFinish + debounce + processing
-      await new Promise(resolve => setTimeout(resolve, 600));
-
-      service.resetStats();
-
-      const stats = service.getStats();
-      expect(stats.eventsProcessed).toBe(0);
-      expect(stats.errors).toBe(0);
+      service.onFileChange(async () => { throw new Error('Reset precondition'); });
+      await withControlledWatcher(async (_watcher, emit) => {
+        const event = await emit('add', 'reset.md');
+        expect(service.getStats()).toMatchObject({
+          filesWatched: 1, eventsProcessed: 1, errors: 1, lastEvent: event.timestamp,
+        });
+        await vi.advanceTimersByTimeAsync(1);
+        const resetAt = new Date();
+        service.resetStats();
+        expect(service.getStats()).toEqual({
+          filesWatched: 1, eventsProcessed: 0, errors: 0,
+          startTime: resetAt, lastEvent: undefined,
+        });
+      });
     }, 10000);
   });
 
@@ -381,12 +518,10 @@ describe('WatchService', () => {
       await writeFile(resolve(testDir, 'watched.md'), 'Content', 'utf-8');
 
       await service.start(config.patterns, config);
-      await new Promise(resolve => setTimeout(resolve, 1000));
 
       const files = service.getWatchedFiles();
 
-      // Should have files (exact count depends on timing)
-      expect(Array.isArray(files)).toBe(true);
+      expect(files).toContain(resolve(testDir, 'watched.md'));
     }, 5000);
   });
 

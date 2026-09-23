@@ -112,6 +112,26 @@ afterEach(() => {
 });
 
 describe('managed Agent Skills provider matrix', () => {
+  it.each(['dsh', 'deepseek'])('%s preserves fork identity and sidecar metadata on the shared surface', async (target) => {
+    const name = 'dsh-shared-skill';
+    await importActive(name);
+    const first = deployImportedAgentSkill(name, deployOptions(target));
+    expect(first).toMatchObject({ provider: 'dsh', projectionStatus: 'native', outcome: 'deployed' });
+    expect(first.path).toBe(path.join(projectDir, '.agents', 'skills', name));
+    const sidecarPath = path.join(first.path, AGENT_SKILL_DEPLOYMENT_SIDECAR);
+    const original = fs.readFileSync(sidecarPath);
+    expect(JSON.parse(original.toString())).toMatchObject({
+      provider: 'dsh',
+      portable: { aiwg: { namespace: 'fixture', platforms: ['all'] } },
+    });
+    for (const provider of ['antigravity', 'codex', 'deepseek-harness', 'dsh']) {
+      expect(deployImportedAgentSkill(name, deployOptions(provider))).toMatchObject({
+        provider, outcome: 'unchanged', path: first.path,
+      });
+      expect(fs.readFileSync(sidecarPath)).toEqual(original);
+    }
+  });
+
   it('projects one conforming resource bundle through every provider policy', async () => {
     const name = 'provider-matrix-skill';
     const source = await importActive(name);
@@ -121,17 +141,22 @@ describe('managed Agent Skills provider matrix', () => {
 
     expect(results.map((item) => item.provider)).toEqual([...PROVIDER_IDS]);
     expect(results.map((item) => [item.provider, item.projectionStatus])).toEqual([
+      ['antigravity', 'native'],
       ['claude', 'native'],
       ['codex', 'projected'],
       ['copilot', 'native'],
       ['cursor', 'native'],
+      ['deepseek-harness', 'native'],
       ['factory', 'projected'],
       ['hermes', 'native'],
       ['opencode', 'native'],
       ['openclaw', 'native'],
       ['openhuman', 'projected'],
+      ['pi', 'native'],
+      ['omp', 'native'],
       ['warp', 'native'],
       ['windsurf', 'projected'],
+      ['dsh', 'native'],
       ['generic', 'native'],
     ]);
 
@@ -139,7 +164,9 @@ describe('managed Agent Skills provider matrix', () => {
       expect(result.sourceDigest).toMatch(/^[0-9a-f]{64}$/);
       expect(result.path).toContain(name);
       expect(result.reasons.length).toBeGreaterThan(0);
-      expect(result.outcome).toBe('deployed');
+      expect(result.outcome).toBe(
+        ['codex', 'deepseek-harness', 'dsh'].includes(result.provider) ? 'unchanged' : 'deployed',
+      );
       expect(fs.readFileSync(path.join(result.path, AGENT_SKILL_MANAGED_MARKER), 'utf8'))
         .toBe('aiwg-agent-skill-v1\n');
       const sidecar = JSON.parse(fs.readFileSync(
@@ -149,8 +176,12 @@ describe('managed Agent Skills provider matrix', () => {
       expect(sidecar).toMatchObject({
         schemaVersion: 1,
         name,
-        provider: result.provider,
-        projectionStatus: result.projectionStatus,
+        provider: ['codex', 'deepseek-harness', 'dsh'].includes(result.provider)
+          ? 'antigravity'
+          : result.provider,
+        projectionStatus: ['codex', 'deepseek-harness', 'dsh'].includes(result.provider)
+          ? 'native'
+          : result.projectionStatus,
         sourceDigest: result.sourceDigest,
         portable: {
           aiwg: {

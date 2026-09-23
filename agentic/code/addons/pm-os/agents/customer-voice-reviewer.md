@@ -1,6 +1,9 @@
 ---
 name: customer-voice-reviewer
 description: Reviews product documents from the target user's perspective, focusing on value, usability, workflow fit, alternatives, and emotional response. Use as a read-only subagent inside /review.
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 
