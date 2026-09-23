@@ -45,6 +45,7 @@ import {
   pruneStaleAiwgSkills,
   computeAllKernelNames,
   createManagedMdFromTemplate,
+  listSkillDirs,
 } from './base.mjs';
 
 // ============================================================================
@@ -253,6 +254,14 @@ export async function deploy(opts) {
   // ── Skills ─────────────────────────────────────────────────────────────────
   if ((shouldDeploySkills || skillsOnly) && !opts.commandsOnly && !opts.rulesOnly) {
     const allSkillDirs = [];
+
+    // A direct addon/extension source (`aiwg use <addon>`, required addons,
+    // project-local bundles) carries its skills in <srcRoot>/skills/, which the
+    // $AIWG_ROOT walks below do not see. Mirrors factory/claude (#124).
+    const directSkillsDir = path.join(srcRoot, 'skills');
+    if (fs.existsSync(directSkillsDir)) {
+      allSkillDirs.push(...listSkillDirs(directSkillsDir));
+    }
 
     // Addon skills when deploying everything
     allSkillDirs.push(...getAddonSkillDirs(srcRoot));
