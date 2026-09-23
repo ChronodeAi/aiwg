@@ -75,7 +75,7 @@ Bands are this repository's LOC-weighted percentiles (p70/p80/p90), printed besi
 | `evaluator-surface-changed` | FAIL | Evaluator surface edited outside an evaluator-only commit citing an ADR on base |
 | `band-loosened` | FAIL | Bands raised, lists shrunk, or other config changed without an accepted evaluator commit |
 | `quality-step-suppressed` / `-removed` | FAIL | Workflow quality step made non-blocking or dropped |
-| `suppression-unjustified` / `-unused` | FAIL | New `noqa`/`eslint-disable`/… without a valid annotation; unused suppressions |
+| `suppression-unjustified` / `-unused` | FAIL | New `noqa`/`eslint-disable`/… in measured files (include/exclude apply) without a valid annotation; unused suppressions |
 | `codeowners` | FAIL / WARN | Multi-owner CODEOWNERS missing evaluator surfaces / single owner |
 
 Every changed file also prints `SHAPE <file> loc b→h functions b→h sum_ccn b→h max_ccn b→h`. Accepted evaluator commits print `EXCEPTION evaluator-change <sha> ADR-<id>`.
@@ -87,7 +87,7 @@ Suppression annotation (same line or line above):
 
 - `0` — pass (or report-only without `--ci`)
 - `1` — `--ci` and at least one FAIL
-- `2` — tool/config error: lizard missing, no merge base, no `gate.json` when a mode needs one
+- `2` — tool/config error: lizard missing, no merge base, no `gate.json` at base, HEAD or working tree for any mode but `--history`/`--calibrate`/`--functions`
 
 ## Bootstrap
 
