@@ -147,7 +147,7 @@ export function main(argv) {
     const files = discoverFiles(root, cfgHead);
     const distribution = distributionReport(files.length ? runLizard(files, { cwd: root }) : [], cfgHead.bands);
     report.lines.push(...distribution.lines);
-    report.verdicts.push(...distribution.verdicts);
+    report.distribution = { above_p90: distribution.above };
   }
 
   if (opts.architecture) {

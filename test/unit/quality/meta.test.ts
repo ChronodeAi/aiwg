@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runMeta } from '../../../tools/quality/meta.mjs';
+import { judgeEvaluatorCommit, runMeta } from '../../../tools/quality/meta.mjs';
 
 const GATE = '.aiwg/quality/gate.json';
 
@@ -105,6 +105,17 @@ describe('runMeta (git-backed)', () => {
     expect(codes()).toEqual(['quality-step-suppressed']);
   }, 60_000);
 
+  it('warns, without failing, on a quality step already suppressed on the base branch', () => {
+    write(dir, '.github/workflows/ci.yml', WORKFLOW.replace('      - name: contracts\n', '      - name: contracts\n        continue-on-error: true\n'));
+    commit(dir, 'soften ci\n\nEvaluator-Change: ADR-001');
+    base = git(dir, 'rev-parse', 'HEAD').trim();
+    write(dir, 'src/a.py', 'def f():\n    return 2\n');
+    commit(dir, 'unrelated change');
+    const verdicts = meta().verdicts.filter((v: { code: string }) => v.code === 'quality-step-suppressed');
+    expect(verdicts.map((v: { level: string }) => v.level)).toEqual(['WARN']);
+    expect(codes()).toEqual([]);
+  }, 60_000);
+
   it('fails a new suppression without annotation and accepts a valid one', () => {
     write(dir, 'src/a.py', 'import os  # noqa\n\ndef f():\n    return 1\n');
     commit(dir, 'noqa');
@@ -127,4 +138,15 @@ describe('runMeta (git-backed)', () => {
     commit(dir, 'evidence scripts');
     expect(codes()).toEqual([]);
   }, 60_000);
+});
+
+describe('judgeEvaluatorCommit ADR lookup', () => {
+  const surfaces = ['.aiwg/quality/**'];
+  const commit = (adr: string) => ({ sha: 'x', message: `raise\n\nEvaluator-Change: ${adr}\n`, paths: ['.aiwg/quality/gate.json'] });
+
+  it('matches ADR files regardless of case and requires the id to end at a separator', () => {
+    const base = ['.aiwg/architecture/adr-0022-architecture-evolution-prune.md'];
+    expect(judgeEvaluatorCommit(commit('ADR-0022'), surfaces, base).accepted).toBe(true);
+    expect(judgeEvaluatorCommit(commit('ADR-002'), surfaces, base).accepted).toBe(false);
+  });
 });
