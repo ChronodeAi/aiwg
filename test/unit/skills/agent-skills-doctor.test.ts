@@ -116,7 +116,7 @@ describe('Agent Skills doctor section', () => {
     }
 
     const section = buildAgentSkillsDoctorSection(projectDir, { homeDir });
-    expect(section.hasFailures).toBe(false);
+    expect(section.hasFailures, JSON.stringify(section.diagnostics, null, 2)).toBe(false);
     expect(section.diagnostics).toEqual([]);
   });
 });

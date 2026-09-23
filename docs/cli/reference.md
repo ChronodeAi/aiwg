@@ -161,6 +161,7 @@ Display comprehensive CLI help information.
 
 ```bash
 aiwg help
+aiwg help --json
 aiwg -help
 aiwg --help
 aiwg <command> --help
@@ -171,6 +172,13 @@ Per-command help is intercepted before command hooks and normal handler
 execution, so requesting help does not enter a state-changing command path.
 Commands that declare detailed help return it; all other registered commands
 return a non-executing pointer to `aiwg help`.
+
+`aiwg help --json` emits one machine-readable object with
+`schema: "aiwg.command-registry.v1"` and a `commandIds` array from the canonical
+CLI command registry. It excludes aliases and human-readable examples. The MCP
+command allow-list uses this versioned response when source definitions are
+unavailable (for example, in an installed package), and fails closed if the
+response is unsuccessful or malformed.
 
 **Capabilities:** cli, help, documentation
 **Platforms:** All
@@ -252,7 +260,7 @@ aiwg doctor [--provider <name>] [--all-providers] [--project-local] [--quiet]
 
 **Flags:**
 
-- `--provider <name>` — Inspect a specific provider's deployment paths (claude, factory, codex, copilot, cursor, opencode, warp, devin, openclaw, openhuman, hermes). Defaults to auto-detect across deployed providers.
+- `--provider <name>` — Inspect a specific provider's deployment paths (claude, codex, copilot, cursor, factory, hermes, opencode, openclaw, openhuman, omp, pi, warp, or devin). Defaults to auto-detect across deployed providers.
 - `--all-providers` — Enumerate every supported provider, including ones with nothing deployed.
 - `--project-local` — Show only the project-local artifacts section. Exit code reflects only project-local findings.
 - `--quiet` — Suppress informational subsections (counts, shadows). Show only failures.
@@ -393,6 +401,9 @@ exit-0 resilience path for a successful package update.
 | `--skip-update`             | Skip the installation update                     |
 | `--packages-only`           | Refresh remote packages only                     |
 | `--provider <name>`         | Target specific provider (default: auto-detect)  |
+| `--prune-other-providers`   | Remove stale AIWG-managed trees for providers this run did not refresh (off by default). Git-tracked files are always left in place unless `--prune-tracked` is also given |
+| `--prune-tracked`           | Allow `--prune-other-providers` to delete git-tracked files. Separate from `--force` on purpose — see below |
+| `--force`                   | Re-write every deployed artifact, replacing files AIWG does not currently manage. Never authorises deleting tracked files |
 | `--channel <name>`          | Update channel (stable, main)                    |
 | `--frameworks <list>`       | Comma-separated frameworks to re-deploy          |
 | `--model <name>`            | Override all deployed agent model tiers          |
@@ -541,7 +552,7 @@ aiwg use <framework|addon>
 
 **Options:**
 
-- `--provider <name>` - Target platform (claude, copilot, factory, cursor, devin, warp, codex, opencode, hermes, openclaw, openhuman, local)
+- `--provider <name>` - Target platform (claude, copilot, factory, cursor, devin, warp, codex, opencode, hermes, openclaw, openhuman, pi, local)
 - `--scope user` / `--user` - Additively deploy to the project and mirror the
   artifacts into the provider's user-level discovery paths.
 - `--global` - Install framework and kernel assets into provider user-level
@@ -565,7 +576,9 @@ being falsely described as pinned.
 
 - `--save-user` - Save model overrides to `~/.config/aiwg/models.json`
 - `--no-utils` - Skip aiwg-utils addon installation (frameworks only)
-- `--force` - Overwrite existing deployments
+- `--force` - Overwrite existing deployments, including artifacts AIWG does not
+  currently manage. This is the supported way to reclaim a provider directory
+  left behind by an older AIWG install.
 - `--dry-run` - Preview without making changes
 - `--verbose` / `-v` - Include deployment phase details, framework-index build
   time, registry diagnostics, and the provider-specific reload rationale. The
@@ -580,6 +593,31 @@ being falsely described as pinned.
 - `--no-harness-agents` - OpenHuman only: explicitly skip native TOML harness agents and deploy only kernel skills/rules.
 - `--skip-commands-migration` - Skip deleting the legacy commands directory (warns about duplicate entries in the command palette)
 - `--profile <name>` - Select a topology profile for addons that declare multiple page templates (e.g., `llm-wiki` ships `book-companion | personal | research-deep-dive | business-team | generic`). Without the flag, an interactive prompt appears on TTY. The selection is written to `.aiwg/<namespace>/config.json` so subsequent skill invocations pick the right template.
+
+Deployment counts report what the run accounts for: artifacts it wrote, plus
+artifacts AIWG already manages. Files in a provider directory that AIWG does not
+own are never counted as deployed — they are reported as a separate advisory
+naming the files and the command to replace or remove them.
+
+A provider-scoped `aiwg refresh` never mutates another provider's deployed
+surface. Stale trees belonging to providers the run did not refresh are reported
+with the two concrete next actions; `--prune-other-providers` removes such a
+tree as a unit (agents, commands, and rules together) rather than partially.
+That prune also defers to version control: git-tracked artifacts are left in
+place and reported separately, because deleting an ignored regenerable artifact
+and deleting a committed file are not the same act.
+
+Removing them requires `--prune-tracked`, which is deliberately not `--force`.
+`--force` governs what gets **written** — it replaces artifacts AIWG does not
+currently manage. Deleting files someone committed, in a provider tree the run
+was not asked to touch, is a different decision, so habitual `--force` use can
+never authorise it.
+
+`aiwg use all` deploys the kernel surface — kernel skills, rules, and behaviors —
+and does not deploy agents or commands. It leaves the artifacts other bundles
+deployed alone: running it after `aiwg use sdlc` does not remove the SDLC agent
+surface. In a project whose only recorded deployment is the bulk install itself,
+it still clears flat artifacts left by the pre-kernel bulk default.
 
 **Capabilities:** cli, framework, deployment, addon
 **Platforms:** All
@@ -608,6 +646,10 @@ aiwg use rlm
 
 # Deploy RLM addon to Codex
 aiwg use rlm --provider codex
+
+# Preview and deploy the Civic Action addon
+aiwg use civic-action --dry-run
+aiwg use civic-action
 
 # Preview deployment without writing files
 aiwg use sdlc --dry-run
@@ -685,14 +727,18 @@ reload are shown with `--verbose`.
 
 **Addon options:**
 
-| Addon   | ID    | Description                                                                           |
-| ------- | ----- | ------------------------------------------------------------------------------------- |
-| **RLM** | `rlm` | Recursive Language Models — recursive context decomposition for 10M+ token processing |
+| Addon            | ID             | Description                                                                           |
+| ---------------- | -------------- | ------------------------------------------------------------------------------------- |
+| **Civic Action** | `civic-action` | Evidence-bound civic research, review artifacts, and human-gated validation           |
+| **RLM**          | `rlm`          | Recursive Language Models — recursive context decomposition for 10M+ token processing |
 
 **Platform targets:**
 
 | Platform       | `--provider` ID | Artifact dirs                                                                                                         | Behaviors |
 | -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------- | --------- |
+| Google Antigravity CLI (experimental) | `antigravity` (`agy`) | `.agents/agents/`, `.agents/skills/`, project `AGENTS.md`; global skills unsupported | — |
+| Oh My Pi (experimental) | `omp` (`oh-my-pi`) | `.omp/agents/`, `.omp/prompts/`, `.omp/rules/`, `.agents/skills/`, `.omp/AGENTS.md` | Explicit extension bridge |
+| Pi Coding Agent (experimental) | `pi` | `.agents/skills/`, `.pi/prompts/`, `.pi/.aiwg/skills/`, project `AGENTS.md` | — |
 | Claude Code    | `claude`        | `.claude/agents/`, `.claude/commands/`, `.claude/skills/`, `.claude/rules/`                                           | —         |
 | GitHub Copilot | `copilot`       | `.github/agents/`, `.github/copilot-rules/`, `.github/skills/`                                                        | —         |
 | Factory AI     | `factory`       | `.factory/droids/`, `.factory/commands/`, `.factory/skills/`, `.factory/rules/`                                       | —         |
@@ -1372,9 +1418,11 @@ same framework, project, and codebase graph normalization used by
 `aiwg discover` and `aiwg show`.
 
 Repeated `--output-mode` flags compose invocation-scoped modes with session and
-project state. The resolved ordered profiles are exposed to scripts as
-`AIWG_OUTPUT_MODES` and `AIWG_OUTPUT_MODES_JSON`; provider startup files are not
-rewritten.
+project state. Flags after `--` are forwarded to the child unchanged. The
+resolved ordered profiles are exposed to scripts as `AIWG_OUTPUT_MODES` and
+`AIWG_OUTPUT_MODES_JSON`; an empty stack exports an empty string and `[]` so
+stale parent state cannot leak into a nested run. Provider startup files are
+not rewritten.
 
 **Examples:**
 
@@ -1438,6 +1486,15 @@ resolution is project, user, voice adapter, then built-in; composition order is
 semantic, voice, controlled language, structure, presentation. Unknown modes,
 undeclared same-kind combinations, explicit conflicts, missing requirements,
 and mandatory validation without a configured validator fail safe.
+
+Project profiles live in `.aiwg/output-modes/`. Personal profiles live below
+the active user configuration path reported by `aiwg config path`. Selecting a
+mode resolves and exports policy; the participating skill, script, or provider
+adapter must consume and apply that policy. The `aiwg` package root exports the
+registry and `applyOutputModes` runtime for integrations.
+
+See `docs/addons/voice-framework/output-modes.md` for the user guide,
+custom-profile authoring, integration contract, and troubleshooting links.
 
 **Capabilities:** cli, voice, controlled-language, presentation
 **Tools:** Read, Bash
@@ -2004,7 +2061,7 @@ aiwg skills export aiwg-status --out ./agent-skill-exports --json
 
 Validation uses `aiwg validate-metadata --profile <profile>`, where the profile
 is `strict`, `compatible`, or `discovery`. Provider projection details, trust
-rules, diagnostics, sidecars, updates, and all 12 target paths are documented
+rules, diagnostics, sidecars, updates, and all 14 target paths are documented
 in [Agent Skills import and deployment](../skills/agent-skills.md).
 
 **Capabilities:** cli, skills, registry, import, validation, deployment
@@ -2901,7 +2958,10 @@ aiwg mc stop mc-abc123 --drain
 
 ## Agent Team Commands
 
-Agent teams provide a provider-agnostic abstraction for multi-agent collaboration. On Claude Code, teams use native agent dispatch. On all other providers (Copilot, Cursor, Warp, Windsurf, OpenCode, Factory, Codex, OpenClaw), teams are emulated via `aiwg mc` (Mission Control) orchestration.
+Agent teams provide a provider-agnostic abstraction for multi-agent
+collaboration. Claude Code, Factory AI, and Oh My Pi use their reviewed native
+team or task surfaces. Providers without a native team surface route through
+`aiwg mc` (Mission Control) orchestration when that emulation is available.
 
 ### team
 
@@ -2913,7 +2973,8 @@ aiwg teams <subcommand> [options]
 ```
 
 **Capabilities:** orchestration, agent-teams, multi-provider, mission-control
-**Platforms:** All (native on Claude Code, emulated via aiwg mc on others)
+**Platforms:** All (native on Claude Code, Factory AI, and Oh My Pi; emulated
+via `aiwg mc` where supported)
 **Category:** orchestration
 
 #### Subcommands
@@ -2926,10 +2987,12 @@ aiwg teams <subcommand> [options]
 
 #### Provider Routing
 
-| Provider                                                            | Backend             | Behavior                                      |
-| ------------------------------------------------------------------- | ------------------- | --------------------------------------------- |
-| Claude Code                                                         | Native              | @agent-name dispatch instructions             |
-| Warp, Copilot, Cursor, Windsurf, OpenCode, Factory, Codex, OpenClaw | `aiwg mc` emulation | Generates `mc start` + `mc dispatch` commands |
+| Provider | Backend | Behavior |
+| --- | --- | --- |
+| Claude Code | Native | Agent dispatch instructions |
+| Factory AI | Native | Factory Missions and task dispatch |
+| Oh My Pi | Native | Bounded native task-agent scheduling |
+| Other supported providers | `aiwg mc` emulation | Generates `mc start` and `mc dispatch` commands when available |
 
 #### Options
 
@@ -3924,7 +3987,12 @@ aiwg discover "<phrase>" [options]
 - `--format text` — Emit readable text output (default).
 - `--pretty` — Pretty-print JSON output with indentation (default for compatibility).
 - `--compact` — Emit single-line JSON output for scripts.
-- `--graph <name>` — Override the default graph. Defaults to `framework` (the AIWG capability graph), which is rebuilt automatically after every `aiwg use`.
+- `--graph <name>` — Select one graph explicitly. Default local capability
+  discovery combines `project`, `user` (when project policy permits), and
+  `framework`. Default discovery and show use an existing local project index
+  when its Fortemi cache is unavailable or stale, with one actionable warning
+  on stderr. Normal lookup needs no graph or backend override; explicit graph
+  selection retains cache diagnostics.
 - `--backend <fortemi-core|local>` — Query backend. Default is
   `fortemi-core`; `local` selects the legacy local fallback. The Fortemi Core
   backend reads the static cache created by `aiwg index sync`. For the
@@ -4114,7 +4182,7 @@ and the
 
 ### Best-practice usage guidance
 
-Discovery is the operator surface that makes the **kernel + on-demand model** work across all 11 supported providers (Claude Code, Cursor, Factory, Copilot, OpenCode, Warp, Windsurf, OpenClaw, OpenHuman, Hermes, Codex). Each provider deploys a small kernel set of always-loaded quickref skills; everything else sits at `<provider-dir>/.aiwg/skills/` and is reached via `aiwg discover`.
+Discovery is the operator surface that makes the **kernel + on-demand model** work across all 16 named provider integrations (Google Antigravity CLI, Claude Code, OpenAI Codex, GitHub Copilot, Cursor, DeepSeek Harness, Factory AI, Hermes, OpenCode, OpenClaw, OpenHuman, Pi Coding Agent from pi.dev, Oh My Pi, Warp Terminal, and Devin Desktop). Each provider deploys a small kernel set on its supported skill surface; everything else is reached via `aiwg discover`.
 
 **Lead with discovery, not with memory.** When a user describes a capability, query first:
 
@@ -4201,7 +4269,7 @@ aiwg index <subcommand> [options]
 Manage the configured project AIWG artifact root.
 
 ```bash
-aiwg artifacts path [--json]
+aiwg artifacts path [--json] [--check-write]
 aiwg artifacts move --to <path> [--from <path>] [--dry-run] [--no-reindex] [--no-sync]
 aiwg artifacts attach --to <existing-path> [--dry-run] [--no-reindex] [--no-sync]
 aiwg artifacts repair --dry-run
@@ -4211,6 +4279,10 @@ aiwg artifacts repair --apply
 `path` prints the resolved absolute artifact root for scripts and agent
 workflows; `--json` returns the stable `aiwg.artifacts.path.v1` envelope. It
 honors artifact-root environment overrides and `.aiwg-location`.
+The JSON envelope reports whether the root is external and write-ready, plus
+the exact repository-local control-file exceptions. Add `--check-write` before
+an agent or workflow write: it exits non-zero when an explicitly external root
+is unavailable instead of recreating or falling back to local payload.
 
 `move` relocates or renames the current artifact root, writes `.aiwg-location`
 in the project root, updates `.gitignore` so the pointer remains local,
@@ -4222,10 +4294,29 @@ writes the same pointer, and rebuilds the external index.
 Both commands retain a minimal repository-local control plane (`AIWG.md`,
 `aiwg.config`, and `frameworks/registry.json`) while corpus-heavy directories
 live under the configured artifact root. `repair` audits legacy split-root
-workspaces, previews restoration of missing control files, and removes only
-byte-identical local corpus duplicates when `--apply` is explicit. Divergent
-files are never overwritten or removed automatically. The same classification
-is reported by `aiwg status --probe --json` and `aiwg doctor`.
+workspaces and previews every action. With explicit `--apply`, local-only
+payload is copied to the external corpus, byte-identical duplicates are
+deduplicated, and divergent local variants are preserved under
+`archive/local-corpus-migration/conflicts/local/` with a content-hash suffix.
+The external variant is never overwritten, and local payload is removed only
+after byte-for-byte verification of its external or archived copy.
+
+Divergent **control-plane** files (`AIWG.md`, `aiwg.config`,
+`frameworks/registry.json`) are the one case repair refuses outright — they have
+no safe automatic winner — and must be reconciled by hand. Divergent **payload**
+is repairable and is reported separately, so the two are not confused for one
+another. The same classification is reported by `aiwg status --probe --json` and
+`aiwg doctor`:
+
+| Classification | Severity | Repairable | Meaning |
+|---|---|---|---|
+| `healthy-split-root` | ok | — | Local holds only the control plane; all corpus content is external. |
+| `duplicated-identical` | warning | yes | Local payload duplicates the external corpus byte-for-byte. |
+| `duplicated-divergent-payload` | warning | yes | Local payload differs from (or is missing from) the external corpus. Repair migrates local-only files and archives conflicting local variants. |
+| `duplicated-divergent` | error | no | A control-plane file differs between local and external. Reconcile manually before any repair. |
+| `legacy-missing-control-plane` | error | yes | Local control-plane files are absent and recoverable from the external corpus. |
+| `degraded-offline` | warning/error | no | The configured external corpus is unreachable. |
+
 `AIWG_ARTIFACTS_PATH` still has highest precedence for per-call overrides.
 
 **Capabilities:** cli, index, artifacts, search, dependencies
@@ -5395,6 +5486,31 @@ State source: `.aiwg/ralph/rlm-state.json`.
 ## Addon Commands
 
 Commands contributed by installed addons. Available after running `aiwg use <addon>`.
+
+### civic-action
+
+The prompt-first user journey is in the
+[Civic Action quickstart](../addons/civic-action/quickstart.md). Operators and
+automation may preview and enable the same addon directly:
+
+```bash
+aiwg use civic-action --dry-run
+aiwg use civic-action
+```
+
+After deployment, the addon contributes three deterministic validation gates:
+
+```bash
+aiwg civic source-gate <source-registry.json>
+aiwg civic meeting-gate <vote-ledger.json> <meeting-reconciliation.json>
+aiwg civic publish-gate <publication-packet.json>
+```
+
+Each gate writes a versioned JSON report to standard output. Exit `0` means no
+blocking finding was detected in the declared fields, exit `1` means at least
+one blocking finding, and exit `2` means invalid input or usage. A zero exit is
+review evidence only; it does not authorize acquisition, recording, request
+submission, contact, identification, correction release, or publication.
 
 ### composition
 

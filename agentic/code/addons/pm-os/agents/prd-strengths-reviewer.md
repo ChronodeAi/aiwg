@@ -1,6 +1,9 @@
 ---
 name: prd-strengths-reviewer
 description: Reviews a PRD through an optimist lens — surfaces positive aspects, potential benefits, simplicity/systems-thinking elements, and constructive suggestions for improvement. Use as a read-only subagent inside /prd Step 7.
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 

@@ -10,9 +10,22 @@ AIWG/Git project root. Override it with `--db <path>`. Read-only commands infer
 the workspace from an explicit `--workspace`, the canonical current project
 root, or a sole catalog workspace, in that order. Multiple candidates fail
 with `WORKSPACE_AMBIGUOUS`; AIWG never chooses between them. Mutation commands
-continue to require an explicit workspace. The catalog requires the optional
-`better-sqlite3` peer dependency; `aiwg sessions doctor --json` reports
-`CATALOG_UNAVAILABLE` when it is absent.
+continue to require an explicit workspace. Install and verify the optional
+SQLite runtime before using catalog commands:
+
+```sh
+aiwg features install sqlite
+aiwg features info sqlite --json
+```
+
+The installer places the exact supported `better-sqlite3` release in AIWG's
+user-owned feature root, allows only its required lifecycle script, and fails
+unless the native module loads. Catalog commands resolve that feature root
+before the base AIWG installation. If no compatible prebuild is available,
+the package falls back to `node-gyp`; install Python 3, `make`, and a C/C++
+compiler supported by your Node platform, then repeat the feature install.
+`aiwg sessions doctor --json` reports `CATALOG_UNAVAILABLE` with the same
+installer command when the package is absent or unusable.
 
 ## Commands
 
@@ -20,6 +33,7 @@ continue to require an explicit workspace. The catalog requires the optional
 aiwg sessions sources [--json]
 aiwg sessions discover --workspace <path>
                        [--codex-root <authorized-path>]
+                       [--omp-root <authorized-path>] [--dsh-root <authorized-path>]
                        [--manifest <path>] [--dry-run] [--json]
 aiwg sessions import-discovered --workspace <path>
                                 [--manifest <path>] [--confirm|--yes]
@@ -79,7 +93,10 @@ Discovery scans only provider roots associated with the explicitly authorized
 workspace. Claude, Cursor, and Factory have workspace-keyed local roots. Codex
 rollouts use a shared root, so AIWG does not inspect `CODEX_HOME` implicitly:
 pass `--codex-root` to authorize that root, or leave Codex reported as
-`SHARED_ROOT_AUTHORIZATION_REQUIRED`. Providers that require an API or manual
+`SHARED_ROOT_AUTHORIZATION_REQUIRED`. OMP and DeepSeek Harness also require an
+explicit authorized root through `--omp-root` or `--dsh-root`. Harness imports
+raw v2 JSONL; compressed histories require a reviewed raw export. Providers that
+require an API or manual
 export remain visible as `export-required`.
 
 ```sh

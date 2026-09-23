@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const prebuiltDir = path.join(repoRoot, 'prebuilt', 'fortemi-core', 'framework');
@@ -22,6 +23,17 @@ function sha256(text) {
   return createHash('sha256').update(text).digest('hex');
 }
 
+function sourceScriptDeclaration(item) {
+  const sourcePath = item.source?.path;
+  if (item.type !== 'aiwg.skill' || typeof sourcePath !== 'string') return null;
+  const absolute = path.join(repoRoot, sourcePath);
+  if (!existsSync(absolute)) return null;
+  const source = readFileSync(absolute, 'utf8');
+  const match = source.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return null;
+  return parseYaml(match[1])?.script ?? null;
+}
+
 function parseNpmPackJson(stdout) {
   try {
     return JSON.parse(stdout);
@@ -34,7 +46,9 @@ function parseNpmPackJson(stdout) {
   }
 }
 
-const pack = spawnSync('npm', ['pack', '--dry-run', '--json'], {
+const tmp = mkdtempSync(path.join(os.tmpdir(), 'aiwg-fortemi-prebuilt-gate-'));
+process.once('exit', () => rmSync(tmp, { recursive: true, force: true }));
+const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', tmp], {
   cwd: repoRoot,
   encoding: 'utf8',
   maxBuffer: 64 * 1024 * 1024,
@@ -42,7 +56,7 @@ const pack = spawnSync('npm', ['pack', '--dry-run', '--json'], {
 if (pack.status !== 0) {
   console.error(pack.stdout);
   console.error(pack.stderr);
-  fail(`npm pack --dry-run --json exited with status ${pack.status}`);
+  fail(`npm pack --json exited with status ${pack.status}`);
 }
 
 let packJson;
@@ -65,10 +79,11 @@ if (!existsSync(manifestPath)) fail(`${manifestRel} is missing`);
 const exportText = readFileSync(exportPath, 'utf8');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const exported = JSON.parse(exportText);
-// The optional graph-pattern capability and scoped Markdown-link edge metadata
-// add discoverable corpus structure. Keep a tight, explicit package budget
-// while accommodating the reviewed 3,705-item release corpus.
-const maxExportBytes = Number.parseInt(process.env.AIWG_FORTEMI_PREBUILT_MAX_BYTES ?? '13250000', 10);
+// The 2026.9.6 corpus has 4,135 metadata-only records (14,562,168 bytes),
+// including 94 Testing Quality records for its conformance agents and flows.
+// Retain an explicit package budget with about 3% headroom for this corpus;
+// source-body, chunk, checksum, and per-record size checks remain independent.
+const maxExportBytes = Number.parseInt(process.env.AIWG_FORTEMI_PREBUILT_MAX_BYTES ?? '15000000', 10);
 
 if (manifest.schema_version !== 'aiwg.fortemi.prebuilt.v1') {
   fail(`manifest schema_version is ${manifest.schema_version}`);
@@ -91,6 +106,12 @@ if (exported.source?.graph !== 'framework') fail(`export source.graph is ${expor
 if (!Array.isArray(exported.items) || exported.items.length === 0) {
   fail('export contains no items');
 }
+const nondeterministicTimestamp = exported.items.find((item) =>
+  item.updated_at !== exported.generated_at || item.source?.updated_at !== exported.generated_at
+);
+if (nondeterministicTimestamp) {
+  fail(`prebuilt export timestamp for ${nondeterministicTimestamp.source?.path ?? nondeterministicTimestamp.id} is not bound to generated_at`);
+}
 if (exported.items.some((item) => Array.isArray(item.chunks) && item.chunks.length > 0)) {
   fail('prebuilt framework export must not include chunk payloads; package fallback is metadata/capability-only');
 }
@@ -105,7 +126,13 @@ if (manifest.item_count !== exported.items.length) {
   fail(`manifest item_count ${manifest.item_count} does not match export item count ${exported.items.length}`);
 }
 
-const tmp = mkdtempSync(path.join(os.tmpdir(), 'aiwg-fortemi-prebuilt-gate-'));
+const missingExecutableMetadata = exported.items.filter((item) =>
+  sourceScriptDeclaration(item) && !item.search?.frontmatter?.aiwg_script
+);
+if (missingExecutableMetadata.length > 0) {
+  fail(`prebuilt export strips executable metadata from ${missingExecutableMetadata.length} source skill(s): ${missingExecutableMetadata.slice(0, 5).map((item) => item.name ?? item.id).join(', ')}`);
+}
+
 try {
   const discover = spawnSync(
     process.execPath,
@@ -129,6 +156,7 @@ try {
       env: {
         ...process.env,
         XDG_DATA_HOME: path.join(tmp, 'xdg'),
+        AIWG_CONFIG: path.join(tmp, 'config-source'),
         AIWG_ROOT: repoRoot,
       },
     },
@@ -152,6 +180,7 @@ try {
         env: {
           ...process.env,
           XDG_DATA_HOME: path.join(tmp, 'xdg'),
+          AIWG_CONFIG: path.join(tmp, 'config-source'),
           AIWG_ROOT: repoRoot,
         },
       },
@@ -171,17 +200,7 @@ try {
     fail('Fortemi Core prebuilt fallback discovery did not return intake-start-campaign for "campaign intake"');
   }
 
-  const packOut = spawnSync('npm', ['pack', '--json', '--pack-destination', tmp], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (packOut.status !== 0) {
-    console.error(packOut.stdout);
-    console.error(packOut.stderr);
-    fail(`npm pack --pack-destination exited with status ${packOut.status}`);
-  }
-  const packed = parseNpmPackJson(packOut.stdout)?.[0];
+  const packed = packJson?.[0];
   const tarball = packed?.filename ? path.join(tmp, packed.filename) : undefined;
   if (!tarball || !existsSync(tarball)) fail('npm pack did not produce a tarball for packed-install smoke');
 
@@ -211,6 +230,7 @@ try {
       env: {
         ...process.env,
         XDG_DATA_HOME: path.join(tmp, 'xdg-installed'),
+        AIWG_CONFIG: path.join(tmp, 'config-installed'),
         AIWG_ROOT: path.join(installDir, 'node_modules', 'aiwg'),
       },
     },
@@ -225,6 +245,43 @@ try {
   }
 
   const installedRoot = path.join(installDir, 'node_modules', 'aiwg');
+  const executableSkills = [
+    {
+      name: 'issue-create',
+      args: ['plan', '--title', 'prebuilt package diagnostic', '--body', 'diagnostic', '--labels', 'bug', '--project-root', tmp],
+    },
+    {
+      name: 'address-issues-threat-assess',
+      args: ['--text', 'diagnostic', '--format', 'json'],
+    },
+  ];
+  for (const executable of executableSkills) {
+    const record = exported.items.find((item) => item.type === 'aiwg.skill' && item.name === executable.name);
+    if (!record) fail(`prebuilt export is missing executable skill ${executable.name}`);
+    for (const selector of [executable.name, record.id]) {
+      const run = spawnSync(
+        process.execPath,
+        [installedCli, 'run', 'skill', selector, '--', ...executable.args],
+        {
+          cwd: tmp,
+          encoding: 'utf8',
+          maxBuffer: 16 * 1024 * 1024,
+          env: {
+            ...process.env,
+            XDG_DATA_HOME: path.join(tmp, `xdg-run-${executable.name}-${selector === record.id ? 'id' : 'name'}`),
+            AIWG_CONFIG: path.join(tmp, 'config-installed'),
+            AIWG_ROOT: installedRoot,
+          },
+        },
+      );
+      if (run.status !== 0) {
+        console.error(run.stdout);
+        console.error(run.stderr);
+        fail(`packed production executable skill ${executable.name} failed via ${selector === record.id ? 'stable ID' : 'name'} (status ${run.status})`);
+      }
+    }
+  }
+
   const installedDoctor = spawnSync(
     process.execPath,
     [path.join(installedRoot, 'tools', 'cli', 'doctor.mjs'), '--no-budget-check'],
@@ -235,6 +292,7 @@ try {
       env: {
         ...process.env,
         XDG_DATA_HOME: path.join(tmp, 'xdg-doctor'),
+        AIWG_CONFIG: path.join(tmp, 'config-installed'),
         AIWG_ROOT: installedRoot,
       },
     },

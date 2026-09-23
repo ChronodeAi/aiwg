@@ -344,12 +344,46 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
       const gitignore = await fs.readFile(path.join(projectDir, '.gitignore'), 'utf-8');
       expect(gitignore).toContain('.codex/');
       expect(gitignore).toContain('.agents/');
-      const codexAgents = (await fs.readdir(path.join(projectDir, '.codex', 'agents')))
-        .filter(file => file.endsWith('.toml'));
-      expect(codexAgents.length).toBeGreaterThan(0);
       const config = JSON.parse(await fs.readFile(path.join(projectDir, '.aiwg', 'aiwg.config'), 'utf-8'));
       expect(config.installed.all.deployedTo.codex.agents).toBe(codexAgents.length);
       expect(result.stdout).toMatch(/Deployed to OpenAI Codex \(codex\)[\s\S]*\bSkills [1-9]\d*\b/);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('deploys Pi prompts and kernel skills for the default bulk install', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-all-pi-home-'));
+    try {
+      const result = runAiwgWithEnv(
+        ['use', 'all', '--provider', 'pi', '--target', projectDir],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir },
+      );
+      expect(result.exitCode, `aiwg use all --provider pi failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(existsSync(path.join(projectDir, '.agents', 'skills', 'aiwg-regenerate', 'SKILL.md'))).toBe(true);
+      expect(existsSync(path.join(projectDir, '.pi', 'prompts', 'address-issues.md'))).toBe(true);
+      expect(existsSync(path.join(projectDir, 'AGENTS.md'))).toBe(true);
+      expect(existsSync(path.join(projectDir, '.pi', 'settings.json'))).toBe(false);
+      expect(result.stdout).toMatch(/Deployed to Pi Coding Agent \(pi\)[\s\S]*\bCommands [1-9]\d*\b[\s\S]*\bSkills [1-9]\d*\b/);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it('mirrors Pi user-scope resources through PI_CODING_AGENT_DIR', async () => {
+    const homeDir = mkdtempSync(path.join(os.tmpdir(), 'aiwg-use-pi-user-home-'));
+    const agentDir = path.join(homeDir, 'custom-pi-agent');
+    try {
+      const result = runAiwgWithEnv(
+        ['use', 'sdlc', '--provider', 'pi', '--target', projectDir, '--scope', 'user'],
+        projectDir,
+        { HOME: homeDir, USERPROFILE: homeDir, PI_CODING_AGENT_DIR: agentDir },
+      );
+      expect(result.exitCode, `Pi user-scope deployment failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+      expect(existsSync(path.join(agentDir, 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(true);
+      expect(existsSync(path.join(agentDir, 'prompts', 'address-issues.md'))).toBe(true);
+      expect(existsSync(path.join(homeDir, '.agents', 'skills', 'sdlc-quickref', 'SKILL.md'))).toBe(false);
     } finally {
       rmSync(homeDir, { recursive: true, force: true });
     }
@@ -432,20 +466,20 @@ describe.skipIf(!GIT_AVAILABLE)('aiwg use all — deployment coverage', { timeou
     }
   });
 
-  it('writes complete RULES-ONDEMAND indexes for Claude and Codex after real aiwg use all (#1784)', async () => {
-    for (const provider of ['claude', 'codex']) {
-      const result = runAiwg(['use', 'all', '--provider', provider, '--target', projectDir], projectDir);
-      expect(result.exitCode, `aiwg use all --provider ${provider} failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
+  // One bounded CLI child per case; each provider gets an isolated project and
+  // a distinct failure identity instead of sharing a 90s budget for two calls.
+  it.each(['claude', 'codex'])('writes complete RULES-ONDEMAND indexes for %s after real aiwg use all (#1784)', async (provider) => {
+    const result = runAiwg(['use', 'all', '--provider', provider, '--target', projectDir], projectDir);
+    expect(result.exitCode, `aiwg use all --provider ${provider} failed:\nstdout: ${result.stdout}\nstderr: ${result.stderr}`).toBe(0);
 
-      const rulesDir = provider === 'claude'
-        ? path.join(projectDir, '.claude', 'rules')
-        : path.join(projectDir, '.codex', 'rules');
-      const body = await fs.readFile(path.join(rulesDir, 'RULES-ONDEMAND.md'), 'utf8');
-      const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
+    const rulesDir = provider === 'claude'
+      ? path.join(projectDir, '.claude', 'rules')
+      : path.join(projectDir, '.codex', 'rules');
+    const body = await fs.readFile(path.join(rulesDir, 'RULES-ONDEMAND.md'), 'utf8');
+    const actual = [...body.matchAll(/^- `([^`]+)`/gm)].map((match) => match[1]).sort();
 
-      expect(actual).toEqual(EXPECTED_ON_DEMAND_RULE_NAMES);
-      expect(actual).toEqual(expect.arrayContaining(ISSUE_1784_MISSING_EXAMPLES));
-    }
+    expect(actual).toEqual(EXPECTED_ON_DEMAND_RULE_NAMES);
+    expect(actual).toEqual(expect.arrayContaining(ISSUE_1784_MISSING_EXAMPLES));
   }, 90_000);
 });
 

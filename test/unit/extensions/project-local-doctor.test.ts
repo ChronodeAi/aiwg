@@ -157,9 +157,61 @@ describe('project-local-doctor (DC-1)', () => {
     expect(current.hasFailures).toBe(false);
   });
 
+  it('reports a discovered bundle with no recorded deployment as a failure (#2503)', async () => {
+    writeBundle(projectDir, 'never-deployed');
+    const config: AiwgConfig = { version: '1', providers: ['claude'], installed: {}, scripts: {} };
+
+    // A deploy that aborts (e.g. on a support-asset reference) leaves no
+    // installed entry, so manifest validation and drift both pass while the
+    // bundle is in fact unavailable.
+    const result = await buildProjectLocalDoctorSection({ projectDir, frameworkRoot, config });
+
+    expect(result.validationErrors).toBe(0);
+    expect(result.undeployedCount).toBe(1);
+    expect(result.hasFailures).toBe(true);
+    expect(result.output).toContain('not deployed');
+    expect(result.output).toContain('extension/never-deployed');
+  });
+
+  it('reports all discovered bundles deployed once a deployment is recorded (#2503)', async () => {
+    writeBundle(projectDir, 'deployed-ok');
+    const config: AiwgConfig = {
+      version: '1',
+      providers: ['claude'],
+      installed: {
+        'deployed-ok': {
+          version: '1.0.0',
+          source: 'project-local',
+          installedAt: new Date().toISOString(),
+          deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
+        },
+      },
+      scripts: {},
+    };
+
+    const result = await buildProjectLocalDoctorSection({ projectDir, frameworkRoot, config });
+
+    expect(result.undeployedCount).toBe(0);
+    expect(result.output).toContain('Deployment: ✓ all discovered bundles deployed');
+  });
+
   it('audits a managed quickref synthesized from bundles without a legacy source', async () => {
     writeBundle(projectDir, 'managed-tools');
-    const config: AiwgConfig = { version: '1', providers: ['claude'], installed: {}, scripts: {} };
+    const config: AiwgConfig = {
+      version: '1',
+      providers: ['claude'],
+      // Recorded as deployed so this quickref-focused case is not also
+      // reporting the undeployed-bundle failure added for #2503.
+      installed: {
+        'managed-tools': {
+          version: '1.0.0',
+          source: 'project-local',
+          installedAt: new Date().toISOString(),
+          deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 1 } },
+        },
+      },
+      scripts: {},
+    };
 
     const stale = await buildProjectLocalDoctorSection({ projectDir, frameworkRoot, config });
     expect(stale.output).toContain('Project quickref: aiwg-project-');
@@ -291,6 +343,7 @@ describe('project-local-doctor (DC-1)', () => {
 
   it('detects drift through provider-translated artifact paths', async () => {
     writeBundle(projectDir, 'foo');
+    await deployProjectQuickref(projectDir, 'cursor');
     mkdirSync(join(projectDir, '.cursor', 'rules'), { recursive: true });
     writeFileSync(join(projectDir, '.cursor', 'rules', 'r1.mdc'), 'mutated cursor rule');
     const config = makeConfig('foo', { 'rules/r1.md': sha256('rule body') }, 'cursor');

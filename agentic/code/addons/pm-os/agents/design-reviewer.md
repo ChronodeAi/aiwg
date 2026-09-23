@@ -1,6 +1,9 @@
 ---
 name: design-reviewer
 description: Reviews product documents from a product design, usability, accessibility, state, and information architecture perspective. Use as a read-only subagent inside /review.
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 

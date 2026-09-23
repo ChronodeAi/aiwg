@@ -19,6 +19,507 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   no include syntax. MCP stays provider-native via DSH's `dsh-mcp-client`
   cordis.yml plugin, so no JSON injection adapter ships. Aliases: `deepseek`,
   `deepseek-harness`. Provider reference: `docs/agents/providers/deepseek-harness.md`.
+
+## [2026.9.7] - 2026-09-12 – "Only what the run owns"
+
+### Added
+
+- Detect a bootstrap whose precedence block no longer puts AIWG rules first, and route the
+  finding to `aiwg regenerate` through the steward.
+
+### Changed
+
+- Rank AIWG's deployed rules above provider, harness, and session directives in the generated
+  WORKSPACE.md precedence block. Platform capability and safety constraints remain absolute; a
+  session-level directive no longer outranks a rule marked CRITICAL. Regenerate to pick this up.
+- Lead the README with natural-language requests rather than CLI invocations, keep its tooling
+  interactions prompt-driven, and fix Mermaid diagram rendering.
+
+### Fixed
+
+- Stop `aiwg use all` from deleting another bundle's surface. The kernel-only path called the
+  flat-artifact prune with an empty desired set, so every AIWG-managed agent, command, and rule
+  matched as stale: `aiwg use sdlc` followed by `aiwg use all` took `.claude/agents` from 139 to
+  0 and `.claude/rules` from 47 to 2, and reported success.
+- Report the artifacts a deploy accounts for rather than a directory listing. Counts came from a
+  readdir, so a run that wrote nothing still printed whatever sat in the provider tree and a
+  no-op deploy was indistinguishable from a successful one.
+- Retire skill-command wrappers whose source skill is gone, instead of leaving them advertising
+  a command that resolves to nothing.
+- Stop a provider-scoped refresh from pruning provider trees it was not asked to touch.
+  `aiwg refresh --provider claude` had been leaving `.codex/` with zero agents while its
+  commands, rules, and AGENTS.md bridge stayed intact and advertised.
+- Leave git-tracked artifacts to an explicit opt-in during the cross-provider prune. Deleting a
+  regenerable ignored artifact and deleting a committed file are different questions; the prune
+  had answered both the same way and produced 161 staged deletions in a working tree holding
+  unrelated in-flight work.
+- Keep `--force` scoped to overwriting artifacts AIWG does not manage, rather than also
+  authorising deletion of tracked files in a tree the run was not asked to touch.
+- Treat an edge launcher redirect as aligned rather than reporting it as installation drift.
+- Report divergent artifact payload as repairable instead of manual-only.
+- Resolve the artifact root when writing hook traces instead of hardcoding `.aiwg`, so
+  split-root workspaces record traces in the configured corpus.
+- Declare AIWG ownership on the generated project quickref.
+- Keep bundle agents and deploy-directory support assets in project-local deployments.
+- Resolve `WatchService.start()` only once chokidar reports the watch armed, not merely that its
+  initial scan finished. A file created in that window was reported by neither, so the `add`
+  event was absent rather than late and no caller-side wait could recover it.
+- Skip sqlite-backed test suites with a named remedy when the optional `better-sqlite3` backend
+  is absent, instead of failing 61 tests across 25 files with symptoms that never name the
+  cause. A default `npm install && npm test` is green; `npm run features:sqlite` enables the
+  suites, and CI installs the same pinned build.
+
+- Cover restoration-observer edge cases and import-lease ownership preservation, with per-file source coverage in CI.
+- Replace untrusted fleet transport and response-decoding errors with safe diagnostics in structured and text reports.
+- Include workspace discovery and retrieval in context-pack elapsed time, with deterministic timing-boundary tests.
+- Strengthen memory confirmation, CLI routing, independent budgets, metrics, and cache regression assertions.
+- Preserve provider JSON and TOML settings during MCP registration, escaping values and rejecting malformed input.
+- Handle split UTF-8 output, child timeouts, and stdin failures in MCP CLI requests; use structured command discovery.
+- Reject incomplete, fractional, unsafe, and non-finite mission limits before dispatch through CLI and MCP surfaces.
+- Strengthen memory, recovery, session, provider, and documentation test assertions and fixture cleanup.
+
+- Preserve required runtime and idempotency extension activation when forwarding mission approval replies (#2310).
+
+- Route public mission approvals over the task's negotiated A2A transport, retaining prompt correlation,
+  validating pending responses and rejecting duplicate submissions (#2310).
+
+## [2026.9.6] - 2026-09-08 – "Verifiable test conformance"
+
+### Added
+
+- Expand testing-quality with source-bound conformance assessment, runner discovery and execution receipts,
+  negative controls, reversible normalization, platform templates, research guidance, and SDLC agents and flows.
+  Qualify real Vitest and pytest lifecycles and retain explicit limits for other platform profiles.
+
+### Fixed
+
+- Exercise AIWG's own test conformance workflow: restore omitted Vitest tests, split mixed contract runners,
+  fail closed on validator setup errors, strengthen schema/fixture oracles, and prove multi-target control attribution.
+- Reconcile real Vitest nested-suite counters independently from result-file counts.
+- Execute artifact query integration on a deterministic corpus, replacing absent-corpus early returns with exact
+  ranking, filtering, limit, and populated-index assertions.
+- Share genuine package preparation in a required serial lane, correct coverage threshold placement, and enforce
+  a measured Testing Quality library denominator with a deliberate failure control.
+
+## [2026.9.5] - 2026-09-07 - "DeepSeek Harness, shared bundles, and controlled writing"
+
+### Fixed
+
+- Index validated external project-local bundles in nested members so deployment, discovery, show, and managed quickrefs agree without copying source bundles. Exclude unrelated external files and escaping payload links (#2308).
+- Route artifact writes through the configured external corpus and independently verify Fortemi execution receipts.
+- Drain DeepSeek Harness output before reporting successful completion.
+
+### Added
+
+- Session exploration workflows, recipe references, and discoverable catalog help.
+
+### Changed
+
+- Clarify first-use onboarding, workflow examples, provider setup, and public documentation navigation while retaining
+  the full capability reference.
+- Report indexed artifact access for Hermes, OpenHuman, and Antigravity when native artifact deployment is unavailable.
+
+### Documentation
+
+- Add the native subagent harness voice-evaluation lane and record thirty Astra/Sol cases, primary reviews, replay outcomes and comparison limits.
+
+- Record the Gemma native-schema follow-up: format recovery, remaining edit-budget and fidelity failures, and unchanged rejection of unqualified voice revisions.
+
+- Record forty current Qwen/Gemma expression revalidation calls, primary-reviewed passes, strict-format failures and resource/settings limits.
+
+- Retire GPT-OSS20b from current-model qualification and retain its existing reports as historical evidence pending eligible-model revalidation.
+
+- Record the TinyStyler negative mechanism trial and the bounded-expression/paragraph-addressing comparison, including failed proposals and unresolved cadence.
+
+- Record the negative paired core-guidance handoff result, including factual regressions, unchanged voice acceptance and additional token cost.
+
+### Fixed
+- Protect explicit channel CTAs and required literals before generation, merging overlaps with existing code/Markdown protection while retaining final constraint checks.
+
+
+### Documentation
+- Publish paired Qwen/GPT-OSS channel development results, including failed slices, reused baseline provenance and the remaining qualification limits.
+
+
+### Fixed
+- Route negation, qualification and first-person lexical changes to explicit semantic review instead of treating wording differences as conclusive fidelity failures. Quantity, command, citation and protected-content invariants still fail closed; final reviewers can inspect a cloned assessment.
+
+
+### Fixed
+
+- Pass channel/task context into writer-profile compilation so scoped author
+  preferences apply to the intended output without leaking across calls (#2301).
+
+### Added
+
+- Published four-policy, two-count exemplar development results and exact-token
+  envelope audit with text-free receipts; no retrieval default promoted (#2295).
+
+- Five opt-in channel structure packs with bounded local consumer adapters,
+  one-post chat constraints and explicit unsupported-consumer coverage (#2301).
+- Canonical writing receipts, opt-in legacy migration/rollback and a local
+  `writing plan|proofread` CLI path (#2303). No publication is performed.
+
+- Bounded voice revision, individual human edit decisions, explicit profile-learning
+  proposals and undo (#2299). Reported usage and reserved budgets remain distinct.
+- Writer sidecars in the existing mode resolver, truthful participating-consumer
+  state and scoped shared MCP profile resources (#2300). Selection alone does
+  not intercept provider responses.
+- Voice evaluation design, blinding, clustered analysis and leakage checks
+  (#2302). Real pilot data, human ratings and model comparisons remain required.
+
+- Deterministic, profile-scoped exemplar selection with four budgeted strategies,
+  split leakage checks and reproducible receipts (#2295). Fixture ablations
+  measure selector behavior; model-quality comparison remains unqualified.
+- Structured fact/intent/audience briefs and authorized proofreading with
+  grounded author claims and pinned provider-launch annotations (#2296).
+- Conservative fidelity review and final mandatory output-mode validation,
+  including accurate attempted/retained fallback receipts (#2298).
+
+- Opt-in writer profile sidecars with approved sample evidence, author overrides,
+  lossless legacy attachments, scoped revisioned storage, controlled exports,
+  revocation, and advisory output-mode compilation (#2294). Legacy voice files
+  retain their existing loading behavior.
+
+- Contextual writing diagnostics with UTF-16 spans, protected contexts,
+  reasoned exceptions, explicit rule overrides and repetition review across
+  words, paragraphs and documents (#2297). Legacy validator fields remain
+  compatible but are labeled deprecated heuristics. The 32 labeled regression
+  cases are fixture measurements, not human voice qualification.
+
+- Natural voice evidence ledger and ownership ADR with pinned research artifacts,
+  bounded claim mappings, deferred additional-source assessments, and validation
+  rejecting anecdotal release thresholds (#2293). This establishes the evidence
+  contract; it does not qualify generated voice quality.
+
+- Experimental DeepSeek Harness provider (`deepseek-harness`, alias `dsh`) with
+  AGENTS-first context, native filesystem skills, least-authority Cordis
+  defaults, exact-version-gated headless and SDK JSON-RPC execution, raw v2
+  session import, credential-reference-only OpenRouter conformance, and public
+  provider/site documentation (#2160, #2162–#2167, #2290).
+- Opt-in `network-analysis` addon for governed saved-PCAP/PCAPNG analysis with
+  bounded TShark recipes, metadata-first evidence, stable citations, optional
+  local Termshark review, framework handoffs, and deterministic conformance
+  evidence (#2269–#2281).
+
+### Fixed
+
+- Fortemi dataset qualification discovers the consolidated execution tool,
+  independently validates receipts and approved request digests, and exercises
+  bounded replay, resume, journal recovery, and archive (#2242; Fortemi #1131).
+
+## [2026.9.4] - 2026-09-05 - "Clear recovery for lightweight CLI setup"
+
+### Fixed
+
+- Bundled setup through `@aiwg/cli` stops before project initialization and
+  explains how to install the full `aiwg` package, instead of starting an
+  incomplete deployment and crashing on a missing addons directory (#2287).
+
+## [2026.9.3] - 2026-09-05 - "Broader provider support, reliable project discovery"
+
+### Added
+
+- Experimental Google Antigravity CLI provider (`antigravity`, alias and
+  executable `agy`) with project-scoped agents and skills, collision-safe MCP
+  injection, explicit model/session routing, and a bounded offline-qualified
+  headless adapter pinned to CLI 1.1.26 (#2258–#2267).
+- Contributor Covenant 2.0 community standards, enforcement responsibilities,
+  reporting channel, and impact guidelines ([jmagly/aiwg#186](https://github.com/jmagly/aiwg/pull/186)).
+- Experimental Oh My Pi (`omp`, alias `oh-my-pi`) integration with distinct native
+  resource paths, profile-aware configuration, agents, owned MCP injection,
+  extension bridge, model discovery, JSON/RPC execution, bounded teams, and
+  title-prefixed session imports. See the [provider guide](docs/providers/omp.md)
+  for the pinned version, support limits, and removal workflow (#2244–#2256).
+- Opt-in Fortemi live storage qualification now produces sanitized, durable
+  receipts binding the tested revision, endpoint identity, server contract,
+  complete operation inventory, mutation status, and resource bounds. Dataset
+  workflows also gain a schema-first live contract preflight and durable UAT
+  plan; these checks do not certify Server persistence or recovery.
+
+### Changed
+
+- Promoted the Hermes provider integration from experimental to stable and
+  identified the `pi` provider explicitly as the Pi Coding Agent harness
+  published at [pi.dev](https://pi.dev/) across current provider documentation.
+- Synchronized OMP across the public homepage, provider and capability
+  matrices, setup navigation, operator references, and getting-started guides.
+  Together with Antigravity, the public platform list now matches 14 named
+  provider integrations and no longer counts Ollama, an LLM backend, as an
+  AIWG deployment provider.
+
+### Fixed
+
+- Existing project-local skills remain discoverable when their Fortemi Core
+  project cache is missing, stale, or corrupt. Discovery falls back to the existing
+  local project index, and framework deployment, refresh, and upgrade synchronize
+  the project index after local bundle reconciliation (#2155).
+- Portable workflows, including `aiwg-guide`, documentation consolidation,
+  and semantic-memory skills, declare `platforms: [all]` across canonical and
+  plugin copies. Newly supported providers can deploy them without stale
+  provider allowlists silently excluding them (#2282).
+- Fortemi MCP reads accept nested original/revised content, and search results
+  with opaque note IDs retrieve missing path metadata before applying subsystem
+  filtering. Search hydration is bounded to 50 results.
+- Concurrent SQLite graph initialization now retries journal-mode and schema
+  contention within the configured busy timeout and closes failed connections.
+  Deterministic lock regressions and renewed source-bound benchmark evidence
+  cover the change.
+
+### Release boundaries
+
+- OMP remains experimental at its reviewed 18.1.10 baseline. Antigravity remains
+  experimental with offline conformance pinned to 1.1.26; authenticated model
+  execution has not been qualified.
+- Fortemi Server remains alpha and pre-certification. Live probes require an
+  explicitly configured endpoint, default to read-only, and gate writes
+  separately. Fortemi Core capability discovery is a separate static-cache
+  path and does not require a live Server endpoint.
+
+## [2026.9.2] - 2026-09-04 - "Pi from resources to runtime"
+
+### Changed
+
+- **Pi is now integrated across deployment, model selection, headless execution,
+  and session intelligence** - AIWG deploys a reviewed trust-gated extension
+  bridge, discovers Pi's configured backend/model catalog, launches External
+  Ralph sessions with model, thinking, tools, and session controls, and uses
+  bounded RPC-first cancellation (#2147, #2150, #2151).
+
+- **Pi v3 sessions are a first-class governed source** - Authorized discovery,
+  stable native IDs and tree topology, core-entry normalization, opaque future
+  entries, resource limits, and sensitive tool/custom-data redaction are
+  covered by provider conformance and repository importer gates (#2152).
+
+### Security
+
+- **Headless Pi runs fail closed at trust and tool-policy boundaries** - The
+  managed extension never prompts without a TUI and blocks destructive or
+  package-mutating shell calls; machine protocols keep JSONL on stdout and
+  diagnostics on stderr. MCP remains explicitly unsupported in Pi core.
+
+### Tests
+
+- Qualified Pi Coding Agent 0.85.0 against OpenRouter using isolated agent and
+  session roots. Model discovery, RPC state/abort, strict JSONL, live inference,
+  and terminal `agent_settled` all passed without persisting credentials or raw
+  output.
+
+### Release boundaries
+
+- Pi remains experimental pending its promotion gate. AIWG does not install Pi
+  packages, credentials, or MCP extensions, and operator-owned settings,
+  prompts, skills, extensions, sessions, and trust decisions remain preserved.
+
+
+- Corrected the Pi Coding Agent package name to
+  `@earendil-works/pi-coding-agent` and synchronized the provider guide,
+  quickstart, CLI reference, trust policy, OpenRouter example, session/RPC
+  boundaries, and upstream verification baseline with Pi 0.85.0.
+
+### Tests
+
+- Added pinned Pi provider and version-3 session conformance fixtures covering
+  resource discovery, explicit headless trust, branches, compaction, retry
+  evidence, opaque future entries, malformed JSONL, and credential redaction.
+- Added an opt-in Pi/OpenRouter smoke harness that uses an ephemeral pinned
+  package or reviewed source build, isolated agent/session roots, explicit
+  trust, strict JSONL/RPC checks, and value-free evidence.
+
+## [2026.9.1] - 2026-09-04 - "Governed data, broader provider reach"
+
+### Added
+
+- **Schema governance now has a first-class control plane** - A catalog,
+  lifecycle policy, compatibility analysis, validation commands, and storage
+  parity checks make schema evolution explicit and testable across packaged
+  resources (roctinam/aiwg#2223, roctinam/aiwg#2227).
+
+- **Dataset intelligence adds governed, reproducible data workflows** - The new
+  addon provides source-adapter contracts, standards profiles, canonical run
+  ledgers, provenance, orchestration commands, migration guidance, and
+  cross-runtime conformance coverage.
+
+- **Pi Coding Agent is available as an experimental resource-first provider** -
+  `aiwg use all --provider pi` deploys a Pi-neutral `AGENTS.md`, portable Agent
+  Skills, and native `.pi/prompts` templates at project or relocated user scope.
+  Provider detection, capability routing, receipts, planning records, and
+  end-to-end coverage are included. The public provider inventory now enforces
+  12 named integrations plus a separately identified generic fallback
+  (roctinam/aiwg#2148, roctinam/aiwg#2149).
+
+- **Output modes now have a supported extension and discovery surface** - The
+  output-mode registry and protected transformation runtime are exported from
+  the package API, with guides for selection, custom profiles, integration, and
+  troubleshooting.
+
+- **Fortemi storage qualification now runs against the live server path** - A
+  dedicated conformance gate exercises published Core receipts against clean
+  PGlite and Fortemi environments (roctinam/aiwg#2194).
+
+### Fixed
+
+- **Release CI installs Rust from an immutable archive** - The conformance
+  workflow no longer depends on a mutable installer endpoint.
+
+- **Dataset documentation, packaging, and orchestration stay aligned** -
+  Governed schemas ship with the CLI, report directories are created before
+  use, source links resolve correctly, and addon commands bind to the shared
+  orchestration service.
+
+- **Provider documentation cannot silently drift from the registry** - A unit
+  test compares the published provider inventory with canonical definitions and
+  asserts the exact named-provider count.
+
+### Release boundaries
+
+- Pi support in this release covers provider identity, detection, capability
+  reporting, and native resource deployment. Runtime extensions, model-catalog
+  integration, and persisted-session ingestion remain future work.
+- Dataset standards profiles and adapters establish governed contracts; they do
+  not certify external datasets or replace operator review of source rights,
+  quality, or fitness for purpose.
+
+## [2026.9.0] - 2026-09-01 - "Cited civic workflows, safer publication"
+
+### Added
+
+- **Civic research and publication now have an opt-in, cited review kit** -
+  Four bounded agents, eight skills, three rules, three FlowPlaybooks, fifteen
+  resolvable Flow capabilities, ten schemas, ten templates, examples, and
+  deployment metadata support public-source review, public-records planning,
+  meeting and vote reconciliation, public-technology research, local-resource
+  profiles, editorial correction, and publication QA
+  (roctinam/aiwg#2213-#2222).
+
+- **Civic contracts expose source, jurisdiction, and review fields** - Source
+  registry contracts record provenance, license and terms, acquisition method,
+  jurisdiction, and declared uses. CAP, GTFS, and HSDS remain vendor-neutral
+  AIWG profile contracts. A control-to-source matrix links every skill to the
+  primary standards and public-sector guidance that informed its design and
+  records which boundaries are executable or declarative.
+
+### Security
+
+- **Selected declared civic conditions produce machine-readable blocks** -
+  Local gates block declared access-control bypass and unresolved source
+  authorization/rights; conflicted or unverified vote evidence; declared
+  material claims without citations; unnamed privacy/accessibility review;
+  unresolved declared corrections/deployment states; and publication packets
+  lacking named exact-hash approval. Broader jurisdiction, consent,
+  anti-targeting, retention, and independent-review requirements remain
+  explicit human workflow rules.
+
+### Fixed
+
+- **Required CI workflows no longer cancel one another** - Workflow-specific
+  concurrency groups isolate CI, documentation, and metadata-validation runs so
+  the release gate can observe each required check independently.
+
+- **Release publication and recovery paths are retry-safe** - Gitea npm jobs
+  scope Vault route variables correctly, recovery dispatch is supported,
+  duplicate release assets are replaced on retry, and GitHub signing identity
+  is bound to the release tag.
+
+- **Prebuilt release indices are reproducible** - Generated index timestamps no
+  longer introduce non-deterministic package output.
+
+- **Civic executable gates reject malformed contracts before evaluating
+  policy** - Source, meeting, and publication commands validate their complete
+  JSON Schemas and return the documented invalid-input exit code with bounded
+  JSON-pointer diagnostics instead of allowing a partial object to pass.
+
+- **Civic newsroom discovery resolves its shipped FlowPlaybook** - The planning
+  skill and design map now reference the deployed `civic-newsroom.yaml` path.
+
+- **Executable addon skills retain their support payloads after deployment** -
+  Bundled addon installs now copy declared scripts and existing referenced
+  assets into native provider skill directories. Civic gate wrappers resolve
+  the installed AIWG source root when executed from a deployed Codex skill.
+
+### Release boundaries
+
+- Civic Action prepares structured artifacts and local findings; named humans
+  retain authority for acquisition, recording, contact, submission, legal
+  interpretation, identity resolution, procurement decisions, correction
+  approval, and publication.
+- A machine pass means only that no blocking condition was found among the
+  declared, schema-valid fields. It is not legal advice, factual verification,
+  standards certification, a compliance determination, or authorization to
+  act. Review and hash fields are asserted metadata unless a command explicitly
+  verifies them.
+- Records, procurement, local-resource, and correction assets are profile and
+  review contracts. Jurisdiction-specific rules and external adapters do not
+  ship in this release; missing integrations perform no external action.
+
+## [2026.8.28] - 2026-08-31 - "Governed evidence, resilient tooling"
+
+### Added
+
+- **Ops outputs now cross a mandatory redaction boundary** - A public text,
+  stream, and nested-structured API sanitizes common and project-defined secret
+  classes before responses or persistent/external sinks. Typed markers preserve
+  optional length/HMAC correlation metadata, failures deny publication without a
+  payload, and exceptional bypasses require a sink-enabled, scoped audit record
+  (jmagly/aiwg#178).
+
+- **Ops artifacts are classified and destination-gated** - Versioned governance
+  schemas, secure kind/category defaults, inheritance, custom ordered classes,
+  sink visibility ceilings, cross-repo approval checks, payload-free decisions,
+  and separately gated sanitized summaries now cover repository, tracker,
+  comment, export, and bundle boundaries (jmagly/aiwg#179).
+
+- **Ops evidence has enforceable minimization and lifecycle controls** - Durable
+  evidence defaults to bounded excerpts, outcomes, counts, and digests; raw
+  capture requires a reason and short TTL. Category/classification/sink/tier
+  policies drive summarize, redact, archive, retain, and delete actions with
+  reversible holds and payload-free disposition receipts (jmagly/aiwg#180).
+
+### Fixed
+
+- **Output-mode selection now fails safe before persistence and execution** -
+  Proposed project and session stacks are validated before state is saved,
+  personal profiles follow the active AIWG user-config resolver, nested runs
+  clear stale mode variables, child flags after `--` remain untouched, strict
+  profile/state validation rejects malformed policy, and protected literals
+  cannot be removed, duplicated, or confused with input text.
+
+- **Ops extension YAML templates now honor their declared schemas** - IT asset,
+  service, and network-state templates use strict first-class IT kinds, the
+  provisioning playbook uses structured references, and all shipped ops
+  extension templates resolve through manifest-declared schemas. A reusable
+  all-extension conformance validator with negative reference/shape tests now
+  runs in CI and reports file-plus-JSON-pointer diagnostics (jmagly/aiwg#181).
+
+- **Development-channel build drift now fails with an actionable recovery
+  path** - When a configured checkout has a compiled router but is missing the
+  compiled installation manager, the launcher reports the exact `build:cli`
+  command and keeps `aiwg --use-stable` reachable instead of surfacing a raw
+  Node module import error (roctinam/aiwg#2212).
+
+- **Scoped SQLite session installs now complete through the production feature
+  path** - Session storage can install its optional SQLite backend through the
+  same feature workflow used by deployed commands, with CI coverage for the
+  package and runtime boundary (jmagly/aiwg#182).
+
+- **A2A dual-version negotiation preserves compatible routes** - Client and
+  dispatch adapters retain the legacy interface base where required while
+  qualifying negotiated version-specific endpoints with codec and routing
+  regression coverage.
+
+- **Executable skills retain their release-index metadata** - Fortemi Core
+  package indices preserve script entrypoints and execution flags so a skill
+  discovered from the release corpus remains runnable rather than degrading to
+  documentation-only metadata.
+
+### Release boundaries
+
+- Ops evidence governance applies at the new boundary APIs and CLI preparation
+  path; existing custom integrations must call that boundary before publishing
+  operational payloads.
+- The SQLite feature remains optional and is installed only when selected by a
+  session workflow. This release does not add SQLite to the base package.
+
 ## [2026.8.27] - 2026-08-28 - "Qualified storage scale-out"
 
 ### Added

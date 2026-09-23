@@ -119,6 +119,7 @@ function runDirectAddonDeploy(
   home: string,
   dryRun: boolean,
   copyStandardSkills = false,
+  withAiwgRoot = true,
 ): { stdout: string; stderr: string } {
   const providerUrl = pathToFileURL(PROVIDER_PATH).href;
   const program = [
@@ -142,7 +143,7 @@ function runDirectAddonDeploy(
       env: {
         ...process.env,
         HOME: home,
-        AIWG_ROOT: REPO_ROOT,
+        AIWG_ROOT: withAiwgRoot ? REPO_ROOT : undefined,
       },
     },
   );
@@ -155,6 +156,26 @@ function runDirectAddonDeploy(
 }
 
 describe('Codex project-local addon helper resolution', () => {
+  it('resolves executing-module helpers without seeding AIWG_ROOT or prune authority', async () => {
+    const bundle = makeBundle();
+    const previousRoot = process.env.AIWG_ROOT;
+    const provider = await import(/* @vite-ignore */ PROVIDER_PATH);
+    const { resolveAiwgRoot } = await import('../../../tools/agents/providers/base.mjs');
+    try {
+      delete process.env.AIWG_ROOT;
+      for (const helper of ['tools/commands/deploy-prompts-codex.mjs', 'tools/skills/deploy-skills-codex.mjs']) {
+        expect(provider.resolveCodexDeploymentHelper(bundle, helper))
+          .toBe(fs.realpathSync(path.join(REPO_ROOT, helper)));
+      }
+      expect(process.env.AIWG_ROOT).toBeUndefined();
+      expect(resolveAiwgRoot(bundle)).toBeNull();
+      expect(provider.resolveCodexDeploymentHelper(bundle, '../outside.mjs')).toBeNull();
+    } finally {
+      if (previousRoot === undefined) delete process.env.AIWG_ROOT;
+      else process.env.AIWG_ROOT = previousRoot;
+    }
+  });
+
   it('uses only a validated AIWG root when the bundle has no helper scripts', async () => {
     const bundle = makeBundle();
     const invalidRoot = path.join(sandbox, 'not-an-aiwg-root');
@@ -233,6 +254,20 @@ describe('Codex project-local addon helper resolution', () => {
 });
 
 describe('Codex direct addon deployment', () => {
+  it('deploys from the executing installation without AIWG_ROOT and preserves unrelated skills', () => {
+    const bundle = makeBundle();
+    const project = path.join(sandbox, 'project');
+    const home = path.join(sandbox, 'home');
+    const unrelated = makeUnrelatedManagedSkill(project);
+    const before = snapshotTree(unrelated);
+
+    runDirectAddonDeploy(bundle, project, home, false, false, false);
+
+    expect(fs.existsSync(path.join(home, '.codex', 'prompts', 'aiwg-launch.md'))).toBe(true);
+    expect(fs.existsSync(path.join(project, '.agents', 'skills', 'fixture-kernel', 'SKILL.md'))).toBe(true);
+    expect(snapshotTree(unrelated)).toEqual(before);
+  });
+
   it('deploys one command and the kernel skill without pruning another addon', () => {
     const bundle = makeBundle();
     const project = path.join(sandbox, 'project');

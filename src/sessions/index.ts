@@ -28,5 +28,9 @@ export * from './adapters/hermes.js';
 export * from './adapters/opencode.js';
 export * from './adapters/openclaw.js';
 export * from './adapters/openhuman.js';
+export * from './adapters/pi.js';
+export * from './adapters/deepseek-harness.js';
 export * from './adapters/warp.js';
 export * from './adapters/windsurf.js';
+
+export * from './adapters/omp.js';

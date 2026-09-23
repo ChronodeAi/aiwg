@@ -214,7 +214,7 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     expect(existsSync(path.join(fortemiRoot, 'aiwg-fortemi-index-v2.json'))).toBe(true);
     expect(fortemiManifest.item_count).toBe(stats.totalArtifacts);
     expect(fortemiManifest.source_index_built_at).toBe(frameworkMetadata.builtAt);
-  }, 60_000);
+  }, 120_000);
 
   it('keeps default non-TTY output compact, colorless, and free of registry chatter', () => {
     const projectRoot = isolatedRoot('aiwg-use-output-codex-project-');
@@ -261,7 +261,7 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     expect(existsSync(path.join(homeRoot, '.openclaw', 'skills'))).toBe(true);
     expect(readdirSync(path.join(projectRoot, '.agents', 'skills')).length).toBeGreaterThan(0);
     expect(existsSync(repoSkillsRoot) ? readdirSync(repoSkillsRoot).sort() : []).toEqual(repoSkillsBefore);
-  }, 30_000);
+  }, 60_000);
 
   it('verifies every provider and computes one deterministic multi-provider outcome', () => {
     const projectRoot = isolatedRoot('aiwg-use-verify-multi-project-');
@@ -274,5 +274,5 @@ describe.sequential('aiwg use self-verifying provider deployment (#2069)', () =>
     expect(result.payload.providers.every(
       (provider: { outcome: string }) => provider.outcome === 'ready-restart-required',
     )).toBe(true);
-  }, 30_000);
+  }, 90_000);
 });

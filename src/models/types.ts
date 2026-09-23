@@ -59,6 +59,7 @@ export type ModelRole = 'reasoning' | 'coding' | 'efficiency';
  * AI provider identifier
  */
 export type Provider =
+  | 'antigravity'
   | 'claude'
   | 'codex'
   | 'copilot'
@@ -68,10 +69,13 @@ export type Provider =
   | 'opencode'
   | 'openclaw'
   | 'openhuman'
+  | 'omp'
+  | 'pi'
   | 'openai'
   | 'warp'
   | 'windsurf'
-  | 'dsh';
+  | 'dsh'
+  | 'deepseek-harness';
 
 export type ModelEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 

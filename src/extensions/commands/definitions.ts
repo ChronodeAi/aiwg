@@ -1130,6 +1130,30 @@ export const sessionCommand: Extension = {
   } satisfies SkillMetadata,
 };
 
+export const writingCommand: Extension = {
+  id: 'writing', type: 'command', name: 'Writing',
+  description: 'Prepare grounded writing plans and apply authorized proofreading corrections with canonical receipts',
+  version: '1.0.0', capabilities: ['cli', 'voice', 'writing', 'proofread'],
+  keywords: ['writing', 'brief', 'proofread', 'author', 'receipt'],
+  category: 'project', platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '<plan|proofread> --brief <file> --profile <id> [--output <new-file>]', allowedTools: ['Read', 'Write', 'Bash'] } satisfies CommandMetadata,
+};
+
+export const writerProfileCommand: Extension = {
+  id: 'writer-profile', type: 'command', name: 'Writer Profiles',
+  description: 'Import, inspect, export, version, compile, revoke, and delete author-controlled writer sidecars',
+  version: '1.0.0', capabilities: ['cli', 'voice', 'writer-profile'],
+  keywords: ['writer-profile', 'author', 'voice', 'sample', 'provenance'],
+  category: 'project', platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command', template: 'utility',
+    argumentHint: '<list|import|inspect|export|version|compile|revoke|delete> [id] [--scope project|user]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
 export const outputModeCommand: Extension = {
   id: 'output-mode',
   type: 'command',
@@ -1137,7 +1161,7 @@ export const outputModeCommand: Extension = {
   description: 'List, inspect, enable, disable, clear, and report composable output modes',
   version: '1.0.0',
   capabilities: ['cli', 'voice', 'output-mode', 'controlled-language', 'presentation'],
-  keywords: ['output-mode', 'voice', 'style', 'asd-ste', 'presentation'],
+  keywords: ['output-mode', 'output-mask', 'voice', 'style', 'syntax', 'wittgenstein', 'asd-ste', 'engineering-language', 'controlled-language', 'presentation'],
   category: 'project',
   platforms: { claude: 'full', generic: 'full' },
   deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
@@ -1147,6 +1171,32 @@ export const outputModeCommand: Extension = {
     argumentHint: '<list|show|enable|disable|clear|status> [id] [--scope invocation|session|project]',
     allowedTools: ['Read', 'Write'],
   } satisfies CommandMetadata,
+};
+
+export const schemaCommand: Extension = {
+  id: 'schema',
+  type: 'command',
+  name: 'Schema Control Plane',
+  description: 'Discover, validate, compare, and verify governed schema artifacts',
+  version: '1.0.0',
+  capabilities: ['cli', 'schema', 'catalog', 'validation', 'compatibility', 'projections'],
+  keywords: ['schema', 'catalog', 'validate', 'lint', 'references', 'compatibility', 'projection', 'policy'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<list|show|graph|policy|validate|lint|check-refs|diff|compatibility|generate|verify-projections> [options]',
+    allowedTools: ['Read', 'Write'],
+  } satisfies CommandMetadata,
+};
+
+export const datasetCommand: Extension = {
+  id: 'dataset', type: 'command', name: 'Dataset Intelligence', description: 'Register, preview, plan, ingest, verify, query, and trace governed datasets', version: '1.0.0',
+  capabilities: ['cli', 'dataset', 'ingest', 'index', 'traceability', 'provenance'], keywords: ['dataset', 'source', 'preview', 'plan', 'ingest', 'verify', 'query', 'lineage', 'export'], category: 'index',
+  platforms: { claude: 'full', generic: 'full' }, deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: { type: 'command', template: 'utility', argumentHint: '<source|check|preview|plan|ingest|status|show|verify|query|lineage|export|cancel|retry> [options]', allowedTools: ['Read', 'Write'] } satisfies CommandMetadata,
 };
 
 // Session Catalog Command (#1903)
@@ -4017,6 +4067,10 @@ export const commandDefinitions: Extension[] = [
   sessionCommand,
   sessionsCommand,
   outputModeCommand,
+  writerProfileCommand,
+  writingCommand,
+  schemaCommand,
+  datasetCommand,
 ];
 
 // ============================================

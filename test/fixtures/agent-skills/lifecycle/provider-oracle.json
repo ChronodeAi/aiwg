@@ -30,6 +30,15 @@
   },
   "providers": [
     {
+      "id": "antigravity",
+      "location": "project",
+      "root": ".agents/skills",
+      "status": "native",
+      "outcome": "deployed",
+      "validator": "pass",
+      "resources": "exact"
+    },
+    {
       "id": "claude",
       "location": "project",
       "root": ".claude/skills",
@@ -60,6 +69,15 @@
       "id": "cursor",
       "location": "project",
       "root": ".cursor/skills",
+      "status": "native",
+      "outcome": "deployed",
+      "validator": "pass",
+      "resources": "exact"
+    },
+    {
+      "id": "deepseek-harness",
+      "location": "project",
+      "root": ".agents/skills",
       "status": "native",
       "outcome": "deployed",
       "validator": "pass",
@@ -112,6 +130,24 @@
       "resources": "exact"
     },
     {
+      "id": "pi",
+      "location": "project",
+      "root": ".pi/skills",
+      "status": "native",
+      "outcome": "deployed",
+      "validator": "pass",
+      "resources": "exact"
+    },
+    {
+      "id": "omp",
+      "location": "project",
+      "root": ".omp/skills",
+      "status": "native",
+      "outcome": "deployed",
+      "validator": "pass",
+      "resources": "exact"
+    },
+    {
       "id": "warp",
       "location": "project",
       "root": ".warp/skills",
@@ -125,6 +161,15 @@
       "location": "project",
       "root": ".windsurf/skills",
       "status": "projected",
+      "outcome": "deployed",
+      "validator": "pass",
+      "resources": "exact"
+    },
+    {
+      "id": "dsh",
+      "location": "project",
+      "root": ".agents/skills",
+      "status": "native",
       "outcome": "deployed",
       "validator": "pass",
       "resources": "exact"

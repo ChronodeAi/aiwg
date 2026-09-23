@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, statSync, chmodSync } from 'fs';
 import { mkdtempSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -108,6 +108,49 @@ function makePluginWrapperEnv(label: string): Env {
   return { ...env, bundleDir: payload };
 }
 
+/**
+ * Project-local extension whose SKILL.md references a *directory* of support
+ * assets rather than individual files (#2503).
+ */
+function makeDirectoryAssetEnv(label: string): Env {
+  const base = mkdtempSync(path.join(os.tmpdir(), `aiwg-pl-dirasset-${label}-`));
+  const projectDir = path.join(base, 'project');
+  const homeDir = path.join(base, 'home');
+  mkdirSync(projectDir, { recursive: true });
+  mkdirSync(homeDir, { recursive: true });
+
+  const bundleDir = path.join(projectDir, '.aiwg', 'extensions', 'dir-asset-ext');
+  const skillDir = path.join(bundleDir, 'skills', 'dir-asset-skill');
+  mkdirSync(path.join(skillDir, 'templates', 'pack', 'nested'), { recursive: true });
+  mkdirSync(path.join(skillDir, 'scripts', 'bin'), { recursive: true });
+
+  writeFileSync(
+    path.join(bundleDir, 'manifest.json'),
+    JSON.stringify({
+      id: 'dir-asset-ext',
+      type: 'extension',
+      name: 'Dir Asset Ext',
+      version: '1.0.0',
+      description: 'Extension referencing a directory-valued support asset.',
+      manifestVersion: '1',
+      platforms: { claude: 'full', codex: 'full' },
+      keywords: ['test'],
+      deployment: { pathTemplate: '.{platform}/skills/{id}.md' },
+    }, null, 2),
+  );
+  writeFileSync(path.join(skillDir, 'templates', 'pack', 'a.md'), '# A\n');
+  writeFileSync(path.join(skillDir, 'templates', 'pack', 'nested', 'b.md'), '# B\n');
+  writeFileSync(path.join(skillDir, 'scripts', 'bin', 'run.sh'), '#!/bin/sh\necho run\n');
+  chmodSync(path.join(skillDir, 'scripts', 'bin', 'run.sh'), 0o755);
+  writeFileSync(
+    path.join(skillDir, 'SKILL.md'),
+    '---\nname: dir-asset-skill\ndescription: Skill referencing a directory-valued support asset.\nplatforms: [all]\n---\n\n'
+    + '# Dir Asset Skill\n\n## Resources\n\n- `templates/pack/`: a directory of templates.\n- `scripts/bin/`: a directory of scripts.\n',
+  );
+
+  return { projectDir, homeDir, bundleDir };
+}
+
 function makeEnv(label: string): Env {
   const base = mkdtempSync(path.join(os.tmpdir(), `aiwg-pl-deploy-${label}-`));
   const projectDir = path.join(base, 'project');
@@ -200,6 +243,85 @@ describe('project-local deploy integration (#1046)', () => {
   afterEach(() => {
     cleanup(env);
   });
+
+  it.each(['relative', 'absolute'])('indexes external bundle sources in a nested member via %s roots (#2308)', (source) => {
+    const memberDir = path.join(env.projectDir, 'member');
+    const member = { ...env, projectDir: memberDir };
+    mkdirSync(path.join(memberDir, '.aiwg'), { recursive: true });
+    const externalRoot = path.join(env.projectDir, '.aiwg');
+    writeFileSync(path.join(memberDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1', providers: ['codex'], installed: {}, scripts: {},
+      projectLocal: { searchPaths: [source === 'relative' ? '../.aiwg' : externalRoot] },
+    }));
+    // Unrelated parent artifacts do not belong in the member's surface.
+    const unrelated = path.join(externalRoot, 'unrelated.md');
+    writeFileSync(unrelated, '# Unrelated parent artifact\n');
+    expect(existsSync(path.join(memberDir, '.aiwg', '.index'))).toBe(false);
+
+    const deployed = runAiwg(member, ['use', 'pl-test', '--provider', 'codex', '--json']);
+    expect(deployed.status, deployed.stdout).toBe(0);
+    expect(deployed.stdout).not.toContain('index-surface-missing:project');
+    expect(existsSync(path.join(memberDir, '.codex', 'agents', 'pl-agent.toml'))).toBe(true);
+    const quickref = path.join(memberDir, '.agents', 'skills', 'aiwg-project-member-quickref', 'SKILL.md');
+    expect(existsSync(quickref), deployed.stdout).toBe(true);
+    expect(readFileSync(quickref, 'utf-8')).toContain('aiwg show agent PL Agent');
+
+    const rebuilt = runAiwg(member, ['index', 'build', '--graph', 'project']);
+    expect(rebuilt.status, rebuilt.stdout).toBe(0);
+    const metadata = JSON.parse(readFileSync(path.join(memberDir, '.aiwg', '.index', 'project', 'metadata.json'), 'utf-8'));
+    expect(metadata.entries[path.join(env.bundleDir, 'agents', 'pl-agent.md')]).toMatchObject({ type: 'agent' });
+    expect(Object.keys(metadata.entries).some(file => /unrelated|escaped/.test(file))).toBe(false);
+    for (const backend of [[], ['--backend', 'local']]) {
+      const discovery = runAiwg(member, ['discover', 'pl-agent', '--json', ...backend]);
+      expect(discovery.status, discovery.stdout).toBe(0);
+      expect(JSON.parse(discovery.stdout).results).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'agent', name: 'PL Agent', provenance: { graph: 'project', scope: 'project' } }),
+      ]));
+      const shown = runAiwg(member, ['show', 'agent', 'PL Agent', '--json', ...backend]);
+      expect(shown.status, shown.stdout).toBe(0);
+      expect(shown.stdout).toContain('Agent from project-local bundle');
+    }
+  }, 180_000);
+
+  it.each([
+    ['use', ['use', 'sdlc', '--provider', 'claude', '--quiet']],
+    ['refresh', ['refresh', '--skip-update', '--provider', 'claude', '--quiet']],
+    ['upgrade', ['upgrade', '--skip-check', '--provider', 'claude']],
+  ])('%s synchronizes existing project-local skills without a project cache (#2155)', (_command, args) => {
+    // Model an established workspace whose bundles predate the Fortemi cache.
+    // No scaffold command or named local install has populated its index.
+    writeFileSync(path.join(env.projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+      version: '1',
+      providers: ['claude'],
+      installed: { sdlc: {
+        version: '1.0', source: 'bundled', installedAt: '2026-01-01T00:00:00Z',
+        deployedTo: { claude: { agents: 0, commands: 0, skills: 0, rules: 0 } },
+      } },
+    }));
+    mkdirSync(path.join(env.projectDir, '.aiwg', 'frameworks'), { recursive: true });
+    writeFileSync(path.join(env.projectDir, '.aiwg', 'frameworks', 'registry.json'), JSON.stringify({
+      version: '1.0',
+      frameworks: [{ id: 'sdlc-complete', installed: '2026-01-01', version: '1.0' }],
+    }));
+    const cache = path.join(env.projectDir, '.aiwg', '.index', 'fortemi-core', 'project', 'aiwg-fortemi-index-v2.json');
+    expect(existsSync(cache)).toBe(false);
+
+    const result = runAiwg(env, args);
+
+    expect(result.status, result.stdout).toBe(0);
+    expect(existsSync(cache), result.stdout).toBe(true);
+    const exported = JSON.parse(readFileSync(cache, 'utf8'));
+    expect(exported.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'demo-skill' }),
+    ]));
+  }, 180_000);
+
+  it('automatic local reconciliation leaves the project cache absent on dry-run (#2155)', () => {
+    writeFileSync(path.join(env.projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({ providers: ['claude'] }));
+    const result = runAiwg(env, ['use', 'sdlc', '--provider', 'claude', '--dry-run', '--quiet']);
+    expect(result.status, result.stdout).toBe(0);
+    expect(existsSync(path.join(env.projectDir, '.aiwg', '.index', 'fortemi-core', 'project'))).toBe(false);
+  }, 180_000);
 
   it('bootstraps a managed quickref preview from bundles with zero dry-run writes', () => {
     writeFileSync(
@@ -493,7 +615,8 @@ describe('project-local deploy integration (#1046)', () => {
 
     const config = JSON.parse(readFileSync(path.join(env.projectDir, '.aiwg', 'aiwg.config'), 'utf-8'));
     expect(config.installed?.['pl-test']?.deployedTo?.codex?.skills).toBe(1);
-  });
+    // Spawns a real `aiwg use`; the default 5s budget is not enough under load.
+  }, 180_000);
 
   it.each([
     ['claude', false],
@@ -537,6 +660,32 @@ describe('project-local deploy integration (#1046)', () => {
     },
     240_000,
   );
+
+  it('PL-DIRASSET (#2503): deploys directory-valued support asset references recursively', () => {
+    const dirEnv = makeDirectoryAssetEnv('claude');
+    try {
+      writeFileSync(path.join(dirEnv.projectDir, '.aiwg', 'aiwg.config'), JSON.stringify({
+        version: '1', providers: ['claude'], installed: {}, scripts: {},
+      }, null, 2));
+
+      const deploy = runAiwg(dirEnv, ['use', 'dir-asset-ext', '--provider', 'claude', '--quiet']);
+      // A directory that exists on disk is not a missing asset — rejecting it
+      // aborted the whole bundle deploy with a WARN and exit 1.
+      expect(deploy.stdout).not.toMatch(/missing skill support asset/);
+      expect(deploy.status, deploy.stdout).toBe(0);
+
+      const skillRoot = path.join(dirEnv.projectDir, '.claude', '.aiwg', 'skills', 'dir-asset-skill');
+      expect(existsSync(path.join(skillRoot, 'SKILL.md'))).toBe(true);
+      for (const ref of ['templates/pack/a.md', 'templates/pack/nested/b.md', 'scripts/bin/run.sh']) {
+        expect(existsSync(path.join(skillRoot, ref)), `missing deployed asset: ${ref}`).toBe(true);
+      }
+      // Executable bits survive the recursive copy the same way they do for
+      // single-file references.
+      expect(statSync(path.join(skillRoot, 'scripts', 'bin', 'run.sh')).mode & 0o111).not.toBe(0);
+    } finally {
+      cleanup(dirEnv);
+    }
+  }, 240_000);
 
   it('PL-ASSETS (#2109): deploys every referenced BT6 asset and repairs drift', () => {
     const bt6 = makePluginWrapperEnv('codex-assets');

@@ -24,6 +24,12 @@ import {
   OpenClawSessionAdapter,
   OPENHUMAN_ADAPTER_VERSION,
   OpenHumanSessionAdapter,
+  PI_ADAPTER_VERSION,
+  PiSessionAdapter,
+  DEEPSEEK_HARNESS_ADAPTER_VERSION,
+  DeepSeekHarnessSessionAdapter,
+  OmpSessionAdapter,
+  OMP_ADAPTER_VERSION,
   WARP_ADAPTER_VERSION,
   WarpSessionAdapter,
   DEVIN_DESKTOP_ADAPTER_VERSION,
@@ -145,6 +151,8 @@ Options:
   --manifest <path>  Override the discovery manifest path
   --provider-home <path>  Override the provider home root (testing/portable homes)
   --codex-root <path>  Explicitly authorize a shared Codex sessions/export root
+  --omp-root <path>  Explicitly authorize an OMP profile sessions root
+  --dsh-root <path>  Explicitly authorize a DeepSeek Harness sessions root
   --confirm, --yes  Confirm a persistent discovered batch import
   --lock-wait-ms <n>  Maximum import-lease wait (default 5000)
   --inactivity-threshold <duration>  Historical inactivity threshold (default 24h)
@@ -153,7 +161,29 @@ Options:
   --consumer <id> Select a named memory consumer for promotion
   --workspace <id>, --tag <tag>, --limit <n>, --cursor <n>
   --page-size <n>  Extraction scan page size (default 250, maximum 500)
-  --max-documents <n>  Explicit extraction safety limit; returns a partial receipt`;
+  --max-documents <n>  Explicit extraction safety limit; returns a partial receipt
+
+Search filters:
+  --date-from <rfc3339>, --date-to <rfc3339>
+  --participant <actor>, --model <id>, --role <role>, --tool <name>
+  --entity <entity>, --sensitivity <class>, --extraction-state <state>
+  --control-events exclude|include|only (default: exclude)
+  Query syntax: FTS5 terms, quoted phrases, prefixes, AND/OR/NOT
+  Follow the opaque nextCursor with the same query and filters
+
+Analytics / forensics:
+  --session <id>, --date-from <rfc3339>, --date-to <rfc3339>
+  --actor <id>, --participant <id>, --tool <name>, --status <status>
+  --provider <id>, --tag <tag>, --sensitivity <class>, --extraction-state <state>
+  --group-by tool|session|provider, --limit <1..5000>
+  --authorize-forensics  Required for each authorized forensic invocation
+  --markdown      Render a sanitized forensic timeline table`;
+
+function printHelp(ctx: HandlerContext, exitCode: number = EXIT.ok): HandlerResult {
+  if (ctx.args.includes('--json')) emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
+  else console.log(HELP);
+  return { exitCode };
+}
 
 export const sessionsHandler: CommandHandler = {
   id: 'sessions',
@@ -161,6 +191,10 @@ export const sessionsHandler: CommandHandler = {
   description: 'Manage the normalized session catalog (the singular `session` command remains the launcher)',
   category: 'project',
   aliases: [],
+
+  async help(ctx) {
+    return printHelp(ctx);
+  },
 
   async execute(ctx: HandlerContext): Promise<HandlerResult> {
     const json = ctx.args.includes('--json');
@@ -175,9 +209,8 @@ export const sessionsHandler: CommandHandler = {
       return { exitCode: normalized.exitCode, message: normalized.error.message };
     }
     if (!parsed.command || parsed.flags.has('--help') || parsed.flags.has('-h')) {
-      if (json) emit(envelope('sessions.help', 'ok', { usage: HELP }, null));
-      else console.log(HELP);
-      return { exitCode: parsed.command ? EXIT.ok : EXIT.usage };
+      const explicitHelp = parsed.flags.has('--help') || parsed.flags.has('-h');
+      return printHelp(ctx, explicitHelp ? EXIT.ok : EXIT.usage);
     }
     try {
       const result = await executeCommand(ctx, parsed);
@@ -761,7 +794,7 @@ async function importSource(
   if (provider !== 'generic' && provider !== 'claude' && provider !== 'codex'
     && provider !== 'copilot' && provider !== 'cursor' && provider !== 'factory'
     && provider !== 'hermes' && provider !== 'opencode' && provider !== 'openclaw'
-    && provider !== 'openhuman' && provider !== 'warp' && provider !== 'devin-desktop') {
+    && provider !== 'openhuman' && provider !== 'pi' && provider !== 'omp' && provider !== 'deepseek-harness' && provider !== 'warp' && provider !== 'devin-desktop') {
     throw new CliError('UNSUPPORTED_OPERATION', `session import is not implemented for ${provider}`, EXIT.unsupported);
   }
   const sourceId = requiredValue(args, '--source-id');
@@ -777,9 +810,12 @@ async function importSource(
   const isOpenCode = provider === 'opencode';
   const isOpenClaw = provider === 'openclaw';
   const isOpenHuman = provider === 'openhuman';
+  const isPi = provider === 'pi';
+  const isOmp = provider === 'omp';
+  const isDsh = provider === 'deepseek-harness';
   const isWarp = provider === 'warp';
   const isDevinDesktop = provider === 'devin-desktop';
-  const adapter: SessionSourceAdapter = isClaude
+  const adapter: SessionSourceAdapter = isDsh ? new DeepSeekHarnessSessionAdapter() : isOmp ? new OmpSessionAdapter() : isClaude
     ? new ClaudeSessionAdapter()
     : isCodex
       ? new CodexSessionAdapter()
@@ -797,12 +833,14 @@ async function importSource(
                   ? new OpenClawSessionAdapter()
                   : isOpenHuman
                     ? new OpenHumanSessionAdapter()
+                    : isPi
+                      ? new PiSessionAdapter()
                     : isWarp
                       ? new WarpSessionAdapter()
                       : isDevinDesktop
                         ? new DevinDesktopSessionAdapter()
                         : new GenericSessionInterchangeAdapter();
-  const locatorClass = isClaude
+  const locatorClass = isDsh ? 'deepseek-harness-session-v2-jsonl' : isOmp ? 'omp-session-v3-jsonl' : isClaude
     ? (input.endsWith('.hooks.jsonl') ? 'claude-hook-jsonl' : 'claude-transcript-jsonl')
     : isCodex
       ? (input.endsWith('.app-server.jsonl') ? 'codex-app-server-jsonl' : 'codex-rollout-jsonl')
@@ -820,6 +858,8 @@ async function importSource(
                   ? 'openclaw-consistent-snapshot-jsonl'
                   : isOpenHuman
                     ? 'openhuman-enriched-jsonl'
+                    : isPi
+                      ? 'pi-session-v3-jsonl'
                     : isWarp
                       ? 'warp-markdown-export'
                       : isDevinDesktop
@@ -832,7 +872,7 @@ async function importSource(
   const probe = await adapter.inspect(selectedSource);
   const source = SessionSourceSchema.parse({
     contractVersion: SESSION_CONTRACT_VERSION, sourceId, provider,
-    providerProfile: isClaude
+    providerProfile: isDsh ? 'native-session-v2-jsonl' : isOmp ? 'native-title-slot-v3' : isClaude
       ? 'documented-local-jsonl'
       : isCodex
         ? 'app-server-v2-rollout-fallback'
@@ -856,7 +896,7 @@ async function importSource(
                           ? 'opt-in-cascade-transcript-hook'
                           : 'manual-interchange',
     locatorClass, redactedLocator: redactSourceLocator(input),
-    adapterVersion: isClaude
+    adapterVersion: isDsh ? DEEPSEEK_HARNESS_ADAPTER_VERSION : isOmp ? OMP_ADAPTER_VERSION : isClaude
       ? CLAUDE_ADAPTER_VERSION
       : isCodex
         ? CODEX_ADAPTER_VERSION
@@ -883,11 +923,11 @@ async function importSource(
     disposition: isWarp
       ? 'manual-only'
       : isClaude || isCodex || isCopilot || isCursor || isFactory || isHermes
-        || isOpenCode || isOpenClaw || isOpenHuman || isDevinDesktop
+        || isOpenCode || isOpenClaw || isOpenHuman || isDevinDesktop || isOmp || isDsh || isPi
         ? 'implemented' : 'manual-only',
     operationalState: probe.operationalState,
     consistency: probe.consistency, authorizedAt: new Date().toISOString(),
-    extensions: isClaude
+    extensions: isDsh ? { 'native.deepseek-harness': {} } : isOmp ? { 'native.omp': {} } : isClaude
       ? { 'native.claude': {} }
       : isCodex
         ? { 'native.codex': {} }
@@ -963,6 +1003,10 @@ async function discoverWorkspace(
     providerHome: args.values.has('--provider-home')
       ? resolve(ctx.cwd, args.values.get('--provider-home')!)
       : undefined,
+    ompRoot: args.values.has('--omp-root')
+      ? resolve(ctx.cwd, args.values.get('--omp-root')!) : undefined,
+    dshRoot: args.values.has('--dsh-root')
+      ? resolve(ctx.cwd, args.values.get('--dsh-root')!) : undefined,
     codexRoot: args.values.has('--codex-root')
       ? resolve(ctx.cwd, args.values.get('--codex-root')!)
       : undefined,
@@ -1184,6 +1228,45 @@ function providerDisposition(provider: SessionProviderId): Record<string, unknow
       },
     };
   }
+  if (provider === 'omp') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['jsonl'], reasonCode: null,
+      remediation: 'Authorize the selected OMP profile sessions root or an explicit native JSONL file.',
+      evidence: {
+        adapterVersion: OMP_ADAPTER_VERSION,
+        verifiedAt: '2026-09-04',
+        documentation: 'https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/session-entries.ts',
+      },
+    };
+  }
+  if (provider === 'deepseek-harness') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'], acquisitionModes: ['jsonl'],
+      reasonCode: null,
+      remediation: 'Authorize an explicit DeepSeek Harness raw JSONL sessions root. Compressed .zstd histories must be exported as raw JSONL first.',
+      evidence: {
+        adapterVersion: DEEPSEEK_HARNESS_ADAPTER_VERSION,
+        verifiedAt: '2026-09-05',
+        documentation: 'https://github.com/deepseek-ai/deepseek-harness/tree/main/packages/session/session-persistence-jsonl',
+      },
+    };
+  }
+  if (provider === 'pi') {
+    return {
+      provider, disposition: 'implemented', operationalState: 'available',
+      supportedOperations: ['discover', 'inspect', 'stream'],
+      acquisitionModes: ['jsonl'], reasonCode: null,
+      remediation: 'Authorize PI_CODING_AGENT_SESSION_DIR, the default Pi sessions root, or an explicit v3 JSONL export.',
+      evidence: {
+        adapterVersion: PI_ADAPTER_VERSION,
+        verifiedAt: '2026-09-04',
+        documentation: 'https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/session-manager.ts',
+      },
+    };
+  }
   if (provider === 'warp') {
     return {
       provider, disposition: 'manual-only', operationalState: 'available',
@@ -1286,7 +1369,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     '--entity', '--sensitivity', '--extraction-state', '--page-size', '--max-documents',
     '--state', '--reviewer', '--reason', '--policy-version', '--min-confidence',
     '--consumer', '--actor-class', '--reason-code', '--dependent-action', '--basis',
-    '--manifest', '--provider-home', '--codex-root', '--lock-wait-ms', '--min-coverage', '--gap',
+    '--manifest', '--provider-home', '--codex-root', '--omp-root', '--dsh-root', '--lock-wait-ms', '--min-coverage', '--gap',
     '--inactivity-threshold',
     '--control-events',
     '--session', '--status', '--actor', '--group-by',

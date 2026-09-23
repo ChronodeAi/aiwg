@@ -9,6 +9,10 @@ import { ClaudeSessionAdapter } from './adapters/claude.js';
 import { CodexSessionAdapter } from './adapters/codex.js';
 import { CursorSessionAdapter } from './adapters/cursor.js';
 import { FactorySessionAdapter } from './adapters/factory.js';
+import { OmpSessionAdapter, readOmpSessionHeader } from './adapters/omp.js';
+import { resolveOmpPaths } from '../providers/omp-paths.mjs';
+import { PiSessionAdapter } from './adapters/pi.js';
+import { DeepSeekHarnessSessionAdapter } from './adapters/deepseek-harness.js';
 import {
   SESSION_PROVIDER_IDS,
   sha256,
@@ -66,11 +70,13 @@ export interface DiscoverWorkspaceOptions {
   providerHome?: string;
   operatorHome?: string;
   codexRoot?: string;
+  ompRoot?: string;
+  dshRoot?: string;
   createdAt?: string;
 }
 
 interface DiscoverableProvider {
-  provider: 'claude' | 'codex' | 'cursor' | 'factory';
+  provider: 'claude' | 'codex' | 'cursor' | 'factory' | 'pi' | 'omp' | 'deepseek-harness';
   adapter: SessionSourceAdapter;
   roots: string[];
 }
@@ -89,6 +95,12 @@ export async function discoverWorkspaceHistories(
   const keyWithLeadingDash = workspaceKey(workspacePath, true);
   const keyWithoutLeadingDash = workspaceKey(workspacePath, false);
   const discoverable: DiscoverableProvider[] = [
+    { provider: 'deepseek-harness', adapter: new DeepSeekHarnessSessionAdapter(), roots: options.dshRoot
+      ? [resolve(options.dshRoot)] : options.providerHome
+        ? [join(resolve(options.providerHome), '.dsh', 'sessions')] : [] },
+    { provider: 'omp', adapter: new OmpSessionAdapter(), roots: options.ompRoot
+      ? [resolve(options.ompRoot)] : options.providerHome
+        ? [resolveOmpPaths({ home: resolve(options.providerHome), cwd: workspacePath }).sessionsDir] : [] },
     {
       provider: 'claude',
       adapter: new ClaudeSessionAdapter(),
@@ -121,6 +133,15 @@ export async function discoverWorkspaceHistories(
         join(providerHome, '.factory', 'sessions', keyWithLeadingDash),
       ]),
     },
+    {
+      provider: 'pi',
+      adapter: new PiSessionAdapter(),
+      roots: options.providerHome
+        ? [process.env.PI_CODING_AGENT_SESSION_DIR
+          ? resolve(process.env.PI_CODING_AGENT_SESSION_DIR)
+          : join(resolve(options.providerHome), '.pi', 'agent', 'sessions')]
+        : [],
+    },
   ];
 
   const reports = new Map<SessionProviderId, DiscoveryProviderReport>();
@@ -132,7 +153,7 @@ export async function discoverWorkspaceHistories(
       if (await pathExists(root)) availableRoots.push(await canonicalPath(root));
     }
     if (availableRoots.length === 0) {
-      const codexNeedsAuthorization = entry.provider === 'codex'
+      const codexNeedsAuthorization = (entry.provider === 'codex' || entry.provider === 'omp' || entry.provider === 'deepseek-harness')
         && entry.roots.length === 0;
       reports.set(entry.provider, providerReport(
         entry.provider,
@@ -143,7 +164,7 @@ export async function discoverWorkspaceHistories(
           ? 'SHARED_ROOT_AUTHORIZATION_REQUIRED'
           : 'PROVIDER_ROOT_UNAVAILABLE',
         codexNeedsAuthorization
-          ? 'Pass --codex-root with an explicitly authorized Codex sessions or App Server export root.'
+          ? `Pass --${entry.provider}-root with an explicitly authorized sessions root.`
           : `No authorized ${entry.provider} workspace history root was found.`,
       ));
       continue;
@@ -157,6 +178,8 @@ export async function discoverWorkspaceHistories(
       const locator = await canonicalPath(descriptor.locator);
       if (entry.provider === 'codex'
         && !await codexSourceMatchesWorkspace(locator, workspacePath)) continue;
+      const ompHeader = entry.provider === 'omp' ? await readOmpSessionHeader({ ...descriptor, sourceId: 'discovery', authorizedScope: scope }) : undefined;
+      if (ompHeader && resolve(ompHeader.cwd) !== workspacePath) continue;
       const details = await stat(locator);
       const authorizedRoot = scope.allowedRoots.find(
         (root) => locator === root || locator.startsWith(`${root}/`),
@@ -176,6 +199,7 @@ export async function discoverWorkspaceHistories(
         details,
         fingerprint.digest,
       );
+      if (ompHeader) source.sourceId = sha256(['omp-native-source-v1', workspaceId, ompHeader.id].join('\0'));
       providerSources.push(source);
       candidates.push(source);
     }

@@ -18,6 +18,12 @@ export * from '../providers/transformation-receipt-integration.js';
 export * from '../marketplace/artifact-attestation.js';
 export * from '../uhp/index.js';
 export * from '../mission-protocol/index.js';
+export * from '../governance/index.js';
+export * from '../output-modes/index.js';
+export * from '../writing/contextual-diagnostics.js';
+export * from '../schema/index.js';
+export * from '../dataset/index.js';
+export * from '../network-analysis/index.js';
 export {
   ARTIFACT_TRUST_ROOT_MEDIA_TYPE,
   ARTIFACT_TRUST_ROOT_SCHEMA_VERSION,
@@ -42,3 +48,16 @@ export {
   type ArtifactTrustPolicySettings,
   type TrustedChannelState,
 } from '../security/artifact-trust.js';
+
+export * from '../writing/writer-profile.js';
+export * from '../writing/writer-profile-store.js';
+export * from '../writing/writer-profile-legacy.js';
+export * from '../writing/exemplar-selection.js';
+export * from '../writing/writing-brief.js';
+export * from '../writing/fidelity.js';
+export * from '../writing/voice-revision.js';
+export * from '../writing/voice-evaluation.js';
+export * from '../writing/writing-consumer.js';
+export * from '../writing/writing-channels.js';
+export * from '../writing/writing-receipt.js';
+export * from '../writing/writer-migration.js';

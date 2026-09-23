@@ -94,8 +94,13 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
   if (hasProviders) {
     const { collectProviderInventory } = await import('../../providers/provider-inventory.js');
     const inventory = await collectProviderInventory(cwd);
+    const selected = args[args.indexOf('--provider') + 1];
+    const ompSelected = args.includes('--provider') && ['omp', 'oh-my-pi'].includes(selected);
+    const ompRuntime = ompSelected
+      ? await (await import('../../providers/omp-diagnostics.mjs')).diagnoseOmpRuntime({ cwd })
+      : undefined;
     if (hasJson) {
-      console.log(JSON.stringify(inventory, null, 2));
+      console.log(JSON.stringify({ ...inventory, ...(ompRuntime ? { ompRuntime } : {}) }, null, 2));
     } else {
       console.log('\nProvider Inventory');
       console.log('==================');
@@ -113,6 +118,7 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
         }
         for (const reason of provider.reasons) console.log(`  note: ${reason}`);
       }
+      if (ompRuntime) console.log(`\nOMP runtime: ${JSON.stringify(ompRuntime, null, 2)}`);
     }
     return;
   }
@@ -181,7 +187,7 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
         console.log(`Aggregated output: ${caps.aggregated_output}`);
         console.log(`\nArtifact paths:`);
         for (const [type, path] of Object.entries(caps.artifact_paths)) {
-          console.log(`  ${type}: ${path ?? '(none)'}`);
+          console.log(`  ${type}: ${path || 'Indexed (aiwg discover / aiwg show)'}`);
         }
         console.log(`\nFeatures:`);
         for (const [feat, native] of Object.entries(caps.native_features)) {
@@ -303,6 +309,9 @@ async function handleRuntimeInfo(args: string[], cwd = process.cwd()): Promise<v
       console.log(`\nAIWG Installation:`);
       console.log(`  Canonical: ${installation.identity?.method ?? 'unrecorded'} at ${installation.identity?.root ?? '(unrecorded)'}`);
       console.log(`  Actual:    ${installation.actualMethod} at ${installation.actualRoot}`);
+      if (installation.launcher) {
+        console.log(`  Launcher:  ${installation.launcher.method} at ${installation.launcher.root} (edge redirect)`);
+      }
       console.log(`  Run mode:  ${installation.identity?.runMode ?? '(unrecorded)'}`);
       console.log(`  State:     ${installation.state}`);
 

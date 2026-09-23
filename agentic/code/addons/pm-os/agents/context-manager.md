@@ -1,7 +1,9 @@
 ---
 name: context-manager
 description: "Context manager for the PM OS. Backs /status — reads all 📂 Context/ files, scans 📂 Context/Work/ for active output, cross-references against GOALS.md, and surfaces a grounded picture of current state plus one recommended next action."
-model: inherit
+model: haiku
+model-role: efficiency
+model-tier: economy
 color: orange
 ---
 

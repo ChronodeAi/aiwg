@@ -4,6 +4,14 @@
   "refreshedAt": "2026-07-20",
   "staleAfterDays": 90,
   "providers": {
+    "antigravity": {
+      "roles": {
+        "reasoning": { "id": "configured/reasoning", "status": "unverified", "observed": false },
+        "coding": { "id": "configured/coding", "status": "unverified", "observed": false },
+        "efficiency": { "id": "configured/efficiency", "status": "unverified", "observed": false }
+      },
+      "sourceUrl": "https://antigravity.google/docs/cli/overview/", "verifiedAt": "2026-09-04"
+    },
     "claude": {
       "roles": {
         "reasoning": {
@@ -129,6 +137,43 @@
       },
       "sourceUrl": "https://opencode.ai/docs/models",
       "verifiedAt": "2026-07-20"
+    },
+    "omp": {
+      "roles": {
+        "reasoning": {
+          "id": "configured/reasoning",
+          "status": "unverified",
+          "observed": false
+        },
+        "coding": {
+          "id": "configured/coding",
+          "status": "unverified",
+          "observed": false
+        },
+        "efficiency": {
+          "id": "configured/efficiency",
+          "status": "unverified",
+          "observed": false
+        }
+      },
+      "sourceUrl": "https://github.com/can1357/oh-my-pi/tree/5964a0f7649275bcde818f20073193fd032451f2/packages/coding-agent",
+      "verifiedAt": "2026-09-04"
+    },
+    "pi": {
+      "roles": {
+        "reasoning": { "id": "configured/reasoning", "status": "unverified", "observed": false },
+        "coding": { "id": "configured/coding", "status": "unverified", "observed": false },
+        "efficiency": { "id": "configured/efficiency", "status": "unverified", "observed": false }
+      },
+      "sourceUrl": "https://github.com/earendil-works/pi/tree/main/packages/coding-agent#providers--models", "verifiedAt": "2026-09-04"
+    },
+    "deepseek-harness": {
+      "roles": {
+        "reasoning": { "id": "configured/reasoning", "status": "unverified", "observed": false },
+        "coding": { "id": "configured/coding", "status": "unverified", "observed": false },
+        "efficiency": { "id": "configured/efficiency", "status": "unverified", "observed": false }
+      },
+      "sourceUrl": "https://github.com/deepseek-ai/deepseek-harness", "verifiedAt": "2026-09-05"
     },
     "warp": {
       "roles": {

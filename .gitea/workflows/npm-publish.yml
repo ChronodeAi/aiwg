@@ -50,9 +50,6 @@ concurrency:
 env:
   GITEA_NPM_REGISTRY: https://git.integrolabs.net/api/packages/roctinam/npm/
   NODE_VERSION: '20'
-  VAULT_ADDR: ${{ vars.VAULT_ADDR }}
-  GT_NPM_TOKEN_VAULT_PATH: ${{ vars.GT_NPM_TOKEN_VAULT_PATH }}
-  GT_NPM_TOKEN_VAULT_FIELD: ${{ vars.GT_NPM_TOKEN_VAULT_FIELD }}
 
 jobs:
   build-and-publish-prerelease:
@@ -163,6 +160,11 @@ jobs:
         # their checksum/schema contract.
         run: npm run lint:fortemi-prebuilt-package
 
+      - name: Verify packaged SQLite feature installation (#182)
+        # Exercise the documented opt-in installer from the packed CLI before
+        # any pre-release artifact reaches the registry.
+        run: npm run test:sessions:feature-install
+
       - name: Check Cockpit package contents
         run: npm pack ./apps/cockpit --dry-run
 
@@ -190,6 +192,9 @@ jobs:
 
       - name: Fetch Gitea npm token from vault
         env:
+          VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+          GT_NPM_TOKEN_VAULT_PATH: ${{ vars.GT_NPM_TOKEN_VAULT_PATH }}
+          GT_NPM_TOKEN_VAULT_FIELD: ${{ vars.GT_NPM_TOKEN_VAULT_FIELD }}
           VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
           VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
         run: bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec
@@ -415,6 +420,11 @@ jobs:
           AIWG_PERF_SAMPLE_COUNT: "7"
         run: npm test -- --run
 
+      - name: Verify packaged SQLite feature installation (#182)
+        # Hard release gate: install the packed CLI without optional peers,
+        # verify the scoped native feature, and open an empty session catalog.
+        run: npm run test:sessions:feature-install
+
       - name: Extract and verify version
         id: version
         run: |
@@ -508,6 +518,9 @@ jobs:
 
       - name: Fetch Gitea npm token from vault
         env:
+          VAULT_ADDR: ${{ vars.VAULT_ADDR }}
+          GT_NPM_TOKEN_VAULT_PATH: ${{ vars.GT_NPM_TOKEN_VAULT_PATH }}
+          GT_NPM_TOKEN_VAULT_FIELD: ${{ vars.GT_NPM_TOKEN_VAULT_FIELD }}
           VAULT_CI_ROLE_ID: ${{ secrets.VAULT_CI_ROLE_ID }}
           VAULT_CI_SECRET_ID: ${{ secrets.VAULT_CI_SECRET_ID }}
         run: bash ci/vault-fetch.sh --spec ci/vault-fetch.npm-publish.spec

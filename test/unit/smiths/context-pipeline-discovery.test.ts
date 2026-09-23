@@ -173,6 +173,7 @@ describe('discoverDeployedArtifacts', () => {
 
 describe('provider policy', () => {
   it('emits AIWG.md/AGENTS.md for providers that need generated context bridges', () => {
+    expect(shouldEmitContextFiles('antigravity')).toBe(true);
     expect(shouldEmitContextFiles('codex')).toBe(true);
     expect(shouldEmitContextFiles('copilot')).toBe(true);
     expect(shouldEmitContextFiles('cursor')).toBe(true);
@@ -185,8 +186,14 @@ describe('provider policy', () => {
     expect(shouldEmitAgentsMd('dsh')).toBe(true);
     expect(shouldEmitAiwgMd('dsh')).toBe(true);
     expect(shouldEmitClaudeMdHook('dsh')).toBe(false);
+    expect(shouldEmitContextFiles('pi')).toBe(true);
+    expect(shouldEmitContextFiles('omp')).toBe(true);
+    expect(shouldEmitContextFiles('deepseek-harness')).toBe(true);
     expect(shouldEmitContextFiles('openhuman')).toBe(false);
-    expect(AGENTS_MD_PROVIDERS.size).toBe(9);
+    expect([...AGENTS_MD_PROVIDERS].sort()).toEqual([
+      'antigravity', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'dsh',
+      'factory', 'hermes', 'opencode', 'pi', 'warp', 'windsurf',
+    ].sort());
   });
 
   // #1437: claude is no longer skipped — it gets AIWG.md emission + CLAUDE.md hook

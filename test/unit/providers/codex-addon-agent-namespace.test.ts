@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import os from 'os';
 import path from 'path';
 import {
@@ -148,6 +149,8 @@ describe('Codex direct-addon agent namespace', () => {
     });
 
     expect(fs.existsSync(path.join(root, '.codex', 'agents', 'reviewer.toml'))).toBe(true);
+    expect(fs.readFileSync(path.join(root, '.codex', 'agents', 'reviewer.toml'), 'utf8'))
+      .toContain('# aiwg:managed vtest bundled');
     expect(fs.existsSync(path.join(root, '.codex', 'agents', 'pm-os-reviewer.toml'))).toBe(false);
   });
 
@@ -195,6 +198,28 @@ describe('Codex packaged direct-addon agents', () => {
       .toEqual(['pm-os-context-manager.toml']);
   });
 
+  it('preserves unmarked packaged bytes and records ownership and their exact hash in the sidecar', async () => {
+    const root = sandbox();
+    const bundle = makeAddon(root);
+    const target = path.join(root, 'project');
+    const filename = 'pm-os-context-manager.toml';
+    const native = packagedAgent('context-manager');
+    write(path.join(bundle, 'codex', 'agents', filename), native);
+
+    await deploy(deployOptions(bundle, target));
+
+    const agentsDir = path.join(target, '.codex', 'agents');
+    expect(fs.readFileSync(path.join(agentsDir, filename), 'utf8')).toBe(native);
+    const sidecar = JSON.parse(fs.readFileSync(path.join(agentsDir, '.aiwg-manifest.json'), 'utf8'));
+    expect(sidecar.managed[filename]).toMatchObject({
+      frameworkSlug: 'pm-os',
+      hash: `sha256:${createHash('sha256').update(native).digest('hex')}`,
+    });
+    const before = snapshotTree(target);
+    await deploy(deployOptions(bundle, target));
+    expect(snapshotTree(target)).toEqual(before);
+  });
+
   it.each([
     ['unnamespaced filename', 'context-manager.toml', packagedAgent('context-manager')],
     ['missing contract field', 'pm-os-context-manager.toml', 'name = "context-manager"\ndeveloper_instructions = "Do work."\n'],
@@ -223,7 +248,7 @@ describe('Codex packaged direct-addon agents', () => {
     expect(fs.existsSync(path.join(target, '.codex'))).toBe(false);
   });
 
-  it('refuses a differing unmanaged destination even with a lookalike marker', async () => {
+  it.each([false, true])('refuses a differing unmanaged destination even with a lookalike marker (force=%s)', async (force) => {
     const root = sandbox();
     const bundle = makeAddon(root);
     const target = path.join(root, 'project');
@@ -233,7 +258,7 @@ describe('Codex packaged direct-addon agents', () => {
     write(src, packagedAgent('context-manager'));
     write(dest, existing);
 
-    await expect(deploy(deployOptions(bundle, target))).rejects.toThrow('unmanaged Codex agent');
+    await expect(deploy({ ...deployOptions(bundle, target), force })).rejects.toThrow('unmanaged Codex agent');
     expect(fs.readFileSync(dest, 'utf8')).toBe(existing);
   });
 

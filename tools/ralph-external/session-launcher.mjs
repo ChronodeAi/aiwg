@@ -32,6 +32,7 @@
  * - Have monitoring and abort procedures ready
  */
 
+import { StringDecoder } from 'node:string_decoder';
 import { spawn } from 'child_process';
 import {
   accessSync,
@@ -440,13 +441,16 @@ export class SessionLauncher extends EventEmitter {
       // declared capabilities. No inline fallback.
       const args = this.providerAdapter.buildSessionArgs({
         prompt: options.prompt,
-        sessionId: options.sessionId,
+        // Tracking UUIDs are not OMP native session identities.
+        sessionId: this.providerAdapter.getName() === 'omp' ? options.resumeSession : options.sessionId,
         model: options.model,
         budget: options.budget,
         maxTurns: options.maxTurns,
         verbose: options.verbose,
         systemPrompt: options.systemPrompt,
         mcpConfig: options.mcpConfig,
+        thinking: options.thinking,
+        tools: options.tools,
       });
       this._assertFlagsWithinCapabilities(args);
       this.startTime = Date.now();
@@ -457,15 +461,21 @@ export class SessionLauncher extends EventEmitter {
 
       // Buffer for last portion of stdout (for quick analysis)
       let stdoutBuffer = '';
+      const isOmp = this.providerAdapter?.getName() === 'omp';
+      let ompOutput = '';
+      const ompTextDecoder = new StringDecoder('utf8');
+      let ompInvalid = false;
       const maxBufferSize = 100000; // 100KB
 
       // Spawn process via the active provider adapter (ADR-001: no binary fallback)
       const binary = this.providerAdapter.getBinary();
       const envOverrides = this.providerAdapter.getEnvOverrides();
 
+      const abortInput = this.providerAdapter?.getAbortInput?.();
       this.currentProcess = spawn(binary, args, {
         cwd: options.workingDir,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: isOmp && process.platform !== 'win32',
+        stdio: [abortInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         env: {
           ...process.env,
           ...envOverrides,
@@ -473,9 +483,14 @@ export class SessionLauncher extends EventEmitter {
       });
 
       const child = this.currentProcess;
+      const terminate = (signal) => { try { if (isOmp && process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); } catch { /* process already exited */ } };
 
       // Capture stdout
       child.stdout.on('data', (chunk) => {
+        if (isOmp && !ompInvalid) {
+          ompOutput += ompTextDecoder.write(chunk);
+          if (Buffer.byteLength(ompOutput) > 64 * 1024 * 1024) { ompInvalid = true; ompOutput = ''; terminate('SIGKILL'); }
+        }
         stdoutStream.write(chunk);
         stdoutBuffer += chunk.toString();
         // Keep buffer size manageable
@@ -499,18 +514,21 @@ export class SessionLauncher extends EventEmitter {
         timeoutId = setTimeout(() => {
           timedOut = true;
           this.emit('timeout');
-          child.kill('SIGTERM');
-          // Force kill after 5 seconds if still running
+          if (abortInput && child.stdin?.writable) child.stdin.write(abortInput);
+          const terminateDelay = abortInput ? 2000 : 0;
+          setTimeout(() => terminate('SIGTERM'), terminateDelay);
+          // Force kill after bounded graceful-abort and termination windows.
           setTimeout(() => {
-            if (!child.killed) {
-              child.kill('SIGKILL');
+            if (child.exitCode === null && child.signalCode === null) {
+              terminate('SIGKILL');
             }
-          }, 5000);
+          }, terminateDelay + 5000);
         }, options.timeoutMs);
       }
 
       // Handle process completion
       child.on('close', (code) => {
+        if (isOmp) terminate('SIGKILL');
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -523,7 +541,7 @@ export class SessionLauncher extends EventEmitter {
         stderrStream.end();
 
         const result = {
-          exitCode: code || 0,
+          exitCode: isOmp && (ompInvalid || !this.providerAdapter.parseOutput(ompOutput, { exitCode: code ?? 1 })?.success) ? (code || 1) : (code ?? 1),
           stdoutPath: options.stdoutPath,
           stderrPath: options.stderrPath,
           duration,
@@ -594,8 +612,8 @@ export class SessionLauncher extends EventEmitter {
         // Whether the provider actually reported token/cost usage this session.
         // Distinguishes "observed 0" from "cannot observe" so token/spend
         // ceilings aren't silently inert on providers that emit no usage (#1766).
-        result.tokenUsageObserved = stats.usageEvents > 0;
-        result.costObserved = stats.costUsd > 0 || (stats.usageEvents > 0 && stats.costFieldSeen === true);
+        result.tokenUsageObserved = stats.tokenFieldSeen;
+        result.costObserved = stats.costFieldSeen;
       }
     } catch (err) {
       // Log but don't fail the session
@@ -681,6 +699,7 @@ export class SessionLauncher extends EventEmitter {
       totalTokens: 0,
       costUsd: 0,
       usageEvents: 0,
+      tokenFieldSeen: false,
       costFieldSeen: false,
     };
 
@@ -718,6 +737,9 @@ export class SessionLauncher extends EventEmitter {
           }
 
           const usage = this._extractUsageStats(event);
+          if (usage.hasTokenField) {
+            stats.tokenFieldSeen = true;
+          }
           if (usage.hasCostField) {
             stats.costFieldSeen = true;
           }
@@ -822,7 +844,12 @@ export class SessionLauncher extends EventEmitter {
    */
   kill(signal = 'SIGTERM') {
     if (this.currentProcess && !this.currentProcess.killed) {
-      this.currentProcess.kill(signal);
+      if (this.providerAdapter?.getName() === 'omp' && process.platform !== 'win32') {
+        const child = this.currentProcess;
+        try { process.kill(-child.pid, signal); } catch { /* already exited */ }
+        const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already exited */ } } }, 500);
+        timer.unref();
+      } else this.currentProcess.kill(signal);
     }
   }
 
@@ -858,40 +885,46 @@ export class SessionLauncher extends EventEmitter {
       for (const value of values) {
         if (typeof value === 'number' && Number.isFinite(value)) return value;
       }
-      return 0;
+      return undefined;
+    };
+    let hasTokenField = false;
+    const tokenFrom = (...values) => {
+      const value = numberFrom(...values);
+      if (value !== undefined) hasTokenField = true;
+      return value;
     };
 
-    const inputTokens = numberFrom(
+    const inputTokens = tokenFrom(
       usage.input_tokens,
       usage.inputTokens,
       event.input_tokens,
       event.inputTokens
-    );
-    const outputTokens = numberFrom(
+    ) ?? 0;
+    const outputTokens = tokenFrom(
       usage.output_tokens,
       usage.outputTokens,
       event.output_tokens,
       event.outputTokens
-    );
-    const cacheCreationInputTokens = numberFrom(
+    ) ?? 0;
+    const cacheCreationInputTokens = tokenFrom(
       usage.cache_creation_input_tokens,
       usage.cacheCreationInputTokens,
       event.cache_creation_input_tokens,
       event.cacheCreationInputTokens
-    );
-    const cacheReadInputTokens = numberFrom(
+    ) ?? 0;
+    const cacheReadInputTokens = tokenFrom(
       usage.cache_read_input_tokens,
       usage.cacheReadInputTokens,
       event.cache_read_input_tokens,
       event.cacheReadInputTokens
-    );
-    const explicitTotal = numberFrom(
+    ) ?? 0;
+    const explicitTotal = tokenFrom(
       usage.total_tokens,
       usage.totalTokens,
       event.total_tokens,
       event.totalTokens
     );
-    const totalTokens = explicitTotal ||
+    const totalTokens = explicitTotal ??
       inputTokens + outputTokens + cacheCreationInputTokens + cacheReadInputTokens;
     const costCandidates = [
       event.cost_usd,
@@ -904,7 +937,7 @@ export class SessionLauncher extends EventEmitter {
     const hasCostField = costCandidates.some(
       (v) => typeof v === 'number' && Number.isFinite(v)
     );
-    const costUsd = numberFrom(...costCandidates);
+    const costUsd = numberFrom(...costCandidates) ?? 0;
 
     return {
       inputTokens,
@@ -914,7 +947,8 @@ export class SessionLauncher extends EventEmitter {
       totalTokens,
       costUsd,
       hasCostField,
-      hasUsage: totalTokens > 0 || costUsd > 0,
+      hasTokenField,
+      hasUsage: hasTokenField || hasCostField,
     };
   }
 }

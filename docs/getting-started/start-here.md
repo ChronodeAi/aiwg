@@ -1,162 +1,78 @@
 # Start Here
 
-Use this page when AIWG is new to you and you want one useful result before learning the whole system.
+AIWG gives your AI assistant reusable project context and specialist workflows. Start by making one useful report,
+then use that report to guide a later change.
 
-The everyday AIWG user surface is the conversation with your AI tool. AIWG ships a CLI, but most of it exists so the agent can call it on your behalf. You stay in the chat. The agent does the AIWG-specific lookups, discovery, indexing, and orchestration when you ask for something.
+## Set up AIWG
 
-## The Primary Pattern
+Open your project in your AI tool and follow [Install, Connect, and Verify](install-connect-verify.md). The agent
+should identify the project, preserve existing instructions, and explain whether your tool needs a reload. If AIWG is
+already connected, continue below.
 
-1. Tell the agent what you are trying to do.
-2. Ask how AIWG can help.
-3. The agent translates your goal into one recommended path and verifies it against AIWG's installed capabilities.
-4. You preview and approve any deployment.
-5. Follow the recommended path until you get one useful output.
-6. Verify that AIWG is installed and active before you build on it.
+## Review your README
 
-Good starter prompts:
+Ask your agent:
 
 ```text
-How best can we use AIWG for this project?
-I want to use AIWG globally across my work. What should I start with?
-Create a workflow from existing AIWG systems that fits my situation.
-I do not know what AIWG has. Help me find one thing to try first.
+Use AIWG to review this project's README for unclear positioning and missing
+onboarding steps. Save a report at
+.aiwg/marketing/brand/audit/readme-review.md with file references and the
+three highest-priority fixes. Leave the README unchanged.
 ```
 
-If the agent starts listing too many options, ask it to narrow:
+The agent should select a suitable review workflow, inspect the README, and save a report. It should distinguish
+observations from judgment and explain any missing context that limits its conclusions.
+
+Open the report and check:
+
+- Does each finding point to a real passage or missing step?
+- Does it explain the effect on a new reader?
+- Is the proposed fix specific enough to review?
+- Are the top recommendations useful for your intended audience?
+
+The [Just Try It walkthrough](just-try-it.md) includes an illustrative finding and alternative tasks if your project
+has no README.
+
+## Carry the result into the next session
+
+Ask:
 
 ```text
-Recommend one path, one reason, and one fallback.
+Read .aiwg/marketing/brand/audit/readme-review.md. Implement the first agreed
+fix, preserve unrelated work, and show how the change addresses the finding.
 ```
 
-## Setup and Approval
+The saved report is reusable project context. Check that the agent actually reads it and that the change addresses the
+finding. You can revise the report when new information changes the recommendation.
 
-The fastest supported setup is one paste into the AI provider with the project
-open:
+## Choose your next task
+
+| Your situation | Next guide |
+|---|---|
+| You have a product idea | [New project](new-project.md) |
+| You have an existing codebase | [Existing project](existing-project.md) |
+| You want clearer writing | [Writing and content](writing-and-content.md) |
+| You need a different workflow | [Capability guide](../overview/capabilities.md) |
+| You do not know which path fits | [Ask the steward](first-success-ask-steward.md) |
+
+## Guided recovery escape hatch
+
+If setup or routing is unclear, ask:
 
 ```text
-Install or repair AIWG for this project by following
-https://aiwg.io/setup.aiwg.yaml
-Explain the plan before changing anything, preserve my existing work, and ask
-me only for choices you cannot safely determine.
+Check the project and AIWG connection. Explain what is ready, what is missing,
+and the smallest next step needed to complete my task. Preserve my existing
+work and ask only for choices you cannot determine.
 ```
 
-The provider performs the preferred sequence:
+Use [Provider Handoff](provider-handoff.md) for your AI tool's connection details, [Scope and
+Recovery](scope-and-recovery.md) for a wrong-folder problem, or [Troubleshooting](../troubleshooting/index.md) for
+installation issues.
 
-1. install AIWG;
-2. change into the intended project root; and
-3. run one self-verifying `aiwg use all --provider <provider>` deployment.
+## Verify AIWG is working
 
-Follow [Install, Connect, and Verify](install-connect-verify.md) when you need
-the manual fallback, provider-name table, or restricted/headless guidance.
+If the agent cannot find a workflow, ask it to report the engaged state, project root, provider context, and installed
+capabilities. The [verification guide](verify-aiwg-is-working.md) explains what a readiness check should establish.
+Once ready, return to the task above; the saved review is the first useful result.
 
-After bootstrap, ask the agent to handle ongoing setup from the project folder:
-
-```text
-Set up AIWG for this project. Preview the provider and framework changes first,
-ask me before applying them, then verify the result.
-```
-
-The agent normally runs the onboarding and verification operations. You only
-need the following terminal escape hatches when no working agent can perform
-them.
-
-### Installation escape hatch
-
-Install once (and only when your provider does not already bundle AIWG):
-
-```bash
-npm install -g aiwg
-```
-
-### Guided recovery escape hatch
-
-```bash
-cd /path/to/your/project
-aiwg wizard
-```
-
-The wizard asks what you are working on, which provider to target, which AIWG path to deploy first, and whether to deploy now. A dry-run preview is available with `aiwg wizard --dry-run --goal "<your goal>"`.
-
-If you need to deploy without the wizard, use the preferred complete
-project-scoped setup and name your provider:
-
-```bash
-aiwg use all --provider <provider>
-```
-
-This installs the complete deployable end-user surface, refreshes indices and
-project context, checks the provider wiring, and reports one readiness result.
-A narrower command such as `aiwg use sdlc --provider <provider>` is an advanced
-choice for users who deliberately want only one framework. Restart the provider
-only when the result explicitly reports `ready-restart-required`.
-
-If you want an agent or steward to handle the whole setup from prerequisites to
-provider handoff, use the [Agentic Install Runbook](../agentic-install-runbook.md).
-
-### Independent verification escape hatch
-
-```bash
-aiwg status --probe --json
-```
-
-That probe is the source of truth for whether AIWG appears active in this project. If you ask an agent "is AIWG active here?", it reads this probe and reports the engaged state, project root, provider files, deployed frameworks, and next action.
-
-The full list of user-side commands is short: `aiwg use`, `aiwg wizard`, `aiwg new`, `aiwg status`, `aiwg doctor`, `aiwg refresh`. Everything past that — discovery, capability lookup, indexing, agent loops, mission control — is the agent's job, invoked from inside the chat when you ask for something AIWG-shaped.
-
-## Steward And Discover, From The User Side
-
-The steward is a guide agent. You ask the steward what AIWG can do for your situation and which path to try first.
-
-Discover is the agent's capability search. When you describe a goal, the agent searches AIWG's installed operational assets for matching skills, agents, commands, rules, flows, runbooks, templates, and behaviors, inspects the best match, and recommends one. You do not need to learn the search syntax or memorize phrases — you say the goal in plain language, the agent does the lookup.
-
-The pattern in chat:
-
-```text
-Ask the steward what to try.
-Let the agent look up the specific capability against AIWG.
-Inspect the recommendation before deploying or invoking it.
-```
-
-## Project Scope Vs Global Scope
-
-Project-scoped setup lives in the project folder. It is the right default when AIWG should understand one repo, one product, or one team's work. Run the user-side commands from the project root so AIWG can find the right files.
-
-Global or user-scoped setup is for capabilities you want across many projects. It is useful for personal defaults, shared agent skills, and provider-level configuration, but it should not replace project-specific context.
-
-If the agent seems confused about which project it is reasoning about, ask:
-
-```text
-I may be in the wrong folder. Check the current project scope, tell me what
-evidence you see, and tell me which folder I should run AIWG from.
-```
-
-For the longer recovery path, see [Scope And Recovery](scope-and-recovery.md).
-
-## Verify AIWG Is Working
-
-You only need one check. Ask the agent:
-
-```text
-Is AIWG active in this workspace? Read aiwg status --probe and report the
-engaged state, project root, deployed frameworks, and next action.
-```
-
-The agent will run the probe and surface the result in the conversation. If the probe reports `not-configured` or `partial`, the agent will tell you which `aiwg use` or `aiwg wizard` action will finish setup. If it reports `needs-repair`, the agent will run health diagnostics and propose the fix.
-
-For more depth, see [Verify AIWG Is Working](verify-aiwg-is-working.md).
-
-## First Success Recipes
-
-- [Find one AIWG capability](first-success-find-capability.md)
-- [Ask the steward to route you](first-success-ask-steward.md)
-- [Start a project intake](first-success-start-intake.md)
-- [Verify your setup](verify-aiwg-is-working.md)
-- [Provider handoff](provider-handoff.md)
-- [Scope and recovery](scope-and-recovery.md)
-- [Agentic install runbook](../agentic-install-runbook.md)
-
-## Help And Contributions
-
-For setup or usage problems, start with [Troubleshooting](../troubleshooting/index.md).
-
-To report a bug or request a change, use [Filing Issues](../contributing/filing-issues.md). To contribute docs or code, use [Filing Pull Requests](../contributing/filing-pull-requests.md).
+For bug reports and contributions, see [Filing Issues](../contributing/filing-issues.md).

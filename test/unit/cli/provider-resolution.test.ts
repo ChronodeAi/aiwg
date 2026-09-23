@@ -22,6 +22,7 @@ describe('normalizeProviderId', () => {
     expect(normalizeProviderId('devin-desktop')).toBe('windsurf');
     expect(normalizeProviderId('devin-local')).toBe('windsurf');
     expect(normalizeProviderId('cascade')).toBe('windsurf');
+    expect(normalizeProviderId('pi-coding-agent')).toBe('pi');
   });
 
   it('returns null for unknown provider ids', () => {
@@ -42,6 +43,9 @@ describe('capabilityProviderId', () => {
 });
 
 describe('commandLooksLikeProvider (process-tree branch)', () => {
+  it('does not choose a DSH transport from a shared executable name', () => {
+    expect(commandLooksLikeProvider('/usr/local/bin/dsh --profile headless')).toBeNull();
+  });
   // Process-tree detection parity for the home-dir global operators. Env-marker
   // detection (OPENHUMAN_HOME / OPENHUMAN_CORE_TOKEN) resolves OpenHuman first,
   // but this gives full parity with the other 8 providers when markers are
@@ -60,9 +64,28 @@ describe('commandLooksLikeProvider (process-tree branch)', () => {
   it('returns null for a non-provider command', () => {
     expect(commandLooksLikeProvider('/usr/bin/bash -c "echo hi"')).toBeNull();
   });
+
+  it('detects Pi only from an exact pi command marker', () => {
+    expect(commandLooksLikeProvider('/usr/local/bin/pi --mode rpc')).toBe('pi');
+    expect(commandLooksLikeProvider('/usr/bin/pico README.md')).toBeNull();
+    expect(commandLooksLikeProvider('/work/happi/bin/server')).toBeNull();
+  });
 });
 
 describe('resolveActiveProvider', () => {
+  it.each(['dsh', 'deepseek-harness'])('preserves configured %s with shared DSH_HOME', async (provider) => {
+    mockReadAiwgConfig.mockResolvedValue({ providers: [provider], installed: {} });
+    const result = await resolveActiveProvider({ cwd: '/mock/project', env: { DSH_HOME: '/tmp/shared-dsh' }, detectProcess: false });
+    expect(result.provider).toBe(provider);
+    expect(result.source).toBe('config');
+  });
+
+  it('does not infer an upstream transport from a relocated DSH home', async () => {
+    mockReadAiwgConfig.mockResolvedValue({ providers: [], installed: {} });
+    const result = await resolveActiveProvider({ cwd: '/mock/project', env: { DSH_HOME: '/tmp/shared-dsh' }, detectProcess: false });
+    expect(result.provider).toBeNull();
+    expect(result.source).toBe('ambiguous');
+  });
   it('detects runtime env markers from ProviderDefinition data', async () => {
     const resolution = await resolveActiveProvider({
       cwd: '/mock/project',

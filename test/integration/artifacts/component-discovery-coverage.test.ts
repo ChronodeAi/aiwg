@@ -31,10 +31,18 @@ describe('shipped component discovery coverage', () => {
   it('maps every shipped component to a driver that is present in the framework index', () => {
     const report = buildCoverageReport(REPO_ROOT);
 
+    const shippedComponents = ['addons', 'extensions', 'frameworks'].flatMap((kind) => {
+      const directory = path.join(REPO_ROOT, 'agentic', 'code', kind);
+      return fs.readdirSync(directory, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(directory, entry.name, 'manifest.json')))
+        .map((entry) => `agentic/code/${kind}/${entry.name}/manifest.json`);
+    });
+    expect(shippedComponents.length).toBeGreaterThan(0);
+    expect(report.components.map((component) => component.manifest).sort()).toEqual(shippedComponents.sort());
     expect(report.ok).toBe(true);
     expect(report.counts).toMatchObject({
-      total: 59,
-      covered: 59,
+      total: shippedComponents.length,
+      covered: shippedComponents.length,
       missing: 0,
       invalid: 0,
       missingRuntimeAssets: 0,

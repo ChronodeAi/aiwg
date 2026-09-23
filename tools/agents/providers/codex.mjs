@@ -34,6 +34,7 @@ try { const gfs = _require('graceful-fs'); gfs.gracefulify(realFs); fs = realFs;
 const staticModelCatalog = _require('../../../agentic/code/providers/model-catalog.v1.json');
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { load as loadYaml } from 'js-yaml';
 import { classifyModelRole, modelForRole } from './model-role.mjs';
@@ -43,6 +44,7 @@ import {
   listMdFilesRecursive,
   writeFile,
   deployFiles,
+  contentHash,
   createAgentsMdFromTemplate,
   initializeFrameworkWorkspace,
   getAddonAgentFiles,
@@ -248,9 +250,10 @@ function regularFileWithin(rootDir, candidatePath) {
  * Project-local bundles intentionally contain only deployable artifacts, not
  * copies of AIWG's provider tooling. Prefer a bundle-local helper when one is
  * present for backwards compatibility, then fall back to the canonical helper
- * under a validated AIWG root. `resolveAiwgRoot()` accepts AIWG_ROOT only when
- * it contains the framework/addon tree, so an arbitrary environment path can
- * never become executable provider code.
+ * under a validated AIWG root. If AIWG_ROOT is absent, the executing module's
+ * installation can supply tooling only. Never seed AIWG_ROOT here: content-root
+ * resolution also authorizes pruning and must remain fail-closed for bundles.
+ * An explicitly invalid AIWG_ROOT does not enable this fallback.
  *
  * @param {string} srcRoot source tree or direct addon bundle
  * @param {string} helperRelativePath repository-relative helper path
@@ -267,7 +270,11 @@ export function resolveCodexDeploymentHelper(srcRoot, helperRelativePath) {
   const bundled = regularFileWithin(sourceRoot, path.join(sourceRoot, helperRelativePath));
   if (bundled) return bundled;
 
-  const aiwgRoot = resolveAiwgRoot(sourceRoot);
+  const aiwgRoot = resolveAiwgRoot(sourceRoot) || (
+    process.env.AIWG_ROOT === undefined
+      ? resolveAiwgRoot(fileURLToPath(new URL('../../../', import.meta.url)))
+      : null
+  );
   if (!aiwgRoot) return null;
   return regularFileWithin(aiwgRoot, path.join(aiwgRoot, helperRelativePath));
 }
@@ -415,6 +422,11 @@ export function listPackagedCodexAgentFiles(srcRoot, addonId) {
 function directAddonDestinationGuard(addonId) {
   return ({ dest, filename, existingContent, incomingContent, sidecarEntry }) => {
     const sidecarOwned = sidecarEntry?.frameworkSlug === addonId;
+    // Let deployFiles apply its cross-bundle collision skip to an unchanged
+    // managed artifact. This is not permission to overwrite another bundle.
+    const otherBundleOwned = Boolean(sidecarEntry?.frameworkSlug) &&
+      sidecarEntry.frameworkSlug !== addonId &&
+      sidecarEntry.hash === `sha256:${contentHash(existingContent)}`;
     const markerMatch = existingContent.match(CODEX_MANAGED_TOML_MARKER_RE);
     const markerOwned = markerMatch?.[1] === 'AIWG' || (
       markerMatch?.[1] === 'PMOS' && addonId === 'pm-os'
@@ -430,7 +442,7 @@ function directAddonDestinationGuard(addonId) {
       existingContent.startsWith(legacyMarkerPrefix) &&
       CODEX_MANAGED_TOML_MARKER_RE.test(incomingContent) &&
       existingContent.slice(legacyMarkerPrefix.length) === incomingContent.slice(incomingFirstLine.length);
-    if (sidecarOwned || markerOwned || legacyPmosMigration) return;
+    if (sidecarOwned || otherBundleOwned || markerOwned || legacyPmosMigration) return;
     throw new Error(
       `Refusing to replace unmanaged Codex agent ${filename} at ${dest}; ` +
       `only ${addonId}-owned sidecar entries or the strict AIWG-managed marker may be updated`
@@ -448,6 +460,10 @@ export function deployAgents(agentFiles, targetDir, opts) {
     ...opts,
     fileExtension: '.toml',
     injectPlatform: false,
+    // Packaged native TOML is byte-preserved; the sidecar tracks ownership.
+    // Keep stamping generated TOML for doctor attribution, but never prepend
+    // a line that would invalidate the strict packaged legacy-marker migration.
+    stampToml: !opts.packagedNativeAgents,
   }, opts.packagedNativeAgents ? null : transformAgent);
 }
 
@@ -859,7 +875,9 @@ export async function deploy(opts) {
       console.log(`\nDeploying ${agentFiles.length} agents...`);
       const directAddonAgentOpts = directAddonId
         ? {
-            filenamePrefix: `${directAddonId}-`,
+            // PMOS agents need collision-safe names; other addons retain
+            // canonical filenames used by discovery, verification and removal.
+            filenamePrefix: directAddonId === 'pm-os' ? `${directAddonId}-` : '',
             artifactOwner: directAddonId,
             existingDestinationGuard: directAddonDestinationGuard(directAddonId),
             packagedNativeAgents,

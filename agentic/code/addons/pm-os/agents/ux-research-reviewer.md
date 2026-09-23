@@ -1,6 +1,9 @@
 ---
 name: ux-research-reviewer
 description: Reviews product documents for evidence quality, user assumptions, segmentation, validation gaps, and JTBD clarity. Use as a read-only subagent inside /review.
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 

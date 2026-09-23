@@ -13,6 +13,7 @@ import {
   TEST_VERSION,
 } from '../fixtures/web-resource-release.js';
 import { acquireDirectoryLock } from '../../src/artifacts/prebuilt-build-lock.js';
+import { hasSevenDayReleaseAge } from '../helpers/npm-release-age.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 let tempRoot = '';
@@ -142,14 +143,24 @@ describe('global install native lifecycle-script policy', () => {
     const cleanEnv = Object.fromEntries(
       Object.entries(process.env).filter(([key]) => !key.toLowerCase().startsWith('npm_config_')),
     );
-    const install = spawnSync(
-      process.platform === 'win32' ? 'npm.cmd' : 'npm',
-      [
+    const installArgs = [
         'install', '--global', '--prefix', prefix,
         '--cache', path.join(tempRoot, 'cache'), '--userconfig', npmrc,
-        '--no-audit', '--no-fund', tarball,
-      ],
-      { cwd: tempRoot, encoding: 'utf8', timeout: 120_000, env: cleanEnv },
+        '--min-release-age=7', '--no-audit', '--no-fund', tarball,
+    ];
+    // Probe the actual install options after environment/userconfig isolation.
+    const policyStartedAt = Date.now();
+    const policy = spawnSync(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      ['config', 'get', 'min-release-age', 'before', ...installArgs.slice(1, -1)],
+      { cwd: tempRoot, encoding: 'utf8', timeout: 30_000, env: cleanEnv },
+    );
+    expect(policy.status, policy.stderr).toBe(0);
+    expect(hasSevenDayReleaseAge(policy.stdout, policyStartedAt, Date.now()), policy.stdout).toBe(true);
+    const install = spawnSync(
+      process.platform === 'win32' ? 'npm.cmd' : 'npm',
+      installArgs,
+      { cwd: tempRoot, encoding: 'utf8', timeout: 240_000, env: cleanEnv },
     );
     installOutput = `${install.stdout}\n${install.stderr}`;
     if (install.status !== 0) throw new Error(installOutput);
@@ -179,7 +190,7 @@ describe('global install native lifecycle-script policy', () => {
     fixture.publishRelease();
     trustRootFile = path.join(home, 'release-root.pem');
     await writeFile(trustRootFile, fixture.publicKeyPem, { mode: 0o600 });
-  }, 300_000);
+  }, 420_000);
 
   afterAll(async () => {
     await fixture?.stop();
@@ -311,7 +322,7 @@ describe('global install native lifecycle-script policy', () => {
       installRoot,
       'prebuilt', 'fortemi-core', 'framework', 'aiwg-fortemi-index-v2.json',
     ))).toBe(true);
-  }, 30_000);
+  }, 90_000);
 
   it('runs installed-CLI web discover/show and warm offline through legacy configuration', async () => {
     const discovered = await runInstalledCli([

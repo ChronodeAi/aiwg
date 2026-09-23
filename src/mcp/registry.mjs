@@ -1,3 +1,6 @@
+import { manageOmpMcp } from './omp-config.mjs';
+import { replaceServer } from './toml-editor.mjs';
+import { resolveOmpPaths } from '../providers/omp-paths.mjs';
 /**
  * MCP Server Registry (Runtime ESM)
  *
@@ -206,6 +209,12 @@ function buildServerConfig(server, provider) {
   const mcpDefinition = getMcpInjectionDefinition(provider);
 
   switch (mcpDefinition?.serverConfigFormat) {
+    case 'antigravity': {
+      if (server.type === 'stdio') {
+        return { command: server.command, args: server.args || [], ...(server.env ? { env: server.env } : {}) };
+      }
+      return { serverUrl: server.url, ...(server.headers ? { headers: server.headers } : {}) };
+    }
     case 'standard': {
       if (server.type === 'stdio') {
         return {
@@ -261,18 +270,31 @@ function buildServerConfig(server, provider) {
   }
 }
 
+function tomlString(value) {
+  if (typeof value !== 'string' || [...value].some(char => {
+    const point = char.codePointAt(0);
+    return point >= 0xd800 && point <= 0xdfff;
+  })) throw new Error('TOML values must be strings containing valid Unicode scalar values');
+  // JSON escapes align with TOML basic strings except DEL must also be escaped.
+  return JSON.stringify(value).replace(/\u007f/g, '\\u007f');
+}
+
+function tomlKey(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]+$/.test(value) ? value : tomlString(value);
+}
+
 function buildServerToml(server) {
   const lines = [];
-  lines.push(`[mcp_servers.${server.name}]`);
+  lines.push(`[mcp_servers.${tomlKey(server.name)}]`);
 
   if (server.type === 'stdio') {
-    lines.push(`command = "${server.command}"`);
+    lines.push(`command = ${tomlString(server.command)}`);
     if (server.args && server.args.length > 0) {
-      const argsStr = server.args.map(a => `"${a}"`).join(', ');
+      const argsStr = server.args.map(a => tomlString(a)).join(', ');
       lines.push(`args = [${argsStr}]`);
     }
   } else {
-    lines.push(`url = "${server.url}"`);
+    lines.push(`url = ${tomlString(server.url)}`);
   }
 
   lines.push(`startup_timeout_sec = 10.0`);
@@ -281,15 +303,16 @@ function buildServerToml(server) {
   return lines.join('\n');
 }
 
-export function getProviderConfigPath(provider, projectDir = '.') {
-  return resolveMcpConfigPath(provider, projectDir);
+export function getProviderConfigPath(provider, projectDir = '.', options = {}) {
+  if (normalizeRuntimeProviderId(provider) === 'omp' && options.scope !== undefined && !['user', 'project'].includes(options.scope)) throw new Error('OMP MCP scope must be user or project');
+  return resolveMcpConfigPath(provider, projectDir, options);
 }
 
 export async function injectServers(registry, provider, options = {}) {
   const { servers: serverFilter, projectDir = '.', dryRun = false } = options;
   const normalizedProvider = normalizeRuntimeProviderId(provider);
   const mcpDefinition = getMcpInjectionDefinition(provider);
-  const configPath = getProviderConfigPath(provider, projectDir);
+  const configPath = getProviderConfigPath(provider, projectDir, options);
   const result = {
     provider,
     configPath,
@@ -310,6 +333,16 @@ export async function injectServers(registry, provider, options = {}) {
   if (allServers.length === 0) {
     result.error = 'No servers to inject. Use "aiwg mcp add" first.';
     return result;
+  }
+
+  if (normalizedProvider === 'omp') {
+    try {
+      const managed = await manageOmpMcp(configPath, allServers, { dryRun });
+      if (!dryRun) for (const server of allServers) await registry.recordInjection(server.name, 'omp');
+      return { ...result, ...managed };
+    } catch (error) {
+      return { ...result, error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   if (mcpDefinition?.configFormat === 'toml') {
@@ -372,17 +405,28 @@ async function injectJson(registry, servers, configPath, provider, dryRun, resul
   try {
     const content = await readFile(configPath, 'utf-8');
     existing = JSON.parse(content);
-  } catch {
-    // File doesn't exist
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`Refusing to overwrite malformed MCP config ${configPath}: invalid JSON`);
+    }
+    if (normalizeRuntimeProviderId(provider) === 'antigravity' && error?.code !== 'ENOENT') {
+      throw new Error(`Refusing to overwrite malformed MCP config ${configPath}: ${error.message}`);
+    }
+    if (error?.code !== 'ENOENT') throw error;
   }
 
   const mcpKey = getMcpInjectionDefinition(provider)?.serversKey || 'mcpServers';
+  const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  if (!isObject(existing) || (Object.hasOwn(existing, mcpKey) && !isObject(existing[mcpKey]))) {
+    throw new Error('MCP configuration must contain an object root and an object server map');
+  }
   const existingServers = existing[mcpKey] || {};
   const newServers = { ...existingServers };
 
   for (const server of servers) {
     if (existingServers[server.name]) {
       result.alreadyPresent.push(server.name);
+      if (normalizeRuntimeProviderId(provider) === 'antigravity') continue;
     }
     newServers[server.name] = buildServerConfig(server, provider);
     result.serversInjected.push(server.name);
@@ -395,7 +439,8 @@ async function injectJson(registry, servers, configPath, provider, dryRun, resul
     await writeFile(configPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
 
     for (const server of servers) {
-      await registry.recordInjection(server.name, provider);
+      if (normalizeRuntimeProviderId(provider) === 'antigravity' && !result.serversInjected.includes(server.name)) continue;
+      await registry.recordInjection(server.name, normalizeRuntimeProviderId(provider) || provider);
     }
   }
 
@@ -406,28 +451,15 @@ async function injectToml(registry, servers, configPath, provider, dryRun, resul
   let existing = '';
   try {
     existing = await readFile(configPath, 'utf-8');
-  } catch {
-    // File doesn't exist
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
   }
-
-  const sectionsToAdd = [];
 
   for (const server of servers) {
-    const sectionHeader = `[mcp_servers.${server.name}]`;
-    if (existing.includes(sectionHeader)) {
-      const sectionRegex = new RegExp(
-        `\\[mcp_servers\\.${escapeRegex(server.name)}\\][\\s\\S]*?(?=\\n\\[|$)`,
-      );
-      existing = existing.replace(sectionRegex, buildServerToml(server));
-      result.alreadyPresent.push(server.name);
-    } else {
-      sectionsToAdd.push(buildServerToml(server));
-    }
+    const edited = replaceServer(existing, server.name, buildServerToml(server));
+    existing = edited.text;
+    if (edited.alreadyPresent) result.alreadyPresent.push(server.name);
     result.serversInjected.push(server.name);
-  }
-
-  if (sectionsToAdd.length > 0) {
-    existing = existing.trimEnd() + '\n\n' + sectionsToAdd.join('\n\n') + '\n';
   }
 
   if (!dryRun) {
@@ -440,10 +472,6 @@ async function injectToml(registry, servers, configPath, provider, dryRun, resul
   }
 
   return result;
-}
-
-function escapeRegex(str) {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 export const SUPPORTED_PROVIDERS = listMcpInjectProviderIds();

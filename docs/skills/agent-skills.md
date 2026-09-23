@@ -13,6 +13,16 @@ policy.
 
 ## Complete workflow
 
+Portable AIWG source skills use `platforms: [all]`, so explicit copies also
+work with newly added providers. Enumerate providers only when a skill
+requires a specific native tool, and document that dependency in its body.
+The shipped help, document consolidation, and semantic-memory workflows use
+generic file operations and CLI commands and need no provider allowlist.
+
+Platform restrictions control copying into provider directories. Indexed
+`aiwg discover` and `aiwg show` still expose the source independently of
+whether the current provider can load or execute a native skill.
+
 The repository fixture at
 `test/fixtures/agent-skills/lifecycle/portable-complete/` is a complete example.
 The commands below assume its directory has been copied to
@@ -312,17 +322,22 @@ validated Agent Skills name.
 
 | Target ID | Deployed path | Status for conforming fixture | Resource result | Provider behavior |
 |---|---|---|---|---|
+| `antigravity` | `<project>/.agents/skills/<name>` | `native` | exact | Project-local native Agent Skills bundle; global skill deployment remains disabled because Google's documented global paths conflict |
 | `claude` | `<project>/.claude/skills/<name>` | `native` | exact | Recursive native bundle |
 | `codex` | `<project>/.agents/skills/<name>` | `projected` | exact | Project compatibility surface; descriptions over 500 characters are `degraded`/blocked, never truncated |
 | `copilot` | `<project>/.github/skills/<name>` | `native` | exact | Recursive native bundle |
 | `cursor` | `<project>/.cursor/skills/<name>` | `native` | exact | Recursive native bundle |
+| `deepseek-harness` | `<project>/.agents/skills/<name>` | `native` | exact | DeepSeek Harness native filesystem skill surface, shared with other `.agents/skills` consumers |
 | `factory` | `<project>/.factory/skills/<name>` | `projected` | exact | Adds Factory description guidance, then strictly reparses |
 | `hermes` | `~/.hermes/skills/<name>` | `native` | exact | User-global recursive bundle with managed ownership sidecars |
 | `opencode` | `<project>/.opencode/skill/<name>` | `native` | exact | Recursive native bundle |
 | `openclaw` | `~/.openclaw/skills/<name>` | `native` | exact | Global recursive native bundle |
 | `openhuman` | `~/.openhuman/skills/<name>` | `projected` | exact | Verified global one-level skill layout |
+| `omp` | `<project>/.omp/skills/<name>` | `native` | exact | OMP project-local imported Agent Skills bundle; native one-level discovery |
+| `pi` | `<project>/.pi/skills/<name>` | `native` | exact | Pi project-local Agent Skills bundle; loading remains subject to Pi project trust |
 | `warp` | `<project>/.warp/skills/<name>` | `native` | exact | Recursive native bundle |
 | `windsurf` | `<project>/.windsurf/skills/<name>` | `projected` | exact | One bundle directly below the one-level surface |
+| `dsh` | `<project>/.agents/skills/<name>` | `native` | exact | Canonical DSH fork (alias `deepseek`), distinct from upstream `deepseek-harness`; shared native bundle surface |
 | `generic` | `<project>/skills/<name>` | `native` | exact | Recursive portable fallback |
 
 Every supported projection is reparsed with the strict validator. Results

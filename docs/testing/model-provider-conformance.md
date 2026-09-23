@@ -5,7 +5,7 @@ Normal CI is fixture-first and cost-free. The shared fixture at
 standard/coding, economy/efficiency, an unknown exact ID, and an invalid
 blocked pin. Its golden provider matrix asserts the configured target, artifact
 format, native or degraded outcome, field names, and omission of unsupported
-model and effort keys for all eleven providers.
+model and effort keys for all thirteen providers.
 
 ## Test matrix
 
@@ -36,8 +36,18 @@ exposes a stable machine-readable interface.
 The model-worker provider matrix deploys only generated files into temporary
 workspaces. It validates exact native model fields for Claude, Codex, Copilot,
 Cursor, Factory, and OpenCode; semantic OpenHuman hints; and honest
-inherited/global/unsupported degradation for OpenClaw, Warp, Windsurf, and
-Hermes. It never launches a provider or spends model tokens.
+inherited/global/unsupported degradation for OpenClaw, Pi, Warp, Windsurf, and
+Hermes. It never launches a provider or spends model tokens. Pi is an AIWG
+deployment provider here; Pi's own `--provider` flag selects an LLM backend
+and is outside this compiler contract.
+
+Pi-specific fixture coverage lives in
+`test/fixtures/providers/pi/`, `test/fixtures/sessions/pi/`, and
+`test/unit/providers/pi-conformance-fixtures.test.ts`. Those fixtures pin the
+audited upstream version and exercise session-tree, compaction, retry,
+unknown-entry, malformed-JSONL, and redaction cases without installing or
+invoking Pi. The production Pi runtime and session adapter remain unimplemented,
+so fixture coverage must not be reported as live conformance.
 
 ## Opt-in live smoke
 
@@ -67,3 +77,25 @@ node tools/models/live-smoke.mjs \
 
 If a model is unavailable, record the observed fallback and account/admin
 constraint rather than treating the configured ID as the resolved model.
+
+For an opt-in Pi/OpenRouter smoke, install
+`@earendil-works/pi-coding-agent`, source `OPENROUTER_API_KEY` from an
+approved secret manager, and run the gated harness:
+
+```bash
+node tools/providers/pi-live-smoke.mjs --check
+
+AIWG_PI_LIVE_SMOKE=1 \
+OPENROUTER_API_KEY="$(your-secret-command)" \
+npm run smoke:pi:live -- --model <openrouter-model-id>
+```
+
+The default live path uses a pinned, ephemeral `npx` package rather than a
+global Pi installation. For a reviewed source build, pass `--pi-bin` with the
+path to that build's `dist/bundle/cli.js`. The harness creates temporary
+`HOME`, `PI_CODING_AGENT_DIR`, and `PI_CODING_AGENT_SESSION_DIR` values,
+uses `--no-approve`, validates discovery, RPC controls, strict JSONL, and
+`agent_settled`, and deletes raw output. It emits only summary evidence and
+never writes the credential. Pi's current flags are documented in the
+[upstream coding-agent README](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#cli-reference)
+(last verified 2026-09-04).

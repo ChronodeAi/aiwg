@@ -11,6 +11,8 @@
 import type { CommandHandler, HandlerContext, HandlerResult } from './types.js';
 import * as ui from '../ui.js';
 import { maybePrintCommunityFooter } from '../../community/footer.js';
+import { listProviderDefinitions } from '../../providers/provider-definitions.js';
+import { getCommandIds } from '../../extensions/commands/definitions.js';
 
 /**
  * Help command handler
@@ -22,7 +24,12 @@ export const helpHandler: CommandHandler = {
   category: 'maintenance',
   aliases: ['-h', '-help', '--help'],
 
-  async execute(_ctx: HandlerContext): Promise<HandlerResult> {
+  async execute(ctx: HandlerContext): Promise<HandlerResult> {
+    if (ctx.args.includes('--json')) {
+      // Canonical IDs only: aliases and example prose are not registry entries.
+      console.log(JSON.stringify({ schema: 'aiwg.command-registry.v1', commandIds: getCommandIds() }));
+      return { exitCode: 0 };
+    }
     displayHelp();
     return { exitCode: 0 };
   },
@@ -68,6 +75,7 @@ function displayHelp(): void {
 
   helpGroup('WORKSPACE', [
     ['status', 'Show workspace health and installed frameworks'],
+    ['sessions <command>', 'Manage the normalized session catalog, imports, and analytics'],
     ['migrate-workspace', 'Migrate legacy .aiwg/ to framework-scoped structure'],
     ['rollback-workspace', 'Rollback workspace migration from backup'],
   ]);
@@ -104,6 +112,9 @@ function displayHelp(): void {
   helpGroup('DISPATCH', [
     ['run skill <name>', 'Execute a script-bearing skill'],
     ['run <script-name>', 'Run a user-defined script from .aiwg/aiwg.config'],
+    ['writing <plan|proofread>', 'Use grounded briefs and authorized proofreading'],
+    ['writer-profile <action>', 'Manage author-controlled writer profile sidecars'],
+    ['output-mode <action>', 'Configure composable output language and presentation'],
   ]);
 
   helpGroup('FEATURES', [
@@ -167,7 +178,8 @@ function displayHelp(): void {
 
   ui.rule();
   ui.blank();
-  console.log(`  ${ui.dimText('Providers:')} claude (default), copilot, factory, codex, cursor, opencode, warp, windsurf`);
+  const providers = listProviderDefinitions().filter(({ id }) => id !== 'generic');
+  console.log(`  ${ui.dimText('Providers:')} ${providers.length} — ${providers.map(({ id }) => id).join(', ')} (default: claude; aliases: agy → antigravity, devin → windsurf, oh-my-pi → omp)`);
   ui.blank();
   console.log(`  ${ui.dimText('Examples:')}`);
   console.log(`    aiwg use sdlc                   ${ui.dimText('Install SDLC framework')}`);

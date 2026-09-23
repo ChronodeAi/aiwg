@@ -87,12 +87,36 @@ jobs:
       - name: Build CLI (required by integration tests that spawn bin/aiwg.mjs)
         run: npm run build:cli
 
-      - name: Run Fortemi Core index release gate (#1696/#1697)
-        # Builds the real framework corpus index, validates the checked-in
-        # component-to-driver coverage report and discovery query matrix
-        # against local + Fortemi Core backends, and proves npm packaging
-        # includes the generated prebuilt index contract.
-        run: npm run ci:fortemi-index
+      - name: Install SQLite test backend
+        # Keep native prebuild plumbing out of the default/package-lock install
+        # tree while making the optional production backend mandatory in CI.
+        # This exact-version follow-up must not re-resolve the already-locked
+        # graph through the seven-day age filter; match the publish gate.
+        # Shared with contributors as `npm run features:sqlite` so a local run
+        # and a CI run install the same backend the same way (#2515).
+        run: npm run features:sqlite
+
+      - name: Verify test runner ownership
+        run: npm run lint:test-registration
+
+      - name: Enforce measured testing-quality and audit-foundation coverage
+        run: npm run test:coverage:testing-quality && npm run test:coverage:audit-foundations && npm run test:coverage:enforcement
+
+      - name: Run source-bound testing conformance example
+        run: npm run test:conformance:example
+
+      - name: Preserve testing conformance evidence
+        if: always()
+        uses: actions/upload-artifact@c24449f33cd45d4826c6702db7e49f7cdb9b551d  # v3.2.1-node20
+        with:
+          name: testing-conformance-${{ gitea.sha }}
+          path: |
+            test-results/conformance-example
+            test-results/test-registration.json
+            test-results/testing-quality-coverage
+            test-results/audit-foundations-coverage
+            test-results/coverage-enforcement
+          if-no-files-found: error
 
       - name: Lint schemas
         # Validates schemas/executor-v1.json (draft-2020-12) and all
@@ -100,6 +124,11 @@ jobs:
         # Fails the build if the schema is structurally invalid or a fixture
         # violates the declared _validates_as shape. (#1178)
         run: npm run lint:schemas
+
+      - name: Validate ops extension templates
+        # Discovers every extension YAML template, resolves core and custom
+        # kinds through ADDON.yaml, and fails on schema or reference drift.
+        run: npm run lint:ops-templates
 
       - name: Enforce Mission Protocol inventory and compatibility (#2178/#2180)
         # Fails when a new Mission producer/consumer is unclassified or when
@@ -117,11 +146,17 @@ jobs:
         # secret values. Live metadata is checked separately after induction.
         run: npm run lint:vault-migration
 
+      - name: Run contracts in their owning Vitest and Node lanes
+        run: npm run test:contract
+
       - name: Run conformance suite (fixture mode)
         # Exercises the executor-contract v1 dispatch path via fixture replay.
         # Runs as a separate step (not folded into test:ci) to keep the existing
         # CI budget intact. Zero network I/O — fully deterministic. (#1183)
         run: npm run test:conformance
+
+      - name: Run Dataset Intelligence conformance contracts (#2242)
+        run: npm run test:conformance:dataset
 
       - name: Enforce adversarial attestation transport conformance (#2092)
         # Regenerates deterministic real-key fixtures, rejects drift, and proves
@@ -137,13 +172,6 @@ jobs:
         # state-manager suites' async rot (#1777) is now fixed, so the full
         # `test:node` set is gated here. Deterministic, no network.
         run: npm run test:node
-
-      - name: Install SQLite test backend
-        # Keep native prebuild plumbing out of the default/package-lock install
-        # tree while making the optional production backend mandatory in CI.
-        # This exact-version follow-up must not re-resolve the already-locked
-        # graph through the seven-day age filter; match the publish gate.
-        run: npm install --no-save --save-dev --package-lock=false --min-release-age=0 better-sqlite3@12.8.0
 
       - name: Run storage backend conformance gate (#2190/#2191)
         # Enforces the zero-dependency golden corpus, migration safety/fault
@@ -199,12 +227,60 @@ jobs:
           AIWG_SERVE_HTTP_TIMEOUT_MS: "30000"
         run: npm run test:integration:serve
 
+  # Full-corpus index performance, real package installation/build, and
+  # full-corpus discovery are isolated gates. They must not compete with the
+  # general test workers or each other while measuring repository-scale work.
+  artifact-index:
+    name: Artifact index integration
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run isolated full-corpus artifact index tests
+        run: npm run test:integration:artifact-index
+
+  packaging:
+    name: Package lifecycle
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build release prerequisites
+        # Match both publish workflows: the root package intentionally ships
+        # apps/web/dist, so a CLI-only build produces an incomplete dry-run.
+        run: npm run build
+      - name: Run isolated packaging lifecycle tests
+        run: npm run test:packaging
+
+  release-discovery:
+    name: Release discovery and installed package
+    runs-on: ubuntu-latest
+    container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build CLI prerequisites
+        run: npm run build:cli
+      - name: Verify real corpus, tarball and installed discovery
+        run: npm run ci:fortemi-index
+
   build:
     name: Build
     runs-on: ubuntu-latest
     container: node:24@sha256:050bf2bbe33c1d6754e060bec89378a79ed831f04a7bb1a53fe45e997df7b3bb  # node 24.15.0 / npm 11.12.1 (see ci/digests.txt)
     timeout-minutes: 10
-    needs: [test]
+    needs: [test, packaging, release-discovery]
 
     steps:
       - name: Checkout code

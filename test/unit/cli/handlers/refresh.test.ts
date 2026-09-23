@@ -8,18 +8,23 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
+import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import type { HandlerContext } from '../../../../src/cli/handlers/types.js';
 
 // ── Mocks ────────────────────────────────────────────────────
 
-const { mockRun, mockUseExecute, mockRefreshAllPackages, mockReadAiwgConfig, mockHashManifest } = vi.hoisted(() => ({
+const {
+  mockRun, mockUseExecute, mockRefreshAllPackages, mockReadAiwgConfig, mockHashManifest,
+  mockWriteAiwgConfig,
+} = vi.hoisted(() => ({
   mockRun: vi.fn().mockResolvedValue({ exitCode: 0 }),
   mockUseExecute: vi.fn().mockResolvedValue({ exitCode: 0 }),
   mockRefreshAllPackages: vi.fn().mockResolvedValue([]),
   mockReadAiwgConfig: vi.fn().mockResolvedValue(null),
   mockHashManifest: vi.fn().mockResolvedValue(null),
+  mockWriteAiwgConfig: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../../../src/cli/handlers/script-runner.js', () => ({
@@ -41,6 +46,12 @@ vi.mock('../../../../src/packages/registry.js', () => ({
 vi.mock('../../../../src/config/aiwg-config.js', () => ({
   readAiwgConfig: mockReadAiwgConfig,
   hashManifest: mockHashManifest,
+  writeAiwgConfig: mockWriteAiwgConfig,
+  getProviderParallelismDefaults: vi.fn(() => ({
+    max_parallel_subagents: 4,
+    max_parallel_ralph_loops: 2,
+    max_parallel_mc_missions: 4,
+  })),
 }));
 
 vi.mock('../../../../src/cli/ui.js', () => ({
@@ -60,7 +71,8 @@ vi.mock('../../../../src/cli/ui.js', () => ({
 }));
 
 import {
-  collectModelDeployArgs, refreshHandler, pruneStaleManagedAgentFiles,
+  collectModelDeployArgs, refreshHandler, pruneStaleManagedAgentFiles, detectStaleProviderTrees,
+  allowsTrackedDeletes,
 } from '../../../../src/cli/handlers/refresh.js';
 import * as ui from '../../../../src/cli/ui.js';
 // Backward-compat alias for existing test references
@@ -433,7 +445,7 @@ describe('refreshHandler stale AIWG-managed agent cleanup (#1460)', () => {
         '---\n# aiwg:managed v1.4.0 bundled\nname: RLM Agent\n---\n',
       );
 
-      const removed = await pruneStaleManagedAgentFiles({
+      const { removals: removed } = await pruneStaleManagedAgentFiles({
         projectRoot,
         frameworkRoot,
         provider: 'claude',
@@ -441,6 +453,39 @@ describe('refreshHandler stale AIWG-managed agent cleanup (#1460)', () => {
 
       expect(removed).toEqual([]);
       expect(existsSync(join(projectRoot, '.claude/agents/rlm-agent.md'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves project-local bundle agents absent from the packaged corpus (#2502)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-project-local-'));
+    try {
+      const frameworkRoot = join(root, 'framework-root');
+      const projectRoot = join(root, 'project');
+      mkdirSync(join(frameworkRoot, 'agentic/code/frameworks/sdlc-complete/agents'), { recursive: true });
+      mkdirSync(join(projectRoot, '.claude/agents'), { recursive: true });
+      writeFileSync(join(frameworkRoot, 'package.json'), '{"version":"2026.9.6"}\n');
+      writeFileSync(
+        join(frameworkRoot, 'agentic/code/frameworks/sdlc-complete/agents/current-agent.md'),
+        '---\nname: Current\n---\n',
+      );
+      // A project-local bundle's agent never appears in the packaged corpus, so
+      // the `missingFromCurrentPackage` branch matches it on every run. Its
+      // managed-marker source is what keeps it out of the prune's reach.
+      writeFileSync(
+        join(projectRoot, '.claude/agents/repro-agent.md'),
+        '---\n# aiwg:managed v1.0.0 project-local\nname: Repro Agent\nmodel: sonnet\n---\n',
+      );
+
+      const { removals: removed } = await pruneStaleManagedAgentFiles({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+      });
+
+      expect(removed).toEqual([]);
+      expect(existsSync(join(projectRoot, '.claude/agents/repro-agent.md'))).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -471,7 +516,7 @@ describe('refreshHandler stale AIWG-managed agent cleanup (#1460)', () => {
         '---\nname: Operator Agent\nmodel: sonnet\n---\n',
       );
 
-      const removed = await pruneStaleManagedAgentFiles({ projectRoot, frameworkRoot, provider: 'claude' });
+      const { removals: removed } = await pruneStaleManagedAgentFiles({ projectRoot, frameworkRoot, provider: 'claude' });
 
       expect(removed).toEqual([{
         provider: 'claude',
@@ -498,7 +543,7 @@ describe('refreshHandler stale AIWG-managed agent cleanup (#1460)', () => {
         '---\n# aiwg:managed v2026.5.0-rc.7 bundled\nname: Old\nmodel: sonnet\n---\n',
       );
 
-      const removed = await pruneStaleManagedAgentFiles({ projectRoot, frameworkRoot, provider: 'claude', dryRun: true });
+      const { removals: removed } = await pruneStaleManagedAgentFiles({ projectRoot, frameworkRoot, provider: 'claude', dryRun: true });
 
       expect(removed).toEqual([{
         provider: 'claude',
@@ -510,59 +555,326 @@ describe('refreshHandler stale AIWG-managed agent cleanup (#1460)', () => {
     }
   });
 
-  it('globally removes 47 old managed Codex agents during Claude refresh and preserves non-package ownership', async () => {
+  // #2506 — a provider-scoped refresh used to delete every older managed agent
+  // from provider trees it was not asked to touch, leaving commands and rules
+  // behind. The deletions were silent, and in git-tracked provider directories
+  // they landed as staged deletions in an unrelated working tree.
+  it('leaves non-refreshed provider trees untouched by default', async () => {
     const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-cross-provider-'));
     try {
-      const frameworkRoot = join(root, 'framework-root');
-      const projectRoot = join(root, 'project');
-      const packagedAgents = join(frameworkRoot, 'agentic/code/frameworks/sdlc-complete/agents');
-      const claudeAgents = join(projectRoot, '.claude/agents');
-      const codexAgents = join(projectRoot, '.codex/agents');
-      mkdirSync(packagedAgents, { recursive: true });
-      mkdirSync(claudeAgents, { recursive: true });
-      mkdirSync(codexAgents, { recursive: true });
-      writeFileSync(join(frameworkRoot, 'package.json'), '{"version":"2026.7.15"}\n');
+      const { frameworkRoot, projectRoot, claudeAgents, codexAgents, codexCommands, codexRules } =
+        makeCrossProviderFixture(root);
 
-      for (let index = 1; index <= 47; index += 1) {
-        const name = `stale-agent-${String(index).padStart(2, '0')}`;
-        writeFileSync(join(packagedAgents, `${name}.md`), `---\nname: ${name}\n---\nCurrent lean body.\n`);
-        writeFileSync(
-          join(codexAgents, `${name}.md`),
-          `---\n# aiwg:managed v2026.7.13 bundled\nname: ${name}\n---\n${'old oversized example\n'.repeat(900)}`,
-        );
-      }
-
-      writeFileSync(join(packagedAgents, 'current-claude-agent.md'), '---\nname: current-claude-agent\n---\n');
-      writeFileSync(join(packagedAgents, 'newer-channel-agent.md'), '---\nname: newer-channel-agent\n---\n');
-      writeFileSync(
-        join(claudeAgents, 'current-claude-agent.md'),
-        '---\n# aiwg:managed v2026.7.15 bundled\nname: current-claude-agent\n---\n',
-      );
-      writeFileSync(join(codexAgents, 'operator-agent.md'), '# operator owned\n');
-      writeFileSync(
-        join(codexAgents, 'newer-channel-agent.md'),
-        '---\n# aiwg:managed v2026.8.0-rc.1 bundled\nname: newer-channel-agent\n---\n',
-      );
-      writeFileSync(
-        join(codexAgents, 'project-agent.md'),
-        '---\n# aiwg:managed v2026.7.13 project-local\nname: project-agent\n---\n',
-      );
-
-      const removed = await pruneStaleManagedAgentFiles({
+      const { removals: removed } = await pruneStaleManagedAgentFiles({
         projectRoot,
         frameworkRoot,
         provider: 'claude',
       });
 
-      expect(removed).toHaveLength(1);
-      expect(removed[0].provider).toBe('codex');
-      expect(removed[0].paths).toHaveLength(47);
-      expect(existsSync(join(codexAgents, 'stale-agent-01.md'))).toBe(false);
-      expect(existsSync(join(codexAgents, 'stale-agent-47.md'))).toBe(false);
+      expect(removed).toEqual([]);
+      expect(existsSync(join(codexAgents, 'stale-agent-01.md'))).toBe(true);
+      expect(existsSync(join(codexAgents, 'stale-agent-47.md'))).toBe(true);
+      expect(existsSync(join(codexCommands, 'stale-command.md'))).toBe(true);
+      expect(existsSync(join(codexRules, 'stale-rule.md'))).toBe(true);
       expect(existsSync(join(claudeAgents, 'current-claude-agent.md'))).toBe(true);
       expect(existsSync(join(codexAgents, 'operator-agent.md'))).toBe(true);
       expect(existsSync(join(codexAgents, 'newer-channel-agent.md'))).toBe(true);
       expect(existsSync(join(codexAgents, 'project-agent.md'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports non-refreshed stale provider trees so the operator can decide', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-stale-detect-'));
+    try {
+      const { frameworkRoot, projectRoot } = makeCrossProviderFixture(root);
+
+      const trees = await detectStaleProviderTrees({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+      });
+
+      expect(trees).toHaveLength(1);
+      expect(trees[0].provider).toBe('codex');
+      expect(trees[0].version).toBe('2026.7.13');
+      expect(trees[0].counts).toEqual({ agents: 47, commands: 1, rules: 1 });
+      expect(trees[0].total).toBe(49);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes a non-refreshed provider tree as a unit when explicitly requested', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-cross-prune-'));
+    try {
+      const { frameworkRoot, projectRoot, claudeAgents, codexAgents, codexCommands, codexRules } =
+        makeCrossProviderFixture(root);
+
+      const { removals: removed } = await pruneStaleManagedAgentFiles({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+        crossProvider: 'prune',
+      });
+
+      expect(removed).toHaveLength(1);
+      expect(removed[0].provider).toBe('codex');
+      // agents + commands + rules removed together — never a half-deployed tree
+      expect(removed[0].paths).toHaveLength(49);
+      expect(existsSync(join(codexAgents, 'stale-agent-01.md'))).toBe(false);
+      expect(existsSync(join(codexAgents, 'stale-agent-47.md'))).toBe(false);
+      expect(existsSync(join(codexCommands, 'stale-command.md'))).toBe(false);
+      expect(existsSync(join(codexRules, 'stale-rule.md'))).toBe(false);
+      // Ownership boundaries still hold.
+      expect(existsSync(join(claudeAgents, 'current-claude-agent.md'))).toBe(true);
+      expect(existsSync(join(codexAgents, 'operator-agent.md'))).toBe(true);
+      expect(existsSync(join(codexAgents, 'newer-channel-agent.md'))).toBe(true);
+      expect(existsSync(join(codexAgents, 'project-agent.md'))).toBe(true);
+      expect(existsSync(join(codexRules, 'RULES-INDEX.md'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never leaves a half-deployed tree: no run removes agents while keeping commands', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-half-deployed-'));
+    try {
+      const { frameworkRoot, projectRoot, codexAgents, codexCommands } =
+        makeCrossProviderFixture(root);
+
+      for (const crossProvider of ['skip', 'prune'] as const) {
+        const fixtureRoot = mkdtempSync(join(tmpdir(), `aiwg-refresh-half-${crossProvider}-`));
+        try {
+          const fixture = makeCrossProviderFixture(fixtureRoot);
+          await pruneStaleManagedAgentFiles({
+            projectRoot: fixture.projectRoot,
+            frameworkRoot: fixture.frameworkRoot,
+            provider: 'claude',
+            crossProvider,
+          });
+          const agentsLeft = existsSync(join(fixture.codexAgents, 'stale-agent-01.md'));
+          const commandsLeft = existsSync(join(fixture.codexCommands, 'stale-command.md'));
+          expect(agentsLeft).toBe(commandsLeft);
+        } finally {
+          rmSync(fixtureRoot, { recursive: true, force: true });
+        }
+      }
+      expect(existsSync(codexAgents)).toBe(true);
+      expect(existsSync(codexCommands)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('still removes agents the current package no longer ships from the refreshed provider', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-target-orphan-'));
+    try {
+      const { frameworkRoot, projectRoot, claudeAgents } = makeCrossProviderFixture(root);
+      writeFileSync(
+        join(claudeAgents, 'removed-from-package.md'),
+        '---\n# aiwg:managed v2026.7.13 bundled\nname: removed-from-package\n---\n',
+      );
+
+      const { removals: removed } = await pruneStaleManagedAgentFiles({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+      });
+
+      expect(removed).toEqual([{
+        provider: 'claude',
+        paths: ['.claude/agents/removed-from-package.md'],
+      }]);
+      expect(existsSync(join(claudeAgents, 'current-claude-agent.md'))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * Workspace shape from #2506: providers ["claude"] with a stale `.codex/` tree
+ * left behind by an older package — agents, commands, and rules together.
+ */
+function makeCrossProviderFixture(root: string) {
+  const frameworkRoot = join(root, 'framework-root');
+  const projectRoot = join(root, 'project');
+  const packagedAgents = join(frameworkRoot, 'agentic/code/frameworks/sdlc-complete/agents');
+  const claudeAgents = join(projectRoot, '.claude/agents');
+  const codexAgents = join(projectRoot, '.codex/agents');
+  const codexCommands = join(projectRoot, '.codex/commands');
+  const codexRules = join(projectRoot, '.codex/rules');
+  for (const dir of [packagedAgents, claudeAgents, codexAgents, codexCommands, codexRules]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(join(frameworkRoot, 'package.json'), '{"version":"2026.7.15"}\n');
+
+  for (let index = 1; index <= 47; index += 1) {
+    const name = `stale-agent-${String(index).padStart(2, '0')}`;
+    writeFileSync(join(packagedAgents, `${name}.md`), `---\nname: ${name}\n---\nCurrent lean body.\n`);
+    writeFileSync(
+      join(codexAgents, `${name}.md`),
+      `---\n# aiwg:managed v2026.7.13 bundled\nname: ${name}\n---\n${'old oversized example\n'.repeat(900)}`,
+    );
+  }
+
+  writeFileSync(join(packagedAgents, 'current-claude-agent.md'), '---\nname: current-claude-agent\n---\n');
+  writeFileSync(join(packagedAgents, 'newer-channel-agent.md'), '---\nname: newer-channel-agent\n---\n');
+  writeFileSync(
+    join(claudeAgents, 'current-claude-agent.md'),
+    '---\n# aiwg:managed v2026.7.15 bundled\nname: current-claude-agent\n---\n',
+  );
+  writeFileSync(join(codexAgents, 'operator-agent.md'), '# operator owned\n');
+  writeFileSync(
+    join(codexAgents, 'newer-channel-agent.md'),
+    '---\n# aiwg:managed v2026.8.0-rc.1 bundled\nname: newer-channel-agent\n---\n',
+  );
+  writeFileSync(
+    join(codexAgents, 'project-agent.md'),
+    '---\n# aiwg:managed v2026.7.13 project-local\nname: project-agent\n---\n',
+  );
+  writeFileSync(
+    join(codexCommands, 'stale-command.md'),
+    '<!-- aiwg:managed v2026.7.13 bundled -->\n# Stale command\n',
+  );
+  writeFileSync(join(codexCommands, 'operator-command.md'), '# operator owned\n');
+  writeFileSync(
+    join(codexRules, 'stale-rule.md'),
+    '<!-- aiwg:managed v2026.7.13 bundled -->\n# Stale rule\n',
+  );
+  writeFileSync(
+    join(codexRules, 'RULES-INDEX.md'),
+    '<!-- aiwg:managed v2026.7.13 bundled -->\n# Rules index\n',
+  );
+
+  return { frameworkRoot, projectRoot, packagedAgents, claudeAgents, codexAgents, codexCommands, codexRules };
+}
+
+describe('#2514 tracked deletion is its own decision, not a consequence of --force', () => {
+  it('does not let --force authorise deleting tracked files', () => {
+    expect(allowsTrackedDeletes(['--prune-other-providers', '--force'])).toBe(false);
+    expect(allowsTrackedDeletes(['--force'])).toBe(false);
+  });
+
+  it('requires the dedicated switch', () => {
+    expect(allowsTrackedDeletes(['--prune-other-providers', '--prune-tracked'])).toBe(true);
+  });
+
+  it('defaults to refusing', () => {
+    expect(allowsTrackedDeletes([])).toBe(false);
+    expect(allowsTrackedDeletes(['--prune-other-providers'])).toBe(false);
+  });
+
+  it('documents both flags and their separation', async () => {
+    const help = (await refreshHandler.help!(makeCtx(['--help']))).message ?? '';
+    expect(help).toContain('--prune-tracked');
+    expect(help).toContain('Never authorises');
+  });
+});
+
+describe('#2509 cross-provider prune defers to VCS state', () => {
+  function initGitRepo(root: string): void {
+    execFileSync('git', ['init', '-q', '.'], { cwd: root });
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: root });
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: root });
+    execFileSync('git', ['add', '-A'], { cwd: root });
+    execFileSync('git', ['commit', '-qm', 'baseline'], { cwd: root });
+  }
+
+  it('leaves git-tracked artifacts in place and reports them', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-tracked-'));
+    try {
+      const { frameworkRoot, projectRoot, codexAgents, codexRules } = makeCrossProviderFixture(root);
+      initGitRepo(projectRoot);
+
+      const { removals, trackedSkipped } = await pruneStaleManagedAgentFiles({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+        crossProvider: 'prune',
+      });
+
+      expect(removals).toEqual([]);
+      expect(trackedSkipped).toHaveLength(1);
+      expect(trackedSkipped[0].provider).toBe('codex');
+      expect(trackedSkipped[0].paths).toHaveLength(49);
+      expect(existsSync(join(codexAgents, 'stale-agent-01.md'))).toBe(true);
+      expect(existsSync(join(codexRules, 'stale-rule.md'))).toBe(true);
+      // Nothing was staged for deletion in a tree the run was not asked to touch.
+      const status = execFileSync('git', ['status', '--short'], { cwd: projectRoot }).toString();
+      expect(status.split('\n').filter((line) => line.startsWith(' D'))).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('removes tracked artifacts only under the dedicated opt-in', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-tracked-force-'));
+    try {
+      const { frameworkRoot, projectRoot, codexAgents, codexRules } = makeCrossProviderFixture(root);
+      initGitRepo(projectRoot);
+
+      const { removals, trackedSkipped } = await pruneStaleManagedAgentFiles({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+        crossProvider: 'prune',
+        allowTrackedDeletes: true,
+      });
+
+      expect(trackedSkipped).toEqual([]);
+      expect(removals).toHaveLength(1);
+      expect(removals[0].paths).toHaveLength(49);
+      expect(existsSync(join(codexAgents, 'stale-agent-01.md'))).toBe(false);
+      expect(existsSync(join(codexRules, 'stale-rule.md'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prunes normally in a project that is not a git repository', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-untracked-'));
+    try {
+      const { frameworkRoot, projectRoot, codexAgents } = makeCrossProviderFixture(root);
+
+      const { removals, trackedSkipped } = await pruneStaleManagedAgentFiles({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+        crossProvider: 'prune',
+      });
+
+      expect(trackedSkipped).toEqual([]);
+      expect(removals[0].paths).toHaveLength(49);
+      expect(existsSync(join(codexAgents, 'stale-agent-01.md'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never defers the refreshed provider\'s own orphan cleanup to VCS state', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'aiwg-refresh-target-tracked-'));
+    try {
+      const { frameworkRoot, projectRoot, claudeAgents } = makeCrossProviderFixture(root);
+      writeFileSync(
+        join(claudeAgents, 'removed-from-package.md'),
+        '---\n# aiwg:managed v2026.7.13 bundled\nname: removed-from-package\n---\n',
+      );
+      initGitRepo(projectRoot);
+
+      const { removals, trackedSkipped } = await pruneStaleManagedAgentFiles({
+        projectRoot,
+        frameworkRoot,
+        provider: 'claude',
+      });
+
+      expect(trackedSkipped).toEqual([]);
+      expect(removals).toEqual([{
+        provider: 'claude',
+        paths: ['.claude/agents/removed-from-package.md'],
+      }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -1,6 +1,9 @@
 ---
 name: executive-reviewer
 description: "Reviews product documents from a VP Product or CPO lens — strategy, business impact, resource tradeoffs, market position, and risk. Use as a read-only subagent inside /review."
+model: sonnet
+model-role: reasoning
+model-tier: standard
 readonly: true
 ---
 
