@@ -169,9 +169,12 @@ Prove that the proposed architecture is viable, requirements are sufficiently el
   - [ ] Integration architecture (external systems, APIs, protocols)
   - [ ] Security architecture (authentication, authorization, encryption)
   - [ ] Data architecture (data models, storage, migration)
+  - [ ] Declared dependency direction (§5a: allowed layer order, invariants as absences, pointer to the contract file)
 - [ ] SAD reviewed by peer architects (at least 1 external review)
 - [ ] SAD APPROVED by Software Architect and Security Architect
 - [ ] SAD BASELINED (version control, immutable for Construction)
+- [ ] Architecture contracts declared (`contracts.command` in `.aiwg/quality/gate.json`) and passing: `aiwg run skill codebase-health -- --architecture --ci` exits 0 (N/A with stated reason when the source tree has fewer than two top-level packages or no `gate.json`)
+- [ ] On ABM PASS, `.aiwg/gates/abm-baseline.json` written with the baseline commit and date
 
 #### 2. Architectural Prototype OPERATIONAL
 - [ ] Prototype implements "steel thread" (end-to-end skeleton)
@@ -387,6 +390,7 @@ Deliver a feature-complete, tested, deployable product that meets acceptance cri
   - [ ] Security review APPROVED by Security Gatekeeper
 - [ ] Regression suite green (all tests passing)
 - [ ] Test evidence documented (`test/test-evaluation-summary-template.md`)
+- [ ] Architecture conformance since ABM: contracts pass and no band, frozen-edge or suppression loosening since the ABM baseline commit, except ADR-cited evaluator-change commits — `aiwg run skill codebase-health -- --architecture --meta --base $(jq -r .commit .aiwg/gates/abm-baseline.json) --ci` exits 0 (N/A when `gate.json` was absent at ABM)
 
 #### 3. Defect Management COMPLETE
 - [ ] Zero P0 (Show Stopper) defects open

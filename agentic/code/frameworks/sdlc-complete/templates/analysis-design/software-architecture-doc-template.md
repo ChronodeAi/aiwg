@@ -2,7 +2,7 @@
 
 ---
 template_id: software-architecture-doc
-version: 3.0.0
+version: 3.1.0
 reasoning_required: true
 ---
 
@@ -43,6 +43,7 @@ Describe the architectural baseline, including views, decisions, and rationale t
 - C4 Level 1 (Context) diagram present and reviewed
 - C4 Level 2 (Container) diagram present with all external integrations shown
 - C4 Level 3 (Component) diagram present for all primary containers; trait/interface inventory complete
+- §5a Declared Dependency Direction states the allowed layer order, invariants as absences, and points to the contract file and `.aiwg/quality/gate.json` (or states N/A with reason)
 - Data model section includes struct/class definitions, schema definitions, and storage key patterns
 - At least 3 key sequence diagrams covering the highest-risk or most complex flows
 - API surface table complete for all interfaces (REST, gRPC, SDK, MCP, CLI as applicable)
@@ -114,6 +115,16 @@ Decompose each primary container into its internal components. Repeat this secti
   - Which tests (unit, integration, E2E) are expected to use mocks vs real implementations at this boundary
 - Flag any components that have no interface boundary (i.e., cannot be tested in isolation) as architectural concerns.
 - Answer the question: "What are the internal building blocks and where are the test and integration seams?"
+
+### 5a. Declared Dependency Direction
+
+Declare which way dependencies may point, so a mechanical contract can hold the line during Construction. The Code Reviewer and the `structure` gate compare the contract file against this section.
+
+- **Allowed order**: list layers/packages from most dependent to least (e.g., `server → application → domain`). A module may import only modules at or below its own layer.
+- **Invariants as absences**: state each rule as something that must never appear (e.g., "`domain` never imports `server`", "no module imports `legacy/` except `adapters/legacy_bridge`"). Absences are checkable; "should be loosely coupled" is not.
+- **Contract file**: path of the import-contract config that enforces this section (e.g., `.importlinter`, `.dependency-cruiser.js`) and its run command as configured in `contracts.command` of `.aiwg/quality/gate.json`; name `contracts.frozen_edges_file` if legacy violations are frozen rather than fixed.
+- **Changing direction**: requires an ADR (see the ADR template's *Contract and Band Impact*), then a separate commit updating the contract file and this section with trailer `Evaluator-Change: ADR-NNN`, reviewed by someone other than the author.
+- Mark "N/A" with a one-sentence reason when the source tree has fewer than two top-level packages.
 
 ### 6. Data Model
 

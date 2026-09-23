@@ -42,7 +42,7 @@ Every gate decision is logged with rationale (~90-day retention).
 Gates present enough context to decide: artifacts ready, quality score, open issues, the action required, the artifacts to show, and a required question with explicit options.
 
 ### Rule 8: Artifact Omission Requires Human Approval
-Agents MUST NOT silently skip, abbreviate, or omit any SDLC artifact based on inferred project type/size/complexity — completeness is the default. To skip an artifact, surface an `ALWAYS`/`block` gate ("Skip generating {{artifact}}?" → No-generate-it (recommended) / Yes-skip / generate-abbreviated). Implicit skips produce inconsistent artifact sets and erode trust; the human must explicitly opt out.
+Agents MUST NOT silently skip, abbreviate, or omit any SDLC artifact based on inferred project type/size/complexity — completeness is the default. To skip an artifact, surface an `ALWAYS`/`block` gate ("Skip generating {{artifact}}?" → No-generate-it (recommended) / Yes-skip / generate-abbreviated). Implicit skips produce inconsistent artifact sets and erode trust; the human must explicitly opt out. `sdlc-right-sizing` decides which flow and artifact set launches; Rule 8 governs completeness inside the chosen set, not the choice of set.
 
 ## SDLC Phase Gates
 

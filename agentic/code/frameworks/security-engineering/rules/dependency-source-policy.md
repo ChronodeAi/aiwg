@@ -4,6 +4,14 @@ triggers:
   - "can I add this dependency"
   - "is this package source safe"
   - "git dependency"
+paths:
+  - "package.json"
+  - "**/package-lock.json"
+  - "pnpm-lock.yaml"
+  - "pnpm-workspace.yaml"
+  - "yarn.lock"
+  - "bun.lockb"
+  - ".npmrc"
 ---
 
 # Dependency Source Policy

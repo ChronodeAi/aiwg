@@ -116,8 +116,8 @@
     },
     {
       "name": "decompose-file",
-      "description": "Analyze a large source file and produce a concrete decomposition plan with optional execution",
-      "triggers": ["decompose this file", "split this file into smaller modules", "this file is too large, break it up"]
+      "description": "Plan and execute a source-file split along one stated responsibility, with sibling-cycle and ratchet verification after the split",
+      "triggers": ["this file is too large", "split into modules", "decompose this file", "split this file along a responsibility"]
     },
     {
       "name": "issue-driven-al",

@@ -242,8 +242,8 @@ to programmatically navigate the file.
 
 ### Auto-Trigger on Large File Read
 
-When an agent attempts to read a file over 300 lines, the code-chunker can be
-invoked automatically to provide a map first:
+When an agent attempts to read a file the ratchet or `codebase-health --history`
+flags, the code-chunker can be invoked automatically to provide a map first:
 
 ```
 Agent reads src/legacy/monolith.ts (920 lines)
@@ -254,10 +254,10 @@ Agent reads src/legacy/monolith.ts (920 lines)
 ## Integration
 
 This skill uses:
-- `agent-friendly-code` rule: Threshold for when to suggest chunking
+- `code-shape` rule: Files flagged by the ratchet or `--history` are chunking candidates
 - `rlm-context-management` rule: Aligns with Rule 2 (programmatic access over full-context loading)
 - `/decompose-file` skill: Chunker maps → decomposer splits permanently
-- `/codebase-health` command: Identifies files that benefit from chunking
+- `codebase-health` skill: Identifies files that benefit from chunking (ratchet verdicts, `--history` hotspots)
 
 ## Output Locations
 
@@ -265,6 +265,6 @@ This skill uses:
 
 ## References
 
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/agent-friendly-code.md — Thresholds triggering chunker use
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/rules/code-shape.md — Change-scoped code-shape gates
 - @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/decompose-file/SKILL.md — Permanent splitting
-- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/commands/codebase-health.md — File size scanning
+- @$AIWG_ROOT/agentic/code/frameworks/sdlc-complete/skills/codebase-health/SKILL.md — Ratchet and hotspot routing

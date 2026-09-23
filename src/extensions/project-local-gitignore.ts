@@ -49,6 +49,8 @@ export const AIWG_GITIGNORE_BLOCK = [
   '!.aiwg/frameworks/',
   '!.aiwg/plugins/',
   '!.aiwg/providers/',
+  '!.aiwg/quality/',
+  '!.aiwg/gates/',
   '',
 ].join('\n');
 

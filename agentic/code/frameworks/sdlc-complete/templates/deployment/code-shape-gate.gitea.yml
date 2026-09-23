@@ -1,0 +1,30 @@
+# AIWG code-shape gate (Gitea Actions)
+#
+# Copy to .gitea/workflows/code-shape-gate.yml. Blocking: do not add continue-on-error —
+# the evaluator meta-check fails the PR when a quality step is made non-blocking.
+# The gate judges the PR with .aiwg/quality/gate.json from the base branch.
+name: code-shape
+
+on:
+  pull_request:
+
+jobs:
+  code-shape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install tools
+        run: |
+          pipx install lizard || python3 -m pip install --user lizard
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          npm i -g aiwg
+
+      - name: code-shape
+        run: aiwg run skill codebase-health -- --base "origin/${{ github.base_ref }}" --architecture --meta --ci
