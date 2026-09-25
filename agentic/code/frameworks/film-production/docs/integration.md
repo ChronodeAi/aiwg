@@ -12,9 +12,11 @@ schema rather than copying the legacy scaffold manifest verbatim.
   `FRAMEWORK_DIR_MAP` entries in `src/cli/handlers/use.ts` include film-production.
 - Provider framework inventory and kernel discovery are dynamic. The quickref
   carries `kernel: true`; standard skills stay source-indexed by default.
-- Agents carry model-role/model-tier/model-rationale; skills carry
-  commandHint.modelRole/modelTier. These are routing hints, not media model IDs
-  or a change to the user's current model selection.
+- Agents pin `model: sonnet` with `model-role: reasoning` and `model-tier: standard`,
+  matching other frameworks' standard-tier agents, so subagents do not inherit a
+  large-context parent model. Skills carry commandHint.modelRole/modelTier. These
+  are agent routing settings, not media model IDs or a change to the user's
+  session model.
 
 The framework creation guide and scaffold command currently emit legacy manifest
 fields. The new framework replaces those with the strict schema accepted by the
@@ -30,7 +32,12 @@ npm run build:cli
 node tools/cli/validate-metadata.mjs --recursive --ci --profile compatible --format json agentic/code/frameworks/film-production
 node --test agentic/code/frameworks/film-production/scripts/validate-film-state.test.mjs
 node agentic/code/frameworks/film-production/scripts/validate-film-state.mjs agentic/code/frameworks/film-production/examples/production-state.example.json
+npm run schema:catalog -- --check
 ```
+
+The state checker validates shape with the JSON schema (Ajv, a runtime dependency)
+and then applies gate rules. `fixtures/valid/` and `fixtures/invalid/` hold the
+reference states; each invalid fixture has a documented expected failure in the test.
 
 The public CLI was dry-run then deployed into an isolated test project using
 `aiwg use film-production --provider codex`. Its readiness check completed;

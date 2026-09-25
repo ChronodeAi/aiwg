@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import Ajv from 'ajv';
+
+const schema = JSON.parse(readFileSync(new URL('../schemas/production-state.schema.json', import.meta.url), 'utf8'));
+const validateShape = new Ajv({ allErrors: true, strict: false }).compile(schema);
 
 const promotion = new Set(['motion_ready', 'accepted', 'delivery_ready']);
 const walked = new Set(['accepted', 'delivery_ready']);
@@ -16,11 +20,14 @@ const record = value => value !== null && typeof value === 'object' && !Array.is
 const sha256 = value => typeof value === 'string' && hash.test(value);
 const count = value => Number.isInteger(value) && value >= 0;
 
-/** Check recorded evidence. This does not inspect media or grant authority. */
+/** Check recorded evidence against the schema (shape) and gate rules (cross-references, promotion, locks). This does not inspect media or grant authority. */
 export function validateFilmState(state) {
   const errors = [];
   const require = (ok, message) => { if (!ok) errors.push(message); };
   if (!record(state)) return ['state must be an object'];
+  if (!validateShape(state)) {
+    for (const error of validateShape.errors ?? []) errors.push(`schema: ${error.instancePath || '/'} ${error.message}`);
+  }
   require(state.schemaVersion === 2, 'schemaVersion must be 2');
   require(text(state.project_id), 'project_id is required');
   require(['active', 'paused', 'complete'].includes(state.production_status), 'invalid production_status');

@@ -3,6 +3,7 @@ name: film-continuity-supervisor
 description: Verifies character, prop, set, performance, and editorial continuity against controlling versions
 namespace: aiwg
 platforms: [all]
+model: sonnet
 model-role: reasoning
 model-tier: standard
 tools: [Read, Write, Edit, Bash, Glob, Grep]

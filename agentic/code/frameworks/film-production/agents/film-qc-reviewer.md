@@ -3,6 +3,7 @@ name: film-qc-reviewer
 description: Independently reviews exact film versions and reports bounded acceptance evidence and residual defects
 namespace: aiwg
 platforms: [all]
+model: sonnet
 model-role: reasoning
 model-tier: standard
 tools: [Read, Write, Bash, Glob, Grep]

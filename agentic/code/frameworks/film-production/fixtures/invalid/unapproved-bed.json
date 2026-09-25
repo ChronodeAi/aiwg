@@ -1,0 +1,309 @@
+{
+  "schemaVersion": 2,
+  "project_id": "FP-PROJ-EXAMPLE",
+  "production_status": "active",
+  "requested_action": "deliver",
+  "authority": {
+    "generation_allowed": false,
+    "currency": "USD",
+    "remaining": 0,
+    "next_estimate": 0
+  },
+  "checklist": {
+    "version": 1,
+    "classes": []
+  },
+  "beats": [
+    {
+      "id": "FP-BEAT-001",
+      "required": true,
+      "treatment": "shown",
+      "event_refs": [
+        "FP-SHOT-001#FP-EVENT-001"
+      ]
+    }
+  ],
+  "locks": {
+    "coverage": {
+      "status": "locked",
+      "subject_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "reviewer": "synthetic-fixture",
+      "reviewer_type": "agent",
+      "evidence": "Synthetic fixture only; not an actual animatic review."
+    },
+    "picture": {
+      "status": "locked",
+      "subject_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "reviewer": "synthetic-fixture",
+      "reviewer_type": "user",
+      "evidence": "recorded sign-off reference"
+    },
+    "sound": {
+      "status": "locked",
+      "subject_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "reviewer": "synthetic-fixture",
+      "reviewer_type": "user",
+      "evidence": "recorded sign-off reference"
+    }
+  },
+  "assets": [
+    {
+      "id": "FP-ASSET-MASTER",
+      "version": "v1",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "role": "aesthetic_master",
+      "quality_status": "accepted",
+      "path": "synthetic-example/no-real-media.png"
+    }
+  ],
+  "shots": [
+    {
+      "id": "FP-SHOT-001",
+      "version": "v1",
+      "status": "delivery_ready",
+      "record_path": "synthetic-example/shot.md",
+      "input_assets": [
+        {
+          "id": "FP-ASSET-MASTER",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "usage": "primary_image"
+        }
+      ],
+      "required_dimensions": [
+        "blocking",
+        "visual_quality"
+      ],
+      "reviews": [
+        {
+          "dimension": "blocking",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "dimension": "visual_quality",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "dimension": "motion",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "checklist_version": 1
+        },
+        {
+          "dimension": "edit",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "checklist_version": 1
+        },
+        {
+          "dimension": "delivery",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "checklist_version": 1
+        }
+      ],
+      "defects": [],
+      "events": [
+        {
+          "id": "FP-EVENT-001",
+          "order": 1,
+          "target": "FP-PROP-RECEIVER",
+          "result_state": "receiver lifted",
+          "expected_count": 1,
+          "observed_count": 1,
+          "observed_evidence": "observed at frame 42 of the review render"
+        }
+      ],
+      "checks": {
+        "object_counts": [
+          {
+            "id": "FP-PROP-RECEIVER",
+            "expected": 1,
+            "observed": 1
+          }
+        ],
+        "spatial_checked": true,
+        "temporal_checked": true
+      },
+      "required_user_dimensions": []
+    },
+    {
+      "id": "FP-SHOT-002",
+      "version": "v1",
+      "status": "delivery_ready",
+      "record_path": "synthetic-example/shot.md",
+      "input_assets": [
+        {
+          "id": "FP-ASSET-MASTER",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "usage": "primary_image"
+        }
+      ],
+      "required_dimensions": [
+        "blocking",
+        "visual_quality"
+      ],
+      "reviews": [
+        {
+          "dimension": "blocking",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "dimension": "visual_quality",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "dimension": "motion",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "checklist_version": 1
+        },
+        {
+          "dimension": "edit",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "checklist_version": 1
+        },
+        {
+          "dimension": "delivery",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "checklist_version": 1
+        }
+      ],
+      "defects": [],
+      "events": [
+        {
+          "id": "FP-EVENT-002",
+          "order": 1,
+          "target": "FP-PROP-RECEIVER",
+          "result_state": "receiver lifted",
+          "expected_count": 1,
+          "observed_count": 1,
+          "observed_evidence": "observed at frame 42 of the review render"
+        }
+      ],
+      "checks": {
+        "object_counts": [
+          {
+            "id": "FP-PROP-RECEIVER",
+            "expected": 1,
+            "observed": 1
+          }
+        ],
+        "spatial_checked": true,
+        "temporal_checked": true
+      },
+      "required_user_dimensions": []
+    }
+  ],
+  "timeline": {
+    "id": "FP-TL-001",
+    "version": "v1",
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "shot_order": [
+      "FP-SHOT-001",
+      "FP-SHOT-002"
+    ]
+  },
+  "cuts": [
+    {
+      "id": "FP-CUT-001",
+      "out_shot": "FP-SHOT-001",
+      "out_version": "v1",
+      "in_shot": "FP-SHOT-002",
+      "in_version": "v1",
+      "carried_states": [
+        "receiver in right hand"
+      ],
+      "defects": [],
+      "reviews": [
+        {
+          "method": "playback",
+          "context_seconds": 1,
+          "timeline_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "checklist_version": 1,
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "reviewer_type": "agent",
+          "evidence": "played 1 s either side, then frame-stepped the join"
+        }
+      ]
+    }
+  ],
+  "audio_elements": [
+    {
+      "id": "FP-CUE-001",
+      "kind": "bed",
+      "measured_by": "ffmpeg astats",
+      "qc": "pass",
+      "noise_floor_dbfs": -70,
+      "noise_floor_limit_dbfs": -60,
+      "spectral_flatness": 0.1,
+      "spectral_flatness_limit": 0.3
+    }
+  ]
+}
