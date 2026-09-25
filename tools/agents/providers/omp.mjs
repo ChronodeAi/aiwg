@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import YAML from 'yaml';
 import { resolveOmpPaths } from '../../../src/providers/omp-paths.mjs';
-import { collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot } from './base.mjs';
+import { collectFrameworkArtifacts, getAddonFiles, isKernelSkill, listMdFiles, listSkillDirs, normalizeDeploymentMode, resolveAiwgRoot, rulesIndexProjectionName } from './base.mjs';
 export const name = 'omp';
 export const aliases = ['oh-my-pi'];
 export const paths = { agents: '.omp/agents', commands: '.omp/prompts', skills: '.agents/skills', rules: '.omp/rules' };
@@ -113,18 +113,13 @@ function writeOwned(dest, content, source, opts = {}, transformation = 'identity
 export function deploySkillSupportAsset(source, destination, opts = {}) {
   return writeOwned(destination, fs.readFileSync(source), source, opts, 'omp-skill');
 }
-function rulesIndexOwner(src) {
-  const parts = src.split(path.sep);
-  const at = parts.lastIndexOf('frameworks');
-  return at >= 0 && parts[at + 1] ? parts[at + 1] : path.basename(path.dirname(path.dirname(src)));
-}
 function assignRuleNames(files) {
   const indexes = files.filter(src => path.basename(src) === 'RULES-INDEX.md');
-  const preferred = indexes.find(src => rulesIndexOwner(src) === 'sdlc-complete') ?? indexes[0];
+  const preferred = indexes.find(src => rulesIndexProjectionName(src) === 'RULES-INDEX-sdlc-complete.md') ?? indexes[0];
   const names = new Map(); const used = new Set();
   for (const src of files) {
     const original = path.basename(src);
-    const name = original === 'RULES-INDEX.md' && src !== preferred ? `RULES-INDEX-${rulesIndexOwner(src)}.md` : original;
+    const name = original === 'RULES-INDEX.md' && src !== preferred ? rulesIndexProjectionName(src) : original;
     if (used.has(name)) throw new Error(`OMP rules collision: ${name}`);
     used.add(name); names.set(src, name);
   }
