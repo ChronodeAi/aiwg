@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "project_id": "FP-PROJ-EXAMPLE",
+  "production_status": "active",
+  "requested_action": "none",
+  "authority": {
+    "generation_allowed": false,
+    "currency": "USD",
+    "remaining": 0,
+    "next_estimate": 0
+  },
+  "assets": [
+    {
+      "id": "FP-ASSET-MASTER",
+      "version": "v1",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "role": "aesthetic_master",
+      "quality_status": "accepted",
+      "path": "synthetic-example/no-real-media.png"
+    }
+  ],
+  "shots": [
+    {
+      "id": "FP-SHOT-001",
+      "version": "v1",
+      "status": "motion_ready",
+      "record_path": "synthetic-example/shot.md",
+      "input_assets": [
+        {
+          "id": "FP-ASSET-MASTER",
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "usage": "primary_image"
+        }
+      ],
+      "required_dimensions": [
+        "blocking",
+        "visual_quality"
+      ],
+      "reviews": [
+        {
+          "dimension": "blocking",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        },
+        {
+          "dimension": "visual_quality",
+          "shot_version": "v1",
+          "decision": "accepted",
+          "reviewer": "synthetic-fixture",
+          "evidence": "Synthetic fixture only; not actual media approval.",
+          "reviewer_type": "agent",
+          "input_hashes": {
+            "FP-ASSET-MASTER": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      ],
+      "defects": [],
+      "checks": {
+        "object_counts": [
+          {
+            "id": "FP-PROP-RECEIVER",
+            "expected": 1,
+            "observed": 1
+          }
+        ],
+        "spatial_checked": true,
+        "temporal_checked": false
+      },
+      "required_user_dimensions": []
+    }
+  ]
+}
