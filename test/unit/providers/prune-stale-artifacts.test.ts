@@ -86,6 +86,20 @@ describe('#1627 computeAllArtifactBasenames', () => {
     expect(rules.has('tao-loop')).toBe(true);
   });
 
+  it('keeps projected per-bundle rules indexes through a prune, but still prunes retired ones', async () => {
+    const base = await importBase();
+    const rules = base.computeAllArtifactBasenames(REPO_ROOT, 'rules');
+    const projected = base.rulesIndexProjectionName(
+      path.join(REPO_ROOT, 'agentic', 'code', 'frameworks', 'ops-complete', 'rules', 'RULES-INDEX.md'),
+    );
+    expect(projected).toBe('RULES-INDEX-ops-complete.md');
+    writeManaged(projected);
+    writeManaged('RULES-INDEX-retired-framework.md');
+    const removed = base.pruneStaleAiwgFiles(dir, rules);
+    expect(removed.map((p: string) => path.basename(p))).toEqual(['RULES-INDEX-retired-framework.md']);
+    expect(fs.existsSync(path.join(dir, projected))).toBe(true);
+  });
+
   it('returns null when there is no AIWG framework/addon tree', async () => {
     const base = await importBase();
     const saved = process.env.AIWG_ROOT;
