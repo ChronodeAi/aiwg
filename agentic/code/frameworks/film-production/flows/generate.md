@@ -17,7 +17,7 @@ Load with `aiwg show skill <name>`: film-provider-preflight, film-motion-coverag
 Run receipts, candidate takes, playback/contact review and accepted selections.
 Owners: film-scene-supervisor, film-continuity-supervisor.
 
-## Exit evidence — FP-G04
-No known blocking defect in accepted take; source and audio versions traceable; actual cost recorded or explicitly unavailable.
+## Exit evidence — FP-G04 Take accepted
+Criteria: `docs/taxonomy.md`, Acceptance gates and locks. Record the event walk (`observed_count`, `observed_evidence`) per event and the actual cost, or state that cost is unavailable.
 
 This gate evaluates evidence; it does not automatically demand a new user approval. Existing explicit scope/authority persists. On failure, stay in the affected phase, update current state and continue independent authorized work. A user pause blocks production. Frame, motion and delivery approvals apply to the recorded version and dimension only.

@@ -17,7 +17,7 @@ Load with `aiwg show skill <name>`: film-intake, film-story-proof.
 Versioned brief, timed script, knowledge/clue ledger and story-proof review.
 Owners: film-producer, film-story-director.
 
-## Exit evidence — FP-G01
-The setup, change and consequence can be understood; required lines retained; unresolved creative questions named.
+## Exit evidence — FP-G01 Story and dialogue lock
+Criteria: `docs/taxonomy.md`, Acceptance gates and locks. Record the beat list in current state (`beats`) and name unresolved creative questions.
 
 This gate evaluates evidence; it does not automatically demand a new user approval. Existing explicit scope/authority persists. On failure, stay in the affected phase, update current state and continue independent authorized work. A user pause blocks production. Frame, motion and delivery approvals apply to the recorded version and dimension only.

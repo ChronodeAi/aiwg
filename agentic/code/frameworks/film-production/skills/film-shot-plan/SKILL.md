@@ -29,7 +29,7 @@ Use current state, story proof, continuity bible, selected audio, and delivery f
 
 ## Outputs
 
-Write ordered shot records with event lists, state transitions, cut entry/exit states, audio links, reference roles, duration assumptions, and acceptance criteria. Update current state with dependencies and next actions.
+Write ordered shot records with event lists, state transitions, cut entry/exit states, audio links, reference roles, duration assumptions, and acceptance criteria. Mirror events into current state `shots[].events` and trace each story beat to them in `beats`. Update current state with dependencies and next actions.
 
 ## Continue or hold
 

@@ -29,7 +29,7 @@ Reload the provider session after deployment for new kernel/agent listings. Stan
 
 [Taxonomy](docs/taxonomy.md) · [Primary sources](docs/sources.md) · [Existing framework interfaces](docs/interfaces.md) · [Lifecycle](plan-act-film-production.md) · [Roles](actors-and-templates.md) · [Metrics](metrics/tracking-catalog.md)
 
-Rules are agent procedures. The [state checker](scripts/validate-film-state.mjs) checks recorded promotion constraints; it cannot inspect images, authenticate a reviewer or prove creative quality. Run `node scripts/validate-film-state.mjs <state.json>` from this framework directory. The [synthetic example](examples/production-state.example.json) demonstrates format, not a live approval.
+Rules are agent procedures. The [state checker](scripts/validate-film-state.mjs) checks recorded promotion constraints and, from schema v2, the lock gates in [the taxonomy](docs/taxonomy.md#acceptance-gates-and-locks): coverage lock before paid motion, a recorded event walk per accepted shot, a playback review (never stills) for every cut, picture lock before sound lock, measured audio clips, and escaped-defect checklist versions. It cannot inspect images, play media, authenticate a reviewer or prove creative quality. Run `node scripts/validate-film-state.mjs <state.json>` from this framework directory. The [synthetic example](examples/production-state.example.json) demonstrates format, not a live approval. v1 state files must be migrated to v2 (`events` on every shot) before the checker accepts them.
 
 ## Integration and scope
 

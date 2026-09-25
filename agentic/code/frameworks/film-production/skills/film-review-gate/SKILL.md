@@ -31,7 +31,7 @@ Read current state, candidate and controlling source versions, requested change,
 
 ## Outputs
 
-Update one compact review package with the candidate, relevant crops/playback, passed checks, residuals, and next action. Keep superseded versions traceable.
+Update one compact review package with the candidate, relevant crops/playback, passed checks, residuals, and next action. Keep superseded versions traceable. Write results into current state: per-event `observed_count` and `observed_evidence`, `checklist_version` on shot and cut reviews, and a `checklist` class plus version bump for every escaped defect.
 
 ## Continue or hold
 

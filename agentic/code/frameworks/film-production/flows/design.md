@@ -14,10 +14,10 @@ Break down scenes/shots. Lock character anatomy, costume, set geometry, physical
 Load with `aiwg show skill <name>`: film-continuity-pack, film-shot-plan.
 
 ## Outputs and owners
-Continuity bible, reference manifest and shot records with start/end states.
+Continuity bible, reference manifest, and shot records with event lists, start/end and cut entry/exit states.
 Owners: film-continuity-supervisor, film-scene-supervisor.
 
-## Exit evidence — FP-G02
-References have roles and versions; shot coverage and contacts are feasible; no contradictory controlling state.
+## Exit evidence — FP-G02 Continuity baseline
+Criteria: `docs/taxonomy.md`, Acceptance gates and locks.
 
 This gate evaluates evidence; it does not automatically demand a new user approval. Existing explicit scope/authority persists. On failure, stay in the affected phase, update current state and continue independent authorized work. A user pause blocks production. Frame, motion and delivery approvals apply to the recorded version and dimension only.

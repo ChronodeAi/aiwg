@@ -13,7 +13,7 @@ purposes; none guarantees generated continuity or creative acceptance.
 | FP-C01 | Develop | `film-intake` | Establish intent, audience, format, constraints, scope, existing authority, and delivery requirements in a production brief. |
 | FP-C02 | Develop | `film-story-proof` | Prove premise, character knowledge, causality, dialogue, and performance timing with a script, read-through, or animatic. |
 | FP-C03 | Design | `film-continuity-pack` | Define required character, anatomy, costume, set, prop, lighting, and spatial references, with controlling versions. |
-| FP-C04 | Previs | `film-shot-plan` | Break scenes into shots, action phases, sound requirements, start/end states, coverage, and usable edit handles. |
+| FP-C04 | Design | `film-shot-plan` | Break scenes into shots, per-shot event lists, action phases, sound requirements, start/end and cut entry/exit states, coverage, and usable edit handles. |
 | FP-C05 | Generate | `film-provider-preflight` | Verify the selected provider/model's supported controls, input requirements, current authority, bounded cost, and recovery path. |
 | FP-C06 | Design / Generate | `film-reference-edit` | Choose reference roles and localized or native-layer edits; retain exact sources and check changed regions plus invariants. |
 | FP-C07 | Generate | `film-motion-coverage` | Produce and inspect connected action, physical interactions, camera behavior, and sufficient coverage for the intended cut. |
@@ -73,21 +73,26 @@ editorial, and delivery. Changed inputs invalidate affected dimensions and
 downstream dependencies, while unaffected approvals remain usable. Historical
 directions cannot silently override the current state.
 
-## Acceptance gates
+## Acceptance gates and locks
 
-| ID | Gate | Minimum evidence |
-|---|---|---|
-| FP-G00 | Scope ready | Current brief, delivery requirements, relevant constraints, existing authority, and unresolved decisions identified. |
-| FP-G01 | Story ready | Required beats and lines present; character knowledge and action consequences coherent; timing demonstrated. |
-| FP-G02 | Source ready | Controlling reference roles/versions identified; usable source quality; exact-source layers retained; material defects resolved. |
-| FP-G03 | Shot ready | Physical action states and edit coverage viable; provider capability checked; run within current authority. |
-| FP-G04 | Take accepted | Actual playback inspected; target change and invariants checked; contact transitions and sound/performance checked where relevant. |
-| FP-G05 | Edit accepted | Adjacent shots and full timeline reviewed; selected versions, dialogue, continuity, color, and mix verified. |
-| FP-G06 | Delivery accepted | Exported files checked against specifications; agreed package complete; residuals, provenance, and archive references recorded. |
+This table is the single source of gate criteria; phase flows point here rather than restating them. Locks are recorded in current state (`locks`, schema v2) and checked by `scripts/validate-film-state.mjs`. "Validator" below means a recorded-evidence check, not media inspection.
 
-Gates are evidence checks, not mandatory new permission requests. Existing user
-authority persists. Missing authority, a material creative decision, or a genuine
-dependency can require input; a routine reversible correction need not.
+| ID | Gate / lock | Phase exit | Minimum evidence | Checked by | Blocks |
+|---|---|---|---|---|---|
+| FP-G00 | Scope ready | Develop entry | Current brief, delivery requirements, constraints, existing authority, unresolved decisions; project audio limits (noise floor, spectral flatness) and any `required_user_locks` recorded. | Agent | Story work |
+| FP-G01 | Story and dialogue lock | Develop | Beat list where every beat names an observable on-screen event (`beats`, `required`, `treatment`); lines and selected takes versioned and hashed; character knowledge and consequences coherent. | Agent; user only where the brief requires | Design |
+| FP-G02 | Continuity baseline | Design | Every hero prop, character, exact art and screen has one controlling reference with hash and count; every required beat maps to shot events (`shots[].events`); cut entry/exit states declared. | Validator (beat → event traceability, hashes) + continuity agent | First keyframes |
+| FP-G03 | Coverage lock | Previs | Animatic watched at real speed; every beat marked shown, continuous, cut or elided; eliding a required beat recorded as a scope change with authority; selected audio hashes fixed. Only this lock may be waived, with reason and authority (for example a single-shot piece). | Agent prepares; user where required | **All paid motion generation** (`requested_action: generate`) |
+| FP-G04 | Take accepted (per shot) | Generate | Actual playback inspected; event walk recorded with observed count and evidence per event, counts match or an accepted exception names the event; target change and invariants checked; source resolution meets the delivery floor or is an accepted exception; foley measured. | Agent + validator | Timeline placement |
+| FP-G05a | Picture lock | Finish | Timeline hash recorded; every adjacent shot pair has one cut record whose latest review is accepted **playback** with ≥ 1 s context at the current timeline hash and checklist version (stills never pass); cut shot versions current; every timeline shot accepted with its motion review at the current checklist version; every required beat event in the timeline; no open blocker/major shot or cut defect; conditions due by picture closed. Later picture changes record a `change_list` and relock. | Agent + validator; user where required | Sound lock |
+| FP-G05b | Sound lock | Finish | Valid picture lock on the same timeline hash; every `audio_elements` entry measured, qc pass, noise floor and spectral flatness within project limits; continuous beds carry an approval reference; stems kept separate from picture clips; exported mix listened to in context. | Script measures + validator; user listen where the agent cannot hear | Delivery |
+| FP-G06 | Delivery accepted | Deliver | Picture and sound locks valid for the current timeline; all lock conditions closed; exported file checked against specification and played, including every cut; package complete; each QC issue has severity and disposition; residuals, provenance and archive references recorded. | Validator + agent; user where required | Calling a version final; publication stays separately authorized |
+
+A lock may be conditional: `status: locked` with `conditions`, each naming the later gate (`picture`, `sound` or `delivery`) by which it must close. A condition cannot defer a blocking criterion or a required beat.
+
+A defect the user finds that review missed is an escaped defect: add its class to `checklist.classes` and bump `checklist.version`. Picture lock then requires every shot motion review and cut review at the new version, which re-checks already passed work for that class.
+
+Gates are evidence checks, not mandatory new permission requests. Ask for user sign-off only where the brief records it (`required_user_locks`, `required_user_dimensions`) or no agent or machine method can evaluate the criterion. Existing user authority persists. Missing authority, a material creative decision, or a genuine dependency can require input; a routine reversible correction need not. Do not copy SDLC ceremony: no gate meetings, waiting periods, percentage scores, or large reviewer panels. The rule is zero open blockers per level.
 
 An attractive image can fail a gate. Inspect native-size detail and the full
 frame, and review motion in playback rather than certifying it from stills.

@@ -17,7 +17,7 @@ Load with `aiwg show skill <name>`: film-delivery, film-retrospective.
 Verified master, delivery record, archive/handoff and small process update.
 Owners: film-producer, film-qc-reviewer.
 
-## Exit evidence — FP-G06
-Requested deliverables exist and checks match file; project backup availability distinguished from restore test; publication separately authorized.
+## Exit evidence — FP-G06 Delivery accepted
+Criteria: `docs/taxonomy.md`, Acceptance gates and locks. Distinguish project backup availability from a restore test; publication is separately authorized.
 
 This gate evaluates evidence; it does not automatically demand a new user approval. Existing explicit scope/authority persists. On failure, stay in the affected phase, update current state and continue independent authorized work. A user pause blocks production. Frame, motion and delivery approvals apply to the recorded version and dimension only.

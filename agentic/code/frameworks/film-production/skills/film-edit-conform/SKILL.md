@@ -29,7 +29,7 @@ Read current state, ordered shot records, accepted source ranges, dialogue/cue s
 
 ## Outputs
 
-Deliver the editable project/timeline, a current review export, and a review record linked to exact versions.
+Deliver the editable project/timeline, a current review export, and a review record linked to exact versions. In current state, record `timeline` (with the review export hash) and one `cuts` entry per adjacent shot pair with its playback review; record `locks.picture` when FP-G05a criteria in `docs/taxonomy.md` pass, and run the state validator.
 
 ## Continue or hold
 

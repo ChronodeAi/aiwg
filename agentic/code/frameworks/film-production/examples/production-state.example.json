@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "project_id": "FP-PROJ-EXAMPLE",
   "production_status": "active",
   "requested_action": "none",
@@ -8,6 +8,29 @@
     "currency": "USD",
     "remaining": 0,
     "next_estimate": 0
+  },
+  "checklist": {
+    "version": 1,
+    "classes": []
+  },
+  "beats": [
+    {
+      "id": "FP-BEAT-001",
+      "required": true,
+      "treatment": "shown",
+      "event_refs": [
+        "FP-SHOT-001#FP-EVENT-001"
+      ]
+    }
+  ],
+  "locks": {
+    "coverage": {
+      "status": "locked",
+      "subject_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "reviewer": "synthetic-fixture",
+      "reviewer_type": "agent",
+      "evidence": "Synthetic fixture only; not an actual animatic review."
+    }
   },
   "assets": [
     {
@@ -61,6 +84,15 @@
         }
       ],
       "defects": [],
+      "events": [
+        {
+          "id": "FP-EVENT-001",
+          "order": 1,
+          "target": "FP-PROP-RECEIVER",
+          "result_state": "receiver lifted",
+          "expected_count": 1
+        }
+      ],
       "checks": {
         "object_counts": [
           {

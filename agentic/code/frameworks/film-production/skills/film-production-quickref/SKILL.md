@@ -45,7 +45,7 @@ For roles, rules and artifacts use `aiwg show agent film-continuity-supervisor`,
 
 1. Read the current production state and affected shot; preserve approved decisions and immutable reference versions.
 2. Identify the cheapest useful next proof. A draft guides blocking; it is not a final quality master.
-3. Verify current tool/model capability, source quality, physical action and authority before submission. Reconcile a known task before retrying an ambiguous write.
+3. Verify current tool/model capability, source quality, physical action and authority before submission. Reconcile a known task before retrying an ambiguous write. Paid motion waits for the coverage lock; delivery waits for picture and sound locks (criteria: `docs/taxonomy.md`; check with `scripts/validate-film-state.mjs`).
 4. Inspect target change **and** scene invariants. Review motion in playback, audio in context. Record candidate/verified/accepted distinctly.
 5. Continue authorized work to a coherent review package. Ask only for missing decisions or permissions that materially block the next action.
 

@@ -29,7 +29,7 @@ Read the story proof, current dialogue, selected voice takes, shot records, timi
 
 ## Outputs
 
-Produce the cue sheet, versioned takes, editable processing/mix, contextual audition evidence, and remaining issues.
+Produce the cue sheet, versioned takes, editable processing/mix, contextual audition evidence, and remaining issues. Record each placed clip in current state `audio_elements` with measured noise floor (and spectral flatness where the project sets a limit), the measuring tool, and bed approval; record `locks.sound` after picture lock when FP-G05b criteria pass.
 
 ## Continue or hold
 
