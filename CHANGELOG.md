@@ -7,6 +7,27 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- **Film Production framework (`film-production`)** - A provider-neutral
+  framework for reference-driven films, animated shorts, and episodes across
+  develop → design → previs → generate → finish → deliver: one kernel
+  `film-production-quickref` plus 12 operational skills, 6 agents, 7 rules,
+  8 flows, and 8 templates. Editing routes to DaVinci Resolve (verified Resolve
+  MCP or scripting) and Mirage Tesseract (`tesseract-video` /
+  `tesseract-motion` skills with the `tsrct` CLI). The framework installs no
+  media software and grants no spend or publication authority. Docs:
+  `docs/frameworks/film-production/`.
+- **Film production lock-gate state checker** -
+  `scripts/validate-film-state.mjs` validates schema v2 production state:
+  coverage lock (FP-G03) before any paid motion generation, picture lock
+  (FP-G05a) with accepted playback review of every cut, sound lock (FP-G05b)
+  after picture lock with measured audio, and delivery acceptance (FP-G06). It
+  checks recorded evidence only; v1 state files must be migrated to v2.
+- **`aiwg use film-production`** - The framework is registered with the CLI,
+  help output, and setup wizard, and the kernel inventory is now 28 skills with
+  11 quickrefs.
+
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed
