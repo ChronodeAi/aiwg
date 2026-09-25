@@ -34,6 +34,7 @@ README](just-try-it.md). The result is a saved report with three prioritized fix
 | Security investigations | [Forensics](forensics-framework.md) |
 | Research and source synthesis | [Research](research-framework.md) |
 | Media collections | [Media Curator](media-curator-framework.md) |
+| Films, animated shorts, and episodes | [Film Production](../frameworks/film-production/quickstart.md) |
 | Shared notes and reference material | [Knowledge Base](../frameworks/knowledge-base/overview.md) |
 | Operational reviews and runbooks | [Operations](../frameworks/ops-complete/overview.md) |
 

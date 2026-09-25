@@ -233,6 +233,9 @@
     "frameworks/media-curator/overview",
     "frameworks/media-curator/standards-reference",
     "frameworks/media-curator/user-guide",
+    "frameworks/film-production",
+    "frameworks/film-production/overview",
+    "frameworks/film-production/quickstart",
     "frameworks/sdlc-complete",
     "frameworks/sdlc-complete/agent-design",
     "frameworks/sdlc-complete/agent-permission-rationale",
@@ -1927,6 +1930,27 @@
       "summary": "Install required tools:",
       "file": "frameworks/media-curator/user-guide.md",
       "parent": "frameworks/media-curator"
+    },
+    {
+      "id": "frameworks/film-production",
+      "title": "Film Production",
+      "summary": "Reference-driven AI film production with coverage, picture, sound, and delivery locks",
+      "collapsed": true,
+      "parent": "frameworks"
+    },
+    {
+      "id": "frameworks/film-production/overview",
+      "title": "Overview",
+      "summary": "Lifecycle, lock gates, agents, rules, and editor routing for film production",
+      "file": "frameworks/film-production/overview.md",
+      "parent": "frameworks/film-production"
+    },
+    {
+      "id": "frameworks/film-production/quickstart",
+      "title": "Quick Start",
+      "summary": "Deploy the framework and write a production brief before any paid generation",
+      "file": "frameworks/film-production/quickstart.md",
+      "parent": "frameworks/film-production"
     },
     {
       "id": "frameworks/sdlc-complete",

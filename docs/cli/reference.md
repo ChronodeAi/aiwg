@@ -555,7 +555,7 @@ aiwg use <framework|addon>
 
 **Arguments:**
 
-- `<framework>` - Framework name: `sdlc`, `marketing`, `writing`, `all`
+- `<framework>` - Framework name: `sdlc`, `marketing`, `film-production`, `writing`, `all`
 - `<addon>` - Addon name: any addon in `agentic/code/addons/` (e.g., `rlm`, `ralph`, `voice-framework`)
 
 **Options:**
@@ -645,6 +645,9 @@ aiwg use sdlc --provider copilot
 
 # Deploy marketing framework
 aiwg use marketing
+
+# Deploy film production framework
+aiwg use film-production
 
 # Deploy all frameworks and addons (auto-discovers all addons in agentic/code/addons/ except those marked devOnly)
 aiwg use all
