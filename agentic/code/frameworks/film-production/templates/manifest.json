@@ -1,0 +1,46 @@
+{
+  "id": "film-production-templates",
+  "version": "2026.9.0",
+  "templates": [
+    {
+      "id": "film-production-brief",
+      "path": "templates/develop/film-production-brief.md",
+      "phase": "develop"
+    },
+    {
+      "id": "film-production-state",
+      "path": "templates/develop/film-production-state.md",
+      "phase": "develop"
+    },
+    {
+      "id": "film-continuity-bible",
+      "path": "templates/design/film-continuity-bible.md",
+      "phase": "design"
+    },
+    {
+      "id": "film-shot-record",
+      "path": "templates/design/film-shot-record.md",
+      "phase": "design"
+    },
+    {
+      "id": "film-generation-receipt",
+      "path": "templates/generate/film-generation-receipt.md",
+      "phase": "generate"
+    },
+    {
+      "id": "film-voice-cue-sheet",
+      "path": "templates/previs/film-voice-cue-sheet.md",
+      "phase": "previs"
+    },
+    {
+      "id": "film-review-record",
+      "path": "templates/finish/film-review-record.md",
+      "phase": "finish"
+    },
+    {
+      "id": "film-delivery-record",
+      "path": "templates/deliver/film-delivery-record.md",
+      "phase": "deliver"
+    }
+  ]
+}
