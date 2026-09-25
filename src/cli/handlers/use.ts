@@ -120,7 +120,7 @@ import { createResourceCredentialProvider } from '../../auth/resource-credential
 /**
  * Valid framework identifiers
  */
-const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'validation', 'knowledge-base', 'writing', 'general', 'all'] as const;
+const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'film-production', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'validation', 'knowledge-base', 'writing', 'general', 'all'] as const;
 type Framework = typeof VALID_FRAMEWORKS[number];
 
 function providerReceiptWebReleaseOptions(): Omit<WebReleaseOptions, 'selector' | 'offline'> {
@@ -194,6 +194,7 @@ const MODE_MAP: Record<Framework, string> = {
   sdlc: 'sdlc',
   marketing: 'marketing',
   'media-curator': 'media-curator',
+  'film-production': 'film-production',
   research: 'research',
   forensics: 'forensics',
   dfir: 'dfir',
@@ -311,6 +312,7 @@ const FRAMEWORK_DIR_MAP: Partial<Record<string, string>> = {
   sdlc: 'sdlc-complete',
   marketing: 'media-marketing-kit',
   'media-curator': 'media-curator',
+  'film-production': 'film-production',
   research: 'research-complete',
   forensics: 'forensics-complete',
   dfir: 'forensics-complete',

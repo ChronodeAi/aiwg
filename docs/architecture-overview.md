@@ -351,4 +351,4 @@ the provider's session, window, or tab reload behavior so their native registry 
 - [`skill-discovery.md`](https://github.com/jmagly/aiwg/blob/main/agentic/code/addons/aiwg-utils/rules/skill-discovery.md)
   — discover-first protocol source
 
-The canonical inventory contains 27 kernel skills for routing, quick references, and self-maintenance.
+The canonical inventory contains 28 kernel skills for routing, quick references, and self-maintenance.
