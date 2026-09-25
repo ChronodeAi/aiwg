@@ -1363,6 +1363,23 @@ export function artifactStem(name) {
 }
 
 /**
+ * Provider projection name for a non-primary `RULES-INDEX.md`. Several
+ * frameworks/addons ship their own index; providers that deploy rules as
+ * individual files (OMP) keep the primary as `RULES-INDEX.md` and project the
+ * rest as `RULES-INDEX-<owner>.md`. Shared with the prune desired set so the
+ * projected names are never pruned as stale.
+ *
+ * @param {string} src absolute path of a `rules/RULES-INDEX.md` source
+ * @returns {string} projected basename
+ */
+export function rulesIndexProjectionName(src) {
+  const parts = src.split(path.sep);
+  const at = parts.lastIndexOf('frameworks');
+  const owner = at >= 0 && parts[at + 1] ? parts[at + 1] : path.basename(path.dirname(path.dirname(src)));
+  return `RULES-INDEX-${owner}.md`;
+}
+
+/**
  * Compute the global set of source-basename stems AIWG ships for a flat
  * artifact type, across ALL frameworks and addons (mode-independent).
  *
@@ -1413,8 +1430,10 @@ export function computeAllArtifactBasenames(srcRoot, type) {
     add(frameworkArtifacts.commands);
     add(getAddonCommandFiles(aiwgRoot));
   } else if (type === 'rules') {
-    add(frameworkArtifacts.rules);
-    add(getAddonRuleFiles(aiwgRoot));
+    const rules = [...frameworkArtifacts.rules, ...getAddonRuleFiles(aiwgRoot)];
+    add(rules);
+    // Projected names of per-bundle rules indexes (see rulesIndexProjectionName).
+    add(rules.filter(f => path.basename(f) === 'RULES-INDEX.md').map(rulesIndexProjectionName));
   }
 
   return stems;
