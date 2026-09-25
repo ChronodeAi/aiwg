@@ -1,0 +1,411 @@
+{
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "project_id",
+    "production_status",
+    "requested_action",
+    "authority",
+    "assets",
+    "shots"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "production_status": {
+      "enum": [
+        "active",
+        "paused",
+        "complete"
+      ]
+    },
+    "requested_action": {
+      "enum": [
+        "none",
+        "prepare",
+        "generate",
+        "deliver"
+      ]
+    },
+    "authority": {
+      "type": "object",
+      "required": [
+        "generation_allowed",
+        "currency",
+        "remaining",
+        "next_estimate"
+      ],
+      "properties": {
+        "generation_allowed": {
+          "type": "boolean"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remaining": {
+          "type": "number",
+          "minimum": 0
+        },
+        "next_estimate": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "sha256",
+          "role",
+          "quality_status",
+          "path"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "quality_status": {
+            "enum": [
+              "candidate",
+              "accepted",
+              "rejected"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "shots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "status",
+          "input_assets",
+          "required_dimensions",
+          "reviews",
+          "defects",
+          "checks"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "candidate",
+              "held",
+              "motion_ready",
+              "accepted",
+              "delivery_ready"
+            ]
+          },
+          "record_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "input_assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "sha256",
+                "usage"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "usage": {
+                  "enum": [
+                    "primary_image",
+                    "identity_reference",
+                    "blocking_only",
+                    "exact_layer",
+                    "audio"
+                  ]
+                }
+              }
+            }
+          },
+          "required_dimensions": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "story",
+                "blocking",
+                "visual_quality",
+                "performance",
+                "motion",
+                "edit",
+                "delivery"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "reviews": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "dimension",
+                "shot_version",
+                "decision",
+                "reviewer",
+                "evidence",
+                "reviewer_type",
+                "input_hashes"
+              ],
+              "properties": {
+                "dimension": {
+                  "enum": [
+                    "story",
+                    "blocking",
+                    "visual_quality",
+                    "performance",
+                    "motion",
+                    "edit",
+                    "delivery"
+                  ]
+                },
+                "shot_version": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "decision": {
+                  "enum": [
+                    "accepted",
+                    "rejected",
+                    "pending"
+                  ]
+                },
+                "reviewer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "reviewer_type": {
+                  "enum": [
+                    "user",
+                    "agent",
+                    "automated"
+                  ]
+                },
+                "input_hashes": {
+                  "type": "object",
+                  "description": "Exact input asset ID to SHA256 mapping when reviewed; promotion requires equality with the current shot inputs.",
+                  "additionalProperties": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            },
+            "description": "Append-only review order: the last review for a dimension and shot version controls that dimension. Records are claims, not authenticated approvals."
+          },
+          "defects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "severity",
+                "status"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "severity": {
+                  "enum": [
+                    "blocker",
+                    "major",
+                    "minor"
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "open",
+                    "resolved",
+                    "accepted_exception"
+                  ]
+                },
+                "disposition_evidence": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "disposition_reviewer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "shot_version": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "exception_reason": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authority_reference": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "disclosure": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "exception_basis": {
+                  "enum": [
+                    "intentional",
+                    "accepted_scope"
+                  ]
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "resolved",
+                          "accepted_exception"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "disposition_evidence",
+                      "disposition_reviewer",
+                      "shot_version"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "status": {
+                        "const": "accepted_exception"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "exception_reason",
+                      "authority_reference",
+                      "exception_basis"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "checks": {
+            "type": "object",
+            "required": [
+              "object_counts",
+              "spatial_checked",
+              "temporal_checked"
+            ],
+            "properties": {
+              "object_counts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "expected",
+                    "observed"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "expected": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "observed": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              },
+              "spatial_checked": {
+                "type": "boolean"
+              },
+              "temporal_checked": {
+                "type": "boolean"
+              }
+            }
+          },
+          "required_user_dimensions": {
+            "type": "array",
+            "default": [],
+            "description": "Only populate from an actual user acceptance requirement; empty or omitted introduces no user approval gate.",
+            "items": {
+              "enum": [
+                "story",
+                "blocking",
+                "visual_quality",
+                "performance",
+                "motion",
+                "edit",
+                "delivery"
+              ]
+            },
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Film production state v1",
+  "description": "Recorded state shape contract. Run validate-film-state.mjs for cross-reference/promotion checks. Neither inspects media, verifies file contents or approval authenticity, grants authority, or enforces provider actions."
+}
