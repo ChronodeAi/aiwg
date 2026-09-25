@@ -53,6 +53,7 @@ const VALID_FRAMEWORKS = [
   'security-engineering',
   'knowledge-base',
   'media-curator',
+  'film-production',
   'writing',
   'general',
 ];

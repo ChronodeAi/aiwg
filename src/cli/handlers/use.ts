@@ -2555,7 +2555,8 @@ Deploy an AIWG framework, addon, or extension into the current project.
 
 Bundles:
   all                       Kernel surface only (kernel skills, rules, behaviors)
-  sdlc | research | ops | forensics | marketing | media-curator | ...
+  sdlc | research | ops | forensics | marketing | media-curator |
+  film-production | ...
                             Full framework surface (agents, commands, skills, rules)
   <addon> | <extension>     Any installed addon or extension name
 
@@ -2983,7 +2984,7 @@ export class UseHandler implements CommandHandler {
           : '';
         return {
           exitCode: 1,
-          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
+          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, film-production, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
         };
       }
       const installedNames = Object.keys(config.installed);

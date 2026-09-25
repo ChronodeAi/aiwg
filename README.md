@@ -800,6 +800,7 @@ capabilities through manifests, docs, scripts, or nested skill packages.
 | **[Forensics Complete](agentic/code/frameworks/forensics-complete/)** | 13 agents, 20 skills, 12 templates, 4 rules | Preserve and analyze incident evidence through scoping, triage, acquisition, log review, persistence hunting, timeline building, IOC extraction, and reporting |
 | **[Media/Marketing Kit](agentic/code/frameworks/media-marketing-kit/)** | 38 agents, 34 skills, 97 templates, 2 flows | Plan, produce, review, publish, and analyze marketing campaigns with reusable briefs, brand/legal gates, channel assets, and performance artifacts |
 | **[Media Curator](agentic/code/frameworks/media-curator/)** | 6 agents, 21 skills | Assess mixed media collections, research sources, acquire approved material, tag metadata, verify integrity, create transcript sidecars, and prepare exports or research handoffs |
+| **[Film Production](agentic/code/frameworks/film-production/)** | 6 agents, 13 skills, 8 templates, 7 rules, 8 flows | Carry reference-driven films and animated shorts from story proof through continuity, previs, generation review, edit, sound, and verified delivery with coverage, picture, and sound locks |
 | **[Research Complete](agentic/code/frameworks/research-complete/)** | 8 agents, 41 skills, 16 templates | Turn literature searches and PDFs into reviewable research artifacts: source records, grounded summaries, citation work, GRADE/FAIR-style quality checks, gap notes, and provenance |
 | **[Knowledge Base](agentic/code/frameworks/knowledge-base/)** | 3 skills, 5 templates | Build a linked AI-assisted wiki from loose sources, notes, entities, concepts, comparisons, and synthesis pages without forcing formal literature-review overhead |
 | **[Ops Complete](agentic/code/frameworks/ops-complete/)** | 12 agents, 1 skill, 17 templates, 6 rules | Convert operational procedures into executable runbooks, inventories, incident reports, troubleshooting trees, and extension-backed ops workflows |
@@ -1163,6 +1164,22 @@ Quality tiers help reviewers choose what to keep. Transcript sidecars preserve
 source hashes, transcript hashes, timestamps, and optional speaker labels for
 review and later research handoff. Common standards include ID3v2.4, Vorbis
 Comments, MusicBrainz, PREMIS 3.0, and W3C PROV-O.
+
+### Film Production — Reference-Driven Films
+
+Film Production carries films, animated shorts, and episodes through
+develop → design → previs → generate → finish → deliver with one current
+production state, controlling references, and recorded locks. The coverage
+lock (FP-G03) blocks paid motion generation until the animatic is watched at
+real speed; picture lock (FP-G05a) requires accepted playback of every cut;
+sound lock (FP-G05b) and delivery acceptance (FP-G06) follow. The
+`validate-film-state.mjs` state checker verifies recorded lock evidence.
+Editing routes to DaVinci Resolve or Mirage Tesseract. The framework does not
+install media software or grant spend or publication authority.
+
+```bash
+aiwg use film-production
+```
 
 ### Research Complete — Academic Research Pipeline
 
@@ -2134,6 +2151,8 @@ attestation, or substitute for domain-specific review.
 - **[Marketing Kit](agentic/code/frameworks/media-marketing-kit/README.md)** — Campaign lifecycle, content, brand, and
   review workflows
 - **[Media Curator](agentic/code/frameworks/media-curator/README.md)** — Media archive management
+- **[Film Production](agentic/code/frameworks/film-production/README.md)** — Film lifecycle, continuity, lock gates,
+  and verified delivery
 - **[Research Complete](agentic/code/frameworks/research-complete/README.md)** — Research pipeline, source notes,
   citation, and archive workflows
 - **[Knowledge Base](agentic/code/frameworks/knowledge-base/README.md)** — Source ingest, wiki pages, and corpus health
