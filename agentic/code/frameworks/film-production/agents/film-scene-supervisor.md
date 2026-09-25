@@ -3,6 +3,7 @@ name: film-scene-supervisor
 description: Plans and verifies reference-driven scene construction, localized repair, and motion inputs
 namespace: aiwg
 platforms: [all]
+model: sonnet
 model-role: reasoning
 model-tier: standard
 tools: [Read, Write, Edit, Bash, Glob, Grep]

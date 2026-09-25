@@ -3,6 +3,7 @@ name: film-producer
 description: Coordinates bounded film production from current state through verified delivery
 namespace: aiwg
 platforms: [all]
+model: sonnet
 model-role: reasoning
 model-tier: standard
 tools: [Read, Write, Edit, Bash, Glob, Grep]

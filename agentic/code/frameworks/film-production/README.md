@@ -14,7 +14,7 @@ aiwg show skill film-intake
 aiwg show template film-shot-record
 ```
 
-Reload the provider session after deployment for new kernel/agent listings. Standard skills are retrieved through discovery; absence from the flat provider list is expected. Commands are generated from skills, not separately authored source duplicates. This framework does not alter the user's model selection or install media services.
+Reload the provider session after deployment for new kernel/agent listings. Standard skills are retrieved through discovery; absence from the flat provider list is expected. Commands are generated from skills, not separately authored source duplicates. Film agents pin the standard (`sonnet`) tier for subagent work; this framework does not change the user's session model or install media services.
 
 ## The production contract
 
