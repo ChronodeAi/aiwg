@@ -11,7 +11,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": 1
+      "const": 2
     },
     "project_id": {
       "type": "string",
@@ -113,7 +113,8 @@
           "required_dimensions",
           "reviews",
           "defects",
-          "checks"
+          "checks",
+          "events"
         ],
         "properties": {
           "id": {
@@ -240,6 +241,11 @@
                     "type": "string",
                     "pattern": "^[a-f0-9]{64}$"
                   }
+                },
+                "checklist_version": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Review checklist version applied. Picture lock requires the latest motion review at the current checklist.version."
                 }
               }
             },
@@ -302,6 +308,11 @@
                     "intentional",
                     "accepted_scope"
                   ]
+                },
+                "affects_event": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Event ID in this shot. An accepted_exception excuses that event count mismatch; an open minor defect on a required beat event blocks."
                 }
               },
               "allOf": [
@@ -400,12 +411,836 @@
               ]
             },
             "uniqueItems": true
+          },
+          "events": {
+            "type": "array",
+            "description": "Ordered per-shot event list: every discrete contact, count and state change. Accepted and delivery_ready shots need an observed walk with matching counts.",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "order",
+                "target",
+                "result_state",
+                "expected_count"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "order": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "target": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "result_state": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "expected_count": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "observed_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "observed_evidence": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Where the event was observed, e.g. frame and review render."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "checklist": {
+      "type": "object",
+      "required": [
+        "version"
+      ],
+      "description": "Review checklist version. Record each escaped (user-found) defect class and bump version; picture lock then needs reviews at the new version.",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "classes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "source_defect",
+              "added_in_version"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_defect": {
+                "type": "string",
+                "minLength": 1
+              },
+              "added_in_version": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "beats": {
+      "type": "array",
+      "description": "Story beats traced to shot events. Eliding a required beat is a scope change needing authority.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "required",
+          "treatment",
+          "event_refs"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "treatment": {
+            "enum": [
+              "shown",
+              "continuous",
+              "cut",
+              "elided"
+            ]
+          },
+          "event_refs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[^#]+#[^#]+$"
+            },
+            "description": "SHOT_ID#EVENT_ID"
+          },
+          "scope_change": {
+            "type": "object",
+            "required": [
+              "reason",
+              "authority_reference"
+            ],
+            "properties": {
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "authority_reference": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "locks": {
+      "type": "object",
+      "description": "Lock points: coverage (animatic, before paid motion), picture (before sound), sound (before delivery). Only coverage may be waived.",
+      "properties": {
+        "coverage": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "open",
+                "locked",
+                "waived"
+              ]
+            },
+            "subject_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "Coverage: reviewed animatic. Picture and sound: current timeline.sha256."
+            },
+            "reviewer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewer_type": {
+              "enum": [
+                "user",
+                "agent",
+                "automated"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "authority_reference": {
+              "type": "string",
+              "minLength": 1
+            },
+            "change_list": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Changes since the previous lock of this kind."
+            },
+            "conditions": {
+              "type": "array",
+              "description": "Conditional lock: every condition closes by the named later gate.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "closes_by",
+                  "status"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "closes_by": {
+                    "enum": [
+                      "picture",
+                      "sound",
+                      "delivery"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "open",
+                      "closed"
+                    ]
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "closure_evidence": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "locked"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "subject_sha256",
+                  "reviewer",
+                  "reviewer_type",
+                  "evidence"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "waived"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "reason",
+                  "authority_reference"
+                ]
+              }
+            }
+          ]
+        },
+        "picture": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "open",
+                "locked",
+                "waived"
+              ]
+            },
+            "subject_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "Coverage: reviewed animatic. Picture and sound: current timeline.sha256."
+            },
+            "reviewer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewer_type": {
+              "enum": [
+                "user",
+                "agent",
+                "automated"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "authority_reference": {
+              "type": "string",
+              "minLength": 1
+            },
+            "change_list": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Changes since the previous lock of this kind."
+            },
+            "conditions": {
+              "type": "array",
+              "description": "Conditional lock: every condition closes by the named later gate.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "closes_by",
+                  "status"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "closes_by": {
+                    "enum": [
+                      "picture",
+                      "sound",
+                      "delivery"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "open",
+                      "closed"
+                    ]
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "closure_evidence": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "locked"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "subject_sha256",
+                  "reviewer",
+                  "reviewer_type",
+                  "evidence"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "waived"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "reason",
+                  "authority_reference"
+                ]
+              }
+            }
+          ]
+        },
+        "sound": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "open",
+                "locked",
+                "waived"
+              ]
+            },
+            "subject_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$",
+              "description": "Coverage: reviewed animatic. Picture and sound: current timeline.sha256."
+            },
+            "reviewer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reviewer_type": {
+              "enum": [
+                "user",
+                "agent",
+                "automated"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "authority_reference": {
+              "type": "string",
+              "minLength": 1
+            },
+            "change_list": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "Changes since the previous lock of this kind."
+            },
+            "conditions": {
+              "type": "array",
+              "description": "Conditional lock: every condition closes by the named later gate.",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "closes_by",
+                  "status"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "closes_by": {
+                    "enum": [
+                      "picture",
+                      "sound",
+                      "delivery"
+                    ]
+                  },
+                  "status": {
+                    "enum": [
+                      "open",
+                      "closed"
+                    ]
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "closure_evidence": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "locked"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "subject_sha256",
+                  "reviewer",
+                  "reviewer_type",
+                  "evidence"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "status": {
+                    "const": "waived"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "reason",
+                  "authority_reference"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "required_user_locks": {
+      "type": "array",
+      "default": [],
+      "description": "Only populate from an actual user requirement; listed locks need a user reviewer.",
+      "items": {
+        "enum": [
+          "coverage",
+          "picture",
+          "sound"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "timeline": {
+      "type": "object",
+      "required": [
+        "id",
+        "version",
+        "sha256",
+        "shot_order"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "shot_order": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "cuts": {
+      "type": "array",
+      "description": "One record per adjacent timeline pair. Picture lock needs an accepted playback review with >= 1 s context at the current timeline hash and checklist version.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "out_shot",
+          "out_version",
+          "in_shot",
+          "in_version",
+          "carried_states",
+          "reviews",
+          "defects"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "out_shot": {
+            "type": "string",
+            "minLength": 1
+          },
+          "out_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "in_shot": {
+            "type": "string",
+            "minLength": 1
+          },
+          "in_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "carried_states": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "States that must match across the cut: pointer target, finger position, key state, prop art and location."
+          },
+          "reviews": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "method",
+                "decision",
+                "reviewer",
+                "reviewer_type",
+                "evidence"
+              ],
+              "properties": {
+                "method": {
+                  "enum": [
+                    "playback",
+                    "stills"
+                  ]
+                },
+                "context_seconds": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "timeline_sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "checklist_version": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "decision": {
+                  "enum": [
+                    "accepted",
+                    "rejected",
+                    "pending"
+                  ]
+                },
+                "reviewer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "reviewer_type": {
+                  "enum": [
+                    "user",
+                    "agent",
+                    "automated"
+                  ]
+                },
+                "evidence": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "defects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "severity",
+                "status"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "severity": {
+                  "enum": [
+                    "blocker",
+                    "major",
+                    "minor"
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "open",
+                    "resolved",
+                    "accepted_exception"
+                  ]
+                },
+                "disposition_evidence": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "disposition_reviewer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "exception_reason": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authority_reference": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "disclosure": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "exception_basis": {
+                  "enum": [
+                    "intentional",
+                    "accepted_scope"
+                  ]
+                },
+                "timeline_version": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "status": {
+                        "enum": [
+                          "resolved",
+                          "accepted_exception"
+                        ]
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "disposition_evidence",
+                      "disposition_reviewer",
+                      "timeline_version"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "status": {
+                        "const": "accepted_exception"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "exception_reason",
+                      "authority_reference",
+                      "exception_basis"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "audio_elements": {
+      "type": "array",
+      "description": "Measured audio clips. Sound lock needs qc pass, approved beds, and values within project-set limits.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "measured_by",
+          "qc",
+          "noise_floor_dbfs",
+          "noise_floor_limit_dbfs"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "dialogue",
+              "foley",
+              "effect",
+              "bed",
+              "music"
+            ]
+          },
+          "measured_by": {
+            "type": "string",
+            "minLength": 1
+          },
+          "qc": {
+            "enum": [
+              "pass",
+              "fail",
+              "pending"
+            ]
+          },
+          "noise_floor_dbfs": {
+            "type": "number"
+          },
+          "noise_floor_limit_dbfs": {
+            "type": "number"
+          },
+          "spectral_flatness": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "spectral_flatness_limit": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "bed_approval_reference": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Film production state v1",
+  "title": "Film production state v2",
   "description": "Recorded state shape contract. Run validate-film-state.mjs for cross-reference/promotion checks. Neither inspects media, verifies file contents or approval authenticity, grants authority, or enforces provider actions."
 }

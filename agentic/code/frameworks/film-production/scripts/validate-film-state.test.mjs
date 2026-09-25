@@ -4,6 +4,22 @@ import { readFileSync } from 'node:fs';
 import { validateFilmState } from './validate-film-state.mjs';
 const example = JSON.parse(readFileSync(new URL('../examples/production-state.example.json', import.meta.url)));
 const fresh = () => structuredClone(example);
+const H = c => c.repeat(64);
+const deliverable = () => {
+  const s = fresh(); s.requested_action = 'deliver';
+  const one = s.shots[0]; one.status = 'delivery_ready'; one.checks.temporal_checked = true;
+  for (const dimension of ['motion', 'edit', 'delivery']) one.reviews.push({ ...one.reviews[0], dimension, checklist_version: 1 });
+  Object.assign(one.events[0], { observed_count: 1, observed_evidence: 'observed at frame 42 of the review render' });
+  const two = structuredClone(one); two.id = 'FP-SHOT-002'; two.events[0].id = 'FP-EVENT-002'; s.shots.push(two);
+  s.timeline = { id: 'FP-TL-001', version: 'v1', sha256: H('d'), shot_order: ['FP-SHOT-001', 'FP-SHOT-002'] };
+  s.cuts = [{ id: 'FP-CUT-001', out_shot: 'FP-SHOT-001', out_version: 'v1', in_shot: 'FP-SHOT-002', in_version: 'v1', carried_states: ['receiver in right hand'], defects: [],
+    reviews: [{ method: 'playback', context_seconds: 1, timeline_sha256: H('d'), checklist_version: 1, decision: 'accepted', reviewer: 'synthetic-fixture', reviewer_type: 'agent', evidence: 'played 1 s either side, then frame-stepped the join' }] }];
+  s.audio_elements = [{ id: 'FP-CUE-001', kind: 'foley', measured_by: 'ffmpeg astats', qc: 'pass', noise_floor_dbfs: -70, noise_floor_limit_dbfs: -60, spectral_flatness: 0.1, spectral_flatness_limit: 0.3 }];
+  const sign = { status: 'locked', subject_sha256: H('d'), reviewer: 'synthetic-fixture', reviewer_type: 'user', evidence: 'recorded sign-off reference' };
+  s.locks.picture = { ...sign }; s.locks.sound = { ...sign };
+  return s;
+};
+const errorsOf = s => validateFilmState(s).join('\n');
 
 test('synthetic ready shot permits review without authorizing generation', () => {
   assert.deepEqual(validateFilmState(fresh()), []);
@@ -135,10 +151,96 @@ test('resolved defect requires evidence instead of a bare status change', () => 
   const s=fresh(); s.shots[0].defects.push({id:'contact',severity:'major',status:'resolved'});
   assert.match(validateFilmState(s).join('\n'), /defect disposition evidence/);
 });
-test('valid delivery state requires recorded motion, edit, delivery and playback', () => {
-  const s=fresh(); s.requested_action='deliver'; s.shots[0].status='delivery_ready'; s.shots[0].checks.temporal_checked=true;
-  for(const dimension of ['motion','edit','delivery']) s.shots[0].reviews.push({...s.shots[0].reviews[0],dimension});
+test('delivery requires delivery_ready shots with motion, edit, delivery and playback', () => {
+  const s = deliverable();
   assert.deepEqual(validateFilmState(s), []);
-  s.shots[0].checks.temporal_checked=false;
-  assert.match(validateFilmState(s).join('\n'), /temporal playback/);
+  s.shots[0].checks.temporal_checked = false;
+  assert.match(errorsOf(s), /temporal playback/);
+});
+test('delivery requires valid picture and sound locks', () => {
+  const s = deliverable(); delete s.locks.sound;
+  assert.match(errorsOf(s), /valid sound lock/);
+  const p = deliverable(); p.locks.picture.status = 'open';
+  const errors = errorsOf(p);
+  assert.match(errors, /valid picture lock/); assert.match(errors, /sound lock requires a valid picture lock/);
+});
+test('generation requires a coverage lock, and only an authorized waiver replaces it', () => {
+  const s = fresh(); s.requested_action = 'generate';
+  s.authority = { generation_allowed: true, currency: 'USD', remaining: 5, next_estimate: 1 };
+  assert.deepEqual(validateFilmState(s), []);
+  s.locks.coverage.status = 'open';
+  assert.match(errorsOf(s), /coverage lock/);
+  s.locks.coverage = { status: 'waived' };
+  assert.match(errorsOf(s), /waiver needs reason and authority_reference/);
+  Object.assign(s.locks.coverage, { reason: 'single-shot piece', authority_reference: 'recorded user decision reference' });
+  assert.deepEqual(validateFilmState(s), []);
+});
+test('eliding a required beat is a scope change needing authority', () => {
+  const s = fresh(); Object.assign(s.beats[0], { treatment: 'elided', event_refs: [] });
+  assert.match(errorsOf(s), /scope change/);
+  s.beats[0].scope_change = { reason: 'shown by sound only', authority_reference: 'recorded user decision reference' };
+  assert.deepEqual(validateFilmState(s), []);
+  const missing = fresh(); missing.beats[0].event_refs = ['FP-SHOT-001#nope'];
+  assert.match(errorsOf(missing), /unknown event/);
+});
+test('accepted motion needs a recorded event walk with matching counts', () => {
+  const s = deliverable(); delete s.shots[0].events[0].observed_evidence;
+  assert.match(errorsOf(s), /walk not recorded/);
+  const doubled = deliverable(); doubled.shots[0].events[0].observed_count = 2;
+  assert.match(errorsOf(doubled), /event count mismatch FP-EVENT-001/);
+  doubled.shots[0].defects.push({ id: 'double', severity: 'major', status: 'accepted_exception', affects_event: 'FP-EVENT-001', shot_version: 'v1',
+    disposition_evidence: 'review record reference', disposition_reviewer: 'recorded-user', exception_reason: 'intentional repeated gag', authority_reference: 'recorded user decision reference', exception_basis: 'intentional' });
+  assert.deepEqual(validateFilmState(doubled), []);
+});
+test('a defect on a required beat event cannot ship as a disclosed minor residual', () => {
+  const s = deliverable();
+  s.shots[0].defects.push({ id: 'offscreen', severity: 'minor', status: 'open', affects_event: 'FP-EVENT-001', disclosure: 'action happens off-screen' });
+  assert.match(errorsOf(s), /cannot ship as a minor residual/);
+});
+test('a still-image cut review cannot pass picture lock', () => {
+  const s = deliverable(); s.cuts[0].reviews.push({ ...s.cuts[0].reviews[0], method: 'stills' });
+  assert.match(errorsOf(s), /still-image review cannot pass a cut/);
+  const short = deliverable(); short.cuts[0].reviews[0].context_seconds = 0.2;
+  assert.match(errorsOf(short), /at least 1 s context/);
+});
+test('every adjacent timeline pair needs exactly one cut record', () => {
+  const s = deliverable(); s.cuts = [];
+  assert.match(errorsOf(s), /exactly one cut record required for FP-SHOT-001>FP-SHOT-002/);
+});
+test('a changed timeline makes locks and cut reviews stale', () => {
+  const s = deliverable(); s.timeline.sha256 = H('e');
+  const errors = errorsOf(s);
+  assert.match(errors, /picture lock: stale against current timeline/);
+  assert.match(errors, /cut FP-CUT-001: review is stale/);
+});
+test('a changed shot version reopens its cut review', () => {
+  const s = deliverable(); s.cuts[0].in_version = 'v0';
+  assert.match(errorsOf(s), /shot versions changed since cut review/);
+});
+test('an escaped defect class makes earlier shot and cut reviews stale', () => {
+  const s = deliverable();
+  s.checklist = { version: 2, classes: [{ id: 'double-press', source_defect: 'user note reference', added_in_version: 2 }] };
+  const errors = errorsOf(s);
+  assert.match(errors, /motion review predates checklist version 2/);
+  assert.match(errors, /cut FP-CUT-001: review predates checklist version 2/);
+});
+test('sound lock rejects unapproved beds and noisy clips', () => {
+  const s = deliverable(); s.audio_elements.push({ ...s.audio_elements[0], id: 'FP-CUE-BED', kind: 'bed' });
+  assert.match(errorsOf(s), /continuous bed needs approval reference/);
+  s.audio_elements[1].bed_approval_reference = 'recorded user decision reference';
+  assert.deepEqual(validateFilmState(s), []);
+  s.audio_elements[0].noise_floor_dbfs = -40;
+  assert.match(errorsOf(s), /noise floor missing or above limit/);
+  const flat = deliverable(); flat.audio_elements[0].spectral_flatness = 0.6;
+  assert.match(errorsOf(flat), /spectral flatness/);
+});
+test('a conditional lock must close its conditions by the named gate', () => {
+  const s = deliverable(); s.locks.picture.conditions = [{ id: 'reshoot-insert', closes_by: 'delivery', status: 'open' }];
+  assert.match(errorsOf(s), /picture lock condition reshoot-insert must close before delivery/);
+  Object.assign(s.locks.picture.conditions[0], { status: 'closed', closure_evidence: 'review record reference' });
+  assert.deepEqual(validateFilmState(s), []);
+});
+test('a required user lock cannot be signed by the agent', () => {
+  const s = deliverable(); s.required_user_locks = ['sound']; s.locks.sound.reviewer_type = 'agent';
+  assert.match(errorsOf(s), /sound lock: user sign-off required/);
 });
