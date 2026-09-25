@@ -1,4 +1,8 @@
 {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aiwg.io/schemas/film/v2/production-state.schema.json",
+  "title": "Film production state v2",
+  "description": "Recorded state shape contract. Run validate-film-state.mjs for cross-reference/promotion checks. Neither inspects media, verifies file contents or approval authenticity, grants authority, or enforces provider actions.",
   "type": "object",
   "required": [
     "schemaVersion",
@@ -332,7 +336,12 @@
                       "disposition_evidence",
                       "disposition_reviewer",
                       "shot_version"
-                    ]
+                    ],
+                    "properties": {
+                      "disposition_evidence": true,
+                      "disposition_reviewer": true,
+                      "shot_version": true
+                    }
                   }
                 },
                 {
@@ -348,7 +357,12 @@
                       "exception_reason",
                       "authority_reference",
                       "exception_basis"
-                    ]
+                    ],
+                    "properties": {
+                      "exception_reason": true,
+                      "authority_reference": true,
+                      "exception_basis": true
+                    }
                   }
                 }
               ]
@@ -661,7 +675,13 @@
                   "reviewer",
                   "reviewer_type",
                   "evidence"
-                ]
+                ],
+                "properties": {
+                  "subject_sha256": true,
+                  "reviewer": true,
+                  "reviewer_type": true,
+                  "evidence": true
+                }
               }
             },
             {
@@ -676,7 +696,11 @@
                 "required": [
                   "reason",
                   "authority_reference"
-                ]
+                ],
+                "properties": {
+                  "reason": true,
+                  "authority_reference": true
+                }
               }
             }
           ]
@@ -785,7 +809,13 @@
                   "reviewer",
                   "reviewer_type",
                   "evidence"
-                ]
+                ],
+                "properties": {
+                  "subject_sha256": true,
+                  "reviewer": true,
+                  "reviewer_type": true,
+                  "evidence": true
+                }
               }
             },
             {
@@ -800,7 +830,11 @@
                 "required": [
                   "reason",
                   "authority_reference"
-                ]
+                ],
+                "properties": {
+                  "reason": true,
+                  "authority_reference": true
+                }
               }
             }
           ]
@@ -909,7 +943,13 @@
                   "reviewer",
                   "reviewer_type",
                   "evidence"
-                ]
+                ],
+                "properties": {
+                  "subject_sha256": true,
+                  "reviewer": true,
+                  "reviewer_type": true,
+                  "evidence": true
+                }
               }
             },
             {
@@ -924,7 +964,11 @@
                 "required": [
                   "reason",
                   "authority_reference"
-                ]
+                ],
+                "properties": {
+                  "reason": true,
+                  "authority_reference": true
+                }
               }
             }
           ]
@@ -1153,7 +1197,12 @@
                       "disposition_evidence",
                       "disposition_reviewer",
                       "timeline_version"
-                    ]
+                    ],
+                    "properties": {
+                      "disposition_evidence": true,
+                      "disposition_reviewer": true,
+                      "timeline_version": true
+                    }
                   }
                 },
                 {
@@ -1169,7 +1218,12 @@
                       "exception_reason",
                       "authority_reference",
                       "exception_basis"
-                    ]
+                    ],
+                    "properties": {
+                      "exception_reason": true,
+                      "authority_reference": true,
+                      "exception_basis": true
+                    }
                   }
                 }
               ]
@@ -1239,8 +1293,5 @@
         }
       }
     }
-  },
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "Film production state v2",
-  "description": "Recorded state shape contract. Run validate-film-state.mjs for cross-reference/promotion checks. Neither inspects media, verifies file contents or approval authenticity, grants authority, or enforces provider actions."
+  }
 }

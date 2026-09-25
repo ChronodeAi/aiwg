@@ -464,6 +464,26 @@
       "consumers": []
     },
     {
+      "logicalName": "agentic.code.frameworks.film.production.schemas.production.state",
+      "id": "https://aiwg.io/schemas/film/v2/production-state.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "http://json-schema.org/draft-07/schema#",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "bundle-film-production"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "agentic/code/frameworks/film-production/schemas/production-state.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "agentic.code.addons.composition.engine.schemas.flow.graph",
       "id": "https://aiwg.io/schemas/flow/graph/v1alpha1/flow-graph.schema.json",
       "version": "1.0.0",

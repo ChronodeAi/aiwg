@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { validateFilmState } from './validate-film-state.mjs';
 const example = JSON.parse(readFileSync(new URL('../examples/production-state.example.json', import.meta.url)));
 const fresh = () => structuredClone(example);
@@ -243,4 +243,24 @@ test('a conditional lock must close its conditions by the named gate', () => {
 test('a required user lock cannot be signed by the agent', () => {
   const s = deliverable(); s.required_user_locks = ['sound']; s.locks.sound.reviewer_type = 'agent';
   assert.match(errorsOf(s), /sound lock: user sign-off required/);
+});
+const fixture = path => JSON.parse(readFileSync(new URL(`../fixtures/${path}`, import.meta.url)));
+const invalidExpectations = {
+  'missing-shot-events.json': /schema: \/shots\/1 must have required property 'events'/,
+  'stills-cut-review.json': /still-image review cannot pass a cut/,
+  'generation-without-coverage-lock.json': /coverage lock/,
+  'unapproved-bed.json': /continuous bed needs approval reference/,
+};
+test('the example and every valid fixture pass schema and gate checks', () => {
+  assert.deepEqual(validateFilmState(example), []);
+  for (const name of readdirSync(new URL('../fixtures/valid/', import.meta.url))) assert.deepEqual(validateFilmState(fixture(`valid/${name}`)), [], name);
+});
+test('every invalid fixture fails for its documented reason', () => {
+  const names = readdirSync(new URL('../fixtures/invalid/', import.meta.url));
+  assert.deepEqual(names.sort(), Object.keys(invalidExpectations).sort());
+  for (const name of names) assert.match(errorsOf(fixture(`invalid/${name}`)), invalidExpectations[name], name);
+});
+test('schema shape errors are reported, not just gate errors', () => {
+  const s = fresh(); s.shots[0].events[0].expected_count = 'one';
+  assert.match(errorsOf(s), /schema: \/shots\/0\/events\/0\/expected_count must be integer/);
 });

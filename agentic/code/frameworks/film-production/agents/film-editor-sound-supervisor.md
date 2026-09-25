@@ -3,6 +3,7 @@ name: film-editor-sound-supervisor
 description: Assembles accepted takes and verifies dialogue, sound, color, and timeline conform
 namespace: aiwg
 platforms: [all]
+model: sonnet
 model-role: reasoning
 model-tier: standard
 tools: [Read, Write, Edit, Bash, Glob, Grep]
