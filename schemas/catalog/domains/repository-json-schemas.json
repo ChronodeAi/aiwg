@@ -564,6 +564,26 @@
       "consumers": []
     },
     {
+      "logicalName": "agentic.code.frameworks.kairos.schemas.conformance.claim",
+      "id": "https://aiwg.io/schemas/kairos/v1/conformance-claim.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "http://json-schema.org/draft-07/schema#",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "bundle-kairos"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "agentic/code/frameworks/kairos/schemas/conformance-claim.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "agentic.code.frameworks.kairos.schemas.connection.record",
       "id": "https://aiwg.io/schemas/kairos/v1/connection-record.schema.json",
       "version": "1.0.0",

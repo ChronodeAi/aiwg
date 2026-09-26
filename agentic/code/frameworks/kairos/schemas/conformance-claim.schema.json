@@ -468,21 +468,19 @@
         "compute": {
           "type": "object",
           "required": [
-            "var"
+            "var",
+            "sha256"
           ],
+          "additionalProperties": false,
           "properties": {
             "var": {
               "type": "string"
             },
             "sha256": {
-              "type": "string"
-            },
-            "value": {}
+              "type": "string",
+              "description": "Text whose SHA-256 hex is saved under var."
+            }
           }
-        },
-        "sleep_ms": {
-          "type": "integer",
-          "minimum": 0
         },
         "repeat": {
           "type": "integer",
@@ -495,12 +493,6 @@
           "type": "boolean"
         },
         "save": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "save_header": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
@@ -581,14 +573,6 @@
           "required": [
             "compute"
           ]
-        },
-        {
-          "properties": {
-            "sleep_ms": true
-          },
-          "required": [
-            "sleep_ms"
-          ]
         }
       ]
     },
@@ -600,8 +584,7 @@
           "enum": [
             "last",
             "first",
-            "each",
-            "any"
+            "each"
           ]
         },
         "why": {

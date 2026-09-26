@@ -1,0 +1,7040 @@
+{
+  "schema": "kairos_conformance_claims/v1",
+  "kairos": {
+    "version": "2.1.1",
+    "tag": "v2.1.1",
+    "commit": "6e0ccc01",
+    "repo": "ChronodeAi/kairos"
+  },
+  "recorded_at": "2026-09-26T00:00:00Z",
+  "docs": [
+    {
+      "file": "PRODUCT.md",
+      "sha256": "a939412d81ba72f418823b1832311035b16cf3e1c01eeeb1359b6a752a885e5b"
+    },
+    {
+      "file": "API.md",
+      "sha256": "6c0f5b26203b0c00a2497543da0592ce484b709ecadb29003bdd96421d9a01a1"
+    },
+    {
+      "file": "ARCHITECTURE.md",
+      "sha256": "fc031f3f99e91bc4bdbfae4f7f5a864fcecab3c405d0797f4843faacffa0dcb3"
+    },
+    {
+      "file": "AGENT-SETUP.md",
+      "sha256": "33234dad08c460e73e207f52035dde8cf58858d77c5dea6386e5f6b42c06ef52"
+    },
+    {
+      "file": "README.md",
+      "sha256": "78f3aed751c86b31152547431d6b7713cd1e4a372c0addce2906308fc84934ba"
+    },
+    {
+      "file": "CHANGELOG.md",
+      "sha256": "8675e97171baf1c585ecfc4999365de08e4ce98f43296ba7085af75bc485ee1c"
+    },
+    {
+      "file": "src/server/models/resolution.py",
+      "sha256": "de01551efdce67b71890f48eab6352f990843d674cb81f89523da2308ce2e035"
+    }
+  ],
+  "known_gaps": {
+    "C1": "resolve returns trace: [] although the field is described as a resolution trace log (KC-RES-017)",
+    "C2": "no store revision in resolve responses; no v2.1.1 document promises one, so no claim probes it",
+    "C4": "adaptive admission is a hard threshold on a point estimate; exact-0.618 boundary probed by KC-RES-007",
+    "C6": "src/causal/live_providers.py:276-300 writes LLM-derived causal weights; internal path, not reachable on a default node"
+  },
+  "fixtures": {
+    "xtypes": {
+      "c_x": {
+        "name": "c_x"
+      },
+      "c_y": {
+        "name": "c_y"
+      },
+      "c_z": {
+        "name": "c_z"
+      },
+      "l_amb": {
+        "name": "l_amb"
+      },
+      "l_bracket_a": {
+        "name": "l_bracket_a"
+      },
+      "l_bracket_b": {
+        "name": "l_bracket_b"
+      },
+      "l_cbracket_a": {
+        "name": "l_cbracket_a"
+      },
+      "l_cbracket_b": {
+        "name": "l_cbracket_b"
+      },
+      "l_cli": {
+        "name": "l_cli"
+      },
+      "l_close": {
+        "name": "l_close"
+      },
+      "l_collapse": {
+        "name": "l_collapse"
+      },
+      "l_conflict": {
+        "name": "l_conflict"
+      },
+      "l_cross": {
+        "name": "l_cross"
+      },
+      "l_ema": {
+        "name": "l_ema"
+      },
+      "l_expire": {
+        "name": "l_expire"
+      },
+      "l_hash": {
+        "name": "l_hash"
+      },
+      "l_nolink": {
+        "name": "l_nolink"
+      },
+      "l_notad": {
+        "name": "l_notad"
+      },
+      "l_open": {
+        "name": "l_open"
+      },
+      "l_reads": {
+        "name": "l_reads"
+      },
+      "l_replay": {
+        "name": "l_replay"
+      },
+      "l_rev": {
+        "name": "l_rev"
+      },
+      "l_seq_a": {
+        "name": "l_seq_a"
+      },
+      "l_seq_b": {
+        "name": "l_seq_b"
+      },
+      "l_seq_c": {
+        "name": "l_seq_c"
+      },
+      "l_src": {
+        "name": "l_src"
+      },
+      "l_valid": {
+        "name": "l_valid"
+      },
+      "pref_decl": {
+        "name": "pref_decl",
+        "metadata": {
+          "accessor": "analyst"
+        }
+      },
+      "pref_plain": {
+        "name": "pref_plain"
+      },
+      "pref_src": {
+        "name": "pref_src"
+      },
+      "rank_a": {
+        "name": "rank_a"
+      },
+      "rank_b": {
+        "name": "rank_b"
+      },
+      "rank_c": {
+        "name": "rank_c"
+      },
+      "rank_src": {
+        "name": "rank_src"
+      },
+      "src": {
+        "name": "src"
+      },
+      "svc_src": {
+        "name": "svc_src"
+      },
+      "t_adapt_0618": {
+        "name": "t_adapt_0618"
+      },
+      "t_adapt_hi": {
+        "name": "t_adapt_hi"
+      },
+      "t_adapt_lo": {
+        "name": "t_adapt_lo"
+      },
+      "t_beh": {
+        "name": "t_beh"
+      },
+      "t_causal_en": {
+        "name": "t_causal_en"
+      },
+      "t_ctx_anyloc": {
+        "name": "t_ctx_anyloc"
+      },
+      "t_ctx_en": {
+        "name": "t_ctx_en"
+      },
+      "t_ctx_multi": {
+        "name": "t_ctx_multi"
+      },
+      "t_ctx_none": {
+        "name": "t_ctx_none"
+      },
+      "t_ctx_roles": {
+        "name": "t_ctx_roles"
+      },
+      "t_struct": {
+        "name": "t_struct"
+      },
+      "t_svc": {
+        "name": "t_svc"
+      },
+      "vec_a": {
+        "name": "vec_a"
+      },
+      "vec_b": {
+        "name": "vec_b"
+      }
+    },
+    "vectors": {
+      "v_adapt_0618": {
+        "source": "src",
+        "target": "t_adapt_0618",
+        "vector_type": "adaptive",
+        "weight": 0.618,
+        "parameters": {}
+      },
+      "v_adapt_hi": {
+        "source": "src",
+        "target": "t_adapt_hi",
+        "vector_type": "adaptive",
+        "weight": 0.9,
+        "parameters": {}
+      },
+      "v_adapt_lo": {
+        "source": "src",
+        "target": "t_adapt_lo",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_beh": {
+        "source": "src",
+        "target": "t_beh",
+        "vector_type": "behavioral",
+        "weight": 0.95,
+        "parameters": {
+          "event_trigger": "kairos.conformance.event"
+        }
+      },
+      "v_c_xy": {
+        "source": "c_x",
+        "target": "c_y",
+        "vector_type": "causal",
+        "weight": 0.8,
+        "parameters": {}
+      },
+      "v_c_yz": {
+        "source": "c_y",
+        "target": "c_z",
+        "vector_type": "causal",
+        "weight": 0.8,
+        "parameters": {}
+      },
+      "v_causal_en": {
+        "source": "src",
+        "target": "t_causal_en",
+        "vector_type": "causal",
+        "weight": 0.8,
+        "parameters": {
+          "locale": "en"
+        }
+      },
+      "v_ctx_anyloc": {
+        "source": "src",
+        "target": "t_ctx_anyloc",
+        "vector_type": "contextual",
+        "weight": 0.55,
+        "parameters": {
+          "locale": [
+            "en",
+            "de"
+          ]
+        }
+      },
+      "v_ctx_en": {
+        "source": "src",
+        "target": "t_ctx_en",
+        "vector_type": "contextual",
+        "weight": 0.7,
+        "parameters": {
+          "locale": "en"
+        }
+      },
+      "v_ctx_multi": {
+        "source": "src",
+        "target": "t_ctx_multi",
+        "vector_type": "contextual",
+        "weight": 0.65,
+        "parameters": {
+          "locale": "en",
+          "roles": [
+            "analyst"
+          ]
+        }
+      },
+      "v_ctx_none": {
+        "source": "src",
+        "target": "t_ctx_none",
+        "vector_type": "contextual",
+        "weight": 0.6,
+        "parameters": {}
+      },
+      "v_ctx_roles": {
+        "source": "src",
+        "target": "t_ctx_roles",
+        "vector_type": "contextual",
+        "weight": 0.5,
+        "parameters": {
+          "roles": [
+            "analyst",
+            "operator"
+          ]
+        }
+      },
+      "v_l_amb1": {
+        "source": "l_src",
+        "target": "l_amb",
+        "vector_type": "adaptive",
+        "weight": 0.7,
+        "parameters": {}
+      },
+      "v_l_amb2": {
+        "source": "l_src",
+        "target": "l_amb",
+        "vector_type": "adaptive",
+        "weight": 0.8,
+        "parameters": {}
+      },
+      "v_l_bracket_a": {
+        "source": "l_src",
+        "target": "l_bracket_a",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_bracket_b": {
+        "source": "l_src",
+        "target": "l_bracket_b",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_cbracket_a": {
+        "source": "l_src",
+        "target": "l_cbracket_a",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_cbracket_b": {
+        "source": "l_src",
+        "target": "l_cbracket_b",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_cli": {
+        "source": "l_src",
+        "target": "l_cli",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_close": {
+        "source": "l_src",
+        "target": "l_close",
+        "vector_type": "adaptive",
+        "weight": 0.7,
+        "parameters": {}
+      },
+      "v_l_collapse": {
+        "source": "l_src",
+        "target": "l_collapse",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_conflict": {
+        "source": "l_src",
+        "target": "l_conflict",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_cross": {
+        "source": "l_src",
+        "target": "l_cross",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_ema": {
+        "source": "l_src",
+        "target": "l_ema",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_expire": {
+        "source": "l_src",
+        "target": "l_expire",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_hash": {
+        "source": "l_src",
+        "target": "l_hash",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_notad": {
+        "source": "l_src",
+        "target": "l_notad",
+        "vector_type": "structural",
+        "weight": 0.9,
+        "parameters": {}
+      },
+      "v_l_open": {
+        "source": "l_src",
+        "target": "l_open",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_reads": {
+        "source": "l_src",
+        "target": "l_reads",
+        "vector_type": "adaptive",
+        "weight": 0.8,
+        "parameters": {}
+      },
+      "v_l_replay": {
+        "source": "l_src",
+        "target": "l_replay",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_rev": {
+        "source": "l_src",
+        "target": "l_rev",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_seq_a": {
+        "source": "l_src",
+        "target": "l_seq_a",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_seq_b": {
+        "source": "l_src",
+        "target": "l_seq_b",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_seq_c": {
+        "source": "l_src",
+        "target": "l_seq_c",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_l_valid": {
+        "source": "l_src",
+        "target": "l_valid",
+        "vector_type": "adaptive",
+        "weight": 0.5,
+        "parameters": {}
+      },
+      "v_pref_decl": {
+        "source": "pref_src",
+        "target": "pref_decl",
+        "vector_type": "structural",
+        "weight": 0.7,
+        "parameters": {}
+      },
+      "v_pref_plain": {
+        "source": "pref_src",
+        "target": "pref_plain",
+        "vector_type": "structural",
+        "weight": 0.9,
+        "parameters": {}
+      },
+      "v_rank_a": {
+        "source": "rank_src",
+        "target": "rank_a",
+        "vector_type": "structural",
+        "weight": 0.55,
+        "parameters": {}
+      },
+      "v_rank_b": {
+        "source": "rank_src",
+        "target": "rank_b",
+        "vector_type": "structural",
+        "weight": 0.95,
+        "parameters": {}
+      },
+      "v_rank_c": {
+        "source": "rank_src",
+        "target": "rank_c",
+        "vector_type": "structural",
+        "weight": 0.75,
+        "parameters": {}
+      },
+      "v_struct": {
+        "source": "src",
+        "target": "t_struct",
+        "vector_type": "structural",
+        "weight": 0.9,
+        "parameters": {}
+      }
+    }
+  },
+  "claims": [
+    {
+      "id": "KC-ACCESS-001",
+      "area": "access",
+      "doc": "API.md",
+      "line": 1907,
+      "line_end": 1910,
+      "also": [
+        "API.md:1943",
+        "API.md:1957-1958",
+        "CHANGELOG.md:37"
+      ],
+      "statement": "GET /api/v1/access (admin) is a read-only projection {schema_version: 1, principals, roles, policy} whose policy.configured matches /meta authorization.namespace_policy.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "save": {
+              "policy": "authorization.namespace_policy"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "access",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/access"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "schema_version",
+                "equals": 1
+              },
+              {
+                "path": "$",
+                "keys_include": [
+                  "principals",
+                  "roles",
+                  "policy"
+                ]
+              },
+              {
+                "path": "policy",
+                "keys_include": [
+                  "configured",
+                  "profile",
+                  "strict",
+                  "digest"
+                ]
+              },
+              {
+                "path": "policy.configured",
+                "equals": "{{s.policy}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-ACCESS-002",
+      "area": "access",
+      "doc": "API.md",
+      "line": 792,
+      "also": [
+        "ARCHITECTURE.md:747"
+      ],
+      "statement": "Under a namespace policy an observation receipt omits the store revision, reporting it absent as policy_scoped.",
+      "surface": "rest",
+      "profile": "pg",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "high",
+      "requires": [
+        "namespace_policy",
+        "bearer"
+      ],
+      "probe": {
+        "steps": [
+          {
+            "name": "observe",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:policy:0",
+                "vector_id": "{{v.v_l_rev}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "store_revision",
+                "equals": null
+              },
+              {
+                "path": "absent.store_revision",
+                "equals": "policy_scoped"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-ACCESS-003",
+      "area": "access",
+      "doc": "API.md",
+      "line": 149,
+      "line_end": 153,
+      "also": [
+        "API.md:856",
+        "API.md:1909-1910"
+      ],
+      "statement": "Without a bearer, POST /observations gets the constant 401 ACCESS.authorization_denied block (category permission, param null, message Forbidden) and GET /access gets 401 with the common error body.",
+      "surface": "rest",
+      "profile": "pg",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "observe-unauth",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:unauth:0",
+                "vector_id": "kairos-conformance-missing-{{run}}",
+                "signal": 0.5
+              },
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 401
+              },
+              {
+                "path": "error.code",
+                "equals": "ACCESS.authorization_denied"
+              },
+              {
+                "path": "error.category",
+                "equals": "permission"
+              },
+              {
+                "path": "error.param",
+                "equals": null
+              },
+              {
+                "path": "error.message",
+                "equals": "Forbidden"
+              }
+            ]
+          },
+          {
+            "name": "access-unauth",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/access",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 401
+              },
+              {
+                "path": "error.type",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-BEHAV-001",
+      "area": "behavioral",
+      "doc": "API.md",
+      "line": 1141,
+      "line_end": 1142,
+      "also": [
+        "PRODUCT.md:87"
+      ],
+      "statement": "POST /behavioral/events requires a source id in context (422 without it) and returns an empty list when no directive matches.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "no-source",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/behavioral/events",
+              "json": {
+                "event_name": "kairos.conformance.{{run}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          },
+          {
+            "name": "no-match",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/behavioral/events",
+              "json": {
+                "event_name": "kairos.conformance.{{run}}",
+                "context": {
+                  "source_id": "{{x.src}}"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "equals": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-CAUSAL-001",
+      "area": "causal",
+      "doc": "PRODUCT.md",
+      "line": 37,
+      "also": [
+        "API.md:1034-1035"
+      ],
+      "statement": "The causal engine never mutates the store: intervene, counterfactual and propagate leave vectors and the store revision unchanged.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "critical",
+      "when_meta": {
+        "authorization.namespace_policy": false
+      },
+      "probe": {
+        "steps": [
+          {
+            "name": "bracket-open",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:causal:a",
+                "vector_id": "{{v.v_l_cbracket_a}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "s0": "store_revision.recorded_seq"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "vectors-before",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/from/{{x.c_x}}"
+            },
+            "save": {
+              "before": "items"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "intervene",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/intervene",
+              "json": {
+                "variable_id": "{{x.c_x}}",
+                "value": 2.0
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "counterfactual",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/counterfactual",
+              "json": {
+                "observation": {
+                  "{{x.c_x}}": 1.0,
+                  "{{x.c_y}}": 1.0
+                },
+                "intervention": {
+                  "{{x.c_x}}": 0.0
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "propagate",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/propagate",
+              "json": {
+                "from_id": "{{x.c_x}}",
+                "override_values": {
+                  "{{x.c_x}}": 3.0
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "vectors-after",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/from/{{x.c_x}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "items",
+                "equals": "{{s.before}}"
+              }
+            ]
+          },
+          {
+            "name": "bracket-close",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:causal:b",
+                "vector_id": "{{v.v_l_cbracket_b}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "store_revision.recorded_seq",
+                "delta": 1,
+                "from": "s0",
+                "why": "causal calls committed no store transaction"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-CAUSAL-002",
+      "area": "causal",
+      "doc": "API.md",
+      "line": 1109,
+      "also": [
+        "API.md:1041",
+        "API.md:1113-1116",
+        "API.md:1049",
+        "API.md:1058",
+        "API.md:1070"
+      ],
+      "statement": "Graph-free and missing-record causal routes: validate-dag answers {valid: true, message: null} or 400 on a cycle, mechanisms include linear, additive_noise and polynomial, intervene and subgraph answer 404 for a missing record, and causal/resolve answers empty results for a missing source.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "dag-ok",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/validate-dag",
+              "json": {
+                "edges": {
+                  "a": [
+                    "b",
+                    "c"
+                  ],
+                  "b": [
+                    "c"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "valid",
+                "equals": true
+              },
+              {
+                "path": "message",
+                "equals": null
+              }
+            ]
+          },
+          {
+            "name": "dag-cycle",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/validate-dag",
+              "json": {
+                "edges": {
+                  "a": [
+                    "b"
+                  ],
+                  "b": [
+                    "a"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 400
+              }
+            ]
+          },
+          {
+            "name": "mechanisms",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/causal/mechanisms"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "superset_of": [
+                  "linear",
+                  "additive_noise",
+                  "polynomial"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "intervene-missing",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/intervene",
+              "json": {
+                "variable_id": "kairos-conformance-missing-{{run}}",
+                "value": 1.0
+              }
+            },
+            "expect": [
+              {
+                "status": 404
+              }
+            ]
+          },
+          {
+            "name": "subgraph-missing",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/subgraph",
+              "json": {
+                "root_id": "kairos-conformance-missing-{{run}}",
+                "max_depth": 2
+              }
+            },
+            "expect": [
+              {
+                "status": 404
+              }
+            ]
+          },
+          {
+            "name": "resolve-missing",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/resolve",
+              "json": {
+                "source_id": "kairos-conformance-missing-{{run}}"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results",
+                "equals": []
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-CAUSAL-003",
+      "area": "causal",
+      "doc": "API.md",
+      "line": 1067,
+      "line_end": 1070,
+      "also": [
+        "API.md:1028"
+      ],
+      "statement": "do(X=value) returns {variable_id, value, affected_ids, trace} and affected_ids include the causal descendants of X.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "intervene",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/intervene",
+              "json": {
+                "variable_id": "{{x.c_x}}",
+                "value": 1.5
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "keys_include": [
+                  "variable_id",
+                  "value",
+                  "affected_ids",
+                  "trace"
+                ]
+              },
+              {
+                "path": "value",
+                "equals": 1.5
+              },
+              {
+                "path": "variable_id",
+                "equals": "{{x.c_x}}"
+              },
+              {
+                "path": "affected_ids",
+                "superset_of": [
+                  "{{x.c_y}}",
+                  "{{x.c_z}}"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-CAUSAL-004",
+      "area": "causal",
+      "doc": "API.md",
+      "line": 1094,
+      "line_end": 1099,
+      "also": [
+        "API.md:1030"
+      ],
+      "statement": "POST /causal/counterfactual returns factual, counterfactual and diff, where diff maps each changed variable to its numeric difference (e.g. \"var-b\": -1.0).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "counterfactual",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/counterfactual",
+              "json": {
+                "observation": {
+                  "{{x.c_x}}": 1.0,
+                  "{{x.c_y}}": 2.0
+                },
+                "intervention": {
+                  "{{x.c_x}}": 0.0
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "keys_include": [
+                  "factual",
+                  "counterfactual",
+                  "diff"
+                ]
+              },
+              {
+                "path": "diff[\"{{x.c_y}}\"]",
+                "type": "number",
+                "why": "documented diff values are numbers"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-CAUSAL-005",
+      "area": "causal",
+      "doc": "API.md",
+      "line": 1026,
+      "also": [
+        "API.md:1049"
+      ],
+      "statement": "POST /causal/resolve returns only XTypes reachable via CAUSAL-type vectors.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "causal-resolve",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "dimensions": {
+                    "locale": "en"
+                  }
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].id",
+                "set_equals": [
+                  "{{x.t_causal_en}}"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-CLI-001",
+      "area": "cli",
+      "doc": "API.md",
+      "line": 880,
+      "line_end": 881,
+      "also": [
+        "README.md:303-306",
+        "ARCHITECTURE.md:276"
+      ],
+      "statement": "kairos-observe mints a UUIDv7 idempotency key, prints it on stderr, and rerunning with --idempotency-key KEY replays instead of re-applying.",
+      "surface": "cli",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "medium",
+      "requires": [
+        "kairos_bin"
+      ],
+      "probe": {
+        "steps": [
+          {
+            "name": "observe",
+            "cli": {
+              "argv": [
+                "kairos-observe",
+                "--server-url",
+                "{{node}}",
+                "--vector-id",
+                "{{v.v_l_cli}}",
+                "--signal",
+                "0.9",
+                "--json"
+              ]
+            },
+            "save_regex": {
+              "key": {
+                "pattern": "idempotency key (\\S+)",
+                "stream": "stderr"
+              }
+            },
+            "save": {
+              "o1": "observation_id"
+            },
+            "expect": [
+              {
+                "exit_code": 0
+              },
+              {
+                "stderr_matches": "idempotency key [0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+              },
+              {
+                "path": "outcome",
+                "equals": "applied"
+              }
+            ]
+          },
+          {
+            "name": "retry",
+            "cli": {
+              "argv": [
+                "kairos-observe",
+                "--server-url",
+                "{{node}}",
+                "--vector-id",
+                "{{v.v_l_cli}}",
+                "--signal",
+                "0.9",
+                "--json",
+                "--idempotency-key",
+                "{{s.key}}"
+              ]
+            },
+            "expect": [
+              {
+                "exit_code": 0
+              },
+              {
+                "path": "outcome",
+                "equals": "replayed"
+              },
+              {
+                "path": "observation_id",
+                "equals": "{{s.o1}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HEALTH-001",
+      "area": "health",
+      "doc": "PRODUCT.md",
+      "line": 80,
+      "also": [
+        "API.md:13",
+        "API.md:168",
+        "API.md:276",
+        "API.md:284-291"
+      ],
+      "statement": "GET /api/v1/health returns only {status, version, timestamp} (also at the /health alias), /api/v1/health/ready answers 200 with ready true and a components object on a started node, and all three are exempt from rate limiting (no X-RateLimit-* headers).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "health",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/health",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "keys_equal": [
+                  "status",
+                  "version",
+                  "timestamp"
+                ]
+              },
+              {
+                "path": "status",
+                "equals": "ok"
+              },
+              {
+                "header": "x-ratelimit-limit",
+                "exists": false
+              }
+            ]
+          },
+          {
+            "name": "health-alias",
+            "http": {
+              "method": "GET",
+              "path": "/health",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "keys_equal": [
+                  "status",
+                  "version",
+                  "timestamp"
+                ]
+              },
+              {
+                "header": "x-ratelimit-limit",
+                "exists": false
+              }
+            ]
+          },
+          {
+            "name": "ready",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/health/ready",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "ready",
+                "equals": true
+              },
+              {
+                "path": "components",
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              {
+                "header": "x-ratelimit-limit",
+                "exists": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-001",
+      "area": "http",
+      "doc": "API.md",
+      "line": 186,
+      "line_end": 196,
+      "statement": "Every response, including errors, carries the documented security headers with the documented values (HSTS max-age=31536000; includeSubDomains, CSP default-src 'none', nosniff, DENY, no-store, strict-origin-when-cross-origin, empty permissions policy).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "ok-response",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "header": "x-content-type-options",
+                "equals": "nosniff"
+              },
+              {
+                "header": "x-frame-options",
+                "equals": "DENY"
+              },
+              {
+                "header": "content-security-policy",
+                "equals": "default-src 'none'"
+              },
+              {
+                "header": "strict-transport-security",
+                "equals": "max-age=31536000; includeSubDomains"
+              },
+              {
+                "header": "cache-control",
+                "equals": "no-store"
+              },
+              {
+                "header": "referrer-policy",
+                "equals": "strict-origin-when-cross-origin"
+              },
+              {
+                "header": "permissions-policy",
+                "equals": "geolocation=(), microphone=(), camera=()"
+              }
+            ]
+          },
+          {
+            "name": "error-response",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes/kairos-conformance-missing-{{run}}"
+            },
+            "expect": [
+              {
+                "status": 404
+              },
+              {
+                "header": "x-content-type-options",
+                "equals": "nosniff"
+              },
+              {
+                "header": "x-frame-options",
+                "equals": "DENY"
+              },
+              {
+                "header": "content-security-policy",
+                "equals": "default-src 'none'"
+              },
+              {
+                "header": "strict-transport-security",
+                "equals": "max-age=31536000; includeSubDomains"
+              },
+              {
+                "header": "cache-control",
+                "equals": "no-store"
+              },
+              {
+                "header": "referrer-policy",
+                "equals": "strict-origin-when-cross-origin"
+              },
+              {
+                "header": "permissions-policy",
+                "equals": "geolocation=(), microphone=(), camera=()"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-002",
+      "area": "http",
+      "doc": "API.md",
+      "line": 172,
+      "line_end": 178,
+      "also": [
+        "API.md:163-164",
+        "API.md:212-214"
+      ],
+      "statement": "Rate-limited responses carry X-RateLimit-Limit/Remaining/Reset (100 for reads, 30 for writes), and every response carries X-Request-ID, echoing a client-supplied value or a fresh UUID v4.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "read",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes?namespace={{ns}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "header": "x-ratelimit-limit",
+                "equals": "100"
+              },
+              {
+                "header": "x-ratelimit-remaining",
+                "matches": "^[0-9]+$"
+              },
+              {
+                "header": "x-ratelimit-reset",
+                "matches": "^[0-9]+$"
+              },
+              {
+                "header": "x-request-id",
+                "matches": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              }
+            ]
+          },
+          {
+            "name": "write",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/validate-dag",
+              "json": {
+                "edges": {
+                  "a": [
+                    "b"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "header": "x-ratelimit-limit",
+                "equals": "30"
+              }
+            ]
+          },
+          {
+            "name": "echo-request-id",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "headers": {
+                "X-Request-ID": "kairos-conformance-{{run}}"
+              },
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "header": "x-request-id",
+                "equals": "kairos-conformance-{{run}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-003",
+      "area": "http",
+      "doc": "API.md",
+      "line": 204,
+      "also": [
+        "API.md:244"
+      ],
+      "statement": "A request body over 1 MB is rejected with 413 and error.type PayloadTooLargeError before any route runs.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "oversize",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "raw_body_bytes": 1100000
+            },
+            "expect": [
+              {
+                "status": 413
+              },
+              {
+                "path": "error.type",
+                "equals": "PayloadTooLargeError"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-004",
+      "area": "http",
+      "doc": "API.md",
+      "line": 226,
+      "line_end": 236,
+      "also": [
+        "API.md:238-247"
+      ],
+      "statement": "All error responses share the structured body {\"error\": {\"type\", \"message\", \"detail\"}}.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "xtype-404",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes/kairos-conformance-missing-{{run}}"
+            },
+            "expect": [
+              {
+                "status": 404
+              },
+              {
+                "path": "error.type",
+                "type": "string"
+              },
+              {
+                "path": "error.message",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "unknown-query-422",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes?kairos_conformance_bogus=1"
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.type",
+                "type": "string"
+              },
+              {
+                "path": "error.message",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "cyclic-dag-400",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/validate-dag",
+              "json": {
+                "edges": {
+                  "a": [
+                    "b"
+                  ],
+                  "b": [
+                    "a"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 400
+              },
+              {
+                "path": "error.type",
+                "type": "string"
+              },
+              {
+                "path": "error.message",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "intervene-404",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/causal/intervene",
+              "json": {
+                "variable_id": "kairos-conformance-missing-{{run}}",
+                "value": 1.0
+              }
+            },
+            "expect": [
+              {
+                "status": 404
+              },
+              {
+                "path": "error.type",
+                "type": "string"
+              },
+              {
+                "path": "error.message",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "name": "mcp-get-405",
+            "http": {
+              "method": "GET",
+              "path": "/mcp"
+            },
+            "expect": [
+              {
+                "status": 405
+              },
+              {
+                "path": "error.type",
+                "type": "string"
+              },
+              {
+                "path": "error.message",
+                "type": "string"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-005",
+      "area": "http",
+      "doc": "API.md",
+      "line": 258,
+      "statement": "/docs, /redoc and /openapi.json return 404 unless KAIROS_DEBUG=true.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "low",
+      "when_meta": {
+        "capabilities.api_docs": false
+      },
+      "probe": {
+        "steps": [
+          {
+            "name": "docs",
+            "http": {
+              "method": "GET",
+              "path": "/docs",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 404
+              }
+            ]
+          },
+          {
+            "name": "redoc",
+            "http": {
+              "method": "GET",
+              "path": "/redoc",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 404
+              }
+            ]
+          },
+          {
+            "name": "openapi",
+            "http": {
+              "method": "GET",
+              "path": "/openapi.json",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 404
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-006",
+      "area": "http",
+      "doc": "API.md",
+      "line": 298,
+      "also": [
+        "API.md:168",
+        "API.md:272"
+      ],
+      "statement": "GET /metrics is exempt from rate limiting (no X-RateLimit-* headers).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": false,
+      "severity": "low",
+      "probe": {
+        "steps": [
+          {
+            "name": "metrics",
+            "http": {
+              "method": "GET",
+              "path": "/metrics"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "header": "x-ratelimit-limit",
+                "exists": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-007",
+      "area": "http",
+      "doc": "API.md",
+      "line": 78,
+      "also": [
+        "API.md:143"
+      ],
+      "statement": "With auth on, /api/v1/meta, /api/v1/health and /api/v1/health/ready answer without a token, while a data route without a bearer gets 401 {\"error\": {\"type\": \"AuthenticationError\", \"message\": \"Authentication required\", \"detail\": null}}.",
+      "surface": "rest",
+      "profile": "pg",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "health",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/health",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "ready",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/health/ready",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "xtypes-unauth",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 401
+              },
+              {
+                "path": "error.type",
+                "equals": "AuthenticationError"
+              },
+              {
+                "path": "error.message",
+                "equals": "Authentication required"
+              },
+              {
+                "path": "error.detail",
+                "equals": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-HTTP-008",
+      "area": "http",
+      "doc": "API.md",
+      "line": 298,
+      "also": [
+        "API.md:272",
+        "PRODUCT.md:73"
+      ],
+      "statement": "GET /metrics is exempt from authentication (answers without a bearer token).",
+      "surface": "rest",
+      "profile": "pg",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "low",
+      "probe": {
+        "steps": [
+          {
+            "name": "metrics-unauth",
+            "http": {
+              "method": "GET",
+              "path": "/metrics",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-001",
+      "area": "learning",
+      "doc": "PRODUCT.md",
+      "line": 92,
+      "also": [
+        "API.md:803",
+        "API.md:730",
+        "API.md:800"
+      ],
+      "statement": "An observation applies one ema-phi-v1 step (w <- 0.618*w + 0.382*signal), answers 201 with outcome applied, and the stored weight equals the receipt weight.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "critical",
+      "probe": {
+        "steps": [
+          {
+            "name": "observe",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:ema:0",
+                "vector_id": "{{v.v_l_ema}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "w1": "weight"
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "outcome",
+                "equals": "applied"
+              },
+              {
+                "path": "learning_rule",
+                "equals": "ema-phi-v1"
+              },
+              {
+                "path": "signal",
+                "equals": 0.9
+              },
+              {
+                "path": "weight",
+                "approx": 0.6528,
+                "tol": 0.001
+              },
+              {
+                "path": "schema_version",
+                "equals": 1
+              },
+              {
+                "path": "operation.name",
+                "equals": "observe"
+              },
+              {
+                "path": "operation.class",
+                "equals": "W"
+              }
+            ]
+          },
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_ema}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": "{{s.w1}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-002",
+      "area": "learning",
+      "doc": "PRODUCT.md",
+      "line": 92,
+      "also": [
+        "API.md:803"
+      ],
+      "statement": "An ema-phi-v1 result below 0.382 collapses to 0.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "observe-zero",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:collapse:0",
+                "vector_id": "{{v.v_l_collapse}}",
+                "signal": 0.0
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "weight",
+                "equals": 0.0,
+                "why": "0.618*0.5 + 0.382*0 = 0.309 < 0.382"
+              }
+            ]
+          },
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_collapse}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": 0.0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-003",
+      "area": "learning",
+      "doc": "PRODUCT.md",
+      "line": 54,
+      "also": [
+        "API.md:804-805"
+      ],
+      "statement": "Because an adaptive edge is admitted only at or above 0.618, one observation can open a route (0.5 -> 0.65) or close one (0.7 -> 0.55).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "before",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.l_src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_l_open}}"
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_l_close}}"
+              }
+            ]
+          },
+          {
+            "name": "open",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:open:0",
+                "vector_id": "{{v.v_l_open}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "weight",
+                "approx": 0.6528,
+                "tol": 0.001
+              }
+            ]
+          },
+          {
+            "name": "close",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:close:0",
+                "vector_id": "{{v.v_l_close}}",
+                "signal": 0.3
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "weight",
+                "approx": 0.5472,
+                "tol": 0.001
+              }
+            ]
+          },
+          {
+            "name": "after",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.l_src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_l_open}}"
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_l_close}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-004",
+      "area": "learning",
+      "doc": "PRODUCT.md",
+      "line": 51,
+      "also": [
+        "API.md:814-815",
+        "AGENT-SETUP.md:189-190"
+      ],
+      "statement": "A retry with the same idempotency key and payload replays: 201, outcome replayed, the stored receipt, and no second learning step.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "critical",
+      "probe": {
+        "steps": [
+          {
+            "name": "first",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:replay:0",
+                "vector_id": "{{v.v_l_replay}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "o1": "observation_id",
+              "w1": "weight"
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "outcome",
+                "equals": "applied"
+              }
+            ]
+          },
+          {
+            "name": "retry",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:replay:0",
+                "vector_id": "{{v.v_l_replay}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "outcome",
+                "equals": "replayed"
+              },
+              {
+                "path": "observation_id",
+                "equals": "{{s.o1}}"
+              },
+              {
+                "path": "weight",
+                "equals": "{{s.w1}}"
+              }
+            ]
+          },
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_replay}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": "{{s.w1}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-005",
+      "area": "learning",
+      "doc": "API.md",
+      "line": 821,
+      "line_end": 822,
+      "also": [
+        "PRODUCT.md:51",
+        "API.md:841-851"
+      ],
+      "statement": "The same key with a different payload is refused with 409 OBSERVATION.idempotency_key_conflict (not retryable) and applies nothing.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "critical",
+      "probe": {
+        "steps": [
+          {
+            "name": "first",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:conflict:0",
+                "vector_id": "{{v.v_l_conflict}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "w1": "weight"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "changed-body",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:conflict:0",
+                "vector_id": "{{v.v_l_conflict}}",
+                "signal": 0.2
+              }
+            },
+            "expect": [
+              {
+                "status": 409
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.idempotency_key_conflict"
+              },
+              {
+                "path": "error.category",
+                "equals": "conflict"
+              },
+              {
+                "path": "error.retry.retryable",
+                "equals": false
+              }
+            ]
+          },
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_conflict}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": "{{s.w1}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-006",
+      "area": "learning",
+      "doc": "API.md",
+      "line": 815,
+      "line_end": 816,
+      "also": [
+        "PRODUCT.md:93",
+        "API.md:1258"
+      ],
+      "statement": "REST, the agent tool observe and MCP kairos_observe share one key space: a retry on another surface replays.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "rest",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:cross:0",
+                "vector_id": "{{v.v_l_cross}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "o1": "observation_id",
+              "w1": "weight"
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "outcome",
+                "equals": "applied"
+              }
+            ]
+          },
+          {
+            "name": "mcp-retry",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_observe",
+                "arguments": {
+                  "idempotency_key": "{{run}}:cross:0",
+                  "vector_id": "{{v.v_l_cross}}",
+                  "signal": 0.9
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "result.isError",
+                "equals": false
+              },
+              {
+                "path": "result.structuredContent.outcome",
+                "equals": "replayed"
+              },
+              {
+                "path": "result.structuredContent.data.observation_id",
+                "equals": "{{s.o1}}"
+              }
+            ]
+          },
+          {
+            "name": "tool-retry",
+            "tool": {
+              "tool": "observe",
+              "input": {
+                "idempotency_key": "{{run}}:cross:0",
+                "vector_id": "{{v.v_l_cross}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error",
+                "equals": null
+              },
+              {
+                "path": "outcome",
+                "equals": "replayed"
+              },
+              {
+                "path": "data.observation_id",
+                "equals": "{{s.o1}}"
+              }
+            ]
+          },
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_cross}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": "{{s.w1}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-007",
+      "area": "learning",
+      "doc": "PRODUCT.md",
+      "line": 52,
+      "also": [
+        "API.md:745",
+        "API.md:792"
+      ],
+      "statement": "Without a namespace policy an observation receipt carries the store revision {instance_id, recorded_seq}, and a replay returns the same revision.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "high",
+      "when_meta": {
+        "authorization.namespace_policy": false
+      },
+      "probe": {
+        "steps": [
+          {
+            "name": "first",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:rev:0",
+                "vector_id": "{{v.v_l_rev}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "rev": "store_revision"
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "store_revision",
+                "keys_equal": [
+                  "instance_id",
+                  "recorded_seq"
+                ]
+              },
+              {
+                "path": "store_revision.instance_id",
+                "type": "string"
+              },
+              {
+                "path": "store_revision.recorded_seq",
+                "type": "integer"
+              }
+            ]
+          },
+          {
+            "name": "replay",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:rev:0",
+                "vector_id": "{{v.v_l_rev}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "store_revision",
+                "equals": "{{s.rev}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-008",
+      "area": "learning",
+      "doc": "ARCHITECTURE.md",
+      "line": 164,
+      "line_end": 168,
+      "also": [
+        "ARCHITECTURE.md:321-323"
+      ],
+      "statement": "recorded_seq advances by exactly 1 per committed transaction that changes XType or vector rows, and a replay does not move it.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "medium",
+      "when_meta": {
+        "authorization.namespace_policy": false
+      },
+      "probe": {
+        "steps": [
+          {
+            "name": "obs-a",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:seq:a",
+                "vector_id": "{{v.v_l_seq_a}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "s0": "store_revision.recorded_seq"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "obs-a-replay",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:seq:a",
+                "vector_id": "{{v.v_l_seq_a}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "outcome",
+                "equals": "replayed"
+              }
+            ]
+          },
+          {
+            "name": "obs-b",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:seq:b",
+                "vector_id": "{{v.v_l_seq_b}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "s1": "store_revision.recorded_seq"
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "store_revision.recorded_seq",
+                "delta": 1,
+                "from": "s0",
+                "why": "one write since obs-a (replay moves nothing); assumes no concurrent writers"
+              }
+            ]
+          },
+          {
+            "name": "create-xtype",
+            "tool": {
+              "tool": "create_xtype",
+              "input": {
+                "idempotency_key": "{{run}}:seq:x",
+                "name": "seq-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error",
+                "equals": null
+              }
+            ]
+          },
+          {
+            "name": "obs-c",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:seq:c",
+                "vector_id": "{{v.v_l_seq_c}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "store_revision.recorded_seq",
+                "delta": 2,
+                "from": "s1",
+                "why": "create_xtype + obs-c"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-009",
+      "area": "learning",
+      "doc": "PRODUCT.md",
+      "line": 54,
+      "also": [
+        "API.md:811",
+        "ARCHITECTURE.md:255"
+      ],
+      "statement": "Public reads never change weights: resolves, queries and MCP/agent-tool reads leave adaptive weights, vector versions and the store revision untouched.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "critical",
+      "when_meta": {
+        "authorization.namespace_policy": false
+      },
+      "probe": {
+        "steps": [
+          {
+            "name": "bracket-open",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:reads:a",
+                "vector_id": "{{v.v_l_bracket_a}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "s0": "store_revision.recorded_seq"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "vector-before",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_reads}}"
+            },
+            "save": {
+              "w0": "weight",
+              "ver0": "version"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "resolve",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.l_src}}",
+                "context": {}
+              }
+            },
+            "repeat": 3,
+            "expect": [
+              {
+                "status": 200,
+                "on": "each"
+              }
+            ]
+          },
+          {
+            "name": "resolve-ctx",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.l_src}}",
+                "context": {
+                  "roles": [
+                    "operator"
+                  ],
+                  "locale": "en"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "query",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/query",
+              "json": {
+                "query": "{{x.l_src}}",
+                "limit": 10
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "mcp-resolve",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_resolve",
+                "arguments": {
+                  "source_id": "{{x.l_src}}"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "tool-resolve",
+            "tool": {
+              "tool": "resolve",
+              "input": {
+                "source_id": "{{x.l_src}}"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "tool-query",
+            "tool": {
+              "tool": "run_query",
+              "input": {
+                "query": "{{x.l_src}}"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "search",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/resolve?query=l_reads"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "vector-after",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_reads}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": "{{s.w0}}"
+              },
+              {
+                "path": "version",
+                "equals": "{{s.ver0}}"
+              }
+            ]
+          },
+          {
+            "name": "bracket-close",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:reads:b",
+                "vector_id": "{{v.v_l_bracket_b}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "store_revision.recorded_seq",
+                "delta": 1,
+                "from": "s0",
+                "why": "reads committed no store transaction"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-010",
+      "area": "learning",
+      "doc": "API.md",
+      "line": 863,
+      "line_end": 865,
+      "also": [
+        "API.md:712-719"
+      ],
+      "statement": "Observation bodies are validated: a missing key is 422 idempotency_key_required, a body carrying update is 422 observation_update_retired, and a signal outside [0, 1], a boolean or string signal, an unknown field or both selectors are 422 invalid_input; nothing is applied.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "no-key",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "vector_id": "{{v.v_l_valid}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.idempotency_key_required"
+              },
+              {
+                "path": "error.param",
+                "equals": "idempotency_key"
+              }
+            ]
+          },
+          {
+            "name": "update",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:valid:update",
+                "vector_id": "{{v.v_l_valid}}",
+                "signal": 0.9,
+                "update": true
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.observation_update_retired"
+              },
+              {
+                "path": "error.param",
+                "equals": "update"
+              }
+            ]
+          },
+          {
+            "name": "signal-high",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:valid:high",
+                "vector_id": "{{v.v_l_valid}}",
+                "signal": 1.5
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.invalid_input"
+              },
+              {
+                "path": "error.param",
+                "equals": "signal"
+              }
+            ]
+          },
+          {
+            "name": "signal-bool",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:valid:bool",
+                "vector_id": "{{v.v_l_valid}}",
+                "signal": true
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.invalid_input"
+              }
+            ]
+          },
+          {
+            "name": "signal-string",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:valid:str",
+                "vector_id": "{{v.v_l_valid}}",
+                "signal": "0.5"
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.invalid_input"
+              }
+            ]
+          },
+          {
+            "name": "unknown-field",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:valid:field",
+                "vector_id": "{{v.v_l_valid}}",
+                "signal": 0.9,
+                "kairos_conformance": 1
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.invalid_input"
+              }
+            ]
+          },
+          {
+            "name": "both-selectors",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:valid:both",
+                "vector_id": "{{v.v_l_valid}}",
+                "signal": 0.9,
+                "source_id": "{{x.l_src}}",
+                "target_id": "{{x.l_valid}}"
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.invalid_input"
+              }
+            ]
+          },
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_valid}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": 0.5
+              },
+              {
+                "path": "version",
+                "equals": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-011",
+      "area": "learning",
+      "doc": "API.md",
+      "line": 855,
+      "line_end": 867,
+      "statement": "Edge selection refusals: unknown vector_id or an unjoined pair is 404 observation_edge_not_found, an unknown endpoint is 400 observation_endpoint_not_found, a non-adaptive vector is 422 observation_edge_not_adaptive, and a pair joined by two adaptive vectors is 422 observation_edge_ambiguous.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "unknown-vector",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:sel:vec",
+                "vector_id": "kairos-conformance-missing-{{run}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 404
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.observation_edge_not_found"
+              }
+            ]
+          },
+          {
+            "name": "unjoined-pair",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:sel:pair",
+                "source_id": "{{x.l_src}}",
+                "target_id": "{{x.l_nolink}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 404
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.observation_edge_not_found"
+              }
+            ]
+          },
+          {
+            "name": "unknown-endpoint",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:sel:end",
+                "source_id": "kairos-conformance-missing-{{run}}",
+                "target_id": "{{x.l_nolink}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 400
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.observation_endpoint_not_found"
+              }
+            ]
+          },
+          {
+            "name": "not-adaptive",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:sel:notad",
+                "vector_id": "{{v.v_l_notad}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.observation_edge_not_adaptive"
+              }
+            ]
+          },
+          {
+            "name": "ambiguous",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:sel:amb",
+                "source_id": "{{x.l_src}}",
+                "target_id": "{{x.l_amb}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.observation_edge_ambiguous"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-012",
+      "area": "learning",
+      "doc": "API.md",
+      "line": 885,
+      "line_end": 893,
+      "also": [
+        "API.md:921-928",
+        "CHANGELOG.md:34"
+      ],
+      "statement": "GET /api/v1/observations (admin) lists receipts newest first as {schema_version: 1, items, page: {next_cursor, partial}}, with writer absent as not_stored, and refuses limit outside 1..100 with 422 OBSERVATION.invalid_input naming limit.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "list",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/observations?limit=100"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "schema_version",
+                "equals": 1
+              },
+              {
+                "path": "$",
+                "keys_include": [
+                  "items",
+                  "page"
+                ]
+              },
+              {
+                "path": "page",
+                "keys_include": [
+                  "next_cursor",
+                  "partial"
+                ]
+              },
+              {
+                "path": "items[*].recorded_at",
+                "sorted": "desc"
+              },
+              {
+                "path": "items[*].writer",
+                "all_equal": null
+              },
+              {
+                "path": "items[*].absent.writer",
+                "all_equal": "not_stored"
+              }
+            ]
+          },
+          {
+            "name": "limit-101",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/observations?limit=101"
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.invalid_input"
+              },
+              {
+                "path": "error.param",
+                "equals": "limit"
+              }
+            ]
+          },
+          {
+            "name": "limit-0",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/observations?limit=0"
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.invalid_input"
+              },
+              {
+                "path": "error.param",
+                "equals": "limit"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-LEARN-013",
+      "area": "learning",
+      "doc": "PRODUCT.md",
+      "line": 96,
+      "also": [
+        "API.md:820",
+        "API.md:886"
+      ],
+      "statement": "There is no read API for observation history: no per-observation or history route exists beyond the 24-hour admin receipt list.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": false,
+      "severity": "low",
+      "probe": {
+        "steps": [
+          {
+            "name": "by-id",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/observations/kairos-conformance-{{run}}"
+            },
+            "expect": [
+              {
+                "status": [
+                  404,
+                  405
+                ]
+              }
+            ]
+          },
+          {
+            "name": "history",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/observations/history"
+            },
+            "expect": [
+              {
+                "status": [
+                  404,
+                  405
+                ]
+              }
+            ]
+          },
+          {
+            "name": "log",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/observations/log"
+            },
+            "expect": [
+              {
+                "status": [
+                  404,
+                  405
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-001",
+      "area": "mcp",
+      "doc": "AGENT-SETUP.md",
+      "line": 118,
+      "line_end": 119,
+      "also": [
+        "PRODUCT.md:78",
+        "API.md:1968"
+      ],
+      "statement": "MCP initialize answers protocolVersion 2025-11-25 with serverInfo {name: kairos, version: <node version>}, and notifications/initialized answers HTTP 202.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "health",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/health",
+              "auth": "none"
+            },
+            "save": {
+              "health_version": "version"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "initialize",
+            "mcp": {
+              "method": "initialize",
+              "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {
+                  "name": "kairos-conformance",
+                  "version": "1"
+                }
+              },
+              "drop_headers": [
+                "MCP-Protocol-Version"
+              ]
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "result.protocolVersion",
+                "equals": "2025-11-25"
+              },
+              {
+                "path": "result.serverInfo.name",
+                "equals": "kairos"
+              },
+              {
+                "path": "result.serverInfo.version",
+                "equals": "{{s.health_version}}"
+              }
+            ]
+          },
+          {
+            "name": "initialized",
+            "mcp": {
+              "method": "notifications/initialized",
+              "notification": true
+            },
+            "expect": [
+              {
+                "status": 202
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-002",
+      "area": "mcp",
+      "doc": "PRODUCT.md",
+      "line": 78,
+      "also": [
+        "AGENT-SETUP.md:120",
+        "API.md:1968-1969",
+        "API.md:1984-1996"
+      ],
+      "statement": "MCP tools/list exposes exactly 9 tools (kairos_resolve, kairos_observe and seven kairos_federation_* tools), each with an inputSchema; only kairos_observe and kairos_resolve also declare an outputSchema.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "tools-list",
+            "mcp": {
+              "method": "tools/list"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "result.tools",
+                "length": 9
+              },
+              {
+                "path": "result.tools[*].name",
+                "set_equals": [
+                  "kairos_federation_identity",
+                  "kairos_federation_handshake",
+                  "kairos_federation_capabilities",
+                  "kairos_federation_resolve",
+                  "kairos_federation_get_xtype",
+                  "kairos_federation_get_vectors_from",
+                  "kairos_federation_health",
+                  "kairos_observe",
+                  "kairos_resolve"
+                ]
+              },
+              {
+                "path": "result.tools[*].inputSchema",
+                "length": 9
+              },
+              {
+                "path": "result.tools[*].outputSchema",
+                "length": 2
+              },
+              {
+                "path": "result.tools[?name=kairos_observe].outputSchema",
+                "length": 1
+              },
+              {
+                "path": "result.tools[?name=kairos_resolve].outputSchema",
+                "length": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-003",
+      "area": "mcp",
+      "doc": "AGENT-SETUP.md",
+      "line": 144,
+      "line_end": 150,
+      "also": [
+        "PRODUCT.md:78",
+        "AGENT-SETUP.md:229-230"
+      ],
+      "statement": "GET /mcp returns 405 (no SSE stream), another MCP-Protocol-Version header gets HTTP 400, and a request carrying an Origin header is refused with 403 when no origin is allowed.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "when_meta": {
+        "mcp.browser_access": false
+      },
+      "probe": {
+        "steps": [
+          {
+            "name": "get-mcp",
+            "http": {
+              "method": "GET",
+              "path": "/mcp"
+            },
+            "expect": [
+              {
+                "status": 405
+              }
+            ]
+          },
+          {
+            "name": "bad-protocol-version",
+            "mcp": {
+              "method": "ping",
+              "headers": {
+                "MCP-Protocol-Version": "2026-07-28"
+              }
+            },
+            "expect": [
+              {
+                "status": 400
+              }
+            ]
+          },
+          {
+            "name": "origin",
+            "mcp": {
+              "method": "ping",
+              "headers": {
+                "Origin": "http://kairos-conformance.invalid"
+              }
+            },
+            "expect": [
+              {
+                "status": 403
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-004",
+      "area": "mcp",
+      "doc": "API.md",
+      "line": 2044,
+      "line_end": 2053,
+      "statement": "JSON-RPC errors are HTTP 200: malformed JSON is -32700, an unknown method or unknown tool name is -32601.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "parse-error",
+            "http": {
+              "method": "POST",
+              "path": "/mcp",
+              "raw": "{not json",
+              "headers": {
+                "MCP-Protocol-Version": "2025-11-25"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error.code",
+                "equals": -32700
+              }
+            ]
+          },
+          {
+            "name": "unknown-method",
+            "mcp": {
+              "method": "kairos/conformance-unknown",
+              "params": {}
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error.code",
+                "equals": -32601
+              }
+            ]
+          },
+          {
+            "name": "unknown-tool",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_conformance_unknown",
+                "arguments": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error.code",
+                "equals": -32601
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-005",
+      "area": "mcp",
+      "doc": "AGENT-SETUP.md",
+      "line": 176,
+      "line_end": 177,
+      "also": [
+        "API.md:2024-2031"
+      ],
+      "statement": "kairos_observe without idempotency_key is an isError tool result carrying OBSERVATION.idempotency_key_required, not a JSON-RPC error.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "observe-no-key",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_observe",
+                "arguments": {
+                  "vector_id": "kairos-conformance-missing-{{run}}",
+                  "signal": 0.9
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error",
+                "exists": false
+              },
+              {
+                "path": "result.isError",
+                "equals": true
+              },
+              {
+                "path": "result.structuredContent.error.code",
+                "equals": "OBSERVATION.idempotency_key_required"
+              },
+              {
+                "path": "result.structuredContent.outcome",
+                "equals": "rejected"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-006",
+      "area": "mcp",
+      "doc": "API.md",
+      "line": 1996,
+      "also": [
+        "API.md:2000-2002"
+      ],
+      "statement": "kairos_resolve ranks a source's admitted edges in the same order as POST /api/v1/resolve and returns a CallToolResult whose structuredContent is the result envelope and whose content[0].text is the same JSON.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "rest-resolve",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en",
+                  "roles": [
+                    "operator"
+                  ]
+                }
+              }
+            },
+            "save": {
+              "rest_ids": "results[*].vector_id"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "mcp-resolve",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_resolve",
+                "arguments": {
+                  "source_id": "{{x.src}}",
+                  "context": {
+                    "locale": "en",
+                    "roles": [
+                      "operator"
+                    ]
+                  }
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "result.isError",
+                "equals": false
+              },
+              {
+                "path": "result.structuredContent",
+                "keys_equal": [
+                  "schema_version",
+                  "outcome",
+                  "data",
+                  "page",
+                  "error",
+                  "operation",
+                  "approval"
+                ]
+              },
+              {
+                "path": "result.structuredContent.data.results[*].vector_id",
+                "equals": "{{s.rest_ids}}"
+              },
+              {
+                "path": "result.content[0].type",
+                "equals": "text"
+              },
+              {
+                "path": "result.content[0].text",
+                "json_text_equals_path": "result.structuredContent"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-007",
+      "area": "mcp",
+      "doc": "API.md",
+      "line": 2038,
+      "statement": "The federation tools identity, capabilities and health are not gated: they answer without a bearer token.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "fed-identity",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_federation_identity",
+                "arguments": {}
+              },
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error",
+                "exists": false
+              },
+              {
+                "path": "result",
+                "exists": true
+              }
+            ]
+          },
+          {
+            "name": "fed-capabilities",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_federation_capabilities",
+                "arguments": {}
+              },
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error",
+                "exists": false
+              },
+              {
+                "path": "result",
+                "exists": true
+              }
+            ]
+          },
+          {
+            "name": "fed-health",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_federation_health",
+                "arguments": {}
+              },
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error",
+                "exists": false
+              },
+              {
+                "path": "result",
+                "exists": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-MCP-008",
+      "area": "mcp",
+      "doc": "AGENT-SETUP.md",
+      "line": 151,
+      "line_end": 152,
+      "also": [
+        "PRODUCT.md:78",
+        "API.md:180"
+      ],
+      "statement": "Every POST /mcp counts against a write limit of 30 requests per minute per client; past it the node answers 429 with Retry-After.",
+      "surface": "mcp",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "run_last": true,
+      "probe": {
+        "steps": [
+          {
+            "name": "burst",
+            "mcp": {
+              "method": "ping"
+            },
+            "repeat": 40,
+            "stop_on_status": 429,
+            "no_rate_retry": true,
+            "expect": [
+              {
+                "status": 429,
+                "why": "a burst of pings must hit 429 within 31 requests"
+              },
+              {
+                "header": "retry-after",
+                "matches": "^[0-9]+$"
+              },
+              {
+                "count_lte": 31
+              },
+              {
+                "header": "x-ratelimit-limit",
+                "equals": "30",
+                "on": "first"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-META-001",
+      "area": "meta",
+      "doc": "API.md",
+      "line": 321,
+      "line_end": 327,
+      "also": [
+        "CHANGELOG.md:36"
+      ],
+      "statement": "GET /api/v1/meta is auth-exempt, answers 200 application/json with Cache-Control: no-store, accepts HEAD, refuses other methods, and reports the same version as /health.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "health",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/health",
+              "auth": "none"
+            },
+            "save": {
+              "health_version": "version"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "header": "content-type",
+                "matches": "^application/json"
+              },
+              {
+                "header": "cache-control",
+                "equals": "no-store"
+              },
+              {
+                "path": "schema_version",
+                "equals": 1
+              },
+              {
+                "path": "service",
+                "equals": "kairos"
+              },
+              {
+                "path": "version",
+                "equals": "{{s.health_version}}"
+              }
+            ]
+          },
+          {
+            "name": "meta-head",
+            "http": {
+              "method": "HEAD",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "meta-post",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/meta",
+              "json": {},
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 405,
+                "why": "GET and HEAD only"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-META-002",
+      "area": "meta",
+      "doc": "API.md",
+      "line": 329,
+      "also": [
+        "API.md:330",
+        "API.md:335",
+        "PRODUCT.md:75"
+      ],
+      "statement": "With authentication off, /meta reports auth.enabled false, auth.provider and auth.privy_app_id null, and mcp.requires_bearer equal to auth.enabled.",
+      "surface": "rest",
+      "profile": "dev",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "auth.enabled",
+                "equals": false
+              },
+              {
+                "path": "auth.provider",
+                "equals": null
+              },
+              {
+                "path": "auth.privy_app_id",
+                "equals": null
+              },
+              {
+                "path": "mcp.requires_bearer",
+                "equals": false
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-META-003",
+      "area": "meta",
+      "doc": "API.md",
+      "line": 330,
+      "also": [
+        "API.md:329",
+        "API.md:335",
+        "PRODUCT.md:76"
+      ],
+      "statement": "On the PostgreSQL profile /meta reports Privy auth on (provider privy, a public app id), admin_waiver false, mcp.requires_bearer true and store.backend postgres.",
+      "surface": "rest",
+      "profile": "pg",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "auth.enabled",
+                "equals": true
+              },
+              {
+                "path": "auth.provider",
+                "equals": "privy"
+              },
+              {
+                "path": "auth.privy_app_id",
+                "type": "string"
+              },
+              {
+                "path": "auth.admin_waiver",
+                "equals": false
+              },
+              {
+                "path": "mcp.requires_bearer",
+                "equals": true
+              },
+              {
+                "path": "store.backend",
+                "equals": "postgres"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-META-004",
+      "area": "meta",
+      "doc": "API.md",
+      "line": 336,
+      "also": [
+        "API.md:357-358",
+        "PRODUCT.md:78"
+      ],
+      "statement": "/meta.mcp describes the pinned transport (path /mcp, protocol 2025-11-25, streamable-http, JSON responses, no sessions) and lists the MCP tools in tools/list order.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "save": {
+              "meta_tools": "mcp.tools[*].name"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "mcp.path",
+                "equals": "/mcp"
+              },
+              {
+                "path": "mcp.protocol_version",
+                "equals": "2025-11-25"
+              },
+              {
+                "path": "mcp.transport",
+                "equals": "streamable-http"
+              },
+              {
+                "path": "mcp.response_mode",
+                "equals": "json"
+              },
+              {
+                "path": "mcp.sessions",
+                "equals": false
+              }
+            ]
+          },
+          {
+            "name": "tools-list",
+            "mcp": {
+              "method": "tools/list"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "result.tools[*].name",
+                "equals": "{{s.meta_tools}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-META-005",
+      "area": "meta",
+      "doc": "API.md",
+      "line": 337,
+      "also": [
+        "API.md:1241-1249"
+      ],
+      "statement": "/meta.agent_tools lists the seven documented agent tools, and every write (W) tool carries idempotency_key: required.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "agent_tools.path",
+                "equals": "/api/v1/agent/tools/execute"
+              },
+              {
+                "path": "agent_tools.tools[*].name",
+                "set_equals": [
+                  "create_xtype",
+                  "create_vector",
+                  "observe",
+                  "run_query",
+                  "resolve",
+                  "get_reactor_status",
+                  "get_graph_stats"
+                ]
+              },
+              {
+                "path": "agent_tools.tools[?class=W].name",
+                "set_equals": [
+                  "create_xtype",
+                  "create_vector",
+                  "observe"
+                ]
+              },
+              {
+                "path": "agent_tools.tools[?class=W].idempotency_key",
+                "all_equal": "required"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-META-006",
+      "area": "meta",
+      "doc": "API.md",
+      "line": 345,
+      "line_end": 346,
+      "statement": "/meta never carries an env id, hostname, namespace, peer URLs, Origin allowlist entries, keys or secrets.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "federation-identity",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_federation_identity",
+                "arguments": {}
+              }
+            },
+            "save": {
+              "env_id": "result.env_id"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "no_key_anywhere": [
+                  "env_id",
+                  "hostname",
+                  "host",
+                  "namespace",
+                  "namespaces",
+                  "peers",
+                  "peer_urls",
+                  "origins",
+                  "allowlist",
+                  "public_key",
+                  "key",
+                  "secret"
+                ]
+              },
+              {
+                "text_not_contains": "{{s.env_id}}",
+                "why": "federation env_id must not leak through /meta"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-META-007",
+      "area": "meta",
+      "doc": "PRODUCT.md",
+      "line": 80,
+      "also": [
+        "CHANGELOG.md:36",
+        "API.md:319"
+      ],
+      "statement": "PRODUCT.md states auth mode is not discoverable and no /meta route exists (GET /api/v1/meta would be 404).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "low",
+      "finding_kind": "doc_drift",
+      "probe": {
+        "steps": [
+          {
+            "name": "meta",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/meta",
+              "auth": "none"
+            },
+            "expect": [
+              {
+                "status": 404,
+                "why": "PRODUCT.md:80 says no /meta route exists"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-001",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 26,
+      "statement": "A structural vector is always admitted, whatever the request context.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "ctx-0",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_struct}}"
+              }
+            ]
+          },
+          {
+            "name": "ctx-1",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_struct}}"
+              }
+            ]
+          },
+          {
+            "name": "ctx-2",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "fr"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_struct}}"
+              }
+            ]
+          },
+          {
+            "name": "ctx-3",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "roles": [
+                    "viewer"
+                  ],
+                  "user": "kc"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_struct}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-002",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 27,
+      "statement": "A contextual vector is admitted only when every one of its parameters matches the context.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "locale-only",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_ctx_en}}"
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_ctx_multi}}"
+              }
+            ]
+          },
+          {
+            "name": "all-params",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en",
+                  "roles": [
+                    "analyst"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_ctx_multi}}"
+              }
+            ]
+          },
+          {
+            "name": "one-mismatch",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "fr",
+                  "roles": [
+                    "analyst"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_ctx_multi}}"
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_ctx_en}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-003",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 86,
+      "statement": "Parameter matching is exact or any-of: a list parameter admits a context value (or any context list member) that is in the list.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "roles-member",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "roles": [
+                    "operator"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_ctx_roles}}"
+              }
+            ]
+          },
+          {
+            "name": "roles-nonmember",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "roles": [
+                    "viewer"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_ctx_roles}}"
+              }
+            ]
+          },
+          {
+            "name": "locale-in-list",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "de"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_ctx_anyloc}}"
+              }
+            ]
+          },
+          {
+            "name": "locale-not-in-list",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "fr"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_ctx_anyloc}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-004",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 28,
+      "also": [
+        "src/causal/resolver.py:6-18"
+      ],
+      "statement": "A causal vector is admitted only when its parameters match the context (and it is not blocked by an intervention).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "match",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_causal_en}}"
+              }
+            ]
+          },
+          {
+            "name": "mismatch",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "fr"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_causal_en}}",
+                "why": "causal edge gated on locale=en"
+              }
+            ]
+          },
+          {
+            "name": "empty",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_causal_en}}",
+                "why": "causal edge gated on locale=en"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-005",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 86,
+      "also": [
+        "PRODUCT.md:88",
+        "API.md:245"
+      ],
+      "statement": "The public resolve context accepts only user, roles, locale and timestamp (extra: forbid); interventions cannot be smuggled in through it.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "extra-field",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "kairos-conformance-missing-{{run}}",
+                "context": {
+                  "tenant": "kc"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.type",
+                "equals": "ValidationError"
+              }
+            ]
+          },
+          {
+            "name": "interventions",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "kairos-conformance-missing-{{run}}",
+                "context": {
+                  "_interventions": [
+                    "x"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              },
+              {
+                "path": "error.type",
+                "equals": "ValidationError"
+              }
+            ]
+          },
+          {
+            "name": "event-trigger",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "kairos-conformance-missing-{{run}}",
+                "context": {
+                  "_event_trigger": "kairos.conformance.event"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-006",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 29,
+      "also": [
+        "API.md:804"
+      ],
+      "statement": "An adaptive vector is admitted only while its learned weight is at least 0.618.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "empty",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_adapt_hi}}"
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_adapt_lo}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-007",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 54,
+      "also": [
+        "PRODUCT.md:29",
+        "API.md:804",
+        "PRODUCT.md:127"
+      ],
+      "statement": "An adaptive edge is admitted at or above 0.618, so an edge whose weight is exactly 0.618 is admitted.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "low",
+      "known_gap": "C4",
+      "probe": {
+        "steps": [
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_adapt_0618}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": 0.618
+              }
+            ]
+          },
+          {
+            "name": "empty",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "contains": "{{v.v_adapt_0618}}",
+                "why": "weight 0.618 >= 0.618"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-008",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 87,
+      "also": [
+        "PRODUCT.md:30"
+      ],
+      "statement": "Behavioral edges resolve only through the behavioral event path, never from a public resolve (REST or MCP).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "empty",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_beh}}"
+              }
+            ]
+          },
+          {
+            "name": "rich",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en",
+                  "roles": [
+                    "analyst",
+                    "operator"
+                  ],
+                  "user": "kc"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{v.v_beh}}"
+              }
+            ]
+          },
+          {
+            "name": "mcp-resolve",
+            "mcp": {
+              "method": "tools/call",
+              "params": {
+                "name": "kairos_resolve",
+                "arguments": {
+                  "source_id": "{{x.src}}"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "result.structuredContent.data.results[*].vector_id",
+                "not_contains": "{{v.v_beh}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-009",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 89,
+      "statement": "service_chain vectors can be created but never resolve, because no resolver is registered.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "setup": [
+          {
+            "name": "create-service-chain",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "{{x.svc_src}}",
+                "target_id": "{{x.t_svc}}",
+                "vector_type": "service_chain",
+                "name": "svc-{{run}}",
+                "weight": 0.99
+              }
+            },
+            "save": {
+              "svc": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          }
+        ],
+        "steps": [
+          {
+            "name": "ctx-0",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.svc_src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{s.svc}}"
+              }
+            ]
+          },
+          {
+            "name": "ctx-1",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.svc_src}}",
+                "context": {
+                  "locale": "en",
+                  "roles": [
+                    "operator"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "not_contains": "{{s.svc}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-010",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 32,
+      "also": [
+        "API.md:625"
+      ],
+      "statement": "Admitted targets are ranked by weight, highest first.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "rank",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.rank_src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].weight",
+                "sorted": "desc"
+              },
+              {
+                "path": "results[*].vector_id",
+                "equals": [
+                  "{{v.v_rank_b}}",
+                  "{{v.v_rank_c}}",
+                  "{{v.v_rank_a}}"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-011",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 41,
+      "also": [
+        "API.md:1247"
+      ],
+      "statement": "Resolution is deterministic: the same graph and context give the same answer, and the resolve agent tool returns the same order as POST /resolve.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "repeat",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en",
+                  "roles": [
+                    "operator"
+                  ]
+                }
+              }
+            },
+            "repeat": 3,
+            "save": {
+              "rest_ids": "results[*].vector_id"
+            },
+            "expect": [
+              {
+                "status": 200,
+                "on": "each"
+              },
+              {
+                "path": "results",
+                "stable": true,
+                "on": "last"
+              }
+            ]
+          },
+          {
+            "name": "agent-tool",
+            "tool": {
+              "tool": "resolve",
+              "input": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en",
+                  "roles": [
+                    "operator"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error",
+                "equals": null
+              },
+              {
+                "path": "data.results[*].vector_id",
+                "equals": "{{s.rest_ids}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-012",
+      "area": "resolution",
+      "doc": "API.md",
+      "line": 620,
+      "line_end": 622,
+      "statement": "The documented POST /resolve request example ({\"locale\": \"en\", \"role\": \"admin\"} context) is a valid request.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "low",
+      "finding_kind": "doc_drift",
+      "probe": {
+        "steps": [
+          {
+            "name": "doc-example",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "kairos-conformance-missing-{{run}}",
+                "context": {
+                  "locale": "en",
+                  "role": "admin"
+                },
+                "threshold": 0.5
+              }
+            },
+            "expect": [
+              {
+                "status_not": 422,
+                "why": "the documented example must validate"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-013",
+      "area": "resolution",
+      "doc": "API.md",
+      "line": 625,
+      "statement": "An empty context ({}) resolves only structural vectors.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "empty",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_type",
+                "all_equal": "structural"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-014",
+      "area": "resolution",
+      "doc": "API.md",
+      "line": 644,
+      "line_end": 648,
+      "statement": "With roles containing \"prefer-declared\", targets whose metadata.accessor equals another requested role rank by weight x 1.618; without it the order is the weight order; stored weights never change.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "plain",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.pref_src}}",
+                "context": {
+                  "roles": [
+                    "analyst"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "equals": [
+                  "{{v.v_pref_plain}}",
+                  "{{v.v_pref_decl}}"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "prefer",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.pref_src}}",
+                "context": {
+                  "roles": [
+                    "prefer-declared",
+                    "analyst"
+                  ]
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "equals": [
+                  "{{v.v_pref_decl}}",
+                  "{{v.v_pref_plain}}"
+                ]
+              },
+              {
+                "path": "results[?vector_id={{v.v_pref_decl}}].weight",
+                "equals": [
+                  0.7
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-015",
+      "area": "resolution",
+      "doc": "PRODUCT.md",
+      "line": 86,
+      "also": [
+        "ADR-0039"
+      ],
+      "statement": "There are no time windows: the context timestamp never changes which vectors are admitted.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "past",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en",
+                  "timestamp": "1970-01-01T00:00:00Z"
+                }
+              }
+            },
+            "save": {
+              "past": "results[*].vector_id"
+            },
+            "expect": [
+              {
+                "status": 200
+              }
+            ]
+          },
+          {
+            "name": "future",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en",
+                  "timestamp": "2999-12-31T23:59:59Z"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "equals": "{{s.past}}"
+              }
+            ]
+          },
+          {
+            "name": "none",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results[*].vector_id",
+                "equals": "{{s.past}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-016",
+      "area": "resolution",
+      "doc": "API.md",
+      "line": 664,
+      "also": [
+        "API.md:692",
+        "PRODUCT.md:36"
+      ],
+      "statement": "Compositional traversal: chain refuses more than 8 steps with 422, and reachable returns a depth map of readable targets that excludes the source.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "chain-9",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve/chain",
+              "json": {
+                "source_id": "{{x.rank_src}}",
+                "vector_names": [
+                  "kc",
+                  "kc",
+                  "kc",
+                  "kc",
+                  "kc",
+                  "kc",
+                  "kc",
+                  "kc",
+                  "kc"
+                ],
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          },
+          {
+            "name": "reachable",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve/reachable",
+              "json": {
+                "source_id": "{{x.rank_src}}",
+                "max_depth": 3,
+                "context": {}
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "reachable",
+                "keys_exclude": [
+                  "{{x.rank_src}}"
+                ]
+              },
+              {
+                "path": "reachable",
+                "keys_equal": [
+                  "{{x.rank_a}}",
+                  "{{x.rank_b}}",
+                  "{{x.rank_c}}"
+                ]
+              },
+              {
+                "path": "reachable[\"{{x.rank_a}}\"]",
+                "equals": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-017",
+      "area": "resolution",
+      "doc": "src/server/models/resolution.py",
+      "line": 227,
+      "also": [
+        "API.md:640"
+      ],
+      "statement": "The resolve response field trace is the resolution trace log (published OpenAPI description \"Resolution trace log\"): a resolution that admits targets records its steps there.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "medium",
+      "known_gap": "C1",
+      "probe": {
+        "steps": [
+          {
+            "name": "resolve",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/resolve",
+              "json": {
+                "source_id": "{{x.src}}",
+                "context": {
+                  "locale": "en"
+                }
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "results",
+                "not_equals": [],
+                "why": "precondition: the resolution admits targets"
+              },
+              {
+                "path": "trace",
+                "type": "array"
+              },
+              {
+                "path": "trace",
+                "not_equals": [],
+                "why": "a trace log of a non-empty resolution is not empty"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-RES-018",
+      "area": "resolution",
+      "doc": "API.md",
+      "line": 605,
+      "line_end": 613,
+      "statement": "GET /resolve?query= is a text search returning {results, query, threshold} with threshold defaulting to 0.5.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "low",
+      "probe": {
+        "steps": [
+          {
+            "name": "search",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/resolve?query=kairos-conformance-nomatch-{{run}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "keys_include": [
+                  "results",
+                  "query",
+                  "threshold"
+                ]
+              },
+              {
+                "path": "query",
+                "equals": "kairos-conformance-nomatch-{{run}}"
+              },
+              {
+                "path": "threshold",
+                "equals": 0.5
+              },
+              {
+                "path": "results",
+                "type": "array"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-STORE-001",
+      "area": "store",
+      "doc": "PRODUCT.md",
+      "line": 93,
+      "also": [
+        "ARCHITECTURE.md:276",
+        "src/core/idempotency.py:116-123"
+      ],
+      "statement": "Idempotency keys are stored as SHA-256 only: the key row holds sha256(key) and the raw key appears in no stored column.",
+      "surface": "cli",
+      "profile": "dev",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "high",
+      "requires": [
+        "sqlite_store"
+      ],
+      "probe": {
+        "steps": [
+          {
+            "name": "observe",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:hash:0",
+                "vector_id": "{{v.v_l_hash}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "hash",
+            "compute": {
+              "var": "kh",
+              "sha256": "{{run}}:hash:0"
+            }
+          },
+          {
+            "name": "row-by-hash",
+            "sqlite": {
+              "sql": "SELECT count(*) FROM idempotency_keys WHERE key_hash = ?",
+              "params": [
+                "{{s.kh}}"
+              ]
+            },
+            "expect": [
+              {
+                "path": "rows[0][0]",
+                "equals": 1
+              }
+            ]
+          },
+          {
+            "name": "raw-key-absent",
+            "sqlite": {
+              "sql": "SELECT count(*) FROM idempotency_keys WHERE instr(receipt, ?) > 0 OR instr(principal_scope, ?) > 0 OR instr(request_digest, ?) > 0",
+              "params": [
+                "{{run}}:hash:0",
+                "{{run}}:hash:0",
+                "{{run}}:hash:0"
+              ]
+            },
+            "expect": [
+              {
+                "path": "rows[0][0]",
+                "equals": 0,
+                "why": "raw key must never be stored"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-STORE-002",
+      "area": "store",
+      "doc": "API.md",
+      "line": 828,
+      "line_end": 829,
+      "also": [
+        "AGENT-SETUP.md:192-193",
+        "API.md:887",
+        "PRODUCT.md:93"
+      ],
+      "statement": "A key whose stored row is older than 24 hours never replays: the retry is refused with 409 OBSERVATION.idempotency_key_expired, nothing is applied, and GET /observations no longer lists it.",
+      "surface": "cli",
+      "profile": "dev",
+      "requires_admin": true,
+      "mutates": true,
+      "severity": "high",
+      "requires": [
+        "sqlite_store"
+      ],
+      "probe": {
+        "steps": [
+          {
+            "name": "observe",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:expire:0",
+                "vector_id": "{{v.v_l_expire}}",
+                "signal": 0.9
+              }
+            },
+            "save": {
+              "o1": "observation_id",
+              "w1": "weight"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "hash",
+            "compute": {
+              "var": "kh",
+              "sha256": "{{run}}:expire:0"
+            }
+          },
+          {
+            "name": "backdate-25h",
+            "sqlite": {
+              "sql": "UPDATE idempotency_keys SET created_at = ? WHERE key_hash = ?",
+              "params": [
+                "{{utc_ago_hours:25}}",
+                "{{s.kh}}"
+              ]
+            },
+            "expect": [
+              {
+                "path": "rowcount",
+                "equals": 1
+              }
+            ]
+          },
+          {
+            "name": "retry",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/observations",
+              "json": {
+                "idempotency_key": "{{run}}:expire:0",
+                "vector_id": "{{v.v_l_expire}}",
+                "signal": 0.9
+              }
+            },
+            "expect": [
+              {
+                "status": 409
+              },
+              {
+                "path": "error.code",
+                "equals": "OBSERVATION.idempotency_key_expired"
+              }
+            ]
+          },
+          {
+            "name": "vector",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{v.v_l_expire}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "weight",
+                "equals": "{{s.w1}}"
+              }
+            ]
+          },
+          {
+            "name": "list",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/observations?vector_id={{v.v_l_expire}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "items[*].observation_id",
+                "not_contains": "{{s.o1}}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-TOOL-001",
+      "area": "tools",
+      "doc": "API.md",
+      "line": 1306,
+      "line_end": 1327,
+      "also": [
+        "API.md:1254",
+        "API.md:1338"
+      ],
+      "statement": "A write tool without idempotency_key is an HTTP 200 envelope with outcome rejected, data null, error.code XTYPE.idempotency_key_required (param idempotency_key) and a null operation key.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "no-key",
+            "tool": {
+              "tool": "create_xtype",
+              "input": {
+                "name": "nokey-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "outcome",
+                "equals": "rejected"
+              },
+              {
+                "path": "data",
+                "equals": null
+              },
+              {
+                "path": "error.code",
+                "equals": "XTYPE.idempotency_key_required"
+              },
+              {
+                "path": "error.param",
+                "equals": "idempotency_key"
+              },
+              {
+                "path": "operation.idempotency_key",
+                "equals": null
+              },
+              {
+                "path": "approval",
+                "equals": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-TOOL-002",
+      "area": "tools",
+      "doc": "API.md",
+      "line": 1255,
+      "line_end": 1257,
+      "also": [
+        "PRODUCT.md:78"
+      ],
+      "statement": "Agent-tool creates are retry-safe: the same key and input replay (outcome replayed, same id, nothing written twice); the same key with other input is XTYPE.idempotency_key_conflict.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "create",
+            "tool": {
+              "tool": "create_xtype",
+              "input": {
+                "idempotency_key": "{{run}}:tool:0",
+                "name": "tool-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "save": {
+              "id": "data.id"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "outcome",
+                "equals": "applied"
+              }
+            ]
+          },
+          {
+            "name": "retry",
+            "tool": {
+              "tool": "create_xtype",
+              "input": {
+                "idempotency_key": "{{run}}:tool:0",
+                "name": "tool-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "outcome",
+                "equals": "replayed"
+              },
+              {
+                "path": "data.id",
+                "equals": "{{s.id}}"
+              }
+            ]
+          },
+          {
+            "name": "changed-input",
+            "tool": {
+              "tool": "create_xtype",
+              "input": {
+                "idempotency_key": "{{run}}:tool:0",
+                "name": "tool-other-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error.code",
+                "equals": "XTYPE.idempotency_key_conflict"
+              },
+              {
+                "path": "error.category",
+                "equals": "conflict"
+              }
+            ]
+          },
+          {
+            "name": "one-row",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes?namespace={{ns}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "items[?name=tool-{{run}}]",
+                "length": 1
+              },
+              {
+                "path": "items[?name=tool-other-{{run}}]",
+                "length": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-TOOL-003",
+      "area": "tools",
+      "doc": "API.md",
+      "line": 1373,
+      "line_end": 1374,
+      "statement": "execute-batch runs every tool regardless of failures and reports all_success false when any result has an error.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "batch",
+            "tool": {
+              "batch": [
+                {
+                  "tool": "create_xtype",
+                  "input": {
+                    "idempotency_key": "{{run}}:batch:0",
+                    "name": "batch-{{run}}",
+                    "namespace": "{{ns}}",
+                    "kind": "data"
+                  }
+                },
+                {
+                  "tool": "create_xtype",
+                  "input": {
+                    "name": "batch-nokey-{{run}}",
+                    "namespace": "{{ns}}",
+                    "kind": "data"
+                  }
+                }
+              ]
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "all_success",
+                "equals": false
+              },
+              {
+                "path": "results",
+                "length": 2
+              },
+              {
+                "path": "results[0].outcome",
+                "equals": "applied"
+              },
+              {
+                "path": "results[1].error.code",
+                "equals": "XTYPE.idempotency_key_required"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-TOOL-004",
+      "area": "tools",
+      "doc": "API.md",
+      "line": 1251,
+      "also": [
+        "API.md:1336"
+      ],
+      "statement": "An unknown tool name, including reload_seed, is refused with TOOL.unknown_tool (param tool) before any handler runs.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "low",
+      "probe": {
+        "steps": [
+          {
+            "name": "reload-seed",
+            "tool": {
+              "tool": "reload_seed",
+              "input": {}
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error.code",
+                "equals": "TOOL.unknown_tool"
+              },
+              {
+                "path": "error.param",
+                "equals": "tool"
+              },
+              {
+                "path": "data",
+                "equals": null
+              }
+            ]
+          },
+          {
+            "name": "unknown",
+            "tool": {
+              "tool": "kairos_conformance_unknown",
+              "input": {}
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "error.code",
+                "equals": "TOOL.unknown_tool"
+              },
+              {
+                "path": "error.param",
+                "equals": "tool"
+              },
+              {
+                "path": "data",
+                "equals": null
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-VEC-001",
+      "area": "vectors",
+      "doc": "API.md",
+      "line": 546,
+      "also": [
+        "API.md:565",
+        "API.md:575",
+        "API.md:583"
+      ],
+      "statement": "Vector endpoints must reference existing XTypes: POST /vectors with an unknown source is 400, and GET /vectors/from|to/{unknown} is 400.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "create-unknown-source",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "kairos-conformance-missing-{{run}}",
+                "target_id": "kairos-conformance-missing-{{run}}",
+                "vector_type": "structural"
+              }
+            },
+            "expect": [
+              {
+                "status": 400
+              }
+            ]
+          },
+          {
+            "name": "from-unknown",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/from/kairos-conformance-missing-{{run}}"
+            },
+            "expect": [
+              {
+                "status": 400
+              }
+            ]
+          },
+          {
+            "name": "to-unknown",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/to/kairos-conformance-missing-{{run}}"
+            },
+            "expect": [
+              {
+                "status": 400
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-VEC-002",
+      "area": "vectors",
+      "doc": "API.md",
+      "line": 547,
+      "statement": "A vector weight below 0.382 collapses to 0.0 and a weight above 1.0 clamps to 1.0.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "low",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "{{x.vec_a}}",
+                "target_id": "{{x.vec_b}}",
+                "vector_type": "structural",
+                "name": "low-{{run}}",
+                "weight": 0.3
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "weight",
+                "equals": 0.0
+              }
+            ]
+          },
+          {
+            "name": "high",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "{{x.vec_a}}",
+                "target_id": "{{x.vec_b}}",
+                "vector_type": "structural",
+                "name": "high-{{run}}",
+                "weight": 1.7
+              }
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "weight",
+                "equals": 1.0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-VEC-003",
+      "area": "vectors",
+      "doc": "API.md",
+      "line": 545,
+      "also": [
+        "PRODUCT.md:89"
+      ],
+      "statement": "vector_type must be one of contextual, structural, causal, behavioral, adaptive; any other value is refused with 422.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "low",
+      "finding_kind": "doc_drift",
+      "probe": {
+        "steps": [
+          {
+            "name": "unknown-type",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "{{x.vec_a}}",
+                "target_id": "{{x.vec_b}}",
+                "vector_type": "kairos_conformance"
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          },
+          {
+            "name": "service-chain",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "{{x.vec_a}}",
+                "target_id": "{{x.vec_b}}",
+                "vector_type": "service_chain",
+                "name": "svc-type-{{run}}"
+              }
+            },
+            "expect": [
+              {
+                "status": 422,
+                "why": "service_chain is not in the documented enumeration"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-XTYPE-001",
+      "area": "xtypes",
+      "doc": "API.md",
+      "line": 421,
+      "line_end": 438,
+      "also": [
+        "API.md:419",
+        "API.md:460-466",
+        "API.md:396"
+      ],
+      "statement": "POST /xtypes creates at version 1 (201) with the documented fields, a duplicate id is 409, GET /xtypes/fqn/{namespace.name} finds it (404 when absent), and PATCH increments the version (sent with the store's expected_version token; see KC-XTYPE-006).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "create",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "name": "xt-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data",
+                "content": "kc",
+                "metadata": {
+                  "tag": "kc"
+                }
+              }
+            },
+            "save": {
+              "id": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              },
+              {
+                "path": "$",
+                "keys_include": [
+                  "id",
+                  "kind",
+                  "name",
+                  "namespace",
+                  "content",
+                  "content_type",
+                  "metadata",
+                  "version",
+                  "created_at",
+                  "updated_at"
+                ]
+              },
+              {
+                "path": "version",
+                "equals": 1
+              }
+            ]
+          },
+          {
+            "name": "duplicate-id",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "id": "{{s.id}}",
+                "name": "xt-dup-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "expect": [
+              {
+                "status": 409
+              }
+            ]
+          },
+          {
+            "name": "by-fqn",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes/fqn/{{ns}}.xt-{{run}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "id",
+                "equals": "{{s.id}}"
+              }
+            ]
+          },
+          {
+            "name": "by-fqn-missing",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes/fqn/{{ns}}.missing-{{run}}"
+            },
+            "expect": [
+              {
+                "status": 404
+              }
+            ]
+          },
+          {
+            "name": "patch",
+            "http": {
+              "method": "PATCH",
+              "path": "/api/v1/xtypes/{{s.id}}",
+              "json": {
+                "content": "kc2",
+                "expected_version": 1
+              }
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "version",
+                "equals": 2
+              },
+              {
+                "path": "content",
+                "equals": "kc2"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-XTYPE-002",
+      "area": "xtypes",
+      "doc": "API.md",
+      "line": 416,
+      "line_end": 418,
+      "also": [
+        "API.md:442"
+      ],
+      "statement": "XType validation: kind outside data|model|service|vector_def|directive, a model without a name, a namespace deeper than 5 levels, and unknown GET /xtypes query parameters are refused with 422.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "steps": [
+          {
+            "name": "bad-kind",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "name": "kc",
+                "namespace": "{{ns}}",
+                "kind": "kairos_conformance"
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          },
+          {
+            "name": "model-without-name",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "namespace": "{{ns}}",
+                "kind": "model"
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          },
+          {
+            "name": "namespace-depth-6",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "name": "kc",
+                "namespace": "{{ns}}.b.c.d.e.f",
+                "kind": "data"
+              }
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          },
+          {
+            "name": "unknown-query",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes?kairos_conformance=1"
+            },
+            "expect": [
+              {
+                "status": 422
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-XTYPE-003",
+      "area": "xtypes",
+      "doc": "API.md",
+      "line": 397,
+      "also": [
+        "API.md:478-484"
+      ],
+      "statement": "DELETE /xtypes/{id} deletes the XType and cascade-deletes its vectors (sent with the store's expected_version token; see KC-XTYPE-006).",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "probe": {
+        "setup": [
+          {
+            "name": "create-a",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "name": "del-a-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "save": {
+              "a": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "create-b",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "name": "del-b-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "save": {
+              "b": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "create-vector",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "{{s.a}}",
+                "target_id": "{{s.b}}",
+                "vector_type": "structural",
+                "name": "del-{{run}}"
+              }
+            },
+            "save": {
+              "vec": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          }
+        ],
+        "steps": [
+          {
+            "name": "delete",
+            "http": {
+              "method": "DELETE",
+              "path": "/api/v1/xtypes/{{s.a}}?expected_version=1"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "id",
+                "equals": "{{s.a}}"
+              }
+            ]
+          },
+          {
+            "name": "vector-gone",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/{{s.vec}}"
+            },
+            "expect": [
+              {
+                "status": 404
+              }
+            ]
+          },
+          {
+            "name": "inbound-gone",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/vectors/to/{{s.b}}"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "total",
+                "equals": 0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-XTYPE-004",
+      "area": "xtypes",
+      "doc": "API.md",
+      "line": 110,
+      "line_end": 112,
+      "statement": "Creating an XType whose id starts with kairos.access: outside the kairos.access namespace is refused with 403 \"XType ids and names under 'kairos.access' are reserved for that namespace\".",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "reserved-id",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "id": "kairos.access:kc-{{run}}",
+                "name": "kc-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "expect": [
+              {
+                "status": 403
+              },
+              {
+                "text_contains": "XType ids and names under 'kairos.access' are reserved for that namespace"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-XTYPE-005",
+      "area": "xtypes",
+      "doc": "API.md",
+      "line": 107,
+      "line_end": 108,
+      "also": [
+        "PRODUCT.md:100",
+        "API.md:456"
+      ],
+      "statement": "The kairos.access graph is never returned by data surfaces, and /xtypes/count reports {xtypes, vectors} integers that hide it.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": false,
+      "severity": "high",
+      "probe": {
+        "steps": [
+          {
+            "name": "access-namespace",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes?namespace=kairos.access"
+            },
+            "expect": [
+              {
+                "status": [
+                  200,
+                  403
+                ]
+              },
+              {
+                "path": "items",
+                "in": [
+                  [],
+                  null
+                ]
+              },
+              {
+                "path": "total",
+                "in": [
+                  0,
+                  null
+                ]
+              }
+            ]
+          },
+          {
+            "name": "count",
+            "http": {
+              "method": "GET",
+              "path": "/api/v1/xtypes/count"
+            },
+            "expect": [
+              {
+                "status": 200
+              },
+              {
+                "path": "$",
+                "keys_equal": [
+                  "xtypes",
+                  "vectors"
+                ]
+              },
+              {
+                "path": "xtypes",
+                "type": "integer"
+              },
+              {
+                "path": "vectors",
+                "type": "integer"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "KC-XTYPE-006",
+      "area": "xtypes",
+      "doc": "API.md",
+      "line": 468,
+      "line_end": 484,
+      "also": [
+        "API.md:396-397",
+        "API.md:514-516",
+        "API.md:522-524"
+      ],
+      "statement": "PATCH /xtypes/{id} (only the fields to change), DELETE /xtypes/{id} and DELETE /vectors/{id} are documented without any version precondition: a request as documented succeeds with 200.",
+      "surface": "rest",
+      "profile": "any",
+      "requires_admin": false,
+      "mutates": true,
+      "severity": "medium",
+      "finding_kind": "doc_drift",
+      "probe": {
+        "setup": [
+          {
+            "name": "create-a",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "name": "pre-a-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "save": {
+              "a": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "create-b",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/xtypes",
+              "json": {
+                "name": "pre-b-{{run}}",
+                "namespace": "{{ns}}",
+                "kind": "data"
+              }
+            },
+            "save": {
+              "b": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          },
+          {
+            "name": "create-vector",
+            "http": {
+              "method": "POST",
+              "path": "/api/v1/vectors",
+              "json": {
+                "source_id": "{{s.a}}",
+                "target_id": "{{s.b}}",
+                "vector_type": "structural",
+                "name": "pre-{{run}}"
+              }
+            },
+            "save": {
+              "vec": "id"
+            },
+            "expect": [
+              {
+                "status": 201
+              }
+            ]
+          }
+        ],
+        "steps": [
+          {
+            "name": "patch-as-documented",
+            "http": {
+              "method": "PATCH",
+              "path": "/api/v1/xtypes/{{s.b}}",
+              "json": {
+                "content": "kc2"
+              }
+            },
+            "expect": [
+              {
+                "status": 200,
+                "why": "API.md:470-476: provide only the fields to change"
+              }
+            ]
+          },
+          {
+            "name": "delete-vector-as-documented",
+            "http": {
+              "method": "DELETE",
+              "path": "/api/v1/vectors/{{s.vec}}"
+            },
+            "expect": [
+              {
+                "status": 200,
+                "why": "API.md:514-516: delete a vector by id"
+              }
+            ]
+          },
+          {
+            "name": "delete-xtype-as-documented",
+            "http": {
+              "method": "DELETE",
+              "path": "/api/v1/xtypes/{{s.a}}"
+            },
+            "expect": [
+              {
+                "status": 200,
+                "why": "API.md:478-484: returns 200 on success"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
