@@ -236,6 +236,9 @@
     "frameworks/film-production",
     "frameworks/film-production/overview",
     "frameworks/film-production/quickstart",
+    "frameworks/kairos",
+    "frameworks/kairos/overview",
+    "frameworks/kairos/quickstart",
     "frameworks/sdlc-complete",
     "frameworks/sdlc-complete/agent-design",
     "frameworks/sdlc-complete/agent-permission-rationale",
@@ -1951,6 +1954,27 @@
       "summary": "Deploy the framework and write a production brief before any paid generation",
       "file": "frameworks/film-production/quickstart.md",
       "parent": "frameworks/film-production"
+    },
+    {
+      "id": "frameworks/kairos",
+      "title": "Kairos",
+      "summary": "Run a project on a live Kairos node with evidence-gated edges and conformance feedback",
+      "collapsed": true,
+      "parent": "frameworks"
+    },
+    {
+      "id": "frameworks/kairos/overview",
+      "title": "Overview",
+      "summary": "Lifecycle, gates, human boundary, agents, rules and the Kairos surfaces the framework uses",
+      "file": "frameworks/kairos/overview.md",
+      "parent": "frameworks/kairos"
+    },
+    {
+      "id": "frameworks/kairos/quickstart",
+      "title": "Quick Start",
+      "summary": "Deploy the framework, declare the node and pass the Connected gate",
+      "file": "frameworks/kairos/quickstart.md",
+      "parent": "frameworks/kairos"
     },
     {
       "id": "frameworks/sdlc-complete",

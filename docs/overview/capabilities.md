@@ -17,6 +17,7 @@ example that produces a saved report, use [Just Try It](../getting-started/just-
 | Organize research | Source notes, citations, and synthesis | [Research overview](../frameworks/research-complete/overview.md) |
 | Curate media | Collection assessment and metadata or acquisition work | [Media curator](../frameworks/media-curator/overview.md) |
 | Produce a film or animated short | Production brief, shot records, lock records, and verified delivery | [Film production](../frameworks/film-production/overview.md) |
+| Run a project on a Kairos node | Connection record, evidence-gated edges, decision receipts, and Kairos findings | [Kairos](../frameworks/kairos/overview.md) |
 | Maintain a reference collection | Linked notes and a maintenance process | [Knowledge base](../frameworks/knowledge-base/overview.md) |
 | Organize infrastructure work | Operational reviews and runbooks | [Operations](../frameworks/ops-complete/overview.md) |
 | Review civic information | Cited analysis and publication preparation | [Civic action](../addons/civic-action/overview.md) |

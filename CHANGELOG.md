@@ -37,6 +37,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - **`aiwg use film-production`** - The framework is registered with the CLI,
   help output, and setup wizard, and the kernel inventory is now 28 skills with
   11 quickrefs.
+- **Kairos framework (`kairos`)** - Runs a project on a live Kairos node across
+  connect → model → validate → operate plus a continuous feedback track: one
+  kernel `kairos-quickref` plus 8 operational skills, 7 agents, 6 rules,
+  5 flows, 6 templates, and schemas for review packets, findings, connection
+  records, and edge proposals. Gates CG, MB, EA, and OP. Candidate edges are
+  hashed proposals; promotion is automatic when seven client-side evidence gates
+  pass (baseline margin, two of three proposer families, FDR-controlled
+  statistic, block stability, point-in-time walk-forward, interventional
+  confirmation, K-consecutive hysteresis), and a person is asked only for
+  live-money or policy edges, gate disagreement, sign flips, new node types, and
+  signing or capital policy. Findings become deduplicated `ChronodeAi/kairos`
+  issues only with command, output, doc citation, and expected versus observed.
+  `aiwg use kairos` registers it; the kernel inventory is now 29 skills with 12
+  quickrefs. Docs: `docs/frameworks/kairos/`.
 
 ### Fixed
 

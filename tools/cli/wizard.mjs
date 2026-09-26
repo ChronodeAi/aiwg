@@ -54,6 +54,7 @@ const VALID_FRAMEWORKS = [
   'knowledge-base',
   'media-curator',
   'film-production',
+  'kairos',
   'writing',
   'general',
 ];

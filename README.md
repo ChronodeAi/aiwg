@@ -801,6 +801,7 @@ capabilities through manifests, docs, scripts, or nested skill packages.
 | **[Media/Marketing Kit](agentic/code/frameworks/media-marketing-kit/)** | 38 agents, 34 skills, 97 templates, 2 flows | Plan, produce, review, publish, and analyze marketing campaigns with reusable briefs, brand/legal gates, channel assets, and performance artifacts |
 | **[Media Curator](agentic/code/frameworks/media-curator/)** | 6 agents, 21 skills | Assess mixed media collections, research sources, acquire approved material, tag metadata, verify integrity, create transcript sidecars, and prepare exports or research handoffs |
 | **[Film Production](agentic/code/frameworks/film-production/)** | 6 agents, 13 skills, 8 templates, 7 rules, 8 flows | Carry reference-driven films and animated shorts from story proof through continuity, previs, generation review, edit, sound, and verified delivery with coverage, picture, and sound locks |
+| **[Kairos](agentic/code/frameworks/kairos/)** | 7 agents, 9 skills, 6 templates, 6 rules, 5 flows | Run a project on a live Kairos node: record its capability contract, admit causal edges on client-side evidence gates, decide with receipts in paper mode, and file conformance findings on Kairos |
 | **[Research Complete](agentic/code/frameworks/research-complete/)** | 8 agents, 41 skills, 16 templates | Turn literature searches and PDFs into reviewable research artifacts: source records, grounded summaries, citation work, GRADE/FAIR-style quality checks, gap notes, and provenance |
 | **[Knowledge Base](agentic/code/frameworks/knowledge-base/)** | 3 skills, 5 templates | Build a linked AI-assisted wiki from loose sources, notes, entities, concepts, comparisons, and synthesis pages without forcing formal literature-review overhead |
 | **[Ops Complete](agentic/code/frameworks/ops-complete/)** | 12 agents, 1 skill, 17 templates, 6 rules | Convert operational procedures into executable runbooks, inventories, incident reports, troubleshooting trees, and extension-backed ops workflows |
@@ -1179,6 +1180,23 @@ install media software or grant spend or publication authority.
 
 ```bash
 aiwg use film-production
+```
+
+### Kairos — Evidence-Gated Work on a Live Kairos Node
+
+Kairos connects a project to one declared Kairos node and works through
+connect → model → validate → operate with a continuous feedback track. The
+Connected gate records `/api/v1/meta`, readiness, version and the agent auth
+path without secrets, plus a conformance baseline. Edge proposals are hashed
+and never admitted directly; seven client-side evidence gates promote edges
+automatically, and a person decides only live-money or policy edges, gate
+disagreements, sign flips, new node types, and signing or capital policy.
+Decisions run in paper mode with receipts, and every discrepancy between the
+Kairos docs and the node becomes an evidence-complete issue on
+`ChronodeAi/kairos`.
+
+```bash
+aiwg use kairos
 ```
 
 ### Research Complete — Academic Research Pipeline
@@ -2153,6 +2171,8 @@ attestation, or substitute for domain-specific review.
 - **[Media Curator](agentic/code/frameworks/media-curator/README.md)** — Media archive management
 - **[Film Production](agentic/code/frameworks/film-production/README.md)** — Film lifecycle, continuity, lock gates,
   and verified delivery
+- **[Kairos](agentic/code/frameworks/kairos/README.md)** — Live Kairos node pilots, evidence gates, receipts,
+  and conformance feedback
 - **[Research Complete](agentic/code/frameworks/research-complete/README.md)** — Research pipeline, source notes,
   citation, and archive workflows
 - **[Knowledge Base](agentic/code/frameworks/knowledge-base/README.md)** — Source ingest, wiki pages, and corpus health
