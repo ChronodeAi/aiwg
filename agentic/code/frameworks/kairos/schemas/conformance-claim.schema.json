@@ -1,0 +1,731 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aiwg.io/schemas/kairos/v1/conformance-claim.schema.json",
+  "title": "Kairos conformance claims registry v1",
+  "description": "A versioned registry of executable claims derived from one Kairos release's documentation. Each claim cites the document line it paraphrases and carries a probe (setup steps, requests, assertions) that skills/kairos-conformance-probe/scripts/kairos_conformance.py executes against a live node. A passing claim proves only that the observed node matched the cited sentence at run time; it grants no authority and certifies nothing about other nodes or releases.",
+  "type": "object",
+  "required": [
+    "schema",
+    "kairos",
+    "docs",
+    "fixtures",
+    "claims"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kairos_conformance_claims/v1"
+    },
+    "kairos": {
+      "type": "object",
+      "required": [
+        "version",
+        "tag",
+        "commit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$"
+        },
+        "repo": {
+          "type": "string"
+        }
+      }
+    },
+    "recorded_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "docs": {
+      "description": "SHA-256 of every cited document at the release tag, so a finding can prove which text it was checked against.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "file",
+          "sha256"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "known_gaps": {
+      "description": "Operator-known gaps (C1..C6) and how the registry covers them.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "fixtures": {
+      "description": "Graph fixtures created on demand in the run namespace through retry-safe agent-tool batches. Referencing a fixture xtype also creates its declared out-edges, transitively.",
+      "type": "object",
+      "required": [
+        "xtypes",
+        "vectors"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "xtypes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "enum": [
+                  "data",
+                  "model",
+                  "service",
+                  "vector_def",
+                  "directive"
+                ]
+              },
+              "metadata": {
+                "type": "object"
+              },
+              "content": {}
+            }
+          }
+        },
+        "vectors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "source",
+              "target",
+              "vector_type",
+              "weight"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "source": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "vector_type": {
+                "enum": [
+                  "structural",
+                  "contextual",
+                  "causal",
+                  "behavioral",
+                  "adaptive",
+                  "service_chain"
+                ]
+              },
+              "weight": {
+                "type": "number",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/claim"
+      }
+    }
+  },
+  "definitions": {
+    "citation": {
+      "type": "string",
+      "description": "FILE:LINE or FILE:LINE-LINE relative to the Kairos repository root, or an ADR id.",
+      "pattern": "^[A-Za-z0-9_./-]+(:[0-9]+(-[0-9]+)?)?$"
+    },
+    "claim": {
+      "type": "object",
+      "required": [
+        "id",
+        "area",
+        "doc",
+        "line",
+        "statement",
+        "surface",
+        "profile",
+        "requires_admin",
+        "mutates",
+        "severity",
+        "probe"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^KC-[A-Z0-9]+-[0-9]{3}$"
+        },
+        "area": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$"
+        },
+        "doc": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cited file relative to the Kairos repository root."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "also": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/citation"
+          }
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Short paraphrase of the documented behaviour; the expected side of a finding."
+        },
+        "surface": {
+          "enum": [
+            "rest",
+            "mcp",
+            "cli"
+          ]
+        },
+        "profile": {
+          "enum": [
+            "dev",
+            "pg",
+            "any"
+          ],
+          "description": "dev = auth off; pg = store.backend postgres (Privy auth on); any = both."
+        },
+        "requires_admin": {
+          "type": "boolean"
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "bearer",
+              "namespace_policy",
+              "sqlite_store",
+              "kairos_bin"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "mutates": {
+          "type": "boolean",
+          "description": "True when the claim writes (fixtures, write tools, observations) or exhausts a shared rate-limit bucket. Skipped without --allow-mutation."
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "known_gap": {
+          "type": "string",
+          "pattern": "^C[0-9]+$"
+        },
+        "when_meta": {
+          "type": "object",
+          "description": "JSON-path -> value guards evaluated against GET /api/v1/meta; the claim is skipped when any guard differs.",
+          "additionalProperties": true
+        },
+        "run_last": {
+          "type": "boolean"
+        },
+        "finding_kind": {
+          "enum": [
+            "conformance",
+            "doc_drift"
+          ]
+        },
+        "probe": {
+          "type": "object",
+          "required": [
+            "steps"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "setup": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/step"
+              }
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/definitions/step"
+              }
+            }
+          }
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "http": {
+          "type": "object",
+          "required": [
+            "method",
+            "path"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "enum": [
+                "GET",
+                "HEAD",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/"
+            },
+            "json": {},
+            "raw": {
+              "type": "string"
+            },
+            "raw_body_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "auth": {
+              "enum": [
+                "default",
+                "none"
+              ]
+            }
+          }
+        },
+        "mcp": {
+          "type": "object",
+          "required": [
+            "method"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "type": "string"
+            },
+            "params": {},
+            "id": {},
+            "notification": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "headers": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "drop_headers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "auth": {
+              "enum": [
+                "default",
+                "none"
+              ]
+            }
+          }
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tool": {
+              "type": "string"
+            },
+            "input": {
+              "type": "object"
+            },
+            "batch": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "tool",
+                  "input"
+                ],
+                "properties": {
+                  "tool": {
+                    "type": "string"
+                  },
+                  "input": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "auth": {
+              "enum": [
+                "default",
+                "none"
+              ]
+            }
+          }
+        },
+        "sqlite": {
+          "type": "object",
+          "required": [
+            "sql"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "sql": {
+              "type": "string"
+            },
+            "params": {
+              "type": "array"
+            }
+          }
+        },
+        "cli": {
+          "type": "object",
+          "required": [
+            "argv"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "argv": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string"
+              }
+            },
+            "timeout": {
+              "type": "number"
+            }
+          }
+        },
+        "compute": {
+          "type": "object",
+          "required": [
+            "var"
+          ],
+          "properties": {
+            "var": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "value": {}
+          }
+        },
+        "sleep_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "repeat": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stop_on_status": {
+          "type": "integer"
+        },
+        "no_rate_retry": {
+          "type": "boolean"
+        },
+        "save": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "save_header": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "save_regex": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "pattern"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "stream": {
+                "enum": [
+                  "stdout",
+                  "stderr"
+                ]
+              }
+            }
+          }
+        },
+        "expect": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/assertion"
+          }
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "http": true
+          },
+          "required": [
+            "http"
+          ]
+        },
+        {
+          "properties": {
+            "mcp": true
+          },
+          "required": [
+            "mcp"
+          ]
+        },
+        {
+          "properties": {
+            "tool": true
+          },
+          "required": [
+            "tool"
+          ]
+        },
+        {
+          "properties": {
+            "sqlite": true
+          },
+          "required": [
+            "sqlite"
+          ]
+        },
+        {
+          "properties": {
+            "cli": true
+          },
+          "required": [
+            "cli"
+          ]
+        },
+        {
+          "properties": {
+            "compute": true
+          },
+          "required": [
+            "compute"
+          ]
+        },
+        {
+          "properties": {
+            "sleep_ms": true
+          },
+          "required": [
+            "sleep_ms"
+          ]
+        }
+      ]
+    },
+    "assertion": {
+      "type": "object",
+      "description": "One check against a step response. `path` uses dotted keys, [n], [*], [?key=value] and [\"literal key\"]; values may be {{s.var}} templates saved earlier in the claim.",
+      "properties": {
+        "on": {
+          "enum": [
+            "last",
+            "first",
+            "each",
+            "any"
+          ]
+        },
+        "why": {
+          "type": "string"
+        },
+        "status": {
+          "oneOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "integer"
+              }
+            }
+          ]
+        },
+        "status_not": {
+          "type": "integer"
+        },
+        "header": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "text_contains": {
+          "type": "string"
+        },
+        "text_not_contains": {
+          "type": "string"
+        },
+        "count_lte": {
+          "type": "integer"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "stderr_matches": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "tol": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "anyOf": [
+        {
+          "properties": {
+            "status": true
+          },
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "properties": {
+            "status_not": true
+          },
+          "required": [
+            "status_not"
+          ]
+        },
+        {
+          "properties": {
+            "header": true
+          },
+          "required": [
+            "header"
+          ]
+        },
+        {
+          "properties": {
+            "path": true
+          },
+          "required": [
+            "path"
+          ]
+        },
+        {
+          "properties": {
+            "text_contains": true
+          },
+          "required": [
+            "text_contains"
+          ]
+        },
+        {
+          "properties": {
+            "text_not_contains": true
+          },
+          "required": [
+            "text_not_contains"
+          ]
+        },
+        {
+          "properties": {
+            "count_lte": true
+          },
+          "required": [
+            "count_lte"
+          ]
+        },
+        {
+          "properties": {
+            "exit_code": true
+          },
+          "required": [
+            "exit_code"
+          ]
+        },
+        {
+          "properties": {
+            "stderr_matches": true
+          },
+          "required": [
+            "stderr_matches"
+          ]
+        }
+      ]
+    }
+  }
+}

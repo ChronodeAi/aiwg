@@ -7,10 +7,9 @@ description: Route live Kairos node work (connect, causal graph proposals, evide
 triggers:
   - kairos
   - kairos node
-  - kairos pilot
-  - kairos causal graph
-  - kairos conformance
-  - kairos review packet
+  - kairos framework
+  - kairos pilot workflow
+  - use kairos in a project
 commandHint:
   modelRole: efficiency
   modelTier: economy
