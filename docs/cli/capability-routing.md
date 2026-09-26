@@ -21,7 +21,7 @@ AIWG ships **480+ skills** across its frameworks. Agentic platforms (Claude Code
 
 Starting in 2026.5.0, AIWG splits its skill surface into two tiers, with discovery + on-demand fetch closing the loop:
 
-- **Kernel skills** — always-loaded into the platform's flat skill listing. 28 kernel skills total: 11 quickrefs (one per installed framework/addon family + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), the `dataset-intelligence` routing entry point, and 14 self-maintenance ops, including the plan-first context firewall.
+- **Kernel skills** — always-loaded into the platform's flat skill listing. 29 kernel skills total: 12 quickrefs (one per installed framework/addon family + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), the `dataset-intelligence` routing entry point, and 14 self-maintenance ops, including the plan-first context firewall.
 - **Standard skills** — the other ~460 skills. Stay at `$AIWG_ROOT` and are **not copied per-project** by default (#1217). Reachable via `aiwg discover` (find) and `aiwg show` (fetch).
 - **Project quickref** — an optional, generated kernel skill synthesized from
   discovered project-local bundles. Operators can curate managed discovery with
@@ -87,7 +87,7 @@ The current measurements and decision are recorded in
 
 ## ⚠ Discover-First Protocol (rc.41+)
 
-For any user request mentioning **AIWG**, framework names (sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator, film-production), or capability keywords (skill, agent, rule, command, addon, workflow, template), `aiwg discover` MUST be the first information-gathering tool call.
+For any user request mentioning **AIWG**, framework names (sdlc, research, forensics, ops, security-engineering, knowledge-base, marketing, media-curator, film-production, kairos), or capability keywords (skill, agent, rule, command, addon, workflow, template), `aiwg discover` MUST be the first information-gathering tool call.
 
 Filesystem `Grep`/`Glob`/`Read` against any provider artifact directory (`.claude/`, `.codex/`, `.factory/`, `.warp/`, `.cursor/`, `.windsurf/`, `.opencode/`, `.github/`, `~/.hermes/`, `~/.openclaw/`, or `agentic/code/`) for AIWG-related lookups is **forbidden** until discover has been consulted at least once in the current session.
 
@@ -110,9 +110,9 @@ You may skip the discover query only when: the user named a specific skill (`/fl
 
 ```mermaid
 flowchart TB
-  subgraph KERNEL["Kernel tier — 28 skills, always loaded"]
+  subgraph KERNEL["Kernel tier — 29 skills, always loaded"]
     direction LR
-    K1[11 quickrefs<br/>sdlc / research / forensics /<br/>marketing / media-curator /<br/>film-production / security-eng /<br/>knowledge-base / ops / pm-os /<br/>aiwg-utils-quickref]
+    K1[12 quickrefs<br/>sdlc / research / forensics /<br/>marketing / media-curator /<br/>film-production / kairos /<br/>security-eng / knowledge-base /<br/>ops / pm-os / aiwg-utils-quickref]
     K2[3 routing entries<br/>aiwg-language-map / steward-quickref /<br/>dataset-intelligence]
     K3[14 self-maintenance ops<br/>steward / doctor / refresh / status / help / use /<br/>regenerate router + 3 branches / issue / PR / mission / context firewall]
   end
@@ -165,7 +165,7 @@ Source of truth ($AIWG_ROOT/agentic/code/...)
 │  ┌────────────────────────────┐
 ├─►│ KERNEL skills              │  copied per-project to platform-native skills dir
 │  │ kernel: true in frontmatter│  always-loaded into agent context
-│  │ (28 skills today)          │  budget-bound; keep tight
+│  │ (29 skills today)          │  budget-bound; keep tight
 │  └────────────────────────────┘
 │
 └─►┌────────────────────────────┐
@@ -201,9 +201,9 @@ aiwg use all --copy-all           # works for `aiwg use all` too
 
 The `--copy-all` flag (alias `--copy-standard-skills`) restores the legacy copy behavior and writes all skills (kernel + standard) into the per-project tree at `<provider>/.aiwg/skills/` (and where applicable, `.agents/skills/`). With `aiwg use all`, it also opts into the legacy full agent, command, and expanded-rule copy. Without that flag, bulk deployment keeps every provider's startup surface kernel-only and uses `aiwg discover` / `aiwg show` for the broader catalog.
 
-## The kernel set today (28 skills, ~15-25k tokens total)
+## The kernel set today (29 skills, ~15-25k tokens total)
 
-### Framework quickrefs (11)
+### Framework quickrefs (12)
 
 One quickref per framework, deployed when that framework is installed. Each one teaches the framework's mental model and lists curated `aiwg discover` phrases. They do **not** enumerate the full skill surface.
 
@@ -215,6 +215,7 @@ One quickref per framework, deployed when that framework is installed. Each one 
 | `media-curator-quickref` | media-curator |
 | `marketing-quickref` | media-marketing-kit |
 | `film-production-quickref` | film-production |
+| `kairos-quickref` | kairos |
 | `ops-quickref` | ops-complete |
 | `security-engineering-quickref` | security-engineering |
 | `knowledge-base-quickref` | knowledge-base |

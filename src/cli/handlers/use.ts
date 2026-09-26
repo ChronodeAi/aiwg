@@ -120,7 +120,7 @@ import { createResourceCredentialProvider } from '../../auth/resource-credential
 /**
  * Valid framework identifiers
  */
-const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'film-production', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'validation', 'knowledge-base', 'writing', 'general', 'all'] as const;
+const VALID_FRAMEWORKS = ['sdlc', 'marketing', 'media-curator', 'film-production', 'kairos', 'research', 'forensics', 'dfir', 'security-engineering', 'ops', 'validation', 'knowledge-base', 'writing', 'general', 'all'] as const;
 type Framework = typeof VALID_FRAMEWORKS[number];
 
 function providerReceiptWebReleaseOptions(): Omit<WebReleaseOptions, 'selector' | 'offline'> {
@@ -195,6 +195,7 @@ const MODE_MAP: Record<Framework, string> = {
   marketing: 'marketing',
   'media-curator': 'media-curator',
   'film-production': 'film-production',
+  kairos: 'kairos',
   research: 'research',
   forensics: 'forensics',
   dfir: 'dfir',
@@ -313,6 +314,7 @@ const FRAMEWORK_DIR_MAP: Partial<Record<string, string>> = {
   marketing: 'media-marketing-kit',
   'media-curator': 'media-curator',
   'film-production': 'film-production',
+  kairos: 'kairos',
   research: 'research-complete',
   forensics: 'forensics-complete',
   dfir: 'forensics-complete',
@@ -2556,7 +2558,7 @@ Deploy an AIWG framework, addon, or extension into the current project.
 Bundles:
   all                       Kernel surface only (kernel skills, rules, behaviors)
   sdlc | research | ops | forensics | marketing | media-curator |
-  film-production | ...
+  film-production | kairos | ...
                             Full framework surface (agents, commands, skills, rules)
   <addon> | <extension>     Any installed addon or extension name
 
@@ -2984,7 +2986,7 @@ export class UseHandler implements CommandHandler {
           : '';
         return {
           exitCode: 1,
-          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, film-production, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
+          message: `Error: Framework, addon, or extension name required\nFrameworks: sdlc, marketing, media-curator, film-production, kairos, research, forensics, dfir, security-engineering, ops, validation, knowledge-base, all\nAddons: rlm, ring, daemon, aiwg-dev (full list: \`aiwg list\`)\nExtensions: sys, net, it, sec, stream, dev (full list: \`ls $AIWG_ROOT/agentic/code/extensions\`)\n'all' deploys every framework + every addon + every extension.${advisory}`,
         };
       }
       const installedNames = Object.keys(config.installed);

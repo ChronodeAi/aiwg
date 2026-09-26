@@ -132,9 +132,10 @@ afterAll(() => {
 
 describe('kernel deployment conformance', () => {
   it('has a non-empty, unique canonical kernel inventory', () => {
-    expect(EXPECTED_KERNEL.length).toBe(28);
+    expect(EXPECTED_KERNEL.length).toBe(29);
     expect(EXPECTED_KERNEL).toContain('dataset-intelligence');
     expect(EXPECTED_KERNEL).toContain('film-production-quickref');
+    expect(EXPECTED_KERNEL).toContain('kairos-quickref');
     expect(new Set(EXPECTED_KERNEL).size).toBe(EXPECTED_KERNEL.length);
   });
 
