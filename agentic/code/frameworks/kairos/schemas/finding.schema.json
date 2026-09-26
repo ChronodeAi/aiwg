@@ -1,0 +1,338 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aiwg.io/schemas/kairos/v1/finding.schema.json",
+  "title": "Kairos finding",
+  "description": "A conformance failure, friction point, bug or doc drift observed on a live Kairos node. A finding is fileable only when it carries the exact command, its output, a doc citation (file:line) and expected versus observed. fingerprint is the dedupe key: sha256 hex of the UTF-8 string 'kairos_finding/v1|' + (claim_id or '-') + '|' + surface + '|' + doc_citation.file + ':' + doc_citation.line_start + '|' + discriminator. The discriminator is the sorted assertion_signatures joined with ';' when present (each '<step_name>:<assertion_op>:<json_path_or_header>'), otherwise expected with whitespace runs collapsed to one space and trimmed. Volatile observed values (ids, timestamps, weights) never enter the fingerprint, so one defect dedupes across runs and nodes. scripts/kairos-records.mjs fingerprint computes it; probe findings use finding_id 'KF-' + claim_id + '-' + fingerprint[:12].",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "finding_id",
+    "kind",
+    "title",
+    "severity",
+    "surface",
+    "command",
+    "output",
+    "doc_citation",
+    "expected",
+    "observed",
+    "node",
+    "recorded_at",
+    "fingerprint",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kairos_finding/v1"
+    },
+    "finding_id": {
+      "type": "string",
+      "pattern": "^KF-[A-Z0-9][A-Za-z0-9._-]{0,95}$"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "conformance",
+        "friction",
+        "bug",
+        "doc_drift"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 200
+    },
+    "severity": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "claim_id": {
+      "type": "string",
+      "pattern": "^KC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "known_gap": {
+      "type": "string",
+      "pattern": "^C[0-9]+$",
+      "description": "Operator-tracked gap id (for example C1) when the finding reproduces an already-known gap."
+    },
+    "probe_status": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "skip",
+        "error"
+      ]
+    },
+    "surface": {
+      "type": "string",
+      "enum": [
+        "rest",
+        "mcp",
+        "agent_tools",
+        "cli",
+        "docs",
+        "installer",
+        "ui"
+      ]
+    },
+    "assertion_signatures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[^:;]+:[^:;]+:[^;]+$"
+      },
+      "uniqueItems": true,
+      "description": "Failed assertion signatures from a probe run; the fingerprint discriminator when present."
+    },
+    "command": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The exact command or request that reproduces the observation, with the bearer token replaced by $KAIROS_API_TOKEN."
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "excerpt",
+        "sha256"
+      ],
+      "properties": {
+        "excerpt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8000
+        },
+        "sha256": {
+          "$ref": "#/definitions/sha256"
+        },
+        "path": {
+          "type": "string"
+        },
+        "http_status": {
+          "type": "integer"
+        }
+      }
+    },
+    "doc_citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "line_start"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ref": {
+          "type": "string",
+          "description": "Tag or commit the line numbers refer to, for example v2.1.1."
+        },
+        "quote": {
+          "type": "string"
+        }
+      }
+    },
+    "expected": {
+      "type": "string",
+      "minLength": 1
+    },
+    "observed": {
+      "type": "string",
+      "minLength": 1
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "version"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string",
+          "enum": [
+            "dev",
+            "pg",
+            "memory",
+            "unknown"
+          ]
+        },
+        "meta_sha256": {
+          "$ref": "#/definitions/sha256"
+        }
+      }
+    },
+    "recorded_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "sha256"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "$ref": "#/definitions/sha256"
+          }
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/definitions/sha256"
+        }
+      }
+    },
+    "body": {
+      "type": "string",
+      "description": "Optional Markdown issue body prepared by the prober; kairos-feedback renders its own body when absent."
+    },
+    "fingerprint": {
+      "$ref": "#/definitions/sha256"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "open",
+        "filed",
+        "duplicate",
+        "wont_file"
+      ],
+      "description": "Triage lifecycle. open: not yet triaged. filed: an issue exists (issue required). duplicate: an existing issue already covers it (issue required). wont_file: triaged out (triage_note required)."
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repo",
+        "number",
+        "url"
+      ],
+      "properties": {
+        "repo": {
+          "const": "ChronodeAi/kairos"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://github\\.com/ChronodeAi/kairos/issues/[0-9]+$"
+        },
+        "filed_via": {
+          "type": "string",
+          "enum": [
+            "mcp",
+            "http_api",
+            "gh_cli",
+            "existing"
+          ]
+        },
+        "filed_at": {
+          "type": "string"
+        }
+      }
+    },
+    "triage_note": {
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "filed",
+              "duplicate"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "issue"
+        ],
+        "properties": {
+          "issue": true
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "wont_file"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "triage_note"
+        ],
+        "properties": {
+          "triage_note": true
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}

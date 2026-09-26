@@ -564,6 +564,86 @@
       "consumers": []
     },
     {
+      "logicalName": "agentic.code.frameworks.kairos.schemas.connection.record",
+      "id": "https://aiwg.io/schemas/kairos/v1/connection-record.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "http://json-schema.org/draft-07/schema#",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "bundle-kairos"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "agentic/code/frameworks/kairos/schemas/connection-record.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "agentic.code.frameworks.kairos.schemas.edge.proposal",
+      "id": "https://aiwg.io/schemas/kairos/v1/edge-proposal.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "http://json-schema.org/draft-07/schema#",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "bundle-kairos"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "agentic/code/frameworks/kairos/schemas/edge-proposal.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "agentic.code.frameworks.kairos.schemas.finding",
+      "id": "https://aiwg.io/schemas/kairos/v1/finding.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "http://json-schema.org/draft-07/schema#",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "bundle-kairos"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "agentic/code/frameworks/kairos/schemas/finding.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "agentic.code.frameworks.kairos.schemas.review.packet",
+      "id": "https://aiwg.io/schemas/kairos/v1/review-packet.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "http://json-schema.org/draft-07/schema#",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "bundle-kairos"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "agentic/code/frameworks/kairos/schemas/review-packet.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.marketplace.aiwg.marketplace.catalog.v1",
       "id": "https://aiwg.io/schemas/marketplace/aiwg-marketplace-catalog.v1.schema.json",
       "version": "1.0.0",

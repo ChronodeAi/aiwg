@@ -1,0 +1,31 @@
+{
+  "schema": "kairos_finding/v1",
+  "finding_id": "KF-C1-resolve-trace-empty",
+  "kind": "conformance",
+  "title": "POST /api/v1/resolve returns an empty trace although the field is documented as the resolution trace log",
+  "severity": "medium",
+  "known_gap": "C1",
+  "surface": "rest",
+  "command": "curl -fsS -X POST \"$KAIROS_URL/api/v1/resolve\" -H 'Content-Type: application/json' -H \"Authorization: Bearer $KAIROS_API_TOKEN\" -d '{\"source_id\":\"<source-id>\",\"context\":{\"roles\":[\"edge-evm-paper\"]}}'",
+  "output": {
+    "excerpt": "{\"results\":[{\"vector_id\":\"...\",\"weight\":0.7,\"vector_type\":\"causal\"}],\"trace\":[]}",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "http_status": 200
+  },
+  "doc_citation": {
+    "file": "src/server/models/resolution.py",
+    "line_start": 227,
+    "ref": "v2.1.1",
+    "quote": "Resolution trace log"
+  },
+  "expected": "trace lists the admission decisions that produced the ranked results",
+  "observed": "trace is an empty list while one result is admitted",
+  "node": {
+    "url": "http://127.0.0.1:4110",
+    "version": "2.1.1",
+    "profile": "pg"
+  },
+  "recorded_at": "2026-09-26T12:30:00Z",
+  "fingerprint": "28aedc8e760fe3a8d87317844102cf3fde8e0c9b5c110220867aae27b15f8236",
+  "status": "open"
+}

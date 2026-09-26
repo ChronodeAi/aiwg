@@ -1,0 +1,48 @@
+{
+  "schema": "kairos_edge_proposal/v1",
+  "recorded_at": "2026-09-20T09:00:00Z",
+  "edge_id": "edge-evm.gas-spike.causes.fill-slippage",
+  "proposer": {
+    "id": "kairos-domain-modeler",
+    "family": "llm:anthropic",
+    "kind": "llm",
+    "model": "reported-by-runtime",
+    "method_ref": {
+      "ref": ".aiwg/kairos/proposals/prompts/model-execution-costs.md",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "source": {
+    "name": "GasSpike",
+    "namespace": "edge_evm.market",
+    "kind": "data"
+  },
+  "target": {
+    "name": "FillSlippage",
+    "namespace": "edge_evm.execution",
+    "kind": "data"
+  },
+  "vector_type": "causal",
+  "sign": "positive",
+  "parameters": {
+    "roles": [
+      "edge-evm-paper"
+    ]
+  },
+  "lag": "PT2M",
+  "mechanism": "Base-fee spikes delay follower inclusion, so fills land after the leader's price impact.",
+  "falsifier": "Randomized paper orders sent during spikes show no higher slippage than orders sent outside spikes.",
+  "confidence_text": "moderate; mechanism is standard, magnitude unknown",
+  "new_node_type": false,
+  "touches_live_money": false,
+  "policy_touching": false,
+  "signing_or_capital_policy": false,
+  "sources": [
+    {
+      "ref": "datasets/edge_evm/gas-2026-08-11.parquet",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "as_of": "2026-08-11T23:59:59Z"
+    }
+  ],
+  "status": "candidate"
+}

@@ -1,0 +1,36 @@
+{
+  "id": "kairos-templates",
+  "version": "2026.9.0",
+  "templates": [
+    {
+      "id": "kairos-connection-record",
+      "path": "templates/connect/kairos-connection-record.md",
+      "phase": "connect"
+    },
+    {
+      "id": "kairos-pilot-plan",
+      "path": "templates/connect/kairos-pilot-plan.md",
+      "phase": "connect"
+    },
+    {
+      "id": "kairos-review-packet",
+      "path": "templates/validate/kairos-review-packet.md",
+      "phase": "validate"
+    },
+    {
+      "id": "kairos-pilot-report",
+      "path": "templates/operate/kairos-pilot-report.md",
+      "phase": "operate"
+    },
+    {
+      "id": "kairos-conformance-finding",
+      "path": "templates/feedback/kairos-conformance-finding.md",
+      "phase": "feedback"
+    },
+    {
+      "id": "kairos-feedback-issue",
+      "path": "templates/feedback/kairos-feedback-issue.md",
+      "phase": "feedback"
+    }
+  ]
+}

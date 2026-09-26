@@ -1,0 +1,71 @@
+{
+  "id": "kairos",
+  "type": "framework",
+  "name": "Kairos",
+  "version": "2026.9.0",
+  "description": "Put a live Kairos node to work on a real project: model the domain as a context-resolved causal graph, admit edges on evidence, operate on it, and feed conformance findings back to Kairos.",
+  "manifestVersion": "1",
+  "platforms": {
+    "codex": "full",
+    "claude": "full",
+    "generic": "partial"
+  },
+  "keywords": [
+    "kairos",
+    "causal-graph",
+    "context-resolution",
+    "evidence-admission",
+    "conformance",
+    "dogfood",
+    "review-packet",
+    "paper-trading"
+  ],
+  "deployment": {
+    "pathTemplate": ".{platform}/skills/{id}.md"
+  },
+  "frameworkConfig": {},
+  "memory": {
+    "creates": [
+      {
+        "path": ".aiwg/kairos/",
+        "description": "Kairos pilot workspace root"
+      },
+      {
+        "path": ".aiwg/kairos/connection/",
+        "description": "Connection record: node URL, /meta snapshot, readiness, version, auth mode and agent auth path (no secrets)"
+      },
+      {
+        "path": ".aiwg/kairos/proposals/",
+        "description": "Candidate edge proposals with proposer, source sha256 and recorded_at; never admitted edges"
+      },
+      {
+        "path": ".aiwg/kairos/evidence/",
+        "description": "Point-in-time evidence bundles and client-side gate results per candidate edge"
+      },
+      {
+        "path": ".aiwg/kairos/packets/",
+        "description": "Review packets (JSON per review-packet.schema.json plus Markdown render) and recorded decisions"
+      },
+      {
+        "path": ".aiwg/kairos/decisions/",
+        "description": "Operational decision receipts: resolve, intervene and counterfactual responses with request hashes"
+      },
+      {
+        "path": ".aiwg/kairos/observations/",
+        "description": "Observation intents and receipts keyed by durable idempotency keys"
+      },
+      {
+        "path": ".aiwg/kairos/conformance/",
+        "description": "Conformance claims and probe runs against the configured node"
+      },
+      {
+        "path": ".aiwg/kairos/findings/",
+        "description": "Conformance findings, friction and bugs with command, output, doc citation and expected vs observed"
+      },
+      {
+        "path": ".aiwg/kairos/reports/",
+        "description": "Pilot plans, gate records and pilot reports"
+      }
+    ]
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "name": "kairos-skills",
+  "description": "Skills for running a project on a live Kairos node and feeding conformance evidence back to Kairos",
+  "version": "2026.9.0",
+  "type": "skills-catalog",
+  "skills": [
+    {
+      "name": "kairos-quickref",
+      "description": "Kernel orientation: lifecycle, gates, human boundary and discover phrases",
+      "triggers": ["kairos", "kairos pilot", "kairos causal graph"],
+      "phase": "all",
+      "kernel": true
+    },
+    {
+      "name": "kairos-connect",
+      "description": "Declare the project's node and record /meta, readiness, version, auth mode and the agent auth path",
+      "triggers": ["connect to a kairos node", "kairos connection record"],
+      "phase": "connect"
+    },
+    {
+      "name": "kairos-conformance-probe",
+      "description": "Run documented-claim probes against the configured node and emit receipts and findings",
+      "triggers": ["kairos conformance probe", "prove kairos works as documented"],
+      "phase": "connect",
+      "owner": "conformance probe suite (skills/kairos-conformance-probe/)"
+    },
+    {
+      "name": "kairos-propose-graph",
+      "description": "Propose a context-resolved causal graph as hashed proposals, never admitted edges",
+      "triggers": ["propose a kairos causal graph", "kairos domain model"],
+      "phase": "model"
+    },
+    {
+      "name": "kairos-validate-evidence",
+      "description": "Run the client-side evidence admission gates and decide auto-promote, hold or escalate",
+      "triggers": ["validate kairos edge evidence", "kairos evidence gates"],
+      "phase": "validate"
+    },
+    {
+      "name": "kairos-review-packet",
+      "description": "Render review packets for escalated edges and record human decisions as calibration labels",
+      "triggers": ["kairos review packet", "record a kairos edge decision"],
+      "phase": "validate"
+    },
+    {
+      "name": "kairos-operate",
+      "description": "Write promoted edges and decide through Kairos with idempotency keys and receipts",
+      "triggers": ["operate on kairos with receipts", "kairos observe with idempotency key"],
+      "phase": "operate"
+    },
+    {
+      "name": "kairos-feedback",
+      "description": "File deduplicated, evidence-complete findings on ChronodeAi/kairos",
+      "triggers": ["file kairos feedback issue", "kairos bug report"],
+      "phase": "feedback"
+    },
+    {
+      "name": "kairos-status",
+      "description": "Summarize node, gates, pending packets, findings and review minutes",
+      "triggers": ["kairos pilot status", "kairos gate status"],
+      "phase": "all"
+    }
+  ]
+}

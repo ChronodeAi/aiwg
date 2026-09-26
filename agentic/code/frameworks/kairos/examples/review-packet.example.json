@@ -1,0 +1,246 @@
+{
+  "schema": "kairos_review_packet/v1",
+  "recorded_at": "2026-09-26T12:00:05Z",
+  "packet_id": "KP-20260926-gas-spike-causes-fill-slippage",
+  "gate": "EA",
+  "status": "ESCALATED",
+  "escalation_reasons": [
+    "gate_disagreement"
+  ],
+  "subject": {
+    "edge_id": "edge-evm.gas-spike.causes.fill-slippage",
+    "source": {
+      "name": "GasSpike",
+      "namespace": "edge_evm.market",
+      "kind": "data",
+      "xtype_id": null
+    },
+    "target": {
+      "name": "FillSlippage",
+      "namespace": "edge_evm.execution",
+      "kind": "data",
+      "xtype_id": null
+    },
+    "vector_type": "causal",
+    "sign": "positive",
+    "parameters": {
+      "roles": [
+        "edge-evm-paper"
+      ]
+    },
+    "gates_action": true,
+    "touches_live_money": false,
+    "current_status": "candidate",
+    "proposed_status": "active",
+    "kairos_vector_id": null
+  },
+  "proposers": [
+    {
+      "id": "modeler-claude",
+      "family": "llm:anthropic",
+      "kind": "llm",
+      "sign": "positive",
+      "proposal_ref": ".aiwg/kairos/proposals/edge-evm.gas-spike.causes.fill-slippage.json",
+      "proposal_sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    {
+      "id": "granger-hac",
+      "family": "statistical:granger",
+      "kind": "statistical",
+      "sign": "positive",
+      "proposal_ref": ".aiwg/kairos/proposals/edge-evm.gas-spike.causes.fill-slippage.granger.json",
+      "proposal_sha256": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    {
+      "id": "modeler-gpt",
+      "family": "llm:openai",
+      "kind": "llm",
+      "sign": "unknown",
+      "proposal_ref": ".aiwg/kairos/proposals/edge-evm.gas-spike.causes.fill-slippage.gpt.json",
+      "proposal_sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
+  ],
+  "sources": [
+    {
+      "ref": "datasets/edge_evm/gas-2026-08-11.parquet",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "as_of": "2026-08-11T23:59:59Z"
+    }
+  ],
+  "data_snapshot": {
+    "as_of": "2026-08-11T23:59:59Z",
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "ref": "datasets/edge_evm/fills-2026-08-11.parquet"
+  },
+  "gates": [
+    {
+      "id": "EA-G1",
+      "name": "baseline_margin",
+      "status": "pass",
+      "pass": true,
+      "value": {
+        "metric": "mae_bps",
+        "margin": 1.700000000000001
+      },
+      "threshold": {
+        "min_margin": 0,
+        "strict": true
+      },
+      "detail": "model 11.2 vs naive baseline 12.9 (lower is better)",
+      "enforced_by": "client"
+    },
+    {
+      "id": "EA-G2",
+      "name": "proposer_agreement",
+      "status": "pass",
+      "pass": true,
+      "value": {
+        "consulted": 3,
+        "agreeing": 2,
+        "families": [
+          "llm:anthropic",
+          "statistical:granger"
+        ]
+      },
+      "threshold": {
+        "min_families_consulted": 3,
+        "min_families_agreeing": 2
+      },
+      "detail": "2 of 3 families propose the edge with sign positive",
+      "enforced_by": "client"
+    },
+    {
+      "id": "EA-G3",
+      "name": "fdr_statistic",
+      "status": "pass",
+      "pass": true,
+      "value": {
+        "name": "hac_regression",
+        "p_value": 0.011
+      },
+      "threshold": {
+        "method": "benjamini-hochberg",
+        "q": 0.05,
+        "bh_threshold": 0.011,
+        "m": 3
+      },
+      "detail": "p 0.011 within the Benjamini-Hochberg cut over 3 hypotheses",
+      "enforced_by": "client"
+    },
+    {
+      "id": "EA-G4",
+      "name": "block_stability",
+      "status": "pass",
+      "pass": true,
+      "value": {
+        "same_sign_fraction": 1,
+        "flipped_regimes": []
+      },
+      "threshold": {
+        "min_blocks": 4,
+        "min_same_sign_fraction": 0.8,
+        "forbid_regime_majority_flip": true
+      },
+      "detail": "4 of 4 blocks share sign positive",
+      "enforced_by": "client"
+    },
+    {
+      "id": "EA-G5",
+      "name": "walk_forward",
+      "status": "pass",
+      "pass": true,
+      "value": {
+        "windows": 3,
+        "win_fraction": 1,
+        "mean_margin": 1.6333333333333335
+      },
+      "threshold": {
+        "min_windows": 3,
+        "min_win_fraction": 0.67,
+        "require_positive_mean_margin": true,
+        "require_disjoint_from_proposal_sources": true
+      },
+      "detail": "out-of-sample win fraction 1.00 across 3 point-in-time windows",
+      "enforced_by": "client"
+    },
+    {
+      "id": "EA-G6",
+      "name": "interventional",
+      "status": "fail",
+      "pass": false,
+      "value": {
+        "design": "randomized_paper_action",
+        "effect": -0.2,
+        "p_value": 0.41
+      },
+      "threshold": {
+        "alpha": 0.05,
+        "min_units_per_arm": 20
+      },
+      "detail": "p 0.41 above alpha 0.05; interventional effect sign negative contradicts proposed sign positive",
+      "enforced_by": "client"
+    },
+    {
+      "id": "EA-G7",
+      "name": "hysteresis",
+      "status": "fail",
+      "pass": false,
+      "value": {
+        "consecutive_passes": 0
+      },
+      "threshold": {
+        "k_consecutive": 3
+      },
+      "detail": "0 consecutive evaluation(s) with every other required gate passing; 3 required",
+      "enforced_by": "client"
+    }
+  ],
+  "diff": {
+    "before": {
+      "status": "candidate",
+      "kairos_vector": null
+    },
+    "after": {
+      "status": "active",
+      "kairos_vector": {
+        "vector_type": "causal",
+        "name": "gas_spike_causes_fill_slippage",
+        "parameters": {
+          "roles": [
+            "edge-evm-paper"
+          ]
+        },
+        "weight": 0.7
+      }
+    }
+  },
+  "impact": {
+    "summary": "Paper sizing would widen slippage buffers on gas spikes; randomized paper actions do not confirm the effect.",
+    "affected_decisions": [
+      "paper-order-sizing"
+    ],
+    "paper_only": true
+  },
+  "recommendation": "NO-GO",
+  "recommendation_basis": "Observational gates pass but randomized paper actions show no effect; keep as candidate and collect more interventional data.",
+  "human_go_signoff": false,
+  "decision": {
+    "outcome": "reject",
+    "reason_code": "INTERVENTION_CONTRADICTS",
+    "reviewer": "operator",
+    "signed_at": "2026-09-26T12:20:00Z",
+    "review_minutes": 4,
+    "note": "Synthetic example decision.",
+    "calibration_label": true
+  },
+  "contract": "agentic/code/frameworks/kairos/config/gate-policy.json",
+  "contract_sha256": "8b0c7d9e2b3790df4e2f27876db77c6569eaba417dd5e445dd7cf3bca371ddcd",
+  "kairos": {
+    "node_url": "http://127.0.0.1:4110",
+    "version": "2.1.1",
+    "meta_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "store_revision": {
+      "absent": "not_in_resolve_response"
+    }
+  }
+}

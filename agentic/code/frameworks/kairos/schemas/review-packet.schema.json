@@ -1,0 +1,551 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aiwg.io/schemas/kairos/v1/review-packet.schema.json",
+  "title": "Kairos review packet",
+  "description": "One escalated or audited edge decision. Field names shared with the AIWG gate record (schema, recorded_at, gate, status, recommendation, human_go_signoff, contract, contract_sha256) keep the same meaning. recommendation uses the gate-record vocabulary (GO, NO-GO, DEFER); decision.outcome maps GO to approve, NO-GO to reject and DEFER to defer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "recorded_at",
+    "packet_id",
+    "gate",
+    "status",
+    "subject",
+    "proposers",
+    "sources",
+    "data_snapshot",
+    "gates",
+    "diff",
+    "impact",
+    "recommendation",
+    "human_go_signoff",
+    "contract",
+    "contract_sha256",
+    "kairos"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kairos_review_packet/v1"
+    },
+    "recorded_at": {
+      "$ref": "#/definitions/utcTimestamp"
+    },
+    "packet_id": {
+      "type": "string",
+      "pattern": "^KP-[0-9]{8}-[a-z0-9-]{1,64}$",
+      "description": "KP-<YYYYMMDD>-<edge slug>; stable for the edge and evaluation window."
+    },
+    "gate": {
+      "type": "string",
+      "enum": [
+        "CG",
+        "MB",
+        "EA",
+        "OP"
+      ],
+      "description": "Framework gate the packet belongs to: Connected, Model Baseline, Evidence Admission, Operational."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "FAIL",
+        "ESCALATED"
+      ],
+      "description": "PASS: every required client-side gate passed. FAIL: at least one failed and nothing escalates. ESCALATED: an escalation trigger requires a human decision."
+    },
+    "escalation_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "live_money_or_policy",
+          "gate_disagreement",
+          "sign_flip_on_active_edge",
+          "new_node_type",
+          "signing_or_capital_policy"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "edge_id",
+        "source",
+        "target",
+        "vector_type",
+        "proposed_status"
+      ],
+      "properties": {
+        "edge_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "source": {
+          "$ref": "#/definitions/nodeRef"
+        },
+        "target": {
+          "$ref": "#/definitions/nodeRef"
+        },
+        "vector_type": {
+          "type": "string",
+          "enum": [
+            "structural",
+            "contextual",
+            "causal",
+            "adaptive",
+            "behavioral"
+          ]
+        },
+        "sign": {
+          "type": "string",
+          "enum": [
+            "positive",
+            "negative",
+            "unknown"
+          ]
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Context-gating parameters proposed for the Kairos vector (exact or any-of match)."
+        },
+        "gates_action": {
+          "type": "boolean",
+          "description": "True when the edge will be used by operate-phase decisions."
+        },
+        "touches_live_money": {
+          "type": "boolean"
+        },
+        "current_status": {
+          "type": "string",
+          "enum": [
+            "none",
+            "candidate",
+            "active",
+            "retired"
+          ]
+        },
+        "proposed_status": {
+          "type": "string",
+          "enum": [
+            "candidate",
+            "active",
+            "retired"
+          ]
+        },
+        "kairos_vector_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "proposers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "family",
+          "kind",
+          "proposal_ref",
+          "proposal_sha256"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "family": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Independence class, for example llm:anthropic, llm:openai, statistical:granger, domain-rule."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "llm",
+              "statistical",
+              "domain_rule",
+              "human"
+            ]
+          },
+          "sign": {
+            "type": "string",
+            "enum": [
+              "positive",
+              "negative",
+              "unknown"
+            ]
+          },
+          "proposal_ref": {
+            "type": "string",
+            "minLength": 1
+          },
+          "proposal_sha256": {
+            "$ref": "#/definitions/sha256"
+          }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/sourceRef"
+      }
+    },
+    "data_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "as_of",
+        "sha256"
+      ],
+      "properties": {
+        "as_of": {
+          "$ref": "#/definitions/utcTimestamp"
+        },
+        "sha256": {
+          "$ref": "#/definitions/sha256"
+        },
+        "ref": {
+          "type": "string"
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "pass",
+          "value",
+          "threshold",
+          "detail"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^EA-G[0-9]+$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "not_available",
+              "insufficient"
+            ]
+          },
+          "pass": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "null only when status is not_available."
+          },
+          "value": {},
+          "threshold": {},
+          "detail": {
+            "type": "string"
+          },
+          "enforced_by": {
+            "type": "string",
+            "enum": [
+              "client",
+              "kairos"
+            ],
+            "description": "client: this framework computed the gate. kairos: the node enforced it."
+          }
+        }
+      }
+    },
+    "diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before",
+        "after"
+      ],
+      "properties": {
+        "before": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "after": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "impact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "affected_decisions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "paper_only": {
+          "type": "boolean"
+        }
+      }
+    },
+    "recommendation": {
+      "type": "string",
+      "enum": [
+        "GO",
+        "NO-GO",
+        "DEFER"
+      ]
+    },
+    "recommendation_basis": {
+      "type": "string"
+    },
+    "human_go_signoff": {
+      "type": "boolean",
+      "description": "True only after decision.outcome is approve by a named human reviewer."
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "reason_code",
+        "reviewer",
+        "signed_at"
+      ],
+      "properties": {
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject",
+            "defer"
+          ]
+        },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signed_at": {
+          "$ref": "#/definitions/utcTimestamp"
+        },
+        "review_minutes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "note": {
+          "type": "string"
+        },
+        "calibration_label": {
+          "type": "boolean",
+          "description": "True when the decision is recorded as a calibration label for escalation tuning."
+        }
+      }
+    },
+    "contract": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Path of the gate policy or pilot contract the gates were evaluated against."
+    },
+    "contract_sha256": {
+      "$ref": "#/definitions/sha256"
+    },
+    "kairos": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node_url",
+        "version",
+        "store_revision"
+      ],
+      "properties": {
+        "node_url": {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "meta_sha256": {
+          "$ref": "#/definitions/sha256"
+        },
+        "store_revision": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "instance_id",
+                "recorded_seq"
+              ],
+              "properties": {
+                "instance_id": {
+                  "type": "string"
+                },
+                "recorded_seq": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "absent"
+              ],
+              "properties": {
+                "absent": {
+                  "type": "string",
+                  "description": "Why no revision is available, for example not_in_resolve_response or policy_scoped."
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "human_go_signoff": {
+            "const": true
+          }
+        },
+        "required": [
+          "human_go_signoff"
+        ]
+      },
+      "then": {
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "properties": {
+              "outcome": {
+                "const": "approve"
+              }
+            },
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "ESCALATED"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "escalation_reasons"
+        ],
+        "properties": {
+          "escalation_reasons": {
+            "minItems": 1,
+            "type": "array"
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$"
+    },
+    "nodeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "namespace"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "namespace": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string"
+        },
+        "xtype_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "sourceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ref",
+        "sha256"
+      ],
+      "properties": {
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/definitions/sha256"
+        },
+        "as_of": {
+          "$ref": "#/definitions/utcTimestamp"
+        }
+      }
+    }
+  }
+}

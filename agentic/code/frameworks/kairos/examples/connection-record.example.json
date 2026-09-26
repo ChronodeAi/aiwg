@@ -1,0 +1,68 @@
+{
+  "schema": "kairos_connection_record/v1",
+  "recorded_at": "2026-09-26T12:00:00Z",
+  "node": {
+    "url": "http://127.0.0.1:4110",
+    "configured_in": ".aiwg/kairos/connection/node.json",
+    "expected_profile": "pg",
+    "purpose": "dedicated dogfood node"
+  },
+  "meta": {
+    "http_status": 200,
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "snapshot_path": ".aiwg/kairos/connection/meta.json",
+    "schema_version": 1,
+    "version": "2.1.1",
+    "store_backend": "postgres",
+    "authorization_profile": "strict",
+    "namespace_policy": true,
+    "neural_fallback": "unavailable",
+    "federation_peers": 0
+  },
+  "health": {
+    "http_status": 200,
+    "status": "ok",
+    "version": "2.1.1"
+  },
+  "ready": {
+    "http_status": 200,
+    "ready": true,
+    "body_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "auth": {
+    "enabled": true,
+    "provider": "privy",
+    "admin_waiver": false,
+    "agent_path": "bearer_env",
+    "token_env": "KAIROS_API_TOKEN",
+    "token_source": "Privy access token from an operator browser login",
+    "token_lifetime_note": "about one hour; refresh by logging in again",
+    "verified": true,
+    "verification": "GET /api/v1/auth/me -> 200",
+    "admin": true
+  },
+  "mcp": {
+    "protocol_version": "2025-11-25",
+    "server_version": "2.1.1",
+    "tools": [
+      "kairos_federation_identity",
+      "kairos_federation_handshake",
+      "kairos_federation_capabilities",
+      "kairos_federation_resolve",
+      "kairos_federation_get_xtype",
+      "kairos_federation_get_vectors_from",
+      "kairos_federation_health",
+      "kairos_observe",
+      "kairos_resolve"
+    ],
+    "requires_bearer": true,
+    "browser_access": false
+  },
+  "gate_cg": {
+    "status": "FAIL",
+    "unmet": [
+      "conformance baseline not yet run"
+    ]
+  },
+  "secrets_recorded": false
+}

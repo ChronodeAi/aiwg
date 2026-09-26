@@ -1,0 +1,26 @@
+{
+  "version": "2.0.0",
+  "defaults": {
+    "tier": "economy"
+  },
+  "tiers": {
+    "economy": {
+      "description": "Status, packet rendering and issue triage.",
+      "roleMapping": {
+        "efficiency": "efficiency",
+        "coding": "coding",
+        "reasoning": "reasoning"
+      }
+    },
+    "standard": {
+      "description": "Domain modeling, evidence auditing and node operation.",
+      "roleMapping": {
+        "efficiency": "efficiency",
+        "coding": "coding",
+        "reasoning": "reasoning"
+      }
+    }
+  },
+  "providers": {},
+  "agentOverrides": {}
+}

@@ -1,0 +1,322 @@
+{
+  "schema": "kairos_evidence_bundle/v1",
+  "note": "Synthetic example: format only, not evidence about any market.",
+  "recorded_at": "2026-09-26T12:00:00Z",
+  "data_snapshot": {
+    "as_of": "2026-08-11T23:59:59Z",
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "ref": "datasets/edge_evm/fills-2026-08-11.parquet"
+  },
+  "fdr_family_size": 3,
+  "edges": [
+    {
+      "edge_id": "edge-evm.leader-signal.causes.follower-fill",
+      "proposal_ref": ".aiwg/kairos/proposals/edge-evm.leader-signal.causes.follower-fill.json",
+      "proposal_sources_sha256": [
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222222222222222222222222222"
+      ],
+      "sign": "positive",
+      "current_status": "candidate",
+      "gates_action": true,
+      "touches_live_money": false,
+      "policy_touching": false,
+      "new_node_type": false,
+      "signing_or_capital_policy": false,
+      "baseline_margin": {
+        "metric": "brier",
+        "higher_is_better": false,
+        "model": 0.212,
+        "baseline": 0.241
+      },
+      "proposers": [
+        {
+          "id": "modeler-claude",
+          "family": "llm:anthropic",
+          "kind": "llm",
+          "proposes": true,
+          "sign": "positive"
+        },
+        {
+          "id": "granger-hac",
+          "family": "statistical:granger",
+          "kind": "statistical",
+          "proposes": true,
+          "sign": "positive"
+        },
+        {
+          "id": "modeler-gpt",
+          "family": "llm:openai",
+          "kind": "llm",
+          "proposes": false,
+          "sign": "unknown"
+        }
+      ],
+      "statistic": {
+        "name": "block_permutation",
+        "data_provenance": "observational",
+        "p_value": 0.004,
+        "effect": 0.031
+      },
+      "blocks": [
+        {
+          "block_id": "B1",
+          "regime": "low-gas",
+          "effect": 0.03
+        },
+        {
+          "block_id": "B2",
+          "regime": "high-gas",
+          "effect": 0.02
+        },
+        {
+          "block_id": "B3",
+          "regime": "low-gas",
+          "effect": 0.04
+        },
+        {
+          "block_id": "B4",
+          "regime": "high-gas",
+          "effect": 0.01
+        },
+        {
+          "block_id": "B5",
+          "regime": "low-gas",
+          "effect": 0.03
+        }
+      ],
+      "walk_forward": {
+        "higher_is_better": false,
+        "windows": [
+          {
+            "train_end": "2026-06-30T23:59:59Z",
+            "test_start": "2026-07-01T00:00:00Z",
+            "test_end": "2026-07-14T23:59:59Z",
+            "snapshot_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "model": 0.21,
+            "baseline": 0.24
+          },
+          {
+            "train_end": "2026-07-14T23:59:59Z",
+            "test_start": "2026-07-15T00:00:00Z",
+            "test_end": "2026-07-28T23:59:59Z",
+            "snapshot_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "model": 0.22,
+            "baseline": 0.23
+          },
+          {
+            "train_end": "2026-07-28T23:59:59Z",
+            "test_start": "2026-07-29T00:00:00Z",
+            "test_end": "2026-08-11T23:59:59Z",
+            "snapshot_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "model": 0.2,
+            "baseline": 0.24
+          }
+        ]
+      },
+      "interventional": {
+        "available": true,
+        "design": "randomized_paper_action",
+        "n_treated": 40,
+        "n_control": 40,
+        "effect": 0.028,
+        "p_value": 0.03,
+        "assignment_seed_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+      },
+      "history": [
+        {
+          "evaluated_at": "2026-09-12T12:00:00Z",
+          "all_required_pass": true
+        },
+        {
+          "evaluated_at": "2026-09-19T12:00:00Z",
+          "all_required_pass": true
+        }
+      ]
+    },
+    {
+      "edge_id": "edge-evm.gas-spike.causes.fill-slippage",
+      "proposal_ref": ".aiwg/kairos/proposals/edge-evm.gas-spike.causes.fill-slippage.json",
+      "proposal_sources_sha256": [
+        "3333333333333333333333333333333333333333333333333333333333333333"
+      ],
+      "sign": "positive",
+      "current_status": "candidate",
+      "gates_action": true,
+      "baseline_margin": {
+        "metric": "mae_bps",
+        "higher_is_better": false,
+        "model": 11.2,
+        "baseline": 12.9
+      },
+      "proposers": [
+        {
+          "id": "modeler-claude",
+          "family": "llm:anthropic",
+          "kind": "llm",
+          "proposes": true,
+          "sign": "positive"
+        },
+        {
+          "id": "granger-hac",
+          "family": "statistical:granger",
+          "kind": "statistical",
+          "proposes": true,
+          "sign": "positive"
+        },
+        {
+          "id": "modeler-gpt",
+          "family": "llm:openai",
+          "kind": "llm",
+          "proposes": false,
+          "sign": "unknown"
+        }
+      ],
+      "statistic": {
+        "name": "hac_regression",
+        "data_provenance": "observational",
+        "p_value": 0.011,
+        "effect": 0.8
+      },
+      "blocks": [
+        {
+          "block_id": "B1",
+          "regime": "low-gas",
+          "effect": 0.7
+        },
+        {
+          "block_id": "B2",
+          "regime": "high-gas",
+          "effect": 0.9
+        },
+        {
+          "block_id": "B3",
+          "regime": "low-gas",
+          "effect": 0.6
+        },
+        {
+          "block_id": "B4",
+          "regime": "high-gas",
+          "effect": 0.8
+        }
+      ],
+      "walk_forward": {
+        "higher_is_better": false,
+        "windows": [
+          {
+            "train_end": "2026-06-30T23:59:59Z",
+            "test_start": "2026-07-01T00:00:00Z",
+            "test_end": "2026-07-14T23:59:59Z",
+            "snapshot_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "model": 11.0,
+            "baseline": 12.8
+          },
+          {
+            "train_end": "2026-07-14T23:59:59Z",
+            "test_start": "2026-07-15T00:00:00Z",
+            "test_end": "2026-07-28T23:59:59Z",
+            "snapshot_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "model": 11.5,
+            "baseline": 12.7
+          },
+          {
+            "train_end": "2026-07-28T23:59:59Z",
+            "test_start": "2026-07-29T00:00:00Z",
+            "test_end": "2026-08-11T23:59:59Z",
+            "snapshot_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "model": 11.1,
+            "baseline": 13.0
+          }
+        ]
+      },
+      "interventional": {
+        "available": true,
+        "design": "randomized_paper_action",
+        "n_treated": 30,
+        "n_control": 30,
+        "effect": -0.2,
+        "p_value": 0.41,
+        "assignment_seed_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+      },
+      "history": [
+        {
+          "evaluated_at": "2026-09-19T12:00:00Z",
+          "all_required_pass": true
+        }
+      ]
+    },
+    {
+      "edge_id": "edge-evm.funding-rate.causes.leader-exit",
+      "proposal_ref": ".aiwg/kairos/proposals/edge-evm.funding-rate.causes.leader-exit.json",
+      "proposal_sources_sha256": [
+        "4444444444444444444444444444444444444444444444444444444444444444"
+      ],
+      "sign": "negative",
+      "current_status": "none",
+      "gates_action": false,
+      "baseline_margin": {
+        "metric": "auc",
+        "higher_is_better": true,
+        "model": 0.55,
+        "baseline": 0.54
+      },
+      "proposers": [
+        {
+          "id": "modeler-claude",
+          "family": "llm:anthropic",
+          "kind": "llm",
+          "proposes": true,
+          "sign": "negative"
+        }
+      ],
+      "statistic": {
+        "name": "block_bootstrap",
+        "data_provenance": "observational",
+        "p_value": 0.2,
+        "effect": -0.01
+      },
+      "blocks": [
+        {
+          "block_id": "B1",
+          "regime": "low-gas",
+          "effect": -0.01
+        },
+        {
+          "block_id": "B2",
+          "regime": "high-gas",
+          "effect": 0.02
+        },
+        {
+          "block_id": "B3",
+          "regime": "low-gas",
+          "effect": -0.02
+        }
+      ],
+      "walk_forward": {
+        "higher_is_better": true,
+        "windows": [
+          {
+            "train_end": "2026-06-30T23:59:59Z",
+            "test_start": "2026-07-01T00:00:00Z",
+            "test_end": "2026-07-14T23:59:59Z",
+            "snapshot_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "model": 0.55,
+            "baseline": 0.54
+          },
+          {
+            "train_end": "2026-07-14T23:59:59Z",
+            "test_start": "2026-07-15T00:00:00Z",
+            "test_end": "2026-07-28T23:59:59Z",
+            "snapshot_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "model": 0.53,
+            "baseline": 0.54
+          }
+        ]
+      },
+      "interventional": {
+        "available": false
+      },
+      "history": []
+    }
+  ]
+}

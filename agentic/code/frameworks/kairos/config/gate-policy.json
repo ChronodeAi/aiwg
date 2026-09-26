@@ -1,0 +1,58 @@
+{
+  "schema": "kairos_gate_policy/v1",
+  "note": "Calibration starting points, not constants. ADR-0034 marks K_HYST and REFUTER_NULL_RATIO as PLACEHOLDER values to be re-set by a power calculation once intervention volume exists. Copy this file into the project, record its sha256 as contract_sha256, and change values only with a recorded reason.",
+  "baseline_margin": {
+    "min_margin": 0.0,
+    "strict": true
+  },
+  "proposer_agreement": {
+    "min_families_consulted": 3,
+    "min_families_agreeing": 2
+  },
+  "fdr": {
+    "method": "benjamini-hochberg",
+    "q": 0.05,
+    "allowed_statistics": {
+      "observational": [
+        "block_permutation",
+        "block_bootstrap",
+        "hac_regression",
+        "granger_hac",
+        "placebo_refutation"
+      ],
+      "interventional": [
+        "randomization_test",
+        "permutation",
+        "welch_t"
+      ],
+      "mixed": [
+        "block_permutation",
+        "randomization_test"
+      ]
+    }
+  },
+  "block_stability": {
+    "min_blocks": 4,
+    "min_same_sign_fraction": 0.8,
+    "forbid_regime_majority_flip": true
+  },
+  "walk_forward": {
+    "min_windows": 3,
+    "min_win_fraction": 0.67,
+    "require_positive_mean_margin": true,
+    "require_disjoint_from_proposal_sources": true
+  },
+  "interventional": {
+    "alpha": 0.05,
+    "min_units_per_arm": 20
+  },
+  "hysteresis": {
+    "k_consecutive": 3
+  },
+  "escalation": {
+    "gate_disagreement_pairs": [
+      ["EA-G3", "EA-G6"],
+      ["EA-G5", "EA-G6"]
+    ]
+  }
+}

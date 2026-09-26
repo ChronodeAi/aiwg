@@ -1,0 +1,241 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aiwg.io/schemas/kairos/v1/connection-record.schema.json",
+  "title": "Kairos connection record",
+  "description": "What kairos-connect observed about the one node this project configured. It records the capability contract, readiness, version, auth mode and the agent auth path. It never holds a token, key, password or Privy session.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "recorded_at",
+    "node",
+    "meta",
+    "health",
+    "ready",
+    "auth",
+    "mcp",
+    "secrets_recorded"
+  ],
+  "properties": {
+    "schema": {
+      "const": "kairos_connection_record/v1"
+    },
+    "recorded_at": {
+      "$ref": "#/definitions/utcTimestamp"
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "configured_in"],
+      "properties": {
+        "url": {
+          "type": "string",
+          "pattern": "^https?://[^/?#@]+$",
+          "description": "Origin only: no path, query, fragment or credentials."
+        },
+        "configured_in": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the project declared this node, for example .aiwg/kairos/connection/node.json."
+        },
+        "expected_profile": {
+          "type": "string",
+          "enum": ["dev", "pg"]
+        },
+        "purpose": {
+          "type": "string"
+        }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["http_status", "sha256", "snapshot_path"],
+      "properties": {
+        "http_status": {
+          "type": "integer"
+        },
+        "sha256": {
+          "$ref": "#/definitions/sha256"
+        },
+        "snapshot_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": "integer"
+        },
+        "version": {
+          "type": "string"
+        },
+        "store_backend": {
+          "type": "string",
+          "enum": ["memory", "sqlite", "postgres"]
+        },
+        "authorization_profile": {
+          "type": "string",
+          "enum": ["development", "strict"]
+        },
+        "namespace_policy": {
+          "type": "boolean"
+        },
+        "neural_fallback": {
+          "type": "string",
+          "enum": ["available", "unavailable", "unknown"]
+        },
+        "federation_peers": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["http_status", "version"],
+      "properties": {
+        "http_status": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "ready": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["http_status", "ready"],
+      "properties": {
+        "http_status": {
+          "type": "integer"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "body_sha256": {
+          "$ref": "#/definitions/sha256"
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "agent_path", "verified"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": ["string", "null"]
+        },
+        "admin_waiver": {
+          "type": "boolean"
+        },
+        "agent_path": {
+          "type": "string",
+          "enum": ["none", "bearer_env"],
+          "description": "none: auth off. bearer_env: the agent sends Authorization: Bearer $<token_env>."
+        },
+        "token_env": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "Name of the environment variable holding the bearer token, never its value."
+        },
+        "token_source": {
+          "type": "string",
+          "description": "How an operator obtains the token, for example 'Privy access token from a browser login'."
+        },
+        "token_lifetime_note": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean",
+          "description": "True when an authenticated read succeeded with the recorded path."
+        },
+        "verification": {
+          "type": "string",
+          "description": "The request used to verify the path and its HTTP status, for example 'GET /api/v1/auth/me -> 200'."
+        },
+        "admin": {
+          "type": ["boolean", "null"],
+          "description": "Whether the principal holds admin authority; null when not probed."
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "tools"],
+      "properties": {
+        "protocol_version": {
+          "type": "string"
+        },
+        "server_version": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requires_bearer": {
+          "type": "boolean"
+        },
+        "browser_access": {
+          "type": "boolean"
+        }
+      }
+    },
+    "conformance_baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_path", "receipt_sha256"],
+      "properties": {
+        "receipt_path": {
+          "type": "string"
+        },
+        "receipt_sha256": {
+          "$ref": "#/definitions/sha256"
+        },
+        "summary": {
+          "type": "object"
+        }
+      }
+    },
+    "gate_cg": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["PASS", "FAIL"]
+        },
+        "unmet": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "secrets_recorded": {
+      "const": false
+    }
+  },
+  "definitions": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|\\+00:00)$"
+    }
+  }
+}
