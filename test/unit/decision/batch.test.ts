@@ -9,6 +9,9 @@ import {
   artifactDigest,
   JevDecisionAdapter,
   validateDecisionDocument,
+  assertDecisionResultWriterVersion,
+  decisionResultForExport,
+  type DecisionTelemetrySpan,
   type DecisionBinding,
   type DecisionDefinition,
   type DecisionRuleset,
@@ -19,6 +22,7 @@ import {
   type DecisionEvaluationRequest,
   CanonicalJsonByteEstimator,
   MemoryBatchReceiptStore,
+  MemoryDecisionReceiptStore,
   MemoryBatchResultStore,
   FileBatchReceiptStore,
   FileBatchResultStore,
@@ -167,6 +171,62 @@ function malformedResponse(body: Record<string, unknown>, kind: 'missing' | 'ext
 }
 
 describe('native shared-state decision batching', () => {
+  it('owns non-durable request usage once in results, exports and telemetry', async () => {
+    const fetchImpl = vi.fn(async (_url, options) => new Response(
+      JSON.stringify(validPayload(JSON.parse(String(options?.body)))),
+      { status: 200, headers: { 'x-request-id': 'shared-request-1' } },
+    )) as typeof fetch;
+    const spans: DecisionTelemetrySpan[] = [];
+    const result = await evaluateDecisionRuleset({ ...request(fetchImpl),
+      telemetry: { hook: { emit: span => { spans.push(span); } } } });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result.spec.batchRequests).toHaveLength(1);
+    const owner = result.spec.batchRequests![0]!;
+    expect(owner).toMatchObject({ ordinal: 1, questionIds: expect.any(Array),
+      usage: { inputTokens: 9, outputTokens: 3, costUsd: null } });
+    expect(owner.questionIds).toHaveLength(3);
+    expect(owner.requestId).toBe('shared-request-1');
+    for (const evaluation of Object.values(result.spec.evaluations)) {
+      const attempt = evaluation.spec.attempts[0]!;
+      expect(attempt.batch?.groupId).toBe(owner.groupId);
+      expect(owner.questionIds).toContain(attempt.batch?.questionId);
+      expect(attempt.usage).toEqual({ inputTokens: null, outputTokens: null, costUsd: null });
+      expect(attempt.requestId).toBeNull();
+    }
+    expect(spans.reduce((sum, span) => sum + Number(span.attributes['gen_ai.usage.input_tokens'] ?? 0), 0)).toBe(9);
+    expect(spans.reduce((sum, span) => sum + Number(span.attributes['gen_ai.usage.output_tokens'] ?? 0), 0)).toBe(3);
+    const exported = decisionResultForExport(result);
+    expect(exported.spec.batchRequests![0]!.requestId).toBeNull();
+    expect(exported.spec.batchRequests![0]!.usage).toEqual(owner.usage);
+    expect(decisionResultForExport(result, { includeProviderRequestIds: true })).toEqual(result);
+    assertDecisionResultWriterVersion(result);
+    expect(() => assertDecisionResultWriterVersion({ ...result, apiVersion: 'decision.aiwg.io/v1alpha1' })).toThrow(/requires/);
+    expect(() => validateDecisionDocument({ ...result, apiVersion: 'decision.aiwg.io/v1alpha1' })).toThrow();
+  });
+
+  it('keeps receipt-only runs individual and replays their original accounting', async () => {
+    const fetchImpl = vi.fn(async (_url, options) => validResponse(JSON.parse(String(options?.body)))) as typeof fetch;
+    const configured = { ...request(fetchImpl), receiptStore: new MemoryDecisionReceiptStore(), receiptProjectId: 'project' };
+    const result = await evaluateDecisionRuleset(configured);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result.spec.batchRequests).toBeUndefined();
+    const inputTokens = Object.values(result.spec.evaluations).flatMap(value => value.spec.attempts)
+      .reduce((sum, attempt) => sum + (attempt.usage.inputTokens ?? 0), 0);
+    expect(inputTokens).toBe(27);
+    expect(await evaluateDecisionRuleset(configured)).toEqual(result);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('retains one unknown accounting owner when a native dispatch throws', async () => {
+    const configured = request(vi.fn() as unknown as typeof fetch);
+    vi.spyOn(configured.adapters.jev, 'evaluateMany').mockRejectedValue(new Error('transport failed'));
+    const result = await evaluateDecisionRuleset(configured);
+    expect(result.spec.batchRequests).toHaveLength(1);
+    expect(result.spec.batchRequests![0]!.usage).toEqual({ inputTokens: null, outputTokens: null, costUsd: null });
+    expect(Object.values(result.spec.evaluations).every(value => value.spec.attempts[0]!.usage.inputTokens === null)).toBe(true);
+    validateDecisionDocument(result);
+  });
+
   it('CTX-RUNTIME partitions provider calls and attaches estimate-versus-actual evidence', async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetchImpl = vi.fn(async (_url, options) => {
@@ -180,6 +240,10 @@ describe('native shared-state decision batching', () => {
     expect(result.spec.context?.plan.partitions.map(partition => partition.questionIds.length)).toEqual([2, 1]);
     expect(result.spec.context?.actualUsage).toHaveLength(2);
     expect(result.spec.context?.actualUsage.every(item => item.actualInputTokens === 9)).toBe(true);
+    const batchTokens = (result.spec.batchRequests ?? []).reduce((sum, owner) => sum + (owner.usage.inputTokens ?? 0), 0);
+    const answerTokens = Object.values(result.spec.evaluations).flatMap(value => value.spec.attempts)
+      .reduce((sum, attempt) => sum + (attempt.usage.inputTokens ?? 0), 0);
+    expect(batchTokens + answerTokens).toBe(18);
     expect(Object.values(result.spec.evaluations).every(item => item.spec.context?.plan.planDigest === result.spec.context?.plan.planDigest)).toBe(true);
     Object.values(result.spec.evaluations).forEach(validateDecisionDocument);
     // D06 context evidence from v1alpha1 inputs is written only as v1alpha2.
