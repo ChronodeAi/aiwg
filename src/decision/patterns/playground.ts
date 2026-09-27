@@ -24,6 +24,17 @@ const record = (value: unknown): Record<string, unknown> => value && typeof valu
 const pointerValue = (root: unknown, pointer: string): unknown => { const resolved = resolveJsonPointer(root, pointer); return resolved.found ? resolved.value : undefined; };
 const RESTRICTIVENESS: Record<PatternRoute, number> = { accept: 0, review: 1, deny: 2 };
 
+function preflightBatchSubject(spec: PatternSpec, input: Record<string, JsonValue>, gates: PatternGateEvidence[]): { subject?: string; rejected: boolean } {
+  if (!spec.gates.batchSubjectsFrom) return { rejected: false };
+  const subjects = spec.evaluations.map(evaluation => record(pointerValue(input, spec.gates.batchSubjectsFrom!))[evaluation.alias]);
+  if (!subjects.every(subject => typeof subject === 'string' && subject.length > 0 && subject === subjects[0])) {
+    gates.push({ gate: 'batch-subject', outcome: 'rejected-before-dispatch', reason: 'multi-subject-batch-rejected' });
+    return { rejected: true };
+  }
+  gates.push({ gate: 'batch-subject', outcome: 'pass' });
+  return { subject: subjects[0] as string, rejected: false };
+}
+
 export function listDecisionPatterns(): Array<Pick<DecisionPatternPack, 'id' | 'version' | 'status' | 'summary' | 'limitations'>> {
   return decisionPatternPacks.map(({ id, version, status, summary, limitations }) => ({ id, version, status, summary, limitations: [...limitations] }));
 }
@@ -96,17 +107,12 @@ export async function runOfflineDecisionPattern(id: DecisionPatternId, fixtureId
   const gates: PatternGateEvidence[] = [];
   const base = { pack, fixtureId: selected.id, subjectId: selected.subjectId, spec };
 
-  let batchSubject: string | undefined;
-  if (spec.gates.batchSubjectsFrom) {
-    const subjects = aliases.map(alias => record(pointerValue(input, spec.gates.batchSubjectsFrom!))[alias]);
-    if (!subjects.every(subject => typeof subject === 'string' && subject && subject === subjects[0])) {
-      // Unrelated subjects never share a request; the anti-example is rejected before any dispatch.
-      gates.push({ gate: 'batch-subject', outcome: 'rejected-before-dispatch', reason: 'multi-subject-batch-rejected' });
-      return offlineReceipt({ ...base, route: 'deny', reason: 'multi-subject-batch-rejected', gates, result: null, invocations: 0, transportCalls: 0, candidate: null, usage: unavailableUsage() });
-    }
-    batchSubject = subjects[0] as string;
-    gates.push({ gate: 'batch-subject', outcome: 'pass' });
+  const batchPreflight = preflightBatchSubject(spec, input, gates);
+  if (batchPreflight.rejected) {
+    // Unrelated or missing subjects never share a request and never reach admission or transport.
+    return offlineReceipt({ ...base, route: 'deny', reason: 'multi-subject-batch-rejected', gates, result: null, invocations: 0, transportCalls: 0, candidate: null, usage: unavailableUsage() });
   }
+  const batchSubject = batchPreflight.subject;
 
   const transport = new RecordedJevTransport(recordedEvidence, aliases);
   const artifacts = governedPatternArtifacts(id, pack.version);
@@ -314,6 +320,17 @@ export async function runLiveDecisionPattern(
   if (!transport.model || !transport.model.trim()) throw new Error('Live decision pattern requires an explicit requested model');
   const limits = tightenedLimits(plan.limits, options.limits);
   const spec = PATTERN_SPECS[id];
+  const gates: PatternGateEvidence[] = [];
+  const batchPreflight = preflightBatchSubject(spec, request.input, gates);
+  if (batchPreflight.rejected) {
+    return {
+      schema: 'decision-pattern-live-receipt/v2', pattern: { id, version: pack.version }, executionMode: 'live', evidenceOrigin: 'live-synthetic',
+      requestedModel: transport.model, actualModel: null, calls: 0, attempts: 0, limits, admission: [],
+      usage: { inputTokens: null, outputTokens: null, reservedTokens: 0, reservedCostUsd: 0, reportedCostUsd: null },
+      limitBreaches: [], deadlineMs: limits.deadlineMs, route: 'deny', reason: 'multi-subject-batch-rejected',
+      action: { status: 'unexecuted' }, result: null,
+    };
+  }
   const artifacts = governedPatternArtifacts(id, pack.version);
   const binding = structuredClone(artifacts.liveBindingTemplate);
   binding.spec.totalTimeoutMs = limits.deadlineMs;
@@ -362,7 +379,7 @@ export async function runLiveDecisionPattern(
     ...((usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) > limits.maxTokens ? ['tokens'] : []),
   ];
   const models = [...new Set(attempts.map(attempt => attempt.actualModel).filter((model): model is string => Boolean(model)))];
-  const gated = applyGates(spec, request.input, result, []);
+  const gated = applyGates(spec, request.input, result, gates);
   const identityMissing = attempts.some(attempt => attempt.status === 'success' && !attempt.actualModel);
   const route: PatternRoute = limitBreaches.length || identityMissing ? (gated.route === 'deny' ? 'deny' : 'review') : gated.route;
   const reason = limitBreaches.length && gated.route !== 'deny' ? 'live-usage-exceeded-limit' : identityMissing && gated.route !== 'deny' ? 'model-identity-missing' : gated.reason;
