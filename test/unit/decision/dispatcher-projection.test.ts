@@ -38,6 +38,14 @@ describe('decision-evaluate dispatcher projection boundary (#2678)', () => {
 
   const env = { AIWG_DECISION_ENABLED: '1', AIWG_TEST_DISPATCH_TOKEN: 'synthetic-dispatch-credential-canary' };
 
+  function batching() {
+    return {
+      enabled: true,
+      evaluations: Object.fromEntries(['category', 'severity', 'core_unavailable'].map(alias => [alias,
+        { decisionSubject: 'ticket:42', independent: true, egressPolicy: 'jev-public-v1', hostPolicy: 'dispatcher-host-v1' }])),
+    };
+  }
+
   it('DISPATCH-PROJ-01 refuses a network-capable adapter without projectionPolicyPath before any transport', async () => {
     const stdout = sink(); const stderr = sink();
     const code = await runDecisionEvaluate({ argv: ['--request', await request({})], env, runtime, stdout, stderr });
@@ -98,5 +106,52 @@ describe('decision-evaluate dispatcher projection boundary (#2678)', () => {
     const schema = JSON.parse(await import('node:fs/promises')
       .then(fs => fs.readFile('schemas/decision/DecisionProjectionPolicy.v1.schema.json', 'utf8')));
     expect(ajv.validate(schema, policy)).toBe(true);
+  });
+
+  it('DISPATCH-HOST-01 selects trusted native batching by name and shares one request', async () => {
+    const stdout = sink(); const stderr = sink();
+    const code = await runDecisionEvaluate({ argv: ['--request', await request({
+      projectionPolicyPath: join(examples, 'projection-policy-jev.json'), hostPolicies: { batching: 'native' },
+    })], env, runtime, stdout, stderr, hostPolicies: { batching: { native: batching() } } });
+    expect(stderr.chunks).toEqual([]);
+    expect(code).toBe(0);
+    const result = JSON.parse(stdout.chunks.join('')) as runtime.RulesetResult;
+    expect(result.spec.status).toBe('completed');
+    expect(observed.calls).toBe(1);
+    expect(Object.values(result.spec.evaluations).map(value => value.spec.attempts[0]?.batch?.mode))
+      .toEqual(['native', 'native', 'native']);
+  });
+
+  it('DISPATCH-HOST-02 rejects inline, misspelled or unknown host policy configuration before dispatch', async () => {
+    await expect(runDecisionEvaluate({ argv: ['--request', await request({ batching: batching() })],
+      env, runtime, stdout: sink(), stderr: sink() })).rejects.toThrow(/Unsupported inline decision runtime option 'batching'/);
+    await expect(runDecisionEvaluate({ argv: ['--request', await request({ hostPolicies: { batcing: 'native' } })],
+      env, runtime, stdout: sink(), stderr: sink() })).rejects.toThrow(/Unsupported decision host policy 'batcing'/);
+    await expect(runDecisionEvaluate({ argv: ['--request', await request({ hostPolicies: { batching: 'missing' } })],
+      env, runtime, stdout: sink(), stderr: sink(), hostPolicies: { batching: { native: batching() } } }))
+      .rejects.toThrow(/Unknown trusted decision host policy 'batching:missing'/);
+    await expect(runDecisionEvaluate({ argv: ['--request', await request({ hostPolicies: { batching: 'constructor' } })],
+      env, runtime, stdout: sink(), stderr: sink(), hostPolicies: { batching: { native: batching() } } }))
+      .rejects.toThrow(/Unknown trusted decision host policy 'batching:constructor'/);
+    const inherited = Object.create({ native: batching() }) as Record<string, runtime.DecisionEvaluationRequest['batching']>;
+    await expect(runDecisionEvaluate({ argv: ['--request', await request({ hostPolicies: { batching: 'native' } })],
+      env, runtime, stdout: sink(), stderr: sink(), hostPolicies: { batching: inherited } }))
+      .rejects.toThrow(/Unknown trusted decision host policy 'batching:native'/);
+    expect(observed.calls).toBe(0);
+  });
+
+  it('DISPATCH-HOST-03 rejects ambiguous CLI flags and host modules without registry exports', async () => {
+    const stderr = sink();
+    expect(await runDecisionEvaluate({ argv: ['--bogus'], env, runtime, stdout: sink(), stderr })).toBe(2);
+    expect(stderr.chunks.join('')).toContain("Unknown decision-evaluate option '--bogus'");
+    const duplicate = sink();
+    expect(await runDecisionEvaluate({ argv: ['--request', await request({}), '--request', await request({})],
+      env, runtime, stdout: sink(), stderr: duplicate })).toBe(2);
+    expect(duplicate.chunks.join('')).toContain("Duplicate decision-evaluate option '--request'");
+    const modulePath = join(directory, 'empty-host-policy.mjs');
+    await writeFile(modulePath, 'export const notPolicies = {};');
+    await expect(runDecisionEvaluate({ argv: ['--request', await request({ hostPolicies: { batching: 'native' } }),
+      '--host-policy-module', modulePath], env, runtime, stdout: sink(), stderr: sink() }))
+      .rejects.toThrow(/must export decisionHostPolicies or a default registry object/);
   });
 });

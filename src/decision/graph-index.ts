@@ -8,6 +8,8 @@ export { decisionRulesetFlowInvoker, decisionResultNodeStatus } from './graph-de
 export type { DecisionResultProjection } from './graph-decision-bridge.js';
 export { decisionEvaluateSkillFlowInvoker, resolveDecisionEvaluateSkill, runDecisionEvaluateSkill } from './graph-skill-bridge.js';
 export type { DecisionEvaluateSkill, DecisionSkillRequest, DecisionSkillRun } from './graph-skill-bridge.js';
+export { assertDecisionHostPolicyRefs, resolveDecisionHostPolicies } from './host-policy.js';
+export type { DecisionHostPolicyKey, DecisionHostPolicyRefs, DecisionHostPolicyRegistry } from './host-policy.js';
 export { GraphBudgetLedger } from './graph-budget.js';
 export { auditGraphEvidence, effectiveGraphCeilings } from './graph-evidence.js';
 export type { GraphObservation, GraphCeilings, GraphEvidenceReceipt } from './graph-evidence.js';

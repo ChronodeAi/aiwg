@@ -83,6 +83,13 @@ in the entry.
   partition as `{ verified, untrusted }`. The `decision-evaluate` dispatcher
   accepts `projectionPolicyPath` and `adapterOptions.jev`, and refuses
   network-capable adapters without a policy (#2678, #2597).
+- The packaged `decision-evaluate` dispatcher and Flow skill bridge now expose
+  trusted host-policy references for native batching, batch receipts, context,
+  scheduler, compile-cache, result-cache, and provider-prefix policy. Requests
+  name policies through `hostPolicies`; the actual callbacks, stores and cache
+  services come only from an injected host registry or trusted
+  `--host-policy-module`. Inline or misspelled advanced options are rejected,
+  and Jev compile caching remains disabled unless the host opts in (#2739).
 - Decision results that carry native-batch provenance (`attempts[].batch`,
   `batchResult`), admission, context, or provider-prefix evidence are now
   written as `decision.aiwg.io/v1alpha2`, including when the ruleset, binding,
