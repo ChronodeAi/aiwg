@@ -13,6 +13,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   through `aiwg/decision/graph`, including Flow bridges, budget admission,
   receipts, and graph templates. G5/G6 live qualification remains pending (#2740).
 
+### Fixed
+
+- The decision graph declaration bundle includes its transitive protected-file
+  types, so strict TypeScript consumers do not need `skipLibCheck` (#2740).
+
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed

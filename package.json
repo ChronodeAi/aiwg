@@ -188,6 +188,7 @@
     "!dist/**/*.map",
     "dist/src/api/index.d.ts",
     "dist/src/decision/**/*.d.ts",
+    "dist/src/storage/protected-files.d.ts",
     "dist/src/effects/**/*.d.ts",
     "dist/src/writing/contextual-diagnostics.d.ts",
     "dist/src/writing/writer-profile.d.ts",
