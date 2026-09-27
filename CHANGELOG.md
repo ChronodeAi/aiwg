@@ -15,6 +15,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Decision pattern packs require semantic subjects before inference, including
+  classification text, RAG passages and comparison text, citation claims and
+  source text, candidate evidence, and proposed tool calls. Synthetic fixtures
+  and projection checks keep content separate from code-owned authority (#2743).
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).

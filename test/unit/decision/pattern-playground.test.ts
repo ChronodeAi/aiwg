@@ -189,7 +189,7 @@ describe('PAT decision pattern playground', () => {
     [{ ...route('search', 0.95), permissions: ['*'] }, { authorizedCandidates: ['admin'] }],
     [route('search', 0.95), { authorizedCandidates: ['search'] }],
   ] as const)('PAT-AUTH-PROP routing evidence cannot add authority %#', async (recorded, input) => {
-    const receipt = await runOfflineDecisionPattern('intent-routing', 'route-authorized', { recordedEvidence: answers({ route: recorded as Record<string, JsonValue> }), input: input as Record<string, JsonValue> });
+    const receipt = await runOfflineDecisionPattern('intent-routing', 'route-authorized', { recordedEvidence: answers({ route: recorded as Record<string, JsonValue> }), input: { ...input, request: 'Find the Atlas setup guide.' } as Record<string, JsonValue> });
     expect(receipt.action.status).toBe('unexecuted');
     if (input.authorizedCandidates.includes('search') && recorded.choice === 'search' && !('installCapability' in recorded) && !('permissions' in recorded)) {
       expect(receipt).toMatchObject({ route: 'accept', action: { candidate: 'search' } });
@@ -306,9 +306,77 @@ describe('PAT decision pattern playground', () => {
     // The fake transport never leaves the process, so the host opts out of projection.
     const localProjection = { mode: 'unprojected-local' } as const;
 
+    const subjectFields = {
+      'intent-routing': ['request'], 'rag-screen': ['question', 'passage', 'comparisonSources'],
+      'citation-support': ['claim', 'sourceText'], guardrails: ['content'],
+      'tool-risk-preflight': ['proposedTool'], 'bounded-classification': ['text'],
+      'ordinal-scoring': ['report'], 'function-selection': ['request', 'proposedArguments'],
+      'same-subject-batch': ['summary'], 'durable-review': ['item'],
+      'candidate-selection': ['task', 'criteria', 'evidence'],
+    } as const;
+
+    it.each(available().map(pack => pack.id))('PAT-SUBJECT %s projects realistic content separately from authority', async id => {
+      const pack = getDecisionPatternPack(id);
+      const fixture = pack.fixtures.find(value => value.expected.route === 'accept') ?? pack.fixtures[0]!;
+      const aliases = pack.artifacts.definitions.map(uri => uri.split('.').at(-1)!);
+      const recorded = new RecordedJevTransport(fixture.recordedEvidence, aliases);
+      const bodies: Array<{ state: { untrusted: Record<string, JsonValue>; verified: Record<string, JsonValue> } }> = [];
+      const fields = subjectFields[id as keyof typeof subjectFields];
+      const receipt = await runLiveDecisionPattern(id, { synthetic: true, input: fixture.input }, options, {
+        model: 'jev:test', region: 'us', resolveCredential: credential,
+        estimate: () => ({ tokens: 100, costUsd: 0.001 }),
+        fetch: async (url, init) => { bodies.push(JSON.parse(String(init?.body))); return recorded.fetch(url, init); },
+        projection: { resolve: () => ({
+          version: '1.0.0', provider: 'jev', model: 'jev:test', origin: 'https://api.typesafe.ai', region: 'us',
+          purpose: 'synthetic-decision', allowIncompleteContext: false,
+          fields: fields.map(field => ({ pointer: `/${field}`, output: field, source: 'synthetic-fixture',
+            subject: fixture.subjectId, trust: 'untrusted', sensitivity: 'public', purpose: 'synthetic-decision',
+            retentionClass: 'ephemeral', accessScopes: ['decision-runtime'], exportPolicy: 'sanitized',
+            deletionPolicy: 'erase', backupPolicy: 'not-persisted', allowedProviders: ['jev'],
+            allowedModels: ['jev:test'], allowedOrigins: ['https://api.typesafe.ai'], allowedRegions: ['us'] })),
+        }) },
+      });
+      expect(receipt.calls).toBe(aliases.length);
+      expect(receipt.route).toBe(fixture.expected.route);
+      for (const body of bodies) {
+        expect(body.state.verified).toEqual({});
+        expect(Object.keys(body.state.untrusted).sort()).toEqual([...fields].sort());
+        const subject = id === 'same-subject-batch' ? fixture.input.record as Record<string, JsonValue> : fixture.input;
+        for (const field of fields) expect(body.state.untrusted[field]).toEqual(subject[field]);
+        for (const authority of ['authorizedCandidates', 'allowedOptions', 'deterministicPolicy', 'authorizedTools',
+          'sources', 'argumentSchemas', 'legalFunctions', 'extractedCandidates', 'reviewRequired']) {
+          expect(body.state.untrusted).not.toHaveProperty(authority);
+        }
+      }
+    });
+
+    it.each(available().map(pack => pack.id))('PAT-SUBJECT %s rejects missing content and unrelated config before inference', async id => {
+      const fixture = getDecisionPatternPack(id).fixtures[0]!;
+      const fields = subjectFields[id as keyof typeof subjectFields];
+      for (const field of fields) {
+        const input = structuredClone(fixture.input);
+        delete (id === 'same-subject-batch' ? input.record as Record<string, JsonValue> : input)[field];
+        const transport = fakeTransport();
+        const estimate = vi.fn(() => ({ tokens: 100, costUsd: 0.001 }));
+        const resolveCredential = vi.fn(credential);
+        const receipt = await runLiveDecisionPattern(id, { synthetic: true, input }, options,
+          { fetch: transport.fetch, resolveCredential, estimate, model: 'jev:test', projection: localProjection });
+        expect(receipt.calls).toBe(0);
+        expect(receipt.result?.spec.reason).toBe('invalid-input');
+        expect(transport.fetch).not.toHaveBeenCalled();
+        expect(resolveCredential).not.toHaveBeenCalled();
+        expect(estimate).not.toHaveBeenCalled();
+      }
+      const transport = fakeTransport();
+      const receipt = await runLiveDecisionPattern(id, { synthetic: true, input: { ...fixture.input, model: 'untrusted-override' } }, options,
+        { fetch: transport.fetch, resolveCredential: credential, estimate: () => ({ tokens: 100, costUsd: 0.001 }), model: 'jev:test', projection: localProjection });
+      expect(receipt.result?.spec.reason).toBe('invalid-input');
+      expect(transport.fetch).not.toHaveBeenCalled();
+    });
+
     it('PAT-LIVE-PROJECTION denies dispatch without a host projection boundary', async () => {
       const transport = fakeTransport();
-      const receipt = await runLiveDecisionPattern('intent-routing', { synthetic: true, input: { authorizedCandidates: ['search'] } }, options,
+      const receipt = await runLiveDecisionPattern('intent-routing', { synthetic: true, input: { authorizedCandidates: ['search'], request: 'Find the Atlas setup guide.' } }, options,
         { fetch: transport.fetch, resolveCredential: credential, estimate: () => ({ tokens: 100, costUsd: 0.001 }), model: 'jev:test' });
       expect(transport.fetch).not.toHaveBeenCalled();
       expect(receipt.calls).toBe(0);
@@ -318,7 +386,7 @@ describe('PAT decision pattern playground', () => {
 
     it('runs through the evaluator and retains the actual model identity', async () => {
       const transport = fakeTransport();
-      const receipt = await runLiveDecisionPattern('intent-routing', { synthetic: true, input: { authorizedCandidates: ['search'] } }, options,
+      const receipt = await runLiveDecisionPattern('intent-routing', { synthetic: true, input: { authorizedCandidates: ['search'], request: 'Find the Atlas setup guide.' } }, options,
         { fetch: transport.fetch, resolveCredential: credential, estimate: () => ({ tokens: 100, costUsd: 0.001 }), model: 'jev:test', projection: localProjection });
       expect(evaluateSpy).toHaveBeenCalledTimes(1);
       expect(receipt).toMatchObject({ schema: 'decision-pattern-live-receipt/v2', executionMode: 'live', evidenceOrigin: 'live-synthetic',
@@ -359,7 +427,7 @@ describe('PAT decision pattern playground', () => {
 
     it('never starts the call that would exceed a limit of N calls', async () => {
       const transport = fakeTransport();
-      const receipt = await runLiveDecisionPattern('rag-screen', { synthetic: true, input: { sourceLocator: 'doc:synthetic' } }, { ...options, limits: { maxCalls: 1 } },
+      const receipt = await runLiveDecisionPattern('rag-screen', { synthetic: true, input: getDecisionPatternPack('rag-screen').fixtures[0]!.input }, { ...options, limits: { maxCalls: 1 } },
         { fetch: transport.fetch, resolveCredential: credential, estimate: () => ({ tokens: 100, costUsd: 0.001 }), model: 'jev:test', projection: localProjection });
       expect(transport.fetch).toHaveBeenCalledTimes(1);
       expect(receipt.calls).toBe(1);
@@ -374,7 +442,7 @@ describe('PAT decision pattern playground', () => {
       ['unknown cost', {}, () => ({ tokens: 10, costUsd: null }), 0, 'unknown-cost'],
     ] as const)('reserves %s before dispatch', async (_label, limits, estimate, expectedCalls, reason) => {
       const transport = fakeTransport();
-      const receipt = await runLiveDecisionPattern('rag-screen', { synthetic: true, input: { sourceLocator: 'doc:synthetic' } }, { ...options, limits },
+      const receipt = await runLiveDecisionPattern('rag-screen', { synthetic: true, input: getDecisionPatternPack('rag-screen').fixtures[0]!.input }, { ...options, limits },
         { fetch: transport.fetch, resolveCredential: credential, estimate, model: 'jev:test', projection: localProjection });
       expect(transport.fetch).toHaveBeenCalledTimes(expectedCalls);
       expect(receipt.calls).toBe(expectedCalls);
@@ -384,7 +452,7 @@ describe('PAT decision pattern playground', () => {
 
     it('aborts the in-flight transport through its signal at the deadline', async () => {
       const transport = fakeTransport('hang');
-      const receipt = await runLiveDecisionPattern('intent-routing', { synthetic: true, input: { authorizedCandidates: ['search'] } }, { ...options, limits: { deadlineMs: 50 } },
+      const receipt = await runLiveDecisionPattern('intent-routing', { synthetic: true, input: { authorizedCandidates: ['search'], request: 'Find the Atlas setup guide.' } }, { ...options, limits: { deadlineMs: 50 } },
         { fetch: transport.fetch, resolveCredential: credential, estimate: () => ({ tokens: 10, costUsd: 0.001 }), model: 'jev:test', projection: localProjection });
       expect(transport.started).toHaveLength(1);
       expect(transport.aborted).toEqual([true]);
