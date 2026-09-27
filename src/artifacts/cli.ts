@@ -581,20 +581,20 @@ async function handleBuild(args: string[]): Promise<void> {
   loadGlobalGraphConfigs();
 
   let jsonBuilt = false;
-  let projectGraphBuilt = false;
+  const builtGraphs = new Set<GraphType>();
   if (graph) {
     // --graph X: build the JSON graph if X is one; otherwise X may be a
     // research-corpus markdown view, rendered below.
     if (graph in GRAPH_CONFIGS) {
       await buildIndex(cwd, { force, verbose, scope, graph, explicit: true });
       jsonBuilt = true;
-      projectGraphBuilt = graph === 'project';
+      builtGraphs.add(graph);
     }
   } else if (all) {
     // Build all known graphs — user asked for everything, but don't hard-error on missing dirs
     for (const [name] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       await buildIndex(cwd, { force, verbose, graph: name, explicit: false });
-      if (name === 'project') projectGraphBuilt = true;
+      builtGraphs.add(name);
     }
     jsonBuilt = true;
   } else {
@@ -602,7 +602,7 @@ async function handleBuild(args: string[]): Promise<void> {
     for (const [name, config] of orderedGraphEntries(Object.entries(GRAPH_CONFIGS))) {
       if (config.defaultBuild) {
         await buildIndex(cwd, { force, verbose, scope: name === Object.keys(GRAPH_CONFIGS)[0] ? scope : undefined, graph: name, explicit: false });
-        if (name === 'project') projectGraphBuilt = true;
+        builtGraphs.add(name);
       }
     }
     jsonBuilt = true;
@@ -637,21 +637,31 @@ async function handleBuild(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  if (projectGraphBuilt) {
-    await syncProjectFortemiCoreCacheAfterBuild(cwd, verbose);
+  if (builtGraphs.size > 0) {
+    await syncFortemiCoreCachesAfterBuild(cwd, builtGraphs, verbose);
   }
 }
 
-async function syncProjectFortemiCoreCacheAfterBuild(cwd: string, verbose: boolean): Promise<void> {
-  try {
-    const { syncFortemiCoreIndex } = await import('./fortemi-core-sync.js');
-    const manifest = syncFortemiCoreIndex(cwd, { graph: 'project' });
-    if (verbose) {
-      console.log(`Fortemi Core project sync: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
+async function syncFortemiCoreCachesAfterBuild(
+  cwd: string,
+  graphs: Iterable<GraphType>,
+  verbose: boolean,
+): Promise<void> {
+  const { syncFortemiCoreIndex } = await import('./fortemi-core-sync.js');
+  const { loadGraphIndexFile } = await import('./index-reader.js');
+  for (const graph of graphs) {
+    // Some default-build graphs skip cleanly when their scan roots are absent.
+    // Only materialize a cache when this build left an actual source index.
+    if (!loadGraphIndexFile(cwd, 'metadata.json', graph)) continue;
+    try {
+      const manifest = syncFortemiCoreIndex(cwd, { graph });
+      if (verbose) {
+        console.log(`Fortemi Core ${graph} sync: ${manifest.status}, ${manifest.item_count} item(s) → ${manifest.export_path}`);
+      }
+    } catch (err) {
+      console.error(`Warning: Fortemi Core ${graph} sync failed: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(`Run \`aiwg index sync --graph ${graph}\` before using Fortemi-backed commands for '${graph}' artifacts.`);
     }
-  } catch (err) {
-    console.error(`Warning: Fortemi Core project sync failed: ${err instanceof Error ? err.message : String(err)}`);
-    console.error('Run `aiwg index sync --graph project` before using Fortemi-backed `aiwg discover` or `aiwg show` for project-local artifacts.');
   }
 }
 
