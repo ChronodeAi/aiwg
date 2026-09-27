@@ -7,6 +7,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.23] - 2026-09-27 - "CPU bound gates isolated measurement"
+
+### Fixed
+
+- The D05 load-harness CPU comparison gated the process-wide wall-clock
+  fallback — which includes the runner and sibling workers — against the
+  fixed manifest bound, failing conforming code on shared runners. The
+  publish container runs Node 20, which lacks `process.threadCpuUsage`, so
+  every publish run measured the fallback (observed 100 vs limit 80). The
+  manifest CPU bound now gates only isolated thread-CPU results; the
+  observed value stays recorded in resources for informational use.
+
 ## [2026.9.22] - 2026-09-27 - "Doctor names installation drift"
 
 ### Fixed
