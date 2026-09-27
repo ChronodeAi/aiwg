@@ -173,7 +173,7 @@ export function registerDecisionToolset(server) {
       profile: z.string().describe('Profile name from AIWG_DECISION_MCP_REQUESTS'),
       opt_in: z.boolean().default(false).describe('Required per-call opt-in'),
     },
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   }, async ({ profile, opt_in }) => (await driver()).evaluateMcpProfile(profile, opt_in, options()), EVALUATE);
 
   registerJsonTool(server, 'decision-setup-synthetic-classification', {

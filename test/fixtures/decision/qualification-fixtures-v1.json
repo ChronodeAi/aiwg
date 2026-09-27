@@ -266,7 +266,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "source-module",
-      "digest": "sha256:e8a4d505bd156a450260ee63e14144610b958ef0c359ffbd26c51c928a762b15",
+      "digest": "sha256:33b7f77e0e3e523e8667ddd699ddb4c76a0363d77503d5e9851e320608c488f1",
       "expectedOutcome": "decision example fixture adapter used by synthetic classification setup",
       "links": [
         "FR-014",

@@ -118,6 +118,11 @@ describe("MCP subsystems — toolset parsing", () => {
     try {
       registerOptInToolsets(server, new Set(["decision"]));
       expect(tools.get("decision-evaluate-profile").config.inputSchema.profile.safeParse("demo").success).toBe(true);
+      expect(tools.get("decision-evaluate-profile").config.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      });
       expect(tools.get("decision-validate").config.inputSchema.path).toBeUndefined();
       const validation = await tools.get("decision-validate").handler({
         target: "request",

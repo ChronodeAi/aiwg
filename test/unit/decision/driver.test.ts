@@ -98,6 +98,34 @@ describe('decision driver', () => {
       rulesetPath: 'ruleset.json',
       bindingPath: 'binding.json',
       inputPath: 'input.json',
+      hostPolicies: { batching: 'native-ticket-batch' },
+    })).toMatchObject({ valid: true });
+    expect(validateDecisionValue('request', {
+      rulesetPath: 'ruleset.json',
+      bindingPath: 'binding.json',
+      inputPath: 'input.json',
+      batching: {},
+    })).toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining([
+        "Unsupported inline decision runtime option 'batching'. Use hostPolicies.batching to select a trusted host policy",
+      ]),
+    });
+    expect(validateDecisionValue('request', {
+      rulesetPath: 'ruleset.json',
+      bindingPath: 'binding.json',
+      inputPath: 'input.json',
+      hostPolicies: { shell: 'escape' },
+    })).toMatchObject({
+      valid: false,
+      errors: expect.arrayContaining([
+        expect.stringContaining("Unsupported decision host policy 'shell'"),
+      ]),
+    });
+    expect(validateDecisionValue('request', {
+      rulesetPath: 'ruleset.json',
+      bindingPath: 'binding.json',
+      inputPath: 'input.json',
       adapterModules: { '../escape': './adapter.mjs' },
       credentials: { token: 'not-a-valid-env-name' },
       receiptIntegrityKeyRef: 'missing-key',
@@ -180,6 +208,39 @@ describe('decision driver', () => {
       status: 'error',
       compact: { status: 'error' },
     });
+  });
+
+  it('forwards trusted host policy modules for CLI requests and MCP profiles without exposing tool-supplied paths', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'aiwg-decision-host-policy-'));
+    const written = await materializeSyntheticClassificationSetup(dir, {}, { frameworkRoot: process.cwd() });
+    const requestPath = written.files['dispatcher-request.json']!;
+    const modulePath = path.join(dir, 'trusted-host-policies.mjs');
+    const seen: string[][] = [];
+    const dispatcher = {
+      async runDecisionEvaluate({ argv, stdout }: any) {
+        seen.push(argv);
+        stdout.write(`${JSON.stringify((await runOfflinePattern('bounded-classification', 'classification-known')).receipt.result)}\n`);
+        return 0;
+      },
+    };
+
+    await expect(evaluateRequestPath(requestPath, {
+      env: { AIWG_DECISION_ENABLED: '1' },
+      runtime: {},
+      dispatcher,
+    }, { hostPolicyModulePath: modulePath })).resolves.toMatchObject({ status: 'success' });
+    expect(seen.at(-1)).toEqual(['--request', requestPath, '--host-policy-module', modulePath]);
+
+    await expect(evaluateMcpProfile('demo', true, {
+      cwd: dir,
+      env: {
+        AIWG_DECISION_ENABLED: '1',
+        AIWG_DECISION_MCP_REQUESTS: JSON.stringify({ demo: { requestPath: 'dispatcher-request.json', hostPolicyModulePath: 'trusted-host-policies.mjs' } }),
+      },
+      runtime: {},
+      dispatcher,
+    })).resolves.toMatchObject({ status: 'success' });
+    expect(seen.at(-1)).toEqual(['--request', path.join(dir, 'dispatcher-request.json'), '--host-policy-module', modulePath]);
   });
 
   it('MCP evaluation only uses configured profile names plus env and per-call opt-in', async () => {

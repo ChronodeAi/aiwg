@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
+  assertDecisionEvaluateDispatcherConfig,
   decisionPatternPacks,
   getDecisionPatternPack,
   governedPatternArtifacts,
@@ -48,6 +49,11 @@ export interface DecisionDriverOptions {
 export interface DecisionRequestProfile {
   name: string;
   requestPath: string;
+  hostPolicyModulePath?: string;
+}
+
+export interface DecisionEvaluateOptions {
+  hostPolicyModulePath?: string;
 }
 
 const DECISION_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -115,12 +121,8 @@ async function readJson(filePath: string): Promise<{ value?: unknown; error?: st
 function requestSchemaErrors(value: unknown): string[] {
   const errors: string[] = [];
   if (!isRecord(value)) return ['request must be an object'];
-  const allowed = new Set([
-    'rulesetPath', 'bindingPath', 'inputPath', 'definitionPaths', 'projectionPolicyPath',
-    'adapterOptions', 'adapterModules', 'credentials', 'receiptDirectory',
-    'receiptIntegrityKeyRef', 'receiptIntegrityKeyEncoding', 'runId', 'invocationId',
-  ]);
-  for (const key of Object.keys(value)) if (!allowed.has(key)) errors.push(`unknown option: ${key}`);
+  try { assertDecisionEvaluateDispatcherConfig(value); }
+  catch (error) { errors.push(error instanceof Error ? error.message : 'invalid-request-config'); }
   for (const key of ['rulesetPath', 'bindingPath', 'inputPath']) {
     if (typeof value[key] !== 'string' || !value[key]) errors.push(`${key} must be a non-empty string`);
   }
@@ -230,8 +232,14 @@ function parseMcpRequestProfiles(raw: string | undefined, cwd: string): Decision
   if (!isRecord(parsed)) throw new Error('AIWG_DECISION_MCP_REQUESTS must resolve to an object');
   return Object.entries(parsed).map(([name, value]) => {
     const requestPath = typeof value === 'string' ? value : isRecord(value) && typeof value.requestPath === 'string' ? value.requestPath : null;
+    const hostPolicyModulePath = isRecord(value) && typeof value.hostPolicyModulePath === 'string' ? value.hostPolicyModulePath : undefined;
     if (!requestPath || !/^[A-Za-z0-9_.-]+$/.test(name)) throw new Error('Invalid decision MCP request profile');
-    return { name, requestPath: resolvePath(requestPath, cwd) };
+    if (isRecord(value) && 'hostPolicyModulePath' in value && !hostPolicyModulePath) throw new Error('Invalid decision MCP request profile');
+    return {
+      name,
+      requestPath: resolvePath(requestPath, cwd),
+      ...(hostPolicyModulePath ? { hostPolicyModulePath: resolvePath(hostPolicyModulePath, cwd) } : {}),
+    };
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -347,7 +355,7 @@ export async function validateDecisionInput(target: ValidationTarget, filePath: 
   return validateDecisionValue(target, loaded.value, 'path');
 }
 
-export async function evaluateRequestPath(requestPath: string, options: DecisionDriverOptions = {}) {
+export async function evaluateRequestPath(requestPath: string, options: DecisionDriverOptions = {}, evaluateOptions: DecisionEvaluateOptions = {}) {
   const env = driverEnv(options);
   const resolved = resolvePath(requestPath, options.cwd ?? process.cwd());
   if (env.AIWG_DECISION_ENABLED !== '1') {
@@ -359,8 +367,10 @@ export async function evaluateRequestPath(requestPath: string, options: Decision
   const runtime = await loadRuntime(options);
   let stdout = '';
   let stderr = '';
+  const argv = ['--request', resolved];
+  if (evaluateOptions.hostPolicyModulePath) argv.push('--host-policy-module', resolvePath(evaluateOptions.hostPolicyModulePath, options.cwd ?? process.cwd()));
   const exitCode = await dispatcher.runDecisionEvaluate({
-    argv: ['--request', resolved],
+    argv,
     env,
     runtime,
     stdout: { write(chunk: string | Uint8Array) { stdout += String(chunk); return true; } },
@@ -391,7 +401,7 @@ export async function evaluateMcpProfile(profileName: string, optIn: boolean, op
   const profiles = parseMcpRequestProfiles(driverEnv(options).AIWG_DECISION_MCP_REQUESTS, options.cwd ?? process.cwd());
   const profile = profiles.find(candidate => candidate.name === profileName);
   if (!profile) return { schema: 'aiwg-decision-evaluate/v1', status: 'unavailable' as EvaluationStatus, reason: 'unknown-request-profile', exitCode: 2, result: null };
-  return evaluateRequestPath(profile.requestPath, options);
+  return evaluateRequestPath(profile.requestPath, options, { hostPolicyModulePath: profile.hostPolicyModulePath });
 }
 
 export function syntheticClassificationSetup(options: { allowedOptions?: string[]; text?: string } = {}, driverOptions: DecisionDriverOptions = {}) {

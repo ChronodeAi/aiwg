@@ -27,7 +27,7 @@ function usage(): string {
     '  patterns offline-run <id> [fixture] Run a recorded offline fixture through the decision runtime',
     '  patterns live-plan <id> [--opt-in] [--credential-resolved] [--egress-approved]',
     '  validate <request|definition|ruleset|binding> <path>',
-    '  evaluate --request <path>           Evaluate only when AIWG_DECISION_ENABLED=1',
+    '  evaluate --request <path> [--host-policy-module <path>]',
     '  setup synthetic-classification [--output-dir <dir>]',
   ].join('\n');
 }
@@ -67,7 +67,9 @@ async function executeDecision(ctx: HandlerContext): Promise<HandlerResult> {
     if (command === 'evaluate') {
       const request = takeOption(ctx.args, '--request');
       if (!request) return { exitCode: 2, message: 'decision evaluate requires --request <path>' };
-      const result = await evaluateRequestPath(request, options);
+      const result = await evaluateRequestPath(request, options, {
+        hostPolicyModulePath: takeOption(ctx.args, '--host-policy-module'),
+      });
       return jsonResult(result, result.exitCode);
     }
     if (command === 'setup' && subcommand === 'synthetic-classification') {

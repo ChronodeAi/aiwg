@@ -233,6 +233,11 @@ describe('decision-engine clean install from the packed tarball', () => {
       assert.equal(tools.has('decision-capabilities'), true);
       assert.equal(tools.has('decision-validate'), true);
       assert.equal(tools.has('decision-evaluate-profile'), true);
+      assert.deepEqual(tools.get('decision-evaluate-profile').config.annotations, {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      });
       assert.equal('path' in tools.get('decision-validate').config.inputSchema, false);
       const patterns = await tools.get('decision-patterns-list').handler({});
       assert.equal(tools.get('decision-patterns-list').config.outputSchema.result.safeParse(patterns.structuredContent.result).success, true);
