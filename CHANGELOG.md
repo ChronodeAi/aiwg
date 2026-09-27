@@ -16,6 +16,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   runners, freeing a slot so it resolved instead of rejecting. Saturating
   tasks now hold for 8s so the cap check runs against genuinely saturated
   slots. This unblocks npmjs publication, which gates on the full suite.
+- Discovery framework cache: `aiwg discover`/`show` retain framework
+  warnings, expose stale framework diagnostics with scoped repair, and
+  refresh rebuilt Fortemi caches (#272).
 
 ## [2026.9.23] - 2026-09-27 - "CPU bound gates isolated measurement"
 
