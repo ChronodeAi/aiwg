@@ -7,6 +7,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
+
+### Fixed
+
+- The parallelism-cap assertion saturated dispatch slots with 250ms tasks
+  while the 5th dispatch's own admission work can outlast them on loaded
+  runners, freeing a slot so it resolved instead of rejecting. Saturating
+  tasks now hold for 8s so the cap check runs against genuinely saturated
+  slots. This unblocks npmjs publication, which gates on the full suite.
+
 ## [2026.9.23] - 2026-09-27 - "CPU bound gates isolated measurement"
 
 ### Fixed
