@@ -1,0 +1,21 @@
+/** Experimental graph integration surface. Export availability does not imply G5/G6 qualification. */
+export { DecisionGraphError, planDecisionGraph } from './graph.js';
+export type { DecisionGraph, GraphPin, GraphPlan } from './graph.js';
+export { decisionGraphToFlow, decisionGraphApprovalGateId } from './graph-flow.js';
+export { admittedDecisionFlowAdapter } from './graph-flow-adapter.js';
+export type { GraphFlowRequest, GraphFlowResponse, GraphFlowEstimate } from './graph-flow-adapter.js';
+export { decisionRulesetFlowInvoker, decisionResultNodeStatus } from './graph-decision-bridge.js';
+export type { DecisionResultProjection } from './graph-decision-bridge.js';
+export { decisionEvaluateSkillFlowInvoker, resolveDecisionEvaluateSkill, runDecisionEvaluateSkill } from './graph-skill-bridge.js';
+export type { DecisionEvaluateSkill, DecisionSkillRequest, DecisionSkillRun } from './graph-skill-bridge.js';
+export { GraphBudgetLedger } from './graph-budget.js';
+export { auditGraphEvidence, effectiveGraphCeilings } from './graph-evidence.js';
+export type { GraphObservation, GraphCeilings, GraphEvidenceReceipt } from './graph-evidence.js';
+export { finalizeDecisionGraphRun } from './graph-run.js';
+export type { GraphFlowReport, GraphRunReceipt } from './graph-run.js';
+export { FileGraphRunReceiptStore } from './graph-run-store.js';
+export { decisionGraphParallelDispatch } from './graph-parallel.js';
+export { selectDecisionBeam } from './graph-patterns.js';
+export { graphBeamFlowInvoker } from './graph-beam.js';
+export { shortlistRerankTemplate, taxonomyBeamTemplate, extractorVerifierFallbackTemplate } from './graph-templates.js';
+export type { DecisionGraphTemplate } from './graph-templates.js';
