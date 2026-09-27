@@ -16,7 +16,10 @@ import {
   getFortemiCoreSyncStatus,
   syncFortemiCoreIndex,
 } from "../../../src/artifacts/fortemi-core-sync.js";
-import { loadFortemiCoreMetadataEntries } from "../../../src/artifacts/fortemi-core-query-adapter.js";
+import {
+  loadFortemiCoreExport,
+  loadFortemiCoreMetadataEntries,
+} from "../../../src/artifacts/fortemi-core-query-adapter.js";
 import type {
   ArtifactIndex,
   DependencyGraph,
@@ -273,6 +276,89 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     const shown = readConsoleJson();
     expect(shown.path).toContain("schema-registry");
     expect(shown.content).toContain("# Schema Registry");
+  });
+
+  it("refreshes the framework Fortemi Core cache after a framework graph build", async () => {
+    const skillDir = path.join(tmp, "agentic", "code", "frameworks", "kairos", "skills", "kairos-probe");
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: kairos-probe",
+        "description: Probe a Kairos node",
+        "triggers:",
+        '  - "kairos conformance probe"',
+        "---",
+        "# Kairos Probe",
+        "",
+        "Probe a Kairos node for conformance.",
+        "",
+      ].join("\n"),
+    );
+
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmp);
+    try {
+      await indexCliMain(["build", "--graph", "framework"]);
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    const status = getFortemiCoreSyncStatus(tmp, "framework");
+    expect(status.built).toBe(true);
+    expect(status.stale).toBe(false);
+    consoleSpy.mockClear();
+
+    await discoverCapability(tmp, {
+      phrase: "kairos conformance probe",
+      json: true,
+      backend: "fortemi-core",
+    });
+    expect(readConsoleJson().results[0].name).toBe("kairos-probe");
+    consoleSpy.mockClear();
+
+    await showArtifact(tmp, {
+      typeFilter: ["skill"],
+      name: "kairos-probe",
+      json: true,
+      backend: "fortemi-core",
+    });
+    expect(readConsoleJson().content).toContain("# Kairos Probe");
+  });
+
+  it("reports a stale shared framework cache instead of using the packaged prebuilt", () => {
+    writeProjectGraph(tmp, [entry({
+      path: "agentic/code/frameworks/kairos/skills/kairos-probe/SKILL.md",
+      name: "kairos-probe",
+      title: "Kairos Probe",
+    })], undefined, "framework");
+    syncFortemiCoreIndex(tmp, { graph: "framework" });
+
+    const metadataPath = path.join(getGraphIndexDir(tmp, "framework"), "metadata.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    metadata.builtAt = new Date(Date.now() + 60_000).toISOString();
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+
+    const loaded = loadFortemiCoreExport(tmp, "framework");
+    expect(loaded.exported).toBeUndefined();
+    expect(loaded.reason).toContain("source index is newer");
+    expect(loaded.reason).toContain("aiwg index sync");
+  });
+
+  it("points plain-text Fortemi no-match output to index sync", async () => {
+    writeProjectGraph(tmp, [], undefined, "framework");
+    syncFortemiCoreIndex(tmp, { graph: "framework" });
+
+    await discoverCapability(tmp, {
+      phrase: "missing framework phrase",
+      graph: "framework",
+      backend: "fortemi-core",
+    });
+
+    const output = consoleSpy.mock.calls.map((call) => call[0]).join("\n");
+    expect(output).toContain("No discovery matches");
+    expect(output).toContain("aiwg index sync");
+    expect(output).not.toContain("aiwg index build");
   });
 
   it("returns parity-ranked discover results from the Fortemi Core cache", async () => {

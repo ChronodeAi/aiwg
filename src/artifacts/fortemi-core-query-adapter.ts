@@ -293,7 +293,11 @@ export function loadFortemiCoreExport(
     }
   }
   let status = getFortemiCoreSyncStatus(cwd, graph);
-  if ((!status.optedIn || !status.built || status.stale) && graph === "framework") {
+  // The packaged framework index is a bootstrap fallback for an absent shared
+  // cache. Once a shared cache exists, its stale state proves that the local
+  // source index is newer; silently replacing it with an older packaged index
+  // would hide newly authored capabilities.
+  if ((!status.optedIn || !status.built) && !status.stale && graph === "framework") {
     const prebuilt = getFortemiCorePrebuiltStatus(graph);
     if (prebuilt.optedIn && prebuilt.built && !prebuilt.stale) {
       status = prebuilt;

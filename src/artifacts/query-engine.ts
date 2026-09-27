@@ -1428,7 +1428,9 @@ export async function discoverCapability(
 
   if (scored.length === 0) {
     console.log(`No discovery matches for "${params.phrase}" in types: ${types.join(',')}.`);
-    console.log('Try a broader phrase or a `--type` filter. If capabilities were just added, refresh with `aiwg use <framework>` (or `aiwg index build`).');
+    console.log(backend === 'fortemi-core'
+      ? 'Try a broader phrase or a `--type` filter. If capabilities were just added, refresh with `aiwg use <framework>` or `aiwg index sync`.'
+      : 'Try a broader phrase or a `--type` filter. If capabilities were just added, refresh with `aiwg use <framework>` (or `aiwg index build`).');
     return;
   }
 
