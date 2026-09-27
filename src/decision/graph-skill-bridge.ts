@@ -37,6 +37,8 @@ export interface DecisionSkillRequest {
   rulesetPath: string; bindingPath: string; definitionPaths: string[];
   /** Trusted host input; used only by the graph entry node. */
   inputPath?: string;
+  projectionPolicyPath?: string;
+  adapterOptions?: { jev?: { endpoint?: string; allowedOrigins?: string[]; region?: string } };
   adapterModules?: Record<string, string>;
   credentials?: Record<string, string>;
   receiptDirectory?: string; receiptIntegrityKeyRef?: string; receiptIntegrityKeyEncoding?: 'hex' | 'base64';
@@ -100,6 +102,7 @@ export function decisionEvaluateSkillFlowInvoker(graph: DecisionGraph, host: Dec
     }
     const paths = [base.rulesetPath, base.bindingPath, ...base.definitionPaths,
       ...(base.inputPath === undefined ? [] : [base.inputPath]), ...Object.values(base.adapterModules ?? {}),
+      ...(base.projectionPolicyPath === undefined ? [] : [base.projectionPolicyPath]),
       ...(base.receiptDirectory === undefined ? [] : [base.receiptDirectory])];
     if (!base.definitionPaths.length || paths.some(path => typeof path !== 'string' || !isAbsolute(path)) ||
         (node.id === graph.entry && base.inputPath === undefined)) throw new DecisionGraphError('invalid decision-evaluate request');
