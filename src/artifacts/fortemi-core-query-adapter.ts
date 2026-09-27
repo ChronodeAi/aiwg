@@ -313,7 +313,7 @@ export function loadFortemiCoreExport(
       reason: `${
         status.reason ??
         `Fortemi Core static index for graph '${graph}' is stale or incomplete`
-      }. Re-run 'aiwg index sync' or pass '--backend local' to use the legacy local index.`,
+      }. Re-run 'aiwg index sync${graph === "project" ? "" : ` --graph ${graph}`}' or pass '--backend local' to use the legacy local index.`,
     };
   }
 

@@ -279,6 +279,8 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
   });
 
   it("refreshes the framework Fortemi Core cache after a framework graph build", async () => {
+    writeProjectGraph(tmp, [], undefined, "framework");
+    syncFortemiCoreIndex(tmp, { graph: "framework" });
     const skillDir = path.join(tmp, "agentic", "code", "frameworks", "kairos", "skills", "kairos-probe");
     fs.mkdirSync(skillDir, { recursive: true });
     fs.writeFileSync(
@@ -326,7 +328,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     expect(readConsoleJson().content).toContain("# Kairos Probe");
   });
 
-  it("reports a stale shared framework cache instead of using the packaged prebuilt", () => {
+  it("reports a stale shared framework cache even with a healthy project cache", async () => {
     writeProjectGraph(tmp, [entry({
       path: "agentic/code/frameworks/kairos/skills/kairos-probe/SKILL.md",
       name: "kairos-probe",
@@ -342,7 +344,13 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     const loaded = loadFortemiCoreExport(tmp, "framework");
     expect(loaded.exported).toBeUndefined();
     expect(loaded.reason).toContain("source index is newer");
-    expect(loaded.reason).toContain("aiwg index sync");
+    expect(loaded.reason).toContain("aiwg index sync --graph framework");
+    writeProjectGraph(tmp, [entry({})]);
+    syncFortemiCoreIndex(tmp, { graph: "project" });
+    consoleSpy.mockClear();
+    await discoverCapability(tmp, { phrase: "intake", json: true });
+    expect(readConsoleJson().results.length).toBeGreaterThan(0);
+    expect(consoleErrorSpy.mock.calls.flat().join("\n")).toContain("source index is newer");
   });
 
   it("points plain-text Fortemi no-match output to index sync", async () => {
@@ -357,7 +365,7 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
 
     const output = consoleSpy.mock.calls.map((call) => call[0]).join("\n");
     expect(output).toContain("No discovery matches");
-    expect(output).toContain("aiwg index sync");
+    expect(output).toContain("aiwg index sync --graph framework");
     expect(output).not.toContain("aiwg index build");
   });
 

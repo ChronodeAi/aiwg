@@ -1099,7 +1099,12 @@ export async function discoverCapability(
           continue;
         }
       }
-      if (loaded.reason) unavailableReason ??= loaded.reason;
+      if (loaded.reason) {
+        unavailableReason ??= loaded.reason;
+        if (graph === 'framework' && !params.graph) {
+          console.error(`Warning: framework capabilities are unavailable: ${loaded.reason}`);
+        }
+      }
       entries.push(...loaded.entries.map((entry) => withIndexProvenance(entry, graph)));
       const discovered = await queryFortemiCoreAiwgDiscovery(cwd, {
         graph,
@@ -1320,7 +1325,7 @@ export async function discoverCapability(
   // broader phrase / type filter, and a capability refresh via `aiwg use`.
   const emptyResultHint = scored.length === 0
     ? backend === 'fortemi-core'
-      ? `No capability matched "${params.phrase}" among ${entries.length} Fortemi Core static-cache capabilities. Try a broader phrase or a \`--type\` filter. If the local index changed, refresh the cache with \`aiwg index sync\`, or pass \`--backend local\` to use the legacy local index.`
+      ? `No capability matched "${params.phrase}" among ${entries.length} Fortemi Core static-cache capabilities. Try a broader phrase or a \`--type\` filter. If the local index changed, refresh the cache with \`aiwg index sync ${params.graph ? `--graph ${params.graph}` : '--all'}\`, or pass \`--backend local\` to use the legacy local index.`
       : `No capability matched "${params.phrase}" among ${entries.length} indexed capabilities. Try a broader phrase or a \`--type\` filter. If you just installed or authored capabilities, refresh discovery with \`aiwg use <framework>\` (or \`aiwg index build\`).`
     : null;
 
@@ -1429,7 +1434,7 @@ export async function discoverCapability(
   if (scored.length === 0) {
     console.log(`No discovery matches for "${params.phrase}" in types: ${types.join(',')}.`);
     console.log(backend === 'fortemi-core'
-      ? 'Try a broader phrase or a `--type` filter. If capabilities were just added, refresh with `aiwg use <framework>` or `aiwg index sync`.'
+      ? emptyResultHint
       : 'Try a broader phrase or a `--type` filter. If capabilities were just added, refresh with `aiwg use <framework>` (or `aiwg index build`).');
     return;
   }
