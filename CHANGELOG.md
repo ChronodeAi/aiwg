@@ -17,6 +17,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 - The decision graph declaration bundle includes its transitive protected-file
   types, so strict TypeScript consumers do not need `skipLibCheck` (#2740).
+- Decision pattern packs require semantic subjects before inference, including
+  classification text, RAG passages and comparison text, citation claims and
+  source text, candidate evidence, and proposed tool calls. Synthetic fixtures
+  and projection checks keep content separate from code-owned authority (#2743).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
