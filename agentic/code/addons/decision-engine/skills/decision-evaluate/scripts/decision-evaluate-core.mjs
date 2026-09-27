@@ -2,6 +2,24 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+function parseFlags(argv) {
+  const flags = { request: null, hostPolicyModule: null };
+  const seen = new Set();
+  for (let index = 0; index < argv.length; index += 1) {
+    const flag = argv[index];
+    if (!flag.startsWith('--')) throw new Error(`Unexpected decision-evaluate argument '${flag}'`);
+    if (!['--request', '--host-policy-module'].includes(flag)) throw new Error(`Unknown decision-evaluate option '${flag}'`);
+    if (seen.has(flag)) throw new Error(`Duplicate decision-evaluate option '${flag}'`);
+    seen.add(flag);
+    const value = argv[index + 1];
+    if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+    if (flag === '--request') flags.request = value;
+    else flags.hostPolicyModule = value;
+    index += 1;
+  }
+  return flags;
+}
+
 /**
  * Dispatcher logic behind decision-evaluate.mjs. The runtime module is injected
  * so tests can drive the same code path against the source tree; the CLI passes
@@ -10,10 +28,12 @@ import { pathToFileURL } from 'node:url';
  * Returns the process exit code: 0 on a composed result, 1 on an error or
  * cancelled result, 2 on a usage or egress-configuration refusal.
  */
-export async function runDecisionEvaluate({ argv, env, runtime, stdout, stderr }) {
-  const requestIndex = argv.indexOf('--request');
-  if (requestIndex < 0 || !argv[requestIndex + 1]) {
-    stderr.write('Usage: decision-evaluate --request <dispatcher-request.json>\n');
+export async function runDecisionEvaluate({ argv, env, runtime, stdout, stderr, hostPolicies: injectedHostPolicies = {} }) {
+  let flags;
+  try { flags = parseFlags(argv); }
+  catch (error) { stderr.write(`${error.message}\n`); return 2; }
+  if (!flags.request) {
+    stderr.write('Usage: decision-evaluate --request <dispatcher-request.json> [--host-policy-module <trusted-module.mjs>]\n');
     return 2;
   }
   if (env.AIWG_DECISION_ENABLED !== '1') {
@@ -21,8 +41,9 @@ export async function runDecisionEvaluate({ argv, env, runtime, stdout, stderr }
     return 2;
   }
 
-  const requestPath = path.resolve(argv[requestIndex + 1]);
+  const requestPath = path.resolve(flags.request);
   const config = runtime.parseDecisionJson(await readFile(requestPath, 'utf8'));
+  runtime.assertDecisionEvaluateDispatcherConfig(config);
   const base = path.dirname(requestPath);
   const loadJson = async file => runtime.parseDecisionJson(await readFile(path.resolve(base, file), 'utf8'));
 
@@ -47,6 +68,16 @@ export async function runDecisionEvaluate({ argv, env, runtime, stdout, stderr }
     adapters[id] = module.default ?? (await module.createAdapter?.());
     if (!adapters[id]) throw new Error(`Adapter module '${file}' did not export an adapter`);
   }
+  const hostPolicies = { ...injectedHostPolicies };
+  if (flags.hostPolicyModule) {
+    const module = await import(pathToFileURL(path.resolve(base, flags.hostPolicyModule)).href);
+    const exported = module.decisionHostPolicies ?? module.default;
+    if (!exported || typeof exported !== 'object' || Array.isArray(exported)) {
+      throw new Error(`Host policy module '${flags.hostPolicyModule}' must export decisionHostPolicies or a default registry object`);
+    }
+    Object.assign(hostPolicies, exported);
+  }
+  const resolvedHostPolicies = runtime.resolveDecisionHostPolicies(config.hostPolicies, hostPolicies);
 
   // Projection policy is host configuration loaded from a trusted path, never from input.
   const policies = config.projectionPolicyPath ? [await loadJson(config.projectionPolicyPath)].flat() : [];
@@ -130,6 +161,7 @@ export async function runDecisionEvaluate({ argv, env, runtime, stdout, stderr }
         && policy.model === target.model) ?? policies[0]),
     } } : {}),
     ...(receiptStore ? { receiptStore } : {}),
+    ...resolvedHostPolicies,
   });
   stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   return result.spec.status === 'error' || result.spec.status === 'cancelled' ? 1 : 0;

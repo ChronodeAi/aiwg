@@ -55,8 +55,9 @@ function aiwg(args: string[], cwd = consumer): SpawnSyncReturns<string> {
   });
 }
 
-function dispatch(script: string, request: string, cwd: string, extra: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> {
-  return run(process.execPath, [script, '--request', request], { cwd, env: isolatedEnv(extra), timeout: 120_000 });
+function dispatch(script: string, request: string, cwd: string, extra: NodeJS.ProcessEnv = {},
+  args: string[] = []): SpawnSyncReturns<string> {
+  return run(process.execPath, [script, '--request', request, ...args], { cwd, env: isolatedEnv(extra), timeout: 120_000 });
 }
 
 describe('decision-engine clean install from the packed tarball', () => {
@@ -271,6 +272,145 @@ describe('decision-engine clean install from the packed tarball', () => {
     expect(outcome.kind).toBe('RulesetResult');
     expect(outcome.spec.status).toBe('completed');
     expect(outcome.spec.ruleset.id).toBe('example-triage');
+  }, 600_000);
+
+  it('runs trusted host policies for native batching, replay and projection denial from the installed dispatcher', async () => {
+    const script = path.join(consumer, SKILL, 'scripts', 'decision-evaluate.mjs');
+    const state = path.join(tempRoot, 'host-policy-state');
+    await mkdir(state, { recursive: true });
+    const fakeAdapter = path.join(consumer, 'installed-fake-jev.mjs');
+    await writeFile(fakeAdapter, [
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { JevDecisionAdapter } from 'aiwg/decision';",
+      "const logPath = join(process.env.AIWG_TEST_HOST_POLICY_STATE, 'dispatch-log.json');",
+      "function log(body) { const prior = existsSync(logPath) ? JSON.parse(readFileSync(logPath, 'utf8')) : []; prior.push(body); writeFileSync(logPath, JSON.stringify(prior)); }",
+      "function answers(body) { return Object.fromEntries(Object.entries(body.questions).map(([id, question]) => [id, question.type === 'choice'",
+      "  ? { type: 'choice', choice: 'documentation', probabilities: { documentation: 1, runtime: 0, other: 0 }, confidence: 1 }",
+      "  : question.type === 'score' ? { type: 'score', score: 0.25, probabilities: { 0: 0.75, 1: 0.25, 2: 0 },",
+      "    legend: { 0: 'Cosmetic or documentation issue; core functions work.', 1: 'A feature fails but has a workaround.', 2: 'Core functions unavailable.' }, confidence: 0.8 }",
+      "  : { type: 'noul', noul: 0.05 }])); }",
+      "export default new JevDecisionAdapter({ region: 'operator-declared-region', fetch: async (_url, init) => {",
+      "  const body = JSON.parse(String(init.body)); log(body);",
+      "  return new Response(JSON.stringify({ answers: answers(body), model: 'jev-fixture', usage: { input_tokens: 9, output_tokens: 3 } }), { status: 200 });",
+      "} });",
+    ].join('\n'), { mode: 0o600 });
+    const networkAdapter = path.join(consumer, 'installed-network-jev.mjs');
+    await writeFile(networkAdapter, [
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { JevDecisionAdapter } from 'aiwg/decision';",
+      "const logPath = join(process.env.AIWG_TEST_HOST_POLICY_STATE, 'network-dispatch-log.json');",
+      "function log(body) { const prior = existsSync(logPath) ? JSON.parse(readFileSync(logPath, 'utf8')) : []; prior.push(body); writeFileSync(logPath, JSON.stringify(prior)); }",
+      "export default new JevDecisionAdapter({ region: 'operator-declared-region', fetch: async (_url, init) => {",
+      "  const body = JSON.parse(String(init.body)); log(body);",
+      "  return new Response(JSON.stringify({ answers: {}, model: 'jev-fixture', usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200 });",
+      "} });",
+    ].join('\n'), { mode: 0o600 });
+    const hostModule = path.join(consumer, 'decision-host-policies.mjs');
+    await writeFile(hostModule, [
+      "import { readFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { CanonicalJsonByteEstimator, DECISION_LIFECYCLE_SURFACES, DECISION_LIFECYCLE_VERSION,",
+      "  FileBatchReceiptStore, FileBatchResultStore, compareContextUsage, decisionBatchQuestionId, planDecisionContext } from 'aiwg/decision';",
+      "const state = process.env.AIWG_TEST_HOST_POLICY_STATE;",
+      "const input = JSON.parse(readFileSync(process.env.AIWG_TEST_HOST_POLICY_INPUT, 'utf8'));",
+      "const lifecycle = { version: DECISION_LIFECYCLE_VERSION, surfaces: Object.fromEntries(DECISION_LIFECYCLE_SURFACES.map(surface => [surface,",
+      "  { classification: 'restricted', accessScopes: ['batch-owner'], retentionMs: 86400000, export: 'denied', deletion: 'tombstone', backup: 'expire-with-primary' }])) };",
+      "const integrityKey = new Uint8Array(32).fill(11);",
+      "const results = new FileBatchResultStore(join(state, 'results'), { integrityKey, lifecycle, encryptionKeyReference: 'test-key',",
+      "  resolveEncryptionKey: async () => Buffer.from(new Uint8Array(32).fill(12)) });",
+      "const estimator = new CanonicalJsonByteEstimator();",
+      "const questionIds = ['category', 'severity', 'core_unavailable'].map(decisionBatchQuestionId);",
+      "const contextInput = { subject: 'ticket:42', authorizedState: input, authorizationDigest: `sha256:${'a'.repeat(64)}`,",
+      "  incompleteContext: false, questions: questionIds.map(id => ({ id, subject: 'ticket:42', entry: { question: id } })) };",
+      "const contextProfile = { id: 'jev', version: '1', estimator: { id: estimator.id, version: estimator.version },",
+      "  limits: { aggregateTokens: 100000, stateAndLongestQuestionTokens: 100000 }, safetyMarginBps: 0, requestEnvelopeTokens: 0 };",
+      "const contextPlan = planDecisionContext(contextInput,",
+      "  { id: 'jev', version: '1', estimator: { id: estimator.id, version: estimator.version },",
+      "    limits: { aggregateTokens: 100000, stateAndLongestQuestionTokens: 100000 }, safetyMarginBps: 0, requestEnvelopeTokens: 0 }, estimator);",
+      "const qualification = compareContextUsage([{ caseId: 'installed-host-policy', input: contextInput,",
+      "  actualInputTokens: contextPlan.partitions[0].estimate.aggregateTokens, source: 'provider', usageRef: 'fixture:installed-host-policy' }], contextProfile, estimator);",
+      "export const decisionHostPolicies = {",
+      "  batching: { native: { enabled: true, evaluations: Object.fromEntries(['category', 'severity', 'core_unavailable'].map(alias => [alias,",
+      "    { decisionSubject: 'ticket:42', independent: true, egressPolicy: 'jev-public-v1', hostPolicy: 'installed-host-v1' }])) } },",
+      "  context: { qualified: { input: contextInput, profile: contextProfile, estimator, rollout: { mode: 'enforce', qualification } } },",
+      "  batchReceipts: { durable: { store: new FileBatchReceiptStore(join(state, 'receipts'), { integrityKey, lifecycle, results }), resultStore: results,",
+      "    tenantId: 'tenant', projectId: 'project', contextPlan, subjectHash: `sha256:${'b'.repeat(64)}` },",
+      "    budgetDenied: { store: new FileBatchReceiptStore(join(state, 'budget-denied-receipts'), { integrityKey, lifecycle, results }), resultStore: results,",
+      "    tenantId: 'tenant', projectId: 'project', contextPlan, subjectHash: `sha256:${'c'.repeat(64)}`,",
+      "    unknownCostBound: { upperBoundMicros: 1, policyId: 'zero-dispatch-budget', policyVersion: '1' }, maxCostMicros: 0 } }",
+      "};",
+    ].join('\n'), { mode: 0o600 });
+    const requestPath = path.join(consumer, 'trusted-host-request.json');
+    await writeFile(requestPath, JSON.stringify({
+      rulesetPath: path.join(consumer, EXAMPLES, 'ruleset.json'),
+      bindingPath: path.join(consumer, EXAMPLES, 'binding-jev.json'),
+      definitionPaths: ['decision-category.json', 'decision-severity.json', 'decision-core_unavailable.json']
+        .map(name => path.join(consumer, EXAMPLES, name)),
+      inputPath: path.join(consumer, EXAMPLES, 'input.json'),
+      projectionPolicyPath: path.join(consumer, EXAMPLES, 'projection-policy-jev.json'),
+      runId: 'installed-host-policy-run', invocationId: 'installed-host-policy-invocation',
+      credentials: { 'typesafe-api': 'AIWG_TEST_DISPATCH_TOKEN', 'receipt-key': 'AIWG_TEST_RECEIPT_KEY' },
+      adapterModules: { jev: fakeAdapter },
+      hostPolicies: { batching: 'native', context: 'qualified', batchReceipts: 'durable' },
+    }));
+    const env = { AIWG_DECISION_ENABLED: '1', AIWG_TEST_DISPATCH_TOKEN: 'synthetic-token',
+      AIWG_TEST_RECEIPT_KEY: '11'.repeat(32),
+      AIWG_TEST_HOST_POLICY_STATE: state, AIWG_TEST_HOST_POLICY_INPUT: path.join(consumer, EXAMPLES, 'input.json') };
+    const args = ['--host-policy-module', hostModule];
+    const first = ok(dispatch(script, requestPath, consumer, env, args));
+    const firstOutcome = JSON.parse(first.stdout);
+    expect(firstOutcome.spec.status).not.toBe('error');
+    expect(Object.values(firstOutcome.spec.evaluations).map((value: any) => value.spec.attempts[0]?.batch?.mode))
+      .toEqual(['native', 'native', 'native']);
+    const firstBatchResults = Object.values(firstOutcome.spec.evaluations).map((value: any) => value.spec.batchResult);
+    expect(firstBatchResults.every(Boolean)).toBe(true);
+    expect(new Set(firstBatchResults.map((value: any) => value.batchId))).toHaveLength(1);
+    expect(new Set(firstBatchResults.map((value: any) => value.questionId))).toHaveLength(3);
+    const firstDispatches = JSON.parse(await readFile(path.join(state, 'dispatch-log.json'), 'utf8'));
+    expect(firstDispatches).toHaveLength(1);
+    expect(Object.keys(firstDispatches[0].questions)).toHaveLength(3);
+    const replay = ok(dispatch(script, requestPath, consumer, env, args));
+    const replayOutcome = JSON.parse(replay.stdout);
+    expect(replayOutcome.spec.status).toBe(firstOutcome.spec.status);
+    expect(Object.values(replayOutcome.spec.evaluations).map((value: any) => value.spec.batchResult))
+      .toEqual(Object.values(firstOutcome.spec.evaluations).map((value: any) => value.spec.batchResult));
+    expect(JSON.parse(await readFile(path.join(state, 'dispatch-log.json'), 'utf8'))).toHaveLength(1);
+    const budgetAdapter = path.join(consumer, 'installed-budget-jev.mjs');
+    await writeFile(budgetAdapter, [
+      "import { existsSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      "import { JevDecisionAdapter } from 'aiwg/decision';",
+      "const logPath = join(process.env.AIWG_TEST_HOST_POLICY_STATE, 'budget-dispatch-log.json');",
+      "function log(body) { const prior = existsSync(logPath) ? JSON.parse(readFileSync(logPath, 'utf8')) : []; prior.push(body); writeFileSync(logPath, JSON.stringify(prior)); }",
+      "export default new JevDecisionAdapter({ region: 'operator-declared-region', fetch: async (_url, init) => {",
+      "  const body = JSON.parse(String(init.body)); log(body);",
+      "  return new Response(JSON.stringify({ answers: {}, model: 'jev-fixture', usage: { input_tokens: 0, output_tokens: 0 } }), { status: 200 });",
+      "} });",
+    ].join('\n'), { mode: 0o600 });
+    const budgetRequest = path.join(consumer, 'trusted-host-budget-request.json');
+    await writeFile(budgetRequest, JSON.stringify({ ...JSON.parse(await readFile(requestPath, 'utf8')),
+      invocationId: 'installed-host-policy-budget-denied',
+      adapterModules: { jev: budgetAdapter },
+      hostPolicies: { batching: 'native', context: 'qualified', batchReceipts: 'budgetDenied' } }));
+    const budgetDenied = dispatch(script, budgetRequest, consumer, env, args);
+    expect(budgetDenied.status).toBe(1);
+    expect(JSON.parse(budgetDenied.stdout).spec).toMatchObject({ status: 'error', reason: 'budget-exhausted' });
+    await expect(readFile(path.join(state, 'budget-dispatch-log.json'), 'utf8')).rejects.toThrow(/ENOENT/);
+    const deniedPolicy = JSON.parse(await readFile(path.join(consumer, EXAMPLES, 'projection-policy-jev.json'), 'utf8'));
+    deniedPolicy.region = 'eu';
+    const deniedPolicyPath = path.join(consumer, 'projection-denied.json');
+    await writeFile(deniedPolicyPath, JSON.stringify(deniedPolicy));
+    const deniedRequest = path.join(consumer, 'trusted-host-denied-request.json');
+    await writeFile(deniedRequest, JSON.stringify({ ...JSON.parse(await readFile(requestPath, 'utf8')),
+      invocationId: 'installed-host-policy-denied', projectionPolicyPath: deniedPolicyPath,
+      receiptDirectory: path.join(state, 'denied-invocation-receipts'),
+      adapterModules: { jev: networkAdapter } }));
+    const denied = dispatch(script, deniedRequest, consumer, env, args);
+    expect(denied.status).toBe(1);
+    expect(denied.stderr).toContain('projection field is not authorized');
+    await expect(readFile(path.join(state, 'network-dispatch-log.json'), 'utf8')).rejects.toThrow(/ENOENT/);
   }, 600_000);
 
   it('runs the deployed decision-playground against the installed runtime', () => {
