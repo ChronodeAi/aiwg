@@ -7,6 +7,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- Experimental decision graph APIs and TypeScript declarations are available
+  through `aiwg/decision/graph`, including Flow bridges, budget admission,
+  receipts, and graph templates. G5/G6 live qualification remains pending (#2740).
+
 ### Fixed
 
 - Native decision batches without durable receipts now record shared usage once

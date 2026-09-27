@@ -74,6 +74,14 @@ with a durable batch receipt: the receipt reports request-level usage once
 (`scope: "request"`), and each answer's usage stays null. The multi-subject
 anti-example makes zero requests.
 
+Both offline and live runners require every evaluation alias to declare the
+same nonempty subject identity. Mixed or missing identities return `deny` with
+`multi-subject-batch-rejected` before evaluation or budget reservation. Live
+receipts for this preflight denial have `result: null`, zero calls and attempts,
+an empty admission list, and zero reserved tokens and cost. Consumers must check
+for a null result before inspecting evaluations. Valid live probes still use
+individual calls and retain each primitive's acceptance and abstention rules.
+
 The catalog includes routing, RAG screening, citation support, guardrails,
 advisory tool-risk preflight, bounded classification, ordinal scoring, function
 selection, same-subject batching, durable review, and candidate selection.
