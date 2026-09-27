@@ -27,6 +27,10 @@ The `decision-playground` skill lists the installed decision pattern packs and
 runs their offline recorded fixtures through the same evaluator, with no
 credential or network access. See
 [the pattern playground guide](../../../../docs/decision/pattern-playground.md).
+The `aiwg decision` CLI and opt-in MCP `decision` toolset expose the same
+runtime-backed capabilities, validation, pattern runs, live plans, and
+explicitly enabled evaluation. See
+[the decision CLI/MCP driver guide](../../../../docs/decision/cli-mcp-driver.md).
 
 See [the operator guide](docs/operations.md) and the repository-level
 [decision specification](../../../../docs/decision/specification.md).

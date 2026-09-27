@@ -15,6 +15,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Experimental decision graph APIs and TypeScript declarations are available
   through `aiwg/decision/graph`, including Flow bridges, budget admission,
   receipts, and graph templates. G5/G6 live qualification remains pending (#2740).
+- Decision classification workflows now have a shared CLI/MCP driver for
+  capabilities/status, pattern discovery, offline fixture runs, live planning,
+  validation, explicitly enabled evaluation, and synthetic classification setup
+  artifacts (#2742).
 
 ### Fixed
 

@@ -194,6 +194,25 @@ export const installationCommand: Extension = {
   } satisfies CommandMetadata,
 };
 
+export const decisionCommand: Extension = {
+  id: 'decision',
+  type: 'command',
+  name: 'Decision Driver',
+  description: 'Inspect, validate and run governed decision classification workflows',
+  version: '1.0.0',
+  capabilities: ['cli', 'decision', 'classification', 'mcp', 'validation'],
+  keywords: ['decision', 'classification', 'patterns', 'mcp', 'evaluate', 'validate'],
+  category: 'utility',
+  platforms: { claude: 'full', generic: 'full' },
+  deployment: { pathTemplate: '.{platform}/commands/{id}.md', core: true },
+  metadata: {
+    type: 'command',
+    template: 'utility',
+    argumentHint: '<capabilities|patterns|validate|evaluate|setup> [options]',
+    allowedTools: ['Read', 'Write', 'Bash'],
+  } satisfies CommandMetadata,
+};
+
 // Renamed from `refreshCommand` as part of #694 (avoid collision with git sync
 // semantics) and re-linked to `refreshHandler` in #919. Users who type
 // `aiwg sync` still reach this handler via its 'sync' alias and see a
@@ -3890,6 +3909,7 @@ export const commandDefinitions: Extension[] = [
   contextFirewallCommand,
   updateCommand,
   installationCommand,
+  decisionCommand,
   refreshCommand,
   regenerateCommand,
   workspaceContextCommand,

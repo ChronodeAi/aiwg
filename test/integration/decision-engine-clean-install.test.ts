@@ -101,7 +101,11 @@ describe('decision-engine clean install from the packed tarball', () => {
       'agentic/code/addons/decision-engine/skills/decision-evaluate/scripts/runtime-root.mjs',
       'agentic/code/addons/decision-engine/examples/dispatcher-request-llm.json',
       'agentic/code/addons/decision-engine/examples/fixture-llm-adapter.mjs',
+      'agentic/code/addons/decision-engine/examples/fixture-jev-adapter.mjs',
       'agentic/code/addons/decision-engine/examples/binding-jev.json',
+      'dist/src/decision/driver.js',
+      'dist/src/mcp/tools/decision.mjs',
+      'docs/decision/cli-mcp-driver.md',
       'tools/decision/jev-live-smoke.mjs',
     ]) expect(existsSync(path.join(installRoot, relative)), relative).toBe(true);
   });
@@ -183,6 +187,72 @@ describe('decision-engine clean install from the packed tarball', () => {
     ok(run(process.execPath, [path.join(ROOT, 'node_modules/typescript/bin/tsc'),
       '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--target', 'ES2022', typeProbe],
     { cwd: consumer, env: isolatedEnv() }));
+  }, 180_000);
+
+  it('loads the installed decision driver without source-relative runtime paths', async () => {
+    const probe = path.join(consumer, 'decision-driver-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import path from 'node:path';
+      import { pathToFileURL } from 'node:url';
+      const installRoot = process.argv[2];
+      const driver = await import(pathToFileURL(path.join(installRoot, 'dist/src/decision/driver.js')).href);
+      const caps = driver.decisionCapabilities({ cwd: process.cwd(), frameworkRoot: installRoot, env: {} });
+      assert.equal(caps.backend.configured, false);
+      assert.equal(caps.backend.probed, false);
+      assert.equal(caps.backend.status, 'not-probed');
+      const setup = driver.syntheticClassificationSetup({}, { frameworkRoot: installRoot });
+      assert.equal(setup.files['input.json'].text.length > 0, true);
+      assert.equal(
+        setup.files['dispatcher-request.json'].adapterModules.jev,
+        path.join(installRoot, 'agentic/code/addons/decision-engine/examples/fixture-jev-adapter.mjs'),
+      );
+      assert.throws(() => driver.syntheticClassificationSetup({ allowedOptions: [] }, { frameworkRoot: installRoot }), /must not be empty/);
+      assert.throws(() => driver.syntheticClassificationSetup({ allowedOptions: ['support'] }, { frameworkRoot: installRoot }), /pinned definition options/);
+      const receipt = await driver.runOfflinePattern('bounded-classification', 'classification-known');
+      assert.equal(receipt.status, 'success');
+      process.stdout.write('decision-driver-ok');
+    `);
+    expect(ok(run(process.execPath, [probe, installRoot], { cwd: consumer, env: isolatedEnv(), timeout: 120_000 })).stdout)
+      .toBe('decision-driver-ok');
+  }, 180_000);
+
+  it('registers installed MCP decision tools with structured output schemas', async () => {
+    const probe = path.join(consumer, 'decision-mcp-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import path from 'node:path';
+      import { pathToFileURL } from 'node:url';
+      const installRoot = process.argv[2];
+      const { registerOptInToolsets } = await import(pathToFileURL(path.join(installRoot, 'dist/src/mcp/tools/subsystems.mjs')).href);
+      const tools = new Map();
+      const server = { registerTool(name, config, handler) { tools.set(name, { config, handler }); } };
+      process.env.AIWG_DECISION_MCP_REQUESTS = 'demo=/trusted/request.json';
+      registerOptInToolsets(server, new Set(['decision']));
+      assert.equal(tools.has('decision-capabilities'), true);
+      assert.equal(tools.has('decision-validate'), true);
+      assert.equal(tools.has('decision-evaluate-profile'), true);
+      assert.equal('path' in tools.get('decision-validate').config.inputSchema, false);
+      const patterns = await tools.get('decision-patterns-list').handler({});
+      assert.equal(tools.get('decision-patterns-list').config.outputSchema.result.safeParse(patterns.structuredContent.result).success, true);
+      const setup = await tools.get('decision-setup-synthetic-classification').handler({ allowed_options: ['bug'], text: 'Crash after save' });
+      assert.equal(tools.get('decision-setup-synthetic-classification').config.outputSchema.result.safeParse(setup.structuredContent.result).success, true);
+      const validation = await tools.get('decision-validate').handler({
+        target: 'request',
+        document: { rulesetPath: 'ruleset.json', bindingPath: 'binding.json', inputPath: 'input.json' },
+      });
+      assert.equal(validation.structuredContent.result.valid, true);
+      assert.equal(validation.structuredContent.result.source, 'mcp-inline');
+      assert.deepEqual(JSON.parse(validation.content[0].text), validation.structuredContent.result);
+      assert.equal(tools.get('decision-validate').config.outputSchema.result.safeParse(validation.structuredContent.result).success, true);
+      const denied = await tools.get('decision-evaluate-profile').handler({ profile: 'demo', opt_in: false });
+      assert.equal(denied.structuredContent.result.status, 'denied');
+      assert.equal(denied.structuredContent.result.reason, 'per-call-opt-in-required');
+      assert.equal(tools.get('decision-evaluate-profile').config.outputSchema.result.safeParse(denied.structuredContent.result).success, true);
+      process.stdout.write('decision-mcp-ok');
+    `);
+    expect(ok(run(process.execPath, [probe, installRoot], { cwd: consumer, env: isolatedEnv({ PATH: process.env.PATH }), timeout: 120_000 })).stdout)
+      .toBe('decision-mcp-ok');
   }, 180_000);
 
   it('deploys the addon by name and runs the deployed dispatcher on the fixture request', async () => {
