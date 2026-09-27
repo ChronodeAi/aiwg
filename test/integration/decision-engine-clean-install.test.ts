@@ -107,6 +107,44 @@ describe('decision-engine clean install from the packed tarball', () => {
     ]) expect(existsSync(path.join(installRoot, relative)), relative).toBe(true);
   });
 
+  it('discovers classification and efficiency phrases from a fresh installed index without inference', async () => {
+    const probe = path.join(consumer, 'decision-discovery-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import { buildIndex } from './node_modules/aiwg/dist/src/artifacts/index-builder.js';
+      import { discoverCapability } from './node_modules/aiwg/dist/src/artifacts/query-engine.js';
+      import { fileURLToPath } from 'node:url';
+      import net from 'node:net'; import tls from 'node:tls';
+      import http from 'node:http'; import https from 'node:https';
+      const deny = () => { throw new Error('discovery must stay network-free'); };
+      globalThis.fetch = deny; net.connect = deny; net.createConnection = deny;
+      tls.connect = deny; http.request = deny; https.request = deny; http.get = deny; https.get = deny;
+      const root = fileURLToPath(new URL('./node_modules/aiwg/', import.meta.url));
+      process.env.AIWG_ROOT = root;
+      const output = console.log;
+      console.log = () => {};
+      await buildIndex(root, { graph: 'framework', force: true, explicit: true });
+      const results = [];
+      for (const phrase of ['agentic classification', 'decision classification', 'bounded classification',
+        'Jev decision engine', 'classify to reduce frontier tokens', 'shared-state batching',
+        'decision playground', 'decision-evaluate']) {
+        const captured = [];
+        console.log = (...args) => captured.push(args.map(String).join(' '));
+        await discoverCapability(root, { phrase, graph: 'framework', backend: 'local', json: true, limit: 3 });
+        const names = JSON.parse(captured.join('')).results.map(item => item.name);
+        const expected = phrase === 'decision playground' ? 'decision-playground' : 'decision-evaluate';
+        assert(names.includes(expected), phrase + ': ' + names.join(', '));
+        results.push({ phrase, names });
+      }
+      console.log = output;
+      process.stdout.write(JSON.stringify(results));
+    `);
+    const result = ok(run(process.execPath, [probe], {
+      cwd: consumer, env: isolatedEnv({ XDG_DATA_HOME: path.join(tempRoot, 'discovery-index') }), timeout: 180_000,
+    }));
+    expect(JSON.parse(result.stdout)).toHaveLength(8);
+  }, 180_000);
+
   it('imports experimental graph APIs and compiles their declarations from the tarball', async () => {
     const names = [
       'DecisionGraphError', 'planDecisionGraph', 'decisionGraphToFlow', 'decisionGraphApprovalGateId',

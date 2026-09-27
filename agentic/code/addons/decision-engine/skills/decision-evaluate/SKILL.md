@@ -3,6 +3,13 @@ namespace: aiwg
 name: decision-evaluate
 platforms: [all]
 description: Evaluate a pinned normalized decision ruleset through an explicitly configured Jev or LLM-subagent binding
+triggers:
+  - agentic classification
+  - decision classification
+  - bounded classification
+  - Jev decision engine
+  - classify to reduce frontier tokens
+  - shared-state batching
 requires:
   - feature-enabled: AIWG_DECISION_ENABLED=1
   - request: dispatcher request JSON with authored artifact paths and runtime adapter configuration
