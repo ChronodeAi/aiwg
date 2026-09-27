@@ -7,6 +7,9 @@ export function decisionResultForExport<T extends DecisionResult | RulesetResult
 ): T {
   const copy = structuredClone(result);
   if (policy.includeProviderRequestIds) return copy;
+  if (copy.kind === 'RulesetResult') {
+    for (const request of (copy as RulesetResult).spec.batchRequests ?? []) request.requestId = null;
+  }
   const decisions: DecisionResult[] = copy.kind === 'DecisionResult'
     ? [copy as DecisionResult] : Object.values((copy as RulesetResult).spec.evaluations);
   for (const decision of decisions) {

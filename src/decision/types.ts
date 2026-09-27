@@ -353,6 +353,16 @@ export interface DecisionResult {
   };
 }
 
+/** Request-owned accounting for native batches without durable batch receipts. */
+export interface DecisionBatchRequestUsage {
+  /** Matches attempts[].batch.groupId; ordinal matches the batch attempt. */
+  groupId: string;
+  ordinal: number;
+  questionIds: string[];
+  usage: DecisionUsage;
+  requestId: string | null;
+}
+
 export interface RulesetResult {
   apiVersion: typeof DECISION_API_VERSION | typeof DECISION_API_VERSION_STRUCTURED;
   kind: 'RulesetResult';
@@ -367,6 +377,8 @@ export interface RulesetResult {
     outcome?: JsonValue;
     matchedRules: string[];
     evaluations: Record<string, DecisionResult>;
+    /** One usage owner per non-durable native request; answer attempts carry null usage. */
+    batchRequests?: DecisionBatchRequestUsage[];
     /** Caller-level cache receipt. Historical evaluation attempts in a hit belong to the source. */
     cache?: ResultCacheCallerReceipt;
     /** Invocation-wide context plan plus immutable estimate-versus-actual evidence. */

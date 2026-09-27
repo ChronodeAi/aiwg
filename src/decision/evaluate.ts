@@ -466,9 +466,22 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
         const batchSpan = runtimeTraceOf(request)?.startBatch(plan.candidates.map(candidate => candidate.alias), plan.groupId,
           durableReceipt ? durableReceipt.attempts.length + 1 : dispatchCount);
         if (batchSpan) batchSpans.push(batchSpan);
+        // A request owns its usage even when it fails before an answer is available.
+        // Durable mode already has that owner in its batch receipt.
+        const usageOwner = !durableReceipt ? {
+          groupId: plan.groupId, ordinal: dispatchCount, questionIds: [...questionIds],
+          usage: { inputTokens: null, outputTokens: null, costUsd: null } as AdapterObservation['usage'],
+          requestId: null as string | null,
+        } : undefined;
+        if (usageOwner) (base.spec.batchRequests ??= []).push(usageOwner);
         const response = await adapter.evaluateMany!({ decisionSubject: plan.decisionSubject,
           requests: preparedRequests, ...(batchSpan ? { traceContext: batchSpan.traceContext } : {}) });
         if (batchSpan) batchSpan.response = response;
+        if (usageOwner) {
+          usageOwner.usage = structuredClone(response.sharedUsage);
+          const ids = uniqueNonNull(response.answers.map(answer => answer.observation.requestId));
+          usageOwner.requestId = ids.length === 1 && validOpaqueRequestId(ids[0]!) ? ids[0]! : null;
+        }
         if (contextPlan && response.sharedUsage.inputTokens !== null) {
           recordRuntimeContextUsage(contextPlan, questionIds, response.sharedUsage.inputTokens, contextUsage);
         }
@@ -606,6 +619,8 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
         }
       }
       runtimeTraceOf(request)?.finishBatch(batchSpans, durableReceipt);
+      // Both durable and result-owned native requests keep accounting off answers.
+      observations = resultOnlyBatchObservations(observations);
       plan.candidates.forEach((candidate, index) => {
         const item = resolved.find(value => value.alias === candidate.alias)!;
         const evidence: DecisionBatchEvidence = { mode: 'native', groupId: plan.groupId, questionId: questionIds[index]! };

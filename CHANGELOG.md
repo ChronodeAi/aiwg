@@ -7,6 +7,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Fixed
+
+- Native decision batches without durable receipts now record shared usage once
+  in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
+  null usage, preventing duplicated token totals in exports and reports (#2745).
+
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed

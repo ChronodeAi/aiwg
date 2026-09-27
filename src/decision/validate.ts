@@ -134,6 +134,7 @@ export function assertDecisionWriterVersion(value: unknown, semantic: DecisionCh
  */
 export const DECISION_RESULT_V1ALPHA2_FIELDS = [
   { field: 'batchResult', scope: 'decision', owner: 'D07', semantic: 'batch-receipt' },
+  { field: 'batchRequests', scope: 'ruleset', owner: 'D04', semantic: 'batch-request-usage' },
   { field: 'batch', scope: 'attempt', owner: 'D04', semantic: 'batch-provenance' },
   { field: 'admission', scope: 'attempt', owner: 'D05', semantic: 'admission-evidence' },
   { field: 'context', scope: 'decision', owner: 'D06', semantic: 'context-evidence' },
