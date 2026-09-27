@@ -7,6 +7,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.22] - 2026-09-27 - "Doctor names installation drift"
+
+### Fixed
+
+- Under installation identity drift, `aiwg doctor` resolves providers from
+  the stale canonical install, so a provider that shipped after the install
+  (muse) was reported as a bare `Unknown provider: muse` — reading as a
+  registry defect when it is really a stale-install condition. When
+  `AIWG_INSTALLATION_DRIFT` is present, the check now names the stale
+  canonical install and points to `aiwg installation adopt` (#270).
+
 ## [2026.9.21] - 2026-09-27 - "Decision runtime, effect ledger, and Muse Code provider"
 
 The Jev decision platform entries below cover the work merged after
