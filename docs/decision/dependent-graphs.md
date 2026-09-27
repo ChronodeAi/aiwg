@@ -1,5 +1,34 @@
 # Dependent decision graphs (experimental)
 
+## Package entry point
+
+Import the experimental graph surface from `aiwg/decision/graph`:
+
+```ts
+import {
+  planDecisionGraph, decisionGraphToFlow, decisionEvaluateSkillFlowInvoker,
+  decisionRulesetFlowInvoker, admittedDecisionFlowAdapter, DecisionGraphError,
+  GraphBudgetLedger, finalizeDecisionGraphRun, FileGraphRunReceiptStore,
+} from 'aiwg/decision/graph';
+import type { DecisionGraph, GraphPlan, GraphRunReceipt } from 'aiwg/decision/graph';
+```
+
+The entry point includes planning and pin types, Flow compilation and approval
+IDs, both host invokers and their request/response types, skill resolution and
+execution, budget admission, evidence auditing and ceilings, receipt finalization
+and storage, parallel dispatch, beam selection, and the three graph templates.
+`aiwg/decision` remains the independent decision runtime entry point.
+
+Internal bridge utilities `decisionFlowNode`, `assertDecisionFlowPins`,
+`decisionFlowResponse`, and `assertUnknownCostBound` are intentionally private:
+hosts use the invokers that apply these checks together. Deep imports into
+`dist/src/decision/graph-*.js` are not public package contracts. Template-local
+helper types are inferred from the public template functions.
+
+Runtime JavaScript and matching TypeScript declarations ship together. This
+surface is experimental; making it importable does not satisfy G5/G6 live
+qualification or promote it to comprehensive-release claims (see #2686).
+
 `DecisionGraph.v1.schema.json` and `planDecisionGraph` provide an opt-in, versioned DAG contract. Existing independent rulesets are unchanged. Validation precedes Flow compilation, adapter resolution, and any transport. A trusted caller supplies resolved definition/binding digests; model evidence cannot alter the graph, pins, permissions, or output projections. The graph has one entry, stage-ordered edges, named inputs/outputs, and declared terminals. A node with only guarded outgoing edges may also be terminal. Missing pins, duplicate IDs, cycles, ambiguous inputs, unreachable nodes, illegal projections and unsafe budgets fail closed.
 
 ## Flow-hosted execution
