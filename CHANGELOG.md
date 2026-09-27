@@ -7,6 +7,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.21] - 2026-09-27 - "Decision runtime, effect ledger, and Muse Code provider"
+
 The Jev decision platform entries below cover the work merged after
 v2026.9.20. The decision runtime ships disabled by default and stays
 experimental where noted. Several entries close offline gaps only; the live
