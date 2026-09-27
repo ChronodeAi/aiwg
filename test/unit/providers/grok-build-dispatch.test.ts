@@ -51,7 +51,11 @@ describe('Grok Build governed dispatch', () => {
       const dispatcher = await GrokBuildDispatcher.forProject(root);
       expect(dispatcher.maxParallel).toBe(4);
       expect(await GrokBuildDispatcher.forProject(root)).toBe(dispatcher);
-      const fake = { command: process.execPath, prefixArgs: ['-e', 'setTimeout(()=>console.log(JSON.stringify({type:"result",text:process.env.GROK_SUBAGENTS})),250)', '--'] };
+      // Saturating tasks must outlive the admission window with wide margin: on
+      // loaded runners the 5th dispatch's own admission work (git resolution)
+      // can otherwise outlast a short task, freeing a slot and resolving
+      // instead of rejecting with the parallelism cap.
+      const fake = { command: process.execPath, prefixArgs: ['-e', 'setTimeout(()=>console.log(JSON.stringify({type:"result",text:process.env.GROK_SUBAGENTS})),8000)', '--'] };
       await expect(dispatcher.dispatch({ ...fake, projectRoot: root, prompt: 'x', authorize: () => false, budgetRemaining: () => true })).rejects.toThrow(/authorization gate/);
       await expect(dispatcher.dispatch({ ...fake, projectRoot: root, prompt: 'x', authorize: () => true, budgetRemaining: () => false })).rejects.toThrow(/budget exhausted/);
       const running = Array.from({ length: dispatcher.maxParallel }, () => dispatcher.dispatch({
