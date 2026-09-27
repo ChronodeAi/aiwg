@@ -106,6 +106,47 @@ describe('decision-engine clean install from the packed tarball', () => {
     ]) expect(existsSync(path.join(installRoot, relative)), relative).toBe(true);
   });
 
+  it('imports experimental graph APIs and compiles their declarations from the tarball', async () => {
+    const names = [
+      'DecisionGraphError', 'planDecisionGraph', 'decisionGraphToFlow', 'decisionGraphApprovalGateId',
+      'admittedDecisionFlowAdapter', 'decisionRulesetFlowInvoker', 'decisionResultNodeStatus',
+      'decisionEvaluateSkillFlowInvoker', 'resolveDecisionEvaluateSkill', 'runDecisionEvaluateSkill',
+      'GraphBudgetLedger', 'auditGraphEvidence', 'effectiveGraphCeilings', 'finalizeDecisionGraphRun',
+      'FileGraphRunReceiptStore', 'decisionGraphParallelDispatch', 'selectDecisionBeam', 'graphBeamFlowInvoker',
+      'shortlistRerankTemplate', 'taxonomyBeamTemplate', 'extractorVerifierFallbackTemplate',
+    ];
+    const probe = path.join(consumer, 'graph-probe.mjs');
+    await writeFile(probe, `
+      import assert from 'node:assert/strict';
+      import * as graph from 'aiwg/decision/graph';
+      for (const name of ${JSON.stringify(names)}) assert.equal(typeof graph[name], 'function', name);
+      for (const name of ['decisionFlowNode', 'assertDecisionFlowPins', 'decisionFlowResponse', 'assertUnknownCostBound']) {
+        assert.equal(name in graph, false, name);
+      }
+      assert.throws(() => graph.planDecisionGraph({}, new Set()), graph.DecisionGraphError);
+      process.stdout.write('graph-import-ok');
+    `);
+    expect(ok(run(process.execPath, [probe], { cwd: consumer, env: isolatedEnv() })).stdout).toBe('graph-import-ok');
+
+    const typeProbe = path.join(consumer, 'graph-probe.mts');
+    await writeFile(typeProbe, `
+      import { ${names.join(', ')} } from 'aiwg/decision/graph';
+      import type {
+        DecisionGraph, GraphPin, GraphPlan, GraphFlowRequest, GraphFlowResponse, GraphFlowEstimate,
+        DecisionResultProjection, DecisionEvaluateSkill, DecisionSkillRequest, DecisionSkillRun,
+        GraphObservation, GraphCeilings, GraphEvidenceReceipt, GraphFlowReport, GraphRunReceipt, DecisionGraphTemplate,
+      } from 'aiwg/decision/graph';
+      export const runtime = [${names.join(', ')}];
+      export type Contracts = [DecisionGraph, GraphPin, GraphPlan, GraphFlowRequest, GraphFlowResponse,
+        GraphFlowEstimate, DecisionResultProjection, DecisionEvaluateSkill, DecisionSkillRequest, DecisionSkillRun,
+        GraphObservation, GraphCeilings, GraphEvidenceReceipt, GraphFlowReport, GraphRunReceipt, DecisionGraphTemplate];
+      export const planner: (value: unknown, pins: ReadonlySet<string>) => GraphPlan = planDecisionGraph;
+    `);
+    ok(run(process.execPath, [path.join(ROOT, 'node_modules/typescript/bin/tsc'),
+      '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--target', 'ES2022', typeProbe],
+    { cwd: consumer, env: isolatedEnv() }));
+  }, 180_000);
+
   it('deploys the addon by name and runs the deployed dispatcher on the fixture request', async () => {
     ok(aiwg(['use', 'decision-engine', '--provider', 'claude']));
     const script = path.join(consumer, SKILL, 'scripts', 'decision-evaluate.mjs');
