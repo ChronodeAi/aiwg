@@ -9,6 +9,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Deterministic discovery phrases for decision classification, Jev, token-saving
+  evaluation, shared-state batching and the offline playground. The NLP quickref
+  explains explicit decision-engine installation and evaluation opt-in (#2741).
 - Experimental decision graph APIs and TypeScript declarations are available
   through `aiwg/decision/graph`, including Flow bridges, budget admission,
   receipts, and graph templates. G5/G6 live qualification remains pending (#2740).
