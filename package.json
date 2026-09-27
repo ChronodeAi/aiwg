@@ -35,6 +35,11 @@
       "import": "./dist/src/decision/index.js",
       "default": "./dist/src/decision/index.js"
     },
+    "./decision/graph": {
+      "types": "./dist/src/decision/graph-index.d.ts",
+      "import": "./dist/src/decision/graph-index.js",
+      "default": "./dist/src/decision/graph-index.js"
+    },
     "./package.json": "./package.json"
   },
   "engines": {

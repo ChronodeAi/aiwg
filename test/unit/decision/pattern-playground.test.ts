@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JsonValue } from '../../../src/decision/types.js';
+import { RecordedJevTransport } from '../../../src/decision/patterns/recorded.js';
 
 vi.mock('../../../src/decision/evaluate.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../src/decision/evaluate.js')>();
@@ -324,6 +325,36 @@ describe('PAT decision pattern playground', () => {
         requestedModel: 'jev:test', actualModel: 'jev:test-2026-09', calls: 1, route: 'accept', action: { status: 'unexecuted' },
         usage: { inputTokens: 10, outputTokens: 2, reservedTokens: 100, reservedCostUsd: 0.001, reportedCostUsd: null } });
       expect(receipt.admission).toEqual([{ alias: 'route', decision: 'admit', reason: 'admitted' }]);
+    });
+
+    it('PAT-BATCH rejects mixed or missing live subjects before evaluation, admission, and transport', async () => {
+      const fixture = getDecisionPatternPack('same-subject-batch').fixtures.find(candidate => candidate.id === 'batch-multi-subject')!;
+      for (const input of [fixture.input, { ...fixture.input, subjects: { risk: 'ticket:1', route: 'ticket:1' } }, { ...fixture.input, subjects: {} }]) {
+        const transport = fakeTransport();
+        const estimate = vi.fn(() => ({ tokens: 100, costUsd: 0.001 }));
+        const resolveCredential = vi.fn(credential);
+        const receipt = await runLiveDecisionPattern('same-subject-batch', { synthetic: true, input }, options,
+          { fetch: transport.fetch, resolveCredential, estimate, model: 'jev:test', projection: localProjection });
+        expect(receipt).toMatchObject({ route: 'deny', reason: 'multi-subject-batch-rejected', calls: 0, attempts: 0, admission: [], result: null });
+        expect(receipt.usage).toEqual({ inputTokens: null, outputTokens: null, reservedTokens: 0, reservedCostUsd: 0, reportedCostUsd: null });
+        expect(transport.fetch).not.toHaveBeenCalled();
+        expect(estimate).not.toHaveBeenCalled();
+        expect(resolveCredential).not.toHaveBeenCalled();
+      }
+      expect(evaluateSpy).not.toHaveBeenCalled();
+    });
+
+    it.each([0.1, 0.5])('allows one live subject and retains truth-probability abstention at %s', async probability => {
+      const fixture = getDecisionPatternPack('same-subject-batch').fixtures[0]!;
+      const evidence = structuredClone(fixture.recordedEvidence);
+      (evidence.answers as Record<string, JsonValue>).urgent = recordedNoul(probability);
+      const recorded = new RecordedJevTransport(evidence, ['risk', 'route', 'urgent']);
+      const receipt = await runLiveDecisionPattern('same-subject-batch', { synthetic: true, input: fixture.input }, options,
+        { fetch: recorded.fetch, resolveCredential: credential, estimate: () => ({ tokens: 100, costUsd: 0.001 }), model: 'jev:test', projection: localProjection });
+      expect(receipt.calls).toBe(3);
+      expect(receipt.route).toBe(probability === 0.5 ? 'review' : 'accept');
+      expect(receipt.reason).toBe(probability === 0.5 ? 'evidence-not-accepted' : 'same-subject-batch');
+      expect(receipt.result?.spec.evaluations.urgent?.spec.status).toBe(probability === 0.5 ? 'abstained' : 'success');
     });
 
     it('never starts the call that would exceed a limit of N calls', async () => {
