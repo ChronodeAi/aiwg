@@ -66,6 +66,7 @@ const objectSchema = (properties: Record<string, JsonSchema>, required: string[]
 });
 const stringArray: JsonSchema = { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'string', minLength: 1 } };
 const policy: JsonSchema = { enum: ['allow', 'deny'] };
+const subjectText: JsonSchema = { type: 'string', minLength: 1, pattern: '\\S' };
 
 const decision = (alias: string, pointer = '/value') => ({ source: 'decision' as const, alias, pointer });
 const valueEq = (alias: string, right: JsonValue): DecisionPredicate => ({ op: 'eq', left: decision(alias), right });
@@ -82,7 +83,7 @@ const notAccepted = { route: 'review' as const, reason: 'evidence-not-accepted' 
 
 export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
   'intent-routing': {
-    inputSchema: objectSchema({ authorizedCandidates: stringArray, request: { type: 'string' } }, ['authorizedCandidates']),
+    inputSchema: objectSchema({ authorizedCandidates: stringArray, request: subjectText }, ['authorizedCandidates', 'request']),
     evaluations: [{ alias: 'route', answer: choice('search', 'summarize', 'admin', 'none', 'manual-review'), question: 'Which capability best serves the synthetic request?', inputPointer: '', acceptance: 'choice' }],
     rules: [
       { id: 'no-candidate', priority: 200, when: valueEq('route', 'none'), route: 'review', reason: 'no-authorized-candidate' },
@@ -94,7 +95,9 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
     unauthorizedEvidenceRoute: 'review',
   },
   'rag-screen': {
-    inputSchema: objectSchema({ sourceLocator: { type: 'string', minLength: 1 }, deterministicPolicy: policy }, ['sourceLocator']),
+    inputSchema: objectSchema({ sourceLocator: subjectText, deterministicPolicy: policy, question: subjectText, passage: subjectText,
+      comparisonSources: { type: 'array', minItems: 1, items: objectSchema({ locator: subjectText, text: subjectText }, ['locator', 'text']) },
+    }, ['sourceLocator', 'question', 'passage', 'comparisonSources']),
     evaluations: [
       { alias: 'relevant', answer: truth('The retrieved passage is relevant', 'The retrieved passage is not relevant'), question: 'Is the synthetic passage relevant to the question?', inputPointer: '', acceptance: 'truth' },
       { alias: 'contradiction', answer: truth('The passage contradicts other sources', 'The passage is consistent'), question: 'Does the synthetic passage contradict the other sources?', inputPointer: '', acceptance: 'truth' },
@@ -113,9 +116,11 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
   },
   'citation-support': {
     inputSchema: objectSchema({
+      claim: subjectText,
+      sourceText: subjectText,
       sources: { type: 'array', minItems: 1, items: objectSchema({ locator: { type: 'string' }, digest: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' }, provenanceVerified: { type: 'boolean' } }, ['locator', 'digest', 'provenanceVerified']) },
       citation: objectSchema({ locator: { type: 'string', minLength: 1 }, digest: { type: 'string', pattern: '^sha256:[0-9a-f]{64}$' } }, ['locator', 'digest']),
-    }, ['sources', 'citation']),
+    }, ['sources', 'citation', 'claim', 'sourceText']),
     evaluations: [{ alias: 'support', answer: choice('supported', 'unclear', 'unsupported'), question: 'Does the cited synthetic source support the claim?', inputPointer: '', acceptance: 'choice' }],
     rules: [
       { id: 'supported', priority: 100, when: valueEq('support', 'supported'), route: 'accept', reason: 'citation-supported' },
@@ -127,7 +132,7 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
     unauthorizedEvidenceRoute: 'review',
   },
   guardrails: {
-    inputSchema: objectSchema({ deterministicPolicy: policy, content: { type: 'string' } }, ['deterministicPolicy']),
+    inputSchema: objectSchema({ deterministicPolicy: policy, content: subjectText }, ['deterministicPolicy', 'content']),
     evaluations: [{ alias: 'screen', answer: truth('Advisory screen permits the synthetic content', 'Advisory screen flags the synthetic content'), question: 'Does the synthetic content pass the advisory guardrail?', inputPointer: '', acceptance: 'truth' }],
     rules: [
       policyDeny,
@@ -139,7 +144,9 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
     unauthorizedEvidenceRoute: 'review',
   },
   'tool-risk-preflight': {
-    inputSchema: objectSchema({ deterministicPolicy: policy, authorizedTools: { type: 'array', maxItems: 0 } }, ['deterministicPolicy', 'authorizedTools']),
+    inputSchema: objectSchema({ deterministicPolicy: policy, authorizedTools: { type: 'array', maxItems: 0 },
+      proposedTool: objectSchema({ name: subjectText, arguments: { type: 'object' }, purpose: subjectText }, ['name', 'arguments', 'purpose']),
+    }, ['deterministicPolicy', 'authorizedTools', 'proposedTool']),
     evaluations: [{ alias: 'risk', answer: choice('allow', 'deny', 'review'), question: 'What is the advisory risk disposition of the synthetic tool call?', inputPointer: '', acceptance: 'choice' }],
     rules: [
       policyDeny,
@@ -152,7 +159,7 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
     unauthorizedEvidenceRoute: 'review',
   },
   'bounded-classification': {
-    inputSchema: objectSchema({ allowedOptions: stringArray }, ['allowedOptions']),
+    inputSchema: objectSchema({ allowedOptions: stringArray, text: subjectText }, ['allowedOptions', 'text']),
     evaluations: [{ alias: 'category', answer: choice('bug', 'feature', 'sales', 'none'), question: 'Which category fits the synthetic ticket?', inputPointer: '', acceptance: 'choice' }],
     rules: [
       { id: 'none', priority: 200, when: valueEq('category', 'none'), route: 'review', reason: 'no-category' },
@@ -173,8 +180,8 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
   'function-selection': {
     inputSchema: objectSchema({
       legalFunctions: stringArray, argumentSchemas: { type: 'object', minProperties: 1, additionalProperties: { type: 'object' } },
-      proposedArguments: { type: 'object' },
-    }, ['legalFunctions', 'argumentSchemas', 'proposedArguments']),
+      proposedArguments: { type: 'object' }, request: subjectText,
+    }, ['legalFunctions', 'argumentSchemas', 'proposedArguments', 'request']),
     evaluations: [{ alias: 'function', answer: choice('lookup', 'deleteAll', 'none'), question: 'Which function fits the synthetic request?', inputPointer: '', acceptance: 'choice' }],
     rules: [
       { id: 'none', priority: 200, when: valueEq('function', 'none'), route: 'review', reason: 'no-function' },
@@ -214,7 +221,7 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
     unauthorizedEvidenceRoute: 'review',
   },
   'durable-review': {
-    inputSchema: objectSchema({ reviewRequired: { const: true }, invocationId: { type: 'string', minLength: 1 }, resumeCount: { type: 'integer', minimum: 1, maximum: 5 } }, ['reviewRequired', 'invocationId', 'resumeCount']),
+    inputSchema: objectSchema({ reviewRequired: { const: true }, invocationId: { type: 'string', minLength: 1 }, resumeCount: { type: 'integer', minimum: 1, maximum: 5 }, item: subjectText }, ['reviewRequired', 'invocationId', 'resumeCount', 'item']),
     evaluations: [{ alias: 'review', answer: choice('route-to-reviewer', 'insufficient-context'), question: 'How should the synthetic review item be queued?', inputPointer: '', acceptance: 'choice' }],
     rules: [
       { id: 'insufficient', priority: 200, when: valueEq('review', 'insufficient-context'), route: 'review', reason: 'review-context-insufficient' },
@@ -225,7 +232,9 @@ export const PATTERN_SPECS: Record<DecisionPatternId, PatternSpec> = {
     unauthorizedEvidenceRoute: 'review',
   },
   'candidate-selection': {
-    inputSchema: objectSchema({ extractedCandidates: stringArray }, ['extractedCandidates']),
+    inputSchema: objectSchema({ extractedCandidates: stringArray, task: subjectText, criteria: subjectText,
+      evidence: { type: 'array', minItems: 1, items: objectSchema({ candidate: subjectText, text: subjectText }, ['candidate', 'text']) },
+    }, ['extractedCandidates', 'task', 'criteria', 'evidence']),
     evaluations: [{ alias: 'candidate', answer: choice('alpha', 'beta', 'gamma', 'none'), question: 'Which extracted synthetic candidate fits best?', inputPointer: '', acceptance: 'choice' }],
     rules: [
       { id: 'none', priority: 200, when: valueEq('candidate', 'none'), route: 'review', reason: 'no-candidate' },
