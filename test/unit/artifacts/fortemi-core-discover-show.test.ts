@@ -351,6 +351,11 @@ describe("Fortemi Core discover/show parity adapter (#1688)", () => {
     await discoverCapability(tmp, { phrase: "intake", json: true });
     expect(readConsoleJson().results.length).toBeGreaterThan(0);
     expect(consoleErrorSpy.mock.calls.flat().join("\n")).toContain("source index is newer");
+    consoleSpy.mockClear();
+    consoleErrorSpy.mockClear();
+    await showArtifact(tmp, { name: "intake-wizard", json: true, backend: "fortemi-core" });
+    expect(readConsoleJson().content).toContain("Intake Wizard");
+    expect(consoleErrorSpy.mock.calls.flat().join("\n")).toContain("source index is newer");
   });
 
   it("points plain-text Fortemi no-match output to index sync", async () => {

@@ -1616,7 +1616,12 @@ async function loadShowEntries(
           continue;
         }
       }
-      if (loaded.reason) unavailableReason ??= loaded.reason;
+      if (loaded.reason) {
+        unavailableReason ??= loaded.reason;
+        if (graph === 'framework' && !params.graph) {
+          console.error(`Warning: framework capabilities are unavailable: ${loaded.reason}`);
+        }
+      }
       entries.push(...loaded.entries.map((entry) => withIndexProvenance(entry, graph)));
     }
     if (entries.length === 0 && unavailableReason) {
