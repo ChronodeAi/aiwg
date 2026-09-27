@@ -3,6 +3,10 @@ namespace: aiwg
 name: decision-playground
 platforms: [all]
 description: List the installed decision pattern packs and run their offline recorded fixtures through the production decision evaluator
+triggers:
+  - decision playground
+  - offline decision patterns
+  - explore decision classification
 requires:
   - build: the installed package's compiled decision runtime (dist/src/decision)
 ensures:

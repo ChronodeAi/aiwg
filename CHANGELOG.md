@@ -7,6 +7,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- Deterministic discovery phrases for decision classification, Jev, token-saving
+  evaluation, shared-state batching and the offline playground. The NLP quickref
+  explains explicit decision-engine installation and evaluation opt-in (#2741).
+
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed
