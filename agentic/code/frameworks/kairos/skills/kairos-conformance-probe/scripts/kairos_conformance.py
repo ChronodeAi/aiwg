@@ -822,6 +822,10 @@ def selected(claim: dict[str, Any], only: list[str], skip: list[str]) -> bool:
     return True
 
 
+AGENT_KEY_PREFIX = "kairos_ak_"
+ADMIN_READ_PROBE = "/api/v1/observations?limit=1"
+
+
 @dataclass
 class NodeFacts:
     url: str
@@ -836,6 +840,7 @@ class NodeFacts:
     namespace_policy: bool | None
     admin_available: bool
     admin_basis: str
+    principal: str
 
 
 def discover_node(t: Transport) -> NodeFacts:
@@ -855,10 +860,18 @@ def discover_node(t: Transport) -> NodeFacts:
         profile = "dev"
     else:
         profile = "other"
-    admin, basis = False, "no admin path"
+    admin, basis, principal = False, "no admin path", "none"
     if auth_enabled is False and waiver:
-        admin, basis = True, "development admin waiver (auth off)"
+        admin, basis, principal = True, "development admin waiver (auth off)", "waiver"
+    elif auth_enabled and t.token and t.token.startswith(AGENT_KEY_PREFIX):
+        # ADR-0041 agent keys have no /auth/me identity (404 by design); an
+        # admin-only read decides the admin role without writing anything.
+        principal = "agent_key"
+        probe = t.send("GET", ADMIN_READ_PROBE)
+        admin = probe.status == 200
+        basis = f"agent key; admin-only read GET {ADMIN_READ_PROBE} {probe.status}"
     elif auth_enabled and t.token:
+        principal = "bearer"
         me = t.send("GET", "/api/v1/auth/me")
         role = me.json.get("role") if isinstance(me.json, dict) else None
         admin = role == "admin"
@@ -867,7 +880,7 @@ def discover_node(t: Transport) -> NodeFacts:
         url=t.node, version=(meta or health_resp.json).get("version"), health=health_resp.json,
         meta=meta, meta_sha256=meta_sha, profile=profile, auth_enabled=auth_enabled,
         admin_waiver=waiver, store_backend=backend, namespace_policy=policy,
-        admin_available=admin, admin_basis=basis,
+        admin_available=admin, admin_basis=basis, principal=principal,
     )
 
 
@@ -877,6 +890,8 @@ def skip_reason(claim: dict[str, Any], node: NodeFacts, opts: argparse.Namespace
         return f"profile {profile} claim; node profile is {node.profile}"
     if is_mutating(claim) and not opts.allow_mutation:
         return "mutating claim; run with --allow-mutation"
+    if is_mutating(claim) and opts.read_only_principal:
+        return "mutating claim; principal declared read-only (--read-only-principal)"
     if claim.get("requires_admin") and not node.admin_available:
         return f"needs admin ({node.admin_basis})"
     for req in claim.get("requires", []):
@@ -888,6 +903,8 @@ def skip_reason(claim: dict[str, Any], node: NodeFacts, opts: argparse.Namespace
             return "needs --sqlite-store for a sqlite node"
         if req == "kairos_bin" and not opts.kairos_bin:
             return "needs --kairos-bin"
+        if req == "session_principal" and node.principal == "agent_key":
+            return "management route; agent keys are refused by design (ADR-0041)"
     when = claim.get("when_meta")
     if when:
         if node.meta is None:
@@ -1185,6 +1202,8 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
                    help="where failed claims are written as kairos_finding/v1 records (default .aiwg/kairos/findings)")
     p.add_argument("--only", action="append", default=[], help="glob on claim id or area; repeatable")
     p.add_argument("--skip", action="append", default=[], help="glob on claim id or area; repeatable")
+    p.add_argument("--read-only-principal", action="store_true",
+                   help="the token cannot write (e.g. an agent key issued --read-only); skip mutating claims")
     p.add_argument("--allow-mutation", action="store_true",
                    help="run claims that write (fixtures, observations, write tools, rate-limit bursts)")
     p.add_argument("--sqlite-store", default=None,
@@ -1339,6 +1358,8 @@ def main(argv: list[str] | None = None) -> int:
             "namespace_policy": node.namespace_policy,
             "admin_available": node.admin_available,
             "admin_basis": node.admin_basis,
+            "principal": node.principal,
+            "read_only_principal": opts.read_only_principal,
         },
         "claims_file": {
             "path": str(opts.claims_path),

@@ -86,8 +86,10 @@ The runner reads `/api/v1/health` and `/api/v1/meta` first, then derives the nod
 
 A claim is skipped, with the reason recorded, when:
 
-- its `profile`, `requires_admin`, `requires` (`bearer`, `namespace_policy`, `sqlite_store`, `kairos_bin`) or `when_meta` guards do not hold;
-- it mutates and `--allow-mutation` is off.
+- its `profile`, `requires_admin`, `requires` (`bearer`, `namespace_policy`, `sqlite_store`, `kairos_bin`, `session_principal`) or `when_meta` guards do not hold;
+- it mutates and `--allow-mutation` is off, or `--read-only-principal` is set.
+
+Admin capability comes from `GET /api/v1/auth/me` for session tokens. Agent keys (`kairos_ak_…`, ADR-0041) have no `/auth/me` identity, so for them the runner uses an admin-only read, `GET /api/v1/observations?limit=1` (200 means admin). It cannot detect a key issued `--read-only` without writing, so pass `--read-only-principal` for such keys. Claims that need a management route declare `session_principal` and skip for agent keys, which are refused on those routes by design. The receipt records `node.principal`, `node.admin_basis` and `node.read_only_principal`.
 
 Fixtures (`fixtures.xtypes` and `fixtures.vectors`) are created only when a selected claim references them, in two retry-safe `execute-batch` calls. A referenced xtype always brings its declared out-edges, so a resolution sees the same graph whichever claims you select. Claims run in id order. Claims marked `run_last` (the rate-limit burst) run at the end.
 

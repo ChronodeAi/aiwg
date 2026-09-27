@@ -584,7 +584,10 @@
             ]
           }
         ]
-      }
+      },
+      "requires": [
+        "session_principal"
+      ]
     },
     {
       "id": "KC-ACCESS-002",
@@ -762,7 +765,10 @@
             ]
           }
         ]
-      }
+      },
+      "requires": [
+        "session_principal"
+      ]
     },
     {
       "id": "KC-CAUSAL-001",
@@ -1867,7 +1873,10 @@
             ]
           }
         ]
-      }
+      },
+      "requires": [
+        "session_principal"
+      ]
     },
     {
       "id": "KC-HTTP-007",
