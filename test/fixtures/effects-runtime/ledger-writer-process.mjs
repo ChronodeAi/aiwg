@@ -30,6 +30,5 @@ process.stdin.once('data', async () => {
       results.push({ index, code: error?.code ?? 'unexpected', exitCode: error?.exitCode ?? 1 });
     }
   }
-  process.stdout.write(`${JSON.stringify(results)}\n`);
-  process.exit(0);
+  process.stdout.write(`${JSON.stringify(results)}\n`, () => process.exit(0));
 });
