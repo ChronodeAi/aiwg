@@ -10,7 +10,7 @@ const route = vi.hoisted(() => ({ root: '' }));
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>();
   return { ...actual, execFileSync: (command: string, args: string[], options: unknown) => command === 'aiwg'
-    ? JSON.stringify({ artifact_root: route.root, write_ready: true }) : actual.execFileSync(command, args, options as any) };
+    ? JSON.stringify({ artifact_root: route.root, write_ready: true }) : actual.execFileSync(command, args, { ...(options as object), timeout: 10_000 }) };
 });
 const estimator = new CanonicalJsonByteEstimator();
 const profile = { id: 'jev-tv12-unqualified', version: '1.0.0', estimator: { id: estimator.id, version: estimator.version },
@@ -133,7 +133,7 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
   });
   it('requires exact clean source including untracked files', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tv12-source-'));
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim();
     try {
       git('init'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'fixture');
       const head = git('rev-parse', 'HEAD'); await expect(assertContextLiveSource(root, head)).resolves.toBeUndefined();
@@ -155,7 +155,7 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
     s.approval.preregistrationDigest = contextLiveDigest(contextLivePreregistration(s.corpus, s.approval.marginRule));
     const root = await mkdtemp(join(tmpdir(), 'tv12-orchestration-'));
     const output = await mkdtemp(join(tmpdir(), 'tv12-artifacts-')); route.root = output;
-    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim();
     try {
       await mkdir(join(root, 'src/decision/adapters'), { recursive: true });
       for (const file of ['context-live-qualification.ts', 'context-plan.ts', 'adapters/jev.ts']) {
