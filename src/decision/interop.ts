@@ -333,8 +333,8 @@ function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: Xm
     maxObservedDepth = Math.max(maxObservedDepth, stack.length + 1);
     if (maxObservedDepth > bounds.maxDepth) throw new DecisionInteropError('dmn-depth-bound', `DMN XML exceeds depth ${bounds.maxDepth}`);
     const element = elementFromTag(tag);
-    if (!allowedNamespace(element)) throw new DecisionInteropError('dmn-namespace', `Unsupported DMN namespace for ${element.local}`);
-    if (!SUPPORTED_DMN_ELEMENTS.has(element.local)) throw new DecisionInteropError('dmn-unsupported-element', `Unsupported DMN element ${element.local}`);
+    if (!allowedNamespace(element)) throw new DecisionInteropError('dmn-namespace', 'Unsupported DMN namespace');
+    if (!SUPPORTED_DMN_ELEMENTS.has(element.local)) throw new DecisionInteropError('dmn-unsupported-element', 'Unsupported DMN element');
     stack.at(-1)?.children.push(element);
     stack.push(element);
   });
@@ -352,7 +352,7 @@ function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: Xm
     if (!stack.length && closed) root = closed;
   });
   parser.on('error', error => {
-    throw new DecisionInteropError('dmn-xml-parse', error.message);
+    throw new DecisionInteropError('dmn-xml-parse', sanitizeXmlParseError(error.message));
   });
   const chunkSize = 8192;
   for (let offset = 0; offset < xml.length; offset += chunkSize) {
@@ -378,6 +378,11 @@ function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: Xm
   }
 }
 
+function sanitizeXmlParseError(message: string): string {
+  const location = /^(\d+:\d+):/u.exec(message)?.[1];
+  return location ? `${location}: DMN XML parse error` : 'DMN XML parse error';
+}
+
 function elementFromTag(tag: SaxesTag): XmlElement {
   const attributes: Record<string, string> = {};
   for (const [name, attr] of Object.entries(tag.attributes)) {
@@ -386,7 +391,7 @@ function elementFromTag(tag: SaxesTag): XmlElement {
     const uri = typeof attr === 'string' ? '' : attr.uri;
     if (uri && uri !== DECISION_INTEROP_DMN_NAMESPACE && uri !== 'https://aiwg.io/spec/decision-interop/v1'
       && uri !== 'http://www.w3.org/2000/xmlns/') {
-      throw new DecisionInteropError('dmn-namespace', `Unsupported namespace on attribute ${name}`);
+      throw new DecisionInteropError('dmn-namespace', 'Unsupported namespace on attribute');
     }
   }
   return { local: tag.local ?? tag.name, uri: tag.uri ?? '', attributes, text: '', children: [] };
@@ -437,7 +442,7 @@ function extractDmnTable(root: XmlElement, bounds: DecisionInteropBounds, extern
     if (rule.inputs.length !== inputs.length || rule.outputs.length !== outputs.length) throw new DecisionInteropError('dmn-rule-shape', 'Each DMN rule must have one entry per declared input and output');
   }
   if ((hitPolicy === 'FIRST' || hitPolicy === 'RULE ORDER' || hitPolicy === 'COLLECT') && rules.some(rule => rule.order === null)) {
-    throw new DecisionInteropError('dmn-ambiguous-order', `${hitPolicy} requires explicit aiwg:order on every rule`);
+    throw new DecisionInteropError('dmn-ambiguous-order', 'DMN hit policy requires explicit aiwg:order on every rule');
   }
   const ordered = rules.slice().sort((left, right) => (left.order ?? 0) - (right.order ?? 0) || left.id.localeCompare(right.id));
   if (new Set(ordered.map(rule => rule.order).filter(order => order !== null)).size !== ordered.filter(rule => rule.order !== null).length) {
@@ -581,8 +586,8 @@ function dependenciesFor(decision: XmlElement, decisions: XmlElement[], external
   assertUnique(ordered, 'DMN decision dependencies');
   return ordered.map(alias => {
     const pin = externalDecisionPins[alias];
-    if (!pin) throw new DecisionInteropError('dmn-dependency-pin-required', `DMN dependency '${alias}' requires a caller-supplied external decision pin`);
-    if (pin.id !== alias) throw new DecisionInteropError('dmn-dependency-pin-mismatch', `DMN dependency '${alias}' pin id must match the decision id`);
+    if (!pin) throw new DecisionInteropError('dmn-dependency-pin-required', 'DMN dependency requires a caller-supplied external decision pin');
+    if (pin.id !== alias) throw new DecisionInteropError('dmn-dependency-pin-mismatch', 'DMN dependency pin id must match the decision id');
     return { alias, decision: structuredClone(pin) };
   });
 }
@@ -608,7 +613,7 @@ function requiredDecisionIds(decision: XmlElement, decisions: Map<string, XmlEle
 function parseHitPolicy(value: string): DmnHitPolicy {
   const normalized = value.trim().toUpperCase().replace(/_/gu, ' ');
   if (['UNIQUE', 'ANY', 'FIRST', 'RULE ORDER', 'COLLECT'].includes(normalized)) return normalized as DmnHitPolicy;
-  throw new DecisionInteropError('dmn-hit-policy', `Unsupported DMN hit policy '${value}'`);
+  throw new DecisionInteropError('dmn-hit-policy', 'Unsupported DMN hit policy');
 }
 
 function parseAggregation(value: string | undefined, hitPolicy: DmnHitPolicy): DmnCollectAggregation | null {
@@ -616,7 +621,7 @@ function parseAggregation(value: string | undefined, hitPolicy: DmnHitPolicy): D
   if (hitPolicy !== 'COLLECT') throw new DecisionInteropError('dmn-aggregation', 'DMN aggregation is supported only with COLLECT');
   const normalized = value.trim().toUpperCase();
   if (['SUM', 'MIN', 'MAX', 'COUNT'].includes(normalized)) return normalized as DmnCollectAggregation;
-  throw new DecisionInteropError('dmn-aggregation', `Unsupported DMN aggregation '${value}'`);
+  throw new DecisionInteropError('dmn-aggregation', 'Unsupported DMN aggregation');
 }
 
 function orderOf(rule: XmlElement): number | null {
@@ -734,7 +739,7 @@ function assertNoControlOverride(value: unknown, path: string): void {
   }
   if (!value || typeof value !== 'object') return;
   for (const [key, child] of Object.entries(value)) {
-    if (FORBIDDEN_CONTROL_FIELDS.has(key)) throw new DecisionInteropError('interop-control-override', `Imported policy cannot set ${path}.${key}`);
+    if (FORBIDDEN_CONTROL_FIELDS.has(key)) throw new DecisionInteropError('interop-control-override', 'Imported policy cannot set a control field');
     assertNoControlOverride(child, `${path}.${key}`);
   }
 }

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SaxesParser, type SaxesTag } from 'saxes';
@@ -134,10 +135,10 @@ describe('INTOP review regressions: hostile import and native equivalence', () =
     const xml = table(row('allow', 1))
       .replace('<decision id="decision" name="Decision"><decisionTable', '<decision id="stored" name="Stored evidence"/><decision id="decision" name="Decision"><informationRequirement><requiredDecision href="#stored"/></informationRequirement><decisionTable');
     const mapping = importDmnDecisionTable(xml, { externalDecisionPins: { stored: depPin } });
-    const modelCall = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('transport must not be used for replay'));
     const replay = evaluateDmnProfile(mapping, { role: 'guest' }, { stored: acceptedDependencyEvidence('stored') });
     expect(replay).toMatchObject({ status: 'completed', outcome: 'allow', matchedRules: ['allow'] });
-    expect(modelCall).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
 
     const dir = await mkdtemp(join(tmpdir(), 'interop-review-auth-')); reviewDirs.push(dir);
     const tenant = { tenantId: 'tenant-interop', projectId: 'project-interop' };
@@ -164,8 +165,10 @@ describe('INTOP review regressions: hostile import and native equivalence', () =
 
   it('rejects archive or compressed-looking binary input as non-XML without fetching remote resources', () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be used'));
-    const gzipMagicBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]).toString('latin1');
-    expect(() => importDmnDecisionTable(gzipMagicBytes)).toThrow(/parse|root|empty|namespace|unsupported|disallowed character/i);
+    const compressed = gzipSync(Buffer.alloc(4096, '<')).toString('latin1');
+    expect(Buffer.byteLength(compressed, 'latin1')).toBeLessThan(256);
+    expect(() => importDmnDecisionTable(compressed, { bounds: { maxBytes: 256 } }))
+      .toThrow(/parse|root|empty|namespace|unsupported|disallowed character/i);
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -188,6 +191,39 @@ describe('INTOP review regressions: hostile import and native equivalence', () =
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).not.toContain('SECRET_CANARY');
   });
+  it('sanitizes malformed XML, namespace, element and attribute names from parser errors', () => {
+    for (const xml of [
+      '<SECRET_CANARY',
+      table().replace('xmlns="https://www.omg.org/spec/DMN/20240513/MODEL/"', 'xmlns="https://SECRET_CANARY.invalid/dmn"'),
+      table().replace('<decisionTable', '<SECRET_CANARY /><decisionTable'),
+      table().replace('<definitions ', '<definitions canary:SECRET_CANARY="x" xmlns:canary="https://evil.invalid/SECRET_CANARY" '),
+    ]) {
+      let error: unknown;
+      try { importDmnDecisionTable(xml); } catch (caught) { error = caught; }
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).not.toContain('SECRET_CANARY');
+    }
+  });
+
+  it('sanitizes imported identifiers and values from unsupported policy diagnostics', () => {
+    const cases: Array<() => unknown> = [
+      () => importDmnDecisionTable(table(undefined, 'SECRET_CANARY' as DmnHitPolicy)),
+      () => importDmnDecisionTable(table(undefined, 'COLLECT', 'SECRET_CANARY')),
+      () => importDmnDecisionTable(table().replace('<decision id="decision" name="Decision"><decisionTable',
+        '<decision id="SECRET_CANARY" name="Secret"/><decision id="decision" name="Decision"><informationRequirement><requiredDecision href="#SECRET_CANARY"/></informationRequirement><decisionTable')),
+      () => importDmnDecisionTable(table().replace('<decision id="decision" name="Decision"><decisionTable',
+        '<decision id="stored" name="Stored"/><decision id="decision" name="Decision"><informationRequirement><requiredDecision href="#stored"/></informationRequirement><decisionTable'),
+      { externalDecisionPins: { stored: { ...depPin, id: 'SECRET_CANARY' } } }),
+      () => exportOpaDecisionLog(storedResult(), { ...envelope(), input: { SECRET_CANARY: { provider: 'evil' } } }),
+    ];
+    for (const run of cases) {
+      let error: unknown;
+      try { run(); } catch (caught) { error = caught; }
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).not.toContain('SECRET_CANARY');
+    }
+  });
+
 
   it('does not claim signature verification from a bare trustedSource boolean', () => {
     const mapping = importDmnDecisionTable(table(), { trustedSource: true });
