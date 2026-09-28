@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   DECISION_API_VERSION,
   DECISION_API_VERSION_STRUCTURED,
+  DECISION_LIFECYCLE_SURFACES,
+  DECISION_LIFECYCLE_VERSION,
   DecisionFeatureExportError,
   DecisionFeatureExportService,
   MemoryDecisionFeatureExportStore,
@@ -11,8 +13,11 @@ import {
   createDecisionFeatureObservation,
   decisionFeatureTrainServeContract,
   deterministicFeatureSplit,
+  eraseDecisionSubject,
   generateDecisionFeatureSet,
   loadDecisionFeatureCsv,
+  placeDecisionLifecycleHold,
+  restoreDecisionSubjectBackup,
   semanticFeatureContentDigest,
   serializeDecisionFeatureCsv,
   serializeDecisionFeatureJsonl,
@@ -22,7 +27,9 @@ import {
   type DecisionDefinition,
   type DecisionFeatureExportPolicy,
   type DecisionFeatureSourceLifecycleStore,
+  type DecisionLifecycleBackupEntry,
   type DecisionLifecycleHold,
+  type DecisionLifecyclePolicy,
   type DecisionLifecycleReference,
   type DecisionLifecycleReferenceState,
   type DecisionLifecycleTombstone,
@@ -117,6 +124,13 @@ function policy(): DecisionFeatureExportPolicy {
     allowOutcomeLabels: false,
     reidentificationCanary: 'CANARY_NEVER_IN_FEATURES',
   };
+}
+
+function lifecyclePolicy(): DecisionLifecyclePolicy {
+  const rule = { classification: 'restricted' as const, accessScopes: ['feature-exporter'], retentionMs: 86_400_000,
+    export: 'sanitized' as const, deletion: 'tombstone' as const, backup: 'expire-with-primary' as const };
+  return { version: DECISION_LIFECYCLE_VERSION,
+    surfaces: Object.fromEntries(DECISION_LIFECYCLE_SURFACES.map(surface => [surface, { ...rule }])) as DecisionLifecyclePolicy['surfaces'] };
 }
 
 function featureSet() {
@@ -391,6 +405,18 @@ describe('decision feature export', () => {
       .toBe(first.manifest.semanticContentDigest);
   });
 
+  it('denies cross-project manifest serialization before any manifest is produced', () => {
+    const set = featureSet();
+    const row = createDecisionFeatureObservation({
+      featureSet: set, result: result(), definitions, subjectId: 'subject-1',
+      eventTime: '2026-09-24T00:00:00.000Z', exportTime: '2026-09-24T00:00:01.000Z', authorization: policy(),
+    });
+    let exported: ReturnType<typeof serializeDecisionFeatureJsonl> | undefined;
+    expect(() => { exported = serializeDecisionFeatureJsonl(set, [row], { ...policy(), projectId: 'other-project' },
+      '2026-09-24T00:00:02.000Z'); }).toThrow(/authorization/);
+    expect(exported).toBeUndefined();
+  });
+
   it('rejects train/serve drift before downstream inference', () => {
     const set = featureSet();
     const row = createDecisionFeatureObservation({
@@ -585,22 +611,37 @@ describe('decision feature export', () => {
   it('uses host D10 lifecycle links, tombstones and holds rather than row self-assertions', async () => {
     const set = featureSet();
     const lifecycle = new LifecycleFixtureStore();
-    const service = new DecisionFeatureExportService(set, new MemoryDecisionFeatureExportStore(), undefined, lifecycle);
+    const store = new MemoryDecisionFeatureExportStore();
+    const service = new DecisionFeatureExportService(set, store, lifecyclePolicy(), lifecycle);
     const row = await service.create({ featureSet: set, result: result(), definitions, subjectId: 'subject-1',
       eventTime: '2026-09-24T00:00:00.000Z', exportTime: '2026-09-24T00:00:01.000Z', authorization: policy() });
     expect(lifecycle.registered).toHaveLength(1);
-    await lifecycle.tombstone({ subject: 'subject-1', reference: { surface: 'export', opaqueId: row.lifecycle.reference },
-      deletedAt: Date.parse('2026-09-24T00:00:02.000Z') });
-    await expect(service.read(policy(), row.observationId, Date.parse('2026-09-24T00:00:03.000Z'))).rejects.toThrow(/lifecycle reference/);
-    await expect(service.exportJsonl(policy(), '2026-09-24T00:00:03.000Z', Date.parse('2026-09-24T00:00:03.000Z')))
+
+    const backup: DecisionLifecycleBackupEntry[] = [{ subject: 'subject-1',
+      reference: { surface: 'export', opaqueId: row.lifecycle.reference }, createdAt: Date.parse('2026-09-24T00:00:01.000Z') }];
+    const backedUpRow = structuredClone(row);
+    await eraseDecisionSubject('subject-1', lifecyclePolicy(), lifecycle, Date.parse('2026-09-24T00:00:02.000Z'));
+    let restoreHandlerCalls = 0;
+    const restoreReport = await restoreDecisionSubjectBackup(backup, lifecyclePolicy(), lifecycle.tombstones, {
+      export: async () => { restoreHandlerCalls++; await store.create(backedUpRow); },
+    }, Date.parse('2026-09-24T00:00:03.000Z'));
+    expect(restoreHandlerCalls).toBe(0);
+    expect(restoreReport.restored).toEqual([]);
+    expect(restoreReport.refused).toMatchObject([{ reason: 'tombstoned' }]);
+    await expect(service.read(policy(), row.observationId, Date.parse('2026-09-24T00:00:04.000Z'))).rejects.toThrow(/lifecycle reference/);
+    await expect(service.list(policy(), Date.parse('2026-09-24T00:00:04.000Z'))).resolves.toEqual([]);
+    await expect(service.exportJsonl(policy(), '2026-09-24T00:00:04.000Z', Date.parse('2026-09-24T00:00:04.000Z')))
       .resolves.toMatchObject({ manifest: { rowCount: 0 } });
 
     const heldLifecycle = new LifecycleFixtureStore();
-    const heldService = new DecisionFeatureExportService(set, new MemoryDecisionFeatureExportStore(), undefined, heldLifecycle);
+    const heldService = new DecisionFeatureExportService(set, new MemoryDecisionFeatureExportStore(), lifecyclePolicy(), heldLifecycle);
     const held = await heldService.create({ featureSet: set, result: result(), definitions, subjectId: 'subject-2',
       eventTime: '2026-09-24T00:00:00.000Z', exportTime: '2026-09-24T00:00:01.000Z', authorization: policy() });
-    await heldLifecycle.recordHold({ subject: 'subject-2', reason: 'legal', scope: ['export'],
-      expiresAt: Date.parse('2026-09-25T00:00:00.000Z'), authorizedBy: 'counsel' });
+    await placeDecisionLifecycleHold({ subject: 'subject-2', reason: 'legal', scope: ['export'],
+      expiresAt: Date.parse('2026-09-25T00:00:00.000Z'), authorizedBy: 'counsel' }, async () => true,
+    heldLifecycle, Date.parse('2026-09-24T00:00:02.000Z'));
+    await expect(eraseDecisionSubject('subject-2', lifecyclePolicy(), heldLifecycle, Date.parse('2026-09-24T00:00:03.000Z')))
+      .rejects.toThrow(/hold/);
     await expect(heldService.delete(policy(), held.observationId, Date.parse('2026-09-24T00:00:03.000Z'))).rejects.toThrow(/legal hold/);
   });
 });
