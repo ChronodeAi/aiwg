@@ -18,6 +18,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- The decision graph declaration bundle includes its transitive protected-file
+  types, so strict TypeScript consumers do not need `skipLibCheck` (#2740).
 - Decision pattern packs require semantic subjects before inference, including
   classification text, RAG passages and comparison text, citation claims and
   source text, candidate evidence, and proposed tool calls. Synthetic fixtures

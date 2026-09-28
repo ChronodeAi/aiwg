@@ -97,6 +97,7 @@ describe('decision-engine clean install from the packed tarball', () => {
   it('ships the addon examples, runtime locator and compiled runtime', () => {
     for (const relative of [
       'dist/src/decision/index.js',
+      'dist/src/storage/protected-files.d.ts',
       'agentic/code/addons/decision-engine/manifest.json',
       'agentic/code/addons/decision-engine/skills/decision-evaluate/scripts/runtime-root.mjs',
       'agentic/code/addons/decision-engine/examples/dispatcher-request-llm.json',
@@ -181,7 +182,7 @@ describe('decision-engine clean install from the packed tarball', () => {
       export const planner: (value: unknown, pins: ReadonlySet<string>) => GraphPlan = planDecisionGraph;
     `);
     ok(run(process.execPath, [path.join(ROOT, 'node_modules/typescript/bin/tsc'),
-      '--noEmit', '--strict', '--skipLibCheck', '--module', 'NodeNext', '--target', 'ES2022', typeProbe],
+      '--noEmit', '--strict', '--module', 'NodeNext', '--target', 'ES2022', typeProbe],
     { cwd: consumer, env: isolatedEnv() }));
   }, 180_000);
 
