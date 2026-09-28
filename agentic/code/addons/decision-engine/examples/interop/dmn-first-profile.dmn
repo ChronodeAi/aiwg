@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="https://www.omg.org/spec/DMN/20240513/MODEL/" xmlns:aiwg="https://aiwg.io/spec/decision-interop/v1" id="aiwgInterop" name="AIWG Interop" namespace="https://aiwg.io/examples/decision-interop">
+  <decision id="route" name="Route reviewed evidence">
+    <decisionTable id="route-table" hitPolicy="FIRST" aiwg:conflict="defer-on-conflict">
+      <input id="category"><inputExpression typeRef="string"><text>/category</text></inputExpression></input>
+      <input id="score"><inputExpression typeRef="number"><text>/score</text></inputExpression></input>
+      <output id="outcome" name="outcome" />
+      <rule id="review" aiwg:order="1">
+        <inputEntry><text>= "documentation"</text></inputEntry>
+        <inputEntry><text>&lt; 0.8</text></inputEntry>
+        <outputEntry><text>"manual-review"</text></outputEntry>
+      </rule>
+      <rule id="accept" aiwg:order="2">
+        <inputEntry><text>= "documentation"</text></inputEntry>
+        <inputEntry><text>-</text></inputEntry>
+        <outputEntry><text>"docs-review"</text></outputEntry>
+      </rule>
+    </decisionTable>
+  </decision>
+</definitions>

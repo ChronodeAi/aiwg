@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/OpaDecisionLogExport.v1.schema.json",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "const": "decision-interop.aiwg.io/v1" },
+    "decision_id": { "type": "string", "minLength": 1 },
+    "trace_id": { "type": "string", "minLength": 1 },
+    "span_id": { "type": "string", "minLength": 1 },
+    "path": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "minLength": 1 },
+    "bundles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "revision": { "type": "string", "minLength": 1 },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        },
+        "required": ["name", "revision"],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "result": {},
+    "input": {},
+    "metrics": { "type": "object", "additionalProperties": { "type": "number" } },
+    "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+    "revisionLineage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": { "enum": ["ruleset", "binding", "policy-bundle", "calibration"] },
+          "id": { "type": "string", "minLength": 1 },
+          "version": { "type": "string", "minLength": 1 },
+          "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        },
+        "required": ["kind", "id", "version", "digest"],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "redaction": {
+      "type": "object",
+      "properties": {
+        "mode": { "const": "default-deny-sensitive" },
+        "removed": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["mode", "removed"],
+      "additionalProperties": false
+    },
+    "enforcement": {
+      "type": "object",
+      "properties": {
+        "separated": { "const": true },
+        "contract": { "const": "decision-only-action-requires-aiwg-authorization" }
+      },
+      "required": ["separated", "contract"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["schemaVersion", "decision_id", "path", "bundles", "result", "input", "revisionLineage", "redaction", "enforcement"],
+  "additionalProperties": false
+}
