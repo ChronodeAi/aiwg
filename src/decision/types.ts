@@ -89,7 +89,7 @@ export interface DecisionRuleset {
     inputSchema: JsonSchema;
     evaluations: Array<{ alias: string; decision: ArtifactPin; inputPointer: string }>;
     rules: Array<{ id: string; priority: number; when: DecisionPredicate; outcome: JsonValue }>;
-    composition: 'first-match' | 'collect';
+    composition: 'first-match' | 'unique' | 'any' | 'collect' | 'collect-sum' | 'collect-min' | 'collect-max' | 'collect-count';
     conflict: 'error' | 'review';
     defaultOutcome: JsonValue;
     failureOutcome: JsonValue;

@@ -86,7 +86,7 @@
             ],
             "additionalProperties": false
           },
-          "minItems": 1
+          "minItems": 0
         },
         "rules": {
           "type": "array",
@@ -120,7 +120,13 @@
         "composition": {
           "enum": [
             "first-match",
-            "collect"
+            "unique",
+            "any",
+            "collect",
+            "collect-sum",
+            "collect-min",
+            "collect-max",
+            "collect-count"
           ]
         },
         "conflict": {

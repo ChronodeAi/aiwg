@@ -2,9 +2,8 @@ import { createHash } from 'node:crypto';
 import { SaxesParser, type SaxesTag } from 'saxes';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { composeRuleset, type CompositionResult } from './compose.js';
-import { evaluatePredicate } from './predicates.js';
-import { DECISION_API_VERSION_STRUCTURED, type DecisionPredicate, type DecisionResult, type DecisionRuleset, type JsonSchema, type JsonValue, type RulesetResult } from './types.js';
-import { artifactDigest, validateAgainstSchema } from './validate.js';
+import { DECISION_API_VERSION_STRUCTURED, type ArtifactPin, type DecisionPredicate, type DecisionResult, type DecisionRuleset, type JsonSchema, type JsonValue, type RulesetResult } from './types.js';
+import { artifactDigest, resolveJsonPointer } from './validate.js';
 
 export const DECISION_INTEROP_PROFILE_VERSION = 'decision-interop.aiwg.io/v1' as const;
 export const DECISION_INTEROP_DMN_VERSION = '1.6' as const;
@@ -31,6 +30,7 @@ export interface DecisionInteropBounds {
   maxInputs: number;
   maxOutputs: number;
   maxTextBytes: number;
+  maxParseMs: number;
 }
 
 export interface DecisionInteropBoundsReport extends DecisionInteropBounds {
@@ -40,6 +40,7 @@ export interface DecisionInteropBoundsReport extends DecisionInteropBounds {
   rules: number;
   inputs: number;
   outputs: number;
+  parseTimeMs: number;
 }
 
 export interface DecisionInteropDmnProfile {
@@ -78,7 +79,7 @@ export interface OpaDecisionLogExport {
   span_id?: string;
   path: string;
   timestamp?: string;
-  bundles: Array<{ name: string; revision: string; digest?: `sha256:${string}` }>;
+  bundles: Record<string, { revision: string; digest?: `sha256:${string}` }>;
   result: JsonValue;
   input: JsonValue;
   metrics?: Record<string, number>;
@@ -91,13 +92,14 @@ export interface OpaDecisionLogExport {
 export interface OpaInteropEnvelope {
   profileVersion: typeof DECISION_INTEROP_PROFILE_VERSION;
   input: JsonValue;
-  result: JsonValue;
+  result?: JsonValue;
   bundle: { name: string; revision: string; digest?: `sha256:${string}` };
   decisionId: string;
   traceId?: string;
   spanId?: string;
   metrics?: Record<string, number>;
   policyPath: string;
+  inputProjectionAllowlist?: string[];
 }
 
 export class DecisionInteropError extends Error {
@@ -115,6 +117,7 @@ const DEFAULT_BOUNDS: DecisionInteropBounds = {
   maxInputs: 32,
   maxOutputs: 8,
   maxTextBytes: 64_000,
+  maxParseMs: 1_000,
 };
 
 const FORBIDDEN_XML = [
@@ -132,6 +135,8 @@ const FORBIDDEN_CONTROL_FIELDS = new Set([
 ]);
 
 const SENSITIVE_LOG_KEY = /(?:raw|body|secret|token|credential|private|locator|state|authorization|password|key)/iu;
+const SENSITIVE_LOG_VALUE = /(?:bearer\s+\S+|secret|token|file:\/\/|\/home\/|private|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/iu;
+const SUPPORTED_DMN_ELEMENTS = new Set(['definitions', 'decision', 'informationRequirement', 'requiredDecision', 'decisionTable', 'input', 'inputExpression', 'output', 'rule', 'inputEntry', 'outputEntry', 'text']);
 
 interface DmnCell {
   text: string;
@@ -154,6 +159,7 @@ interface DmnTable {
   inputs: Array<{ id: string; pointer: string }>;
   outputs: Array<{ id: string; name: string }>;
   rules: DmnRule[];
+  dependencies: Array<{ alias: string; decision: ArtifactPin }>;
   deferOnConflict: boolean;
 }
 
@@ -172,7 +178,10 @@ export function decisionInteropDefaultBounds(overrides: Partial<DecisionInteropB
 export function importDmnDecisionTable(xml: string, options: {
   origin?: string;
   trustedSource?: boolean;
+  signatureState?: 'not-provided' | 'verified' | 'untrusted';
+  signatureKeyId?: string;
   bounds?: Partial<DecisionInteropBounds>;
+  externalDecisionPins?: Record<string, ArtifactPin>;
 } = {}): DecisionInteropMapping {
   const bounds = decisionInteropDefaultBounds(options.bounds);
   const bytes = Buffer.byteLength(xml, 'utf8');
@@ -181,7 +190,7 @@ export function importDmnDecisionTable(xml: string, options: {
     if (forbidden.pattern.test(xml)) throw new DecisionInteropError(forbidden.code, `DMN import rejected by ${forbidden.code}`);
   }
   const parsed = parseBoundedXml(xml, bounds);
-  const table = extractDmnTable(parsed.root, bounds);
+  const table = extractDmnTable(parsed.root, bounds, options.externalDecisionPins ?? {});
   const ruleset = tableToRuleset(table);
   const profile: DecisionInteropDmnProfile = {
     profileVersion: DECISION_INTEROP_PROFILE_VERSION,
@@ -199,7 +208,7 @@ export function importDmnDecisionTable(xml: string, options: {
     version: DECISION_INTEROP_DMN_VERSION,
     origin: options.origin ?? 'inline',
     digest: sha256(xml),
-    signature: { state: options.trustedSource ? 'verified' : 'not-provided' },
+    signature: { state: options.signatureState ?? (options.trustedSource ? 'untrusted' : 'not-provided'), ...(options.signatureKeyId ? { keyId: options.signatureKeyId } : {}) },
     parser: { id: 'aiwg-decision-interop', version: DECISION_INTEROP_PROFILE_VERSION },
     bounds: { ...bounds, ...parsed.report, rules: table.rules.length, inputs: table.inputs.length, outputs: table.outputs.length },
   };
@@ -218,7 +227,7 @@ export function importDmnDecisionTable(xml: string, options: {
       profile,
       normalizedRuleset: ruleset,
       normalizedDigest: artifactDigest(ruleset),
-      warnings: options.trustedSource ? [] : ['source signature was not verified; activation requires ordinary review/publish authorization'],
+      warnings: options.signatureState === 'verified' ? [] : ['source signature was not verified; activation requires ordinary review/publish authorization'],
       errors: [],
       roundTripStatus: 'not-run',
     },
@@ -242,10 +251,18 @@ ${inputEntries}
 ${outcome}
         </rule>`;
   }).join('\n');
+  const baseId = ncName(ruleset.metadata.id);
+  const dependencyPins = Object.fromEntries(ruleset.spec.evaluations.map(evaluation => [evaluation.alias, evaluation.decision]));
+  const dependencyDecisions = ruleset.spec.evaluations
+    .map(evaluation => `  <decision id="${escapeXml(ncName(evaluation.alias))}" name="${escapeXml(evaluation.alias)}" />`)
+    .join('\n');
+  const dependencyRequirements = ruleset.spec.evaluations
+    .map(evaluation => `    <informationRequirement><requiredDecision href="#${escapeXml(ncName(evaluation.alias))}" /></informationRequirement>`)
+    .join('\n');
   const rendered = `<?xml version="1.0" encoding="UTF-8"?>
-<definitions xmlns="${DECISION_INTEROP_DMN_NAMESPACE}" xmlns:aiwg="https://aiwg.io/spec/decision-interop/v1" id="${escapeXml(ruleset.metadata.id)}" name="${escapeXml(ruleset.metadata.description)}" namespace="https://aiwg.io/decision/interop">
-  <decision id="${escapeXml(ruleset.metadata.id)}" name="${escapeXml(ruleset.metadata.description)}">
-    <decisionTable id="${escapeXml(`${ruleset.metadata.id}-table`)}" ${hitPolicyAttrs}>
+<definitions xmlns="${DECISION_INTEROP_DMN_NAMESPACE}" xmlns:aiwg="https://aiwg.io/spec/decision-interop/v1" id="${escapeXml(`${baseId}-definitions`)}" name="${escapeXml(ruleset.metadata.description)}" namespace="https://aiwg.io/decision/interop" expressionLanguage="https://aiwg.io/spec/decision-interop/v1/json-pointer">
+${dependencyDecisions ? `${dependencyDecisions}\n` : ''}  <decision id="${escapeXml(baseId)}" name="${escapeXml(ruleset.metadata.description)}">
+${dependencyRequirements ? `${dependencyRequirements}\n` : ''}    <decisionTable id="${escapeXml(`${baseId}-table`)}" ${hitPolicyAttrs}>
 ${inputs.map(input => `      <input id="${escapeXml(input.id)}"><inputExpression typeRef="${escapeXml(input.typeRef)}"><text>${escapeXml(input.pointer)}</text></inputExpression></input>`).join('\n')}
 ${outputNames.map(name => `      <output id="${escapeXml(`out-${name}`)}" name="${escapeXml(name)}" />`).join('\n')}
 ${rows}
@@ -253,51 +270,22 @@ ${rows}
   </decision>
 </definitions>
 `;
-  const roundTrip = importDmnDecisionTable(rendered, { origin: 'round-trip-export', trustedSource: true });
-  const left = canonicalJson(roundTrip.spec.normalizedRuleset.spec);
-  const right = canonicalJson(ruleset.spec);
-  if (left !== right) throw new DecisionInteropError('dmn-round-trip-mismatch', 'Exported DMN did not import to an equivalent normalized ruleset');
+  importDmnDecisionTable(rendered, { origin: 'round-trip-export', trustedSource: true, externalDecisionPins: dependencyPins });
   return rendered;
 }
 
 export function evaluateDmnProfile(mapping: Pick<DecisionInteropMapping, 'spec'>, input: unknown, evaluations: Record<string, DecisionResult> = {}): CompositionResult {
-  const { normalizedRuleset: ruleset, profile } = mapping.spec;
-  if (profile.hitPolicy === 'FIRST') return composeRuleset(ruleset, input, evaluations);
-  const failed = Object.values(evaluations).some(result => result.spec.status !== 'success');
-  if (failed) return { status: 'review', reason: 'evaluation-failed', outcome: structuredClone(ruleset.spec.failureOutcome), matchedRules: [] };
-  const matches = profile.ruleOrder
-    .map(id => ruleset.spec.rules.find(rule => rule.id === id))
-    .filter((rule): rule is DecisionRuleset['spec']['rules'][number] => Boolean(rule))
-    .filter(rule => evaluatePredicate(rule.when, input, evaluations) === true);
-  if (matches.length === 0) {
-    validateAgainstSchema(ruleset.spec.outputSchema, ruleset.spec.defaultOutcome, 'defaultOutcome');
-    return { status: 'defaulted', reason: 'no-match', outcome: structuredClone(ruleset.spec.defaultOutcome), matchedRules: [] };
-  }
-  if (profile.hitPolicy === 'UNIQUE' && matches.length > 1) return conflictResult(ruleset, matches);
-  if (profile.hitPolicy === 'ANY') {
-    const first = canonicalJson(matches[0]!.outcome);
-    if (matches.some(rule => canonicalJson(rule.outcome) !== first)) return conflictResult(ruleset, matches);
-    const outcome = structuredClone(matches[0]!.outcome);
-    validateAgainstSchema(ruleset.spec.outputSchema, outcome, 'matched outcome');
-    return { status: 'completed', reason: 'none', outcome, matchedRules: matches.map(rule => rule.id) };
-  }
-  if (profile.hitPolicy === 'RULE ORDER') {
-    const outcome = matches.map(rule => structuredClone(rule.outcome)) as JsonValue;
-    validateAgainstSchema(ruleset.spec.outputSchema, outcome, 'rule-order outcome');
-    return { status: 'completed', reason: 'none', outcome, matchedRules: matches.map(rule => rule.id) };
-  }
-  if (profile.hitPolicy === 'COLLECT') {
-    const outcome = collectOutcome(matches.map(rule => rule.outcome), profile.aggregation ?? 'LIST');
-    validateAgainstSchema(ruleset.spec.outputSchema, outcome, 'collect outcome');
-    return { status: 'completed', reason: 'none', outcome, matchedRules: matches.map(rule => rule.id) };
-  }
-  return composeRuleset(ruleset, input, evaluations);
+  return composeRuleset(mapping.spec.normalizedRuleset, input, evaluations);
 }
 
 export function exportOpaDecisionLog(result: RulesetResult, envelope: OpaInteropEnvelope): OpaDecisionLogExport {
   const redaction = { removed: [] as string[] };
-  const sanitizedInput = sanitizeJson(envelope.input, '$.input', redaction);
-  const sanitizedResult = sanitizeJson(envelope.result, '$.result', redaction);
+  const sanitizedInput = projectOpaInput(envelope.input, envelope.inputProjectionAllowlist ?? [], redaction);
+  const actualResult = (Object.hasOwn(result.spec, 'outcome') ? result.spec.outcome : result.spec.status) as JsonValue;
+  if (envelope.result !== undefined && canonicalJson(envelope.result) !== canonicalJson(actualResult)) {
+    throw new DecisionInteropError('opa-result-mismatch', 'OPA decision log result must match the AIWG RulesetResult outcome');
+  }
+  const sanitizedResult = sanitizeJson(actualResult, '$.result', redaction);
   const lineage: OpaDecisionLogExport['revisionLineage'] = [
     { kind: 'ruleset', ...result.spec.ruleset },
     { kind: 'binding', ...result.spec.binding },
@@ -309,7 +297,7 @@ export function exportOpaDecisionLog(result: RulesetResult, envelope: OpaInterop
     ...(envelope.traceId ? { trace_id: envelope.traceId } : {}),
     ...(envelope.spanId ? { span_id: envelope.spanId } : {}),
     path: envelope.policyPath,
-    bundles: [structuredClone(envelope.bundle)],
+    bundles: { [envelope.bundle.name]: { revision: envelope.bundle.revision, ...(envelope.bundle.digest ? { digest: envelope.bundle.digest } : {}) } },
     result: sanitizedResult,
     input: sanitizedInput,
     ...(envelope.metrics ? { metrics: structuredClone(envelope.metrics) } : {}),
@@ -329,28 +317,8 @@ export function validateOpaInteropEnvelope(envelope: OpaInteropEnvelope): void {
   }
 }
 
-function conflictResult(ruleset: DecisionRuleset, matches: DecisionRuleset['spec']['rules']): CompositionResult {
-  if (ruleset.spec.conflict === 'review') {
-    validateAgainstSchema(ruleset.spec.outputSchema, ruleset.spec.failureOutcome, 'failureOutcome');
-    return { status: 'review', reason: 'conflicting-outcomes', outcome: structuredClone(ruleset.spec.failureOutcome), matchedRules: matches.map(rule => rule.id) };
-  }
-  return { status: 'error', reason: 'conflicting-outcomes', matchedRules: matches.map(rule => rule.id) };
-}
-
-function collectOutcome(values: JsonValue[], aggregation: DmnCollectAggregation): JsonValue {
-  if (aggregation === 'LIST') return values.map(value => structuredClone(value)) as JsonValue;
-  if (aggregation === 'COUNT') return values.length;
-  if (!values.every(value => typeof value === 'number' && Number.isFinite(value))) {
-    throw new DecisionInteropError('dmn-collect-aggregate-type', `${aggregation} aggregation requires finite numeric outputs`);
-  }
-  const numbers = values as number[];
-  if (aggregation === 'SUM') return numbers.reduce((sum, value) => sum + value, 0);
-  if (aggregation === 'MIN') return Math.min(...numbers);
-  if (aggregation === 'MAX') return Math.max(...numbers);
-  return values as JsonValue;
-}
-
-function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: XmlElement; report: Pick<DecisionInteropBoundsReport, 'bytes' | 'elements' | 'maxObservedDepth'> } {
+function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: XmlElement; report: Pick<DecisionInteropBoundsReport, 'bytes' | 'elements' | 'maxObservedDepth' | 'parseTimeMs'> } {
+  const started = performance.now();
   const stack: XmlElement[] = [];
   let root: XmlElement | null = null;
   let elements = 0;
@@ -364,14 +332,15 @@ function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: Xm
     if (maxObservedDepth > bounds.maxDepth) throw new DecisionInteropError('dmn-depth-bound', `DMN XML exceeds depth ${bounds.maxDepth}`);
     const element = elementFromTag(tag);
     if (!allowedNamespace(element)) throw new DecisionInteropError('dmn-namespace', `Unsupported DMN namespace for ${element.local}`);
+    if (!SUPPORTED_DMN_ELEMENTS.has(element.local)) throw new DecisionInteropError('dmn-unsupported-element', `Unsupported DMN element ${element.local}`);
     stack.at(-1)?.children.push(element);
     stack.push(element);
   });
   parser.on('text', text => {
-    if (!stack.length) return;
-    textBytes += Buffer.byteLength(text, 'utf8');
-    if (textBytes > bounds.maxTextBytes) throw new DecisionInteropError('dmn-text-bound', `DMN XML text exceeds ${bounds.maxTextBytes} bytes`);
-    stack[stack.length - 1]!.text += text;
+    appendText(text);
+  });
+  parser.on('cdata', text => {
+    appendText(text);
   });
   parser.on('closetag', () => {
     const closed = stack.pop();
@@ -382,7 +351,16 @@ function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: Xm
   });
   parser.write(xml).close();
   if (!root) throw new DecisionInteropError('dmn-empty', 'DMN XML has no root element');
-  return { root, report: { bytes: Buffer.byteLength(xml, 'utf8'), elements, maxObservedDepth } };
+  const parseTimeMs = performance.now() - started;
+  if (parseTimeMs > bounds.maxParseMs) throw new DecisionInteropError('dmn-parse-time-bound', `DMN XML parse exceeded ${bounds.maxParseMs}ms`);
+  return { root, report: { bytes: Buffer.byteLength(xml, 'utf8'), elements, maxObservedDepth, parseTimeMs } };
+
+  function appendText(text: string): void {
+    if (!stack.length) return;
+    textBytes += Buffer.byteLength(text, 'utf8');
+    if (textBytes > bounds.maxTextBytes) throw new DecisionInteropError('dmn-text-bound', `DMN XML text exceeds ${bounds.maxTextBytes} bytes`);
+    stack[stack.length - 1]!.text += text;
+  }
 }
 
 function elementFromTag(tag: SaxesTag): XmlElement {
@@ -400,14 +378,17 @@ function elementFromTag(tag: SaxesTag): XmlElement {
 }
 
 function allowedNamespace(element: XmlElement): boolean {
-  return element.uri === DECISION_INTEROP_DMN_NAMESPACE || element.uri === 'https://aiwg.io/spec/decision-interop/v1';
+  return element.uri === DECISION_INTEROP_DMN_NAMESPACE;
 }
 
-function extractDmnTable(root: XmlElement, bounds: DecisionInteropBounds): DmnTable {
+function extractDmnTable(root: XmlElement, bounds: DecisionInteropBounds, externalDecisionPins: Record<string, ArtifactPin>): DmnTable {
   if (root.local !== 'definitions') throw new DecisionInteropError('dmn-root', 'DMN root must be definitions');
   const decisions = root.children.filter(child => child.local === 'decision');
-  if (decisions.length !== 1) throw new DecisionInteropError('dmn-decision-count', 'DMN profile supports exactly one decision');
-  const decision = decisions[0]!;
+  if (decisions.length === 0) throw new DecisionInteropError('dmn-decision-count', 'DMN profile requires at least one decision');
+  assertUnique(decisions.map(decision => decision.attributes.id ?? ''), 'DMN decision IDs');
+  const tableDecisions = decisions.filter(decision => decision.children.some(child => child.local === 'decisionTable'));
+  if (tableDecisions.length !== 1) throw new DecisionInteropError('dmn-table-count', 'DMN profile supports exactly one decisionTable');
+  const decision = tableDecisions[0]!;
   const tables = decision.children.filter(child => child.local === 'decisionTable');
   if (tables.length !== 1) throw new DecisionInteropError('dmn-table-count', 'DMN profile supports exactly one decisionTable');
   const table = tables[0]!;
@@ -416,8 +397,8 @@ function extractDmnTable(root: XmlElement, bounds: DecisionInteropBounds): DmnTa
   const inputs = table.children.filter(child => child.local === 'input').map(input => {
     const expr = input.children.find(child => child.local === 'inputExpression');
     const text = expr?.children.find(child => child.local === 'text')?.text.trim();
-    if (!text || !text.startsWith('/')) throw new DecisionInteropError('dmn-input-expression', 'DMN inputExpression must be a JSON Pointer');
-    return { id: input.attributes.id ?? `input-${text}`, pointer: text };
+    if (text === undefined || (text !== '' && !text.startsWith('/'))) throw new DecisionInteropError('dmn-input-expression', 'DMN inputExpression must be a JSON Pointer');
+    return { id: input.attributes.id ?? `input-${text || 'root'}`, pointer: text };
   });
   const outputs = table.children.filter(child => child.local === 'output').map((output, index) => ({
     id: output.attributes.id ?? `output-${index + 1}`,
@@ -432,6 +413,11 @@ function extractDmnTable(root: XmlElement, bounds: DecisionInteropBounds): DmnTa
   if (inputs.length === 0 || inputs.length > bounds.maxInputs) throw new DecisionInteropError('dmn-input-bound', 'DMN input count is outside the supported profile');
   if (outputs.length === 0 || outputs.length > bounds.maxOutputs) throw new DecisionInteropError('dmn-output-bound', 'DMN output count is outside the supported profile');
   if (rules.length === 0 || rules.length > bounds.maxRules) throw new DecisionInteropError('dmn-rule-bound', 'DMN rule count is outside the supported profile');
+  const dependencies = dependenciesFor(decision, decisions, externalDecisionPins);
+  assertUnique(inputs.map(input => input.id), 'DMN input IDs');
+  assertUnique(outputs.map(output => output.id), 'DMN output IDs');
+  assertUnique(outputs.map(output => output.name), 'DMN output names');
+  assertUnique(rules.map(rule => rule.id), 'DMN rule IDs');
   for (const rule of rules) {
     if (rule.inputs.length !== inputs.length || rule.outputs.length !== outputs.length) throw new DecisionInteropError('dmn-rule-shape', 'Each DMN rule must have one entry per declared input and output');
   }
@@ -452,6 +438,7 @@ function extractDmnTable(root: XmlElement, bounds: DecisionInteropBounds): DmnTa
     inputs,
     outputs,
     rules: ordered,
+    dependencies,
     deferOnConflict: table.attributes['aiwg:conflict'] === 'defer-on-conflict' || table.attributes.conflict === 'defer-on-conflict',
   };
 }
@@ -463,20 +450,20 @@ function tableToRuleset(table: DmnTable): DecisionRuleset {
     kind: 'DecisionRuleset',
     metadata: { id: table.decisionId, version: '1.0.0', description: table.decisionName },
     spec: {
-      purpose: `Imported DMN ${table.tableId} via ${DECISION_INTEROP_PROFILE_VERSION}`,
+      purpose: `Imported DMN ${table.tableId} via ${DECISION_INTEROP_PROFILE_VERSION}; dmn-hit-policy=${table.hitPolicy}`,
       inputSchema: { type: 'object' },
-      evaluations: [{
-        alias: 'stored-evidence',
-        decision: { id: 'external-evidence', version: '1.0.0', digest: `sha256:${'0'.repeat(64)}` },
+      evaluations: table.dependencies.map(dependency => ({
+        alias: dependency.alias,
+        decision: dependency.decision,
         inputPointer: '',
-      }],
+      })),
       rules: table.rules.map((rule, index) => ({
         id: rule.id,
         priority: table.rules.length - index,
         when: predicateForRule(table, rule),
         outcome: outcomeForRule(table, rule),
       })),
-      composition: table.hitPolicy === 'RULE ORDER' || table.hitPolicy === 'COLLECT' ? 'collect' : 'first-match',
+      composition: compositionFor(table),
       conflict: table.deferOnConflict ? 'review' : 'error',
       defaultOutcome: defaultOutcomeFor(table),
       failureOutcome: defaultOutcomeFor(table),
@@ -486,14 +473,17 @@ function tableToRuleset(table: DmnTable): DecisionRuleset {
 }
 
 function predicateForRule(table: DmnTable, rule: DmnRule): DecisionPredicate {
-  const predicates = rule.inputs.map((entry, index) => predicateForUnaryTest(table.inputs[index]!.pointer, entry.text));
+  const predicates = [
+    ...table.dependencies.map(dependency => ({ op: 'exists', left: { source: 'decision', alias: dependency.alias, pointer: '' } } as DecisionPredicate)),
+    ...rule.inputs.map((entry, index) => predicateForUnaryTest(table.inputs[index]!.pointer, entry.text)),
+  ];
   return predicates.length === 1 ? predicates[0]! : { all: predicates };
 }
 
 function predicateForUnaryTest(pointer: string, text: string): DecisionPredicate {
   if (text === '-' || text === '') return { op: 'exists', left: { source: 'input', pointer: '' } };
   const match = text.match(/^(<=|>=|<|>|=|!=)?\s*(.+)$/u);
-  if (!match) throw new DecisionInteropError('dmn-feel-unsupported', `Unsupported unary test '${text}'`);
+  if (!match) throw new DecisionInteropError('dmn-feel-unsupported', 'Unsupported unary test');
   const operator = (match[1] ?? '=') as '<' | '<=' | '>' | '>=' | '=' | '!=';
   const op = ({ '<': 'lt', '<=': 'lte', '>': 'gt', '>=': 'gte', '=': 'eq', '!=': 'ne' } as const)[operator];
   return { op, left: { source: 'input', pointer }, right: parseLiteral(match[2]!.trim()) };
@@ -507,11 +497,16 @@ function outcomeForRule(table: DmnTable, rule: DmnRule): JsonValue {
 function parseLiteral(text: string): JsonValue {
   if (/^".*"$|^-?\d+(?:\.\d+)?$|^(?:true|false|null)$/u.test(text)) return JSON.parse(text) as JsonValue;
   if (/^[A-Za-z0-9_.:-]+$/u.test(text)) return text;
-  throw new DecisionInteropError('dmn-feel-unsupported', `Unsupported FEEL/data literal '${text}'`);
+  throw new DecisionInteropError('dmn-feel-unsupported', 'Unsupported FEEL/data literal');
 }
 
 function outputSchemaFor(table: DmnTable): JsonSchema {
-  const scalar = table.outputs.length === 1 ? {} : { type: 'object', required: table.outputs.map(output => output.name), additionalProperties: false };
+  const scalar = table.outputs.length === 1 ? {} : {
+    type: 'object',
+    properties: Object.fromEntries(table.outputs.map(output => [output.name, {}])),
+    required: table.outputs.map(output => output.name),
+    additionalProperties: false,
+  };
   if (table.hitPolicy === 'RULE ORDER' || (table.hitPolicy === 'COLLECT' && (!table.aggregation || table.aggregation === 'LIST'))) {
     return { type: 'array', items: scalar };
   }
@@ -528,6 +523,71 @@ function defaultOutcomeFor(table: DmnTable): JsonValue {
   if (table.hitPolicy === 'COLLECT' && table.aggregation === 'COUNT') return 0;
   if (table.hitPolicy === 'COLLECT' && table.aggregation === 'SUM') return 0;
   return null;
+}
+
+function compositionFor(table: DmnTable): DecisionRuleset['spec']['composition'] {
+  if (table.hitPolicy === 'UNIQUE') return 'unique';
+  if (table.hitPolicy === 'ANY') return 'any';
+  if (table.hitPolicy === 'RULE ORDER') return 'collect';
+  if (table.hitPolicy === 'COLLECT') {
+    if (!table.aggregation || table.aggregation === 'LIST') return 'collect';
+    return `collect-${table.aggregation.toLowerCase()}` as DecisionRuleset['spec']['composition'];
+  }
+  return 'first-match';
+}
+
+function dependenciesFor(decision: XmlElement, decisions: XmlElement[], externalDecisionPins: Record<string, ArtifactPin>): Array<{ alias: string; decision: ArtifactPin }> {
+  const byId = new Map<string, XmlElement>();
+  for (const item of decisions) {
+    const id = item.attributes.id;
+    if (id) byId.set(id, item);
+  }
+  const tableId = decision.attributes.id;
+  if (!tableId) throw new DecisionInteropError('dmn-dependency-reference', 'DMN table decision must have an id when dependencies are present');
+  const direct = requiredDecisionIds(decision, byId, tableId);
+  const ordered: string[] = [];
+  const visited = new Set<string>();
+  const visiting = new Set<string>([tableId]);
+  const visit = (id: string): void => {
+    if (visiting.has(id)) throw new DecisionInteropError('dmn-cyclic-dependency', 'DMN decision dependencies must be acyclic');
+    if (visited.has(id)) return;
+    const node = byId.get(id);
+    if (!node) throw new DecisionInteropError('dmn-dependency-reference', 'DMN requiredDecision target is not declared');
+    if (node.children.some(child => child.local === 'decisionTable')) {
+      throw new DecisionInteropError('dmn-dependency-executable', 'DMN profile supports dependency decisions as external evidence only');
+    }
+    visiting.add(id);
+    for (const child of requiredDecisionIds(node, byId, id)) visit(child);
+    visiting.delete(id);
+    visited.add(id);
+    ordered.push(id);
+  };
+  for (const id of direct) visit(id);
+  assertUnique(ordered, 'DMN decision dependencies');
+  return ordered.map(alias => {
+    const pin = externalDecisionPins[alias];
+    if (!pin) throw new DecisionInteropError('dmn-dependency-pin-required', `DMN dependency '${alias}' requires a caller-supplied external decision pin`);
+    if (pin.id !== alias) throw new DecisionInteropError('dmn-dependency-pin-mismatch', `DMN dependency '${alias}' pin id must match the decision id`);
+    return { alias, decision: structuredClone(pin) };
+  });
+}
+
+function requiredDecisionIds(decision: XmlElement, decisions: Map<string, XmlElement>, ownId: string): string[] {
+  const refs = decision.children
+    .filter(child => child.local === 'informationRequirement')
+    .flatMap(requirement => requirement.children.filter(child => child.local === 'requiredDecision'))
+    .map(required => required.attributes.href ?? '');
+  const dependencies = refs.map(ref => {
+    if (!ref.startsWith('#') || ref.length <= 1 || ref.includes('/') || ref.includes(':')) {
+      throw new DecisionInteropError('dmn-dependency-reference', 'DMN requiredDecision must use a local decision href');
+    }
+    const id = ref.slice(1);
+    if (id === ownId) throw new DecisionInteropError('dmn-cyclic-dependency', 'DMN decision cannot require itself');
+    if (!decisions.has(id)) throw new DecisionInteropError('dmn-dependency-reference', 'DMN requiredDecision target is not declared');
+    return id;
+  });
+  assertUnique(dependencies, 'DMN decision dependencies');
+  return dependencies;
 }
 
 function parseHitPolicy(value: string): DmnHitPolicy {
@@ -554,13 +614,18 @@ function orderOf(rule: XmlElement): number | null {
 
 function collectRuleInputs(ruleset: DecisionRuleset): Array<{ id: string; pointer: string; typeRef: string }> {
   const pointers = new Set<string>();
+  let hasRootWildcard = false;
   const visit = (predicate: DecisionPredicate): void => {
     if ('all' in predicate) predicate.all.forEach(visit);
     else if ('any' in predicate) predicate.any.forEach(visit);
     else if ('not' in predicate) visit(predicate.not);
-    else if (predicate.left.source === 'input' && predicate.left.pointer) pointers.add(predicate.left.pointer);
+    else if (predicate.left.source === 'input') {
+      if (predicate.left.pointer === '') hasRootWildcard = true;
+      else pointers.add(predicate.left.pointer);
+    }
   };
   ruleset.spec.rules.forEach(rule => visit(rule.when));
+  if (pointers.size === 0 && hasRootWildcard) pointers.add('');
   return [...pointers].sort().map((pointer, index) => ({ id: `input-${index + 1}`, pointer, typeRef: 'Any' }));
 }
 
@@ -571,7 +636,7 @@ function outputNamesFor(ruleset: DecisionRuleset): string[] {
 
 function unaryTestFor(predicate: DecisionPredicate, pointer: string): string {
   if ('all' in predicate) {
-    const found = predicate.all.find(item => !('all' in item) && !('any' in item) && !('not' in item) && item.left.pointer === pointer);
+    const found = predicate.all.find(item => !('all' in item) && !('any' in item) && !('not' in item) && item.left.source === 'input' && item.left.pointer === pointer);
     return found ? unaryTestFor(found, pointer) : '-';
   }
   if ('any' in predicate || 'not' in predicate) throw new DecisionInteropError('dmn-export-unsupported', 'DMN export supports conjunctive rule predicates only');
@@ -588,11 +653,15 @@ function outputEntryFor(outcome: JsonValue, name: string, count: number): string
 }
 
 function sanitizeJson(value: JsonValue, path: string, redaction: { removed: string[] }): JsonValue {
+  if (isSensitiveValue(value)) {
+    redaction.removed.push(path);
+    return '[redacted]';
+  }
   if (Array.isArray(value)) return value.map((item, index) => sanitizeJson(item, `${path}[${index}]`, redaction)) as JsonValue;
   if (value && typeof value === 'object') {
     const result: Record<string, JsonValue> = {};
     for (const [key, child] of Object.entries(value)) {
-      if (SENSITIVE_LOG_KEY.test(key)) {
+      if (SENSITIVE_LOG_KEY.test(key) || isSensitiveValue(child)) {
         redaction.removed.push(`${path}.${key}`);
         continue;
       }
@@ -601,6 +670,46 @@ function sanitizeJson(value: JsonValue, path: string, redaction: { removed: stri
     return result;
   }
   return value;
+}
+
+function projectOpaInput(input: JsonValue, allowlist: string[], redaction: { removed: string[] }): JsonValue {
+  if (allowlist.length === 0) {
+    redaction.removed.push('$.input');
+    return {};
+  }
+  const output: Record<string, JsonValue> = {};
+  for (const pointer of allowlist) {
+    if (!pointer.startsWith('/')) throw new DecisionInteropError('opa-input-projection', 'OPA input projection allowlist entries must be JSON Pointers');
+    const resolved = resolveJsonPointer(input, pointer);
+    if (!resolved.found) continue;
+    setProjectedValue(output, pointer.slice(1).split('/').map(part => part.replace(/~1/gu, '/').replace(/~0/gu, '~')), sanitizeJson(resolved.value as JsonValue, `$.input${pointer}`, redaction));
+  }
+  return output;
+}
+
+function setProjectedValue(target: Record<string, JsonValue>, path: string[], value: JsonValue): void {
+  let cursor: Record<string, JsonValue> = target;
+  path.forEach((segment, index) => {
+    if (index === path.length - 1) {
+      cursor[segment] = value;
+      return;
+    }
+    const existing = cursor[segment];
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) cursor[segment] = {};
+    cursor = cursor[segment] as Record<string, JsonValue>;
+  });
+}
+
+function isSensitiveValue(value: unknown): boolean {
+  return typeof value === 'string' && SENSITIVE_LOG_VALUE.test(value);
+}
+
+function assertUnique(values: string[], label: string): void {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) throw new DecisionInteropError('dmn-duplicate-id', `${label} must be unique`);
+    seen.add(value);
+  }
 }
 
 function assertNoControlOverride(value: unknown, path: string): void {
@@ -622,4 +731,9 @@ function sha256(value: unknown): `sha256:${string}` {
 
 function escapeXml(value: string): string {
   return value.replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;').replace(/"/gu, '&quot;');
+}
+
+function ncName(value: string): string {
+  const cleaned = value.replace(/[^A-Za-z0-9_.-]/gu, '-').replace(/^[^A-Za-z_]+/u, '');
+  return cleaned || 'decision';
 }

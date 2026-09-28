@@ -46,10 +46,8 @@ process.stdin.once('data', async () => {
       setInterval(() => undefined, 1000);
       return;
     }
-    process.stdout.write(`${JSON.stringify({ owner: result.owner, revision: result.receipt.revision })}\n`);
-    process.exit(0);
+    process.stdout.write(`${JSON.stringify({ owner: result.owner, revision: result.receipt.revision })}\n`, () => process.exit(0));
   } catch (error) {
-    process.stderr.write(String(error));
-    process.exit(1);
+    process.stderr.write(String(error), () => process.exit(1));
   }
 });

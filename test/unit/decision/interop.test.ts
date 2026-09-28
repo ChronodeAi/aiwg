@@ -18,6 +18,7 @@ import {
 
 const fixture = <T>(name: string): T => JSON.parse(readFileSync(`agentic/code/addons/decision-engine/examples/${name}`, 'utf8')) as T;
 const schema = (name: string) => JSON.parse(readFileSync(`schemas/decision/${name}.schema.json`, 'utf8'));
+const pin = (id: string) => ({ id, version: '1.0.0', digest: `sha256:${'1'.repeat(64)}` as const });
 
 function dmn(hitPolicy: DmnHitPolicy, rows: string, aggregation = '', extra = ''): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -40,7 +41,7 @@ const row = (id: string, order: number, category: string, score: string, outcome
       </rule>`;
 
 function importProfile(hitPolicy: DmnHitPolicy, rows: string, aggregation = '', extra = ''): DecisionInteropMapping {
-  return importDmnDecisionTable(dmn(hitPolicy, rows, aggregation, extra), { origin: `${hitPolicy}.dmn`, trustedSource: true });
+  return importDmnDecisionTable(dmn(hitPolicy, rows, aggregation, extra), { origin: `${hitPolicy}.dmn`, signatureState: 'verified' });
 }
 
 describe('DMN/OPA decision interoperability profile', () => {
@@ -87,12 +88,14 @@ describe('DMN/OPA decision interoperability profile', () => {
     const collect = importProfile('COLLECT', [row('low', 1, '-', '&lt; 10', '1'), row('high', 2, '-', '>= 5', '3')].join('\n'), 'SUM');
     expect(evaluateDmnProfile(collect, { category: 'anything', score: 7 })).toMatchObject({ status: 'completed', outcome: 4 });
     const invalid = importProfile('COLLECT', [row('bad', 1, '-', '-', '"not-number"')].join('\n'), 'SUM');
-    expect(() => evaluateDmnProfile(invalid, { category: 'anything', score: 7 })).toThrow(/requires finite numeric outputs/);
+    expect(() => evaluateDmnProfile(invalid, { category: 'anything', score: 7 })).toThrow(/requires finite numeric/);
   });
 
-  it('does not coerce unknown or unsuccessful evidence into a permissive match', () => {
-    const mapping = importProfile('FIRST', row('requires-category', 1, '= "docs"', '-', '"docs-review"'));
-    expect(evaluateDmnProfile(mapping, { score: 1 })).toMatchObject({ status: 'defaulted', outcome: null, matchedRules: [] });
+  it('does not coerce unknown or unsuccessful required evidence into a permissive match', () => {
+    const xml = dmn('FIRST', row('requires-category', 1, '= "docs"', '-', '"docs-review"'))
+      .replace('<decision id="route" name="Route">', '<decision id="stored" name="Stored evidence"></decision><decision id="route" name="Route"><informationRequirement><requiredDecision href="#stored"/></informationRequirement>');
+    const mapping = importDmnDecisionTable(xml, { externalDecisionPins: { stored: pin('stored') } });
+    expect(evaluateDmnProfile(mapping, { score: 1 }, { stored: decisionResult('success') })).toMatchObject({ status: 'defaulted', outcome: null, matchedRules: [] });
     for (const status of ['abstained', 'unsupported', 'error', 'cancelled'] as const) {
       const evaluation = decisionResult(status);
       expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { stored: evaluation })).toMatchObject({
@@ -100,6 +103,40 @@ describe('DMN/OPA decision interoperability profile', () => {
         reason: 'evaluation-failed',
       });
     }
+  });
+
+  it('maps equivalent DMN information requirements to explicit external evidence dependencies', () => {
+    const xml = dmn('FIRST', row('r', 1, '= "docs"', '-', '"docs-review"'))
+      .replace('<decision id="route" name="Route">', '<decision id="storedEvidence" name="Stored evidence"></decision><decision id="route" name="Route"><informationRequirement><requiredDecision href="#storedEvidence"/></informationRequirement>');
+    const mapping = importDmnDecisionTable(xml, { signatureState: 'verified', externalDecisionPins: { storedEvidence: pin('storedEvidence') } });
+    expect(mapping.spec.normalizedRuleset.spec.evaluations).toEqual([{
+      alias: 'storedEvidence',
+      decision: pin('storedEvidence'),
+      inputPointer: '',
+    }]);
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success') })).toMatchObject({
+      status: 'completed', outcome: 'docs-review', matchedRules: ['r'],
+    });
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('unsupported') })).toMatchObject({
+      status: 'review', reason: 'evaluation-failed', matchedRules: [],
+    });
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 })).toMatchObject({
+      status: 'review', reason: 'evaluation-failed', matchedRules: [],
+    });
+    const exported = exportDmnDecisionTable(mapping);
+    const roundTrip = importDmnDecisionTable(exported, { externalDecisionPins: { storedEvidence: pin('storedEvidence') } });
+    expect(roundTrip.spec.normalizedRuleset.spec.evaluations).toEqual(mapping.spec.normalizedRuleset.spec.evaluations);
+  });
+
+
+  it('rejects unsupported cyclic or unpinned DMN dependency graphs instead of silently weakening them', () => {
+    const base = dmn('FIRST', row('r', 1, '= "docs"', '-', '"docs-review"'));
+    const cyclic = base.replace('<decision id="route" name="Route">', '<decision id="storedEvidence" name="Stored evidence"><informationRequirement><requiredDecision href="#route"/></informationRequirement></decision><decision id="route" name="Route"><informationRequirement><requiredDecision href="#storedEvidence"/></informationRequirement>');
+    expect(() => importDmnDecisionTable(cyclic, { externalDecisionPins: { storedEvidence: pin('storedEvidence') } })).toThrow(/cyclic/);
+    const transitive = base.replace('<decision id="route" name="Route">', '<decision id="rawEvidence" name="Raw evidence"></decision><decision id="storedEvidence" name="Stored evidence"><informationRequirement><requiredDecision href="#rawEvidence"/></informationRequirement></decision><decision id="route" name="Route"><informationRequirement><requiredDecision href="#storedEvidence"/></informationRequirement>');
+    expect(() => importDmnDecisionTable(transitive, { externalDecisionPins: { storedEvidence: pin('storedEvidence') } })).toThrow(/caller-supplied external decision pin/);
+    const mapping = importDmnDecisionTable(transitive, { externalDecisionPins: { storedEvidence: pin('storedEvidence'), rawEvidence: pin('rawEvidence') } });
+    expect(mapping.spec.normalizedRuleset.spec.evaluations.map(evaluation => evaluation.alias)).toEqual(['rawEvidence', 'storedEvidence']);
   });
 
   it('fails closed on unsupported FEEL, executable extensions, remote references, ambiguous order, bounds, and namespace confusion', () => {
@@ -123,7 +160,7 @@ describe('DMN/OPA decision interoperability profile', () => {
       policyPath: '/aiwg/decision/allow',
       metrics: { timer_rego_query_eval_ns: 1 },
       input: { subject: 'operator', credentialRef: 'vault://secret', evidence: { value: 'docs', rawBody: 'private' } },
-      result: { allow: true, privateLocator: 's3://private', outcome: 'docs-review' },
+      result: 'docs-review',
     });
     const ajv = new Ajv2020({ strict: false, allErrors: true });
     expect(ajv.validate(schema('OpaDecisionLogExport.v1'), log), JSON.stringify(ajv.errors)).toBe(true);
@@ -132,10 +169,10 @@ describe('DMN/OPA decision interoperability profile', () => {
     expect(log).toMatchObject({
       decision_id: 'decision-1',
       trace_id: 'trace-1',
-      bundles: [{ revision: 'rev-1' }],
+      bundles: { authz: { revision: 'rev-1' } },
       enforcement: { separated: true },
     });
-    expect(log.redaction.removed).toContain('$.input.credentialRef');
+    expect(log.redaction.removed).toContain('$.input');
     expect(() => validateOpaInteropEnvelope({
       profileVersion: DECISION_INTEROP_PROFILE_VERSION,
       bundle: { name: 'authz', revision: 'rev-1' },
