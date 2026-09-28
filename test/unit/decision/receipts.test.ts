@@ -210,10 +210,15 @@ describe('REC-ATOMIC store conformance', () => {
       const initialized = new Promise<void>(resolve => { ready = resolve; });
       child.stdout.on('data', chunk => { output += String(chunk); if (output.includes('ready\n')) ready(); });
       child.stderr.on('data', chunk => { errors += String(chunk); });
-      const result = new Promise<{ owner: boolean; revision: number }>((resolve, reject) => child.on('exit', code => {
-        if (code !== 0) reject(new Error(errors));
-        else resolve(JSON.parse(output.trim().split('\n').at(-1)!) as { owner: boolean; revision: number });
-      }));
+      const result = new Promise<{ owner: boolean; revision: number }>((resolve, reject) => {
+        child.once('error', reject);
+        // close follows exit only after stdout/stderr have drained.
+        child.once('close', code => {
+          if (code !== 0) { reject(new Error(errors || `exit ${code}`)); return; }
+          try { resolve(JSON.parse(output.trim().split('\n').at(-1)!) as { owner: boolean; revision: number }); }
+          catch (error) { reject(error); }
+        });
+      });
       return { child, initialized, result };
     };
     const a = start();
