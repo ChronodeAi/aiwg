@@ -12,6 +12,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.
+- Decision DMN/OPA interoperability APIs are available through `aiwg/decision`
+  with dry-run DMN 1.6 import/export, caller-pinned external evidence
+  dependencies, OPA decision-log export, packaged schemas and interop profile,
+  and offline standards fixtures for the supported subset (#2612).
 - Experimental `aiwg/discovery/shadow` observes ambiguous searches through a
   pinned evaluator with projection, admission, calibration and durable receipts.
   It stays off by default and preserves existing result order; empirical quality
