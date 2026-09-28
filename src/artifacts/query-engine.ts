@@ -10,6 +10,7 @@
  */
 
 import { minimatch } from 'minimatch';
+import type { DiscoveryShadowRoute } from './discovery-shadow.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { QueryParams, QueryResult, MetadataEntry, GraphType, ArtifactIndex } from './types.js';
@@ -905,6 +906,8 @@ export async function queryIndex(
  * @implements #1214
  */
 export interface DiscoverParams {
+  /** Trusted host-only, default-off D27 observer. Shadow evidence never changes ranking. */
+  shadowRoute?: DiscoveryShadowRoute;
   /** Search phrase (the user's capability description) */
   phrase: string;
   /** Restrict to specific types — defaults to the operational discovery surface */
@@ -1292,6 +1295,19 @@ export async function discoverCapability(
     ),
   ).slice(0, limit);
   const relaxed = scored.some(result => !strictPaths.has(result.entry.path));
+
+  if (params.shadowRoute) {
+    try {
+      await params.shadowRoute.observe(params.phrase, scored.map(result => ({
+        id: discoveryIdForEntry(result.entry), name: result.entry.name ?? result.entry.title,
+        type: result.entry.type, capability: result.entry.capability ?? result.entry.summary,
+        score: result.score,
+      })));
+    } catch {
+      // An optional observation failure must never replace deterministic discovery.
+      params.shadowRoute.disable();
+    }
+  }
 
   const queryTimeMs = Date.now() - startTime;
 
