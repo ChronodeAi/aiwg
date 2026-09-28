@@ -18,7 +18,7 @@ if(!output) throw new Error('explicit report output directory required');
 mkdirSync(output,{recursive:true});
 const report={schemaVersion:'conformal-study/v1',outcome:'INSUFFICIENT EVIDENCE',preregistrationHash:digest(plan),frozenDataHash,
  splitHashes:frozen.hashes, provenance:{origin:'synthetic-only',representativeWorkflowRows:0,liveCollection:'not-performed',nativeFile:'frozen.json',
-  preregistrationCommit:'fbddd386c',freezeCommit:'490bbee79',codeHashes:Object.fromEntries(['prototype.mjs','run.mjs','preregister.json'].map(f=>[f,digest(readFileSync(new URL(f,dir),'utf8'))]))},
+  preregistrationCommit:'fbddd386c',freezeCommit:'490bbee79',codeHashes:Object.fromEntries(['prototype.mjs','run.mjs','preregister.json','../../../src/decision/acceptance.ts','../../../src/decision/qualification/quality.ts','../../eval/src/integrity.ts'].map(f=>[f,digest(readFileSync(new URL(f,dir),'utf8'))]))},
  actuals:{calls:0,inputTokens:0,outputTokens:0,costUsd:0},tasks:{}};
 const timing=[], results=[];
 function baseline(row, bins, calibrated) {
