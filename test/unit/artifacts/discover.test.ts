@@ -1223,3 +1223,27 @@ describe('discover — native-release vs plugin packaging routing (#1598)', () =
     expect(parsed.results[0].path).toContain('release-publication-verify');
   });
 });
+
+describe('experimental discovery shadow integration', () => {
+  it('passes only retrieved candidates to the observer and preserves emitted ranking on failure', async () => {
+    writeSkill('intake-first', 'fx', '---\nname: intake-first\ndescription: intake forms\n---\n');
+    writeSkill('intake-second', 'fx', '---\nname: intake-second\ndescription: intake forms\n---\n');
+    const logs: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((...args) => logs.push(args.join(' ')));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await buildIndex(cwd, { graph: 'framework', force: true, explicit: true });
+      const options = { phrase: 'intake forms', graph: 'framework' as const, json: true, backend: 'local' as const, limit: 3 };
+      logs.length = 0;
+      await discoverCapability(cwd, options);
+      const baseline = JSON.parse(logs.join('\n'));
+      const observer = { observe: vi.fn(async () => { throw new Error('offline observer failure'); }), disable: vi.fn() };
+      logs.length = 0;
+      await discoverCapability(cwd, { ...options, shadowRoute: observer as unknown as import('../../../src/artifacts/discovery-shadow.js').DiscoveryShadowRoute });
+      const shadow = JSON.parse(logs.join('\n'));
+      expect(shadow.results).toEqual(baseline.results);
+      expect(observer.observe).toHaveBeenCalledWith('intake forms', baseline.results.map((r: { id: string; name: string; type: string; capability: string }) => expect.objectContaining({ id: r.id, name: r.name, type: r.type, capability: r.capability })));
+      expect(observer.disable).toHaveBeenCalledTimes(1);
+    } finally { log.mockRestore(); err.mockRestore(); }
+  });
+});

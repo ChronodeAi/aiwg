@@ -750,7 +750,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "source-module",
-      "digest": "sha256:670c1cfa9dfb92b199c8cb698a7ef36277c66b1ce94d6e398e633389339a38be",
+      "digest": "sha256:cbe0e476c81d55a1e3f89b88f002cb767ea58cbbdf57f78e5f1e0fc0122e32b9",
       "expectedOutcome": "child-process worker used by cross-process race and cache tests",
       "links": [
         "FR-014",

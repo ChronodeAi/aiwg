@@ -26,10 +26,15 @@ function start(writer: string, salt: string, count: number, first = 0) {
   const initialized = new Promise<void>(resolve => { ready = resolve; });
   child.stdout.on('data', chunk => { output += String(chunk); if (output.includes('ready\n')) ready(); });
   child.stderr.on('data', chunk => { errors += String(chunk); });
-  const result = new Promise<Result[]>((resolve, reject) => child.on('exit', code => {
-    if (code !== 0) reject(new Error(errors || `exit ${code}`));
-    else resolve(JSON.parse(output.trim().split('\n').at(-1)!) as Result[]);
-  }));
+  const result = new Promise<Result[]>((resolve, reject) => {
+    child.once('error', reject);
+    // close follows exit only after stdout/stderr have drained.
+    child.once('close', code => {
+      if (code !== 0) { reject(new Error(errors || `exit ${code}`)); return; }
+      try { resolve(JSON.parse(output.trim().split('\n').at(-1)!) as Result[]); }
+      catch (error) { reject(error); }
+    });
+  });
   return { child, initialized, result };
 }
 
