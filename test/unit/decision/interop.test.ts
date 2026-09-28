@@ -126,17 +126,17 @@ describe('DMN/OPA decision interoperability profile', () => {
       decision: pin('storedEvidence'),
       inputPointer: '',
     }]);
-    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success', pin('storedEvidence')) })).toMatchObject({
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success', pin('storedEvidence'), 'storedEvidence') })).toMatchObject({
       status: 'completed', outcome: 'docs-review', matchedRules: ['r'],
     });
-    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('unsupported', pin('storedEvidence')) })).toMatchObject({
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('unsupported', pin('storedEvidence'), 'storedEvidence') })).toMatchObject({
       status: 'review', reason: 'evaluation-failed', matchedRules: [],
     });
     expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 })).toMatchObject({
       status: 'review', reason: 'evaluation-failed', matchedRules: [],
     });
 
-    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success', pin('wrong')) })).toMatchObject({
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success', pin('wrong'), 'storedEvidence') })).toMatchObject({
       status: 'review', reason: 'evaluation-failed', matchedRules: [],
     });
     const exported = exportDmnDecisionTable(mapping);
@@ -175,7 +175,7 @@ describe('DMN/OPA decision interoperability profile', () => {
       spanId: 'span-1',
       policyPath: '/aiwg/decision/allow',
       metrics: { timer_rego_query_eval_ns: 1 },
-      input: { subject: 'operator', credentialRef: 'vault://secret', evidence: { value: 'docs', rawBody: 'private' } },
+      input: { subject: 'operator', token: 'vault://secret', evidence: { value: 'docs', rawBody: 'private' } },
       result: 'docs-review',
     });
     const ajv = new Ajv2020({ strict: false, allErrors: true });
@@ -200,7 +200,7 @@ describe('DMN/OPA decision interoperability profile', () => {
   });
 });
 
-function decisionResult(status: DecisionResult['spec']['status'], decision = { id: 'external-evidence', version: '1.0.0', digest: `sha256:${'0'.repeat(64)}` as const }): DecisionResult {
+function decisionResult(status: DecisionResult['spec']['status'], decision = { id: 'external-evidence', version: '1.0.0', digest: `sha256:${'0'.repeat(64)}` as const }, alias = 'stored'): DecisionResult {
   const ruleset = fixture('ruleset.json');
   return {
     apiVersion: 'decision.aiwg.io/v1alpha2',
@@ -210,7 +210,7 @@ function decisionResult(status: DecisionResult['spec']['status'], decision = { i
       decision,
       ruleset: artifactPin(ruleset),
       binding: artifactPin(fixture('binding-jev.json')),
-      alias: 'stored',
+      alias,
       runId: 'run',
       invocationId: 'invocation',
       status,

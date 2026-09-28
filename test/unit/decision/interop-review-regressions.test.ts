@@ -45,6 +45,16 @@ function reviewEvidence(): DecisionResult {
         reason: 'default', values: {} }, attempts: [] },
   };
 }
+function acceptedDependencyEvidence(alias = 'stored'): DecisionResult {
+  return {
+    apiVersion: 'decision.aiwg.io/v1alpha2', kind: 'DecisionResult',
+    metadata: { id: 'dependency-evidence', version: '1.0.0', description: 'accepted dependency evidence' },
+    spec: { decision: depPin, ruleset: pin, binding: pin, alias, runId: 'run', invocationId: 'invocation',
+      status: 'success', reason: 'none', value: 'guest', uncertainty: null,
+      acceptance: { policyVersion: '1.0.0', uncertaintyProfile: 'fixture', disposition: 'act', matchedRule: null,
+        reason: 'accepted', values: {} }, attempts: [] },
+  };
+}
 
 // Independent review cases: successful parsing must not weaken predicates or invent
 // interoperability. This file deliberately does not mock the parser or composer.
@@ -98,6 +108,15 @@ describe('INTOP review regressions: hostile import and native equivalence', () =
     const mapping = importDmnDecisionTable(xml, { externalDecisionPins: { stored: depPin } });
     expect(evaluateDmnProfile(mapping, { role: 'guest' }, { stored: reviewEvidence() })).toMatchObject({
       status: 'review', matchedRules: [],
+    });
+  });
+
+  it('rejects required evidence whose stored alias does not match the required dependency alias', () => {
+    const xml = table(row('allow', 1))
+      .replace('<decision id="decision" name="Decision"><decisionTable', '<decision id="stored" name="Stored evidence"/><decision id="decision" name="Decision"><informationRequirement><requiredDecision href="#stored"/></informationRequirement><decisionTable');
+    const mapping = importDmnDecisionTable(xml, { externalDecisionPins: { stored: depPin } });
+    expect(evaluateDmnProfile(mapping, { role: 'guest' }, { stored: acceptedDependencyEvidence('wrongAlias') })).toMatchObject({
+      status: 'review', reason: 'evaluation-failed', matchedRules: [],
     });
   });
 
@@ -199,6 +218,13 @@ describe('INTOP review regressions: sanitized and truthful OPA logs', () => {
     try { exported = exportOpaDecisionLog(storedResult(), data); } catch (caught) { error = caught; }
     if (error !== undefined) expect(error).toBeInstanceOf(Error);
     else expect(exported!.result).toBe(false);
+  });
+
+  it('applies control-plane override validation before exporting allowlisted OPA inputs', () => {
+    const data = envelope();
+    data.input = { provider: 'evil' };
+    data.inputProjectionAllowlist = ['/provider'];
+    expect(() => exportOpaDecisionLog(storedResult(), data)).toThrow(/control|provider/i);
   });
 
   it('serializes bundles as the OPA object keyed by bundle name', () => {

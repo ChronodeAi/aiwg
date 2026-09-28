@@ -21,7 +21,7 @@ export function composeRuleset(
   const suppliedFailed = Object.values(evaluations).some(result => !acceptedEvaluation(result));
   const requiredFailed = [...requiredEvaluations].some(([alias, evaluation]) => {
     const result = evaluations[alias];
-    return !result || !acceptedEvaluation(result) || !samePin(result.spec.decision, evaluation.decision);
+    return !result || result.spec.alias !== alias || !acceptedEvaluation(result) || !samePin(result.spec.decision, evaluation.decision);
   });
   const failed = suppliedFailed || requiredFailed;
   if (failed) {

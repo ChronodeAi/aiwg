@@ -279,6 +279,7 @@ export function evaluateDmnProfile(mapping: Pick<DecisionInteropMapping, 'spec'>
 }
 
 export function exportOpaDecisionLog(result: RulesetResult, envelope: OpaInteropEnvelope): OpaDecisionLogExport {
+  validateOpaInteropEnvelope(envelope);
   const redaction = { removed: [] as string[] };
   const sanitizedInput = projectOpaInput(envelope.input, envelope.inputProjectionAllowlist ?? [], redaction);
   const actualResult = (Object.hasOwn(result.spec, 'outcome') ? result.spec.outcome : result.spec.status) as JsonValue;
