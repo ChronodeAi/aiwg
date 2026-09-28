@@ -697,6 +697,34 @@
       "compatibility": { "mode": "backward" },
       "consumers": [{ "id": "decision-lifecycle", "boundary": "Common host lifecycle controls for every decision surface", "path": "src/decision/lifecycle.ts" }],
       "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.feature-set",
+      "id": "https://aiwg.io/schemas/decision/DecisionFeatureSet.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionFeatureSet.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-feature-export", "boundary": "Versioned probabilistic feature set, source pins, train/serve domains and D10 export lifecycle binding", "path": "src/decision/feature-export.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.feature-observation",
+      "id": "https://aiwg.io/schemas/decision/DecisionFeatureObservation.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionFeatureObservation.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-feature-export", "boundary": "Governed feature rows with lineage, missingness, batch accounting and lifecycle references", "path": "src/decision/feature-export.ts" }],
+      "publication": { "public": true }
     }
   ]
 }

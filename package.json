@@ -69,6 +69,8 @@
     "smoke:muse:live": "node tools/providers/muse-live-smoke.mjs",
     "smoke:decision:jev:live": "npm run build:cli && node tools/decision/jev-live-smoke.mjs",
     "smoke:decision:patterns:offline": "npm run build:cli && node tools/decision/patterns-offline-smoke.mjs",
+    "smoke:decision:feature-export:offline": "npm run build:cli && node tools/decision/feature-export-offline-smoke.mjs",
+    "smoke:decision:feature-export:package": "npm run build:cli && node tools/decision/feature-export-package-smoke.mjs",
     "smoke:grok-build:live": "node tools/providers/grok-build-qualification.mjs smoke",
     "gate:grok-build": "node tools/providers/grok-build-qualification.mjs gate",
     "drift:grok-build": "node tools/providers/grok-build-qualification.mjs drift",

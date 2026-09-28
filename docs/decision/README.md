@@ -34,6 +34,8 @@ Read the [normative specification](specification.md), [architecture](architectur
 
 Structured entry fields, version migration, and rollback rules are described in
 [structured entries](structured-entries.md).
+Probabilistic downstream feature export is described in
+[feature export](feature-export.md).
 Jev request, retry, cancellation, and egress behavior is documented in the
 [transport contract](jev-transport.md). State projection is mandatory for
 network-capable adapters; see [state projection](state-projection.md) and the

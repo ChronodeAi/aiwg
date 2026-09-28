@@ -9,6 +9,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
+  enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
+  and schemas/docs/tests for #2614.
 - Deterministic discovery phrases for decision classification, Jev, token-saving
   evaluation, shared-state batching and the offline playground. The NLP quickref
   explains explicit decision-engine installation and evaluation opt-in (#2741).

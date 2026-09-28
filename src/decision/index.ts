@@ -36,6 +36,7 @@ export * from './portable-secrets.js';
 export * from './evaluate.js';
 export * from './host-policy.js';
 export * from './export.js';
+export * from './feature-export.js';
 export * from './adapters/jev.js';
 export * from './adapters/llm-subagent.js';
 export * from './review/index.js';
