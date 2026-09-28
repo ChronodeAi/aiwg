@@ -1,0 +1,26 @@
+{
+  "profileVersion": "decision-interop.aiwg.io/v1",
+  "bundle": {
+    "name": "aiwg-decision-authz",
+    "revision": "rev-2026-09-27",
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "decisionId": "decision-example-1",
+  "traceId": "trace-example-1",
+  "spanId": "span-example-1",
+  "policyPath": "/aiwg/decision/allow",
+  "metrics": {
+    "timer_rego_query_eval_ns": 100
+  },
+  "input": {
+    "subject": "operator",
+    "evidence": {
+      "status": "success",
+      "value": "documentation"
+    }
+  },
+  "result": {
+    "allow": true,
+    "outcome": "docs-review"
+  }
+}

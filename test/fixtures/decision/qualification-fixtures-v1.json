@@ -1418,6 +1418,150 @@
         "#2721",
         "JEV-16"
       ]
+    },
+    {
+      "id": "DEC-INTOP-01",
+      "path": "agentic/code/addons/decision-engine/examples/interop/dmn-first-profile.dmn",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:67253febfe46cd9ff90fa88b0340f13586f9131690fb78a29cfc04ce87d36deb",
+      "expectedOutcome": "DMN 1.6 FIRST hit-policy interop example for import, export, and package smoke verification",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-02",
+      "path": "agentic/code/addons/decision-engine/examples/interop/opa-decision-log-input.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:9f313f7319f22c3934193cad8dceb527d280f6cc62dc846c46c7465fa6924a51",
+      "expectedOutcome": "OPA decision log interop envelope example for package smoke verification",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-03",
+      "path": "test/fixtures/decision/interop-review/DC.xsd",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:9f57b8e99b00163a65dfaf5de2a3e3ea4be041a1bb23228044c50693334d59e6",
+      "expectedOutcome": "Pinned OMG DC schema supporting offline DMN 1.6 export validation",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-04",
+      "path": "test/fixtures/decision/interop-review/DI.xsd",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:73a5908426f12021da85c9cce74ae70db5ddac1ebe9c9d28d8495f34bea60f07",
+      "expectedOutcome": "Pinned OMG DI schema supporting offline DMN 1.6 export validation",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-05",
+      "path": "test/fixtures/decision/interop-review/DMN16.xsd",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:861483990d3df4c771c16e8516bc36a5120ee2051decc1146fcb18e4f0a4a318",
+      "expectedOutcome": "Pinned OMG DMN 1.6 schema used for offline export validation",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-06",
+      "path": "test/fixtures/decision/interop-review/DMNDI15.xsd",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:6e78fe9621d7360c96609523afef3da5ba4fee6a2ad53ec4cd12d126c7795c50",
+      "expectedOutcome": "Pinned OMG DMNDI 1.5 schema supporting offline DMN 1.6 export validation",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-07",
+      "path": "test/fixtures/decision/interop-review/README.md",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:b50d829163088605939e075e3ca34a0702203f8f102aee58639746660ceccc1e",
+      "expectedOutcome": "Interop review fixture provenance note for frozen OMG schema files and offline validation helper",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-08",
+      "path": "test/fixtures/decision/interop-review/schema-provenance.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:e3c00b80208f0edd9b419d14d2f4f7e59c40fbc4efcf4b0e69923a56e70f0211",
+      "expectedOutcome": "Interop review schema source and hash provenance for frozen OMG schema files",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
+    },
+    {
+      "id": "DEC-INTOP-09",
+      "path": "test/fixtures/decision/interop-review/validate-dmn.py",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:eb553f5de4f406e34544bb3ed06d9ea2cf71557059a8d6c66dfba4a079cf3073",
+      "expectedOutcome": "Offline lxml validator helper for exported DMN 1.6 XML",
+      "links": [
+        "JEV-16",
+        "#2612"
+      ]
     }
   ]
 }
