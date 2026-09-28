@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Decision DMN/OPA interoperability APIs are available through `aiwg/decision`
+  with dry-run DMN 1.6 import/export, caller-pinned external evidence
+  dependencies, OPA decision-log export, packaged schemas and interop profile,
+  and offline standards fixtures for the supported subset (#2612).
 - Deterministic discovery phrases for decision classification, Jev, token-saving
   evaluation, shared-state batching and the offline playground. The NLP quickref
   explains explicit decision-engine installation and evaluation opt-in (#2741).

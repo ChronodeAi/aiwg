@@ -95,12 +95,24 @@ describe('DMN/OPA decision interoperability profile', () => {
     const xml = dmn('FIRST', row('requires-category', 1, '= "docs"', '-', '"docs-review"'))
       .replace('<decision id="route" name="Route">', '<decision id="stored" name="Stored evidence"></decision><decision id="route" name="Route"><informationRequirement><requiredDecision href="#stored"/></informationRequirement>');
     const mapping = importDmnDecisionTable(xml, { externalDecisionPins: { stored: pin('stored') } });
-    expect(evaluateDmnProfile(mapping, { score: 1 }, { stored: decisionResult('success') })).toMatchObject({ status: 'defaulted', outcome: null, matchedRules: [] });
+    expect(evaluateDmnProfile(mapping, { score: 1 }, { stored: decisionResult('success', pin('stored')) })).toMatchObject({ status: 'defaulted', outcome: null, matchedRules: [] });
     for (const status of ['abstained', 'unsupported', 'error', 'cancelled'] as const) {
-      const evaluation = decisionResult(status);
+      const evaluation = decisionResult(status, pin('stored'));
       expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { stored: evaluation })).toMatchObject({
         status: 'review',
         reason: 'evaluation-failed',
+      });
+    }
+  });
+
+  it('preserves the legacy guard that any supplied failed evidence forces review, even for input-only rules', () => {
+    const mapping = importProfile('FIRST', row('input-only', 1, '= "docs"', '-', '"docs-review"'));
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 })).toMatchObject({
+      status: 'completed', outcome: 'docs-review', matchedRules: ['input-only'],
+    });
+    for (const status of ['abstained', 'unsupported', 'error', 'cancelled'] as const) {
+      expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { unrelated: decisionResult(status) })).toMatchObject({
+        status: 'review', reason: 'evaluation-failed', matchedRules: [],
       });
     }
   });
@@ -114,13 +126,17 @@ describe('DMN/OPA decision interoperability profile', () => {
       decision: pin('storedEvidence'),
       inputPointer: '',
     }]);
-    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success') })).toMatchObject({
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success', pin('storedEvidence')) })).toMatchObject({
       status: 'completed', outcome: 'docs-review', matchedRules: ['r'],
     });
-    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('unsupported') })).toMatchObject({
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('unsupported', pin('storedEvidence')) })).toMatchObject({
       status: 'review', reason: 'evaluation-failed', matchedRules: [],
     });
     expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 })).toMatchObject({
+      status: 'review', reason: 'evaluation-failed', matchedRules: [],
+    });
+
+    expect(evaluateDmnProfile(mapping, { category: 'docs', score: 1 }, { storedEvidence: decisionResult('success', pin('wrong')) })).toMatchObject({
       status: 'review', reason: 'evaluation-failed', matchedRules: [],
     });
     const exported = exportDmnDecisionTable(mapping);
@@ -184,14 +200,14 @@ describe('DMN/OPA decision interoperability profile', () => {
   });
 });
 
-function decisionResult(status: DecisionResult['spec']['status']): DecisionResult {
+function decisionResult(status: DecisionResult['spec']['status'], decision = { id: 'external-evidence', version: '1.0.0', digest: `sha256:${'0'.repeat(64)}` as const }): DecisionResult {
   const ruleset = fixture('ruleset.json');
   return {
     apiVersion: 'decision.aiwg.io/v1alpha2',
     kind: 'DecisionResult',
     metadata: { id: 'stored', version: '1.0.0', description: 'stored evidence' },
     spec: {
-      decision: { id: 'external-evidence', version: '1.0.0', digest: `sha256:${'0'.repeat(64)}` },
+      decision,
       ruleset: artifactPin(ruleset),
       binding: artifactPin(fixture('binding-jev.json')),
       alias: 'stored',

@@ -14,12 +14,16 @@ export function composeRuleset(
   input: unknown,
   evaluations: Record<string, DecisionResult>,
 ): CompositionResult {
-  const requiredEvaluations = referencedDecisionAliases(ruleset);
-  const failed = requiredEvaluations.some(alias => {
+  const referencedAliases = referencedDecisionAliases(ruleset);
+  const requiredEvaluations = new Map(ruleset.spec.evaluations
+    .filter(evaluation => referencedAliases.includes(evaluation.alias))
+    .map(evaluation => [evaluation.alias, evaluation]));
+  const suppliedFailed = Object.values(evaluations).some(result => !acceptedEvaluation(result));
+  const requiredFailed = [...requiredEvaluations].some(([alias, evaluation]) => {
     const result = evaluations[alias];
-    return !result || result.spec.status !== 'success'
-      || (result.spec.acceptance !== undefined && result.spec.acceptance.disposition !== 'act');
+    return !result || !acceptedEvaluation(result) || !samePin(result.spec.decision, evaluation.decision);
   });
+  const failed = suppliedFailed || requiredFailed;
   if (failed) {
     validateAgainstSchema(ruleset.spec.outputSchema, ruleset.spec.failureOutcome, 'failureOutcome');
     return {
@@ -65,6 +69,16 @@ export function composeRuleset(
   return { status: 'completed', reason: 'none', outcome, matchedRules: top.map(rule => rule.id) };
 }
 
+
+
+function acceptedEvaluation(result: DecisionResult): boolean {
+  return result.spec.status === 'success'
+    && (result.spec.acceptance === undefined || result.spec.acceptance.disposition === 'act');
+}
+
+function samePin(left: DecisionResult['spec']['decision'], right: DecisionRuleset['spec']['evaluations'][number]['decision']): boolean {
+  return left.id === right.id && left.version === right.version && left.digest === right.digest;
+}
 
 function referencedDecisionAliases(ruleset: DecisionRuleset): string[] {
   const aliases = new Set<string>();
