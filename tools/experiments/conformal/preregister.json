@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "conformal-preregistration/v1",
+  "issue": 2613,
+  "mode": "offline-synthetic-only",
+  "methods": ["lac-v1"],
+  "methodDefinition": "score=1-p(label); quantile rank ceil((n+1)*(1-alpha)); infinity if rank>n; include all boundary ties; no random tie breaking",
+  "alpha": 0.1,
+  "tasks": {
+    "choice": {"question": "Route a bounded issue to bug, docs, or feature", "labels": ["bug", "docs", "feature"], "primitive": "choice"},
+    "noul": {"question": "Does a bounded change require review?", "labels": ["no", "yes"], "primitive": "truth-probability"}
+  },
+  "pins": {"servedModel": "synthetic-generator/v1", "adapter": "synthetic-native/v1", "population": "synthetic-independent-entities/v1", "definition": "bounded-routing-and-review/v1", "seed": 2613},
+  "splits": {"tuning": {"nPerTask": 300, "seed": 2613}, "calibration": {"nPerTask": 300, "seed": 2614}, "test": {"nPerTask": 600, "seed": 2615}, "shift": {"nPerTask": 600, "seed": 2616}},
+  "generation": "Independent PRNG streams; 70% easy, 20% tied, 10% rare-class examples. Quantized probabilities; held-out labels drawn from nominal categorical distribution. Shift draws labels from reversed class distribution with unchanged predictions. IDs include task and split; entities unique.",
+  "gates": {"minimumRepresentativeTestNPerTask": 600, "minimumClassSliceN": 50, "minimumCoverageWilsonLower": 0.85, "maximumMeanSetSizeChoice": 1.5, "maximumMeanSetSizeNoul": 1.3, "maximumReviewRate": 0.4, "maximumSelectiveRisk": 0.1, "mustImproveReviewAtEqualOrLowerRisk": true},
+  "sampleRationale": "600 test rows gives nominal 90% coverage about +/-2.4 percentage points at 95%; class/slice results below 50 are descriptive only. Synthetic n does not meet the representative-data requirement.",
+  "baselines": ["raw primitive policy: Choice selected probability >=0.8, Noul yes probability <=0.2 or >=0.8", "calibrated risk: tuning top-probability decile empirical error with Wilson upper bound <=0.1, evaluated by existing primitive policy; missing bins review", "always-review", "always-predict"],
+  "loss": "0-1 classification loss; false-auto=wrong singleton / all rows; selective-risk=wrong singleton / singleton rows; review cost=review rows (unit cost)",
+  "metrics": ["marginal and class/slice set coverage with Wilson intervals", "mean p50 p90 p95 set size", "review rate", "selective risk", "false-auto rate", "unit review cost", "latency", "calls", "tokens", "USD", "risk-coverage, reliability and set-size plots"],
+  "budget": {"providerCalls": 0, "tokens": 0, "usd": 0, "maximumRows": 3600},
+  "outcomeRule": "INSUFFICIENT EVIDENCE when representative frozen D11 workflow data or approved calibrated profiles are missing; synthetic arithmetic cannot establish GO. No Score study without ordinal loss validation. No production routing or policy mutations.",
+  "lifecycle": "Only generated public synthetic records supported. Restricted, deleted, held, non-active, OOD, provider-backed, or compatibility one-hot records rejected before evaluation. No credential or network access. Live absence is recorded, never counted as offline success.",
+  "sources": ["https://arxiv.org/abs/2306.10193v2", "https://arxiv.org/abs/2006.02544v1"]
+}
