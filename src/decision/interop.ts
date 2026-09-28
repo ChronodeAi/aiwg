@@ -327,6 +327,7 @@ function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: Xm
   let textBytes = 0;
   const parser = new SaxesParser({ xmlns: true, fragment: false, resolvePrefix: (prefix: string) => prefix === 'xml' ? 'http://www.w3.org/XML/1998/namespace' : undefined });
   parser.on('opentag', tag => {
+    assertParseTime();
     elements += 1;
     if (elements > bounds.maxElements) throw new DecisionInteropError('dmn-element-bound', `DMN XML exceeds ${bounds.maxElements} elements`);
     maxObservedDepth = Math.max(maxObservedDepth, stack.length + 1);
@@ -338,23 +339,36 @@ function parseBoundedXml(xml: string, bounds: DecisionInteropBounds): { root: Xm
     stack.push(element);
   });
   parser.on('text', text => {
+    assertParseTime();
     appendText(text);
   });
   parser.on('cdata', text => {
+    assertParseTime();
     appendText(text);
   });
   parser.on('closetag', () => {
+    assertParseTime();
     const closed = stack.pop();
     if (!stack.length && closed) root = closed;
   });
   parser.on('error', error => {
     throw new DecisionInteropError('dmn-xml-parse', error.message);
   });
-  parser.write(xml).close();
+  const chunkSize = 8192;
+  for (let offset = 0; offset < xml.length; offset += chunkSize) {
+    assertParseTime();
+    parser.write(xml.slice(offset, offset + chunkSize));
+  }
+  assertParseTime();
+  parser.close();
+  assertParseTime();
   if (!root) throw new DecisionInteropError('dmn-empty', 'DMN XML has no root element');
   const parseTimeMs = performance.now() - started;
-  if (parseTimeMs > bounds.maxParseMs) throw new DecisionInteropError('dmn-parse-time-bound', `DMN XML parse exceeded ${bounds.maxParseMs}ms`);
   return { root, report: { bytes: Buffer.byteLength(xml, 'utf8'), elements, maxObservedDepth, parseTimeMs } };
+
+  function assertParseTime(): void {
+    if (performance.now() - started > bounds.maxParseMs) throw new DecisionInteropError('dmn-parse-time-bound', `DMN XML parse exceeded ${bounds.maxParseMs}ms`);
+  }
 
   function appendText(text: string): void {
     if (!stack.length) return;

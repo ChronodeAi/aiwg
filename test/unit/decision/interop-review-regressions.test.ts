@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { SaxesParser, type SaxesTag } from 'saxes';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DECISION_INTEROP_DMN_NAMESPACE as DMN,
   DECISION_INTEROP_PROFILE_VERSION as PROFILE,
@@ -10,10 +13,17 @@ import {
 } from '../../../src/decision/interop.js';
 import { composeRuleset } from '../../../src/decision/compose.js';
 import type { DecisionResult, RulesetResult } from '../../../src/decision/types.js';
+import { DecisionReviewService, FileDecisionReviewStore, ReviewAccessError, type ReviewAuthorization, type ReviewScope } from '../../../src/decision/review/index.js';
 
 const AIWG = 'https://aiwg.io/spec/decision-interop/v1';
 const pin = { id: 'fixture', version: '1.0.0', digest: `sha256:${'a'.repeat(64)}` as const };
 const depPin = { id: 'stored', version: '1.0.0', digest: `sha256:${'b'.repeat(64)}` as const };
+const reviewDirs: string[] = [];
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(reviewDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
+});
+
 const row = (id: string, order: number, condition = '"guest"', outcome = '"allow"') =>
   `<rule id="${id}" aiwg:order="${order}"><inputEntry><text>${condition}</text></inputEntry><outputEntry><text>${outcome}</text></outputEntry></rule>`;
 function table(rows = row('r1', 1), hitPolicy: DmnHitPolicy = 'FIRST', aggregation?: string): string {
@@ -118,6 +128,53 @@ describe('INTOP review regressions: hostile import and native equivalence', () =
     expect(evaluateDmnProfile(mapping, { role: 'guest' }, { stored: acceptedDependencyEvidence('wrongAlias') })).toMatchObject({
       status: 'review', reason: 'evaluation-failed', matchedRules: [],
     });
+  });
+
+  it('replays stored evidence without a model call but still denies unauthorized downstream action execution', async () => {
+    const xml = table(row('allow', 1))
+      .replace('<decision id="decision" name="Decision"><decisionTable', '<decision id="stored" name="Stored evidence"/><decision id="decision" name="Decision"><informationRequirement><requiredDecision href="#stored"/></informationRequirement><decisionTable');
+    const mapping = importDmnDecisionTable(xml, { externalDecisionPins: { stored: depPin } });
+    const modelCall = vi.fn();
+    const replay = evaluateDmnProfile(mapping, { role: 'guest' }, { stored: acceptedDependencyEvidence('stored') });
+    expect(replay).toMatchObject({ status: 'completed', outcome: 'allow', matchedRules: ['allow'] });
+    expect(modelCall).not.toHaveBeenCalled();
+
+    const dir = await mkdtemp(join(tmpdir(), 'interop-review-auth-')); reviewDirs.push(dir);
+    const tenant = { tenantId: 'tenant-interop', projectId: 'project-interop' };
+    const actor = (id: string, role: string): ReviewScope => ({ ...tenant, actor: { id, roles: [role], authorityContext: 'interop-review-auth/v1' } });
+    const authorization: ReviewAuthorization = {
+      authorize: (scope, operation) => operation === 'create' ? scope.actor.roles.includes('requester') : !scope.actor.roles.includes('requester'),
+      eligible: scope => scope.actor.roles.includes('reviewer') || scope.actor.roles.includes('executor'),
+      eligibleApproval: (_scope, _review, _proposal, decision) => decision.reviewer.roles.includes('reviewer'),
+      authorizeAction: () => false,
+    };
+    const service = new DecisionReviewService(new FileDecisionReviewStore(dir, new Uint8Array(32).fill(6)), authorization, () => 1_000);
+    await service.create(actor('requester', 'requester'), {
+      reviewId: 'interop-replay-action', sourceReceipt: { id: 'ruleset-result', digest: pin.digest }, evidencePins: [depPin],
+      policyPins: [pin], reasonCodes: ['interop-replay-allow'], riskTier: 'low', presentation: { outcome: replay.outcome },
+      action: { kind: 'fixture-action', decision: replay.outcome }, rationale: 'replayed deterministic allow still needs action auth',
+      expiresAtEpochMs: 10_000, continuationId: 'continuation', resumeToken: 'resume-token',
+    });
+    await service.decide(actor('reviewer', 'reviewer'), 'interop-replay-action', 'approve', 'approved for auth check');
+    const executor = vi.fn(async () => ({ delivered: true }));
+    await expect(service.resume(actor('executor', 'executor'), 'interop-replay-action', 'resume-token', executor))
+      .rejects.toBeInstanceOf(ReviewAccessError);
+    expect(executor).not.toHaveBeenCalled();
+  });
+
+  it('rejects archive or compressed-looking binary input as non-XML without fetching remote resources', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network must not be used'));
+    const gzipMagicBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00]).toString('latin1');
+    expect(() => importDmnDecisionTable(gzipMagicBytes)).toThrow(/parse|root|empty|namespace|unsupported|disallowed character/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('enforces the parse-time bound deterministically before producing a mapping', () => {
+    const now = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(25);
+    expect(() => importDmnDecisionTable(table(), { bounds: { maxParseMs: 1 } })).toThrow(/parse exceeded 1ms/);
+    expect(now).toHaveBeenCalled();
   });
 
   it('bounds CDATA text by the same byte limit as ordinary text', () => {
