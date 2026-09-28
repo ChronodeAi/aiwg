@@ -27,6 +27,18 @@ The `decision-playground` skill lists the installed decision pattern packs and
 runs their offline recorded fixtures through the same evaluator, with no
 credential or network access. See
 [the pattern playground guide](../../../../docs/decision/pattern-playground.md).
+The `aiwg decision` CLI and opt-in MCP `decision` toolset expose the same
+runtime-backed capabilities, validation, pattern runs, live plans, and
+explicitly enabled evaluation. See
+[the decision CLI/MCP driver guide](../../../../docs/decision/cli-mcp-driver.md).
+
+The packaged dispatcher exposes public JSON fields for artifact paths,
+credential environment mappings, adapter selection, projection policies, and
+named `hostPolicies` references. The referenced advanced runtime objects are
+not public JSON capabilities: batching receipts, schedulers, context planners,
+compile caches, result caches, provider-prefix policy, stores, callbacks, and
+key services must come from trusted host code. Unsupported or misspelled
+request fields fail closed.
 
 See [the operator guide](docs/operations.md) and the repository-level
 [decision specification](../../../../docs/decision/specification.md).

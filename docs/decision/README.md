@@ -19,6 +19,15 @@ The standard test suite uses fixtures only. The live Jev smoke is separately
 gated by `AIWG_DECISION_JEV_LIVE_SMOKE=1` and
 `AIWG_DECISION_JEV_API_KEY`.
 
+The dispatcher request is deliberately narrower than the TypeScript library.
+Public request JSON can name artifact paths, adapter configuration, projection
+policy files, credentials by environment-variable name, and trusted
+`hostPolicies` references. Runtime objects such as receipt stores, schedulers,
+context estimators, compile-cache implementations, result-cache services,
+provider-prefix identity functions, and key services stay library or host
+module capabilities. They are selected by trusted host code, not serialized in
+model-authored JSON. Unknown or inline advanced policy fields are rejected.
+
 Read the [normative specification](specification.md), [architecture](architecture.md),
 [implementation and migration plan](implementation-plan.md), and addon
 [operations guide](../../agentic/code/addons/decision-engine/docs/operations.md).

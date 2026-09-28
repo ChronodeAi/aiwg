@@ -15,6 +15,17 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Experimental decision graph APIs and TypeScript declarations are available
   through `aiwg/decision/graph`, including Flow bridges, budget admission,
   receipts, and graph templates. G5/G6 live qualification remains pending (#2740).
+- Decision classification workflows now have a shared CLI/MCP driver for
+  capabilities/status, pattern discovery, offline fixture runs, live planning,
+  validation, explicitly enabled evaluation, and synthetic classification setup
+  artifacts (#2742).
+- The packaged `decision-evaluate` dispatcher and Flow skill bridge now expose
+  trusted host-policy references for native batching, batch receipts, context,
+  scheduler, compile-cache, result-cache, and provider-prefix policy. Requests
+  name policies through `hostPolicies`; the actual callbacks, stores and cache
+  services come only from an injected host registry or trusted
+  `--host-policy-module`. Inline or misspelled advanced options are rejected,
+  and Jev compile caching remains disabled unless the host opts in (#2739).
 
 ### Fixed
 

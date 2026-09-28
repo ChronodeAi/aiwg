@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { artifactPin, type DecisionBinding, type DecisionDefinition } from '../../../src/decision/index.js';
 import { decisionEvaluateSkillFlowInvoker, resolveDecisionEvaluateSkill, runDecisionEvaluateSkill,
-  type DecisionSkillRun } from '../../../src/decision/graph-skill-bridge.js';
+  type DecisionSkillRequest, type DecisionSkillRun } from '../../../src/decision/graph-skill-bridge.js';
 import { decisionGraphApprovalGateId, decisionGraphToFlow } from '../../../src/decision/graph-flow.js';
 import { GraphBudgetLedger } from '../../../src/decision/graph-budget.js';
 import { admittedDecisionFlowAdapter } from '../../../src/decision/graph-flow-adapter.js';
@@ -186,5 +186,34 @@ describe('decision graph through the shipped decision-evaluate skill (AC13)', ()
     expect(seen[0].input).toEqual({ message: 'docs-review' });
     expect(seen[0].request).toMatchObject({ runId: 'r', invocationId: 'i' });
     expect(await readdir(dir)).toEqual([]);
+  });
+  it('DAG-059 forwards trusted host policy refs without serializing host module paths', async () => {
+    const seen: any[] = [];
+    const modulePath = join(await workDirectory(), 'host-policy.mjs');
+    const skill = await resolveDecisionEvaluateSkill(root);
+    const configured: DecisionSkillRequest = { ...request(), projectionPolicyPath: join(examples, 'projection-policy-jev.json'),
+      adapterOptions: { jev: { region: 'operator-declared-region' } },
+      hostPolicies: { batching: 'native' }, hostPolicyModulePath: modulePath };
+    const invoker = decisionEvaluateSkillFlowInvoker(graph, { skill, workDirectory: await workDirectory(), project,
+      unknownCostBoundUsd: 0.000001, request: () => configured, run: scripted(seen) });
+    await invoker({ node: { id: 'initial', kind: 'skill', phase: 'stage-0', retry: { limit: 0 }, sideEffectMode: 'none' },
+      inputs: {}, runId: 'r', nodeRunId: 'n', activationId: 'a', invocationKey: 'i' });
+    expect(seen[0].run.hostPolicyModulePath).toBe(modulePath);
+    expect(seen[0].request.hostPolicies).toEqual({ batching: 'native' });
+    expect(seen[0].request.projectionPolicyPath).toBe(configured.projectionPolicyPath);
+    expect(seen[0].request.adapterOptions).toEqual({ jev: { region: 'operator-declared-region' } });
+    expect(seen[0].request.hostPolicyModulePath).toBeUndefined();
+    const rejected = decisionEvaluateSkillFlowInvoker(graph, { skill, workDirectory: await workDirectory(), project,
+      unknownCostBoundUsd: 0.000001, request: () => ({ ...request(), projectionPolicyPath: 'relative-policy.json' }),
+      run: scripted([]) });
+    await expect(rejected({ node: { id: 'initial', kind: 'skill', phase: 'stage-0', retry: { limit: 0 }, sideEffectMode: 'none' },
+      inputs: {}, runId: 'r', nodeRunId: 'n', activationId: 'a', invocationKey: 'i' }))
+      .rejects.toThrow(/invalid decision-evaluate request/);
+  });
+  it('DAG-060 rejects in-process host policy registries for the default external runner', async () => {
+    const skill = await resolveDecisionEvaluateSkill(root);
+    await expect(runDecisionEvaluateSkill({ scriptPath: skill.scriptPath, requestPath: join(examples, 'dispatcher-request-llm.json'),
+      env: {}, timeoutMs: 1_000, hostPolicies: { batching: { native: { enabled: false, evaluations: {} } } } }))
+      .rejects.toThrow(/in-process host policy registry requires a custom decision-evaluate runner/);
   });
 });

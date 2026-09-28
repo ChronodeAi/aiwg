@@ -92,7 +92,7 @@ describe("MCP subsystems — toolset parsing", () => {
   });
 
   it("known toolsets match expected list", () => {
-    const expected = ['flows', 'missions', 'memory', 'kb', 'research', 'activity-log', 'index', 'ralph', 'mc', 'ops', 'sandbox'];
+    const expected = ['flows', 'missions', 'memory', 'kb', 'research', 'activity-log', 'index', 'ralph', 'mc', 'ops', 'sandbox', 'decision'];
     for (const t of expected) {
       expect(KNOWN_TOOLSETS).toContain(t);
     }
@@ -103,6 +103,51 @@ describe("MCP subsystems — toolset parsing", () => {
     expect(all.has("flows")).toBe(true);
     expect(all.has("missions")).toBe(true);
     expect(all.has("sandbox")).toBe(true);
+    expect(all.has("decision")).toBe(true);
+  });
+
+  it("decision toolset registers typed tools and preserves profile-gated evaluation", async () => {
+    const tools = new Map<string, any>();
+    const previous = process.env.AIWG_DECISION_MCP_REQUESTS;
+    process.env.AIWG_DECISION_MCP_REQUESTS = "demo=/trusted/request.json";
+    const server = {
+      registerTool: vi.fn((name: string, config: any, handler: any) => {
+        tools.set(name, { config, handler });
+      }),
+    };
+    try {
+      registerOptInToolsets(server, new Set(["decision"]));
+      expect(tools.get("decision-evaluate-profile").config.inputSchema.profile.safeParse("demo").success).toBe(true);
+      expect(tools.get("decision-evaluate-profile").config.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: true,
+      });
+      expect(tools.get("decision-validate").config.inputSchema.path).toBeUndefined();
+      const validation = await tools.get("decision-validate").handler({
+        target: "request",
+        document: { rulesetPath: "r.json", bindingPath: "b.json", inputPath: "i.json" },
+      });
+      expect(validation.structuredContent.result).toMatchObject({ valid: true, source: "mcp-inline" });
+      const response = await tools.get("decision-evaluate-profile").handler({ profile: "demo", opt_in: false });
+      expect(response.isError).toBeFalsy();
+      expect(tools.get("decision-evaluate-profile").config.outputSchema.result.safeParse(response.structuredContent.result).success).toBe(true);
+      expect(response.structuredContent.result).toMatchObject({
+        status: "denied",
+        reason: "per-call-opt-in-required",
+      });
+      const patterns = await tools.get("decision-patterns-list").handler({});
+      expect(tools.get("decision-patterns-list").config.outputSchema.result.safeParse(patterns.structuredContent.result).success).toBe(true);
+      const shown = await tools.get("decision-pattern-show").handler({ id: "bounded-classification" });
+      expect(tools.get("decision-pattern-show").config.outputSchema.result.safeParse(shown.structuredContent.result).success).toBe(true);
+      const setup = await tools.get("decision-setup-synthetic-classification").handler({ allowed_options: ["bug"], text: "Crash after save" });
+      expect(tools.get("decision-setup-synthetic-classification").config.outputSchema.result.safeParse(setup.structuredContent.result).success).toBe(true);
+      expect(JSON.parse(response.content[0].text)).toEqual(response.structuredContent.result);
+      expect(tools.has("decision-setup-synthetic-classification")).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.AIWG_DECISION_MCP_REQUESTS;
+      else process.env.AIWG_DECISION_MCP_REQUESTS = previous;
+    }
   });
 
   it("mc-dispatch forwards LFD budget controls to the CLI", async () => {

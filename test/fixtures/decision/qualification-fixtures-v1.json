@@ -258,6 +258,22 @@
       ]
     },
     {
+      "id": "DEC-EXAMPLE-25",
+      "path": "agentic/code/addons/decision-engine/examples/fixture-jev-adapter.mjs",
+      "origin": "repository-authored",
+      "author": "Joseph Magly",
+      "date": "2026-09-27",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:33b7f77e0e3e523e8667ddd699ddb4c76a0363d77503d5e9851e320608c488f1",
+      "expectedOutcome": "decision example fixture adapter used by synthetic classification setup",
+      "links": [
+        "FR-014",
+        "JEV-16"
+      ]
+    },
+    {
       "id": "DEC-EXAMPLE-09",
       "path": "agentic/code/addons/decision-engine/examples/input.json",
       "origin": "repository-authored",

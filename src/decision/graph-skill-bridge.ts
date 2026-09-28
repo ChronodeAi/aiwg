@@ -4,6 +4,8 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { resolveRoutableCapability } from '../artifacts/capability-resolver.js';
 import { parseDecisionJson } from './entry.js';
 import { DecisionGraphError, type DecisionGraph } from './graph.js';
+import { assertDecisionHostPolicyRefs, resolveDecisionHostPolicies,
+  type DecisionHostPolicyRefs, type DecisionHostPolicyRegistry } from './host-policy.js';
 import { assertDecisionFlowPins, assertUnknownCostBound, decisionFlowNode, decisionFlowResponse,
   type DecisionResultProjection } from './graph-decision-bridge.js';
 import type { RulesetResult } from './types.js';
@@ -35,18 +37,33 @@ export interface DecisionSkillRequest {
   rulesetPath: string; bindingPath: string; definitionPaths: string[];
   /** Trusted host input; used only by the graph entry node. */
   inputPath?: string;
+  projectionPolicyPath?: string;
+  adapterOptions?: { jev?: { endpoint?: string; allowedOrigins?: string[]; region?: string } };
   adapterModules?: Record<string, string>;
   credentials?: Record<string, string>;
   receiptDirectory?: string; receiptIntegrityKeyRef?: string; receiptIntegrityKeyEncoding?: 'hex' | 'base64';
+  /** Named references into the host-owned policy registry, never inline callbacks or stores. */
+  hostPolicies?: DecisionHostPolicyRefs;
+  /** Host-owned module path passed as a CLI argument, not serialized into the dispatcher request. */
+  hostPolicyModulePath?: string;
 }
-export interface DecisionSkillRun { scriptPath: string; requestPath: string; env: Record<string, string>; timeoutMs: number }
+export interface DecisionSkillRun {
+  scriptPath: string; requestPath: string; env: Record<string, string>; timeoutMs: number;
+  hostPolicyModulePath?: string;
+  hostPolicies?: DecisionHostPolicyRegistry;
+}
 
 /** Default runner: executes the skill entrypoint with a minimal environment.
  * Only PATH, the opt-in flag and host-listed variables reach the child process.
  */
 export function runDecisionEvaluateSkill(run: DecisionSkillRun): Promise<{ code: number; stdout: string }> {
+  if (run.hostPolicies && Object.keys(run.hostPolicies).length) {
+    return Promise.reject(new DecisionGraphError('in-process host policy registry requires a custom decision-evaluate runner'));
+  }
   return new Promise(done => {
-    execFile(process.execPath, [run.scriptPath, '--request', run.requestPath], {
+    const args = [run.scriptPath, '--request', run.requestPath];
+    if (run.hostPolicyModulePath) args.push('--host-policy-module', run.hostPolicyModulePath);
+    execFile(process.execPath, args, {
       cwd: dirname(run.requestPath), timeout: run.timeoutMs, maxBuffer: 16 * 1024 * 1024,
       env: { PATH: process.env.PATH ?? '', ...run.env, AIWG_DECISION_ENABLED: '1' },
     }, (error, stdout) => done({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout }));
@@ -66,6 +83,8 @@ export function decisionEvaluateSkillFlowInvoker(graph: DecisionGraph, host: Dec
   workDirectory: string;
   /** Environment values the dispatcher request's credential mapping names. */
   env?: Record<string, string>;
+  /** Trusted in-process policy registry forwarded to the packaged dispatcher. */
+  hostPolicies?: DecisionHostPolicyRegistry;
   timeoutMs?: number;
   run?: (run: DecisionSkillRun) => Promise<{ code: number; stdout: string }>;
 }): (request: GraphFlowRequest) => Promise<GraphFlowResponse> {
@@ -74,8 +93,16 @@ export function decisionEvaluateSkillFlowInvoker(graph: DecisionGraph, host: Dec
   return async flow => {
     const { node, input } = decisionFlowNode(graph, flow);
     const base = host.request(node.id);
+    if (base.hostPolicies !== undefined) {
+      if (host.hostPolicies) resolveDecisionHostPolicies(base.hostPolicies, host.hostPolicies);
+      else assertDecisionHostPolicyRefs(base.hostPolicies);
+    }
+    if (base.hostPolicyModulePath !== undefined && !isAbsolute(base.hostPolicyModulePath)) {
+      throw new DecisionGraphError('host policy module path must be absolute');
+    }
     const paths = [base.rulesetPath, base.bindingPath, ...base.definitionPaths,
       ...(base.inputPath === undefined ? [] : [base.inputPath]), ...Object.values(base.adapterModules ?? {}),
+      ...(base.projectionPolicyPath === undefined ? [] : [base.projectionPolicyPath]),
       ...(base.receiptDirectory === undefined ? [] : [base.receiptDirectory])];
     if (!base.definitionPaths.length || paths.some(path => typeof path !== 'string' || !isAbsolute(path)) ||
         (node.id === graph.entry && base.inputPath === undefined)) throw new DecisionGraphError('invalid decision-evaluate request');
@@ -90,10 +117,11 @@ export function decisionEvaluateSkillFlowInvoker(graph: DecisionGraph, host: Dec
         await writeFile(inputPath, JSON.stringify(input), { mode: 0o600, flag: 'wx' });
       }
       const requestPath = join(directory, 'request.json');
-      await writeFile(requestPath, JSON.stringify({ ...base, inputPath, runId: flow.runId, invocationId: flow.invocationKey }),
+      const { hostPolicyModulePath, ...serializableBase } = base;
+      await writeFile(requestPath, JSON.stringify({ ...serializableBase, inputPath, runId: flow.runId, invocationId: flow.invocationKey }),
         { mode: 0o600, flag: 'wx' });
       const outcome = await (host.run ?? runDecisionEvaluateSkill)({ scriptPath: host.skill.scriptPath, requestPath,
-        env: { ...(host.env ?? {}) }, timeoutMs: host.timeoutMs ?? 60_000 });
+        env: { ...(host.env ?? {}) }, timeoutMs: host.timeoutMs ?? 60_000, hostPolicyModulePath, hostPolicies: host.hostPolicies });
       // Exit 1 still carries an error/cancelled RulesetResult; anything else is a failure.
       if (outcome.code !== 0 && outcome.code !== 1) throw new DecisionGraphError('decision-evaluate skill failed');
       let result: RulesetResult;
