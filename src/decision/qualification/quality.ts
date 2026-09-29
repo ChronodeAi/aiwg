@@ -494,6 +494,19 @@ export function pairedNonInferiority(input: { interval: PairedDifferenceInterval
     : { decision: 'not-non-inferior', reason: 'lower-bound-below-margin' };
 }
 
+/**
+ * Two-sided Wilson score interval for a binomial proportion at `levelBps` (5001..9998), so each bound
+ * is a one-sided (10000 - levelBps) / 20000 bound. Counts must satisfy 0 <= events <= n and n > 0.
+ */
+export function wilsonScoreInterval(input: { events: number; n: number; levelBps: number }): readonly [number, number] {
+  const z = twoSidedZ(input?.levelBps);
+  const { events, n } = input;
+  if (!isCount(events) || !isCount(n) || n === 0 || events > n) {
+    throw new PairedDifferenceError('wilson interval requires integer counts with 0 <= events <= n and n > 0');
+  }
+  return wilsonScore(events, n, z);
+}
+
 function wilson95(errors: number, n: number): readonly [number, number] {
   // 95% normal quantile; finite-sample Wilson interval for binomial events.
   return wilsonScore(errors, n, 1.959963984540054);
