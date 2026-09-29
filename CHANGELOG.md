@@ -14,8 +14,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   against a host-pinned gate policy artifact, D08 native-distribution
   acceptance, D09 registry calibration and D10 review routing, shadow-mode
   receipts, a D13 durable-review bridge, record-computed held-out
-  preregistration scaffolding, docs and offline tests. Paired non-inferiority is
-  pending, so the release report cannot promote yet (#2622).
+  preregistration with paired non-inferiority against the baseline, docs and
+  offline tests (#2622).
+- Shared paired non-inferiority intervals and a fail-closed margin check for decision pilots (#2618, #2619, #2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.

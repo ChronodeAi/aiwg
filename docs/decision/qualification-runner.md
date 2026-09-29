@@ -178,6 +178,42 @@ reports changed-output rate with a Wilson interval for matched control/perturbat
 or repeated-run IDs; it is not a correctness metric and does not prove that
 an injected answer was safe.
 
+### Paired non-inferiority
+
+Decision pilots that compare a candidate with a baseline on the same items use the shared
+paired helpers in `src/decision/qualification/quality.ts` instead of ad hoc bounds. All
+differences are **candidate minus baseline** and all outputs are integer basis points
+(`{ lowerBps, upperBps, estimateBps, n, method }`, 1 bps = 0.0001).
+
+- `pairedBinaryDifferenceInterval({ counts, levelBps, method })` takes the full paired
+  table `{ both, candidateOnly, baselineOnly, neither }` or, for Tango only, discordant
+  counts `{ b, c, n }` with b = candidate-only and c = baseline-only. The default
+  `newcombe-10` is Newcombe (1998, Stat Med 17:2635) method 10: continuity-free Wilson
+  intervals for both marginals combined by square-and-add, with the phi numerator
+  replaced by `max(eh - fg - n/2, 0)` when `eh > fg`. `tango` inverts Tango's (1998)
+  asymptotic score statistic by bisection. Tests reproduce Newcombe's Table III method 10
+  limits and independent Tango/square-and-add reference values.
+- `pairedMeanDifferenceBootstrap({ differences, levelBps, seed, resamples, bounds })` is a
+  seeded percentile bootstrap for bounded continuous per-pair differences on the
+  proportion scale (bounds within [-1, 1]). It draws indices from a mulberry32 stream
+  with rejection sampling, so the index draw is unbiased and the same seed reproduces
+  the same interval. Each tail must hold at least 5 resamples.
+- `pairedNonInferiority({ interval, marginBps })` reads a two-sided interval one-sidedly.
+  `marginBps` is a **non-positive** integer: `-250` means the candidate may be at most
+  2.5 points worse. The result is `non-inferior` only when `lowerBps >= marginBps`.
+  A 95% two-sided interval therefore gives a one-sided 2.5% test.
+- `wilsonScoreInterval({ events, n, levelBps })` is the two-sided Wilson score interval
+  for one proportion at the same level parameter. Use its upper bound for a maximum
+  error-rate cap and its lower bound for a minimum coverage.
+
+The level is always a parameter (`levelBps` strictly between 5000 and 9999); z comes
+from `normalQuantile` (Acklam's approximation). Limits are rounded outward to whole
+bps. The helpers fail closed: NaN or non-finite values, `n = 0`, out-of-range levels,
+negative or fractional counts, `b + c > n`, mixed count forms, differences outside
+the bounds and positive margins throw `PairedDifferenceError`; a malformed interval
+passed to `pairedNonInferiority` returns `insufficient`, never a pass. The bootstrap
+needs at least two differences and is only approximate for small samples.
+
 The fixture registry at `test/fixtures/decision/qualification-fixtures-v1.json`
 records author, date, permission, sanitization, origin, schema, expected outcome,
 trace links and SHA-256 for every file under `test/fixtures/decision/`,
