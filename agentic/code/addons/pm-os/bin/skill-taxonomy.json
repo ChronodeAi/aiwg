@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "categories": [
+    "Strategy & Vision",
+    "Decisions & Prioritization",
+    "Discovery & Research",
+    "PRD, Specs & Documentation",
+    "Design & Prototyping",
+    "Metrics & Measurement",
+    "Stakeholders & Politics",
+    "Communication, Writing & Influence",
+    "Meetings & Facilitation",
+    "Ideation & Analytical Thinking",
+    "Coaching, Self-Management & Career",
+    "PM OS System & Operations",
+    "Planning & Execution",
+    "Code/Engineering"
+  ],
+  "themes": [
+    {
+      "name": "What we choose",
+      "categories": [
+        "Strategy & Vision",
+        "Decisions & Prioritization",
+        "Discovery & Research"
+      ]
+    },
+    {
+      "name": "What we produce",
+      "categories": [
+        "PRD, Specs & Documentation",
+        "Design & Prototyping",
+        "Metrics & Measurement",
+        "Planning & Execution",
+        "Code/Engineering"
+      ]
+    },
+    {
+      "name": "How we interact",
+      "categories": [
+        "Stakeholders & Politics",
+        "Communication, Writing & Influence",
+        "Meetings & Facilitation"
+      ]
+    },
+    {
+      "name": "How we think & grow",
+      "categories": [
+        "Ideation & Analytical Thinking",
+        "Coaching, Self-Management & Career"
+      ]
+    },
+    {
+      "name": "Inside PM OS",
+      "categories": [
+        "PM OS System & Operations"
+      ],
+      "deemphasized": true
+    }
+  ]
+}
