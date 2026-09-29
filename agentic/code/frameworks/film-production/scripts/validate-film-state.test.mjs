@@ -264,3 +264,37 @@ test('schema shape errors are reported, not just gate errors', () => {
   const s = fresh(); s.shots[0].events[0].expected_count = 'one';
   assert.match(errorsOf(s), /schema: \/shots\/0\/events\/0\/expected_count must be integer/);
 });
+const withCue = changes => {
+  const s = deliverable();
+  s.dialogue_cues = [{ id: 'FP-DLG-001', shot: 'FP-SHOT-001', speech_mode: 'visible', mouth_visible_ranges: [[0, 10]], sync_method: 'none', evidence: 'mouth visible frames 0-10 of the review render', ...changes }];
+  return s;
+};
+test('visible speech with the mouth on screen needs a sync method before picture lock', () => {
+  assert.match(errorsOf(withCue({})), /visible mouth requires a sync method/);
+});
+test('visible speech lip-synced in post passes picture lock', () => {
+  assert.deepEqual(validateFilmState(withCue({ sync_method: 'lipsync_post' })), []);
+});
+test('internal thought must not use lip sync', () => {
+  assert.match(errorsOf(withCue({ speech_mode: 'internal', sync_method: 'lipsync_post' })), /internal thought must not use lip sync/);
+});
+test('internal thought may keep the face on screen without lip sync', () => {
+  assert.deepEqual(validateFilmState(withCue({ speech_mode: 'internal', mouth_visible_ranges: [[0, 10]], sync_method: 'none' })), []);
+});
+test('a dialogue cue must name a known shot and ordered frame ranges', () => {
+  assert.match(errorsOf(withCue({ shot: 'FP-SHOT-404' })), /unknown shot/);
+  assert.match(errorsOf(withCue({ mouth_visible_ranges: [[10, 0]], sync_method: 'lipsync_post' })), /range start after end/);
+});
+test('visible speech whose mouth is never on screen passes as hidden_mouth', () => {
+  assert.deepEqual(validateFilmState(withCue({ mouth_visible_ranges: [], sync_method: 'hidden_mouth' })), []);
+});
+test('a locked coverage lock requires a storyboard record; a waived one does not', () => {
+  const s = fresh(); assert.equal(s.locks.coverage.status, 'locked'); delete s.storyboard;
+  assert.match(errorsOf(s), /coverage lock requires a storyboard/);
+  s.locks.coverage = { status: 'waived', reason: 'single-shot piece', authority_reference: 'recorded user decision reference' };
+  assert.deepEqual(validateFilmState(s), []);
+});
+test('a changed storyboard animatic makes the coverage lock stale', () => {
+  const s = fresh(); s.storyboard.animatic_sha256 = H('f');
+  assert.match(errorsOf(s), /stale against current storyboard animatic/);
+});
