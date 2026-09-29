@@ -20,6 +20,7 @@ Applies to story proof, voice selection, dialogue revision, visible speech, soun
 - Build causal audiovisual transitions: a character hears, responds, and acts in the intended order. Do not substitute arbitrary attractive shot order for motivated behavior.
 - Align sound to visible physical phases and plausible sources. Mechanical clicks, motor noise, handling sounds, and impacts must correspond to events rather than act as generic decoration.
 - Listen against actual picture and in the final export. Check intelligibility, sync, unwanted artifacts, abrupt levels, clipping, and whether music/effects support the story. Waveform appearance and endpoint frames do not certify performance.
+- Record for every dialogue cue the shot, speech mode, the frame ranges where the speaker's mouth is on screen, and the sync method. A visible-speech cue whose mouth is on screen needs `audio_driven_generation` or `lipsync_post`; if its mouth is never on screen, `hidden_mouth`. Internal, off-screen and narration cues never use lip sync, even when the face is visible. Before relying on a lip-sync adapter for a stylized or non-human face, run one ≤2 s test on the actual character and record the result.
 
 ## Required response
 

@@ -1292,6 +1292,63 @@
           }
         }
       }
+    },
+    "dialogue_cues": {
+      "type": "array",
+      "description": "Every dialogue cue with its speech mode, on-screen mouth ranges and sync method. Picture lock requires visible speech to be lip-synced or mouth-hidden and forbids lip sync on internal, off-screen and narration cues.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "shot",
+          "speech_mode",
+          "mouth_visible_ranges",
+          "sync_method",
+          "evidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "shot": {
+            "type": "string"
+          },
+          "speech_mode": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "visible",
+              "offscreen",
+              "narration"
+            ]
+          },
+          "mouth_visible_ranges": {
+            "type": "array",
+            "description": "shot-local, 0-based, inclusive frames at the timeline fps; start ≤ end",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          },
+          "sync_method": {
+            "type": "string",
+            "enum": [
+              "audio_driven_generation",
+              "lipsync_post",
+              "hidden_mouth",
+              "none"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
     }
   }
 }

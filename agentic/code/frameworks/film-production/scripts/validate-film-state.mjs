@@ -13,6 +13,7 @@ const lockNames = ['coverage', 'picture', 'sound'];
 const conditionTargets = new Set(['picture', 'sound', 'delivery']);
 const treatments = new Set(['shown', 'continuous', 'cut', 'elided']);
 const audioKinds = new Set(['dialogue', 'foley', 'effect', 'bed', 'music']);
+const lipSync = new Set(['audio_driven_generation', 'lipsync_post']);
 const hash = /^[a-f0-9]{64}$/;
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const list = value => Array.isArray(value) ? value : [];
@@ -205,6 +206,12 @@ export function validateFilmState(state) {
       }
     }
   }
+  for (const cue of list(state.dialogue_cues)) {
+    if (!record(cue)) { errors.push('dialogue cue must be an object'); continue; }
+    const id = cue.id || '?';
+    require(shots.has(cue.shot), `dialogue ${id}: unknown shot`);
+    for (const [start, end] of list(cue.mouth_visible_ranges).map(list)) require(!(start > end), `dialogue ${id}: range start after end`);
+  }
 
   const timeline = record(state.timeline) ? state.timeline : null;
   if (state.timeline !== undefined) {
@@ -291,6 +298,13 @@ export function validateFilmState(state) {
         require(latest?.checklist_version === checklistVersion, `cut ${cut.id}: review predates checklist version ${checklistVersion}`);
         require(!openBlocking(cut.defects), `cut ${cut.id}: unresolved blocking defect`);
         for (const defect of list(cut.defects)) if (defect?.severity === 'minor' && defect.status === 'open') require(text(defect.disclosure), `cut ${cut.id}: open minor defect disclosure required`);
+      }
+      for (const cue of list(state.dialogue_cues)) {
+        if (!record(cue) || !order.includes(cue.shot)) continue;
+        const id = cue.id || '?';
+        const shown = list(cue.mouth_visible_ranges).length > 0;
+        if (cue.speech_mode === 'visible') require(shown ? lipSync.has(cue.sync_method) : cue.sync_method === 'hidden_mouth', `dialogue ${id}: visible mouth requires a sync method before picture lock`);
+        else require(!lipSync.has(cue.sync_method), `dialogue ${id}: ${cue.speech_mode === 'internal' ? 'internal thought' : `${cue.speech_mode} speech`} must not use lip sync`);
       }
     }
     if (name === 'sound') {
