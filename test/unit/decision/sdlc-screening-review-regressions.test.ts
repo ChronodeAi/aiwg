@@ -112,14 +112,14 @@ describe('SDLC screening round-2 review regressions (#2622)', () => {
     expect(result.heldout?.classes.support.precisionBps).toBe(2_500);
     const release = buildSdlcScreeningReleaseReport({ preregistration: plan, trustedPreregistrationDigest: anchored(plan),
       heldout: heldoutRecords(wrong), integrity: verifiedIntegrity(), nowEpochMs: HELDOUT_NOW });
-    expect(release.decision).not.toBe('PROMOTE');
+    expect(release.decision).toBe('HOLD');
+    expect(release.reasons).toContain('quality-not-non-inferior');
     // A regressed candidate (baseline right, candidate wrong) is recorded as paired evidence and held.
     const regressed = heldoutSamples().map((sample, index) => sample.kind === 'phase-criterion' && !sample.gold.ready && index % 3 === 0
       ? { ...sample, candidate: { ...sample.candidate, route: 'ADVISORY_READY' as const, readyProbability: 0.9 } } : sample);
     const regression = evaluateSdlcScreeningPreregistration(plan, anchored(plan), heldoutRecords(regressed), HELDOUT_NOW);
-    expect(regression.heldout?.paired.baselineOnlyCorrect).toBeGreaterThan(0);
-    expect(regression.reasons).toEqual(expect.arrayContaining(['false-ready-bound-exceeded',
-      'quality-non-inferiority-pending-paired-interval']));
+    expect(regression.heldout?.paired.baselineOnly).toBeGreaterThan(0);
+    expect(regression.reasons).toEqual(expect.arrayContaining(['false-ready-bound-exceeded']));
     expect(regression.decision).toBe('fail');
   });
 

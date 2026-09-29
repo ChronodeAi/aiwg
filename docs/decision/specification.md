@@ -224,8 +224,9 @@ the paired non-inferiority margin and economics, and is anchored by a separately
 trusted digest. Held-out metrics are computed from per-sample records with the
 qualification quality helpers, never caller-asserted. Missing records or support
 is `INSUFFICIENT_EVIDENCE`; digest, time-order, split, bound and economics
-violations fail. Paired non-inferiority is pending the shared paired-interval
-helper and fails closed as insufficient evidence meanwhile, so the release report
-cannot currently `PROMOTE`. Integrity is checked against an allowlist of verified
+violations fail. Quality is a paired non-inferiority test of per-item
+correctness against the baseline, using the shared Newcombe paired interval at the
+preregistered level; a candidate that is not non-inferior fails and the release
+holds. Integrity is checked against an allowlist of verified
 mode/state/score-source combinations, and upstream `HOLD` or `ROLLBACK` is never
 upgraded.

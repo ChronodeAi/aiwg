@@ -230,7 +230,8 @@ export function preregistration(overrides: Partial<SdlcScreeningPreregistration>
     minimumSliceSupport: 20,
     minimumGateBlockingSliceSupport: 40,
     confidenceInterval: { method: 'wilson', levelBps: 9_500 },
-    qualityNonInferiorityBps: 200,
+    // All-concordant 180 pairs give a Newcombe 95% lower bound of -209 bps, so the margin is 300.
+    qualityNonInferiorityBps: 300,
     efficiencyClaim: { enabled: true, minimumPositiveTotalEconomicsUsd: 0.5 },
     ...overrides,
   };

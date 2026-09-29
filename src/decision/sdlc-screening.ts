@@ -8,7 +8,8 @@ import type { CreateReviewInput } from './review/types.js';
 import { reviewDigest } from './review/validate.js';
 import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from './qualification/release.js';
 import {
-  evaluateBinaryHeldout, verifyQualificationSplits, wilson95Interval, type QualificationSplit,
+  evaluateBinaryHeldout, pairedBinaryDifferenceInterval, pairedNonInferiority, verifyQualificationSplits, wilsonScoreInterval,
+  type PairedDifferenceInterval, type QualificationSplit,
 } from './qualification/quality.js';
 import { applyPrimitiveAcceptance } from './acceptance.js';
 import { composeRuleset } from './compose.js';
@@ -261,6 +262,8 @@ export interface SdlcScreeningHeldoutSample {
     retries: number;
     fallbacks: number;
   };
+  /** Baseline screening on the same item; `correct` uses the same definition as the candidate
+   * (readiness route matches gold and, for citations, the support label matches gold). */
   baseline: { correct: boolean; costUsd: number | null };
   reviewer: { agreed: boolean; overridden: boolean } | null;
 }
@@ -298,7 +301,12 @@ export interface SdlcScreeningHeldoutReport {
   falseSupport: SdlcRateEvidence;
   falseReady: SdlcRateEvidence;
   reviewer: { n: number; agreementRateBps: number | null; overrideRateBps: number | null };
-  paired: { n: number; baselineOnlyCorrect: number; candidateOnlyCorrect: number };
+  /** Per-item correctness (readiness and citation label), candidate versus the paired baseline outcome. */
+  paired: {
+    n: number; both: number; candidateOnly: number; baselineOnly: number; neither: number;
+    /** Candidate minus baseline at the preregistered level; null when no supported level was given. */
+    interval: PairedDifferenceInterval | null;
+  };
   calibrationRiskCoverage: { brier: number; expectedCalibrationError: number; coverage: number; selectiveRisk: number | null };
   slices: Record<string, { n: number; coverage: number; selectiveRisk: number | null }>;
   latencyMs: { p50: number; p95: number; p99: number };
@@ -1229,14 +1237,22 @@ function bps(events: number, n: number): number | null {
   return n > 0 ? Math.round(events / n * 10_000) : null;
 }
 
-function rateEvidence(events: number, n: number): SdlcRateEvidence {
-  if (n === 0) return { events, n, rateBps: null, upperBps: null };
-  const [, upper] = wilson95Interval(events, n);
+function rateEvidence(events: number, n: number, levelBps: number | null): SdlcRateEvidence {
+  if (n === 0 || levelBps === null) return { events, n, rateBps: bps(events, n), upperBps: null };
+  const [, upper] = wilsonScoreInterval({ events, n, levelBps });
   return { events, n, rateBps: bps(events, n), upperBps: Math.ceil(upper * 10_000) };
 }
 
-/** Computes every held-out metric from per-sample records with the #1585 quality helpers. */
-export function computeSdlcScreeningHeldoutReport(records: SdlcScreeningHeldoutRecords): SdlcScreeningHeldoutReport {
+/**
+ * Computes every held-out metric from per-sample records with the #1585 quality helpers.
+ * With a two-sided `levelBps`, false-rate upper bounds use the Wilson score interval and the
+ * paired candidate-minus-baseline interval uses Newcombe method 10 at that level; without one
+ * (or for an unsupported level) those bounds are null.
+ */
+export function computeSdlcScreeningHeldoutReport(
+  records: SdlcScreeningHeldoutRecords,
+  levelBps: number | null = null,
+): SdlcScreeningHeldoutReport {
   if (!isRecord(records) || records.schemaVersion !== SDLC_SCREENING_HELDOUT_RECORDS_VERSION
     || typeof records.evaluatedAt !== 'string' || !Array.isArray(records.samples) || !Array.isArray(records.splits)) {
     throw new SdlcScreeningValidationError('Invalid held-out records');
@@ -1265,6 +1281,16 @@ export function computeSdlcScreeningHeldoutReport(records: SdlcScreeningHeldoutR
   const baselineCost = sum(samples.map(sample => sample.baseline.costUsd));
   const candidateCost = binary.overall.costUsd;
   const test = records.splits.find(split => split.name === 'test')!;
+  // An item is correct only when the readiness route and, for citations, the support label both match gold.
+  const correct = (sample: SdlcScreeningHeldoutSample) => ready(sample) === sample.gold.ready
+    && (sample.kind !== 'citation' || sample.candidate.support === sample.gold.support);
+  const paired = {
+    n: samples.length,
+    both: samples.filter(sample => sample.baseline.correct && correct(sample)).length,
+    candidateOnly: samples.filter(sample => !sample.baseline.correct && correct(sample)).length,
+    baselineOnly: samples.filter(sample => sample.baseline.correct && !correct(sample)).length,
+    neither: samples.filter(sample => !sample.baseline.correct && !correct(sample)).length,
+  };
   return {
     schemaVersion: SDLC_SCREENING_HELDOUT_REPORT_VERSION,
     evaluatedAt: records.evaluatedAt,
@@ -1274,18 +1300,16 @@ export function computeSdlcScreeningHeldoutReport(records: SdlcScreeningHeldoutR
     gateBlockingSliceSupport: 0,
     classes: { support: classMetrics('supports'), contradiction: classMetrics('contradicts'), unclear: classMetrics('unclear') },
     falseSupport: rateEvidence(citations.filter(sample => ready(sample) && sample.candidate.support === 'supports'
-      && sample.gold.support !== 'supports').length, citations.length),
-    falseReady: rateEvidence(samples.filter(sample => ready(sample) && !sample.gold.ready).length, samples.length),
+      && sample.gold.support !== 'supports').length, citations.length, levelBps),
+    falseReady: rateEvidence(samples.filter(sample => ready(sample) && !sample.gold.ready).length, samples.length, levelBps),
     reviewer: {
       n: reviewed.length,
       agreementRateBps: bps(reviewed.filter(sample => sample.reviewer!.agreed).length, reviewed.length),
       overrideRateBps: bps(reviewed.filter(sample => sample.reviewer!.overridden).length, reviewed.length),
     },
-    paired: {
-      n: samples.length,
-      baselineOnlyCorrect: samples.filter(sample => sample.baseline.correct && ready(sample) !== sample.gold.ready).length,
-      candidateOnlyCorrect: samples.filter(sample => !sample.baseline.correct && ready(sample) === sample.gold.ready).length,
-    },
+    paired: { ...paired, interval: levelBps === null ? null
+      : pairedBinaryDifferenceInterval({ counts: { both: paired.both, candidateOnly: paired.candidateOnly,
+        baselineOnly: paired.baselineOnly, neither: paired.neither }, levelBps, method: 'newcombe-10' }) },
     calibrationRiskCoverage: {
       brier: binary.overall.brier, expectedCalibrationError: binary.overall.expectedCalibrationError,
       coverage: binary.overall.coverage, selectiveRisk: binary.overall.selectiveRisk,
@@ -1318,7 +1342,8 @@ const REASON_DISPOSITIONS: Readonly<Record<string, 'fail' | 'insufficient-eviden
   'confidence-interval-unsupported': 'insufficient-evidence',
   'false-support-bound-exceeded': 'fail',
   'false-ready-bound-exceeded': 'fail',
-  'quality-non-inferiority-pending-paired-interval': 'insufficient-evidence',
+  'quality-not-non-inferior': 'fail',
+  'quality-non-inferiority-insufficient': 'insufficient-evidence',
   'total-economics-unknown': 'insufficient-evidence',
   'total-economics-not-positive': 'fail',
 });
@@ -1360,9 +1385,12 @@ export function evaluateSdlcScreeningPreregistration(
     if (evaluatedAt < frozenAt) reasons.push('heldout-not-after-preregistration');
     if (evaluatedAt > nowEpochMs) reasons.push('heldout-evaluated-in-future');
   }
+  // Wilson score and Newcombe method 10 bounds are implemented for levels the paired helpers accept.
+  const { method, levelBps } = preregistration.confidenceInterval;
+  const intervalSupported = method === 'wilson' && levelBps > 5_000 && levelBps < 9_999;
   let report: SdlcScreeningHeldoutReport;
   try {
-    report = computeSdlcScreeningHeldoutReport(records);
+    report = computeSdlcScreeningHeldoutReport(records, intervalSupported ? levelBps : null);
   } catch {
     reasons.push('heldout-records-invalid');
     return finish(null);
@@ -1381,8 +1409,6 @@ export function evaluateSdlcScreeningPreregistration(
   for (const [label, metric] of Object.entries(report.classes)) {
     if (metric.n < preregistration.minimumSliceSupport) reasons.push(`class-support-missing:${label}`);
   }
-  // Only the Wilson 95% interval is implemented; any other preregistered method/level fails closed.
-  const intervalSupported = preregistration.confidenceInterval.method === 'wilson' && preregistration.confidenceInterval.levelBps === 9_500;
   if (!intervalSupported) reasons.push('confidence-interval-unsupported');
   else {
     if (report.falseSupport.upperBps === null) reasons.push('class-support-missing:false-support');
@@ -1390,10 +1416,14 @@ export function evaluateSdlcScreeningPreregistration(
     if (report.falseReady.upperBps === null) reasons.push('minimum-total-support-missing');
     else if (report.falseReady.upperBps > preregistration.maximumFalseReadyRateBps) reasons.push('false-ready-bound-exceeded');
   }
-  // TODO(#2622): paired non-inferiority needs pairedBinaryDifferenceInterval + pairedNonInferiority from
-  // feat/decision-paired-noninferiority over report.paired at the preregistered CI method/level and
-  // qualityNonInferiorityBps margin. Until that helper lands this fails closed: never pass, never PROMOTE.
-  reasons.push('quality-non-inferiority-pending-paired-interval');
+  // Paired non-inferiority of per-item readiness correctness against the baseline screening path.
+  // The preregistered margin is a tolerated loss in bps; the helper's margin is candidate minus
+  // baseline, so it is negated (200 bps tolerated loss => marginBps -200).
+  const nonInferiority = report.paired.interval
+    ? pairedNonInferiority({ interval: report.paired.interval, marginBps: -preregistration.qualityNonInferiorityBps })
+    : { decision: 'insufficient' as const, reason: 'interval-unavailable' };
+  if (nonInferiority.decision === 'not-non-inferior') reasons.push('quality-not-non-inferior');
+  else if (nonInferiority.decision !== 'non-inferior') reasons.push('quality-non-inferiority-insufficient');
   if (preregistration.efficiencyClaim.enabled) {
     const net = report.costUsd.netSavings;
     if (net === null) reasons.push('total-economics-unknown');

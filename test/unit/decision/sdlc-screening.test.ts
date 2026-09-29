@@ -17,7 +17,7 @@ import {
 } from '../../../src/decision/index.js';
 import {
   HELDOUT_NOW, anchored, calibration, citationObservation, citationSubject, criterionItem, criterionObservation,
-  criterionSubject, digest, heldoutRecords, preregistration, request, trust, verifiedIntegrity,
+  criterionSubject, digest, heldoutRecords, heldoutSamples, preregistration, request, trust, verifiedIntegrity,
 } from './sdlc-screening-fixtures.js';
 
 const schema = (name: string) => {
@@ -161,26 +161,54 @@ describe('SDLC evidence screening (#2622)', () => {
     expect(evaluateSdlcEvidenceScreening(request(criterionSubject(false), criterionObservation(), { mode: 'disabled' }))).toBeNull();
   });
 
-  it('computes held-out metrics from records and cannot promote while paired non-inferiority is pending', () => {
+  it('computes held-out metrics from records and PROMOTEs a report that meets every preregistered threshold', () => {
     const plan = preregistration();
     const result = evaluateSdlcScreeningPreregistration(plan, anchored(plan), heldoutRecords(), HELDOUT_NOW);
-    // Every preregistered threshold is satisfied by the fixture except the pending paired interval.
-    expect(result.reasons).toEqual(['quality-non-inferiority-pending-paired-interval']);
-    expect(result.decision).toBe('insufficient-evidence');
+    expect(result).toMatchObject({ decision: 'pass', reasons: [] });
     expect(result.heldout).toMatchObject({
       totalSupport: 180, gateBlockingSliceSupport: 60,
       classes: { support: { n: 30, precisionBps: 10_000, recallBps: 10_000 } },
       falseSupport: { events: 0, n: 120 }, falseReady: { events: 0, n: 180 },
+      paired: { n: 180, both: 180, candidateOnly: 0, baselineOnly: 0, neither: 0,
+        interval: { lowerBps: -209, estimateBps: 0, method: 'newcombe-hybrid-score' } },
       costUsd: { netSavings: expect.closeTo(1.62, 6) },
     });
     const release = buildSdlcScreeningReleaseReport({ preregistration: plan, trustedPreregistrationDigest: anchored(plan),
       heldout: heldoutRecords(), integrity: verifiedIntegrity(), nowEpochMs: HELDOUT_NOW });
-    expect(release.decision).toBe('HOLD');
-    expect(release.reasons).toEqual(['quality-non-inferiority-pending-paired-interval']);
+    expect(release).toMatchObject({ decision: 'PROMOTE', preregisteredDecision: 'pass', reasons: [] });
+    // The same evidence at a tighter preregistered margin (200 bps < the 209 bps lower bound) is not non-inferior.
+    const tight = preregistration({ qualityNonInferiorityBps: 200 });
+    expect(evaluateSdlcScreeningPreregistration(tight, anchored(tight), heldoutRecords(), HELDOUT_NOW)).toMatchObject({
+      decision: 'fail', reasons: ['quality-not-non-inferior'] });
+    // The preregistered level is used: a 99% interval is wider and fails the same 300 bps margin.
+    const wide = preregistration({ confidenceInterval: { method: 'wilson', levelBps: 9_900 } });
+    const wider = evaluateSdlcScreeningPreregistration(wide, anchored(wide), heldoutRecords(), HELDOUT_NOW);
+    expect(wider.heldout!.paired.interval!.lowerBps).toBeLessThan(-300);
+    expect(wider.reasons).toContain('quality-not-non-inferior');
+    const exact = preregistration({ confidenceInterval: { method: 'exact-binomial', levelBps: 9_500 } });
+    expect(evaluateSdlcScreeningPreregistration(exact, anchored(exact), heldoutRecords(), HELDOUT_NOW)).toMatchObject({
+      decision: 'insufficient-evidence', reasons: expect.arrayContaining(['confidence-interval-unsupported',
+        'quality-non-inferiority-insufficient']) });
     expect(evaluateSdlcScreeningPreregistration(plan, anchored(plan), null, HELDOUT_NOW)).toMatchObject({
       decision: 'insufficient-evidence', reasons: ['heldout-records-missing'] });
     expect(() => evaluateSdlcScreeningPreregistration({ ...plan, minimumTotalSupport: -1 }, anchored(plan), null, HELDOUT_NOW))
       .toThrow('minimums');
+  });
+
+  it('HOLDs a candidate that regresses against the paired baseline (not non-inferior)', () => {
+    const plan = preregistration();
+    // The candidate misses 20 items the baseline screened correctly. They are missed-ready items, so
+    // false-support/false-ready bounds, class support and economics all still pass; only quality regresses.
+    let flipped = 0;
+    const regressed = heldoutSamples().map(sample => sample.gold.ready && flipped < 20 && ++flipped
+      ? { ...sample, candidate: { ...sample.candidate, route: 'REVIEW' as const, readyProbability: 0.1 } } : sample);
+    const result = evaluateSdlcScreeningPreregistration(plan, anchored(plan), heldoutRecords(regressed), HELDOUT_NOW);
+    expect(result.heldout!.paired).toMatchObject({ both: 160, baselineOnly: 20, candidateOnly: 0, neither: 0 });
+    expect(result.heldout!.paired.interval!.lowerBps).toBeLessThan(-300);
+    expect(result).toMatchObject({ decision: 'fail', reasons: ['quality-not-non-inferior'] });
+    const release = buildSdlcScreeningReleaseReport({ preregistration: plan, trustedPreregistrationDigest: anchored(plan),
+      heldout: heldoutRecords(regressed), integrity: verifiedIntegrity(), nowEpochMs: HELDOUT_NOW });
+    expect(release).toMatchObject({ decision: 'HOLD', preregisteredDecision: 'fail', reasons: ['quality-not-non-inferior'] });
   });
 
   it('never upgrades upstream integrity HOLD or ROLLBACK', () => {

@@ -131,25 +131,34 @@ never caller-asserted. Calibration/risk-coverage, latency, tokens, cost and
 per-slice counts come from `evaluateBinaryHeldout` over the frozen split.
 Per-class support/contradiction/unclear precision and recall and the
 false-support and false-ready counts are computed from the records. False rates
-are bounded by the upper limit of the Wilson 95% interval (`wilson95Interval`).
+are bounded by the upper limit of the Wilson score interval
+(`wilsonScoreInterval`) at the preregistered level.
+
+Quality is a paired non-inferiority test against the baseline screening path on
+the same items. An item is correct when the readiness route matches gold and,
+for citations, the support label also matches gold; each record's
+`baseline.correct` must use the same definition. The paired table
+(both / candidate-only / baseline-only / neither correct) goes to
+`pairedBinaryDifferenceInterval` (Newcombe method 10, candidate minus baseline)
+at the preregistered level, and `pairedNonInferiority` reads it with
+`marginBps = -qualityNonInferiorityBps`: a preregistered 300 bps margin lets the
+candidate be at most 3 points worse. A lower bound below the margin is
+`quality-not-non-inferior` (fail).
 
 The result is `insufficient-evidence` for missing records or missing
 total/slice/class/gate-blocking support, including preregistered slices that are
 absent. It is `fail` for a plan digest mismatch, a plan frozen after the
 evaluation clock, a missing or unparseable `evaluatedAt`, an evaluation before
 the freeze or after the clock, a split mismatch, invalid or unregistered-slice
-records, an exceeded false-support or false-ready bound, or non-positive net
+records, an exceeded false-support or false-ready bound, a candidate that is not
+non-inferior to the baseline, or non-positive net
 economics against the baseline when an efficiency claim is made. Each reason is
 an explicit code with a fixed disposition; unknown codes fail.
 
-Pending: paired non-inferiority. The records carry the paired
-baseline-versus-candidate outcomes, but the paired interval
-(`pairedBinaryDifferenceInterval` and `pairedNonInferiority` from the
-`feat/decision-paired-noninferiority` helper branch) is not yet merged. Until it
-is, every evaluation adds `quality-non-inferiority-pending-paired-interval`
-(insufficient evidence), so no held-out result can pass. Only the Wilson 95%
-interval is implemented; a preregistration that asks for another method or
-level is `insufficient-evidence`.
+Only the `wilson` method is implemented, at levels strictly between 5,000 and
+9,999 bps (the range the shared helpers accept). A preregistration that asks for
+`exact-binomial` or another level gets `confidence-interval-unsupported` and
+`quality-non-inferiority-insufficient` (insufficient evidence).
 
 `buildSdlcScreeningReleaseReport()` carries #2037/#2048 eval-integrity metadata
 unchanged and preserves `PROMOTE`/`HOLD`/`ROLLBACK`. Integrity is an allowlist
@@ -158,8 +167,9 @@ unchanged and preserves `PROMOTE`/`HOLD`/`ROLLBACK`. Integrity is an allowlist
 mode's own trusted score source, plus uncertainty, a paired baseline, positive
 `sample_n`, no weak signal, no compromise labels and an upstream `PROMOTE`, can
 promote. Unknown or malformed values hold. D29 cannot upgrade an upstream `HOLD`
-or `ROLLBACK`. While paired non-inferiority is pending, the release decision is
-never `PROMOTE`.
+or `ROLLBACK`. The release is `PROMOTE` only when the preregistered evaluation
+passes, integrity has no problems and the upstream gate is `PROMOTE`; a
+not-non-inferior candidate is `HOLD`.
 
 ## Offline tests
 
@@ -181,6 +191,9 @@ never `PROMOTE`.
 - the host-outcome pass-through in disabled and shadow modes;
 - record-computed held-out metrics, post-hoc and future-dated evaluations,
   missing slices, integrity allowlisting and release HOLD/ROLLBACK;
+- a report meeting every preregistered threshold reaching `PROMOTE`, and a
+  candidate that regresses against the paired baseline (or fails a tighter
+  margin or a wider preregistered level) held as not non-inferior;
 - schema conformance for the request, preregistration and release shapes;
 - D13 restart/resume idempotency through the real file review store.
 
@@ -190,5 +203,4 @@ The implementation does not claim live Jev quality, human reviewer agreement,
 held-out false-support/false-ready bounds, production latency/cost, or reviewer
 time savings. Those require a frozen held-out corpus, adjudication guide,
 reviewer identities/rationales, live provider credentials, deployment egress
-approval and positive total-economics evidence, plus the paired
-non-inferiority helper described above.
+approval and positive total-economics evidence.

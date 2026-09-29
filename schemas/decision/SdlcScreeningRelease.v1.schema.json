@@ -344,21 +344,78 @@
           "additionalProperties": false,
           "required": [
             "n",
-            "baselineOnlyCorrect",
-            "candidateOnlyCorrect"
+            "both",
+            "candidateOnly",
+            "baselineOnly",
+            "neither",
+            "interval"
           ],
           "properties": {
             "n": {
               "type": "integer",
               "minimum": 0
             },
-            "baselineOnlyCorrect": {
+            "both": {
               "type": "integer",
               "minimum": 0
             },
-            "candidateOnlyCorrect": {
+            "candidateOnly": {
               "type": "integer",
               "minimum": 0
+            },
+            "baselineOnly": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "neither": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "interval": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "lowerBps",
+                    "upperBps",
+                    "estimateBps",
+                    "n",
+                    "method"
+                  ],
+                  "properties": {
+                    "lowerBps": {
+                      "type": "integer",
+                      "minimum": -10000,
+                      "maximum": 10000
+                    },
+                    "upperBps": {
+                      "type": "integer",
+                      "minimum": -10000,
+                      "maximum": 10000
+                    },
+                    "estimateBps": {
+                      "type": "integer",
+                      "minimum": -10000,
+                      "maximum": 10000
+                    },
+                    "n": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "method": {
+                      "enum": [
+                        "newcombe-hybrid-score",
+                        "tango-score",
+                        "percentile-bootstrap"
+                      ]
+                    }
+                  }
+                }
+              ]
             }
           }
         },
