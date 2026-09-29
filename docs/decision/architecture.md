@@ -38,7 +38,8 @@ schema/runtime/docs/test areas, but it is not a Jev media adapter and does not
 select an OCR, ASR, captioning, vision, or document parser. Host code resolves
 recorded extraction manifests before evaluation, then passes ordinary text state
 through the existing projection boundary. `RulesetResult.spec.preprocessingLineage`
-stores body-free links only when that host evidence is supplied.
+stores body-free links and the evaluator's pre-dispatch gate verdict only when
+non-empty host evidence is supplied.
 
 ## Alternatives and consequences
 

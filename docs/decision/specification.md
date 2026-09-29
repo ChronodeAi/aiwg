@@ -175,16 +175,21 @@ Definition authorship and binding selection are trusted control inputs; model st
 text-only state derived from non-text sources; see
 [preprocessing lineage](preprocessing-lineage.md). It remains default-off and
 does not add native media input to Jev. A resolver may release derived text only
-after verifying source/output digests when available, ordered preprocessing
-continuity, selected segment locators, transformation links, quality/review
-flags, and independent raw/derived egress policy. Routine decision receipts
-carry only body-free lineage pins, digests, segment IDs, locator digests,
-quality flags, counts, durations and policy outcomes. Raw media,
+after verifying the closed schema, source (when bytes are supplied) and output
+digests, ordered preprocessing continuity, segment text as byte ranges of the
+verified output, selected segment locators, transformation and human-correction
+links, quality/review flags, trust, and independent raw/derived egress policy.
+Routine decision receipts carry only body-free lineage pins, digests, the
+authorized destination, segment IDs, locator digests, quality flags,
+retention/residency digests, counts, durations and policy outcomes. Raw media,
 OCR/ASR/caption/image-description bodies and reviewer notes are not stored in
-default receipts or traces. Low-quality, truncated, incomplete, stale or
-derived-egress-denied lineage routes to review/no-action rather than an
-automatic pass. Preprocessor confidence remains preprocessor evidence and is
-not Jev confidence, calibrated risk or decision correctness.
+receipts or traces. The evaluator gates a non-empty lineage before credential
+resolution and dispatch: a destination that does not match the D10 projection
+provider/origin, or denied derived egress, is refused; low-quality, truncated,
+incomplete, stale, untrusted, unverified, unavailable, tombstoned or held
+lineage returns review/no-action without dispatch. Preprocessor confidence
+remains preprocessor evidence and is not Jev confidence, calibrated risk or
+decision correctness.
 
 Jev key was inducted before first API use, verified by in-memory comparison, and retrieved from the vault for the smoke request. See sanitized receipt. The supplied operator file remains at mode 0600; no source deletion or reader-role provisioning is implied. Production rollout requires a least-privilege runtime reader through itops; it MUST NOT use the one-time administrative induction route. Per itops SOP, leaf secrets stay in the vault metadata catalog and are not mirrored to DATAGERRY.
 
