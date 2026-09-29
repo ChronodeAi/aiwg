@@ -5,7 +5,16 @@ import { fileURLToPath } from 'node:url';
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { canonicalJson } from '../../security/artifact-trust.js';
+import { correlateAtomicBatch } from '../batch.js';
 import { admitEntry } from '../entry.js';
+import { projectDecisionState, type DecisionProjectionField, type DecisionProjectionPolicy } from '../projection.js';
+import {
+  evaluateBinaryHeldout,
+  evaluateOrdinalHeldout,
+  evaluateRankingHeldout,
+  freezeQualificationSplit,
+  type BinaryQualificationSample,
+} from '../qualification/quality.js';
 import { artifactDigest } from '../validate.js';
 import type {
   BinaryMetrics,
@@ -20,6 +29,7 @@ import type {
   IssueTriageGateDecision,
   IssueTriageIssueRecord,
   IssueTriageModelResponse,
+  IssueTriageModelState,
   IssueTriagePilotPack,
   IssueTriageProjection,
   IssueTriageShadowArtifact,
@@ -50,6 +60,7 @@ const FINAL_FIELDS = ['finalLabels', 'finalDuplicateOf', 'resolution', 'closedAt
 const RESPONSE_FIELDS = ['issueId', 'issueType', 'area', 'urgency', 'completeness', 'clarificationNeed', 'duplicate',
   'uncertaintyProfile', 'accepted', 'actualModel', 'requestedModel', 'latencyMs', 'usage', 'calls', 'retries', 'fallbacks', 'cacheHit'] as const;
 const DUPLICATE_RESPONSE_FIELDS = ['issueId', 'rank'] as const;
+const METADATA_ALLOWLIST = ['component', 'provider', 'framework', 'source', 'environment', 'reproduction'] as const;
 
 let validators: Map<SchemaKind, ValidateFunction> | null = null;
 
@@ -198,8 +209,10 @@ export function deterministicIssueDuplicateCandidates(
   pack: IssueTriagePilotPack = defaultIssueTriagePilotPack(),
 ): IssueTriageCandidateLineage {
   const query = tokens(issueText(issue));
+  const issueCreatedAt = Date.parse(issue.createdAt);
   const scored = corpus
-    .filter(candidate => candidate.id !== issue.id && candidate.repository === issue.repository)
+    .filter(candidate => candidate.id !== issue.id && candidate.repository === issue.repository
+      && Number.isFinite(issueCreatedAt) && Date.parse(candidate.createdAt) <= issueCreatedAt)
     .map(candidate => {
       const candidateTokens = tokens(issueText(candidate));
       const overlap = [...query].filter(token => candidateTokens.has(token)).length;
@@ -220,34 +233,83 @@ export function deterministicIssueDuplicateCandidates(
   return { generator: 'deterministic-token-overlap-v1', queryDigest: digest({ id: issue.id, text: issueText(issue) }), candidates: scored, noneOutcome: 'none' };
 }
 
-export function projectIssueTriageModelState(
+function redactCredentialMaterial(value: string): string {
+  return value
+    .replace(/bearer\s+[a-z0-9._~+/=-]+/gi, 'bearer [REDACTED]')
+    .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]')
+    .replace(/(?:api[_-]?key|token|password|credential)\s*[:=]\s*["']?[^"'\s]+/gi, match => `${match.split(/[:=]/)[0]}=[REDACTED]`);
+}
+
+function allowedMetadata(metadata: IssueTriageIssueRecord['metadata']): IssueTriageModelState['issue']['metadata'] | undefined {
+  if (!metadata) return undefined;
+  const entries = Object.entries(metadata).filter(([key]) => (METADATA_ALLOWLIST as readonly string[]).includes(key));
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function projectionField(field: Pick<DecisionProjectionField, 'pointer' | 'output' | 'trust' | 'sensitivity'>, subject: string): DecisionProjectionField {
+  return {
+    ...field,
+    source: 'issue-triage-shadow',
+    subject,
+    purpose: 'issue-triage',
+    retentionClass: 'decision-shadow-evaluation',
+    accessScopes: ['decision:evaluate'],
+    exportPolicy: 'sanitized',
+    deletionPolicy: 'erase',
+    backupPolicy: 'not-persisted',
+    allowedProviders: ['jev'],
+    allowedModels: ['jev-shadow'],
+    allowedOrigins: ['https://typesafe.ai'],
+    allowedRegions: ['us'],
+  };
+}
+
+export async function projectIssueTriageModelState(
   packInput: IssueTriagePilotPack,
   issue: IssueTriageIssueRecord,
   lineage: IssueTriageCandidateLineage,
-): IssueTriageProjection {
+): Promise<IssueTriageProjection> {
   const pack = validateIssueTriagePilotPack(packInput);
   const excludedReplayFields = Object.fromEntries(FINAL_FIELDS.map(field => [field, issue[field] !== undefined])) as IssueTriageProjection['excludedReplayFields'];
-  const modelState = {
+  const metadata = allowedMetadata(issue.metadata);
+  const input = {
     issue: {
       id: issue.id,
       repository: issue.repository,
       title: issue.title,
-      body: issue.body,
+      body: redactCredentialMaterial(issue.body),
       createdAt: issue.createdAt,
       ...(issue.author === undefined ? {} : { author: issue.author }),
-      ...(issue.metadata === undefined ? {} : { metadata: issue.metadata }),
+      ...(metadata === undefined ? {} : { metadata }),
     },
     duplicateCandidates: lineage.candidates,
     allowed: {
       issueTypes: pack.taxonomies.issueTypes,
       areas: pack.taxonomies.areas,
-      urgency: pack.urgencyRubric.sort((left, right) => left.ordinal - right.ordinal).map(level => level.id),
+      urgency: [...pack.urgencyRubric].sort((left, right) => left.ordinal - right.ordinal).map(level => level.id),
       stateCompleteness: pack.taxonomies.stateCompleteness,
       clarificationNeed: pack.taxonomies.clarificationNeed,
       duplicateOutcomes: [...lineage.candidates.map(candidate => candidate.issueId), 'none'],
     },
   };
-  return { modelState, lineage, excludedReplayFields, stateDigest: digest(modelState) };
+  const policy: DecisionProjectionPolicy = {
+    version: 'issue-triage-shadow-d10/v1',
+    provider: 'jev',
+    model: 'jev-shadow',
+    origin: 'https://typesafe.ai',
+    region: 'us',
+    purpose: 'issue-triage',
+    allowIncompleteContext: false,
+    maxSensitivity: 'confidential',
+    fields: [
+      projectionField({ pointer: '/issue', output: 'issue', trust: 'untrusted', sensitivity: 'confidential' }, issue.id),
+      projectionField({ pointer: '/duplicateCandidates', output: 'duplicateCandidates', trust: 'verified', sensitivity: 'internal' }, issue.id),
+      projectionField({ pointer: '/allowed', output: 'allowed', trust: 'verified', sensitivity: 'internal' }, issue.id),
+    ],
+  };
+  const projected = await projectDecisionState(input, policy);
+  return { modelState: projected.state as unknown as IssueTriageModelState, lineage, excludedReplayFields,
+    projectionEvidence: projected.evidence, stateDigest: projected.evidence.projectedDigest };
 }
 
 export function validateIssueTriageBatchSubject(questions: readonly IssueTriageBatchQuestion[]): string {
@@ -260,6 +322,7 @@ export function validateIssueTriageBatchSubject(questions: readonly IssueTriageB
     if (ids.has(question.questionId)) throw new IssueTriagePilotError('issue triage question id is duplicated');
     ids.add(question.questionId);
   }
+  correlateAtomicBatch([...ids], questions.map(question => ({ questionId: question.questionId, value: question.alias })));
   return questions[0]!.issueId;
 }
 
@@ -286,6 +349,13 @@ export function validateIssueTriageModelResponse(
   if (response.duplicate.issueId !== 'none' && !projection.lineage.candidates.some(candidate => candidate.issueId === response.duplicate.issueId)) {
     problems.push(`duplicate candidate ${response.duplicate.issueId} was not deterministically generated`);
   }
+  const deterministicRank = response.duplicate.issueId === 'none'
+    ? null
+    : projection.lineage.candidates.find(candidate => candidate.issueId === response.duplicate.issueId)?.rank ?? null;
+  if (response.duplicate.issueId === 'none' && response.duplicate.rank !== null) problems.push('none duplicate outcome must not carry a rank');
+  if (response.duplicate.issueId !== 'none' && response.duplicate.rank !== deterministicRank) {
+    problems.push(`duplicate rank for ${response.duplicate.issueId} does not match deterministic rank ${deterministicRank}`);
+  }
   if (!Number.isFinite(response.latencyMs) || response.latencyMs < 0) problems.push('latency must be finite and nonnegative');
   if ([response.calls.jev, response.calls.fallbackModel, response.retries, response.fallbacks].some(value => !Number.isSafeInteger(value) || value < 0)) {
     problems.push('call, retry and fallback counts must be nonnegative integers');
@@ -295,9 +365,11 @@ export function validateIssueTriageModelResponse(
     && calibration.uncertaintyProfile === response.uncertaintyProfile;
   const modelCompatible = calibration.requestedModel === response.requestedModel
     && calibration.actualModel === response.actualModel
-    && calibration.compatibleActualModels.includes(response.actualModel);
+    && calibration.compatibleActualModels.includes(response.actualModel)
+    && (calibration.compatibility === undefined || calibration.compatibility.action === 'allow');
   const acceptedScoring = response.accepted && profileCompatible && modelCompatible;
-  const reason = acceptedScoring ? 'compatible' : modelCompatible ? 'defer-calibration-incompatible' : 'defer-drift';
+  const reason = acceptedScoring ? 'compatible' : !response.accepted ? 'defer-response-rejected'
+    : modelCompatible ? 'defer-calibration-incompatible' : 'defer-drift';
   const driftEvent = modelCompatible ? null : `model-drift:${response.requestedModel}->${response.actualModel}`;
   return { ...response, acceptance: { acceptedScoring, reason, driftEvent } };
 }
@@ -305,24 +377,39 @@ export function validateIssueTriageModelResponse(
 export function assertNoTrackerMutations(client: IssueTriageTrackerClient): void {
   for (const method of MUTATION_METHODS) {
     const value = client[method];
-    if (value !== undefined && typeof value !== 'function') throw new IssueTriagePilotError(`tracker mutation hook ${method} is not callable`);
+    if (value !== undefined) throw new IssueTriagePilotError(`tracker mutation hook ${method} is not accepted by shadow runtime`);
   }
 }
 
-export function runIssueTriageShadow(
+export function forbiddenIssueTriageTrackerClient(): Required<IssueTriageTrackerClient> {
+  const fail = (method: string) => () => {
+    throw new IssueTriagePilotError(`tracker mutation ${method} is forbidden in issue triage shadow mode`);
+  };
+  return {
+    createIssue: fail('createIssue'),
+    editIssue: fail('editIssue'),
+    addLabel: fail('addLabel'),
+    assignIssue: fail('assignIssue'),
+    commentIssue: fail('commentIssue'),
+    closeIssue: fail('closeIssue'),
+    mergeIssue: fail('mergeIssue'),
+  };
+}
+
+export async function runIssueTriageShadow(
   pack: IssueTriagePilotPack,
   issue: IssueTriageIssueRecord,
   corpus: readonly IssueTriageCandidateInput[],
   response: IssueTriageModelResponse,
   calibration: IssueTriageCalibrationContext,
-  tracker: IssueTriageTrackerClient = {},
-): IssueTriageShadowArtifact {
+): Promise<IssueTriageShadowArtifact> {
   const active = validateIssueTriagePilotPack(pack);
   if (active.mode !== 'offline-shadow') throw new IssueTriagePilotError('issue triage shadow run requires offline-shadow mode');
-  assertNoTrackerMutations(tracker);
+  const tracker = forbiddenIssueTriageTrackerClient();
   const lineage = deterministicIssueDuplicateCandidates(issue, corpus, active);
-  const projection = projectIssueTriageModelState(active, issue, lineage);
+  const projection = await projectIssueTriageModelState(active, issue, lineage);
   const validated = validateIssueTriageModelResponse(active, projection, response, calibration);
+  void tracker;
   return {
     schemaVersion: 'decision-issue-triage-shadow-artifact/v1',
     mode: 'offline-shadow',
@@ -334,9 +421,41 @@ export function runIssueTriageShadow(
   };
 }
 
-export function applyIssueTriagePilot<T>(enabled: boolean, previousWorkflowResult: T, shadow: () => IssueTriageShadowArtifact): T {
+export interface IssueTriageShadowFailureArtifact {
+  schemaVersion: 'decision-issue-triage-shadow-failure/v1';
+  mode: 'offline-shadow';
+  actionAuthorization: 'not-authorized';
+  trackerMutations: 0;
+  error: { name: string; message: string };
+}
+
+function failureArtifact(error: unknown): IssueTriageShadowFailureArtifact {
+  return {
+    schemaVersion: 'decision-issue-triage-shadow-failure/v1',
+    mode: 'offline-shadow',
+    actionAuthorization: 'not-authorized',
+    trackerMutations: 0,
+    error: { name: error instanceof Error ? error.name : 'Error', message: error instanceof Error ? error.message : String(error) },
+  };
+}
+
+export function applyIssueTriagePilot<T>(
+  enabled: boolean,
+  previousWorkflowResult: T,
+  shadow: () => IssueTriageShadowArtifact | Promise<IssueTriageShadowArtifact>,
+  recordArtifact: (artifact: IssueTriageShadowArtifact | IssueTriageShadowFailureArtifact) => void = () => {},
+): T {
   if (!enabled) return previousWorkflowResult;
-  shadow();
+  try {
+    const artifact = shadow();
+    if (typeof (artifact as Promise<IssueTriageShadowArtifact>).then === 'function') {
+      void (artifact as Promise<IssueTriageShadowArtifact>).then(recordArtifact, error => recordArtifact(failureArtifact(error)));
+    } else {
+      recordArtifact(artifact as IssueTriageShadowArtifact);
+    }
+  } catch (error) {
+    recordArtifact(failureArtifact(error));
+  }
   return previousWorkflowResult;
 }
 
@@ -385,22 +504,53 @@ function quantiles(values: readonly number[]): { p50: number; p95: number; p99: 
 
 function quality(samples: readonly IssueTriageEvaluationSample[], which: 'baseline' | 'cascade'): number {
   if (!samples.length) return 0;
-  const matches = samples.filter(sample => {
-    const observed = sample[which];
-    return observed.issueType === sample.label.issueType
-      && observed.area === sample.label.area
-      && observed.urgency === sample.label.urgency
-      && observed.completeness === sample.label.completeness
-      && observed.clarificationNeed === sample.label.clarificationNeed
-      && observed.duplicate.issueId === sample.label.duplicateOf;
-  }).length;
+  const matches = samples.filter(sample => correct(sample, which)).length;
   return matches / samples.length;
+}
+
+function correct(sample: IssueTriageEvaluationSample, which: 'baseline' | 'cascade'): boolean {
+  const observed = sample[which];
+  return observed.issueType === sample.label.issueType
+    && observed.area === sample.label.area
+    && observed.urgency === sample.label.urgency
+    && observed.completeness === sample.label.completeness
+    && observed.clarificationNeed === sample.label.clarificationNeed
+    && observed.duplicate.issueId === sample.label.duplicateOf;
 }
 
 function gateDecision(upstream: IssueTriageGateDecision, findings: readonly string[]): IssueTriageGateDecision {
   if (upstream === 'ROLLBACK') return 'ROLLBACK';
   if (upstream === 'HOLD' || findings.length > 0) return 'HOLD';
   return 'PROMOTE';
+}
+
+function qualificationSplits(ids: readonly string[]) {
+  return [
+    freezeQualificationSplit('tuning', ['issue-triage-tuning-sentinel']),
+    freezeQualificationSplit('calibration', ['issue-triage-calibration-sentinel']),
+    freezeQualificationSplit('test', ids),
+  ];
+}
+
+function wilsonLower(successes: number, n: number, _level: number): number {
+  if (n === 0) return 0;
+  const z = 1.959963984540054;
+  const rate = successes / n;
+  const denominator = 1 + z * z / n;
+  const center = (rate + z * z / (2 * n)) / denominator;
+  const margin = z * Math.sqrt(rate * (1 - rate) / n + z * z / (4 * n * n)) / denominator;
+  return Math.max(0, center - margin);
+}
+
+function binaryHeldout(ids: readonly string[], samples: readonly BinaryQualificationSample[]) {
+  return evaluateBinaryHeldout(qualificationSplits(ids), samples);
+}
+
+function economicsBenefit(report: Pick<IssueTriageEvaluationReport, 'baselineComparison'>, metric: IssueTriageEvaluationManifest['thresholds']['benefit']['metric']): number | null {
+  if (metric === 'reviewer-time') return report.baselineComparison.delta.reviewerTimeMinutes === null
+    ? null : -report.baselineComparison.delta.reviewerTimeMinutes;
+  if (report.baselineComparison.delta.costUsd !== null) return -report.baselineComparison.delta.costUsd;
+  return report.baselineComparison.delta.tokens === null ? null : -report.baselineComparison.delta.tokens;
 }
 
 export function buildIssueTriageEvaluationReport(input: {
@@ -415,16 +565,30 @@ export function buildIssueTriageEvaluationReport(input: {
   const samples = [...input.samples];
   const findings = new Set<string>();
   if (samples.length < manifest.thresholds.minimumTotalSamples) findings.add('insufficient-total-samples');
+  if (manifest.thresholds.confidenceInterval.method !== 'wilson' || manifest.thresholds.confidenceInterval.level !== 0.95) {
+    findings.add('confidence-interval-unsupported');
+  }
   for (const slice of manifest.slices) {
-    const count = samples.filter(sample => sample.label.slice === slice.id).length;
-    if (count > 0 && count < slice.minimumSupport) findings.add(`slice-insufficient:${slice.id}`);
+    const count = samples.filter(sample => sample.label.slices.includes(slice.id)).length;
+    if (count < slice.minimumSupport) findings.add(`slice-insufficient:${slice.id}`);
   }
   const urgencyOrdinal = new Map(pack.urgencyRubric.map(level => [level.id, level.ordinal]));
   const urgencyErrors = samples.map(sample => Math.abs(urgencyOrdinal.get(sample.cascade.urgency)! - urgencyOrdinal.get(sample.label.urgency)!));
+  if (samples.length) evaluateOrdinalHeldout(qualificationSplits(samples.map(sample => sample.id)), samples.map(sample => ({
+    id: sample.id,
+    trueLevel: urgencyOrdinal.get(sample.label.urgency)!,
+    predictedLevel: urgencyOrdinal.get(sample.cascade.urgency)!,
+    levels: pack.urgencyRubric.length,
+  })));
   const duplicateCases = samples.filter(sample => sample.label.duplicateOf !== 'none');
   const noneCases = samples.filter(sample => sample.label.duplicateOf === 'none');
   const falseDuplicates = noneCases.filter(sample => sample.cascade.duplicate.issueId !== 'none').length;
   const duplicateHits = duplicateCases.filter(sample => sample.cascade.duplicate.issueId === sample.label.duplicateOf).length;
+  if (duplicateCases.length) evaluateRankingHeldout(qualificationSplits(duplicateCases.map(sample => sample.id)), duplicateCases.map(sample => ({
+    id: sample.id,
+    gold: { [sample.label.duplicateOf]: 1, none: 0 },
+    predicted: { [sample.label.duplicateOf]: sample.cascade.duplicate.issueId === sample.label.duplicateOf ? 1 : 0, none: sample.cascade.duplicate.issueId === 'none' ? 1 : 0 },
+  })));
   const topK: Record<string, number> = {};
   for (const k of [1, 3, 5]) {
     const eligible = duplicateCases.filter(sample => sample.cascade.duplicate.rank !== null && sample.cascade.duplicate.rank <= k
@@ -436,6 +600,7 @@ export function buildIssueTriageEvaluationReport(input: {
     return sum + 1 / Math.log2(sample.cascade.duplicate.rank + 1);
   }, 0) / duplicateCases.length : 0;
   const accepted = samples.filter(sample => sample.cascade.acceptance.acceptedScoring);
+  const acceptedCorrect = accepted.filter(sample => correct(sample, 'cascade')).length;
   const calls = samples.reduce((acc, sample) => ({
     jev: acc.jev + sample.cascade.calls.jev,
     fallbackModel: acc.fallbackModel + sample.cascade.calls.fallbackModel,
@@ -466,8 +631,13 @@ export function buildIssueTriageEvaluationReport(input: {
       falseDuplicateRate: noneCases.length ? falseDuplicates / noneCases.length : 0,
       noneRecall: noneCases.length ? (noneCases.length - falseDuplicates) / noneCases.length : 0,
     },
+    slices: manifest.slices.map(slice => {
+      const sampleN = samples.filter(sample => sample.label.slices.includes(slice.id)).length;
+      return { id: slice.id, dimension: slice.dimension, sampleN, minimumSupport: slice.minimumSupport,
+        status: sampleN >= slice.minimumSupport ? 'supported' : 'insufficient' };
+    }),
     calibration: {
-      riskCoverage: accepted.length / Math.max(1, samples.length),
+      riskCoverage: acceptedCorrect / Math.max(1, samples.length),
       acceptedCoverage: accepted.length / Math.max(1, samples.length),
       driftEvents: [...new Set(samples.map(sample => sample.cascade.acceptance.driftEvent).filter((value): value is string => value !== null))].sort(),
     },
@@ -489,8 +659,56 @@ export function buildIssueTriageEvaluationReport(input: {
     integrity: { upstreamDecision: input.upstreamDecision, findings: [...findings].sort() },
     decision: gateDecision(input.upstreamDecision, [...findings]),
   };
-  if (report.duplicates.falseDuplicateRate > manifest.thresholds.maximumFalseDuplicateRate) report.integrity.findings.push('false-duplicate-rate');
-  if (report.calibration.acceptedCoverage < manifest.thresholds.minimumAcceptedCoverage) report.integrity.findings.push('accepted-coverage');
+  if (samples.length) {
+    const qualityMetrics = binaryHeldout(samples.map(sample => sample.id), samples.map(sample => ({
+      id: sample.id,
+      slice: sample.label.slices[0] ?? 'unspecified',
+      label: 1,
+      probability: correct(sample, 'cascade') ? 1 : 0,
+      accepted: sample.cascade.acceptance.acceptedScoring,
+      latencyMs: sample.cascade.latencyMs,
+      inputTokens: sample.cascade.usage.inputTokens,
+      outputTokens: sample.cascade.usage.outputTokens,
+      costUsd: sample.cascade.usage.costUsd,
+      calls: sample.cascade.calls.jev + sample.cascade.calls.fallbackModel,
+      retries: sample.cascade.retries,
+      fallbacks: sample.cascade.fallbacks,
+    })));
+    const cascadeQualityLower = 1 - qualityMetrics.overall.errorWilson95[1];
+    if (cascadeQualityLower < quality(samples, 'baseline') + manifest.thresholds.qualityNonInferiorityMargin) {
+      report.integrity.findings.push('quality-non-inferiority');
+    }
+    const falseAuto = accepted.length ? (accepted.length - acceptedCorrect) / accepted.length : null;
+    if (falseAuto === null) report.integrity.findings.push('false-auto-insufficient');
+    else if (falseAuto > manifest.thresholds.maximumFalseAutoRate) report.integrity.findings.push('false-auto-rate');
+    if (wilsonLower(accepted.length, samples.length, manifest.thresholds.confidenceInterval.level) < manifest.thresholds.minimumAcceptedCoverage) {
+      report.integrity.findings.push('accepted-coverage');
+    }
+  }
+  if (noneCases.length) {
+    const falseDuplicateMetrics = binaryHeldout(noneCases.map(sample => sample.id), noneCases.map(sample => ({
+      id: sample.id,
+      slice: sample.label.slices[0] ?? 'unspecified',
+      label: 0,
+      probability: sample.cascade.duplicate.issueId !== 'none' ? 1 : 0,
+      accepted: sample.cascade.acceptance.acceptedScoring,
+      latencyMs: sample.cascade.latencyMs,
+      inputTokens: sample.cascade.usage.inputTokens,
+      outputTokens: sample.cascade.usage.outputTokens,
+      costUsd: sample.cascade.usage.costUsd,
+      calls: sample.cascade.calls.jev + sample.cascade.calls.fallbackModel,
+      retries: sample.cascade.retries,
+      fallbacks: sample.cascade.fallbacks,
+    })));
+    if (falseDuplicateMetrics.overall.errorWilson95[1] > manifest.thresholds.maximumFalseDuplicateRate) {
+      report.integrity.findings.push('false-duplicate-rate');
+    }
+  } else {
+    report.integrity.findings.push('false-duplicate-insufficient');
+  }
+  const benefit = economicsBenefit(report, manifest.thresholds.benefit.metric);
+  if (benefit === null) report.integrity.findings.push('benefit-insufficient');
+  else if (benefit <= 0) report.integrity.findings.push('benefit-not-positive');
   report.decision = gateDecision(input.upstreamDecision, report.integrity.findings);
   return validateIssueTriageEvaluationReport(report);
 }

@@ -18,9 +18,12 @@ merge tracker issues, and it cannot bypass issue-planner approval.
   subject.
 - `deterministicIssueDuplicateCandidates()` records every duplicate candidate
   with generator identity, rank, score, source digest, and query digest. A model
-  response naming an unlisted issue ID fails validation.
-- `projectIssueTriageModelState()` builds the model-visible replay state and
-  omits final labels, final duplicate decisions, resolution, and close data.
+  response naming an unlisted issue ID, a candidate created after the replayed
+  issue, or a rank that differs from the deterministic list fails validation.
+- `projectIssueTriageModelState()` routes the model-visible replay state through
+  the D10 projection boundary, allowlists metadata, redacts credential-shaped
+  issue text, and omits final labels, final duplicate decisions, resolution,
+  and close data.
 - `runIssueTriageShadow()` returns only a shadow artifact with
   `actionAuthorization: not-authorized` and `trackerMutations: 0`.
 - `DecisionIssueTriageEvaluationManifest.v1` preregisters minimum support,
@@ -29,9 +32,13 @@ merge tracker issues, and it cannot bypass issue-planner approval.
 - `buildIssueTriageEvaluationReport()` reports class counts, macro/per-class
   precision/recall/F1, urgency ordinal error, completeness/clarification
   metrics, duplicate recall/nDCG/top-k, false-duplicate rate, `none` recall,
-  accepted/risk coverage, review load, override rate, latency, tokens, cost,
-  retry/fallback rate, cache effects, Jev and fallback call counts, and
-  baseline-versus-cascade economics.
+  per-slice support, accepted/risk coverage, review load, override rate,
+  latency, tokens, cost, retry/fallback rate, cache effects, Jev and fallback
+  call counts, and baseline-versus-cascade economics.
+- Promotion gating applies every preregistered threshold: total and per-slice
+  support, false-duplicate and false-auto rates, quality non-inferiority,
+  accepted coverage, pinned confidence-interval settings, positive configured
+  benefit after fallback/cache effects, and upstream eval-integrity status.
 - The report carries upstream eval-integrity `PROMOTE`/`HOLD`/`ROLLBACK` and can
   only preserve or tighten it. It cannot upgrade a `HOLD` or `ROLLBACK`.
 - Alias/model or uncertainty-profile incompatibility disables accepted shadow
@@ -54,6 +61,8 @@ These criteria are scaffolded but not claimed complete in this offline change:
 - Representative token, latency, cost, override, and reviewer-time measurements
   from the final holdout.
 
-Until those inputs exist, promotion remains unavailable. Any live or advisory
-mode requires a separate approved decision using the preregistered manifest and
-the resulting evaluation report.
+Until those inputs exist, no production or advisory promotion claim is made.
+The offline report generator can return `PROMOTE` only for a complete,
+preregistered evaluation report that satisfies every threshold; any live or
+advisory mode still requires a separate approved decision using the manifest
+and final holdout report.

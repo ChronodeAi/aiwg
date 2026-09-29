@@ -15,6 +15,7 @@
     "completeness",
     "clarification",
     "duplicates",
+    "slices",
     "calibration",
     "operations",
     "baselineComparison",
@@ -64,6 +65,23 @@
         "topK": { "type": "object", "additionalProperties": { "$ref": "#/$defs/unit" } },
         "falseDuplicateRate": { "$ref": "#/$defs/unit" },
         "noneRecall": { "$ref": "#/$defs/unit" }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "dimension", "sampleN", "minimumSupport", "status"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "dimension": {
+            "enum": ["issue-type", "area", "state-completeness", "adversarial-authority", "new-or-unseen-category"]
+          },
+          "sampleN": { "type": "integer", "minimum": 0 },
+          "minimumSupport": { "type": "integer", "minimum": 1 },
+          "status": { "enum": ["supported", "insufficient"] }
+        }
       }
     },
     "calibration": {

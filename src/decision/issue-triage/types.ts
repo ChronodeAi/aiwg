@@ -1,4 +1,6 @@
 import type { ArtifactPin } from '../types.js';
+import type { CompatibilityDecision } from '../calibration/types.js';
+import type { DecisionProjectionEvidence } from '../projection.js';
 
 export type IssueTriageMode = 'disabled' | 'offline-shadow' | 'advisory';
 export type IssueTriageGateDecision = 'PROMOTE' | 'HOLD' | 'ROLLBACK';
@@ -132,6 +134,7 @@ export interface IssueTriageProjection {
   modelState: IssueTriageModelState;
   lineage: IssueTriageCandidateLineage;
   excludedReplayFields: Record<'finalLabels' | 'finalDuplicateOf' | 'resolution' | 'closedAt', boolean>;
+  projectionEvidence: DecisionProjectionEvidence;
   stateDigest: `sha256:${string}`;
 }
 
@@ -164,7 +167,7 @@ export interface IssueTriageModelResponse {
 export interface IssueTriageValidatedResponse extends IssueTriageModelResponse {
   acceptance: {
     acceptedScoring: boolean;
-    reason: 'compatible' | 'defer-drift' | 'defer-calibration-incompatible';
+    reason: 'compatible' | 'defer-drift' | 'defer-calibration-incompatible' | 'defer-response-rejected';
     driftEvent: string | null;
   };
 }
@@ -174,6 +177,7 @@ export interface IssueTriageCalibrationContext {
   actualModel: string;
   compatibleActualModels: string[];
   uncertaintyProfile: string;
+  compatibility?: CompatibilityDecision;
 }
 
 export interface IssueTriageTrackerClient {
@@ -204,7 +208,7 @@ export interface IssueTriageEvaluationLabel {
   completeness: 'complete' | 'partial' | 'missing';
   clarificationNeed: 'needed' | 'not-needed';
   duplicateOf: string | 'none';
-  slice: string;
+  slices: string[];
   useful: boolean;
   reviewerWouldOverride: boolean;
   reviewerTimeBaselineMinutes: number;
@@ -251,6 +255,13 @@ export interface IssueTriageEvaluationReport {
     falseDuplicateRate: number;
     noneRecall: number;
   };
+  slices: Array<{
+    id: string;
+    dimension: IssueTriageEvaluationManifest['slices'][number]['dimension'];
+    sampleN: number;
+    minimumSupport: number;
+    status: 'supported' | 'insufficient';
+  }>;
   calibration: { riskCoverage: number; acceptedCoverage: number; driftEvents: string[] };
   operations: {
     reviewLoad: number;
