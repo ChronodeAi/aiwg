@@ -14,6 +14,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   immutable reversible receipts, closed schemas, preregistration/report
   scaffolding and docs; live held-out quality/economics evidence remains
   pending (#2619).
+- Shared paired non-inferiority intervals and a fail-closed margin check for decision pilots (#2618, #2619, #2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.
