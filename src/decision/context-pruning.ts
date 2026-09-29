@@ -299,6 +299,8 @@ export interface ContextBudgetManagerBaseline {
   usage: ContextPruningUsageTotal;
   keptItemIds: string[];
   droppedItemIds: string[];
+  /** Items ContextBudgetManager would drop that the protected-item classifier keeps; never in droppedItemIds. */
+  protectedRetainedItemIds: string[];
   tokensFreed: number;
 }
 
@@ -306,6 +308,10 @@ export interface ContextPruningQualityResult {
   metric: ContextPruningQualityMetricName;
   scale: ContextPruningQualityScale;
   n: number;
+  /** Recorded pairs with no outcome for this metric; any missing pair makes a passing metric insufficient. */
+  missingPairs: number;
+  /** Per-slice support counted from this metric's own outcomes. */
+  sliceSupport: Record<string, number>;
   interval: PairedDifferenceInterval | null;
   decision: 'non-inferior' | 'not-non-inferior' | 'insufficient';
 }
@@ -323,6 +329,8 @@ export interface ContextPruningDerivedEvidence {
     cachedInputTokensDelta: number;
   };
   estimatorSavings: { totalTokens: number };
+  /** Derived from validated pruning receipts; metrics.protectedRetentionBps must match it. */
+  protectedRetention: { protectedItems: number; retained: number; bps: number | null };
 }
 
 export interface ContextPruningEvaluationReport {
@@ -610,6 +618,8 @@ export function buildContextPruningEvaluationReport(input: {
   holdoutAccessedAt: string | null;
   integrity: QualificationIntegrityMetadata;
   metrics: ContextPruningPairedMetrics;
+  /** Pruning receipts from the evaluated pruned arm; protected retention is derived from them. */
+  receipts: readonly ContextPruningReceipt[];
   missingInputs?: readonly string[];
 }): ContextPruningEvaluationReport {
   const preregistration = validateContextPruningPreregistration(input.preregistration);
@@ -636,16 +646,29 @@ export function buildContextPruningEvaluationReport(input: {
   for (const slice of thresholds.slices) {
     if (sliceSupport[slice]! < thresholds.minimumSliceN) findings.add(`insufficient-slice:${slice}`);
   }
-  if (metrics.protectedRetentionBps < 10_000) findings.add('protected-retention-breach');
+  const protectedRetention = deriveProtectedRetention(input.receipts);
+  if (protectedRetention.bps === null) findings.add('insufficient-protected-receipts');
+  else if (protectedRetention.bps !== metrics.protectedRetentionBps) {
+    throw new ContextPruningError('protected retention does not reconcile with the pruning receipts', 'semantic');
+  }
+  if (metrics.protectedRetentionBps < 10_000 || (protectedRetention.bps !== null && protectedRetention.bps < 10_000)) {
+    findings.add('protected-retention-breach');
+  }
 
   const quality = thresholds.qualityMetrics.map(({ metric, scale }) =>
-    evaluateQualityMetric(metric, scale, metrics.quality.find(item => item.metric === metric), preregistration));
+    evaluateQualityMetric(metric, scale, metrics.quality.find(item => item.metric === metric), metrics.pairs, preregistration));
   for (const result of quality) {
+    for (const slice of thresholds.slices) {
+      if (result.sliceSupport[slice]! < thresholds.minimumSliceN) findings.add(`insufficient-quality-slice:${result.metric}:${slice}`);
+    }
+    if (result.missingPairs > 0) findings.add(`quality-outcomes-incomplete:${result.metric}`);
     if (result.decision === 'not-non-inferior') {
       findings.add('quality-non-inferiority-failed');
       findings.add(`quality-non-inferiority-failed:${result.metric}`);
-    } else if (result.decision === 'insufficient') {
-      findings.add(result.n === 0 ? `quality-metric-missing:${result.metric}` : `insufficient-quality-sample:${result.metric}`);
+    } else if (result.decision === 'insufficient' && result.n === 0) {
+      findings.add(`quality-metric-missing:${result.metric}`);
+    } else if (result.decision === 'insufficient' && result.n < thresholds.minimumOverallN) {
+      findings.add(`insufficient-quality-sample:${result.metric}`);
     }
   }
 
@@ -671,7 +694,8 @@ export function buildContextPruningEvaluationReport(input: {
     || findings.has('quality-non-inferiority-failed') || findings.has('negative-net-economics');
   const decision = rollback ? 'ROLLBACK' : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
   const advisory = [...findings].some(item => item.startsWith('insufficient-') || item.startsWith('quality-metric-missing:')
-    || item.startsWith('missing-input:') || item === 'holdout-access-unrecorded' || item === 'provider-cost-unknown')
+    || item.startsWith('missing-input:') || item.startsWith('quality-outcomes-incomplete:')
+    || item === 'holdout-access-unrecorded' || item === 'provider-cost-unknown')
     ? 'INSUFFICIENT EVIDENCE' : null;
   const payload: Omit<ContextPruningEvaluationReport, 'digest'> = {
     schemaVersion: CONTEXT_PRUNING_EVALUATION_REPORT_SCHEMA,
@@ -679,7 +703,7 @@ export function buildContextPruningEvaluationReport(input: {
     holdoutAccessedAt,
     integrity: input.integrity,
     metrics,
-    derived: { sampleN: metrics.pairs.length, sliceSupport, quality, providerSavings, estimatorSavings },
+    derived: { sampleN: metrics.pairs.length, sliceSupport, quality, providerSavings, estimatorSavings, protectedRetention },
     missingInputs: [...missing].sort(),
     findings: [...findings].sort(),
     upstreamDecision,
@@ -693,13 +717,19 @@ function evaluateQualityMetric(
   metric: ContextPruningQualityMetricName,
   scale: ContextPruningQualityScale,
   outcomes: ContextPruningQualityOutcomes | undefined,
+  recordedPairs: readonly ContextPruningPairRecord[],
   preregistration: ContextPruningPreregistration,
 ): ContextPruningQualityResult {
-  const { confidenceInterval: ci, minimumOverallN, qualityNonInferiorityMarginBps } = preregistration.thresholds;
+  const { confidenceInterval: ci, minimumOverallN, qualityNonInferiorityMarginBps, slices } = preregistration.thresholds;
   const pairs = outcomes?.pairs ?? [];
-  const insufficient = (interval: PairedDifferenceInterval | null = null): ContextPruningQualityResult =>
-    ({ metric, scale, n: pairs.length, interval, decision: 'insufficient' });
-  if (pairs.length < minimumOverallN) return insufficient();
+  const sliceOf = new Map(recordedPairs.map(pair => [pair.pairId, pair.slice]));
+  const sliceSupport = Object.fromEntries(slices.map(slice => [slice, 0]));
+  for (const pair of pairs) sliceSupport[sliceOf.get(pair.pairId)!]! += 1;
+  // validateMetrics guarantees outcome pair IDs are a unique subset of the recorded pairs.
+  const missingPairs = recordedPairs.length - pairs.length;
+  const result = (interval: PairedDifferenceInterval | null, decision: ContextPruningQualityResult['decision']) =>
+    ({ metric, scale, n: pairs.length, missingPairs, sliceSupport, interval, decision });
+  if (pairs.length < minimumOverallN) return result(null, 'insufficient');
   let interval: PairedDifferenceInterval;
   try {
     if (scale === 'binary') {
@@ -718,11 +748,31 @@ function evaluateQualityMetric(
       });
     }
   } catch (error) {
-    if (error instanceof PairedDifferenceError) return insufficient();
+    if (error instanceof PairedDifferenceError) return result(null, 'insufficient');
     throw error;
   }
   const verdict = pairedNonInferiority({ interval, marginBps: qualityNonInferiorityMarginBps });
-  return { metric, scale, n: pairs.length, interval, decision: verdict.decision };
+  // A regression visible in the reported outcomes still fails; omitted pairs can only withhold a pass.
+  if (verdict.decision === 'non-inferior' && missingPairs > 0) return result(interval, 'insufficient');
+  return result(interval, verdict.decision);
+}
+
+function deriveProtectedRetention(receipts: readonly ContextPruningReceipt[]): ContextPruningDerivedEvidence['protectedRetention'] {
+  if (!Array.isArray(receipts) || receipts.length === 0) {
+    throw new ContextPruningError('pruning receipts are required to derive protected retention', 'invalid-input');
+  }
+  const ids = new Set<string>();
+  let protectedItems = 0;
+  let retained = 0;
+  for (const receipt of receipts) {
+    validateContextPruningReceipt(receipt);
+    if (ids.has(receipt.itemId)) throw new ContextPruningError('pruning receipts must have unique item IDs', 'semantic');
+    ids.add(receipt.itemId);
+    if (!receipt.classification.protected) continue;
+    protectedItems++;
+    if (receipt.proposedAction === 'keep' && receipt.appliedAction === 'keep') retained++;
+  }
+  return { protectedItems, retained, bps: protectedItems === 0 ? null : Math.floor(retained * 10_000 / protectedItems) };
 }
 
 function pruningSubject(candidate: ContextPruningCandidate): string {
@@ -842,17 +892,24 @@ export function computeContextBudgetManagerBaseline(
     manager.addItem(candidate.itemId, candidate.content, sourceTypeForBudget(candidate), candidate.priority);
   }
   const result = manager.degrade();
+  // ContextBudgetManager spares only source type 'system'; protected (and dependency-protected) items are
+  // retained here so the drop list can be applied as the fallback without removing protected context.
+  const classifications = classifyContextPruningCandidates(candidates);
+  const isProtected = (id: string) => classifications.get(id)!.protected;
+  const kept = [...result.kept, ...result.dropped.filter(item => isProtected(item.id))];
+  const dropped = result.dropped.filter(item => !isProtected(item.id));
   return {
     source: 'ContextBudgetManager',
     usage: {
-      inputTokens: result.kept.reduce((sum, item) => sum + item.tokens, 0),
+      inputTokens: kept.reduce((sum, item) => sum + item.tokens, 0),
       cachedInputTokens: null,
       outputTokens: 0,
       costUsd: null,
     },
-    keptItemIds: result.kept.map(item => item.id).sort(),
-    droppedItemIds: result.dropped.map(item => item.id).sort(),
-    tokensFreed: result.tokensFreed,
+    keptItemIds: kept.map(item => item.id).sort(),
+    droppedItemIds: dropped.map(item => item.id).sort(),
+    protectedRetainedItemIds: result.dropped.filter(item => isProtected(item.id)).map(item => item.id).sort(),
+    tokensFreed: dropped.reduce((sum, item) => sum + item.tokens, 0),
   };
 }
 

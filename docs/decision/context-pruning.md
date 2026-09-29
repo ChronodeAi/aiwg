@@ -39,7 +39,10 @@ runs `computeContextBudgetManagerBaseline()` over the candidates, returns it as
 `run.deterministicBaseline`, and a fallback proposes `drop` exactly for the items
 the manager drops and `keep` otherwise. The manager sizes item text itself, so a
 budgeted run requires every candidate's host-owned `content`; it refuses rather
-than size the digest string. Without a `budget` the prior behavior is "no
+than size the digest string. `ContextBudgetManager` itself spares only
+system-source items, so protected and dependency-protected items it would drop
+are moved to `protectedRetainedItemIds` and never appear in `droppedItemIds`;
+the fallback drop list is therefore safe to apply. Without a `budget` the prior behavior is "no
 pruning" and the fallback proposal is `keep`. The candidate envelope `priority`
 is passed to the manager as its similarity input; the manager derives its own
 priority from source type and similarity.
@@ -106,6 +109,20 @@ The report takes raw per-pair evidence, not aggregate deltas:
   at the preregistered level and seed; `pairedNonInferiority` compares each
   lower bound with the margin. A metric below the minimum n is
   `INSUFFICIENT EVIDENCE`.
+- Every metric's outcomes must cover every recorded pair. A metric that omits
+  any recorded pair (`quality-outcomes-incomplete:<metric>`) can never pass:
+  it is insufficient, unless the outcomes it does report already fail
+  non-inferiority, which still triggers `ROLLBACK`. Slice support is also
+  counted per metric from that metric's own outcomes, so a slice missing from
+  a metric is reported as `insufficient-quality-slice:<metric>:<slice>` even
+  when the pair records contain it.
+- Protected retention is derived from the pruned arm's validated receipts:
+  the share of protected receipts whose proposed and applied actions are both
+  `keep`. The caller's `protectedRetentionBps` must equal it or the report is
+  refused; with no protected receipts the report is `INSUFFICIENT EVIDENCE`.
+  Receipts are only self-digested, so a caller that re-digests a forged
+  receipt can still misstate them; binding receipts to a durable store is
+  pending.
 
 Economics use provider-reported usage per arm, reported separately from
 estimator usage. Every provider arm (baseline downstream, pruned downstream,

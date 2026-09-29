@@ -552,7 +552,8 @@
         "sliceSupport",
         "quality",
         "providerSavings",
-        "estimatorSavings"
+        "estimatorSavings",
+        "protectedRetention"
       ],
       "properties": {
         "sampleN": {
@@ -575,6 +576,8 @@
               "metric",
               "scale",
               "n",
+              "missingPairs",
+              "sliceSupport",
               "interval",
               "decision"
             ],
@@ -597,6 +600,17 @@
               "n": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "missingPairs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sliceSupport": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                }
               },
               "interval": {
                 "oneOf": [
@@ -690,6 +704,33 @@
           "properties": {
             "totalTokens": {
               "type": "integer"
+            }
+          }
+        },
+        "protectedRetention": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "protectedItems",
+            "retained",
+            "bps"
+          ],
+          "properties": {
+            "protectedItems": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "retained": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "bps": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 10000
             }
           }
         }

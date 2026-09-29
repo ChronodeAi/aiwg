@@ -174,8 +174,17 @@ function report(
     holdoutAccessedAt: options.holdoutAccessedAt === undefined ? HOLDOUT_AT : options.holdoutAccessedAt,
     integrity: integrity(options.gate ?? 'PROMOTE'),
     metrics,
+    receipts: fixtureReceipts(),
     missingInputs: options.missingInputs,
   });
+}
+
+/** Receipts from a shadow run with one protected and one ordinary item; protected retention is 100%. */
+function fixtureReceipts() {
+  return applyContextPruningPilot({
+    candidates: [candidate('receipt-rules', { source: { kind: 'system', addedAt: now() } }), candidate('receipt-note')],
+    policy, now, evidence: [success('receipt-rules', 'drop'), success('receipt-note', 'drop')],
+  }).receipts;
 }
 
 const withQuality = (metric: string, pairs: { pairId: string; baseline: number; candidate: number }[]) => {
@@ -538,12 +547,91 @@ describe('D26 context pruning pilot', () => {
     const codeOnly = report({ ...base, pairs: base.pairs.map(pair => ({ ...pair, slice: 'code' })) });
     expect(codeOnly.derived.sliceSupport).toEqual({ code: 100, docs: 0 });
     expect(codeOnly).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
-    expect(codeOnly.findings).toEqual(['insufficient-slice:docs']);
+    expect(codeOnly.findings).toEqual(['insufficient-slice:docs', ...preregister().thresholds.qualityMetrics
+      .map(item => `insufficient-quality-slice:${item.metric}:docs`)].sort());
     const thinDocs = report({ ...base, pairs: base.pairs.map((pair, index) => ({ ...pair, slice: index < 90 ? 'code' : 'docs' })) });
-    expect(thinDocs.findings).toEqual(['insufficient-slice:docs']);
+    expect(thinDocs.findings).toContain('insufficient-slice:docs');
+    expect(thinDocs.decision).toBe('HOLD');
     expect(() => report({ ...base, pairs: base.pairs.map((pair, index) => index === 0 ? { ...pair, slice: 'unregistered' } : pair) }))
       .toThrow('preregistered slices');
     expect(() => report({ ...base, pairs: [...base.pairs, base.pairs[0]!] })).toThrow('unique IDs');
+  });
+
+  it('C2: a metric whose outcomes omit recorded pairs cannot PROMOTE, and a regression in the rest still rolls back', () => {
+    // Probe 1: 30 regressed pairs recorded, then dropped from the quality outcomes.
+    const regressed = PAIR_IDS.map((pairId, index) => {
+      const outcome = index % 10 === 0 ? 0 : 1;
+      return { pairId, baseline: outcome, candidate: index < 30 ? 0 : outcome };
+    });
+    expect(report(withQuality('downstream-task-success', regressed)).decision).toBe('ROLLBACK');
+    const cherryPicked = report(withQuality('downstream-task-success', regressed.slice(30)));
+    expect(cherryPicked.decision).not.toBe('PROMOTE');
+    expect(cherryPicked).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+    expect(cherryPicked.findings).toContain('quality-outcomes-incomplete:downstream-task-success');
+    expect(cherryPicked.derived.quality[0]).toMatchObject({ decision: 'insufficient', n: 70, missingPairs: 30 });
+    // Omitted pairs cannot hide a regression that the remaining outcomes already show.
+    const partialRegression = report(withQuality('downstream-task-success', regressed.slice(0, 80)));
+    expect(partialRegression.decision).toBe('ROLLBACK');
+  });
+
+  it('C2: slice support is computed per metric from its outcomes, so a slice omitted from every metric cannot PROMOTE', () => {
+    // Probe 2: pair records keep docs=50, but every quality metric drops the docs pairs.
+    const base = goodMetrics();
+    const codePairs = new Set(base.pairs.filter(pair => pair.slice === 'code').map(pair => pair.pairId));
+    const docsless = report({ ...base, quality: base.quality.map(item => ({ ...item, pairs: item.pairs.filter(pair => codePairs.has(pair.pairId)) })) });
+    expect(docsless.decision).not.toBe('PROMOTE');
+    expect(docsless.derived.sliceSupport).toEqual({ code: 50, docs: 50 });
+    for (const result of docsless.derived.quality) {
+      expect(result.sliceSupport).toEqual({ code: 50, docs: 0 });
+      expect(docsless.findings).toContain(`insufficient-quality-slice:${result.metric}:docs`);
+    }
+    expect(report(goodMetrics()).derived.quality.every(result => result.sliceSupport.code === 50 && result.sliceSupport.docs === 50)).toBe(true);
+  });
+
+  it('protected retention is reconciled against validated receipts and refused on mismatch', () => {
+    const items = [candidate('rules', { source: { kind: 'system', addedAt: now() } }), candidate('note')];
+    const receipts = applyContextPruningPilot({ candidates: items, policy, now, evidence: [success('rules', 'drop'), success('note', 'drop')] }).receipts;
+    const withReceipts = (metrics: ContextPruningPairedMetrics, input: typeof receipts) => {
+      const preregistration = preregister();
+      return buildContextPruningEvaluationReport({ preregistration, trustedPreregistrationDigest: preregistration.digest,
+        holdoutAccessedAt: HOLDOUT_AT, integrity: integrity('PROMOTE'), metrics, receipts: input });
+    };
+    const ok = withReceipts(goodMetrics(), receipts);
+    expect(ok.decision).toBe('PROMOTE');
+    expect(ok.derived.protectedRetention).toEqual({ protectedItems: 1, retained: 1, bps: 10_000 });
+    // A caller-asserted value that disagrees with the receipts is refused.
+    expect(() => withReceipts(goodMetrics({ protectedRetentionBps: 9_000 }), receipts)).toThrow('protected retention');
+    // A forged receipt that drops a protected item is detected (digest), and a re-digested one yields a breach.
+    const protectedReceipt = receipts[0]!;
+    expect(() => withReceipts(goodMetrics(), [{ ...protectedReceipt, proposedAction: 'drop' }, receipts[1]!])).toThrow('digest');
+    const { receiptDigest: _ignored, ...payload } = { ...protectedReceipt, proposedAction: 'drop' as const };
+    const redigested = { ...payload, receiptDigest: digest(payload) };
+    expect(() => withReceipts(goodMetrics(), [redigested, receipts[1]!])).toThrow('protected retention');
+    expect(withReceipts(goodMetrics({ protectedRetentionBps: 0 }), [redigested, receipts[1]!]).decision).toBe('ROLLBACK');
+    // No protected receipts at all is not evidence of retention.
+    expect(() => withReceipts(goodMetrics(), [])).toThrow('receipts');
+    const noProtected = withReceipts(goodMetrics(), [receipts[1]!]);
+    expect(noProtected).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+    expect(noProtected.findings).toContain('insufficient-protected-receipts');
+  });
+
+  it('D2: the ContextBudgetManager fallback never lists protected or dependency-protected items as drops', () => {
+    const items = [
+      candidate('rules', { content: 'system '.repeat(10), source: { kind: 'system', addedAt: now() } }),
+      candidate('blocker', { content: 'blocker '.repeat(40), priority: 0.01, source: { kind: 'blocker', addedAt: now() }, dependencies: ['evidence'] }),
+      candidate('evidence', { content: 'evidence '.repeat(40), priority: 0.01 }),
+      candidate('noise', { content: 'noise '.repeat(40), priority: 0.01 }),
+    ];
+    const budget = { totalTokens: 100, contextFraction: 0.5, generationFraction: 0.5, warningThreshold: 0.5, hardLimitThreshold: 0.9 };
+    const baseline = computeContextBudgetManagerBaseline(items, budget);
+    expect(baseline.droppedItemIds).toEqual(['noise']);
+    expect(baseline.protectedRetainedItemIds).toEqual(['blocker', 'evidence']);
+    expect(baseline.keptItemIds).toEqual(['blocker', 'evidence', 'rules']);
+    expect(baseline.usage.inputTokens).toBe(18 + 80 + 90);
+    const run = applyContextPruningPilot({ candidates: items, policy: { ...policy, mode: 'advisory' }, now, budget,
+      evidence: items.map(item => ({ ...success(item.itemId), status: 'failed' as const })) });
+    expect(run.deterministicBaseline?.droppedItemIds).toEqual(['noise']);
+    expect(run.receipts.filter(receipt => receipt.proposedAction === 'drop').map(receipt => receipt.itemId)).toEqual(['noise']);
   });
 
   it('F: rejects request-owned-once shared-state accounting, which is not implemented', () => {
@@ -558,7 +646,7 @@ describe('D26 context pruning pilot', () => {
     expect(report(goodMetrics(), { gate: 'ROLLBACK' }).decision).toBe('ROLLBACK');
     const unverified = buildContextPruningEvaluationReport({
       preregistration: preregister(), trustedPreregistrationDigest: preregister().digest, holdoutAccessedAt: HOLDOUT_AT,
-      integrity: { ...integrity('PROMOTE'), integrity_state: 'compromised' }, metrics: goodMetrics(),
+      integrity: { ...integrity('PROMOTE'), integrity_state: 'compromised' }, metrics: goodMetrics(), receipts: fixtureReceipts(),
     });
     expect(unverified.decision).toBe('HOLD');
     expect(unverified.findings).toContain('integrity-not-verified');
@@ -579,7 +667,8 @@ describe('D26 context pruning pilot', () => {
   });
 
   it('keeps protected-retention breaches on ROLLBACK and preserves missing-input advisories', () => {
-    expect(report(goodMetrics({ protectedRetentionBps: 9_999 })).decision).toBe('ROLLBACK');
+    // A caller-asserted breach that the receipts do not show is refused rather than trusted either way.
+    expect(() => report(goodMetrics({ protectedRetentionBps: 9_999 }))).toThrow('protected retention');
     const pending = report(goodMetrics(), { missingInputs: ['held-out data', 'human adjudication'] });
     expect(pending).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
     expect(pending.findings).toContain('missing-input:held-out data');
