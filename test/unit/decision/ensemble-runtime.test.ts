@@ -13,6 +13,7 @@ import {
   promoteChampionChallenger,
   rollbackChampionForNewRuns,
   runChampionChallengerShadow,
+  validateEnsembleIntegrityReport,
   validateEnsemblePolicy,
   evaluateDecisionRuleset,
   type AliasEvent,
@@ -130,6 +131,7 @@ function tinyChampionChallenger() {
   const record = structuredClone(ccBase);
   record.inputSet = { ...record.inputSet, itemCount: items.length, digest: championChallengerInputSetDigest(items) };
   record.pairedMetrics = record.pairedMetrics.map(metric => ({ ...metric, minimumPairs: metric.metric === 'slice' ? 1 : 2 }));
+  record.evaluationIntegrityReport = { ...record.evaluationIntegrityReport, digest: ensembleContractDigest(integrity('PROMOTE')) };
   return { record: preregisterChampionChallengerThresholds(record), items };
 }
 
@@ -425,5 +427,205 @@ describe('D17 ensemble runtime (#2611)', () => {
     const aggregate = aggregateEnsembleResults(policies.get(shared.policy)!, shared.results);
     expect(aggregate.warnings).toEqual(expect.arrayContaining(['high-agreement-not-correctness', 'shared-systematic-error-risk']));
     expect(aggregate.correctnessGate.status).toBe('not-satisfied');
+  });
+
+  describe('round-2 review regressions', () => {
+    const at = '2026-09-06T00:00:00.000Z';
+    function aliasGateway(record: DecisionChampionChallenger) {
+      const history: AliasEvent[] = [{ revision: 1, alias: record.alias, actualIdentityDigest: record.champion.identityDigest,
+        actualModel: record.champion.actualModel, recordedAt: '2026-09-01T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null }];
+      const calls: string[] = [];
+      return {
+        history,
+        calls,
+        aliasHistory: () => history,
+        promoteAlias: (eligibilityId: string, when: string) => {
+          calls.push(`promote:${eligibilityId}`);
+          const event: AliasEvent = { revision: history.length + 1, alias: record.alias, actualIdentityDigest: record.challenger.identityDigest,
+            actualModel: record.challenger.actualModel, recordedAt: when, kind: 'promoted', promotionEligibilityId: eligibilityId };
+          history.push(event);
+          return event;
+        },
+        rollbackAlias: (alias: string, targetRevision: number, approvalReference: string, when: string) => {
+          calls.push(`rollback:${targetRevision}`);
+          const target = history.find(item => item.revision === targetRevision)!;
+          const event: AliasEvent = { ...target, revision: history.length + 1, alias, recordedAt: when,
+            kind: 'rolled-back', promotionEligibilityId: `rollback-approval:${approvalReference}` };
+          history.push(event);
+          return event;
+        },
+      };
+    }
+    const passingDeltas = (record: DecisionChampionChallenger) => record.pairedMetrics.map(metric => ({ metric: metric.metric, delta: 0, pairs: metric.minimumPairs }));
+    const redigest = <T extends { digest: string }>(report: T): T => {
+      const { digest: _digest, ...payload } = report;
+      return { ...payload, digest: ensembleContractDigest(payload) } as T;
+    };
+
+    it('R2-01 refuses the reviewer forgery: an honest HOLD relabelled PROMOTE with findings stripped and the digest recomputed', () => {
+      const { record } = tinyChampionChallenger();
+      const gateway = aliasGateway(record);
+      const honestIntegrity: QualificationIntegrityMetadata = { ...integrity('PROMOTE'), integrity_state: 'unverified',
+        trusted_score_source: 'local-unverified', weak_signal_reason: 'small-effect' };
+      const honest = buildEnsembleIntegrityReport({ record, integrity: honestIntegrity, eligibility: eligibility(record),
+        pairedDeltas: record.pairedMetrics.map(metric => ({ metric: metric.metric, delta: -999, pairs: metric.minimumPairs })) });
+      expect(honest.decision).toBe('HOLD');
+      const forged = redigest({ ...honest, findings: [], decision: 'PROMOTE' as const,
+        pairedDeltas: honest.pairedDeltas.map(item => ({ ...item, passed: true })) });
+      expect(() => promoteChampionChallenger({ record, integrityReport: forged, eligibility: eligibility(record), gateway, at })).toThrow();
+      expect(gateway.calls).toEqual([]);
+      expect(gateway.history).toHaveLength(1);
+    });
+
+    it('R2-02 rebuilds the report on promotion: loosened thresholds and a different integrity report cannot promote', () => {
+      const { record } = tinyChampionChallenger();
+      const gateway = aliasGateway(record);
+      const failing = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), eligibility: eligibility(record),
+        pairedDeltas: record.pairedMetrics.map(metric => ({ metric: metric.metric, delta: metric.metric === 'quality' ? -0.5 : 0, pairs: metric.minimumPairs })) });
+      expect(failing.findings).toEqual(['paired-delta-failed:quality']);
+      const loosened = redigest({ ...failing, findings: [], decision: 'PROMOTE' as const,
+        pairedDeltas: failing.pairedDeltas.map(item => item.metric === 'quality' ? { ...item, bound: -1, passed: true } : item) });
+      expect(() => promoteChampionChallenger({ record, integrityReport: loosened, eligibility: eligibility(record), gateway, at }))
+        .toThrow(/does not match the report rebuilt/);
+      const otherIntegrity = buildEnsembleIntegrityReport({ record, integrity: { ...integrity('PROMOTE'), sample_n: 3 },
+        eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
+      expect(otherIntegrity.decision).toBe('PROMOTE');
+      expect(() => promoteChampionChallenger({ record, integrityReport: otherIntegrity, eligibility: eligibility(record), gateway, at }))
+        .toThrow(/evaluation-integrity report digest/);
+      expect(gateway.calls).toEqual([]);
+      const honest = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
+      expect(promoteChampionChallenger({ record, integrityReport: honest, eligibility: eligibility(record), gateway, at })).toMatchObject({ kind: 'promoted' });
+    });
+
+    it('R2-03 validator cross-checks findings, passed flags and decision against integrity and thresholds', () => {
+      const { record } = tinyChampionChallenger();
+      const base = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
+      const unverified = redigest({ ...base, integrity: { ...base.integrity, integrity_state: 'unverified' as const } });
+      expect(() => validateEnsembleIntegrityReport(unverified)).toThrow(/integrity-not-verified/);
+      const failedDelta = redigest({ ...base, pairedDeltas: base.pairedDeltas.map(item => item.metric === 'quality' ? { ...item, delta: -0.5 } : item) });
+      expect(() => validateEnsembleIntegrityReport(failedDelta)).toThrow(/quality/);
+      const lostFinding = redigest({ ...base, decision: 'HOLD' as const, pairedDeltas: base.pairedDeltas.map(item => item.metric === 'quality' ? { ...item, delta: -0.5, passed: false } : item) });
+      expect(() => validateEnsembleIntegrityReport(lostFinding)).toThrow(/paired-delta-failed:quality/);
+      const missingMetric = redigest({ ...base, pairedDeltas: base.pairedDeltas.filter(item => item.metric !== 'cost') });
+      expect(() => validateEnsembleIntegrityReport(missingMetric)).toThrow(/every required metric/);
+      const needlessHold = redigest({ ...base, decision: 'HOLD' as const });
+      expect(() => validateEnsembleIntegrityReport(needlessHold)).toThrow(/decision/);
+    });
+
+    it('R2-04 reserves actual spend plus in-flight reservations before every dispatch', async () => {
+      for (const usage of [{ inputTokens: 95, outputTokens: 0, costUsd: 0.000001 }, { inputTokens: 1, outputTokens: 0, costUsd: 0.000095 }]) {
+        const policy = smallPolicy();
+        policy.members[0]!.samples = 2;
+        policy.ceilings = { ...policy.ceilings, attempts: 2 };
+        let dispatched = 0;
+        const result = await executeDecisionEnsemble(policy, {
+          enabled: true,
+          invocationId: 'reserve-actual',
+          authorizeMember: () => true,
+          dispatch: async request => { dispatched += 1; return withAttempts(request.member, request.sampleIndex, 1, usage); },
+        });
+        expect(dispatched).toBe(1);
+        expect(result.memberResults.map(item => item.status)).toEqual(['succeeded', 'failed']);
+        expect(result.retainedResults[result.memberResults[1]!.resultDigest]?.spec).toMatchObject({ status: 'error', reason: 'budget-exhausted' });
+      }
+      const concurrent = smallPolicy();
+      concurrent.members[0]!.samples = 3;
+      concurrent.members[0]!.estimate.tokensPerAttempt = 40;
+      concurrent.ceilings = { ...concurrent.ceilings, attempts: 3, concurrency: 2 };
+      expect(() => validateEnsemblePolicy(concurrent)).toThrow(/tokens demand/);
+      concurrent.ceilings.tokens = 120;
+      const started: number[] = [];
+      vi.useFakeTimers();
+      try {
+        const running = executeDecisionEnsemble(concurrent, {
+          enabled: true,
+          invocationId: 'reserve-in-flight',
+          authorizeMember: () => true,
+          delay: () => new Promise(() => undefined),
+          dispatch: async request => {
+            started.push(request.sampleIndex);
+            await new Promise(resolve => setTimeout(resolve, request.sampleIndex === 0 ? 1 : 3));
+            return withAttempts(request.member, request.sampleIndex, 1, { inputTokens: 70, outputTokens: 0, costUsd: 0.000001 });
+          },
+        });
+        await vi.advanceTimersByTimeAsync(5);
+        const result = await running;
+        // Sample 2 would fit against actual spend alone (70 + 40 <= 120), but sample 1 still holds a 40-token reservation.
+        expect(started).toEqual([0, 1]);
+        expect(result.memberResults.map(item => item.status)).toEqual(['succeeded', 'failed', 'failed']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('R2-05 converts malformed member DecisionResults into failed members without losing completed members', async () => {
+      const policy = structuredClone(policies.get('triage-choice-ensemble')!);
+      policy.ceilings.concurrency = 1;
+      const result = await executeDecisionEnsemble(policy, {
+        enabled: true,
+        invocationId: 'malformed',
+        authorizeMember: () => true,
+        dispatch: async request => {
+          if (request.member.id === 'jev-a') return { spec: {} } as unknown as DecisionResult;
+          const valid = decisionResult(request.member, request.sampleIndex);
+          if (request.member.id === 'jev-c') (valid.spec.attempts[0] as { requestId: unknown }).requestId = undefined;
+          return valid;
+        },
+      });
+      expect(result.status).toBe('completed');
+      expect(result.memberResults.map(item => [item.memberId, item.status])).toEqual([['jev-a', 'failed'], ['jev-c', 'failed'], ['llm-b', 'succeeded']]);
+      for (const item of result.memberResults.slice(0, 2)) {
+        expect(result.retainedResults[item.resultDigest]?.spec).toMatchObject({ status: 'error', reason: 'invalid-output' });
+      }
+      expect(result.retainedResults[result.memberResults[2]!.resultDigest]?.spec).toMatchObject({ status: 'success', value: 'approve' });
+    });
+
+    it('R2-06 charges a timed-out sample its reserved bound instead of discarding its usage', async () => {
+      const policy = smallPolicy();
+      const spans: DecisionTelemetrySpan[] = [];
+      vi.useFakeTimers();
+      try {
+        const timed = executeDecisionEnsemble(policy, {
+          enabled: true,
+          invocationId: 'late-usage',
+          authorizeMember: () => true,
+          dispatch: async request => new Promise<DecisionResult>(resolve => setTimeout(() =>
+            resolve(withAttempts(request.member, 0, 1, { inputTokens: 9, outputTokens: 0, costUsd: 0.000009 })), 100)),
+          delay: (ms, signal) => new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, ms);
+            signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('cancelled')); }, { once: true });
+          }),
+          telemetry: { hook: { emit: span => { spans.push(span); } } },
+        });
+        await vi.advanceTimersByTimeAsync(11);
+        await expect(timed).resolves.toMatchObject({ memberResults: [{ status: 'failed' }] });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(spans).toHaveLength(1);
+      expect(spans[0]!.attributes).toMatchObject({
+        'aiwg.budget.attempts.actual': 1,
+        'aiwg.budget.tokens.actual': 10,
+        'aiwg.budget.cost_micros.actual': 10,
+      });
+    });
+
+    it('R2-07 rollback refuses, without appending an event, unless the alias currently holds the promoted challenger', () => {
+      const { record } = tinyChampionChallenger();
+      const gateway = aliasGateway(record);
+      expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at }))
+        .toThrow(/promoted challenger/);
+      expect(gateway.calls).toEqual([]);
+      gateway.history.push({ revision: 2, alias: record.alias, actualIdentityDigest: hash('9'), actualModel: 'someone-else',
+        recordedAt: at, kind: 'promoted', promotionEligibilityId: 'other-eligibility' });
+      expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at })).toThrow(/promoted challenger/);
+      expect(gateway.calls).toEqual([]);
+      gateway.history.pop();
+      const report = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
+      promoteChampionChallenger({ record, integrityReport: report, eligibility: eligibility(record), gateway, at });
+      expect(rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at })).toMatchObject({ kind: 'rolled-back', revision: 3 });
+      expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-2', at })).toThrow(/promoted challenger/);
+      expect(gateway.history.map(item => item.kind)).toEqual(['observed', 'promoted', 'rolled-back']);
+    });
   });
 });

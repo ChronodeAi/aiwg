@@ -267,7 +267,40 @@ export function validateEnsembleAggregate(value: unknown): DecisionEnsembleAggre
   return aggregate;
 }
 
-/** A D17 report may keep or tighten the upstream #2037/#2048 decision, never loosen it. */
+/** D17 findings derived from the carried #2037/#2048 integrity fields alone. */
+export function integrityMetadataFindings(integrity: DecisionEnsembleIntegrityReport['integrity'], minimumPairs: number): string[] {
+  const findings: string[] = [];
+  if (integrity.integrity_state !== 'verified') findings.push('integrity-not-verified');
+  if (integrity.integrity_mode === 'standard') findings.push('integrity-mode-standard');
+  if (integrity.trusted_score_source === 'local-unverified') findings.push('untrusted-score-source');
+  if (integrity.fresh_workspace_required && !integrity.fresh_workspace_verified) findings.push('fresh-workspace-unverified');
+  if (integrity.uncertainty === null) findings.push('uncertainty-missing');
+  if (integrity.paired_baseline === null) findings.push('paired-baseline-missing');
+  if (integrity.weak_signal_reason !== null) findings.push('weak-signal');
+  if (integrity.compromise_labels.length > 0) findings.push('compromised');
+  if (integrity.sample_n < minimumPairs) findings.push('insufficient-samples');
+  return findings;
+}
+
+/** The finding for one paired delta against its preregistered threshold, or null when it passes. */
+export function pairedDeltaFinding(threshold: PairedMetricThreshold, item: { delta: number | null; pairs: number } | undefined): string | null {
+  if (!item) return `paired-delta-missing:${threshold.metric}`;
+  if (item.delta === null || !Number.isFinite(item.delta)) return `paired-delta-unknown:${threshold.metric}`;
+  if (!Number.isSafeInteger(item.pairs) || item.pairs < threshold.minimumPairs) return `paired-delta-insufficient:${threshold.metric}`;
+  if (threshold.comparison === 'delta-at-least' ? item.delta < threshold.bound : item.delta > threshold.bound) return `paired-delta-failed:${threshold.metric}`;
+  return null;
+}
+
+/** Upstream ROLLBACK or any compromise gives ROLLBACK; upstream HOLD or any finding gives HOLD. */
+export function ensembleIntegrityDecision(integrity: DecisionEnsembleIntegrityReport['integrity'], findingCount: number): IntegrityGateDecision {
+  const upstream = integrity.release_gate.decision;
+  const compromised = integrity.integrity_state === 'compromised' || integrity.compromise_labels.length > 0;
+  return upstream === 'ROLLBACK' || compromised ? 'ROLLBACK' : upstream === 'HOLD' || findingCount > 0 ? 'HOLD' : 'PROMOTE';
+}
+
+/** A D17 report may keep or tighten the upstream #2037/#2048 decision, never loosen it. Every
+ * finding, passed flag and the decision are recomputed from the carried integrity fields and the
+ * preregistered thresholds; D09-derived findings need the record and are rechecked at promotion. */
 export function validateEnsembleIntegrityReport(value: unknown): DecisionEnsembleIntegrityReport {
   checkEnsembleSchema('integrityReport', value);
   const report = value as DecisionEnsembleIntegrityReport;
@@ -276,6 +309,19 @@ export function validateEnsembleIntegrityReport(value: unknown): DecisionEnsembl
   if (report.upstreamDecision !== report.integrity.release_gate.decision) problems.push('upstream decision must be the eval-integrity release gate decision');
   if (GATE_RANK[report.decision] < GATE_RANK[report.upstreamDecision]) problems.push(`D17 cannot upgrade ${report.upstreamDecision} to ${report.decision}`);
   if (report.decision === 'PROMOTE' && (report.findings.length > 0 || report.pairedDeltas.some(item => !item.passed))) problems.push('PROMOTE requires every D17 check to pass');
+  const metrics = report.pairedDeltas.map(item => item.metric);
+  if (canonicalJson(metrics) !== canonicalJson([...REQUIRED_PAIRED_METRICS].sort(compareEnsembleKeys))) problems.push('paired deltas must list every required metric once in canonical order');
+  if (canonicalJson(report.findings) !== canonicalJson([...new Set(report.findings)].sort())) problems.push('findings must be unique and sorted');
+  const expected = integrityMetadataFindings(report.integrity, Math.max(...report.pairedDeltas.map(item => item.minimumPairs)));
+  for (const item of report.pairedDeltas) {
+    const finding = pairedDeltaFinding(item, item);
+    if (item.passed !== (finding === null)) problems.push(`paired delta ${item.metric} passed flag does not match its threshold`);
+    // A missing observation is carried as delta null / pairs 0, so either label records the failure.
+    if (finding && !(finding === `paired-delta-unknown:${item.metric}` && report.findings.includes(`paired-delta-missing:${item.metric}`))) expected.push(finding);
+  }
+  for (const finding of expected) if (!report.findings.includes(finding)) problems.push(`finding ${finding} is missing`);
+  const decision = ensembleIntegrityDecision(report.integrity, report.findings.length);
+  if (report.decision !== decision) problems.push(`decision ${report.decision} does not follow from its integrity and findings (${decision})`);
   if (digest !== ensembleContractDigest(payload)) problems.push('integrity report digest does not match its content');
   semantic(problems, 'ensemble integrity report rejected');
   return report;

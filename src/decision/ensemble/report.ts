@@ -1,10 +1,10 @@
 import type { AliasEvent, PromotionEligibility } from '../calibration/types.js';
 import type { QualificationIntegrityMetadata } from '../qualification/release.js';
 import {
-  championChallengerEligibilityProblems, ensembleContractDigest, EnsembleContractError, validateChampionChallenger,
-  validateEnsembleIntegrityReport,
+  championChallengerEligibilityProblems, ensembleContractDigest, EnsembleContractError, ensembleIntegrityDecision,
+  integrityMetadataFindings, pairedDeltaFinding, validateChampionChallenger, validateEnsembleIntegrityReport,
 } from './contract.js';
-import type { DecisionEnsembleIntegrityReport, IntegrityGateDecision, PairedDeltaObservation } from './types.js';
+import type { DecisionEnsembleIntegrityReport, PairedDeltaObservation } from './types.js';
 
 export interface EnsembleIntegrityReportInput {
   record: unknown;
@@ -24,15 +24,7 @@ export function buildEnsembleIntegrityReport(input: EnsembleIntegrityReportInput
   const findings = new Set<string>();
   if (!input.eligibility) findings.add('d09-eligibility-missing');
   else for (const problem of championChallengerEligibilityProblems(record, input.eligibility)) findings.add(`d09-${problem}`);
-  if (integrity.integrity_state !== 'verified') findings.add('integrity-not-verified');
-  if (integrity.integrity_mode === 'standard') findings.add('integrity-mode-standard');
-  if (integrity.trusted_score_source === 'local-unverified') findings.add('untrusted-score-source');
-  if (integrity.fresh_workspace_required && !integrity.fresh_workspace_verified) findings.add('fresh-workspace-unverified');
-  if (integrity.uncertainty === null) findings.add('uncertainty-missing');
-  if (integrity.paired_baseline === null) findings.add('paired-baseline-missing');
-  if (integrity.weak_signal_reason !== null) findings.add('weak-signal');
-  if (integrity.compromise_labels.length > 0) findings.add('compromised');
-  if (integrity.sample_n < Math.max(...record.pairedMetrics.map(item => item.minimumPairs))) findings.add('insufficient-samples');
+  for (const finding of integrityMetadataFindings(integrity, Math.max(...record.pairedMetrics.map(item => item.minimumPairs)))) findings.add(finding);
 
   const observed = new Map<string, PairedDeltaObservation>();
   for (const item of input.pairedDeltas) {
@@ -41,19 +33,13 @@ export function buildEnsembleIntegrityReport(input: EnsembleIntegrityReportInput
   }
   const pairedDeltas = record.pairedMetrics.map(threshold => {
     const item = observed.get(threshold.metric);
-    const delta = item?.delta ?? null; const pairs = item?.pairs ?? 0;
-    let passed = true;
-    if (!item) { findings.add(`paired-delta-missing:${threshold.metric}`); passed = false; }
-    else if (delta === null || !Number.isFinite(delta)) { findings.add(`paired-delta-unknown:${threshold.metric}`); passed = false; }
-    else if (!Number.isSafeInteger(pairs) || pairs < threshold.minimumPairs) { findings.add(`paired-delta-insufficient:${threshold.metric}`); passed = false; }
-    else if (threshold.comparison === 'delta-at-least' ? delta < threshold.bound : delta > threshold.bound) { findings.add(`paired-delta-failed:${threshold.metric}`); passed = false; }
-    return { ...threshold, delta, pairs, passed };
+    const finding = pairedDeltaFinding(threshold, item);
+    if (finding) findings.add(finding);
+    return { ...threshold, delta: item?.delta ?? null, pairs: item?.pairs ?? 0, passed: finding === null };
   }).sort((a, b) => a.metric < b.metric ? -1 : a.metric > b.metric ? 1 : 0);
 
   const upstreamDecision = integrity.release_gate.decision;
-  const compromised = integrity.integrity_state === 'compromised' || integrity.compromise_labels.length > 0;
-  const decision: IntegrityGateDecision = upstreamDecision === 'ROLLBACK' || compromised ? 'ROLLBACK'
-    : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
+  const decision = ensembleIntegrityDecision(integrity, findings.size);
   const payload: Omit<DecisionEnsembleIntegrityReport, 'digest'> = {
     schemaVersion: 'decision-ensemble-integrity-report/v1',
     subject: { kind: 'champion-challenger', id: record.id, digest, eligibilityId: record.eligibilityId },

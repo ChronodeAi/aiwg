@@ -66,13 +66,19 @@ reservations. This check happens at validation time; it is not a dispatcher.
 It returns `disabled` unless `options.enabled === true` and the policy mode is not `disabled`.
 When enabled, trusted host authorization is mandatory: if no authorization callback is registered,
 or if it rejects a member for security, privacy, region, capability or budget reasons, no member is
-invoked. The wrapper reserves each planned sample before dispatch, runs admitted samples under the
-effective concurrency and an injected-clock deadline, passes each member to an injected dispatch
-callback, retains each full `DecisionResult` by digest, converts successes and all failure paths into
+invoked. Before every dispatch the wrapper checks the sample's planned reservation against actual
+spend so far plus every in-flight reservation, for attempts, tokens and cost, and against the member
+ceiling; a sample that would not fit is not dispatched and is recorded as `budget-exhausted`. It runs
+admitted samples under the effective concurrency and an injected-clock deadline, passes each member to
+an injected dispatch callback, validates each returned value with the existing `DecisionResult`
+validator, retains each full `DecisionResult` by digest, converts successes and all failure paths into
 `EnsembleMemberResult`, and then calls `aggregateEnsembleResults`. Dispatch rejection, timeout,
-fallback-depth excess, runtime token/cost budget exhaustion, and unknown provider cost under an
-`unknownCost: reject` policy are recorded as failed member evidence rather than flattening the whole
-ensemble call. Runtime telemetry is metadata-only: ensemble IDs, member counts, budgets/actuals,
+a malformed member result (`invalid-output`), fallback-depth excess, runtime token/cost budget
+exhaustion, and unknown provider cost under an `unknownCost: reject` policy are recorded as failed
+member evidence rather than flattening the whole ensemble call. A sample that times out or rejects is
+charged its full reservation, since its provider usage is unknown; usage a provider reports after the
+deadline is not observed, so a late result that exceeded its reservation is not reflected in the
+reported actuals. Runtime telemetry is metadata-only: ensemble IDs, member counts, budgets/actuals,
 disagreement and disposition are emitted without inputs, prompts or response bodies. When no trace
 context is supplied, fresh W3C trace/span IDs are generated for each emitted span.
 
@@ -167,13 +173,21 @@ The experimental runtime exports:
   structured clones of the same item, their input digests must match the preregistered input-set
   digest, and the result reports paired quality, calibration, risk-coverage, abstention, latency,
   tokens, cost and slice deltas.
-- `promoteChampionChallenger(...)`: consumes the D09 `PromotionEligibility`, the fully validated D17
-  integrity report and immutable alias history, then delegates alias movement to the D09 gateway only
-  when the report decision is `PROMOTE` for the exact champion/challenger record. A forged change from
-  `HOLD` or `ROLLBACK` to `PROMOTE` fails report validation.
-- `rollbackChampionForNewRuns(...)` and `pinChampionForRun(...)`: rollback delegates to D09
-  `rollbackAlias` for future alias resolution after a non-empty approval reference is supplied, while
-  already pinned active runs keep their original champion revision.
+- `promoteChampionChallenger(...)`: consumes the D09 `PromotionEligibility`, the D17 integrity report
+  and immutable alias history. It validates the report, then independently rebuilds it with
+  `buildEnsembleIntegrityReport` from the trusted record, the eligibility, the alias history and the
+  report's carried integrity fields and raw paired observations, and refuses unless the rebuilt report
+  is canonically identical to the supplied one. The carried integrity fields must also hash
+  (`ensembleContractDigest`) to the record's pinned `evaluationIntegrityReport.digest`. Alias movement
+  is delegated to the D09 gateway only when the rebuilt decision is `PROMOTE` for the exact
+  champion/challenger record. A report whose decision, findings, passed flags or thresholds were
+  edited, even with a recomputed digest, is refused.
+- `rollbackChampionForNewRuns(...)` and `pinChampionForRun(...)`: rollback requires a valid approval
+  reference and that the alias's current revision is this record's promoted challenger (kind
+  `promoted`, the record's eligibility ID and challenger identity). Otherwise it refuses without
+  calling the gateway, so nothing is appended to alias history. When allowed, it delegates to D09
+  `rollbackAlias` for future alias resolution, while already pinned active runs keep their original
+  champion revision.
 
 ## Eval-integrity report extension
 
@@ -189,7 +203,11 @@ the upstream gate:
   paired delta present, sufficiently sampled and within its bound.
 
 `validateEnsembleIntegrityReport` rejects any report whose decision is less conservative than its
-upstream decision.
+upstream decision. It also recomputes the integrity-derived findings, each paired delta's `passed`
+flag and finding against the thresholds carried in the report, and the decision, and rejects a report
+that is inconsistent with them. D09-derived findings and the thresholds themselves need the record,
+so they are checked when `promoteChampionChallenger` rebuilds the report; a validated report alone is
+not a promotion authorization.
 
 ## Drift response
 
