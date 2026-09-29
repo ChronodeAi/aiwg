@@ -64,6 +64,13 @@ DecisionResult records decision/ruleset/binding pins, evaluation alias, run and 
 
 Attempt fields: monotonic ordinal, adapter/version, requested and actual model (actual may be null if unavailable), resolved pinned subagent identity when applicable, status/reason, duration, token usage and cost or null, and provider/worker request ID or null. Preserve failed Jev attempts when the final answer comes from an LLM fallback. Request IDs are opaque and MUST NOT contain raw credentials. Do not store full prompts, state, or private reasoning by default. Result provenance is execution evidence, not an authorization grant.
 
+Sensitivity analysis over results is a separate default-off diagnostic surface.
+`decision-sensitivity-plan/v1` may replay deterministic policy parameters over
+stored evidence or request a new host-authorized input reevaluation. Its report
+is additive reviewer evidence only, labels itself as associative rather than
+causal, redacts changed values by digest in routine output, and has no action
+authorization field other than the constant `not-authorized`.
+
 RulesetResult records run/invocation IDs, ruleset/binding pins, evaluation results keyed by alias, matched rule IDs, status (`completed/defaulted/review/error/cancelled`), reason, and optional outcome. Completed/defaulted/review carry outcome; error/cancelled do not. Outcome is validated against ruleset outputSchema. Resolved input snapshot is held in memory; protected artifact storage may retain it only by explicit policy. The private atomic receipt stores a fingerprint over the canonical input, ordered definition pins, ruleset pin and binding pin together with the invocation ID. This fingerprint remains inside protected storage, not in public logs/results. Reuse is allowed only for a completed receipt with an exact fingerprint match. Reusing an invocation ID with changed input, definition, ruleset or binding is `replay-mismatch` and MUST fail without a new call. Re-evaluation uses a fresh invocation ID. Incomplete receipts require reconciliation with an existing worker/provider handle when available; an unknown remote outcome is `execution-uncertain`, never silently retried. Exactly-once remote billing is not promised.
 
 ## 3. Evaluation algorithm and failure semantics

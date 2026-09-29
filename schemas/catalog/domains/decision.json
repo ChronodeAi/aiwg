@@ -671,6 +671,46 @@
       "publication": { "public": true }
     },
     {
+      "logicalName": "decision.sensitivity-plan",
+      "id": "https://aiwg.io/schemas/decision/DecisionSensitivityPlan.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionSensitivityPlan.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-sensitivity-contract", "boundary": "D23 bounded sensitivity plans; default-off reviewer analysis only", "path": "src/decision/sensitivity/contract.ts" }],
+      "fixtures": {
+        "valid": ["test/fixtures/decision/sensitivity/sensitivity-plan.v1.valid.json"],
+        "invalid": ["test/fixtures/decision/sensitivity/sensitivity-plan.v1.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/decision/sensitivity/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/sensitivity/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.sensitivity-report",
+      "id": "https://aiwg.io/schemas/decision/DecisionSensitivityReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionSensitivityReport.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-sensitivity-contract", "boundary": "Immutable sensitivity reports; associative evidence, never action authority", "path": "src/decision/sensitivity/contract.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/sensitivity/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/sensitivity/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
       "logicalName": "decision.projection-policy",
       "id": "https://aiwg.io/schemas/decision/DecisionProjectionPolicy.v1.schema.json",
       "version": "1.0.0",

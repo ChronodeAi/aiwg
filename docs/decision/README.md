@@ -49,5 +49,10 @@ The [offline pattern playground](pattern-playground.md) provides discoverable,
 sanitized examples and a governed authoring checklist without requiring network
 access or a provider credential.
 
+The [counterfactual sensitivity analyzer](sensitivity.md) defines default-off
+experimental plans and reports for bounded policy replay and offline input
+reevaluation. Reports are associative diagnostics only: they are not causal
+explanations, correctness evidence, or action authorization.
+
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

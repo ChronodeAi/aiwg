@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental default-off decision sensitivity analysis defines closed
+  `SensitivityPlan`/`SensitivityReport` schemas, a library-only offline analyzer
+  for policy replay and host-supplied input reevaluation, privacy-safe redacted
+  reports, anti-probing checks, synthetic examples, docs, and tests. Reports are
+  associative diagnostics only and cannot authorize actions (#2616).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.
