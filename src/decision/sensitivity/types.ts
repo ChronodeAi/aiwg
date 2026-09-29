@@ -181,6 +181,11 @@ export interface SensitivityReport {
 export interface SensitivityProbeState {
   reportsByWindow?: Map<string, number>;
   pathCounts?: Map<string, number>;
+  /**
+   * Host-owned probe window duration. Windows are derived from the injected clock
+   * (`floor(now / windowMs)`), never from the plan's `probeControl.windowId`. Defaults to one hour.
+   */
+  windowMs?: number;
 }
 
 export interface SensitivityReevaluationRequest {

@@ -199,6 +199,22 @@ function resultWith(input: unknown, invocationId: string): RulesetResult {
   };
 }
 
+function adapterAbstainedSource(built: ReturnType<typeof artifacts>): RulesetResult {
+  const sourceResult = structuredClone(built.sourceResult);
+  const risk = sourceResult.spec.evaluations.risk!;
+  risk.spec.status = 'abstained';
+  risk.spec.reason = 'low-confidence';
+  delete risk.spec.value;
+  delete risk.spec.acceptance;
+  risk.spec.uncertainty = { ...risk.spec.uncertainty!, confidence: 0.9, distribution: { approve: 0.9, review: 0.1 } };
+  risk.spec.attempts = [{ ...risk.spec.attempts[0]!, status: 'abstained', reason: 'low-confidence' }];
+  sourceResult.spec.status = 'review';
+  sourceResult.spec.reason = 'evaluation-failed';
+  sourceResult.spec.outcome = { route: 'review', label: 'needs-review' };
+  sourceResult.spec.matchedRules = [];
+  return sourceResult;
+}
+
 function multiEvaluationArtifacts() {
   const built = artifacts();
   built.ruleset.spec.evaluations.push({ alias: 'compliance', decision: artifactPin(built.definition), inputPointer: '' });
@@ -446,6 +462,139 @@ describe('D23 sensitivity contracts (#2616)', () => {
     }
   });
 
+  it('CFX-REPLAY-06 replays the acceptance of the fallback target that produced the accepted value', async () => {
+    const built = artifacts();
+    built.binding.spec.maxAttempts = 2;
+    const primary = built.binding.spec.evaluations.risk!.targets[0]!;
+    built.binding.spec.evaluations.risk!.targets.push({
+      ...structuredClone(primary),
+      model: 'fixture-fallback-model',
+      acceptance: { mode: 'confidence-threshold', profile: 'fixture-confidence', minimumBps: 5000 },
+    });
+    built.binding.spec.evaluations.risk!.fallbackOn = ['executor-unavailable'];
+    const bindingPin = artifactPin(built.binding);
+    const sourceResult = structuredClone(built.sourceResult);
+    sourceResult.spec.binding = bindingPin;
+    const risk = sourceResult.spec.evaluations.risk!;
+    risk.spec.binding = bindingPin;
+    risk.spec.uncertainty = { ...risk.spec.uncertainty!, confidence: 0.6, distribution: { approve: 0.6, review: 0.4 } };
+    risk.spec.attempts = [
+      { ...structuredClone(risk.spec.attempts[0]!), actualModel: null, status: 'error', reason: 'executor-unavailable',
+        usage: { inputTokens: null, outputTokens: null, costUsd: null } },
+      { ...structuredClone(risk.spec.attempts[0]!), ordinal: 2, requestedModel: 'fixture-fallback-model', actualModel: 'fixture-fallback-model-v1' },
+    ];
+
+    const path = '/binding/spec/evaluations/risk/targets/1/acceptance/minimumBps';
+    const plan = pinnedPlan('triage-threshold-replay');
+    plan.id = 'triage-fallback-target-replay';
+    plan.source.binding = bindingPin;
+    plan.source.result = artifactPin(sourceResult);
+    plan.allowedPaths = [path];
+    plan.pathDomains = [{ path, values: [4000, 7000], sensitivity: 'internal' }];
+    plan.variants = [
+      { id: 'fallback-loosen', changes: [{ path, value: 4000 }] },
+      { id: 'fallback-tighten', changes: [{ path, value: 7000 }] },
+    ];
+
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceDefinitions: built.sourceDefinitions,
+      sourceInput: built.sourceInput,
+      sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+
+    expect(report.status).toBe('completed');
+    const loosen = report.rows.find(row => row.variantId === 'fallback-loosen')!;
+    expect(loosen.deltas.status).toBe('completed');
+    expect(loosen.deltas.outcomeChanged).toBe(false);
+    expect(loosen.deltas.acceptanceChanged).toBe(false);
+    const tighten = report.rows.find(row => row.variantId === 'fallback-tighten')!;
+    expect(tighten.deltas.acceptanceChanged).toBe(true);
+    expect(tighten.deltas.outcomeChanged).toBe(true);
+  });
+
+  it('CFX-REPLAY-07 does not replay an adapter-originated abstention that the source threshold would have accepted', async () => {
+    // Confidence-threshold target: the recorded confidence (0.9) clears the source threshold (7000 bps),
+    // so the source target's acceptance could not have produced this abstention.
+    const threshold = artifacts();
+    const thresholdSource = adapterAbstainedSource(threshold);
+    const thresholdPlan = pinnedPlan('triage-threshold-replay');
+    thresholdPlan.id = 'triage-adapter-abstention-threshold';
+    thresholdPlan.source.result = artifactPin(thresholdSource);
+    thresholdPlan.pathDomains[0]!.values = [6000, 7000];
+    thresholdPlan.variants = [{
+      id: 'threshold-loosen',
+      changes: [{ path: '/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps', value: 6000 }],
+    }];
+    const thresholdReport = await analyzeDecisionSensitivity({
+      plan: thresholdPlan,
+      sourceRuleset: threshold.ruleset,
+      sourceBinding: threshold.binding,
+      sourceDefinitions: threshold.sourceDefinitions,
+      sourceInput: threshold.sourceInput,
+      sourceResult: thresholdSource,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+    expect(thresholdReport.rows[0]?.deltas.status).toBe('review');
+    expect(thresholdReport.rows[0]?.deltas.outcomeChanged).toBe(false);
+    expect(thresholdReport.rows[0]?.deltas.acceptanceChanged).toBe(false);
+  });
+
+  it('CFX-REPLAY-08 requires acceptance evidence before replaying a primitive-policy abstention', async () => {
+    // Primitive-policy target: acceptance-derived abstentions carry DecisionAcceptanceEvidence; this one does not.
+    const primitive = artifacts();
+    primitive.binding.apiVersion = DECISION_API_VERSION_STRUCTURED;
+    primitive.binding.spec.evaluations.risk!.targets[0]!.acceptance = {
+      mode: 'primitive-policy',
+      version: '1.0.0',
+      compatibleUncertaintyProfiles: ['fixture-confidence'],
+      precedence: 'first-match',
+      calibration: 'advisory',
+      rules: [{
+        id: 'accept-choice',
+        primitive: 'choice',
+        all: [{ metric: 'selected-probability', op: 'gte', thresholdBps: 5000 }],
+        route: { disposition: 'act' },
+      }],
+      defaultRoute: { disposition: 'act' },
+      missingEvidenceRoute: { disposition: 'review' },
+      invalidEvidenceRoute: { disposition: 'review' },
+      tieRoute: { disposition: 'review' },
+    };
+    const primitiveBindingPin = artifactPin(primitive.binding);
+    const primitiveSource = adapterAbstainedSource(primitive);
+    primitiveSource.spec.binding = primitiveBindingPin;
+    primitiveSource.spec.evaluations.risk!.spec.binding = primitiveBindingPin;
+    const primitivePlan = pinnedPlan('triage-threshold-replay');
+    primitivePlan.id = 'triage-adapter-abstention-primitive';
+    primitivePlan.source.binding = primitiveBindingPin;
+    primitivePlan.source.result = artifactPin(primitiveSource);
+    primitivePlan.allowedPaths = ['/binding/spec/evaluations/risk/targets/0/acceptance/version'];
+    primitivePlan.pathDomains = [{ path: primitivePlan.allowedPaths[0]!, values: ['1.0.1'], sensitivity: 'internal' }];
+    primitivePlan.variants = [{ id: 'replay-choice-policy', changes: [{ path: primitivePlan.allowedPaths[0]!, value: '1.0.1' }] }];
+    const primitiveReport = await analyzeDecisionSensitivity({
+      plan: primitivePlan,
+      sourceRuleset: primitive.ruleset,
+      sourceBinding: primitive.binding,
+      sourceDefinitions: primitive.sourceDefinitions,
+      sourceInput: primitive.sourceInput,
+      sourceResult: primitiveSource,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+    expect(primitiveReport.rows[0]?.deltas.status).toBe('review');
+    expect(primitiveReport.rows[0]?.deltas.outcomeChanged).toBe(false);
+    expect(primitiveReport.rows[0]?.deltas.acceptanceChanged).toBe(false);
+  });
+
   it('CFX-INPUT-01 uses fresh invocation IDs, separates stability controls, and redacts sensitive field values', async () => {
     const built = artifacts();
     const plan = pinnedPlan('triage-input-field');
@@ -539,9 +688,11 @@ describe('D23 sensitivity contracts (#2616)', () => {
     });
     expect(report.status).toBe('partial');
     expect(report.rows).toHaveLength(1);
-    expect(report.budget.backendCalls).toBe(1);
+    // The completed row spent one call; the thrown second call has no spend evidence, so one reserved call is charged.
+    expect(report.budget.backendCalls).toBe(2);
     expect(report.budget.costMicros).toBeGreaterThan(0);
     expect(report.warnings).toContain('partial-failure');
+    expect(report.warnings).toContain('spend-unknown-reserved');
     expect(report.warnings).not.toContain('rejected-before-inference');
   });
 
@@ -637,6 +788,31 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect(report.budget.tokens).toBe(14);
     expect(report.budget.costMicros).toBe(20);
     expect(report.warnings).toContain('partial-failure');
+  });
+
+  it('CFX-INPUT-08 conservatively reserves and flags spend when a reevaluation throws without spend evidence', async () => {
+    const built = artifacts();
+    const plan = pinnedPlan('triage-input-field');
+    plan.baselineStability.enabled = false;
+    plan.baselineStability.repeats = 0;
+    plan.variants = [{ id: 'risk-high', changes: [{ path: '/input/riskSignal', value: 'high' }] }];
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+      reevaluate: async () => { throw new Error('transport failed after dispatch'); },
+    });
+    expect(report.status).toBe('failed');
+    // One evaluation x maxAttempts 1, priced at the largest source attempt (10 + 2 tokens, 10 micros).
+    expect(report.budget.backendCalls).toBe(1);
+    expect(report.budget.tokens).toBe(12);
+    expect(report.budget.costMicros).toBe(10);
+    expect(report.warnings).toContain('spend-unknown-reserved');
   });
 
   it('CFX-AUTH-01 rejects stale authorization before any input reevaluation', async () => {
@@ -806,8 +982,81 @@ describe('D23 sensitivity contracts (#2616)', () => {
     }
   });
 
-  it('CFX-PROBE-04 bounds the implicit probe state with LRU eviction', async () => {
+  it('CFX-PROBE-04 fails closed when the implicit probe state is full and evicts only expired windows', async () => {
     const built = artifacts();
+    const windowMs = 3_600_000;
+    let clock = 100 * windowMs + 1_000;
+    const common = {
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => clock,
+      reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
+    };
+    const makePlan = (index: number) => {
+      const plan = pinnedPlan('triage-input-field');
+      plan.id = `triage-capacity-${index}`;
+      plan.probeControl.windowId = 'window-capacity-probe';
+      plan.probeControl.maxReportsPerWindow = 1;
+      plan.sourceSubject.subjectRef = `case-capacity-${index}`;
+      plan.baselineStability.enabled = false;
+      plan.baselineStability.repeats = 0;
+      plan.variants = [{ id: `no-change-${index}`, changes: [{ path: '/input/riskSignal', value: 'low' }] }];
+      return plan;
+    };
+    const statuses: string[] = [];
+    for (let index = 0; index < 520; index += 1) {
+      const report = await analyzeDecisionSensitivity({ ...common, plan: makePlan(index) });
+      statuses.push(report.status);
+      if (report.status === 'rejected') expect(report.warnings.join(' ')).toContain('probe state capacity exhausted');
+    }
+    expect(statuses.filter(status => status === 'completed')).toHaveLength(512);
+    expect(statuses.slice(512).every(status => status === 'rejected')).toBe(true);
+    const repeatedFirst = await analyzeDecisionSensitivity({ ...common, plan: makePlan(0) });
+    expect(repeatedFirst.status).toBe('rejected');
+    expect(repeatedFirst.warnings.join(' ')).toContain('probe report limit');
+    clock += windowMs;
+    const nextWindow = await analyzeDecisionSensitivity({ ...common, plan: makePlan(600) });
+    expect(nextWindow.status).toBe('completed');
+  });
+
+  it('CFX-PROBE-05 derives probe windows from the injected clock so a new plan windowId cannot reset the budget', async () => {
+    const built = artifacts();
+    const state = probeState();
+    let clock = 1_000;
+    const common = {
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => clock,
+      probeState: state,
+      reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
+    };
+    const makePlan = (id: string, windowId: string) => {
+      const plan = pinnedPlan('triage-input-field');
+      plan.id = id;
+      plan.probeControl.windowId = windowId;
+      plan.probeControl.maxReportsPerWindow = 1;
+      plan.baselineStability.enabled = false;
+      plan.baselineStability.repeats = 0;
+      return plan;
+    };
+    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-window-one', 'w1') })).status).toBe('completed');
+    const evaded = await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-window-two', 'w2') });
+    expect(evaded.status).toBe('rejected');
+    expect(evaded.warnings.join(' ')).toContain('probe report limit');
+    expect(evaded.budget.backendCalls).toBe(0);
+    clock += 3_600_000;
+    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-window-three', 'w1') })).status).toBe('completed');
+  });
+
+  it('CFX-PROBE-06 scopes probe limits by tenant, workspace and project', async () => {
+    const built = artifacts();
+    const state = probeState();
     const common = {
       sourceRuleset: built.ruleset,
       sourceBinding: built.binding,
@@ -815,25 +1064,26 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
       now: () => 1_000,
+      probeState: state,
       reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
     };
-    const makePlan = (index: number) => {
+    const makePlan = (id: string, tenantId: string, workspaceId = 'workspace-a', projectId = 'project-a') => {
       const plan = pinnedPlan('triage-input-field');
-      plan.id = `triage-lru-${index}`;
-      plan.probeControl.windowId = 'window-lru-probe';
+      plan.id = id;
+      plan.tenantId = tenantId;
+      plan.workspaceId = workspaceId;
+      plan.projectId = projectId;
+      plan.sourceSubject = { ...plan.sourceSubject, tenantId, workspaceId, projectId };
       plan.probeControl.maxReportsPerWindow = 1;
-      plan.sourceSubject.subjectRef = `case-lru-${index}`;
       plan.baselineStability.enabled = false;
       plan.baselineStability.repeats = 0;
-      plan.variants = [{ id: `no-change-${index}`, changes: [{ path: '/input/riskSignal', value: 'low' }] }];
       return plan;
     };
-    for (let index = 0; index < 520; index += 1) {
-      const report = await analyzeDecisionSensitivity({ ...common, plan: makePlan(index) });
-      expect(report.status).toBe('completed');
-    }
-    const repeatedFirst = await analyzeDecisionSensitivity({ ...common, plan: makePlan(0) });
-    expect(repeatedFirst.status).toBe('completed');
+    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-tenant-t2', 't2') })).status).toBe('completed');
+    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-tenant-t2-again', 't2') })).status).toBe('rejected');
+    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-tenant-t3', 't3') })).status).toBe('completed');
+    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-t2-workspace-b', 't2', 'workspace-b') })).status).toBe('completed');
+    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-t2-project-b', 't2', 'workspace-a', 'project-b') })).status).toBe('completed');
   });
 
   it('CFX-DISABLED-01 leaves ordinary decision evaluation byte-identical when sensitivity is not invoked', async () => {

@@ -41,7 +41,7 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
   }
   if (plan.mode === 'disabled') return rejectedReport(request, ['sensitivity plan is disabled']);
   try {
-    enforceProbeLimits(plan, request.probeState ?? defaultProbeState, probeRoot(plan, request));
+    enforceProbeLimits(plan, request.probeState ?? defaultProbeState, probeRoot(plan, request), request.now?.() ?? Date.now());
   } catch (error) {
     if (error instanceof SensitivityContractError) return rejectedReport(request, error.details.length ? [...error.details] : [error.message]);
     throw error;
@@ -69,7 +69,7 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
       try {
         result = await request.reevaluate({ variantId, invocationId, receiptFingerprint, input, changes: [] });
       } catch (error) {
-        spendFailure(budget, error);
+        if (!spendFailure(budget, error)) spendUnknownReserve(budget, warnings, request.sourceBinding, request.sourceResult);
         return failedPartialReport(request, plan, rows, budget, warnings, `baseline ${variantId} failed: ${sanitizeReason(error)}`);
       }
       const failure = validateReevaluationResult(request, result, variantId, invocationId, receiptFingerprint, input);
@@ -98,7 +98,7 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
     }
     if (plan.analysisKind === 'policy-replay') {
       const { ruleset, binding } = replayArtifacts(request.sourceRuleset, request.sourceBinding, variant.changes);
-      const result = replayPolicy(request.sourceResult, ruleset, binding, request.sourceDefinitions ?? {}, request.sourceInput, variant.id);
+      const result = replayPolicy(request.sourceResult, request.sourceBinding, ruleset, binding, request.sourceDefinitions ?? {}, request.sourceInput, variant.id);
       rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: variant.id,
         kind: noChange ? 'unchanged-control' : 'variant', inference: 'reused-stored-evidence', changes: variant.changes, invocationId: null }));
       budget.processedVariants += 1;
@@ -119,7 +119,7 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
     try {
       result = await request.reevaluate({ variantId: variant.id, invocationId, receiptFingerprint, input, changes: structuredClone(variant.changes) });
     } catch (error) {
-      spendFailure(budget, error);
+      if (!spendFailure(budget, error)) spendUnknownReserve(budget, warnings, request.sourceBinding, request.sourceResult);
       return failedPartialReport(request, plan, rows, budget, warnings, `variant ${variant.id} failed: ${sanitizeReason(error)}`);
     }
     const failure = validateReevaluationResult(request, result, variant.id, invocationId, receiptFingerprint, input);
@@ -138,8 +138,14 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
   return report;
 }
 
+// The implicit state is a process-local safety net, not durable storage. When it is full it fails
+// closed instead of evicting live limit state; only counters from windows before the current one
+// are evicted. Production hosts must supply durable, non-resettable probe state.
 const DEFAULT_PROBE_STATE_MAX_ENTRIES = 512;
-const defaultProbeState: Required<SensitivityProbeState> = { reportsByWindow: new Map(), pathCounts: new Map() };
+const DEFAULT_PROBE_WINDOW_MS = 3_600_000;
+const defaultProbeState: Required<Pick<SensitivityProbeState, 'reportsByWindow' | 'pathCounts'>> = {
+  reportsByWindow: new Map(), pathCounts: new Map(),
+};
 
 function probeRoot(plan: SensitivityPlan, request: SensitivityRuntimeRequest): unknown {
   return plan.analysisKind === 'policy-replay'
@@ -164,27 +170,53 @@ function validateChangeTargets(plan: SensitivityPlan, request: SensitivityRuntim
   for (const variant of plan.variants) for (const change of variant.changes) assertPointerTarget(root, change.path);
 }
 
-function enforceProbeLimits(plan: SensitivityPlan, state: SensitivityRuntimeRequest['probeState'], root: unknown): void {
+function enforceProbeLimits(plan: SensitivityPlan, state: SensitivityRuntimeRequest['probeState'], root: unknown, now: number): void {
   const reportsByWindow = state?.reportsByWindow ?? new Map<string, number>();
   const pathCounts = state?.pathCounts ?? new Map<string, number>();
   if (state && !state.reportsByWindow) state.reportsByWindow = reportsByWindow;
   if (state && !state.pathCounts) state.pathCounts = pathCounts;
-  const reportKey = `${plan.probeControl.windowId}:${plan.actor.principalId}:${plan.sourceSubject.subjectRef}`;
-  const reports = touchCount(reportsByWindow, reportKey);
-  if (reports >= plan.probeControl.maxReportsPerWindow) throw new SensitivityContractError('sensitivity probe report limit exceeded', 'semantic', ['probe report limit exceeded']);
-  reportsByWindow.set(reportKey, reports + 1);
-  for (const path of changedProbePaths(plan)) {
-    const key = `${reportKey}:${path}`;
-    const count = touchCount(pathCounts, key);
-    const increments = plan.variants.reduce((sum, variant) => sum + (variant.changes.some(change => change.path === path && changeIsEffective(root, change)) ? 1 : 0), 0);
-    if (count + increments > plan.probeControl.maxPerPrincipalSubjectPath) {
-      throw new SensitivityContractError('sensitivity path probe limit exceeded', 'semantic', [`probe path limit exceeded: ${path}`]);
-    }
-    pathCounts.set(key, count + increments);
+  // The window comes from the host clock and host-owned duration. plan.probeControl.windowId is a
+  // descriptive label only: the plan author cannot pick a fresh window to reset the budget.
+  const windowMs = state?.windowMs ?? DEFAULT_PROBE_WINDOW_MS;
+  if (!Number.isSafeInteger(windowMs) || windowMs <= 0 || !Number.isFinite(now)) {
+    throw new SensitivityContractError('sensitivity probe window is invalid', 'semantic', ['probe window is invalid']);
   }
+  const window = Math.floor(now / windowMs);
+  const subject = plan.sourceSubject;
+  const scope = [subject.tenantId, subject.workspaceId, subject.projectId, plan.actor.principalId, subject.subjectRef];
+  const reportKey = JSON.stringify([window, ...scope]);
+  const reports = reportsByWindow.get(reportKey) ?? 0;
+  if (reports >= plan.probeControl.maxReportsPerWindow) throw new SensitivityContractError('sensitivity probe report limit exceeded', 'semantic', ['probe report limit exceeded']);
+  const charges = changedProbePaths(plan).map(path => ({
+    path,
+    key: JSON.stringify([window, ...scope, path]),
+    increments: plan.variants.reduce((sum, variant) => sum + (variant.changes.some(change => change.path === path && changeIsEffective(root, change)) ? 1 : 0), 0),
+  })).filter(charge => charge.increments > 0);
   if (state === defaultProbeState) {
-    pruneMap(reportsByWindow, DEFAULT_PROBE_STATE_MAX_ENTRIES);
-    pruneMap(pathCounts, DEFAULT_PROBE_STATE_MAX_ENTRIES);
+    evictExpiredWindows(reportsByWindow, window);
+    evictExpiredWindows(pathCounts, window);
+    const newReportKeys = reportsByWindow.has(reportKey) ? 0 : 1;
+    const newPathKeys = charges.filter(charge => !pathCounts.has(charge.key)).length;
+    if (reportsByWindow.size + newReportKeys > DEFAULT_PROBE_STATE_MAX_ENTRIES
+      || pathCounts.size + newPathKeys > DEFAULT_PROBE_STATE_MAX_ENTRIES) {
+      throw new SensitivityContractError('sensitivity probe state capacity exhausted', 'semantic',
+        ['probe state capacity exhausted; supply durable probe state']);
+    }
+  }
+  reportsByWindow.set(reportKey, reports + 1);
+  for (const charge of charges) {
+    const count = pathCounts.get(charge.key) ?? 0;
+    if (count + charge.increments > plan.probeControl.maxPerPrincipalSubjectPath) {
+      throw new SensitivityContractError('sensitivity path probe limit exceeded', 'semantic', [`probe path limit exceeded: ${charge.path}`]);
+    }
+    pathCounts.set(charge.key, count + charge.increments);
+  }
+}
+
+function evictExpiredWindows(map: Map<string, number>, currentWindow: number): void {
+  for (const key of [...map.keys()]) {
+    const window = (JSON.parse(key) as unknown[])[0];
+    if (typeof window === 'number' && window < currentWindow) map.delete(key);
   }
 }
 
@@ -207,6 +239,7 @@ function replayArtifacts(sourceRuleset: DecisionRuleset, sourceBinding: Decision
 
 function replayPolicy(
   source: RulesetResult,
+  sourceBinding: DecisionBinding,
   ruleset: DecisionRuleset,
   binding: DecisionBinding,
   definitions: Readonly<Record<string, DecisionDefinition>>,
@@ -214,9 +247,11 @@ function replayPolicy(
   variantId: string,
 ): RulesetResult {
   const evaluations = Object.fromEntries(Object.entries(source.spec.evaluations).map(([alias, result]) => {
-    const target = binding.spec.evaluations[alias]?.targets[0];
+    const index = replayTargetIndex(result, sourceBinding.spec.evaluations[alias]?.targets ?? []);
+    const sourceTarget = index === null ? undefined : sourceBinding.spec.evaluations[alias]?.targets[index];
+    const target = index === null ? undefined : binding.spec.evaluations[alias]?.targets[index];
     const definition = definitions[result.spec.decision.id];
-    return [alias, target ? replayAcceptance(result, target, definition) : structuredClone(result)];
+    return [alias, sourceTarget && target ? replayAcceptance(result, sourceTarget, target, definition) : structuredClone(result)];
   }));
   const composition = composeRuleset(ruleset, input, evaluations);
   const rulesetPin = artifactPin(ruleset);
@@ -237,20 +272,27 @@ function replayPolicy(
   };
 }
 
-function replayAcceptance(result: DecisionResult, target: ExecutionTarget, definition?: DecisionDefinition): DecisionResult {
-  if (!canReplayAcceptance(result, target)) return structuredClone(result);
-  const replayDefinition = definition ?? replayDefinitionFromEvidence(result, target);
-  const value = replayValue(result, replayDefinition);
-  const observation: AdapterObservation = {
-    status: value === undefined ? result.spec.status : 'success',
-    reason: value === undefined ? result.spec.reason : 'none',
-    ...(value !== undefined ? { value } : {}),
-    uncertainty: structuredClone(result.spec.uncertainty),
-    actualModel: result.spec.attempts.at(-1)?.actualModel ?? null,
-    usage: { inputTokens: null, outputTokens: null, costUsd: null },
-    requestId: null,
-  };
-  const replayed = applyTargetAcceptance(replayDefinition, target, observation);
+// The stored result came from the final attempt (the final successful one when it was accepted), so
+// its adapter, adapter version and requested model select the target whose acceptance is replayed.
+// An ambiguous or unmatched attempt keeps the stored result rather than guessing a target.
+function replayTargetIndex(result: DecisionResult, targets: readonly ExecutionTarget[]): number | null {
+  const attempts = result.spec.attempts;
+  const attempt = result.spec.status === 'success'
+    ? [...attempts].reverse().find(item => item.status === 'success') : attempts.at(-1);
+  if (!attempt) return null;
+  const matches = targets.flatMap((target, index) => target.adapter === attempt.adapter
+    && target.adapterVersion === attempt.adapterVersion && target.model === attempt.requestedModel ? [index] : []);
+  return matches.length === 1 ? matches[0]! : null;
+}
+
+function replayAcceptance(
+  result: DecisionResult,
+  sourceTarget: ExecutionTarget,
+  target: ExecutionTarget,
+  definition?: DecisionDefinition,
+): DecisionResult {
+  if (!canReplayAcceptance(result, sourceTarget, definition)) return structuredClone(result);
+  const replayed = acceptanceObservation(result, target, definition);
   const spec = {
     ...result.spec,
     status: replayed.status,
@@ -266,11 +308,34 @@ function replayAcceptance(result: DecisionResult, target: ExecutionTarget, defin
   };
 }
 
-function canReplayAcceptance(result: DecisionResult, target: ExecutionTarget): boolean {
+function acceptanceObservation(result: DecisionResult, target: ExecutionTarget, definition?: DecisionDefinition): AdapterObservation {
+  const replayDefinition = definition ?? replayDefinitionFromEvidence(result, target);
+  const value = replayValue(result, replayDefinition);
+  const observation: AdapterObservation = {
+    status: value === undefined ? result.spec.status : 'success',
+    reason: value === undefined ? result.spec.reason : 'none',
+    ...(value !== undefined ? { value } : {}),
+    uncertainty: structuredClone(result.spec.uncertainty),
+    actualModel: result.spec.attempts.at(-1)?.actualModel ?? null,
+    usage: { inputTokens: null, outputTokens: null, costUsd: null },
+    requestId: null,
+  };
+  return applyTargetAcceptance(replayDefinition, target, observation);
+}
+
+// Only an abstention that acceptance produced may be replayed. Primitive-policy acceptance records
+// DecisionAcceptanceEvidence, so its absence means the adapter abstained. Confidence-threshold
+// acceptance records no evidence, so the abstention must be reproduced by the source target's own
+// threshold; one the source threshold would have accepted came from the adapter. An adapter that
+// abstains with a confidence below the source threshold is indistinguishable and is replayed.
+function canReplayAcceptance(result: DecisionResult, sourceTarget: ExecutionTarget, definition?: DecisionDefinition): boolean {
   if (result.spec.status === 'success') return true;
-  if (result.spec.reason === 'low-confidence' || result.spec.reason === 'missing-confidence'
-    || result.spec.reason === 'confidence-profile-mismatch') return true;
-  return target.acceptance.mode === 'primitive-policy' && result.spec.acceptance !== undefined;
+  if (sourceTarget.acceptance.mode === 'primitive-policy') return result.spec.acceptance !== undefined;
+  if (sourceTarget.acceptance.mode !== 'confidence-threshold') return false;
+  if (result.spec.reason !== 'low-confidence' && result.spec.reason !== 'missing-confidence'
+    && result.spec.reason !== 'confidence-profile-mismatch') return false;
+  const reproduced = acceptanceObservation(result, sourceTarget, definition);
+  return reproduced.status === result.spec.status && reproduced.reason === result.spec.reason;
 }
 
 function replayDefinitionFromEvidence(result: DecisionResult, target: ExecutionTarget): DecisionDefinition {
@@ -386,23 +451,6 @@ function getPointer(root: unknown, pointer: string): unknown | typeof POINTER_MI
   return current;
 }
 
-function touchCount(map: Map<string, number>, key: string): number {
-  const value = map.get(key) ?? 0;
-  if (map.has(key)) {
-    map.delete(key);
-    map.set(key, value);
-  }
-  return value;
-}
-
-function pruneMap(map: Map<string, number>, maxEntries: number): void {
-  while (map.size > maxEntries) {
-    const key = map.keys().next().value as string | undefined;
-    if (key === undefined) break;
-    map.delete(key);
-  }
-}
-
 function rowForResult(input: {
   plan: SensitivityPlan;
   source: RulesetResult;
@@ -500,19 +548,31 @@ function spendResult(budget: SensitivityReport['budget'], result: RulesetResult)
   budget.costMicros += Math.round(attempts.reduce((sum, attempt) => sum + (attempt.usage.costUsd ?? 0), 0) * 1_000_000);
 }
 
-function spendFailure(budget: SensitivityReport['budget'], error: unknown): void {
+/** Charges host-supplied spend evidence from a failed reevaluation; returns false when there is none. */
+function spendFailure(budget: SensitivityReport['budget'], error: unknown): boolean {
   const record = error && typeof error === 'object' ? error as Record<string, unknown> : {};
   const result = record.result;
   if (result && typeof result === 'object') {
     spendResult(budget, result as RulesetResult);
-    return;
+    return true;
   }
   const resourceUse = record.resourceUse ?? record.sensitivitySpend;
-  if (!resourceUse || typeof resourceUse !== 'object') return;
+  if (!resourceUse || typeof resourceUse !== 'object') return false;
   const usage = resourceUse as Partial<SensitivityReportRow['resourceUse']>;
   budget.backendCalls += integerUsage(usage.backendCalls);
   budget.tokens += integerUsage(usage.tokens);
   budget.costMicros += integerUsage(usage.costMicros);
+  return true;
+}
+
+// A throw without spend evidence may still have reached the backend. Unknown spend is not zero:
+// charge the pre-dispatch reservation and flag the figures as a conservative reservation.
+function spendUnknownReserve(budget: SensitivityReport['budget'], warnings: string[], binding: DecisionBinding, source: RulesetResult): void {
+  const reserve = reevaluationReserve(binding, source);
+  budget.backendCalls += reserve.backendCalls;
+  budget.tokens += reserve.tokens;
+  budget.costMicros += reserve.costMicros;
+  if (!warnings.includes('spend-unknown-reserved')) warnings.push('spend-unknown-reserved');
 }
 
 function integerUsage(value: unknown): number {

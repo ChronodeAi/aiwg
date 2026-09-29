@@ -20,7 +20,12 @@ policy pins. It declares one analysis kind:
 - `policy-replay`: replays preserved evidence through deterministic policy
   changes only. It permits closed caller-authored changes to ruleset
   composition outcomes/priorities and binding acceptance thresholds. It makes
-  zero adapter calls.
+  zero adapter calls. Acceptance is replayed against the target that produced
+  the stored result, selected by the adapter, adapter version and requested
+  model of the final (successful, when accepted) attempt; an unmatched or
+  ambiguous attempt keeps the stored result. Replay cannot recover the value
+  an earlier target would have produced, so loosening a target that was never
+  the final attempt does not change the row.
 - `input-reevaluation`: applies caller-authored values from D10-approved path
   domains to an input copy and calls a host-supplied offline evaluator. The
   analyzer generates fresh per-run invocation IDs, supplies the expected
@@ -34,16 +39,36 @@ precision threshold probing, membership-style paths, prototype-mutating JSON
 Pointer segments, missing structural targets, expired authorization, and stale
 or excessive probe windows before inference.
 
+Only abstentions that acceptance produced are replayed. For primitive-policy
+targets this requires the result's `acceptance` evidence
+(`DecisionAcceptanceEvidence`). Confidence-threshold acceptance records no
+evidence, so the stored abstention must be reproduced by the source target's
+own threshold; an abstention that threshold would have accepted is treated as
+adapter-originated and kept. Limitation: an adapter that itself abstains with a
+confidence below the source threshold cannot be told apart and is replayed as
+if acceptance produced it.
+
 Resource ceilings stop additional variants while keeping completed rows.
 Evaluator failures after completed rows return `partial`; failures before any
 row return `failed` and include host-supplied spend evidence when available.
+When a failure carries no spend evidence the backend may still have been
+called, so the pre-dispatch reservation is charged and the report carries the
+`spend-unknown-reserved` warning; those figures are a conservative reservation,
+not measured spend.
 Both statuses still carry `actionAuthorization: "not-authorized"`.
 Baseline-stability repeats are available only for input reevaluation and are
 labelled separately from perturbation rows. Variants equal to the source are
 retained as deduplicated controls without backend calls or path-probe charges.
-Probe counters are enforced even when a caller does not provide process-local
-state; the implicit state is bounded in memory, but production rollout still
-requires durable, non-resettable storage.
+Probe counters are keyed by tenant, workspace, project, principal, source
+subject and (for path counters) path, within a window derived from the injected
+clock: `floor(now / windowMs)`, where `windowMs` is host-owned probe-state
+configuration (default one hour). The plan's `probeControl.windowId` is a
+descriptive label only and cannot reset a budget. Probe counters are enforced
+even when a caller does not provide state; the implicit process-local state
+holds at most 512 entries per counter map, evicts only counters from earlier
+windows, and when full refuses new probes with `probe state capacity exhausted`
+rather than evicting live limit state. That implicit state resets on process
+restart, so production hosts must supply durable, non-resettable probe state.
 
 Routine reports contain redacted value digests, receipt/result pins, bounded
 outcome, acceptance, matched-rule and distribution deltas, resource use, and
