@@ -312,6 +312,15 @@ describe('D28 routing pilot (#2620)', () => {
       recordedAt: '2026-09-01T00:00:00.000Z',
       kind: 'observed',
       promotionEligibilityId: null,
+    }, {
+      // D17 rollback only undoes this record's own promotion, so the drill starts from a promoted challenger.
+      revision: 2,
+      alias: record.alias,
+      actualIdentityDigest: record.challenger.identityDigest,
+      actualModel: record.challenger.actualModel,
+      recordedAt: '2026-09-15T00:00:00.000Z',
+      kind: 'promoted',
+      promotionEligibilityId: record.eligibilityId,
     }];
     const signal: DriftSignal = {
       source: 'label-drift',
@@ -324,7 +333,7 @@ describe('D28 routing pilot (#2620)', () => {
       observedAt: '2026-09-29T00:00:00.000Z',
     };
     const rollback = vi.fn((alias: string, targetRevision: number, _approval: string, at: string): AliasEvent => ({
-      revision: 2, alias, actualIdentityDigest: record.rollbackTarget.identityDigest, actualModel: record.champion.actualModel,
+      revision: 3, alias, actualIdentityDigest: record.rollbackTarget.identityDigest, actualModel: record.champion.actualModel,
       recordedAt: at, kind: 'rolled-back', promotionEligibilityId: null,
     }));
     const result = await runRoutingControlDrill({
