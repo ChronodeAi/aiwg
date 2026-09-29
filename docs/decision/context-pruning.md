@@ -25,17 +25,40 @@ protected hints, not instructions embedded in chunk text.
 `applyContextPruningPilot()` consumes candidates plus already-recorded decision
 evidence. It does not call Jev or any other provider. Invalid, uncertain,
 uncalibrated, incomplete, cancelled, failed, drifted, low-margin or
-disagreeing evidence resolves to `keep` or the supplied prior deterministic
-fallback as a receipt proposal; the pilot still leaves the downstream item list
-unchanged. Null calibration or model identity digests are treated as unknown,
-not compatible. Model/calibration drift and monitoring regressions restore the
-prior deterministic behavior.
+disagreeing evidence resolves to the prior deterministic fallback as a receipt
+proposal; the pilot still leaves the downstream item list unchanged (it returns
+a copy of the input order). Null calibration or model identity digests are
+treated as unknown, not compatible. Model/calibration drift and monitoring
+regressions restore the prior deterministic behavior. Each receipt records the
+mode that actually decided it, so a fallback inside a shadow run is recorded as
+`deterministic-fallback`.
+
+The prior deterministic fallback is the existing `ContextBudgetManager`
+(`src/metrics/context-budget.ts`). When the caller passes a `budget`, the pilot
+runs `computeContextBudgetManagerBaseline()` over the candidates, returns it as
+`run.deterministicBaseline`, and a fallback proposes `drop` exactly for the items
+the manager drops and `keep` otherwise. The manager sizes item text itself, so a
+budgeted run requires every candidate's host-owned `content`; it refuses rather
+than size the digest string. Without a `budget` the prior behavior is "no
+pruning" and the fallback proposal is `keep`. The candidate envelope `priority`
+is passed to the manager as its similarity input; the manager derives its own
+priority from source type and similarity.
 
 `planContextPruningEvaluations()` creates one subject per eligible chunk
 (`context-item:<itemId>`). Multiple questions about the same chunk may share a
 native batch; unrelated chunks cannot be co-batched. Protected, local-only,
 external-evaluation-denied and restricted chunks are excluded before model
 planning, and the richer planning API records sanitized exclusion reasons.
+
+Shadow byte identity is proven against the real selection substrate, not a
+prompt renderer. **AIWG has no code path that turns context items into a
+downstream model prompt**: the host harness assembles its own prompt, and no
+AIWG module other than this pilot consumes `ContextBudgetManager`. The
+integration test `test/integration/decision-context-pruning-shadow.test.ts`
+therefore feeds the disabled, shadow and advisory downstream item lists to
+`ContextBudgetManager` and asserts its selection output is byte-identical to
+the baseline, and it fails if another consumer of `ContextBudgetManager`
+appears so the check can be moved onto that consumer.
 
 Every destructive proposal has a `ContextPruningReceipt.v1` with the original
 locator, content digest, token estimate, decision receipt digest when present,
@@ -49,27 +72,62 @@ check before they can be accepted.
 access:
 
 - 100% protected-item retention;
-- confidence interval method and level;
-- minimum overall and per-slice sample support or a power rule;
-- numeric quality non-inferiority margin;
+- the confidence level (`levelBps`, strictly between 5000 and 9999), the binary
+  interval method (`newcombe-10` or `tango`), and the bounded-metric method
+  (`percentile-bootstrap`) with a pinned `bootstrapSeed` and
+  `bootstrapResamples`;
+- the scale of every quality metric (`binary` 0/1 outcomes or `bounded` scores
+  in [0, 1]) for downstream task success, requirement coverage, factual
+  coverage, citation accuracy and human preference;
+- the slice list, minimum overall n, minimum per-slice n, and an optional power
+  rule;
+- an integer quality non-inferiority margin in bps (`-500` lets the candidate
+  be at most 5 points worse);
 - positive total token and cost targets after fallbacks, cache effects and
   transformations.
 
-`ContextPruningEvaluationReport.v1` records downstream task success,
-requirement and factual coverage, citation accuracy, human preference or
-adjudication, protected retention, provider usage separately from estimator
-usage, total calls/cost, latency and prompt-cache effects. Share-once Jev state
-accounting is not implemented in this offline pilot; reports must use
-`not-applicable` until a governed shared-state receipt exists.
+`buildContextPruningEvaluationReport()` requires a separately anchored
+`trustedPreregistrationDigest` (the same rule as
+`evaluatePreregisteredBinaryBenchmark`): a preregistration that does not match
+it, or whose `registeredAt` is not before `holdoutAccessedAt`, is rejected. A
+report with `holdoutAccessedAt: null` cannot `PROMOTE`.
 
-Economics gates compare net savings against the existing deterministic
-`ContextBudgetManager` baseline: baseline total minus pruned downstream usage,
-decision/fallback/transformation calls, adjusted for prompt-cache effects.
+The report takes raw per-pair evidence, not aggregate deltas:
 
-The report preserves the #2037/#2048 and #1585 gate vocabulary:
-`PROMOTE`, `HOLD`, and `ROLLBACK`. It cannot upgrade an upstream `HOLD` or
-`ROLLBACK`. Missing held-out data, human review, live provider evidence or
-insufficient samples yields advisory-only `INSUFFICIENT EVIDENCE`.
+- `pairs` lists every frozen paired task with its preregistered slice. Slice
+  support is counted from these records for every preregistered slice; a slice
+  with no pairs counts as zero and is reported as `insufficient-slice:<name>`.
+- `quality` holds, per metric, the raw `{ pairId, baseline, candidate }`
+  outcomes, so each metric has its own n. Every value is range-checked for its
+  preregistered scale and every `pairId` must be a known, unrepeated pair; NaN,
+  out-of-range or unreconciled values throw rather than produce a report.
+- Binary metrics use `pairedBinaryDifferenceInterval` and bounded metrics use
+  `pairedMeanDifferenceBootstrap` from `src/decision/qualification/quality.ts`
+  at the preregistered level and seed; `pairedNonInferiority` compares each
+  lower bound with the margin. A metric below the minimum n is
+  `INSUFFICIENT EVIDENCE`.
+
+Economics use provider-reported usage per arm, reported separately from
+estimator usage. Every provider arm (baseline downstream, pruned downstream,
+decision, fallback and transformation calls) carries `cachedInputTokens`;
+`promptCache.baseline` and `promptCache.prunedDownstream` must match the
+provider-reported cached tokens of the same arm, and cached tokens can never
+exceed input tokens. Cache credit is therefore not a caller assertion. The
+report derives total-token savings, uncached-token savings (every arm with its
+cached tokens removed, so pruning that loses cache hits reduces savings), cost
+savings, and the signed `cachedInputTokensDelta` (negative when pruning lost
+cache hits). Estimator usage must report `cachedInputTokens: null`. Share-once
+Jev state accounting is not implemented; reports must use `not-applicable`.
+
+Gate outcomes preserve the #2037/#2048 and #1585 vocabulary: `PROMOTE`,
+`HOLD`, and `ROLLBACK`. The report never upgrades an upstream `HOLD` or
+`ROLLBACK`. Automatic `ROLLBACK` follows the rollout plan's triggers: an
+upstream `ROLLBACK`, any protected-item miss, any quality metric failing
+non-inferiority, or negative net economics (total tokens, uncached tokens or
+cost). Positive economics below the preregistered target, unknown cost,
+unverified integrity or insufficient support yield `HOLD`; missing held-out
+data, human review, holdout access, live provider evidence or sample support
+also sets advisory-only `INSUFFICIENT EVIDENCE`.
 
 ## Offline Example
 
@@ -117,7 +175,9 @@ unchanged in shadow mode.
 
 This implementation proves offline protected retention, subject isolation,
 receipt immutability, conservative fallback, closed schemas, preregistration
-and byte-identical shadow prompts. It does not claim production token savings
+and a byte-identical `ContextBudgetManager` selection in shadow mode. There is
+no AIWG downstream prompt builder to snapshot, so prompt-level byte identity in
+a host harness is not proven here. It does not claim production token savings
 or quality non-inferiority. Promotion still needs representative held-out
 tasks, provider usage records, human adjudication, live monitoring and rollout
 approval.
