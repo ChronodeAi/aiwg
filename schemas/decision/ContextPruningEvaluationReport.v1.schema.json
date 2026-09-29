@@ -22,8 +22,8 @@
         "citationAccuracyDeltaBps": { "type": ["number", "null"] },
         "humanPreferenceDeltaBps": { "type": ["number", "null"] },
         "protectedRetentionBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
-        "providerUsage": { "$ref": "#/$defs/usage" },
-        "estimatorUsage": { "$ref": "#/$defs/usage" },
+        "providerUsage": { "$ref": "#/$defs/usageAccounting" },
+        "estimatorUsage": { "$ref": "#/$defs/usageAccounting" },
         "totalCalls": { "type": "integer", "minimum": 0 },
         "latencyMs": {
           "type": "object", "additionalProperties": false, "required": ["p50", "p95", "p99"],
@@ -70,6 +70,27 @@
     "usage": {
       "type": "object", "additionalProperties": false, "required": ["inputTokens", "outputTokens", "costUsd"],
       "properties": { "inputTokens": { "type": "integer", "minimum": 0 }, "outputTokens": { "type": "integer", "minimum": 0 }, "costUsd": { "type": ["number", "null"], "minimum": 0 } }
+    },
+    "usageAccounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baseline", "prunedDownstream", "decisionCalls", "fallbackCalls", "transformationCalls", "cacheEffect"],
+      "properties": {
+        "baseline": { "$ref": "#/$defs/usage" },
+        "prunedDownstream": { "$ref": "#/$defs/usage" },
+        "decisionCalls": { "$ref": "#/$defs/usage" },
+        "fallbackCalls": { "$ref": "#/$defs/usage" },
+        "transformationCalls": { "$ref": "#/$defs/usage" },
+        "cacheEffect": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["avoidedTokens", "avoidedCostUsd"],
+          "properties": {
+            "avoidedTokens": { "type": "integer", "minimum": 0 },
+            "avoidedCostUsd": { "type": ["number", "null"], "minimum": 0 }
+          }
+        }
+      }
     },
     "preregistration": {
       "type": "object",

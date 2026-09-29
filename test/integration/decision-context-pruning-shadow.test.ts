@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { renderMarkdownPrompt } from '../../src/mcp/elicitation.mjs';
 import {
   applyContextPruningPilot,
-  assertShadowPromptByteIdentical,
   contextPruningDigest,
-  renderContextPrompt,
   type ContextPruningCandidate,
   type ContextPruningPolicy,
 } from '../../src/decision/context-pruning.js';
@@ -39,13 +38,21 @@ const basePolicy: ContextPruningPolicy = {
   modelIdentityDigest: `sha256:${'d'.repeat(64)}`,
 };
 
+function existingPromptPath(ids: readonly string[], candidates: readonly ContextPruningCandidate[]): string {
+  const byId = new Map(candidates.map(candidate => [candidate.itemId, candidate]));
+  return renderMarkdownPrompt({
+    question: ids.map(id => byId.get(id)?.content ?? '').join('\n'),
+    options: ['continue'],
+  });
+}
+
 describe('D26 shadow prompt snapshot', () => {
   it('keeps baseline prompts byte-identical when disabled and in shadow mode', () => {
     const candidates = [
       item('rules', 'system and project instructions remain in the actual prompt'),
       item('distractor', 'ordinary retrieved note that shadow evidence would drop'),
     ];
-    const baseline = renderContextPrompt(candidates);
+    const baseline = existingPromptPath(candidates.map(candidate => candidate.itemId), candidates);
     const disabled = applyContextPruningPilot({ candidates, policy: { ...basePolicy, mode: 'disabled' }, now });
     const shadow = applyContextPruningPilot({ candidates, policy: basePolicy, now, evidence: [{
       itemId: 'distractor',
@@ -61,8 +68,7 @@ describe('D26 shadow prompt snapshot', () => {
     }] });
     expect(disabled.downstreamItemIds).toEqual(['rules', 'distractor']);
     expect(shadow.downstreamItemIds).toEqual(['rules', 'distractor']);
-    expect(() => assertShadowPromptByteIdentical(baseline, disabled, candidates)).not.toThrow();
-    expect(() => assertShadowPromptByteIdentical(baseline, shadow, candidates)).not.toThrow();
-    expect(Buffer.from(renderContextPrompt(candidates)).equals(Buffer.from(baseline))).toBe(true);
+    expect(Buffer.from(existingPromptPath(disabled.downstreamItemIds, candidates)).equals(Buffer.from(baseline))).toBe(true);
+    expect(Buffer.from(existingPromptPath(shadow.downstreamItemIds, candidates)).equals(Buffer.from(baseline))).toBe(true);
   });
 });

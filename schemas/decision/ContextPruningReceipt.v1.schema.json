@@ -64,7 +64,7 @@
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "action": { "enum": ["keep", "drop", "truncate", "summarize"] },
     "protectedReason": {
-      "enum": ["system-rule", "developer-rule", "project-rule", "security-policy", "current-user-requirement", "explicit-mention", "unresolved-blocker", "action-approval", "artifact-pin", "version-pin", "digest-pin", "provenance-required", "citation-required", "test-gate-evidence", "open-decision-evidence", "external-evaluation-denied", "local-only", "restricted-data", "legal-policy"]
+      "enum": ["system-rule", "developer-rule", "project-rule", "security-policy", "current-user-requirement", "explicit-mention", "unresolved-blocker", "action-approval", "artifact-pin", "version-pin", "digest-pin", "provenance-required", "citation-required", "test-gate-evidence", "open-decision-evidence", "protected-dependency", "external-evaluation-denied", "local-only", "restricted-data", "legal-policy"]
     }
   }
 }

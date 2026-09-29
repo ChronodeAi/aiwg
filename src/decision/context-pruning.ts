@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { canonicalJson } from '../security/artifact-trust.js';
+import { ContextBudgetManager, type BudgetConfig, type ContextItem } from '../metrics/context-budget.js';
+import { sha256 } from './compile-cache/identity.js';
 import { admitEntry } from './entry.js';
 import type { ContextQuestion } from './context-plan.js';
 import type { QualificationIntegrityMetadata } from './qualification/release.js';
@@ -47,6 +47,7 @@ export type ContextProtectedReason =
   | 'citation-required'
   | 'test-gate-evidence'
   | 'open-decision-evidence'
+  | 'protected-dependency'
   | 'external-evaluation-denied'
   | 'local-only'
   | 'restricted-data'
@@ -187,6 +188,16 @@ export interface ContextPruningEvaluationJob {
   contextQuestion: ContextQuestion;
 }
 
+export interface ContextPruningEvaluationExclusion {
+  itemId: string;
+  reasons: ContextProtectedReason[];
+}
+
+export interface ContextPruningEvaluationPlan {
+  jobs: ContextPruningEvaluationJob[];
+  exclusions: ContextPruningEvaluationExclusion[];
+}
+
 export interface ContextPruningPreregistration {
   schemaVersion: typeof CONTEXT_PRUNING_PREREGISTRATION_SCHEMA;
   id: string;
@@ -214,12 +225,35 @@ export interface ContextPruningPairedMetrics {
   citationAccuracyDeltaBps: number | null;
   humanPreferenceDeltaBps: number | null;
   protectedRetentionBps: number;
-  providerUsage: { inputTokens: number; outputTokens: number; costUsd: number | null };
-  estimatorUsage: { inputTokens: number; outputTokens: number; costUsd: number | null };
+  providerUsage: ContextPruningUsageAccounting;
+  estimatorUsage: ContextPruningUsageAccounting;
   totalCalls: number;
   latencyMs: { p50: number | null; p95: number | null; p99: number | null };
   promptCache: { hits: number; misses: number; avoidedPromptTokens: number };
   sharedStateAccounting: 'request-owned-once' | 'not-applicable';
+}
+
+export interface ContextPruningUsageTotal {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+}
+
+export interface ContextPruningUsageAccounting {
+  baseline: ContextPruningUsageTotal;
+  prunedDownstream: ContextPruningUsageTotal;
+  decisionCalls: ContextPruningUsageTotal;
+  fallbackCalls: ContextPruningUsageTotal;
+  transformationCalls: ContextPruningUsageTotal;
+  cacheEffect: { avoidedTokens: number; avoidedCostUsd: number | null };
+}
+
+export interface ContextBudgetManagerBaseline {
+  source: 'ContextBudgetManager';
+  usage: ContextPruningUsageTotal;
+  keptItemIds: string[];
+  droppedItemIds: string[];
+  tokensFreed: number;
 }
 
 export interface ContextPruningEvaluationReport {
@@ -266,11 +300,12 @@ const VALID_PROTECTED_REASONS = new Set<ContextProtectedReason>([
   'system-rule', 'developer-rule', 'project-rule', 'security-policy', 'current-user-requirement',
   'explicit-mention', 'unresolved-blocker', 'action-approval', 'artifact-pin', 'version-pin',
   'digest-pin', 'provenance-required', 'citation-required', 'test-gate-evidence',
-  'open-decision-evidence', 'external-evaluation-denied', 'local-only', 'restricted-data', 'legal-policy',
+  'open-decision-evidence', 'protected-dependency', 'external-evaluation-denied', 'local-only',
+  'restricted-data', 'legal-policy',
 ]);
 
 export function contextPruningDigest(value: unknown): `sha256:${string}` {
-  return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
+  return sha256(value);
 }
 
 export function classifyContextPruningCandidate(candidate: ContextPruningCandidate): ContextProtectedClassification {
@@ -300,13 +335,49 @@ export function classifyContextPruningCandidate(candidate: ContextPruningCandida
   };
 }
 
+export function classifyContextPruningCandidates(
+  candidates: readonly ContextPruningCandidate[],
+): Map<string, ContextProtectedClassification> {
+  const byId = uniqueCandidates(candidates);
+  const classifications = new Map<string, ContextProtectedClassification>();
+  for (const candidate of candidates) classifications.set(candidate.itemId, classifyContextPruningCandidate(candidate));
+  const protectedQueue = candidates.filter(candidate => classifications.get(candidate.itemId)!.protected)
+    .map(candidate => candidate.itemId);
+  for (let index = 0; index < protectedQueue.length; index++) {
+    const item = byId.get(protectedQueue[index]!)!;
+    for (const dependencyId of item.dependencies) {
+      const dependency = byId.get(dependencyId);
+      if (!dependency) throw new ContextPruningError(`unknown context dependency '${dependencyId}'`, 'semantic');
+      const current = classifications.get(dependencyId)!;
+      if (current.reasons.includes('protected-dependency')) continue;
+      classifications.set(dependencyId, {
+        ...current,
+        protected: true,
+        reasons: [...new Set([...current.reasons, 'protected-dependency' as const])].sort(),
+      });
+      protectedQueue.push(dependencyId);
+    }
+  }
+  return classifications;
+}
+
 export function planContextPruningEvaluations(
   candidates: readonly ContextPruningCandidate[],
   questions: readonly ContextPruningQuestion[],
 ): ContextPruningEvaluationJob[] {
-  const byId = new Map(candidates.map(candidate => [candidate.itemId, candidate]));
-  if (byId.size !== candidates.length) throw new ContextPruningError('candidate item IDs must be unique', 'semantic');
-  for (const candidate of candidates) validateContextPruningCandidate(candidate);
+  return planContextPruningEvaluationRun(candidates, questions).jobs;
+}
+
+export function planContextPruningEvaluationRun(
+  candidates: readonly ContextPruningCandidate[],
+  questions: readonly ContextPruningQuestion[],
+): ContextPruningEvaluationPlan {
+  const byId = uniqueCandidates(candidates);
+  const classifications = classifyContextPruningCandidates(candidates);
+  const exclusions = [...classifications.values()]
+    .filter(classification => classification.protected)
+    .map(classification => ({ itemId: classification.itemId, reasons: [...classification.reasons].sort() }));
+  const excluded = new Set(exclusions.map(item => item.itemId));
   const groups = new Map<string, ContextPruningQuestion[]>();
   for (const question of questions) {
     if (!question.id || !question.itemId || !question.subject || !['relevance', 'disposition', 'omission-risk'].includes(question.kind)) {
@@ -314,6 +385,7 @@ export function planContextPruningEvaluations(
     }
     const candidate = byId.get(question.itemId);
     if (!candidate) throw new ContextPruningError(`unknown context item '${question.itemId}'`, 'semantic');
+    if (excluded.has(candidate.itemId)) continue;
     const subject = pruningSubject(candidate);
     if (question.subject !== subject) throw new ContextPruningError('question subject must be the context item subject', 'semantic');
     const key = `${question.itemId}\0${question.batchKey ?? 'default'}`;
@@ -321,7 +393,7 @@ export function planContextPruningEvaluations(
     group.push(question);
     groups.set(key, group);
   }
-  return [...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, group]) => {
+  const jobs = [...groups.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, group]) => {
     const candidate = byId.get(group[0]!.itemId)!;
     const subject = pruningSubject(candidate);
     if (group.some(question => question.itemId !== candidate.itemId || question.subject !== subject)) {
@@ -340,6 +412,7 @@ export function planContextPruningEvaluations(
       },
     };
   });
+  return { jobs, exclusions };
 }
 
 export interface ApplyContextPruningInput {
@@ -358,9 +431,10 @@ export function applyContextPruningPilot(input: ApplyContextPruningInput): Conte
   const disabledReason = input.monitoringRegression ? 'drift-or-monitoring-regression'
     : input.policy.mode === 'disabled' ? 'configured-disabled' : null;
   const mode: ContextPruningRun['mode'] = disabledReason ? 'deterministic-fallback' : input.policy.mode;
+  const classifications = classifyContextPruningCandidates(input.candidates);
   const receipts = input.candidates.map(candidate => {
     validateContextPruningCandidate(candidate);
-    const classification = classifyContextPruningCandidate(candidate);
+    const classification = classifications.get(candidate.itemId)!;
     const itemEvidence = evidence.get(candidate.itemId);
     const decision = decideContextAction(candidate, classification, input.policy, itemEvidence, disabledReason);
     return buildContextPruningReceipt(candidate, classification, decision, mode, now());
@@ -369,9 +443,7 @@ export function applyContextPruningPilot(input: ApplyContextPruningInput): Conte
     schemaVersion: 'decision-context-pruning-run/v1',
     mode,
     baselineItemIds: baseline,
-    downstreamItemIds: input.policy.mode === 'advisory' && !disabledReason
-      ? receipts.filter(receipt => receipt.appliedAction !== 'drop').map(receipt => receipt.itemId)
-      : baseline,
+    downstreamItemIds: baseline,
     receipts,
     disabledReason,
   };
@@ -462,6 +534,7 @@ export function buildContextPruningEvaluationReport(input: {
   const findings = new Set<string>();
   const missing = new Set(input.missingInputs ?? []);
   if (input.metrics.sampleN < preregistration.thresholds.minimumOverallN) findings.add('insufficient-overall-sample');
+  if (Object.keys(input.metrics.sliceCounts).length === 0) findings.add('insufficient-slices');
   for (const [slice, count] of Object.entries(input.metrics.sliceCounts)) {
     if (count < preregistration.thresholds.minimumSliceN) findings.add(`insufficient-slice:${slice}`);
   }
@@ -474,12 +547,17 @@ export function buildContextPruningEvaluationReport(input: {
     input.metrics.humanPreferenceDeltaBps,
   ];
   if (qualityDeltas.some(value => value === null)) findings.add('quality-metric-missing');
-  if (qualityDeltas.some(value => value !== null && value < preregistration.thresholds.qualityNonInferiorityMarginBps)) findings.add('quality-non-inferiority-failed');
-  const providerNetTokens = input.metrics.providerUsage.inputTokens + input.metrics.providerUsage.outputTokens;
-  const estimatorNetTokens = input.metrics.estimatorUsage.inputTokens + input.metrics.estimatorUsage.outputTokens;
-  if (providerNetTokens < preregistration.thresholds.positiveTotalTokenTarget) findings.add('provider-token-target-not-met');
-  if (estimatorNetTokens < preregistration.thresholds.positiveTotalTokenTarget) findings.add('estimator-token-target-not-met');
-  if (input.metrics.providerUsage.costUsd === null || input.metrics.providerUsage.costUsd < preregistration.thresholds.positiveTotalCostTargetUsd) {
+  const ci = preregistration.thresholds.confidenceInterval;
+  if (ci.method !== 'wilson') findings.add(`quality-ci-method-unsupported:${ci.method}`);
+  if (ci.method === 'wilson' && qualityDeltas.some(value => value !== null
+    && wilsonDeltaLowerBoundBps(value, input.metrics.sampleN, ci.levelBps) < preregistration.thresholds.qualityNonInferiorityMarginBps)) {
+    findings.add('quality-non-inferiority-failed');
+  }
+  const providerSavings = usageSavings(input.metrics.providerUsage);
+  const estimatorSavings = usageSavings(input.metrics.estimatorUsage);
+  if (providerSavings.tokens < preregistration.thresholds.positiveTotalTokenTarget) findings.add('provider-token-target-not-met');
+  if (estimatorSavings.tokens < preregistration.thresholds.positiveTotalTokenTarget) findings.add('estimator-token-target-not-met');
+  if (providerSavings.costUsd === null || providerSavings.costUsd < preregistration.thresholds.positiveTotalCostTargetUsd) {
     findings.add('provider-cost-target-not-met');
   }
   if (input.integrity.integrity_state !== 'verified') findings.add('integrity-not-verified');
@@ -489,7 +567,8 @@ export function buildContextPruningEvaluationReport(input: {
   const upstreamDecision = input.integrity.release_gate.decision;
   const decision = upstreamDecision === 'ROLLBACK' || input.metrics.protectedRetentionBps < 10_000 ? 'ROLLBACK'
     : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
-  const advisory = [...findings].some(item => item.startsWith('insufficient-') || item === 'quality-metric-missing' || item.startsWith('missing-input:'))
+  const advisory = [...findings].some(item => item.startsWith('insufficient-') || item === 'quality-metric-missing'
+    || item.startsWith('quality-ci-method-unsupported:') || item.startsWith('missing-input:'))
     ? 'INSUFFICIENT EVIDENCE' : null;
   const payload: Omit<ContextPruningEvaluationReport, 'digest'> = {
     schemaVersion: CONTEXT_PRUNING_EVALUATION_REPORT_SCHEMA,
@@ -526,8 +605,9 @@ function decideContextAction(
   if (evidence.status === 'uncalibrated') return fallback(candidate, 'uncalibrated');
   if (evidence.status === 'drifted') return fallback(candidate, 'drift-or-monitoring-regression');
   if (evidence.status === 'failed') return fallback(candidate, 'evaluation-failed');
-  if ((policy.modelIdentityDigest !== null && evidence.modelIdentityDigest !== policy.modelIdentityDigest)
-    || (policy.calibrationDigest !== null && evidence.calibrationDigest !== policy.calibrationDigest)) {
+  if (policy.modelIdentityDigest === null || policy.calibrationDigest === null
+    || evidence.modelIdentityDigest === undefined || evidence.calibrationDigest === undefined
+    || evidence.modelIdentityDigest !== policy.modelIdentityDigest || evidence.calibrationDigest !== policy.calibrationDigest) {
     return fallback(candidate, 'drift-or-monitoring-regression');
   }
   const confidenceBps = evidence.confidenceBps;
@@ -546,7 +626,7 @@ function decideContextAction(
   }
   return {
     proposedAction: proposed,
-    appliedAction: policy.mode === 'shadow' ? 'keep' : proposed,
+    appliedAction: 'keep',
     mode: policy.mode,
     reason: policy.mode === 'shadow' && proposed !== 'keep' ? 'shadow-only' : 'accepted-evidence',
     decisionReceiptDigest: evidence.decisionReceiptDigest,
@@ -558,7 +638,7 @@ function fallback(candidate: ContextPruningCandidate, reason: ContextPruningRece
   const action = candidate.deterministicFallbackAction ?? 'keep';
   return {
     proposedAction: action,
-    appliedAction: action,
+    appliedAction: 'keep' as const,
     mode: 'deterministic-fallback' as const,
     reason: reason === 'disabled' ? 'disabled' as const
       : ['invalid-evidence', 'uncertain-evidence', 'uncalibrated', 'incomplete-state', 'cancelled', 'evaluation-failed',
@@ -605,6 +685,29 @@ function validTransformation(value: ContextTransformationReference | undefined, 
     && value.sourceDigest === sourceDigest && value.locator && SHA.test(value.digest));
 }
 
+export function computeContextBudgetManagerBaseline(
+  candidates: readonly ContextPruningCandidate[],
+  config?: Partial<BudgetConfig>,
+): ContextBudgetManagerBaseline {
+  const manager = new ContextBudgetManager(process.cwd(), config);
+  for (const candidate of candidates) {
+    validateContextPruningCandidate(candidate);
+    manager.addItem(candidate.itemId, candidate.content ?? candidate.contentDigest, sourceTypeForBudget(candidate), candidate.priority);
+  }
+  const result = manager.degrade();
+  return {
+    source: 'ContextBudgetManager',
+    usage: {
+      inputTokens: result.kept.reduce((sum, item) => sum + item.tokens, 0),
+      outputTokens: 0,
+      costUsd: null,
+    },
+    keptItemIds: result.kept.map(item => item.id).sort(),
+    droppedItemIds: result.dropped.map(item => item.id).sort(),
+    tokensFreed: result.tokensFreed,
+  };
+}
+
 function validateContextPruningCandidate(candidate: ContextPruningCandidate): void {
   requirePlain(candidate, 'candidate');
   if (candidate.schemaVersion !== CONTEXT_PRUNING_CANDIDATE_SCHEMA || !candidate.itemId || !candidate.locator
@@ -648,7 +751,7 @@ function validateMetrics(metrics: ContextPruningPairedMetrics): void {
     || Object.values(metrics.sliceCounts).some(value => !Number.isSafeInteger(value) || value < 0)
     || !Number.isSafeInteger(metrics.protectedRetentionBps) || metrics.protectedRetentionBps < 0 || metrics.protectedRetentionBps > 10_000
     || metrics.sharedStateAccounting !== 'request-owned-once' && metrics.sharedStateAccounting !== 'not-applicable'
-    || !usage(metrics.providerUsage) || !usage(metrics.estimatorUsage)
+    || !usageAccounting(metrics.providerUsage) || !usageAccounting(metrics.estimatorUsage)
     || !Number.isSafeInteger(metrics.totalCalls) || metrics.totalCalls < 0
     || !Number.isSafeInteger(metrics.promptCache.hits) || !Number.isSafeInteger(metrics.promptCache.misses)
     || !Number.isSafeInteger(metrics.promptCache.avoidedPromptTokens)) {
@@ -656,10 +759,92 @@ function validateMetrics(metrics: ContextPruningPairedMetrics): void {
   }
 }
 
-function usage(value: ContextPruningPairedMetrics['providerUsage']): boolean {
+function usage(value: ContextPruningUsageTotal): boolean {
   return Number.isSafeInteger(value.inputTokens) && value.inputTokens >= 0
     && Number.isSafeInteger(value.outputTokens) && value.outputTokens >= 0
-    && (value.costUsd === null || Number.isFinite(value.costUsd));
+    && (value.costUsd === null || (Number.isFinite(value.costUsd) && value.costUsd >= 0));
+}
+
+function usageAccounting(value: ContextPruningUsageAccounting): boolean {
+  return Boolean(value) && usage(value.baseline) && usage(value.prunedDownstream) && usage(value.decisionCalls)
+    && usage(value.fallbackCalls) && usage(value.transformationCalls)
+    && Number.isSafeInteger(value.cacheEffect.avoidedTokens) && value.cacheEffect.avoidedTokens >= 0
+    && (value.cacheEffect.avoidedCostUsd === null || (Number.isFinite(value.cacheEffect.avoidedCostUsd)
+      && value.cacheEffect.avoidedCostUsd >= 0));
+}
+
+function usageSavings(value: ContextPruningUsageAccounting): { tokens: number; costUsd: number | null } {
+  const spentTokens = tokens(value.prunedDownstream) + tokens(value.decisionCalls) + tokens(value.fallbackCalls)
+    + tokens(value.transformationCalls) - value.cacheEffect.avoidedTokens;
+  return {
+    tokens: tokens(value.baseline) - spentTokens,
+    costUsd: costSavings(value),
+  };
+}
+
+function tokens(value: ContextPruningUsageTotal): number {
+  return value.inputTokens + value.outputTokens;
+}
+
+function costSavings(value: ContextPruningUsageAccounting): number | null {
+  const costs = [value.baseline.costUsd, value.prunedDownstream.costUsd, value.decisionCalls.costUsd,
+    value.fallbackCalls.costUsd, value.transformationCalls.costUsd, value.cacheEffect.avoidedCostUsd];
+  if (costs.some(cost => cost === null)) return null;
+  return value.baseline.costUsd! - (value.prunedDownstream.costUsd! + value.decisionCalls.costUsd!
+    + value.fallbackCalls.costUsd! + value.transformationCalls.costUsd! - value.cacheEffect.avoidedCostUsd!);
+}
+
+function wilsonDeltaLowerBoundBps(deltaBps: number, n: number, levelBps: number): number {
+  if (n <= 0) return Number.NEGATIVE_INFINITY;
+  const p = (deltaBps + 10_000) / 20_000;
+  const z = normalQuantile(0.5 + levelBps / 20_000);
+  const denominator = 1 + z * z / n;
+  const center = (p + z * z / (2 * n)) / denominator;
+  const margin = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator;
+  return Math.max(-10_000, (center - margin) * 20_000 - 10_000);
+}
+
+function normalQuantile(p: number): number {
+  if (p <= 0 || p >= 1) throw new ContextPruningError('invalid confidence interval level', 'schema');
+  const a = [-39.6968302866538, 220.946098424521, -275.928510446969, 138.357751867269, -30.6647980661472, 2.50662827745924];
+  const b = [-54.4760987982241, 161.585836858041, -155.698979859887, 66.8013118877197, -13.2806815528857];
+  const c = [-0.00778489400243029, -0.322396458041136, -2.40075827716184, -2.54973253934373, 4.37466414146497, 2.93816398269878];
+  const d = [0.00778469570904146, 0.32246712907004, 2.445134137143, 3.75440866190742];
+  const plow = 0.02425;
+  const phigh = 1 - plow;
+  if (p < plow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!)
+      / ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1);
+  }
+  if (p > phigh) {
+    const q = Math.sqrt(-2 * Math.log(1 - p));
+    return -(((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!)
+      / ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1);
+  }
+  const q = p - 0.5;
+  const r = q * q;
+  return (((((a[0]! * r + a[1]!) * r + a[2]!) * r + a[3]!) * r + a[4]!) * r + a[5]!) * q
+    / (((((b[0]! * r + b[1]!) * r + b[2]!) * r + b[3]!) * r + b[4]!) * r + 1);
+}
+
+function sourceTypeForBudget(candidate: ContextPruningCandidate): ContextItem['source']['type'] {
+  if (candidate.source.kind === 'system' || candidate.source.kind === 'developer' || candidate.source.kind === 'project') return 'system';
+  if (candidate.source.kind === 'user') return 'user';
+  if (candidate.protectedHints.includes('explicit-mention')) return 'at-mention';
+  return 'auto';
+}
+
+function uniqueCandidates(candidates: readonly ContextPruningCandidate[]): Map<string, ContextPruningCandidate> {
+  const byId = new Map(candidates.map(candidate => [candidate.itemId, candidate]));
+  if (byId.size !== candidates.length) throw new ContextPruningError('candidate item IDs must be unique', 'semantic');
+  for (const candidate of candidates) validateContextPruningCandidate(candidate);
+  for (const candidate of candidates) {
+    for (const dependencyId of candidate.dependencies) {
+      if (!byId.has(dependencyId)) throw new ContextPruningError(`unknown context dependency '${dependencyId}'`, 'semantic');
+    }
+  }
+  return byId;
 }
 
 function requirePlain(value: unknown, label: string): void {
