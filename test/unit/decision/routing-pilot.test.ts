@@ -197,6 +197,29 @@ describe('D28 routing pilot (#2620)', () => {
     expect(first.status).toBe(second.status);
   });
 
+  it('ROUTE-REVIEW-01 routes empty eligible sets and uncalibrated evidence to review without dispatch', async () => {
+    const evidenceSpy = vi.fn(async () => evidence());
+    const dispatch = vi.fn(async () => { throw new Error('dispatch must not run'); });
+    const empty = await runRoutingPilot(policy(), task({ allowlist: [] }), {
+      enabled: true,
+      evidence: evidenceSpy,
+      dispatch,
+    });
+    expect(empty.status).toBe('no-route');
+    expect(empty.reason).toBe('empty-eligible-set');
+    expect(evidenceSpy).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+
+    const uncalibrated = await runRoutingPilot(policy(), task(), {
+      enabled: true,
+      evidence: async () => ({ ...evidence(), calibration: 'uncalibrated' }),
+      dispatch,
+    });
+    expect(uncalibrated.status).toBe('review');
+    expect(uncalibrated.reason).toBe('ambiguous-or-uncalibrated');
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it('ROUTE-OFF-01 is default-off and preserves the existing deterministic route', async () => {
     const existingRoute = () => policy().deterministicFallbackRouteId;
     const before = existingRoute();
