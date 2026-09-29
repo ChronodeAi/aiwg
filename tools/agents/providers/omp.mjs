@@ -132,14 +132,16 @@ export const deployRules = (files, target, opts = {}) => deployType(files, targe
 export function deploySkills(dirs, target, opts = {}) {
   let count = 0; const seen = new Map(); const root = roots(target, opts);
   for (const dir of [...new Set(dirs)]) {
-    const base = path.basename(dir); const previous = seen.get(base);
-    if (previous && previous !== dir) throw new Error(`OMP skill collision: ${base} (${previous}, ${dir})`);
-    seen.set(base, dir);
+    const base = path.basename(dir);
     if (!isKernelSkill(dir) && !opts.copyStandardSkills) {
       const removed = removeStandardSkillCopy(path.join(root.kernel, base), opts);
       if (removed && !opts.quiet) console.log(`OMP: ${opts.dryRun ? 'would remove' : 'removed'} ${removed} unchanged standard skill files for ${base}`);
       continue;
     }
+    // Only skills that are written share the native kernel directory, so only they can collide.
+    const previous = seen.get(base);
+    if (previous && previous !== dir) throw new Error(`OMP skill collision: ${base} (${previous}, ${dir})`);
+    seen.set(base, dir);
     // Exactly one native level, sharing kernel directory for both modes avoids double discovery.
     const dest = path.join(root.kernel, base);
     function copy(current, relative = '') {
