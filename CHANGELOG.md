@@ -14,6 +14,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   duplicate reranking. The offline harness adds closed schemas, leakage and
   no-tracker-mutation guards, preregistration and report generation, and does
   not claim live Jev, held-out, or human-review qualification (#2618).
+- Shared paired non-inferiority intervals and a fail-closed margin check for decision pilots (#2618, #2619, #2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.
