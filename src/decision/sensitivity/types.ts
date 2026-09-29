@@ -10,7 +10,7 @@ import type {
 export type SensitivityDigest = `sha256:${string}`;
 export type SensitivityAnalysisKind = 'policy-replay' | 'input-reevaluation';
 export type SensitivityMode = 'disabled' | 'shadow';
-export type SensitivityReportStatus = 'completed' | 'partial' | 'budget-exhausted' | 'rejected';
+export type SensitivityReportStatus = 'completed' | 'partial' | 'budget-exhausted' | 'rejected' | 'failed';
 export type SensitivityInference = 'reused-stored-evidence' | 'new-invocation' | 'deduplicated-control';
 export type SensitivityRowKind = 'variant' | 'unchanged-control' | 'baseline-stability';
 export type SensitivityDataClass = 'public' | 'internal' | 'confidential' | 'restricted';

@@ -31,7 +31,7 @@
     "analysisKind": { "enum": ["policy-replay", "input-reevaluation"] },
     "semantics": { "const": "associative-sensitivity-not-causal" },
     "actionAuthorization": { "const": "not-authorized" },
-    "status": { "enum": ["completed", "partial", "budget-exhausted", "rejected"] },
+    "status": { "enum": ["completed", "partial", "budget-exhausted", "rejected", "failed"] },
     "generatedAt": { "$ref": "#/$defs/dateTime" },
     "privacy": {
       "type": "object",

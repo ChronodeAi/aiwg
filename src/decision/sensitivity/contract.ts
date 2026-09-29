@@ -86,6 +86,7 @@ export function validateSensitivityPlan(value: unknown): SensitivityPlan {
   const precisionPaths = new Map<string, number[]>();
   for (const variant of plan.variants) {
     if (ids.has(variant.id)) problems.push(`variant ${variant.id} is duplicated`);
+    if (/^baseline-/i.test(variant.id)) problems.push(`variant ${variant.id} uses a reserved baseline identifier`);
     ids.add(variant.id);
     for (const change of variant.changes) {
       if (!allowed.has(change.path)) problems.push(`variant ${variant.id} changes undeclared path ${change.path}`);

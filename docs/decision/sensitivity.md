@@ -35,13 +35,15 @@ Pointer segments, missing structural targets, expired authorization, and stale
 or excessive probe windows before inference.
 
 Resource ceilings stop additional variants while keeping completed rows.
-Mid-run evaluator failures return an explicit partial report that preserves
-completed rows and their recorded spend. Partial reports still carry
-`actionAuthorization: "not-authorized"`. Baseline-stability repeats are
-available only for input reevaluation and are labelled separately from
-perturbation rows. Probe counters are enforced even when a caller does not
-provide process-local state, but production rollout still requires durable,
-non-resettable storage.
+Evaluator failures after completed rows return `partial`; failures before any
+row return `failed` and include host-supplied spend evidence when available.
+Both statuses still carry `actionAuthorization: "not-authorized"`.
+Baseline-stability repeats are available only for input reevaluation and are
+labelled separately from perturbation rows. Variants equal to the source are
+retained as deduplicated controls without backend calls or path-probe charges.
+Probe counters are enforced even when a caller does not provide process-local
+state; the implicit state is bounded in memory, but production rollout still
+requires durable, non-resettable storage.
 
 Routine reports contain redacted value digests, receipt/result pins, bounded
 outcome, acceptance, matched-rule and distribution deltas, resource use, and

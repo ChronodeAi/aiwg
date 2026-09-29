@@ -41,7 +41,7 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
   }
   if (plan.mode === 'disabled') return rejectedReport(request, ['sensitivity plan is disabled']);
   try {
-    enforceProbeLimits(plan, request.probeState ?? defaultProbeState);
+    enforceProbeLimits(plan, request.probeState ?? defaultProbeState, probeRoot(plan, request));
   } catch (error) {
     if (error instanceof SensitivityContractError) return rejectedReport(request, error.details.length ? [...error.details] : [error.message]);
     throw error;
@@ -59,15 +59,24 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
       const input = structuredClone(request.sourceInput);
       const invocationId = freshInvocationId(plan, variantId, runNonce);
       const receiptFingerprint = expectedReceiptFingerprint(request, invocationId, input);
-      ensureFreshBeforeDispatch(invocationId, receiptFingerprint, usedInvocations);
+      try {
+        ensureFreshBeforeDispatch(invocationId, receiptFingerprint, usedInvocations);
+      } catch (error) {
+        if (error instanceof SensitivityContractError) return failedPartialReport(request, plan, rows, budget, warnings, error.message);
+        throw error;
+      }
       let result: RulesetResult;
       try {
         result = await request.reevaluate({ variantId, invocationId, receiptFingerprint, input, changes: [] });
       } catch (error) {
+        spendFailure(budget, error);
         return failedPartialReport(request, plan, rows, budget, warnings, `baseline ${variantId} failed: ${sanitizeReason(error)}`);
       }
       const failure = validateReevaluationResult(request, result, variantId, invocationId, receiptFingerprint, input);
-      if (failure) return failedPartialReport(request, plan, rows, budget, warnings, failure);
+      if (failure) {
+        spendResult(budget, result);
+        return failedPartialReport(request, plan, rows, budget, warnings, failure);
+      }
       rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: `baseline-${repeat + 1}`,
         kind: 'baseline-stability', inference: 'new-invocation', changes: [], invocationId }));
       spendResult(budget, result);
@@ -81,7 +90,7 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
     if ((request.now?.() ?? Date.now()) >= deadline) { budget.exhausted = true; break; }
     const noChange = isNoChange(plan.analysisKind === 'policy-replay'
       ? { ruleset: request.sourceRuleset, binding: request.sourceBinding } : { input: request.sourceInput }, variant.changes);
-    if (noChange && plan.unchangedVariant === 'deduplicate') {
+    if (noChange) {
       rows.push(rowForResult({ plan, source: request.sourceResult, result: request.sourceResult, variantId: variant.id,
         kind: 'unchanged-control', inference: 'deduplicated-control', changes: variant.changes, invocationId: null }));
       budget.processedVariants += 1;
@@ -100,15 +109,24 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
     const input = applyChanges({ input: structuredClone(request.sourceInput) }, variant.changes).input;
     const invocationId = freshInvocationId(plan, variant.id, runNonce);
     const receiptFingerprint = expectedReceiptFingerprint(request, invocationId, input);
-    ensureFreshBeforeDispatch(invocationId, receiptFingerprint, usedInvocations);
+    try {
+      ensureFreshBeforeDispatch(invocationId, receiptFingerprint, usedInvocations);
+    } catch (error) {
+      if (error instanceof SensitivityContractError) return failedPartialReport(request, plan, rows, budget, warnings, error.message);
+      throw error;
+    }
     let result: RulesetResult;
     try {
       result = await request.reevaluate({ variantId: variant.id, invocationId, receiptFingerprint, input, changes: structuredClone(variant.changes) });
     } catch (error) {
+      spendFailure(budget, error);
       return failedPartialReport(request, plan, rows, budget, warnings, `variant ${variant.id} failed: ${sanitizeReason(error)}`);
     }
     const failure = validateReevaluationResult(request, result, variant.id, invocationId, receiptFingerprint, input);
-    if (failure) return failedPartialReport(request, plan, rows, budget, warnings, failure);
+    if (failure) {
+      spendResult(budget, result);
+      return failedPartialReport(request, plan, rows, budget, warnings, failure);
+    }
     rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: variant.id,
       kind: noChange ? 'unchanged-control' : 'variant', inference: 'new-invocation', changes: variant.changes, invocationId }));
     spendResult(budget, result);
@@ -120,7 +138,13 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
   return report;
 }
 
+const DEFAULT_PROBE_STATE_MAX_ENTRIES = 512;
 const defaultProbeState: Required<SensitivityProbeState> = { reportsByWindow: new Map(), pathCounts: new Map() };
+
+function probeRoot(plan: SensitivityPlan, request: SensitivityRuntimeRequest): unknown {
+  return plan.analysisKind === 'policy-replay'
+    ? { ruleset: request.sourceRuleset, binding: request.sourceBinding } : { input: request.sourceInput };
+}
 
 function validateInputs(plan: SensitivityPlan, request: SensitivityRuntimeRequest, now: number): void {
   assertArtifactPin(request.sourceRuleset, plan.source.ruleset, 'sensitivity source ruleset');
@@ -140,23 +164,27 @@ function validateChangeTargets(plan: SensitivityPlan, request: SensitivityRuntim
   for (const variant of plan.variants) for (const change of variant.changes) assertPointerTarget(root, change.path);
 }
 
-function enforceProbeLimits(plan: SensitivityPlan, state: SensitivityRuntimeRequest['probeState']): void {
+function enforceProbeLimits(plan: SensitivityPlan, state: SensitivityRuntimeRequest['probeState'], root: unknown): void {
   const reportsByWindow = state?.reportsByWindow ?? new Map<string, number>();
   const pathCounts = state?.pathCounts ?? new Map<string, number>();
   if (state && !state.reportsByWindow) state.reportsByWindow = reportsByWindow;
   if (state && !state.pathCounts) state.pathCounts = pathCounts;
   const reportKey = `${plan.probeControl.windowId}:${plan.actor.principalId}:${plan.sourceSubject.subjectRef}`;
-  const reports = reportsByWindow.get(reportKey) ?? 0;
+  const reports = touchCount(reportsByWindow, reportKey);
   if (reports >= plan.probeControl.maxReportsPerWindow) throw new SensitivityContractError('sensitivity probe report limit exceeded', 'semantic', ['probe report limit exceeded']);
   reportsByWindow.set(reportKey, reports + 1);
   for (const path of changedProbePaths(plan)) {
     const key = `${reportKey}:${path}`;
-    const count = pathCounts.get(key) ?? 0;
-    const increments = plan.variants.reduce((sum, variant) => sum + (variant.changes.some(change => change.path === path) ? 1 : 0), 0);
+    const count = touchCount(pathCounts, key);
+    const increments = plan.variants.reduce((sum, variant) => sum + (variant.changes.some(change => change.path === path && changeIsEffective(root, change)) ? 1 : 0), 0);
     if (count + increments > plan.probeControl.maxPerPrincipalSubjectPath) {
       throw new SensitivityContractError('sensitivity path probe limit exceeded', 'semantic', [`probe path limit exceeded: ${path}`]);
     }
     pathCounts.set(key, count + increments);
+  }
+  if (state === defaultProbeState) {
+    pruneMap(reportsByWindow, DEFAULT_PROBE_STATE_MAX_ENTRIES);
+    pruneMap(pathCounts, DEFAULT_PROBE_STATE_MAX_ENTRIES);
   }
 }
 
@@ -210,6 +238,7 @@ function replayPolicy(
 }
 
 function replayAcceptance(result: DecisionResult, target: ExecutionTarget, definition?: DecisionDefinition): DecisionResult {
+  if (!canReplayAcceptance(result, target)) return structuredClone(result);
   const replayDefinition = definition ?? replayDefinitionFromEvidence(result, target);
   const value = replayValue(result, replayDefinition);
   const observation: AdapterObservation = {
@@ -235,6 +264,13 @@ function replayAcceptance(result: DecisionResult, target: ExecutionTarget, defin
     ...result,
     spec,
   };
+}
+
+function canReplayAcceptance(result: DecisionResult, target: ExecutionTarget): boolean {
+  if (result.spec.status === 'success') return true;
+  if (result.spec.reason === 'low-confidence' || result.spec.reason === 'missing-confidence'
+    || result.spec.reason === 'confidence-profile-mismatch') return true;
+  return target.acceptance.mode === 'primitive-policy' && result.spec.acceptance !== undefined;
 }
 
 function replayDefinitionFromEvidence(result: DecisionResult, target: ExecutionTarget): DecisionDefinition {
@@ -331,6 +367,40 @@ function isNoChange(root: unknown, changes: readonly SensitivityChange[]): boole
   const normalized = changes.map(change => ({ path: change.path, value: change.value }));
   applyChanges(copy, normalized);
   return sensitivityDigest(copy) === before;
+}
+
+function changeIsEffective(root: unknown, change: SensitivityChange): boolean {
+  const current = getPointer(root, change.path);
+  return current === POINTER_MISSING || sensitivityDigest(current) !== sensitivityDigest(change.value);
+}
+
+const POINTER_MISSING = Symbol('pointer-missing');
+
+function getPointer(root: unknown, pointer: string): unknown | typeof POINTER_MISSING {
+  const parts = pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+  let current: unknown = root;
+  for (const part of parts) {
+    if (!current || typeof current !== 'object' || !Object.hasOwn(current, part)) return POINTER_MISSING;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+function touchCount(map: Map<string, number>, key: string): number {
+  const value = map.get(key) ?? 0;
+  if (map.has(key)) {
+    map.delete(key);
+    map.set(key, value);
+  }
+  return value;
+}
+
+function pruneMap(map: Map<string, number>, maxEntries: number): void {
+  while (map.size > maxEntries) {
+    const key = map.keys().next().value as string | undefined;
+    if (key === undefined) break;
+    map.delete(key);
+  }
 }
 
 function rowForResult(input: {
@@ -430,6 +500,25 @@ function spendResult(budget: SensitivityReport['budget'], result: RulesetResult)
   budget.costMicros += Math.round(attempts.reduce((sum, attempt) => sum + (attempt.usage.costUsd ?? 0), 0) * 1_000_000);
 }
 
+function spendFailure(budget: SensitivityReport['budget'], error: unknown): void {
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const result = record.result;
+  if (result && typeof result === 'object') {
+    spendResult(budget, result as RulesetResult);
+    return;
+  }
+  const resourceUse = record.resourceUse ?? record.sensitivitySpend;
+  if (!resourceUse || typeof resourceUse !== 'object') return;
+  const usage = resourceUse as Partial<SensitivityReportRow['resourceUse']>;
+  budget.backendCalls += integerUsage(usage.backendCalls);
+  budget.tokens += integerUsage(usage.tokens);
+  budget.costMicros += integerUsage(usage.costMicros);
+}
+
+function integerUsage(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
 function canSpendCall(plan: SensitivityPlan, binding: DecisionBinding, source: RulesetResult,
   budget: SensitivityReport['budget'], deadline: number, now: number): boolean {
   const reserve = reevaluationReserve(binding, source);
@@ -440,7 +529,8 @@ function canSpendCall(plan: SensitivityPlan, binding: DecisionBinding, source: R
 }
 
 function reevaluationReserve(binding: DecisionBinding, source: RulesetResult): Pick<SensitivityReport['budget'], 'backendCalls' | 'tokens' | 'costMicros'> {
-  const attempts = Math.max(1, binding.spec.maxAttempts);
+  const evaluationCount = Math.max(1, Object.keys(source.spec.evaluations).length, Object.keys(binding.spec.evaluations).length);
+  const attempts = Math.max(1, binding.spec.maxAttempts) * evaluationCount;
   const sourceAttempts = Object.values(source.spec.evaluations).flatMap(evaluation => evaluation.spec.attempts);
   const perAttemptTokens = Math.max(0, ...sourceAttempts.map(attempt => (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0)));
   const perAttemptCostMicros = Math.max(0, ...sourceAttempts.map(attempt => Math.round((attempt.usage.costUsd ?? 0) * 1_000_000)));
@@ -509,7 +599,7 @@ function failedPartialReport(
   budget.exhausted = true;
   const report = buildReport(request, plan, rows, budget, [...warnings, 'partial-failure', reason]);
   const { digest: _digest, ...payload } = report;
-  const status: SensitivityReport['status'] = rows.length ? 'partial' : 'rejected';
+  const status: SensitivityReport['status'] = rows.length ? 'partial' : 'failed';
   return { ...payload, status, digest: sensitivityDigest({ ...payload, status }) };
 }
 
