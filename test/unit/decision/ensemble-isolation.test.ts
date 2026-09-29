@@ -80,6 +80,12 @@ describe('ENS D17 contract isolation: no adapter, transport or credential path (
     visit(resolve(ROOT, 'src/decision/ensemble/index.ts'));
     expect([...seen].some(file => file.endsWith('ensemble/aggregate.ts'))).toBe(true);
     expect([...seen].filter(file => !file.includes('/src/decision/ensemble/')).map(file => file.slice(ROOT.length + 1)).sort())
-      .toEqual(['src/decision/entry.ts', 'src/security/artifact-trust.ts']);
+      .toEqual([
+        'src/decision/entry.ts',
+        'src/decision/telemetry/context.ts',
+        'src/decision/telemetry/metrics.ts',
+        'src/decision/telemetry/types.ts',
+        'src/security/artifact-trust.ts',
+      ]);
   });
 });

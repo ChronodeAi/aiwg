@@ -64,13 +64,17 @@ reservations. This check happens at validation time; it is not a dispatcher.
 
 `executeDecisionEnsemble(policy, options)` is the experimental dispatcher wrapper over that plan.
 It returns `disabled` unless `options.enabled === true` and the policy mode is not `disabled`.
-Before member dispatch, host authorization can reject members for security, privacy, region,
-capability or budget reasons; a rejected member is never invoked. The wrapper runs planned samples
-under the effective concurrency and deadline, passes each member to an injected dispatch callback,
-retains each full `DecisionResult` by digest, converts results into `EnsembleMemberResult`, and then
-calls `aggregateEnsembleResults`. Runtime telemetry is metadata-only: ensemble IDs, member counts,
-budgets/actuals, disagreement and disposition are emitted without inputs, prompts or response
-bodies.
+When enabled, trusted host authorization is mandatory: if no authorization callback is registered,
+or if it rejects a member for security, privacy, region, capability or budget reasons, no member is
+invoked. The wrapper reserves each planned sample before dispatch, runs admitted samples under the
+effective concurrency and an injected-clock deadline, passes each member to an injected dispatch
+callback, retains each full `DecisionResult` by digest, converts successes and all failure paths into
+`EnsembleMemberResult`, and then calls `aggregateEnsembleResults`. Dispatch rejection, timeout,
+fallback-depth excess, runtime token/cost budget exhaustion, and unknown provider cost under an
+`unknownCost: reject` policy are recorded as failed member evidence rather than flattening the whole
+ensemble call. Runtime telemetry is metadata-only: ensemble IDs, member counts, budgets/actuals,
+disagreement and disposition are emitted without inputs, prompts or response bodies. When no trace
+context is supplied, fresh W3C trace/span IDs are generated for each emitted span.
 
 ## Reference aggregation
 
@@ -163,12 +167,13 @@ The experimental runtime exports:
   structured clones of the same item, their input digests must match the preregistered input-set
   digest, and the result reports paired quality, calibration, risk-coverage, abstention, latency,
   tokens, cost and slice deltas.
-- `promoteChampionChallenger(...)`: consumes the D09 `PromotionEligibility`, the D17 integrity report
-  and immutable alias history, then delegates alias movement to the D09 gateway only when the report
-  decision is `PROMOTE`.
+- `promoteChampionChallenger(...)`: consumes the D09 `PromotionEligibility`, the fully validated D17
+  integrity report and immutable alias history, then delegates alias movement to the D09 gateway only
+  when the report decision is `PROMOTE` for the exact champion/challenger record. A forged change from
+  `HOLD` or `ROLLBACK` to `PROMOTE` fails report validation.
 - `rollbackChampionForNewRuns(...)` and `pinChampionForRun(...)`: rollback delegates to D09
-  `rollbackAlias` for future alias resolution, while already pinned active runs keep their original
-  champion revision.
+  `rollbackAlias` for future alias resolution after a non-empty approval reference is supplied, while
+  already pinned active runs keep their original champion revision.
 
 ## Eval-integrity report extension
 
@@ -205,8 +210,9 @@ thresholds are never reused silently. Values equal to a threshold are within it.
 reports the response. `executeDriftResponse(policy, signal, handlers)` is the default-off execution
 seam: it first resolves the exact configured response, then invokes only the handler for that
 response (`alert`, `reduce-coverage`, `route-to-review`, `disable-challenger`, `restore-champion` or
-`require-recertification`). The handler remains host-owned; this package does not mutate routing,
-coverage or aliases by itself.
+`require-recertification`). If the resolved response has no registered handler, execution fails
+closed and does not claim the response ran. The handler remains host-owned; this package does not
+mutate routing, coverage or aliases by itself.
 
 ## Fixtures
 

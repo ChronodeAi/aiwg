@@ -1,6 +1,7 @@
 import type { AliasEvent, PromotionEligibility } from '../calibration/types.js';
-import type { DecisionResult } from '../types.js';
+import type { DecisionFailureReason, DecisionResult } from '../types.js';
 import type { DecisionTelemetryHook, DecisionTelemetrySpan, TelemetryAttributes } from '../telemetry/types.js';
+import { createTelemetryContext, randomTelemetryIds } from '../telemetry/context.js';
 import { DECISION_TELEMETRY_SCHEMA_VERSION } from '../telemetry/types.js';
 import { recordDecisionSpanMetrics, type BoundedDecisionMetrics } from '../telemetry/metrics.js';
 import {
@@ -9,6 +10,7 @@ import {
   ensembleContractDigest,
   pairedThresholdsDigest,
   validateChampionChallenger,
+  validateEnsembleIntegrityReport,
   validateEnsemblePolicy,
   type EnsemblePolicyValidationOptions,
 } from './contract.js';
@@ -107,58 +109,100 @@ export async function executeDecisionEnsemble(
     };
   }
 
+  if (!options.authorizeMember) {
+    throw new EnsembleRuntimeError('ensemble member authorization callback is required before dispatch', 'member-authorization-missing');
+  }
   for (const member of [...policy.members].sort((a, b) => compareEnsembleKeys(a.id, b.id))) {
-    if (options.authorizeMember && await options.authorizeMember(member) !== true) {
+    if (await options.authorizeMember(member) !== true) {
       throw new EnsembleRuntimeError(`ensemble member ${member.id} failed security/privacy/capability authorization`, 'member-disallowed');
     }
   }
 
   const now = options.now ?? Date.now;
   const deadlineEpochMs = now() + budget.effective.deadlineMs;
-  const signal = AbortSignal.any([options.signal ?? new AbortController().signal, AbortSignal.timeout(budget.effective.deadlineMs)]);
+  const deadline = createDeadlineSignal(options.signal, budget.effective.deadlineMs, options.delay);
+  const signal = deadline.signal;
   const tasks = canonicalSamples(policy);
   const retainedResults: Record<string, DecisionResult> = {};
   let actualAttempts = 0;
   let actualTokens = 0;
   let actualCostMicros = 0;
-  const memberResults = await runBounded(tasks, budget.effective.concurrency, async ({ member, sampleIndex }) => {
-    if (signal.aborted || now() >= deadlineEpochMs) return syntheticMemberResult(policy, member, sampleIndex, 'timeout', retainedResults);
-    const result = await options.dispatch({ policy, policyDigest, member: structuredClone(member), sampleIndex,
-      invocationId: `${options.invocationId}:${member.id}:${sampleIndex}`, deadlineEpochMs, signal });
-    const attempts = result.spec.attempts.length;
-    actualAttempts += attempts;
-    actualTokens += result.spec.attempts.reduce((sum, attempt) =>
-      sum + (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0), 0);
-    const cost = result.spec.attempts.reduce((sum, attempt) => sum + (attempt.usage.costUsd ?? 0) * 1_000_000, 0);
-    actualCostMicros += Math.round(cost);
-    if (attempts > member.fallbackDepth + 1) {
-      return syntheticMemberResult(policy, member, sampleIndex, 'fallback-depth-exceeded', retainedResults, result);
-    }
-    if (actualAttempts > budget.effective.attempts || actualTokens > budget.effective.tokens
-      || actualCostMicros > budget.effective.costMicros || now() > deadlineEpochMs) {
-      return syntheticMemberResult(policy, member, sampleIndex, 'budget-exhausted', retainedResults, result);
-    }
-    return memberResultFromDecision(member, sampleIndex, result, retainedResults);
-  });
+  let reservedAttempts = 0;
+  let reservedTokens = 0;
+  let reservedCostMicros = 0;
+  let exhausted = false;
+  const reservations = new Map(budget.reservations.map(item => [`${item.memberId}:${item.sampleIndex}`, item]));
+  try {
+    const memberResults = await runBounded(tasks, budget.effective.concurrency, async ({ member, sampleIndex }) => {
+      if (signal.aborted || now() >= deadlineEpochMs) return syntheticMemberResult(policy, member, sampleIndex, 'timeout', retainedResults);
+      if (exhausted) return syntheticMemberResult(policy, member, sampleIndex, 'budget-exhausted', retainedResults);
+      const reservation = reservations.get(`${member.id}:${sampleIndex}`);
+      if (!reservation || reservedAttempts + reservation.attempts > budget.effective.attempts
+        || reservedTokens + reservation.tokens > budget.effective.tokens
+        || reservedCostMicros + reservation.costMicros > budget.effective.costMicros) {
+        exhausted = true;
+        return syntheticMemberResult(policy, member, sampleIndex, 'budget-exhausted', retainedResults);
+      }
+      reservedAttempts += reservation.attempts;
+      reservedTokens += reservation.tokens;
+      reservedCostMicros += reservation.costMicros;
 
-  const aggregate = aggregateEnsembleResults(policy, memberResults, {
-    hostCeilings: options.hostCeilings,
-    calibrationPins: options.calibrationPins,
-  });
-  emitEnsembleSpan(options.telemetry, options.now, {
-    'aiwg.ensemble.id': policy.id,
-    'aiwg.ensemble.version': policy.version,
-    'aiwg.ensemble.mode': policy.mode,
-    'aiwg.ensemble.status': 'completed',
-    'aiwg.ensemble.members': policy.members.length,
-    'aiwg.ensemble.disagreement_bps': aggregate.disagreement.valueBps,
-    'aiwg.ensemble.outcome': aggregate.outcome.disposition,
-    'aiwg.budget.attempts.planned': budget.demand.attempts,
-    'aiwg.budget.attempts.actual': actualAttempts,
-    'aiwg.budget.tokens.actual': actualTokens,
-    'aiwg.budget.cost_micros.actual': actualCostMicros,
-  });
-  return { status: 'completed', reason: 'completed', policyDigest, budget, aggregate, memberResults, retainedResults };
+      let result: DecisionResult;
+      try {
+        result = await dispatchWithDeadline(options.dispatch({
+          policy, policyDigest, member: structuredClone(member), sampleIndex,
+          invocationId: `${options.invocationId}:${member.id}:${sampleIndex}`, deadlineEpochMs, signal,
+        }), signal);
+      } catch (error) {
+        const reason = signal.aborted || now() >= deadlineEpochMs || (error instanceof EnsembleRuntimeError && error.reason === 'timeout')
+          ? 'timeout' : 'dispatch-error';
+        if (reason === 'timeout') exhausted = true;
+        return syntheticMemberResult(policy, member, sampleIndex, reason, retainedResults);
+      }
+
+      const attempts = result.spec.attempts.length;
+      const tokens = result.spec.attempts.reduce((sum, attempt) =>
+        sum + (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0), 0);
+      const cost = resultCostMicros(policy, result);
+      actualAttempts += attempts;
+      actualTokens += tokens;
+      if (cost === null) {
+        exhausted = true;
+        return syntheticMemberResult(policy, member, sampleIndex, 'unknown-cost', retainedResults, result);
+      }
+      actualCostMicros += cost;
+      if (attempts > member.fallbackDepth + 1) {
+        return syntheticMemberResult(policy, member, sampleIndex, 'fallback-depth-exceeded', retainedResults, result);
+      }
+      if (actualAttempts > budget.effective.attempts || actualTokens > budget.effective.tokens
+        || actualCostMicros > budget.effective.costMicros || now() > deadlineEpochMs) {
+        exhausted = true;
+        return syntheticMemberResult(policy, member, sampleIndex, 'budget-exhausted', retainedResults, result);
+      }
+      return memberResultFromDecision(member, sampleIndex, result, retainedResults);
+    });
+
+    const aggregate = aggregateEnsembleResults(policy, memberResults, {
+      hostCeilings: options.hostCeilings,
+      calibrationPins: options.calibrationPins,
+    });
+    emitEnsembleSpan(options.telemetry, options.now, {
+      'aiwg.ensemble.id': policy.id,
+      'aiwg.ensemble.version': policy.version,
+      'aiwg.ensemble.mode': policy.mode,
+      'aiwg.ensemble.status': 'completed',
+      'aiwg.ensemble.members': policy.members.length,
+      'aiwg.ensemble.disagreement_bps': aggregate.disagreement.valueBps,
+      'aiwg.ensemble.outcome': aggregate.outcome.disposition,
+      'aiwg.budget.attempts.planned': budget.demand.attempts,
+      'aiwg.budget.attempts.actual': actualAttempts,
+      'aiwg.budget.tokens.actual': actualTokens,
+      'aiwg.budget.cost_micros.actual': actualCostMicros,
+    });
+    return { status: 'completed', reason: 'completed', policyDigest, budget, aggregate, memberResults, retainedResults };
+  } finally {
+    deadline.cancel();
+  }
 }
 
 export interface ShadowInputItem {
@@ -299,10 +343,11 @@ export function promoteChampionChallenger(input: {
   now?: () => number;
 }): AliasEvent {
   const aliasHistory = input.gateway.aliasHistory((input.record as DecisionChampionChallenger).alias);
-  const { record } = validateChampionChallenger(input.record, { eligibility: input.eligibility, aliasHistory });
+  const { record, digest } = validateChampionChallenger(input.record, { eligibility: input.eligibility, aliasHistory });
+  const report = validateEnsembleIntegrityReport(input.integrityReport);
   const problems = championChallengerEligibilityProblems(record, input.eligibility);
-  if (input.integrityReport.decision !== 'PROMOTE' || input.integrityReport.subject.id !== record.id
-    || input.integrityReport.subject.digest !== ensembleContractDigest(record) || input.integrityReport.subject.eligibilityId !== record.eligibilityId
+  if (report.decision !== 'PROMOTE' || report.subject.id !== record.id
+    || report.subject.digest !== digest || report.subject.eligibilityId !== record.eligibilityId
     || input.eligibility.eligible !== true || problems.length > 0) {
     throw new EnsembleRuntimeError('promotion requires eligible D09 state, verified eval-integrity and a pinned rollback target', 'promotion-gate');
   }
@@ -324,6 +369,9 @@ export function rollbackChampionForNewRuns(input: {
   telemetry?: EnsembleRuntimeTelemetry;
   now?: () => number;
 }): AliasEvent {
+  if (!/^[A-Za-z0-9][A-Za-z0-9:._/@-]{2,127}$/.test(input.approvalReference)) {
+    throw new EnsembleRuntimeError('rollback requires a non-empty valid approval reference', 'rollback-approval-reference');
+  }
   const { record } = validateChampionChallenger(input.record, { aliasHistory: input.gateway.aliasHistory((input.record as DecisionChampionChallenger).alias) });
   const event = input.gateway.rollbackAlias(record.alias, record.rollbackTarget.aliasRevision, input.approvalReference, input.at);
   emitEnsembleSpan(input.telemetry, input.now, {
@@ -347,7 +395,11 @@ export async function executeDriftResponse(
   now?: () => number,
 ): Promise<{ decision: DriftResponseDecision; executed: DriftResponseAction | null }> {
   const decision = resolveDriftResponse(policyInput, signal);
-  if (decision.response) await handlers[decision.response]?.(decision);
+  if (decision.response) {
+    const handler = handlers[decision.response];
+    if (!handler) throw new EnsembleRuntimeError(`drift response ${decision.response} has no registered handler`, 'drift-handler-missing');
+    await handler(decision);
+  }
   emitEnsembleSpan(telemetry, now, {
     'aiwg.ensemble.drift.signal_id': decision.signalId,
     'aiwg.ensemble.drift.source': decision.source,
@@ -357,6 +409,44 @@ export async function executeDriftResponse(
     'aiwg.drift.value': signal.source === 'alias-drift' ? 1 : signal.valueBps,
   });
   return { decision, executed: decision.response };
+}
+
+function createDeadlineSignal(
+  parent: AbortSignal | undefined,
+  deadlineMs: number,
+  delay: ((ms: number, signal: AbortSignal) => Promise<void>) | undefined,
+): { signal: AbortSignal; cancel: () => void } {
+  const controller = new AbortController();
+  const timer = new AbortController();
+  const abort = () => { if (!controller.signal.aborted) controller.abort(); };
+  if (parent?.aborted) abort();
+  else parent?.addEventListener('abort', abort, { once: true });
+  const wait = delay ?? defaultDelay;
+  void wait(deadlineMs, timer.signal).then(abort, () => undefined);
+  return {
+    signal: controller.signal,
+    cancel: () => {
+      timer.abort();
+      parent?.removeEventListener('abort', abort);
+    },
+  };
+}
+
+function defaultDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => {
+      clearTimeout(timeout);
+      reject(new Error('cancelled'));
+    }, { once: true });
+  });
+}
+
+function dispatchWithDeadline(result: Promise<DecisionResult>, signal: AbortSignal): Promise<DecisionResult> {
+  if (signal.aborted) return Promise.reject(new EnsembleRuntimeError('ensemble dispatch deadline exceeded', 'timeout'));
+  return Promise.race([result, new Promise<DecisionResult>((_, reject) => {
+    signal.addEventListener('abort', () => reject(new EnsembleRuntimeError('ensemble dispatch deadline exceeded', 'timeout')), { once: true });
+  })]);
 }
 
 function canonicalSamples(policy: DecisionEnsemblePolicy): Array<{ member: EnsembleMember; sampleIndex: number }> {
@@ -404,6 +494,7 @@ function syntheticMemberResult(
   retainedResults: Record<string, DecisionResult>,
   source?: DecisionResult,
 ): EnsembleMemberResult {
+  const failureReason = syntheticFailureReason(reason);
   const result = source ? structuredClone(source) : {
     apiVersion: 'decision.aiwg.io/v1alpha1' as const,
     kind: 'DecisionResult' as const,
@@ -416,15 +507,51 @@ function syntheticMemberResult(
       runId: policy.id,
       invocationId: `${policy.id}:${member.id}:${sampleIndex}`,
       status: 'error' as const,
-      reason: reason === 'timeout' ? 'timeout' as const : 'budget-exhausted' as const,
+      reason: failureReason,
       uncertainty: null,
-      attempts: [],
+      attempts: [syntheticAttempt(member, failureReason)],
     },
   };
+  const { value: _value, uncertainty: _uncertainty, ...spec } = result.spec;
   return memberResultFromDecision(member, sampleIndex, {
     ...result,
-    spec: { ...result.spec, status: 'error', value: undefined, uncertainty: null },
+    spec: { ...spec, status: 'error', reason: failureReason, uncertainty: null },
   }, retainedResults);
+}
+
+function syntheticAttempt(member: EnsembleMember, reason: DecisionFailureReason): DecisionResult['spec']['attempts'][number] {
+  return {
+    ordinal: 1,
+    adapter: member.adapter.id,
+    adapterVersion: member.adapter.version,
+    requestedModel: member.model.requested,
+    actualModel: null,
+    subagent: null,
+    status: 'error',
+    reason,
+    durationMs: 0,
+    usage: { inputTokens: null, outputTokens: null, costUsd: null },
+    requestId: null,
+  };
+}
+
+function syntheticFailureReason(reason: string): DecisionFailureReason {
+  if (reason === 'timeout') return 'timeout';
+  if (reason === 'dispatch-error') return 'service-error';
+  return 'budget-exhausted';
+}
+
+function resultCostMicros(policy: DecisionEnsemblePolicy, result: DecisionResult): number | null {
+  let cost = 0;
+  for (const attempt of result.spec.attempts) {
+    if (attempt.usage.costUsd === null) {
+      if (policy.ceilings.unknownCost.rule === 'reject') return null;
+      cost += policy.ceilings.unknownCost.boundMicrosPerAttempt;
+    } else {
+      cost += Math.round(attempt.usage.costUsd * 1_000_000);
+    }
+  }
+  return cost;
 }
 
 type ObservationMetricKey = 'quality' | 'calibration' | 'riskCoverage' | 'abstention' | 'latencyMs' | 'tokens' | 'costMicros' | 'slice';
@@ -459,14 +586,13 @@ function emitEnsembleSpan(telemetry: EnsembleRuntimeTelemetry | undefined, nowIn
   if (!telemetry?.hook && !telemetry?.metrics) return;
   const now = nowInput ?? Date.now;
   const at = now();
-  const traceId = telemetry.traceId ?? '11111111111111111111111111111111';
-  const spanId = spanIdFor(attributes);
+  const context = telemetryContext(telemetry.traceId);
   const clean = Object.fromEntries(Object.entries(attributes).filter(([, value]) =>
     value === null || ['string', 'number', 'boolean'].includes(typeof value))) as TelemetryAttributes;
   const span: DecisionTelemetrySpan = {
     schemaVersion: DECISION_TELEMETRY_SCHEMA_VERSION,
     name: 'decision.workflow',
-    context: { traceId, spanId, traceFlags: '01' },
+    context,
     parentSpanId: telemetry.parentSpanId ?? null,
     startTimeUnixMs: at,
     endTimeUnixMs: at,
@@ -480,8 +606,15 @@ function emitEnsembleSpan(telemetry: EnsembleRuntimeTelemetry | undefined, nowIn
   try { void telemetry.hook?.emit(span); } catch { /* observability never controls runtime */ }
 }
 
-function spanIdFor(attributes: TelemetryAttributes): string {
-  return ensembleContractDigest(attributes).slice('sha256:'.length, 'sha256:'.length + 16);
+function telemetryContext(traceId: string | undefined): DecisionTelemetrySpan['context'] {
+  try {
+    return createTelemetryContext({
+      traceId: () => traceId ?? randomTelemetryIds.traceId(),
+      spanId: () => randomTelemetryIds.spanId(),
+    });
+  } catch {
+    return createTelemetryContext(randomTelemetryIds);
+  }
 }
 
 export function preregisterChampionChallengerThresholds(record: DecisionChampionChallenger): DecisionChampionChallenger {

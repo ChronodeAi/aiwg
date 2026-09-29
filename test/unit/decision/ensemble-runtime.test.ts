@@ -24,6 +24,7 @@ import {
   type DecisionDriftResponse,
   type DecisionEnsemblePolicy,
   type DecisionResult,
+  type DecisionTelemetrySpan,
   type DriftSignal,
   type EnsembleMember,
   type EnsembleMemberResult,
@@ -69,6 +70,34 @@ function decisionResult(member: EnsembleMember, sampleIndex: number, status: Dec
         usage: { inputTokens: 3, outputTokens: 2, costUsd: 0.001 }, requestId: `${member.id}-${sampleIndex}` }],
     },
   };
+}
+
+function smallPolicy(overrides: Partial<DecisionEnsemblePolicy> = {}): DecisionEnsemblePolicy {
+  const policy = structuredClone(policies.get('triage-choice-ensemble')!);
+  policy.members = [policy.members[0]!];
+  policy.members[0]!.fallbackDepth = 0;
+  policy.members[0]!.estimate = { attemptsPerSample: 1, tokensPerAttempt: 10, costMicrosPerAttempt: 10, deadlineMsPerAttempt: 5 };
+  policy.acceptance.minimumSuccessfulMembers = 1;
+  policy.ceilings = { ...policy.ceilings, members: 1, attempts: 1, tokens: 100, costMicros: 100, concurrency: 1, fallbackDepth: 0, deadlineMs: 10 };
+  return { ...policy, ...overrides };
+}
+
+function withAttempts(member: EnsembleMember, sampleIndex: number, attempts: number, usage: DecisionResult['spec']['attempts'][number]['usage']): DecisionResult {
+  const result = decisionResult(member, sampleIndex);
+  result.spec.attempts = Array.from({ length: attempts }, (_, index) => ({
+    ordinal: index + 1,
+    adapter: member.adapter.id,
+    adapterVersion: member.adapter.version,
+    requestedModel: member.model.requested,
+    actualModel: member.model.pinnedVersion,
+    subagent: null,
+    status: 'success',
+    reason: 'none',
+    durationMs: 5,
+    usage,
+    requestId: `${member.id}-${sampleIndex}-${index}`,
+  }));
+  return result;
 }
 
 function definitions(): Record<string, DecisionDefinition> {
@@ -152,6 +181,11 @@ describe('D17 ensemble runtime (#2611)', () => {
       vi.setSystemTime(1_000);
       const after = await evaluateDecisionRuleset(request);
       expect(disabled).toMatchObject({ status: 'disabled', aggregate: null, memberResults: [] });
+      expect(before).toMatchObject({
+        apiVersion: 'decision.aiwg.io/v1alpha1',
+        kind: 'RulesetResult',
+        spec: { status: 'completed', reason: 'none', outcome: 'docs-review', matchedRules: ['docs'] },
+      });
       expect(after).toEqual(before);
     } finally {
       vi.useRealTimers();
@@ -192,6 +226,21 @@ describe('D17 ensemble runtime (#2611)', () => {
       expect(Object.keys(result.retainedResults).sort()).toEqual(result.memberResults.map(item => item.resultDigest).sort());
       expect(spans).toHaveLength(1);
       expect(JSON.stringify(spans)).not.toContain('alpha');
+      const exhausted = structuredClone(policy);
+      exhausted.ceilings.concurrency = 1;
+      let dispatched = 0;
+      const budgeted = await executeDecisionEnsemble(exhausted, {
+        enabled: true,
+        invocationId: 'ens-budget',
+        authorizeMember: () => true,
+        dispatch: async request => {
+          dispatched += 1;
+          return withAttempts(request.member, request.sampleIndex, 1, { inputTokens: 40_000, outputTokens: 0, costUsd: 0.001 });
+        },
+      });
+      expect(dispatched).toBe(1);
+      expect(budgeted.aggregate?.outcome).toMatchObject({ disposition: 'defer', reason: 'insufficient-members' });
+      expect(budgeted.memberResults.every(item => item.status === 'failed')).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -211,6 +260,80 @@ describe('D17 ensemble runtime (#2611)', () => {
     const unknownCost = structuredClone(policy);
     unknownCost.members[0]!.estimate.costMicrosPerAttempt = null;
     expect(() => validateEnsemblePolicy(unknownCost)).toThrow(/unknown cost/);
+    await expect(executeDecisionEnsemble(policy, {
+      enabled: true,
+      invocationId: 'missing-auth',
+      dispatch: async request => decisionResult(request.member, request.sampleIndex),
+    })).rejects.toThrow(/authorization callback is required/);
+    await expect(executeDecisionEnsemble(policy, {
+      enabled: true,
+      invocationId: 'member-ceiling',
+      hostCeilings: [{ members: 2 }],
+      authorizeMember: () => true,
+      dispatch: async request => decisionResult(request.member, request.sampleIndex),
+    })).rejects.toThrow(/members demand/);
+    await expect(executeDecisionEnsemble(policy, {
+      enabled: true,
+      invocationId: 'attempt-ceiling',
+      hostCeilings: [{ attempts: 2 }],
+      authorizeMember: () => true,
+      dispatch: async request => decisionResult(request.member, request.sampleIndex),
+    })).rejects.toThrow(/attempts demand/);
+  });
+
+  it('ENS-RUN-04 records timeout, dispatch, fallback-depth, token, cost and unknown-cost failures without rejecting', async () => {
+    const policy = smallPolicy();
+    vi.useFakeTimers();
+    try {
+      const timed = executeDecisionEnsemble(policy, {
+        enabled: true,
+        invocationId: 'timeout',
+        authorizeMember: () => true,
+        dispatch: async () => new Promise<DecisionResult>(resolve => setTimeout(() => resolve(decisionResult(policy.members[0]!, 0)), 100)),
+        delay: (ms, signal) => new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, ms);
+          signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('cancelled')); }, { once: true });
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(11);
+      await expect(timed).resolves.toMatchObject({ status: 'completed', memberResults: [{ status: 'failed', value: null }] });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const cases: Array<{ name: string; result: (member: EnsembleMember) => DecisionResult; reason: string }> = [
+      { name: 'dispatch', result: () => { throw new Error('transport down'); }, reason: 'service-error' },
+      { name: 'fallback', result: member => withAttempts(member, 0, 2, { inputTokens: 1, outputTokens: 1, costUsd: 0.000001 }), reason: 'budget-exhausted' },
+      { name: 'tokens', result: member => withAttempts(member, 0, 1, { inputTokens: 101, outputTokens: 0, costUsd: 0.000001 }), reason: 'budget-exhausted' },
+      { name: 'cost', result: member => withAttempts(member, 0, 1, { inputTokens: 1, outputTokens: 1, costUsd: 0.000101 }), reason: 'budget-exhausted' },
+      { name: 'unknown-cost', result: member => withAttempts(member, 0, 1, { inputTokens: 1, outputTokens: 1, costUsd: null }), reason: 'budget-exhausted' },
+    ];
+    for (const item of cases) {
+      const result = await executeDecisionEnsemble(policy, {
+        enabled: true,
+        invocationId: item.name,
+        authorizeMember: () => true,
+        dispatch: async request => item.result(request.member),
+      });
+      expect(result.memberResults).toEqual([expect.objectContaining({ status: 'failed', value: null })]);
+      expect(Object.values(result.retainedResults)[0]?.spec).toMatchObject({ status: 'error', reason: item.reason });
+      expect(Object.values(result.retainedResults)[0]?.spec.attempts.length).toBeGreaterThan(0);
+      expect(JSON.stringify(result.retainedResults)).not.toContain('undefined');
+    }
+  });
+
+  it('ENS-RUN-05 emits unique telemetry IDs when no trace context is supplied', async () => {
+    const spans: DecisionTelemetrySpan[] = [];
+    for (const invocationId of ['span-a', 'span-b']) {
+      await executeDecisionEnsemble(policies.get('triage-choice-ensemble')!, {
+        invocationId,
+        dispatch: async request => decisionResult(request.member, request.sampleIndex),
+        telemetry: { hook: { emit: span => { spans.push(span); } } },
+      });
+    }
+    expect(spans).toHaveLength(2);
+    expect(new Set(spans.map(span => `${span.context.traceId}:${span.context.spanId}`)).size).toBe(2);
+    expect(spans.every(span => span.context.traceId !== '11111111111111111111111111111111')).toBe(true);
   });
 
   it('DRF-RUN-01 runs paired shadow on identical immutable inputs and reports required deltas', async () => {
@@ -265,9 +388,14 @@ describe('D17 ensemble runtime (#2611)', () => {
     const report = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), pairedDeltas: deltas, eligibility: eligibility(record) });
     expect(promoteChampionChallenger({ record, integrityReport: report, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
       .toMatchObject({ kind: 'promoted', actualIdentityDigest: record.challenger.identityDigest });
-    const held = { ...report, decision: 'HOLD' as const };
-    expect(() => promoteChampionChallenger({ record, integrityReport: held, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
+    const holdReport = buildEnsembleIntegrityReport({ record, integrity: integrity('HOLD'), pairedDeltas: deltas, eligibility: eligibility(record) });
+    expect(() => promoteChampionChallenger({ record, integrityReport: holdReport, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
       .toThrow(/promotion requires/);
+    const forged = { ...holdReport, decision: 'PROMOTE' as const };
+    expect(() => promoteChampionChallenger({ record, integrityReport: forged, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
+      .toThrow(/integrity report/);
+    expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: ' ', at: '2026-09-07T00:00:00.000Z' }))
+      .toThrow(/approval reference/);
     expect(rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at: '2026-09-07T00:00:00.000Z' }))
       .toMatchObject({ kind: 'rolled-back', actualIdentityDigest: record.champion.identityDigest });
     expect(active).toEqual({ runId: 'active-run', alias: record.alias, aliasRevision: 1,
@@ -287,6 +415,7 @@ describe('D17 ensemble runtime (#2611)', () => {
     expect(decision).toMatchObject({ state: 'breached', response: 'reduce-coverage', evidence: 'unlabeled-distribution-warning' });
     expect(executed).toEqual(['dist-1:reduce-coverage']);
     expect(metrics.snapshot()).toEqual(expect.arrayContaining([{ name: 'decision.drift', value: 3000, dimensions: {} }]));
+    await expect(executeDriftResponse(driftPolicy, signal, {})).rejects.toThrow(/no registered handler/);
     await expect(executeDriftResponse(driftPolicy, { ...signal, thresholdsVersion: 'old' })).rejects.toThrow(/different threshold/);
   });
 
