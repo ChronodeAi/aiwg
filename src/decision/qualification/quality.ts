@@ -261,6 +261,14 @@ export function measurePairedMovement(pairs: readonly PairedQualificationSample[
   return { sampleN: pairs.length, changedN, changedRate: changedN / pairs.length, changedWilson95: [low, high] };
 }
 
+/** Two-sided 95% Wilson interval for `events` of `n` binomial trials; invalid counts fail closed. */
+export function wilson95Interval(events: number, n: number): readonly [number, number] {
+  if (!Number.isSafeInteger(n) || n < 1 || !Number.isSafeInteger(events) || events < 0 || events > n) {
+    throw new Error('invalid binomial counts');
+  }
+  return wilson95(events, n);
+}
+
 function wilson95(errors: number, n: number): readonly [number, number] {
   // 95% normal quantile; finite-sample Wilson interval for binomial events.
   const z = 1.959963984540054;

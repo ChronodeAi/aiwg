@@ -1,26 +1,37 @@
 import { createHash } from 'node:crypto';
 import {
-  DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED, type AdapterObservation,
+  DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED, type AdapterObservation, type ArtifactPin,
   type DecisionDefinition, type DecisionResult, type DecisionRuleset, type JsonSchema, type JsonValue,
   type PrimitiveAcceptancePolicy,
 } from './types.js';
 import type { CreateReviewInput } from './review/types.js';
 import { reviewDigest } from './review/validate.js';
-import type { QualificationIntegrityMetadata } from './qualification/release.js';
+import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from './qualification/release.js';
+import {
+  evaluateBinaryHeldout, verifyQualificationSplits, wilson95Interval, type QualificationSplit,
+} from './qualification/quality.js';
 import { applyPrimitiveAcceptance } from './acceptance.js';
 import { composeRuleset } from './compose.js';
-import { validateProjectionPolicy, type DecisionProjectionPolicy } from './projection.js';
-import { artifactPin } from './validate.js';
+import {
+  validateProjectionPolicy, type DecisionProjectionPolicy, type DecisionSensitivity, type DecisionTrust,
+} from './projection.js';
+import { artifactPin, assertArtifactPin, validateDistribution } from './validate.js';
+import { CalibrationRegistry } from './calibration/registry.js';
+import type { CompatibilityPolicy, CompatibilityRequest } from './calibration/types.js';
 import { canonicalJson } from '../security/artifact-trust.js';
 
 export const SDLC_SCREENING_SCHEMA_VERSION = 'decision-sdlc-evidence-screening/v1' as const;
 export const SDLC_SCREENING_PREREGISTRATION_VERSION = 'decision-sdlc-screening-preregistration/v1' as const;
 export const SDLC_SCREENING_RELEASE_VERSION = 'decision-sdlc-screening-release/v1' as const;
+export const SDLC_SCREENING_HELDOUT_RECORDS_VERSION = 'decision-sdlc-screening-heldout-records/v1' as const;
+export const SDLC_SCREENING_HELDOUT_REPORT_VERSION = 'decision-sdlc-screening-heldout-report/v1' as const;
+export const SDLC_GATE_EVIDENCE_POLICY_KIND = 'SdlcGateEvidencePolicy' as const;
 
 export type SdlcScreeningMode = 'disabled' | 'shadow' | 'advisory';
 export type SdlcScreeningSubjectKind = 'citation' | 'phase-criterion';
 export type SdlcDeterministicStatus = 'pass' | 'review' | 'fail';
 export type SdlcScreeningRoute = 'ADVISORY_READY' | 'REVIEW' | 'FAIL' | 'INSUFFICIENT_EVIDENCE';
+export type SdlcSupportLabel = 'supports' | 'does-not-support' | 'contradicts' | 'unclear';
 
 export type SdlcPreflightReason =
   | 'subject-isolation-violated' | 'unknown-id' | 'source-not-found' | 'locator-not-found'
@@ -28,7 +39,9 @@ export type SdlcPreflightReason =
   | 'artifact-missing' | 'test-failed' | 'approval-absent' | 'signature-invalid'
   | 'schema-invalid' | 'evidence-expired' | 'criterion-missing' | 'required-evidence-missing'
   | 'evidence-untrusted' | 'evidence-restricted' | 'content-digest-mismatch' | 'invalid-observation'
-  | 'calibration-incompatible';
+  | 'calibration-incompatible' | 'duplicate-evidence-id' | 'foreign-evidence' | 'invalid-evidence'
+  | 'content-unverified' | 'evidence-trust-mismatch' | 'gate-policy-untrusted' | 'gate-policy-mismatch'
+  | 'gate-policy-invalid' | 'invalid-request';
 
 export interface SdlcScreeningPin {
   id: string;
@@ -36,20 +49,27 @@ export interface SdlcScreeningPin {
   digest: `sha256:${string}`;
 }
 
+/**
+ * Evidence facts in a subject (`present`, `passed`, `retrieved`, `provenanceVerified`, ...)
+ * are caller-asserted. This module fails closed on what it is told plus the trusted
+ * gate policy; hosts must source these facts from the deterministic validators.
+ */
 export interface SdlcSourceEvidence extends SdlcScreeningPin {
   locator: string;
   locatorExists: boolean;
   retrieved: boolean;
   contentDigest: `sha256:${string}`;
+  /** Omitted content cannot be digest-verified, so the source stays non-ready. */
   content?: string;
   provenanceVerified: boolean;
   publicationAuthorized: boolean;
-  trust: 'untrusted' | 'verified';
-  sensitivity: 'public' | 'internal' | 'confidential' | 'restricted';
+  trust: DecisionTrust;
+  sensitivity: DecisionSensitivity;
 }
 
 export interface SdlcGateEvidenceItem extends SdlcScreeningPin {
   type: 'artifact' | 'test-result' | 'approval' | 'signature' | 'schema';
+  /** Informational only; the trusted gate policy decides what is required. */
   required: boolean;
   present: boolean;
   passed: boolean;
@@ -85,18 +105,38 @@ export interface SdlcScreeningInventory {
   evidenceIds: string[];
 }
 
-export interface SdlcGateEvidencePolicy extends SdlcScreeningPin {
-  requiredEvidenceByCriterion: Record<string, string[]>;
-  evidenceSubjects: Record<string, { kind: 'phase-criterion'; criterionId: string } |
-    { kind: 'citation'; claimId: string; sourceId: string; locator: string }>;
+export type SdlcEvidenceOwner =
+  | { kind: 'phase-criterion'; criterionId: string }
+  | { kind: 'citation'; claimId: string; sourceId: string; locator: string; trust: DecisionTrust; sensitivity: DecisionSensitivity };
+
+/** Trusted gate policy artifact, resolved only by a host-pinned digest (see `SdlcScreeningTrustContext`). */
+export interface SdlcGateEvidencePolicy {
+  kind: typeof SDLC_GATE_EVIDENCE_POLICY_KIND;
+  metadata: { id: string; version: string };
+  spec: {
+    requiredEvidenceByCriterion: Record<string, string[]>;
+    evidenceSubjects: Record<string, SdlcEvidenceOwner>;
+  };
 }
 
+/** Host-owned trust inputs. They never come from the screening request. */
+export interface SdlcScreeningTrustContext {
+  /** Pin of the gate policy from trusted host configuration. */
+  gatePolicyPin: ArtifactPin;
+  /** Registry of gate policy artifacts; the pinned one is verified with `assertArtifactPin`. */
+  gatePolicies: readonly SdlcGateEvidencePolicy[];
+  /** D09 compatibility resolved through the calibration registry; null routes to review. */
+  calibration: { registry: CalibrationRegistry; request: CompatibilityRequest; policy: CompatibilityPolicy } | null;
+}
+
+/** Native per-question distributions over the closed option sets. Absent distributions route to review. */
 export interface SdlcCitationObservation {
   kind: 'citation';
   claimId: string;
   sourceId: string;
   locator: string;
-  support: 'supports' | 'does-not-support' | 'contradicts' | 'unclear';
+  support: SdlcSupportLabel;
+  supportDistribution?: Record<string, number>;
   supportStrengthBps: number;
   injection: 'yes' | 'no' | 'unclear';
   confidenceBps: number;
@@ -113,6 +153,7 @@ export interface SdlcPhaseCriterionObservation {
   contradiction: 'none' | 'present' | 'unclear';
   ambiguity: 'low' | 'high' | 'unclear';
   reviewerAttention: 'needed' | 'not-needed';
+  distributions?: Partial<Record<'relevance' | 'completeness' | 'contradiction' | 'ambiguity' | 'reviewerAttention', Record<string, number>>>;
   confidenceBps: number;
   model: string;
   attempts: number;
@@ -130,7 +171,7 @@ export interface SdlcScreeningReceipt {
   schemaVersion: typeof SDLC_SCREENING_SCHEMA_VERSION;
   mode: Exclude<SdlcScreeningMode, 'disabled'>;
   subject: {
-    kind: SdlcScreeningSubjectKind;
+    kind: SdlcScreeningSubjectKind | 'unknown';
     subjectId: string;
     claimId?: string;
     sourceId?: string;
@@ -154,10 +195,11 @@ export interface SdlcScreeningReceipt {
   route: SdlcScreeningRoute;
   reviewRequired: boolean;
   reviewReasons: string[];
+  gatePolicy: SdlcScreeningPin | null;
   pins: SdlcScreeningPin[];
   trace: {
     redaction: 'metadata-only';
-    subjectDigest: `sha256:${string}`;
+    subjectDigest: `sha256:${string}` | null;
     observationDigest: `sha256:${string}` | null;
   };
   action: { status: 'unexecuted' };
@@ -167,10 +209,10 @@ export interface SdlcScreeningRequest {
   schemaVersion: typeof SDLC_SCREENING_SCHEMA_VERSION;
   mode: SdlcScreeningMode;
   inventory: SdlcScreeningInventory;
-  gatePolicy?: SdlcGateEvidencePolicy;
+  /** Must equal the host-pinned gate policy; any other policy reference is rejected. */
+  gatePolicyPin: SdlcScreeningPin;
   subject: SdlcScreeningSubject;
   observation?: SdlcScreeningObservation;
-  calibrationCompatibility?: { action: 'allow' | 'defer' | 'fail' | 'shadow' | 'require-approval'; reasons: string[] };
   nowEpochMs: number;
 }
 
@@ -185,57 +227,133 @@ export interface SdlcScreeningPreregistration {
   schemaVersion: typeof SDLC_SCREENING_PREREGISTRATION_VERSION;
   planId: string;
   frozenAt: string;
+  /** Digest of the frozen held-out test split (`QualificationSplit.digest`). */
+  heldoutSplitDigest: `sha256:${string}`;
+  /** Every preregistered slice must be present with `minimumSliceSupport`. */
+  slices: string[];
+  gateBlockingSlices: string[];
   maximumFalseSupportRateBps: number;
   maximumFalseReadyRateBps: number;
   minimumTotalSupport: number;
+  minimumSliceSupport: number;
   minimumGateBlockingSliceSupport: number;
   confidenceInterval: { method: 'wilson' | 'exact-binomial'; levelBps: number };
+  /** Paired non-inferiority margin against the baseline screening path. */
   qualityNonInferiorityBps: number;
   efficiencyClaim: { enabled: boolean; minimumPositiveTotalEconomicsUsd: number | null };
 }
 
-export interface SdlcScreeningHeldoutReport {
-  schemaVersion: 'decision-sdlc-screening-heldout-report/v1';
-  evaluatedAt?: string;
-  support: SdlcClassMetrics;
-  contradiction: SdlcClassMetrics;
-  unclear: SdlcClassMetrics;
-  calibrationRiskCoverage: SdlcMetricBlock;
-  falseSupportRateBps: number | null;
-  falseReadyRateBps: number | null;
-  reviewerAgreementRateBps: number | null;
-  reviewerOverrideRateBps: number | null;
-  slices: Record<string, SdlcMetricBlock>;
-  latencyMs: SdlcMetricBlock;
-  tokens: SdlcMetricBlock;
-  costUsd: SdlcMetricBlock;
-  reviewLoad: SdlcMetricBlock;
-  gateBlockingSliceSupport: number;
-  totalSupport: number;
-  positiveTotalEconomicsUsd: number | null;
+/** One adjudicated held-out item with the paired baseline outcome on the same item. */
+export interface SdlcScreeningHeldoutSample {
+  id: string;
+  kind: SdlcScreeningSubjectKind;
+  slice: string;
+  gold: { ready: boolean; support: SdlcSupportLabel | null };
+  candidate: {
+    route: SdlcScreeningRoute;
+    support: SdlcSupportLabel | null;
+    readyProbability: number;
+    latencyMs: number;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    costUsd: number | null;
+    calls: number;
+    retries: number;
+    fallbacks: number;
+  };
+  baseline: { correct: boolean; costUsd: number | null };
+  reviewer: { agreed: boolean; overridden: boolean } | null;
 }
 
-export interface SdlcMetricBlock {
+export interface SdlcScreeningHeldoutRecords {
+  schemaVersion: typeof SDLC_SCREENING_HELDOUT_RECORDS_VERSION;
+  evaluatedAt: string;
+  splits: QualificationSplit[];
+  samples: SdlcScreeningHeldoutSample[];
+}
+
+export interface SdlcRateEvidence {
+  events: number;
   n: number;
-  value: number | null;
+  rateBps: number | null;
+  /** Upper bound of the preregistered interval, rounded up; null when not computable. */
+  upperBps: number | null;
 }
 
-export interface SdlcClassMetrics extends SdlcMetricBlock {
+export interface SdlcClassMetrics {
+  n: number;
   precisionBps: number | null;
   recallBps: number | null;
+}
+
+/** Computed only from per-sample records; never caller-asserted. */
+export interface SdlcScreeningHeldoutReport {
+  schemaVersion: typeof SDLC_SCREENING_HELDOUT_REPORT_VERSION;
+  evaluatedAt: string;
+  heldoutSplitDigest: `sha256:${string}`;
+  recordsDigest: `sha256:${string}`;
+  totalSupport: number;
+  gateBlockingSliceSupport: number;
+  classes: { support: SdlcClassMetrics; contradiction: SdlcClassMetrics; unclear: SdlcClassMetrics };
+  falseSupport: SdlcRateEvidence;
+  falseReady: SdlcRateEvidence;
+  reviewer: { n: number; agreementRateBps: number | null; overrideRateBps: number | null };
+  paired: { n: number; baselineOnlyCorrect: number; candidateOnlyCorrect: number };
+  calibrationRiskCoverage: { brier: number; expectedCalibrationError: number; coverage: number; selectiveRisk: number | null };
+  slices: Record<string, { n: number; coverage: number; selectiveRisk: number | null }>;
+  latencyMs: { p50: number; p95: number; p99: number };
+  tokens: { input: number | null; output: number | null };
+  costUsd: { candidate: number | null; baseline: number | null; netSavings: number | null };
+  reviewLoad: { reviewRate: number };
+}
+
+export interface SdlcScreeningPreregistrationResult {
+  decision: 'pass' | 'fail' | 'insufficient-evidence';
+  reasons: string[];
+  heldout: SdlcScreeningHeldoutReport | null;
 }
 
 export interface SdlcScreeningReleaseReport {
   schemaVersion: typeof SDLC_SCREENING_RELEASE_VERSION;
   preregistration: SdlcScreeningPreregistration;
+  preregistrationDigest: `sha256:${string}`;
+  trustedPreregistrationDigest: `sha256:${string}`;
   heldout: SdlcScreeningHeldoutReport | null;
   integrity: QualificationIntegrityMetadata;
+  preregisteredDecision: SdlcScreeningPreregistrationResult['decision'];
   decision: 'PROMOTE' | 'HOLD' | 'ROLLBACK';
   reasons: string[];
   digest: `sha256:${string}`;
 }
 
-export class SdlcScreeningValidationError extends Error {}
+export class SdlcScreeningValidationError extends Error {
+  constructor(
+    message: string,
+    readonly reason: SdlcPreflightReason = 'invalid-request',
+    readonly status: Exclude<SdlcDeterministicStatus, 'pass'> = 'fail',
+    readonly id = 'validation',
+  ) {
+    super(message);
+    this.name = 'SdlcScreeningValidationError';
+  }
+}
+
+const SCREENING_MODES: readonly SdlcScreeningMode[] = ['disabled', 'shadow', 'advisory'];
+const SUPPORT_LABELS: readonly SdlcSupportLabel[] = ['supports', 'does-not-support', 'contradicts', 'unclear'];
+const CRITERION_OPTIONS = {
+  relevance: ['relevant', 'irrelevant', 'unclear'],
+  completeness: ['complete', 'incomplete', 'unclear'],
+  contradiction: ['none', 'present', 'unclear'],
+  ambiguity: ['low', 'high', 'unclear'],
+  reviewerAttention: ['needed', 'not-needed'],
+} as const;
+const EVIDENCE_TYPES = ['artifact', 'test-result', 'approval', 'signature', 'schema'] as const;
+const TRUST_VALUES: readonly DecisionTrust[] = ['untrusted', 'verified'];
+const SENSITIVITY_VALUES: readonly DecisionSensitivity[] = ['public', 'internal', 'confidential', 'restricted'];
+const ROUTES: readonly SdlcScreeningRoute[] = ['ADVISORY_READY', 'REVIEW', 'FAIL', 'INSUFFICIENT_EVIDENCE'];
+/** An injection "no" must be at least this confident; anything else routes to review. */
+const INJECTION_CLEAR_MINIMUM_BPS = 8_000;
+const SUPPORT_STRENGTH_MINIMUM_BPS = 8_000;
 
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const routeSchema: JsonSchema = {
@@ -258,6 +376,27 @@ function digest(value: unknown): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every(isNonEmptyString);
+}
+
+function hasOwn(value: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function reject(message: string, reason: SdlcPreflightReason = 'invalid-request',
+  status: Exclude<SdlcDeterministicStatus, 'pass'> = 'fail', id = 'validation'): never {
+  throw new SdlcScreeningValidationError(message, reason, status, id);
+}
+
 function definition(id: string, description: string, answer: DecisionDefinition['spec']['answer']): DecisionDefinition {
   return {
     apiVersion: DECISION_API_VERSION,
@@ -277,13 +416,11 @@ function pinDefinition(item: DecisionDefinition) {
   return { id: item.metadata.id, version: item.metadata.version, digest: digest(item) };
 }
 
-/** Closed portable definitions/rulesets for the D29 screening pack. They are data, not authority. */
-export function sdlcScreeningDecisionArtifacts(): { definitions: DecisionDefinition[]; rulesets: DecisionRuleset[] } {
+function buildScreeningArtifacts(): { definitions: DecisionDefinition[]; rulesets: DecisionRuleset[] } {
   const definitions = [
     definition('sdlc-screening.citation.support', 'Classify whether one cited source supports one claim.', {
       kind: 'choice',
-      options: ['supports', 'does-not-support', 'contradicts', 'unclear']
-        .map(id => ({ id, description: `Citation support label: ${id}` })),
+      options: SUPPORT_LABELS.map(id => ({ id, description: `Citation support label: ${id}` })),
     }),
     definition('sdlc-screening.citation.injection', 'Estimate whether the source contains prompt-injection or authority-seeking content.', {
       kind: 'truth-probability',
@@ -292,23 +429,23 @@ export function sdlcScreeningDecisionArtifacts(): { definitions: DecisionDefinit
     }),
     definition('sdlc-screening.criterion.relevance', 'Classify whether enumerated evidence is relevant to one gate criterion.', {
       kind: 'choice',
-      options: ['relevant', 'irrelevant', 'unclear'].map(id => ({ id, description: `Criterion relevance label: ${id}` })),
+      options: CRITERION_OPTIONS.relevance.map(id => ({ id, description: `Criterion relevance label: ${id}` })),
     }),
     definition('sdlc-screening.criterion.completeness', 'Classify whether enumerated evidence is complete for one gate criterion.', {
       kind: 'choice',
-      options: ['complete', 'incomplete', 'unclear'].map(id => ({ id, description: `Criterion completeness label: ${id}` })),
+      options: CRITERION_OPTIONS.completeness.map(id => ({ id, description: `Criterion completeness label: ${id}` })),
     }),
     definition('sdlc-screening.criterion.contradiction', 'Classify whether enumerated evidence contradicts itself or the criterion.', {
       kind: 'choice',
-      options: ['none', 'present', 'unclear'].map(id => ({ id, description: `Criterion contradiction label: ${id}` })),
+      options: CRITERION_OPTIONS.contradiction.map(id => ({ id, description: `Criterion contradiction label: ${id}` })),
     }),
     definition('sdlc-screening.criterion.ambiguity', 'Classify whether one criterion/evidence bundle is ambiguous.', {
       kind: 'choice',
-      options: ['low', 'high', 'unclear'].map(id => ({ id, description: `Criterion ambiguity label: ${id}` })),
+      options: CRITERION_OPTIONS.ambiguity.map(id => ({ id, description: `Criterion ambiguity label: ${id}` })),
     }),
     definition('sdlc-screening.criterion.reviewer-attention', 'Classify whether one criterion needs reviewer attention.', {
       kind: 'choice',
-      options: ['needed', 'not-needed'].map(id => ({ id, description: `Reviewer attention label: ${id}` })),
+      options: CRITERION_OPTIONS.reviewerAttention.map(id => ({ id, description: `Reviewer attention label: ${id}` })),
     }),
   ];
   const byId = new Map(definitions.map(item => [item.metadata.id, item]));
@@ -323,7 +460,7 @@ export function sdlcScreeningDecisionArtifacts(): { definitions: DecisionDefinit
     {
       apiVersion: DECISION_API_VERSION,
       kind: 'DecisionRuleset',
-      metadata: { id: 'sdlc-screening.citation', version: '1.0.0', description: 'Closed citation support screening ruleset.' },
+      metadata: { id: 'sdlc-screening.citation', version: '1.1.0', description: 'Closed citation support screening ruleset.' },
       spec: {
         purpose: 'Route one claim/source pair to advisory-ready or review evidence.',
         inputSchema: subjectInputSchema,
@@ -332,7 +469,9 @@ export function sdlcScreeningDecisionArtifacts(): { definitions: DecisionDefinit
           { alias: 'injection', decision: citationInjection, inputPointer: '' },
         ],
         rules: [
-          { id: 'injection-review', priority: 300, when: { op: 'gte', left: { source: 'decision', alias: 'injection', pointer: '/value' }, right: 0.8 }, outcome: { route: 'REVIEW', reason: 'prompt-injection-flagged' } },
+          // The injection value is P(injection). Only a confident "no" (P <= 0.2) is clear; "unclear"
+          // and "yes" are encoded as 1. A failed evaluation takes the failureOutcome (review).
+          { id: 'injection-review', priority: 300, when: { op: 'gt', left: { source: 'decision', alias: 'injection', pointer: '/value' }, right: 0.2 }, outcome: { route: 'REVIEW', reason: 'prompt-injection-flagged' } },
           { id: 'contradiction-review', priority: 200, when: { op: 'eq', left: { source: 'decision', alias: 'support', pointer: '/value' }, right: 'contradicts' }, outcome: { route: 'REVIEW', reason: 'citation-contradicts' } },
           { id: 'support-ready', priority: 100, when: { op: 'eq', left: { source: 'decision', alias: 'support', pointer: '/value' }, right: 'supports' }, outcome: { route: 'ADVISORY_READY', reason: 'citation-supported' } },
         ],
@@ -384,146 +523,296 @@ export function sdlcScreeningDecisionArtifacts(): { definitions: DecisionDefinit
   return { definitions, rulesets };
 }
 
-function assertDigest(value: string, label: string): asserts value is `sha256:${string}` {
-  if (!digestPattern.test(value)) throw new SdlcScreeningValidationError(`Invalid digest: ${label}`);
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+  }
+  return value;
 }
 
-function assertBps(value: number, label: string): void {
-  if (!Number.isSafeInteger(value) || value < 0 || value > 10_000) throw new SdlcScreeningValidationError(`Invalid basis points: ${label}`);
+let cachedArtifacts: { definitions: DecisionDefinition[]; rulesets: DecisionRuleset[] } | null = null;
+
+function screeningArtifacts(): { definitions: DecisionDefinition[]; rulesets: DecisionRuleset[] } {
+  cachedArtifacts ??= deepFreeze(buildScreeningArtifacts());
+  return cachedArtifacts;
 }
 
-function requireKnown(ids: readonly string[], value: string, reason: SdlcPreflightReason): void {
-  if (!ids.includes(value)) throw new SdlcScreeningValidationError(`${reason}: ${value}`);
+const artifactPins = new WeakMap<object, ArtifactPin>();
+
+/** Pins of the module-owned screening artifacts, computed once per immutable artifact object. */
+function cachedPin(value: DecisionDefinition | DecisionRuleset): ArtifactPin {
+  let pin = artifactPins.get(value);
+  if (!pin) {
+    pin = artifactPin(value);
+    artifactPins.set(value, pin);
+  }
+  return pin;
 }
 
-function rejectUnknownKeys(value: object, allowed: readonly string[], label: string): void {
-  const unknown = Object.keys(value).filter(key => !allowed.includes(key));
-  if (unknown.length) throw new SdlcScreeningValidationError(`${label} contains unsupported fields`);
+/** Closed portable definitions/rulesets for the D29 screening pack. They are data, not authority. */
+export function sdlcScreeningDecisionArtifacts(): { definitions: DecisionDefinition[]; rulesets: DecisionRuleset[] } {
+  return structuredClone(screeningArtifacts());
 }
 
-function validatePins(pins: readonly SdlcScreeningPin[]): void {
-  const seen = new Set<string>();
-  for (const pin of pins) {
-    if (!pin.id || !pin.version) throw new SdlcScreeningValidationError('Pin identity is required');
-    assertDigest(pin.digest, pin.id);
-    const key = `${pin.id}\0${pin.version}`;
-    if (seen.has(key)) throw new SdlcScreeningValidationError(`Duplicate pin: ${pin.id}`);
-    seen.add(key);
+function isDigest(value: unknown): value is `sha256:${string}` {
+  return typeof value === 'string' && digestPattern.test(value);
+}
+
+function isPin(value: unknown): value is SdlcScreeningPin {
+  return isRecord(value) && isNonEmptyString(value.id) && isNonEmptyString(value.version) && isDigest(value.digest);
+}
+
+function assertBps(value: unknown, label: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > 10_000) {
+    throw new SdlcScreeningValidationError(`Invalid basis points: ${label}`, 'invalid-observation');
   }
 }
 
-function subjectPins(subject: SdlcScreeningSubject): SdlcScreeningPin[] {
-  return subject.kind === 'citation' ? [...subject.evidence] : [...subject.evidence];
+function requireKnown(ids: readonly string[], value: string): void {
+  if (!ids.includes(value)) reject(`unknown-id: ${value}`, 'unknown-id', 'review', value);
+}
+
+function rejectUnknownKeys(value: object, allowed: readonly string[], label: string,
+  reason: SdlcPreflightReason = 'invalid-request'): void {
+  const unknown = Object.keys(value).filter(key => !allowed.includes(key));
+  if (unknown.length) reject(`${label} contains unsupported fields: ${unknown.join(', ')}`, reason);
+}
+
+/** Resolves the gate policy by host pin through `assertArtifactPin`; the request can only reference it. */
+function resolveTrustedGatePolicy(request: SdlcScreeningRequest, trust: SdlcScreeningTrustContext | undefined): SdlcGateEvidencePolicy {
+  if (!isRecord(trust) || !isPin(trust.gatePolicyPin) || !Array.isArray(trust.gatePolicies)) {
+    reject('Trusted gate policy context is required', 'gate-policy-untrusted', 'review');
+  }
+  const pin = trust.gatePolicyPin;
+  const matches = trust.gatePolicies.filter(policy => isRecord(policy) && isRecord(policy.metadata)
+    && policy.metadata.id === pin.id && policy.metadata.version === pin.version);
+  if (matches.length !== 1) reject('Pinned gate policy is not uniquely registered', 'gate-policy-untrusted', 'review', pin.id);
+  const policy = matches[0]!;
+  try {
+    assertArtifactPin(policy, pin, 'SDLC gate policy');
+  } catch {
+    reject('Gate policy does not match its trusted pin', 'gate-policy-untrusted', 'review', pin.id);
+  }
+  const requested = request.gatePolicyPin;
+  if (!isPin(requested) || Object.keys(requested).length !== 3
+    || requested.id !== pin.id || requested.version !== pin.version || requested.digest !== pin.digest) {
+    reject('Request gate policy does not match the trusted pinned policy', 'gate-policy-mismatch', 'review', pin.id);
+  }
+  // Freeze a private copy so later mutation of the registry cannot change this evaluation.
+  const resolved = structuredClone(policy);
+  validateGatePolicy(resolved, request.inventory);
+  return resolved;
+}
+
+function validateGatePolicy(policy: SdlcGateEvidencePolicy, inventory: SdlcScreeningInventory): void {
+  const invalid = (id: string): never => reject(`Invalid gate policy entry: ${id}`, 'gate-policy-invalid', 'review', id);
+  if (policy.kind !== SDLC_GATE_EVIDENCE_POLICY_KIND || !isRecord(policy.spec)
+    || !isRecord(policy.spec.requiredEvidenceByCriterion) || !isRecord(policy.spec.evidenceSubjects)) invalid('policy');
+  rejectUnknownKeys(policy, ['kind', 'metadata', 'spec'], 'Gate policy', 'gate-policy-invalid');
+  rejectUnknownKeys(policy.spec, ['requiredEvidenceByCriterion', 'evidenceSubjects'], 'Gate policy spec', 'gate-policy-invalid');
+  const criteria = new Set(inventory.criterionIds);
+  const evidence = new Set(inventory.evidenceIds);
+  for (const [evidenceId, owner] of Object.entries(policy.spec.evidenceSubjects)) {
+    if (!isRecord(owner)) invalid(evidenceId);
+    if (owner.kind === 'phase-criterion') {
+      rejectUnknownKeys(owner, ['kind', 'criterionId'], 'Gate policy owner', 'gate-policy-invalid');
+      if (!isNonEmptyString(owner.criterionId)) invalid(evidenceId);
+      if (!evidence.has(evidenceId) || !criteria.has(owner.criterionId)) reject(`unknown-id: ${evidenceId}`, 'unknown-id', 'review', evidenceId);
+    } else if (owner.kind === 'citation') {
+      rejectUnknownKeys(owner, ['kind', 'claimId', 'sourceId', 'locator', 'trust', 'sensitivity'], 'Gate policy owner', 'gate-policy-invalid');
+      if (evidenceId !== owner.sourceId || !isNonEmptyString(owner.claimId) || !isNonEmptyString(owner.locator)
+        || !TRUST_VALUES.includes(owner.trust) || !SENSITIVITY_VALUES.includes(owner.sensitivity)) invalid(evidenceId);
+      requireKnown(inventory.claimIds, owner.claimId);
+      requireKnown(inventory.sourceIds, owner.sourceId);
+      requireKnown(inventory.locators, owner.locator);
+    } else {
+      invalid(evidenceId);
+    }
+  }
+  for (const [criterionId, ids] of Object.entries(policy.spec.requiredEvidenceByCriterion)) {
+    if (!criteria.has(criterionId)) reject(`criterion-missing: ${criterionId}`, 'criterion-missing', 'review', criterionId);
+    if (!isStringArray(ids) || !ids.length || new Set(ids).size !== ids.length) invalid(criterionId);
+    for (const id of ids) {
+      const owner = hasOwn(policy.spec.evidenceSubjects, id) ? policy.spec.evidenceSubjects[id] : undefined;
+      if (!evidence.has(id)) reject(`unknown-id: ${id}`, 'unknown-id', 'review', id);
+      if (!owner || owner.kind !== 'phase-criterion' || owner.criterionId !== criterionId) invalid(id);
+    }
+  }
+}
+
+function validateInventory(inventory: unknown): asserts inventory is SdlcScreeningInventory {
+  if (!isRecord(inventory)) reject('Screening inventory is required');
+  rejectUnknownKeys(inventory, ['claimIds', 'requirementIds', 'sourceIds', 'locators', 'criterionIds', 'evidenceIds'], 'Screening inventory');
+  for (const key of ['claimIds', 'requirementIds', 'sourceIds', 'locators', 'criterionIds', 'evidenceIds']) {
+    if (!isStringArray(inventory[key])) reject(`Screening inventory ${key} must be a string array`);
+  }
+}
+
+function validateSourceEvidence(source: unknown): asserts source is SdlcSourceEvidence {
+  if (!isRecord(source)) reject('Citation source evidence must be an object', 'invalid-evidence');
+  rejectUnknownKeys(source, ['id', 'version', 'digest', 'locator', 'locatorExists', 'retrieved', 'contentDigest', 'content',
+    'provenanceVerified', 'publicationAuthorized', 'trust', 'sensitivity'], 'Citation source evidence', 'invalid-evidence');
+  if (!isPin(source) || !isNonEmptyString(source.locator) || !isDigest(source.contentDigest)
+    || (source.content !== undefined && typeof source.content !== 'string')
+    || [source.locatorExists, source.retrieved, source.provenanceVerified, source.publicationAuthorized].some(value => typeof value !== 'boolean')
+    || !TRUST_VALUES.includes(source.trust as DecisionTrust) || !SENSITIVITY_VALUES.includes(source.sensitivity as DecisionSensitivity)) {
+    reject('Invalid citation source evidence', 'invalid-evidence', 'fail', isNonEmptyString(source.id) ? source.id : 'validation');
+  }
+}
+
+function validateGateEvidenceItem(item: unknown): asserts item is SdlcGateEvidenceItem {
+  if (!isRecord(item)) reject('Gate evidence item must be an object', 'invalid-evidence');
+  const id = isNonEmptyString(item.id) ? item.id : 'validation';
+  rejectUnknownKeys(item, ['id', 'version', 'digest', 'type', 'required', 'present', 'passed', 'expiresAtEpochMs'], 'Gate evidence item', 'invalid-evidence');
+  if (!isPin(item) || !EVIDENCE_TYPES.includes(item.type as SdlcGateEvidenceItem['type'])
+    || [item.required, item.present, item.passed].some(value => typeof value !== 'boolean')) {
+    reject('Invalid gate evidence item', 'invalid-evidence', 'fail', id);
+  }
+  if (item.expiresAtEpochMs !== undefined
+    && (typeof item.expiresAtEpochMs !== 'number' || !Number.isSafeInteger(item.expiresAtEpochMs) || item.expiresAtEpochMs < 0)) {
+    reject('Evidence expiry must be a non-negative integer epoch', 'invalid-evidence', 'fail', id);
+  }
 }
 
 function validateSubject(request: SdlcScreeningRequest): void {
-  if (request.schemaVersion !== SDLC_SCREENING_SCHEMA_VERSION) throw new SdlcScreeningValidationError('Unsupported screening schema');
-  if (!Number.isSafeInteger(request.nowEpochMs) || request.nowEpochMs < 0) throw new SdlcScreeningValidationError('Invalid screening clock');
   const { inventory, subject } = request;
-  if (!subject.subjectId || !subject.requirementIds.length) throw new SdlcScreeningValidationError('Screening subject identity is required');
-  for (const requirementId of subject.requirementIds) requireKnown(inventory.requirementIds, requirementId, 'unknown-id');
-  validatePins(subjectPins(subject));
+  if (!isRecord(subject) || (subject.kind !== 'citation' && subject.kind !== 'phase-criterion')) reject('Screening subject kind is required');
+  if (!isNonEmptyString(subject.subjectId) || !isStringArray(subject.requirementIds) || !subject.requirementIds.length) {
+    reject('Screening subject identity is required');
+  }
+  for (const requirementId of subject.requirementIds) requireKnown(inventory.requirementIds, requirementId);
+  if (!Array.isArray(subject.evidence) || !subject.evidence.length) reject('Screening subject evidence is required', 'required-evidence-missing', 'review');
   if (subject.kind === 'citation') {
-    if (subject.evidence.length !== 1) throw new SdlcScreeningValidationError('Citation screening requires exactly one source');
-    requireKnown(inventory.claimIds, subject.claimId, 'unknown-id');
-    requireKnown(inventory.sourceIds, subject.sourceId, 'unknown-id');
-    requireKnown(inventory.locators, subject.locator, 'unknown-id');
+    rejectUnknownKeys(subject, ['kind', 'subjectId', 'claimId', 'requirementIds', 'sourceId', 'locator', 'evidence'], 'Citation subject');
+    if (!isNonEmptyString(subject.claimId) || !isNonEmptyString(subject.sourceId) || !isNonEmptyString(subject.locator)) {
+      reject('Citation subject identity is required');
+    }
+    if (subject.evidence.length !== 1) reject('Citation screening requires exactly one source', 'subject-isolation-violated', 'review');
+    requireKnown(inventory.claimIds, subject.claimId);
+    requireKnown(inventory.sourceIds, subject.sourceId);
+    requireKnown(inventory.locators, subject.locator);
     const [source] = subject.evidence;
-    if (source.id !== subject.sourceId || source.locator !== subject.locator) throw new SdlcScreeningValidationError('Citation subject and source evidence mismatch');
-    assertDigest(source.contentDigest, source.id);
+    validateSourceEvidence(source);
+    if (source.id !== subject.sourceId || source.locator !== subject.locator) {
+      reject('Citation subject and source evidence mismatch', 'subject-isolation-violated', 'review', source.id);
+    }
   } else {
-    requireKnown(inventory.criterionIds, subject.criterionId, 'unknown-id');
-    if (!subject.evidence.length) throw new SdlcScreeningValidationError('Criterion screening requires at least one evidence item');
-    for (const item of subject.evidence) requireKnown(inventory.evidenceIds, item.id, 'unknown-id');
-    validateGatePolicy(request);
-  }
-}
-
-function validateGatePolicy(request: SdlcScreeningRequest): void {
-  const policy = request.gatePolicy;
-  if (!policy) throw new SdlcScreeningValidationError('criterion-missing: gate policy is required');
-  validatePins([policy]);
-  const criteria = new Set(request.inventory.criterionIds);
-  const evidence = new Set(request.inventory.evidenceIds);
-  for (const [criterionId, ids] of Object.entries(policy.requiredEvidenceByCriterion)) {
-    if (!criteria.has(criterionId) || !ids.length || new Set(ids).size !== ids.length || ids.some(id => !evidence.has(id))) {
-      throw new SdlcScreeningValidationError(`criterion-missing: ${criterionId}`);
-    }
-  }
-  for (const [evidenceId, owner] of Object.entries(policy.evidenceSubjects)) {
-    if (owner.kind === 'phase-criterion') {
-      if (!evidence.has(evidenceId) || !criteria.has(owner.criterionId)) {
-        throw new SdlcScreeningValidationError(`unknown-id: ${evidenceId}`);
-      }
-    }
-    if (owner.kind === 'citation') {
-      if (evidenceId !== owner.sourceId) throw new SdlcScreeningValidationError(`unknown-id: ${evidenceId}`);
-      requireKnown(request.inventory.claimIds, owner.claimId, 'unknown-id');
-      requireKnown(request.inventory.sourceIds, owner.sourceId, 'unknown-id');
-      requireKnown(request.inventory.locators, owner.locator, 'unknown-id');
+    rejectUnknownKeys(subject, ['kind', 'subjectId', 'criterionId', 'requirementIds', 'evidence'], 'Criterion subject');
+    if (!isNonEmptyString(subject.criterionId)) reject('Criterion subject identity is required');
+    requireKnown(inventory.criterionIds, subject.criterionId);
+    const seen = new Set<string>();
+    for (const item of subject.evidence) {
+      validateGateEvidenceItem(item);
+      // Duplicates are rejected outright; there is no "latest version wins" resolution.
+      if (seen.has(item.id)) reject(`Duplicate evidence ID: ${item.id}`, 'duplicate-evidence-id', 'fail', item.id);
+      seen.add(item.id);
+      requireKnown(inventory.evidenceIds, item.id);
     }
   }
 }
 
-function validateObservation(subject: SdlcScreeningSubject, observation?: SdlcScreeningObservation): void {
-  if (!observation) return;
+function validateRequest(request: SdlcScreeningRequest, trust: SdlcScreeningTrustContext | undefined): SdlcGateEvidencePolicy {
+  rejectUnknownKeys(request, ['schemaVersion', 'mode', 'inventory', 'gatePolicyPin', 'subject', 'observation', 'nowEpochMs'], 'Screening request');
+  if (request.schemaVersion !== SDLC_SCREENING_SCHEMA_VERSION) reject('Unsupported screening schema');
+  if (typeof request.nowEpochMs !== 'number' || !Number.isSafeInteger(request.nowEpochMs) || request.nowEpochMs < 0) {
+    reject('Invalid screening clock');
+  }
+  validateInventory(request.inventory);
+  const policy = resolveTrustedGatePolicy(request, trust);
+  validateSubject(request);
+  return policy;
+}
+
+function validateObservation(subject: SdlcScreeningSubject, observation: unknown): void {
+  if (observation === undefined) return;
+  if (!isRecord(observation)) reject('Observation must be an object', 'invalid-observation');
   assertBps(observation.confidenceBps, 'confidence');
-  if (!Number.isSafeInteger(observation.attempts) || observation.attempts < 1) throw new SdlcScreeningValidationError('Observation attempts must be positive');
-  if (!observation.model) throw new SdlcScreeningValidationError('Observation model is required');
+  if (typeof observation.attempts !== 'number' || !Number.isSafeInteger(observation.attempts) || observation.attempts < 1) {
+    reject('Observation attempts must be positive', 'invalid-observation');
+  }
+  if (!isNonEmptyString(observation.model)) reject('Observation model is required', 'invalid-observation');
   if (subject.kind === 'citation') {
-    rejectUnknownKeys(observation, ['kind', 'claimId', 'sourceId', 'locator', 'support', 'supportStrengthBps', 'injection', 'confidenceBps', 'model', 'attempts'], 'Citation observation');
-    if (observation.kind !== 'citation' || observation.claimId !== subject.claimId ||
-        observation.sourceId !== subject.sourceId || observation.locator !== subject.locator) {
-      throw new SdlcScreeningValidationError('Observation subject mismatch');
+    rejectUnknownKeys(observation, ['kind', 'claimId', 'sourceId', 'locator', 'support', 'supportDistribution', 'supportStrengthBps',
+      'injection', 'confidenceBps', 'model', 'attempts'], 'Citation observation', 'invalid-observation');
+    if (!SUPPORT_LABELS.includes(observation.support as SdlcSupportLabel)
+      || !['yes', 'no', 'unclear'].includes(observation.injection as string)
+      || (observation.supportDistribution !== undefined && !isRecord(observation.supportDistribution))) {
+      reject('Citation observation is outside the closed answer domain', 'invalid-observation');
     }
     assertBps(observation.supportStrengthBps, 'support strength');
+    if (observation.kind !== 'citation' || observation.claimId !== subject.claimId ||
+        observation.sourceId !== subject.sourceId || observation.locator !== subject.locator) {
+      reject('Observation subject mismatch', 'subject-isolation-violated', 'review');
+    }
   } else {
-    rejectUnknownKeys(observation, ['kind', 'criterionId', 'evidenceIds', 'relevance', 'completeness', 'contradiction', 'ambiguity', 'reviewerAttention', 'confidenceBps', 'model', 'attempts'], 'Criterion observation');
-    if (observation.kind !== 'phase-criterion' || observation.criterionId !== subject.criterionId ||
-        canonicalJson([...observation.evidenceIds].sort()) !== canonicalJson(subject.evidence.map(item => item.id).sort())) {
-      throw new SdlcScreeningValidationError('Observation subject mismatch');
+    rejectUnknownKeys(observation, ['kind', 'criterionId', 'evidenceIds', 'relevance', 'completeness', 'contradiction', 'ambiguity',
+      'reviewerAttention', 'distributions', 'confidenceBps', 'model', 'attempts'], 'Criterion observation', 'invalid-observation');
+    for (const [field, options] of Object.entries(CRITERION_OPTIONS)) {
+      if (!(options as readonly string[]).includes(observation[field] as string)) {
+        reject('Criterion observation is outside the closed answer domain', 'invalid-observation');
+      }
+    }
+    if (observation.distributions !== undefined && (!isRecord(observation.distributions)
+      || Object.keys(observation.distributions).some(key => !hasOwn(CRITERION_OPTIONS, key)))) {
+      reject('Criterion observation distributions are invalid', 'invalid-observation');
+    }
+    if (observation.kind !== 'phase-criterion' || observation.criterionId !== subject.criterionId
+      || !isStringArray(observation.evidenceIds)
+      || canonicalJson([...observation.evidenceIds].sort()) !== canonicalJson(subject.evidence.map(item => item.id).sort())) {
+      reject('Observation subject mismatch', 'subject-isolation-violated', 'review');
     }
   }
 }
 
+/**
+ * Deterministic preflight over one validated subject and the trusted gate policy.
+ * Every bundle item is inspected, not only policy-required ones.
+ */
 export function sdlcScreeningPreflight(
   subject: SdlcScreeningSubject,
   nowEpochMs: number,
-  gatePolicy?: SdlcGateEvidencePolicy,
+  gatePolicy: SdlcGateEvidencePolicy,
 ): SdlcPreflightFinding[] {
   const findings: SdlcPreflightFinding[] = [];
+  const owners = gatePolicy.spec.evidenceSubjects;
   if (subject.kind === 'citation') {
     const [source] = subject.evidence;
+    const owner = hasOwn(owners, source.id) ? owners[source.id] : undefined;
+    const citationOwner = owner?.kind === 'citation' && owner.claimId === subject.claimId
+      && owner.sourceId === subject.sourceId && owner.locator === subject.locator ? owner : null;
+    if (!citationOwner) findings.push({ reason: 'subject-isolation-violated', id: source.id, status: 'review' });
     if (source.id !== subject.sourceId) findings.push({ reason: 'source-not-found', id: subject.sourceId, status: 'review' });
     if (source.locator !== subject.locator || !source.locatorExists) findings.push({ reason: 'locator-not-found', id: subject.locator, status: 'review' });
     if (!source.retrieved) findings.push({ reason: 'source-not-retrieved', id: subject.locator, status: 'review' });
     if (!source.provenanceVerified) findings.push({ reason: 'source-provenance-unverified', id: source.id, status: 'review' });
     if (!source.publicationAuthorized) findings.push({ reason: 'publication-not-authorized', id: source.id, status: 'review' });
-    if (source.trust !== 'verified') findings.push({ reason: 'evidence-untrusted', id: source.id, status: 'review' });
-    if (source.sensitivity === 'restricted') findings.push({ reason: 'evidence-restricted', id: source.id, status: 'review' });
-    findings.push(...projectionBoundaryFindings(subject));
-    if (source.content !== undefined && digest(source.content) !== source.contentDigest) {
+    // Trust and sensitivity come from the trusted policy; a caller claim that differs is itself a finding.
+    const trust: DecisionTrust = citationOwner?.trust ?? 'untrusted';
+    const sensitivity: DecisionSensitivity = citationOwner?.sensitivity ?? 'restricted';
+    if (citationOwner && (source.trust !== citationOwner.trust || source.sensitivity !== citationOwner.sensitivity)) {
+      findings.push({ reason: 'evidence-trust-mismatch', id: source.id, status: 'review' });
+    }
+    if (trust !== 'verified') findings.push({ reason: 'evidence-untrusted', id: source.id, status: 'review' });
+    if (sensitivity === 'restricted') findings.push({ reason: 'evidence-restricted', id: source.id, status: 'review' });
+    findings.push(...projectionBoundaryFindings(subject, trust, sensitivity));
+    if (source.content === undefined) {
+      findings.push({ reason: 'content-unverified', id: source.id, status: 'review' });
+    } else if (digest(source.content) !== source.contentDigest) {
       findings.push({ reason: 'content-digest-mismatch', id: source.id, status: 'review' });
     }
-    const owner = gatePolicy?.evidenceSubjects[source.id];
-    if (owner && (owner.kind !== 'citation' || owner.claimId !== subject.claimId ||
-        owner.sourceId !== subject.sourceId || owner.locator !== subject.locator)) {
-      findings.push({ reason: 'subject-isolation-violated', id: source.id, status: 'review' });
-    }
-    return findings;
+    return uniqueFindings(findings);
   }
-  const required = gatePolicy?.requiredEvidenceByCriterion[subject.criterionId];
+  const required = hasOwn(gatePolicy.spec.requiredEvidenceByCriterion, subject.criterionId)
+    ? gatePolicy.spec.requiredEvidenceByCriterion[subject.criterionId] : undefined;
   if (!required?.length) findings.push({ reason: 'criterion-missing', id: subject.criterionId, status: 'review' });
-  const byId = new Map(subject.evidence.map(item => [item.id, item]));
-  for (const id of required ?? []) {
-    const item = byId.get(id);
-    const owner = gatePolicy?.evidenceSubjects[id];
-    if (!item) {
-      findings.push({ reason: 'required-evidence-missing', id, status: 'review' });
-      continue;
-    }
-    if (owner && (owner.kind !== 'phase-criterion' || owner.criterionId !== subject.criterionId)) {
-      findings.push({ reason: 'subject-isolation-violated', id: item.id, status: 'review' });
+  const counts = new Map<string, number>();
+  for (const item of subject.evidence) counts.set(item.id, (counts.get(item.id) ?? 0) + 1);
+  for (const item of subject.evidence) {
+    if ((counts.get(item.id) ?? 0) > 1) findings.push({ reason: 'duplicate-evidence-id', id: item.id, status: 'fail' });
+    const owner = hasOwn(owners, item.id) ? owners[item.id] : undefined;
+    if (!owner || owner.kind !== 'phase-criterion' || owner.criterionId !== subject.criterionId) {
+      findings.push({ reason: 'foreign-evidence', id: item.id, status: 'review' });
     }
     if (!item.present) {
       const reason: SdlcPreflightReason = item.type === 'artifact' ? 'artifact-missing'
@@ -534,17 +823,35 @@ export function sdlcScreeningPreflight(
     } else if (!item.passed) {
       const reason: SdlcPreflightReason = item.type === 'test-result' ? 'test-failed'
         : item.type === 'signature' ? 'signature-invalid'
-        : item.type === 'schema' ? 'schema-invalid' : 'required-evidence-missing';
+        : item.type === 'schema' ? 'schema-invalid'
+        : item.type === 'approval' ? 'approval-absent' : 'artifact-missing';
       findings.push({ reason, id: item.id, status: item.type === 'test-result' ? 'fail' : 'review' });
     }
-    if (item.expiresAtEpochMs !== undefined && item.expiresAtEpochMs <= nowEpochMs) {
-      findings.push({ reason: 'evidence-expired', id: item.id, status: 'review' });
+    if (item.expiresAtEpochMs !== undefined) {
+      if (!Number.isSafeInteger(item.expiresAtEpochMs) || item.expiresAtEpochMs < 0) {
+        findings.push({ reason: 'invalid-evidence', id: item.id, status: 'fail' });
+      } else if (item.expiresAtEpochMs <= nowEpochMs) {
+        findings.push({ reason: 'evidence-expired', id: item.id, status: 'review' });
+      }
     }
   }
-  return findings;
+  for (const id of required ?? []) {
+    if (!counts.has(id)) findings.push({ reason: 'required-evidence-missing', id, status: 'review' });
+  }
+  return uniqueFindings(findings);
 }
 
-function projectionBoundaryFindings(subject: SdlcCitationSubject): SdlcPreflightFinding[] {
+function uniqueFindings(findings: readonly SdlcPreflightFinding[]): SdlcPreflightFinding[] {
+  const seen = new Set<string>();
+  return findings.filter(item => {
+    const key = `${item.reason}\0${item.id}\0${item.status}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function projectionBoundaryFindings(subject: SdlcCitationSubject, trust: DecisionTrust, sensitivity: DecisionSensitivity): SdlcPreflightFinding[] {
   const [source] = subject.evidence;
   const policy: DecisionProjectionPolicy = {
     version: 'sdlc-screening-d10/v1', provider: 'jev', model: 'sdlc-screening',
@@ -552,10 +859,10 @@ function projectionBoundaryFindings(subject: SdlcCitationSubject): SdlcPreflight
     allowIncompleteContext: false, maxSensitivity: 'confidential',
     fields: [{
       pointer: '/evidence/0/content', output: 'sourceContent', source: source.id,
-      subject: subject.subjectId, trust: source.trust, sensitivity: source.sensitivity,
+      subject: subject.subjectId, trust, sensitivity,
       purpose: 'sdlc-evidence-screening', retentionClass: 'metadata-only',
-      accessScopes: ['decision:sdlc-screening'], exportPolicy: source.sensitivity === 'restricted' ? 'denied' : 'sanitized',
-      deletionPolicy: 'erase', backupPolicy: source.sensitivity === 'restricted' ? 'not-persisted' : 'expire-with-primary',
+      accessScopes: ['decision:sdlc-screening'], exportPolicy: sensitivity === 'restricted' ? 'denied' : 'sanitized',
+      deletionPolicy: 'erase', backupPolicy: sensitivity === 'restricted' ? 'not-persisted' : 'expire-with-primary',
       allowedProviders: ['jev'], allowedModels: ['sdlc-screening'],
       allowedOrigins: ['https://decision.invalid'], allowedRegions: ['offline'],
     }],
@@ -564,7 +871,7 @@ function projectionBoundaryFindings(subject: SdlcCitationSubject): SdlcPreflight
     validateProjectionPolicy(policy);
     return [];
   } catch {
-    return [{ reason: source.sensitivity === 'restricted' ? 'evidence-restricted' : 'source-provenance-unverified',
+    return [{ reason: sensitivity === 'restricted' ? 'evidence-restricted' : 'source-provenance-unverified',
       id: source.id, status: 'review' }];
   }
 }
@@ -592,84 +899,102 @@ const screeningAcceptancePolicy: PrimitiveAcceptancePolicy = {
   tieRoute: review,
 };
 
+function calibrationBlock(model: string, calibration: SdlcScreeningTrustContext['calibration'] | undefined): string | null {
+  if (!calibration) return 'calibration-missing';
+  if (!(calibration.registry instanceof CalibrationRegistry)) return 'calibration-invalid';
+  try {
+    const decision = calibration.registry.resolve(calibration.request, calibration.policy);
+    if (decision.actualModel !== model) return 'calibration-model-mismatch';
+    return decision.action === 'allow' ? null : `calibration-${decision.action}`;
+  } catch {
+    return 'calibration-invalid';
+  }
+}
+
 function semanticDecision(
   subject: SdlcScreeningSubject,
-  observation?: SdlcScreeningObservation,
-  calibrationCompatibility?: SdlcScreeningRequest['calibrationCompatibility'],
+  observation: SdlcScreeningObservation | undefined,
+  trust: SdlcScreeningTrustContext | undefined,
 ): SdlcScreeningReceipt['semantic'] {
   if (!observation) return { observed: false, accepted: false, reason: 'semantic-evidence-missing', model: null, attempts: 0, confidenceBps: null };
-  if (calibrationCompatibility && calibrationCompatibility.action !== 'allow') {
-    return { observed: true, accepted: false, reason: `calibration-${calibrationCompatibility.action}`,
-      model: observation.model, attempts: observation.attempts, confidenceBps: observation.confidenceBps };
-  }
-  const { definitions, rulesets } = sdlcScreeningDecisionArtifacts();
+  const base = { observed: true, model: observation.model, attempts: observation.attempts, confidenceBps: observation.confidenceBps };
+  const notAccepted = (reason: string) => ({ ...base, accepted: false, reason });
+  const calibration = calibrationBlock(observation.model, trust?.calibration);
+  if (calibration) return notAccepted(calibration);
+  const { definitions, rulesets } = screeningArtifacts();
   const ruleset = rulesets.find(item => item.metadata.id === (subject.kind === 'citation'
     ? 'sdlc-screening.citation' : 'sdlc-screening.phase-criterion'))!;
   const byId = new Map(definitions.map(item => [item.metadata.id, item]));
   const evaluations: Record<string, DecisionResult> = {};
-  const add = (alias: string, value: string | number, confidenceBps: number, distribution: Record<string, number> | null = null): void => {
-    const pin = ruleset.spec.evaluations.find(item => item.alias === alias)!.decision;
-    const definition = byId.get(pin.id)!;
+  const definitionFor = (alias: string): DecisionDefinition => byId.get(ruleset.spec.evaluations.find(item => item.alias === alias)!.decision.id)!;
+  // Only native provider distributions are accepted (D08); a single confidence number is never expanded into one.
+  const distributionProblem = (alias: string, distribution: unknown): string | null => {
+    if (!isRecord(distribution)) return 'distribution-missing';
+    try {
+      validateDistribution(definitionFor(alias), distribution as Record<string, number>);
+      return null;
+    } catch {
+      return 'distribution-invalid';
+    }
+  };
+  const add = (alias: string, value: string | number, distribution: Record<string, number> | null): void => {
+    const target = definitionFor(alias);
     const raw: AdapterObservation = {
       status: 'success', reason: 'none', value, actualModel: observation.model, requestId: null,
       usage: { inputTokens: null, outputTokens: null, costUsd: null },
       uncertainty: distribution ? {
         source: 'provider', profile: 'sdlc-screening-choice-v1', calibration: 'uncalibrated',
-        confidence: confidenceBps / 10_000, distribution, calibrationRef: null,
+        confidence: observation.confidenceBps / 10_000, distribution, calibrationRef: null,
       } : {
         source: 'provider', profile: 'sdlc-screening-truth-v1', calibration: 'uncalibrated',
         confidence: null, distribution: null, calibrationRef: null,
       },
     };
-    const accepted = distribution ? applyPrimitiveAcceptance(definition, screeningAcceptancePolicy, raw) : raw;
-    evaluations[alias] = decisionResultForScreening(definition, ruleset, alias, accepted, observation.model);
+    const accepted = distribution ? applyPrimitiveAcceptance(target, screeningAcceptancePolicy, raw) : raw;
+    evaluations[alias] = decisionResultForScreening(target, ruleset, alias, accepted, observation.model);
   };
   if (observation.kind === 'citation' && subject.kind === 'citation') {
-    add('support', observation.support, Math.min(observation.confidenceBps, observation.supportStrengthBps),
-      choiceDistribution(['supports', 'does-not-support', 'contradicts', 'unclear'], observation.support,
-        Math.min(observation.confidenceBps, observation.supportStrengthBps)));
-    add('injection', observation.injection === 'yes' ? 1 : observation.injection === 'unclear' ? 0.5 : 0, observation.confidenceBps);
+    const problem = distributionProblem('support', observation.supportDistribution);
+    if (problem) return notAccepted(problem);
+    add('support', observation.support, observation.supportDistribution!);
+    // P(injection): only an explicit "no" carries (1 - confidence); "yes" and "unclear" are 1.
+    add('injection', observation.injection === 'no' ? (10_000 - observation.confidenceBps) / 10_000 : 1, null);
   } else if (observation.kind === 'phase-criterion' && subject.kind === 'phase-criterion') {
-    add('relevance', observation.relevance, observation.confidenceBps,
-      choiceDistribution(['relevant', 'irrelevant', 'unclear'], observation.relevance, observation.confidenceBps));
-    add('completeness', observation.completeness, observation.confidenceBps,
-      choiceDistribution(['complete', 'incomplete', 'unclear'], observation.completeness, observation.confidenceBps));
-    add('contradiction', observation.contradiction, observation.confidenceBps,
-      choiceDistribution(['none', 'present', 'unclear'], observation.contradiction, observation.confidenceBps));
-    add('ambiguity', observation.ambiguity, observation.confidenceBps,
-      choiceDistribution(['low', 'high', 'unclear'], observation.ambiguity, observation.confidenceBps));
-    add('attention', observation.reviewerAttention, observation.confidenceBps,
-      choiceDistribution(['needed', 'not-needed'], observation.reviewerAttention, observation.confidenceBps));
+    const fields = [
+      ['relevance', 'relevance'], ['completeness', 'completeness'], ['contradiction', 'contradiction'],
+      ['ambiguity', 'ambiguity'], ['attention', 'reviewerAttention'],
+    ] as const;
+    for (const [alias, field] of fields) {
+      const problem = distributionProblem(alias, observation.distributions?.[field]);
+      if (problem) return notAccepted(`${problem}:${field}`);
+    }
+    for (const [alias, field] of fields) add(alias, observation[field], observation.distributions![field]!);
   } else {
-    throw new SdlcScreeningValidationError('Observation subject kind mismatch');
+    reject('Observation subject kind mismatch', 'subject-isolation-violated', 'review');
   }
   const composition = composeRuleset(ruleset, { subjectId: subject.subjectId }, evaluations);
-  const outcome = composition.outcome && typeof composition.outcome === 'object' && !Array.isArray(composition.outcome)
-    ? composition.outcome as { route?: unknown; reason?: unknown } : {};
+  const outcome = isRecord(composition.outcome) ? composition.outcome as { route?: unknown; reason?: unknown } : {};
   const route = outcome.route === 'ADVISORY_READY' || outcome.route === 'REVIEW' || outcome.route === 'FAIL'
     ? outcome.route : 'REVIEW';
   const reason = typeof outcome.reason === 'string' ? outcome.reason : composition.reason;
-  return { observed: true, accepted: route === 'ADVISORY_READY', reason,
-    model: observation.model, attempts: observation.attempts, confidenceBps: observation.confidenceBps };
-}
-
-function choiceDistribution(options: readonly string[], selected: string, selectedBps: number): Record<string, number> {
-  const selectedProbability = selectedBps / 10_000;
-  const remaining = Math.max(0, 1 - selectedProbability);
-  const others = options.filter(option => option !== selected);
-  return Object.fromEntries(options.map(option => [option, option === selected ? selectedProbability
-    : others.length ? remaining / others.length : 0]));
+  if (route !== 'ADVISORY_READY') return notAccepted(reason);
+  // Code-level guards independent of the published ruleset data.
+  if (observation.kind === 'citation') {
+    if (observation.injection !== 'no' || observation.confidenceBps < INJECTION_CLEAR_MINIMUM_BPS) return notAccepted('prompt-injection-flagged');
+    if (observation.supportStrengthBps < SUPPORT_STRENGTH_MINIMUM_BPS) return notAccepted('support-strength-low');
+  }
+  return { ...base, accepted: true, reason };
 }
 
 function decisionResultForScreening(
-  definition: DecisionDefinition,
+  target: DecisionDefinition,
   ruleset: DecisionRuleset,
   alias: string,
   observation: AdapterObservation,
   model: string,
 ): DecisionResult {
-  const pin = artifactPin(definition);
-  const rulesetPin = artifactPin(ruleset);
+  const pin = cachedPin(target);
+  const rulesetPin = cachedPin(ruleset);
   const bindingPin = { id: 'sdlc-screening.synthetic-binding', version: '1.0.0', digest: digest('sdlc-screening.synthetic-binding') };
   return {
     apiVersion: DECISION_API_VERSION_STRUCTURED,
@@ -689,82 +1014,104 @@ function decisionResultForScreening(
   };
 }
 
-export function evaluateSdlcEvidenceScreening(request: SdlcScreeningRequest): SdlcScreeningReceipt | null {
+function subjectSummary(subject: unknown): { summary: SdlcScreeningReceipt['subject']; pins: SdlcScreeningPin[] } {
+  const value = isRecord(subject) ? subject : {};
+  const kind = value.kind === 'citation' || value.kind === 'phase-criterion' ? value.kind : 'unknown';
+  const text = (item: unknown): string => typeof item === 'string' ? item : '';
+  const evidence = Array.isArray(value.evidence) ? value.evidence : [];
+  const summary: SdlcScreeningReceipt['subject'] = {
+    kind, subjectId: text(value.subjectId),
+    requirementIds: Array.isArray(value.requirementIds) ? value.requirementIds.filter(isNonEmptyString) : [],
+    evidenceIds: kind === 'citation' ? [text(value.sourceId)].filter(Boolean)
+      : evidence.filter(isRecord).map(item => item.id).filter(isNonEmptyString),
+    ...(kind === 'citation' ? { claimId: text(value.claimId), sourceId: text(value.sourceId), locator: text(value.locator) }
+      : kind === 'phase-criterion' ? { criterionId: text(value.criterionId) } : {}),
+  };
+  const pins = evidence.filter(isPin).map(pin => ({ id: pin.id, version: pin.version, digest: pin.digest }));
+  return { summary, pins };
+}
+
+function optionalDigest(value: unknown): `sha256:${string}` | null {
+  if (value === undefined) return null;
+  try { return digest(value); }
+  catch { return null; }
+}
+
+function validationFinding(error: SdlcScreeningValidationError): SdlcPreflightFinding {
+  return { reason: error.reason, id: error.id, status: error.status };
+}
+
+/**
+ * Advisory screening for one subject. `disabled` returns null without reading anything else;
+ * an invalid `mode` throws. In shadow/advisory mode every other malformed input produces a
+ * non-ready receipt instead of an exception.
+ */
+export function evaluateSdlcEvidenceScreening(
+  request: SdlcScreeningRequest,
+  trust?: SdlcScreeningTrustContext,
+): SdlcScreeningReceipt | null {
+  if (!isRecord(request) || !SCREENING_MODES.includes(request.mode)) {
+    throw new SdlcScreeningValidationError('Invalid screening mode', 'invalid-request');
+  }
   if (request.mode === 'disabled') return null;
-  let validationFindings: SdlcPreflightFinding[] = [];
+  const mode = request.mode;
+  let findings: SdlcPreflightFinding[] = [];
+  let semantic: SdlcScreeningReceipt['semantic'] | null = null;
+  let gatePolicy: SdlcScreeningPin | null = null;
+  const notObserved = (reason: string) => ({ observed: false, accepted: false, reason, model: null, attempts: 0, confidenceBps: null });
   try {
-    validateSubject(request);
+    const policy = validateRequest(request, trust);
+    gatePolicy = { ...trust!.gatePolicyPin };
     validateObservation(request.subject, request.observation);
+    findings = sdlcScreeningPreflight(request.subject, request.nowEpochMs, policy);
+    semantic = semanticDecision(request.subject, request.observation, trust);
   } catch (error) {
-    if (!(error instanceof SdlcScreeningValidationError)) throw error;
-    validationFindings = [validationFinding(error)];
+    const finding = error instanceof SdlcScreeningValidationError ? validationFinding(error)
+      : { reason: 'invalid-request' as const, id: 'validation', status: 'fail' as const };
+    findings = uniqueFindings([...findings, finding]);
+    semantic ??= notObserved(finding.reason);
   }
-  const findings = validationFindings.length ? validationFindings
-    : sdlcScreeningPreflight(request.subject, request.nowEpochMs, request.gatePolicy);
   const status = deterministicStatus(findings);
-  let semantic: SdlcScreeningReceipt['semantic'];
-  try {
-    semantic = validationFindings.length
-      ? { observed: false, accepted: false, reason: validationFindings[0]!.reason, model: null, attempts: 0, confidenceBps: null }
-      : semanticDecision(request.subject, request.observation, request.calibrationCompatibility);
-  } catch (error) {
-    if (!(error instanceof SdlcScreeningValidationError)) throw error;
-    semantic = { observed: false, accepted: false, reason: 'invalid-observation', model: null, attempts: 0, confidenceBps: null };
-    findings.push(validationFinding(error));
-  }
-  const reviewReasons = uniqueStrings([...findings.map(item => item.reason), ...(semantic.accepted ? [] : [semantic.reason])]);
   const route: SdlcScreeningRoute = status === 'fail' ? 'FAIL'
     : status === 'review' ? 'REVIEW'
     : semantic.accepted ? 'ADVISORY_READY' : 'REVIEW';
-  const evidenceIds = request.subject.kind === 'phase-criterion' ? request.subject.evidence.map(item => item.id) : [request.subject.sourceId];
-  const receipt: SdlcScreeningReceipt = {
+  const reviewReasons = uniqueStrings([...findings.map(item => item.reason), ...(semantic.accepted ? [] : [semantic.reason])]);
+  const { summary, pins } = subjectSummary(request.subject);
+  return {
     schemaVersion: SDLC_SCREENING_SCHEMA_VERSION,
-    mode: request.mode,
-    subject: {
-      kind: request.subject.kind, subjectId: request.subject.subjectId,
-      requirementIds: [...request.subject.requirementIds], evidenceIds,
-      ...(request.subject.kind === 'citation' ? { claimId: request.subject.claimId, sourceId: request.subject.sourceId, locator: request.subject.locator }
-        : { criterionId: request.subject.criterionId }),
-    },
+    mode,
+    subject: summary,
     deterministic: { status, findings },
     semantic,
     route,
     reviewRequired: route !== 'ADVISORY_READY',
     reviewReasons,
-    pins: subjectPins(request.subject).map(pin => ({ id: pin.id, version: pin.version, digest: pin.digest })),
-    trace: { redaction: 'metadata-only', subjectDigest: digest(request.subject), observationDigest: request.observation ? optionalDigest(request.observation) : null },
+    gatePolicy,
+    pins,
+    trace: { redaction: 'metadata-only', subjectDigest: optionalDigest(request.subject), observationDigest: optionalDigest(request.observation) },
     action: { status: 'unexecuted' },
   };
-  return receipt;
-}
-
-function validationFinding(error: SdlcScreeningValidationError): SdlcPreflightFinding {
-  const message = error.message;
-  const reason: SdlcPreflightReason = message.includes('unknown-id') ? 'unknown-id'
-    : message.includes('criterion-missing') ? 'criterion-missing'
-    : message.includes('subject mismatch') || message.includes('mismatch') ? 'subject-isolation-violated'
-    : 'invalid-observation';
-  return { reason, id: 'validation', status: reason === 'invalid-observation' ? 'fail' : 'review' };
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-function optionalDigest(value: unknown): `sha256:${string}` | null {
-  try { return digest(value); }
-  catch { return null; }
-}
-
+/**
+ * Pass-through over a host-owned gate outcome. AIWG has no programmatic SDLC phase-gate
+ * evaluator (flow-gate-check is an agent-executed skill), so this adapter only guarantees
+ * that screening never alters the outcome value or publication state a host passes in.
+ */
 export function applySdlcScreeningToGateOutcome<T extends JsonValue>(
   currentOutcome: T,
   mode: SdlcScreeningMode,
   auditReceipts: SdlcScreeningPin[] = [],
   receipt: SdlcScreeningReceipt | null = null,
 ): SdlcScreeningOutcomeApplication<T> {
+  if (!SCREENING_MODES.includes(mode)) throw new SdlcScreeningValidationError('Invalid screening mode', 'invalid-request');
   const base = { outcome: structuredClone(currentOutcome), publication: 'unchanged' as const,
     auditReceipts: auditReceipts.map(item => ({ ...item })) };
-  return mode === 'disabled' || !receipt ? base : { ...base, alternateScreening: receipt };
+  return mode === 'disabled' || !receipt ? base : { ...base, alternateScreening: structuredClone(receipt) };
 }
 
 export function sdlcScreeningReviewInputFromReceipt(
@@ -786,9 +1133,12 @@ export function sdlcScreeningReviewInputFromReceipt(
     ? reviewDigest(options.requesterPresentation) : null;
   return {
     reviewId: options.reviewId,
-    sourceReceipt: { id: receipt.subject.subjectId, digest: reviewDigest(receipt) },
+    sourceReceipt: { id: receipt.subject.subjectId || 'sdlc-screening-invalid-subject', digest: reviewDigest(receipt) },
     evidencePins: receipt.pins,
-    policyPins: [{ id: 'sdlc-evidence-screening', version: '1.0.0', digest: policyDigest }],
+    policyPins: [
+      { id: 'sdlc-evidence-screening', version: '1.0.0', digest: policyDigest },
+      ...(receipt.gatePolicy ? [{ ...receipt.gatePolicy }] : []),
+    ],
     reasonCodes: [...receipt.reviewReasons],
     riskTier: options.riskTier,
     presentation: {
@@ -807,112 +1157,278 @@ export function sdlcScreeningReviewInputFromReceipt(
   };
 }
 
-export function evaluateSdlcScreeningPreregistration(
-  preregistration: SdlcScreeningPreregistration,
-  report: SdlcScreeningHeldoutReport | null,
-): { decision: 'pass' | 'fail' | 'insufficient-evidence'; reasons: string[] } {
-  if (preregistration.schemaVersion !== SDLC_SCREENING_PREREGISTRATION_VERSION || !preregistration.planId) {
-    throw new SdlcScreeningValidationError('Invalid screening preregistration');
+/** Canonical digest a host anchors separately before held-out access. */
+export function sdlcScreeningPreregistrationDigest(preregistration: SdlcScreeningPreregistration): `sha256:${string}` {
+  return digest(preregistration);
+}
+
+function validatePreregistration(preregistration: SdlcScreeningPreregistration): number {
+  const invalid = (message = 'Invalid screening preregistration'): never => { throw new SdlcScreeningValidationError(message); };
+  if (!isRecord(preregistration) || preregistration.schemaVersion !== SDLC_SCREENING_PREREGISTRATION_VERSION
+    || !isNonEmptyString(preregistration.planId) || !isDigest(preregistration.heldoutSplitDigest)) invalid();
+  rejectUnknownKeys(preregistration, ['schemaVersion', 'planId', 'frozenAt', 'heldoutSplitDigest', 'slices', 'gateBlockingSlices',
+    'maximumFalseSupportRateBps', 'maximumFalseReadyRateBps', 'minimumTotalSupport', 'minimumSliceSupport',
+    'minimumGateBlockingSliceSupport', 'confidenceInterval', 'qualityNonInferiorityBps', 'efficiencyClaim'], 'Screening preregistration');
+  const frozenAt = typeof preregistration.frozenAt === 'string' ? Date.parse(preregistration.frozenAt) : Number.NaN;
+  if (!Number.isFinite(frozenAt)) invalid();
+  if (!isStringArray(preregistration.slices) || !preregistration.slices.length
+    || new Set(preregistration.slices).size !== preregistration.slices.length
+    || !isStringArray(preregistration.gateBlockingSlices) || !preregistration.gateBlockingSlices.length
+    || new Set(preregistration.gateBlockingSlices).size !== preregistration.gateBlockingSlices.length
+    || preregistration.gateBlockingSlices.some(slice => !preregistration.slices.includes(slice))) {
+    invalid('Invalid screening preregistration slices');
   }
-  const frozenAt = Date.parse(preregistration.frozenAt);
-  if (!Number.isFinite(frozenAt)) throw new SdlcScreeningValidationError('Invalid screening preregistration');
   for (const [label, value] of [
     ['maximumFalseSupportRateBps', preregistration.maximumFalseSupportRateBps],
     ['maximumFalseReadyRateBps', preregistration.maximumFalseReadyRateBps],
-    ['confidence level', preregistration.confidenceInterval.levelBps],
     ['qualityNonInferiorityBps', preregistration.qualityNonInferiorityBps],
-  ] as const) assertBps(value, label);
-  if (preregistration.confidenceInterval.levelBps <= 0 || preregistration.confidenceInterval.levelBps >= 10_000) {
-    throw new SdlcScreeningValidationError('Invalid confidence interval level');
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value < 0 || value > 10_000) invalid(`Invalid basis points: ${label}`);
   }
+  if (!isRecord(preregistration.confidenceInterval) || !['wilson', 'exact-binomial'].includes(preregistration.confidenceInterval.method)
+    || !Number.isSafeInteger(preregistration.confidenceInterval.levelBps)
+    || preregistration.confidenceInterval.levelBps <= 0 || preregistration.confidenceInterval.levelBps >= 10_000) {
+    invalid('Invalid confidence interval level');
+  }
+  const claim = preregistration.efficiencyClaim;
   if (!Number.isSafeInteger(preregistration.minimumTotalSupport) || preregistration.minimumTotalSupport < 1
-    || !Number.isSafeInteger(preregistration.minimumGateBlockingSliceSupport)
-    || preregistration.minimumGateBlockingSliceSupport < 1
-    || (preregistration.efficiencyClaim.minimumPositiveTotalEconomicsUsd !== null
-      && (!Number.isFinite(preregistration.efficiencyClaim.minimumPositiveTotalEconomicsUsd)
-        || preregistration.efficiencyClaim.minimumPositiveTotalEconomicsUsd < 0))) {
-    throw new SdlcScreeningValidationError('Invalid screening preregistration minimums');
+    || !Number.isSafeInteger(preregistration.minimumSliceSupport) || preregistration.minimumSliceSupport < 1
+    || !Number.isSafeInteger(preregistration.minimumGateBlockingSliceSupport) || preregistration.minimumGateBlockingSliceSupport < 1
+    || !isRecord(claim) || typeof claim.enabled !== 'boolean'
+    || (claim.minimumPositiveTotalEconomicsUsd !== null
+      && (typeof claim.minimumPositiveTotalEconomicsUsd !== 'number' || !Number.isFinite(claim.minimumPositiveTotalEconomicsUsd)
+        || claim.minimumPositiveTotalEconomicsUsd < 0))) {
+    invalid('Invalid screening preregistration minimums');
   }
-  if (!report) return { decision: 'insufficient-evidence', reasons: ['heldout-report-missing'] };
+  return frozenAt;
+}
+
+function validateHeldoutSample(sample: SdlcScreeningHeldoutSample): void {
+  const invalid = (): never => { throw new SdlcScreeningValidationError(`Invalid held-out sample: ${String(sample?.id)}`); };
+  if (!isRecord(sample) || !isNonEmptyString(sample.id) || !isNonEmptyString(sample.slice)
+    || (sample.kind !== 'citation' && sample.kind !== 'phase-criterion')
+    || !isRecord(sample.gold) || typeof sample.gold.ready !== 'boolean'
+    || !isRecord(sample.candidate) || !ROUTES.includes(sample.candidate.route)
+    || !isRecord(sample.baseline) || typeof sample.baseline.correct !== 'boolean'
+    || (sample.baseline.costUsd !== null && (typeof sample.baseline.costUsd !== 'number' || !Number.isFinite(sample.baseline.costUsd) || sample.baseline.costUsd < 0))
+    || !(sample.reviewer === null || (isRecord(sample.reviewer) && typeof sample.reviewer.agreed === 'boolean'
+      && typeof sample.reviewer.overridden === 'boolean'))) invalid();
+  rejectUnknownKeys(sample, ['id', 'kind', 'slice', 'gold', 'candidate', 'baseline', 'reviewer'], 'Held-out sample');
+  rejectUnknownKeys(sample.gold, ['ready', 'support'], 'Held-out gold label');
+  rejectUnknownKeys(sample.candidate, ['route', 'support', 'readyProbability', 'latencyMs', 'inputTokens', 'outputTokens',
+    'costUsd', 'calls', 'retries', 'fallbacks'], 'Held-out candidate');
+  rejectUnknownKeys(sample.baseline, ['correct', 'costUsd'], 'Held-out baseline');
+  if (sample.reviewer) rejectUnknownKeys(sample.reviewer, ['agreed', 'overridden'], 'Held-out reviewer');
+  const citation = sample.kind === 'citation';
+  for (const label of [sample.gold.support, sample.candidate.support]) {
+    if (citation ? !SUPPORT_LABELS.includes(label as SdlcSupportLabel) : label !== null) invalid();
+  }
+}
+
+function bps(events: number, n: number): number | null {
+  return n > 0 ? Math.round(events / n * 10_000) : null;
+}
+
+function rateEvidence(events: number, n: number): SdlcRateEvidence {
+  if (n === 0) return { events, n, rateBps: null, upperBps: null };
+  const [, upper] = wilson95Interval(events, n);
+  return { events, n, rateBps: bps(events, n), upperBps: Math.ceil(upper * 10_000) };
+}
+
+/** Computes every held-out metric from per-sample records with the #1585 quality helpers. */
+export function computeSdlcScreeningHeldoutReport(records: SdlcScreeningHeldoutRecords): SdlcScreeningHeldoutReport {
+  if (!isRecord(records) || records.schemaVersion !== SDLC_SCREENING_HELDOUT_RECORDS_VERSION
+    || typeof records.evaluatedAt !== 'string' || !Array.isArray(records.samples) || !Array.isArray(records.splits)) {
+    throw new SdlcScreeningValidationError('Invalid held-out records');
+  }
+  rejectUnknownKeys(records, ['schemaVersion', 'evaluatedAt', 'splits', 'samples'], 'Held-out records');
+  verifyQualificationSplits(records.splits);
+  records.samples.forEach(validateHeldoutSample);
+  const samples = records.samples;
+  const binary = evaluateBinaryHeldout(records.splits, samples.map(sample => ({
+    id: sample.id, slice: sample.slice, label: sample.gold.ready ? 1 as const : 0 as const,
+    probability: sample.candidate.readyProbability, accepted: sample.candidate.route === 'ADVISORY_READY',
+    latencyMs: sample.candidate.latencyMs, inputTokens: sample.candidate.inputTokens, outputTokens: sample.candidate.outputTokens,
+    costUsd: sample.candidate.costUsd, calls: sample.candidate.calls, retries: sample.candidate.retries, fallbacks: sample.candidate.fallbacks,
+  })));
+  const citations = samples.filter(sample => sample.kind === 'citation');
+  const classMetrics = (label: SdlcSupportLabel): SdlcClassMetrics => {
+    const truePositive = citations.filter(sample => sample.gold.support === label && sample.candidate.support === label).length;
+    const predicted = citations.filter(sample => sample.candidate.support === label).length;
+    const actual = citations.filter(sample => sample.gold.support === label).length;
+    return { n: actual, precisionBps: bps(truePositive, predicted), recallBps: bps(truePositive, actual) };
+  };
+  const ready = (sample: SdlcScreeningHeldoutSample) => sample.candidate.route === 'ADVISORY_READY';
+  const reviewed = samples.filter(sample => sample.reviewer !== null);
+  const sum = (values: readonly (number | null)[]): number | null =>
+    values.some(value => value === null) ? null : values.reduce<number>((total, value) => total + value!, 0);
+  const baselineCost = sum(samples.map(sample => sample.baseline.costUsd));
+  const candidateCost = binary.overall.costUsd;
+  const test = records.splits.find(split => split.name === 'test')!;
+  return {
+    schemaVersion: SDLC_SCREENING_HELDOUT_REPORT_VERSION,
+    evaluatedAt: records.evaluatedAt,
+    heldoutSplitDigest: test.digest,
+    recordsDigest: digest(records),
+    totalSupport: samples.length,
+    gateBlockingSliceSupport: 0,
+    classes: { support: classMetrics('supports'), contradiction: classMetrics('contradicts'), unclear: classMetrics('unclear') },
+    falseSupport: rateEvidence(citations.filter(sample => ready(sample) && sample.candidate.support === 'supports'
+      && sample.gold.support !== 'supports').length, citations.length),
+    falseReady: rateEvidence(samples.filter(sample => ready(sample) && !sample.gold.ready).length, samples.length),
+    reviewer: {
+      n: reviewed.length,
+      agreementRateBps: bps(reviewed.filter(sample => sample.reviewer!.agreed).length, reviewed.length),
+      overrideRateBps: bps(reviewed.filter(sample => sample.reviewer!.overridden).length, reviewed.length),
+    },
+    paired: {
+      n: samples.length,
+      baselineOnlyCorrect: samples.filter(sample => sample.baseline.correct && ready(sample) !== sample.gold.ready).length,
+      candidateOnlyCorrect: samples.filter(sample => !sample.baseline.correct && ready(sample) === sample.gold.ready).length,
+    },
+    calibrationRiskCoverage: {
+      brier: binary.overall.brier, expectedCalibrationError: binary.overall.expectedCalibrationError,
+      coverage: binary.overall.coverage, selectiveRisk: binary.overall.selectiveRisk,
+    },
+    slices: Object.fromEntries(Object.entries(binary.slices).map(([slice, metrics]) => [slice,
+      { n: metrics.sampleN, coverage: metrics.coverage, selectiveRisk: metrics.selectiveRisk }])),
+    latencyMs: { ...binary.overall.latencyMs },
+    tokens: { input: binary.overall.inputTokens, output: binary.overall.outputTokens },
+    costUsd: { candidate: candidateCost, baseline: baselineCost,
+      netSavings: candidateCost === null || baselineCost === null ? null : baselineCost - candidateCost },
+    reviewLoad: { reviewRate: binary.overall.reviewRate },
+  };
+}
+
+/** Explicit reason-code dispositions; unknown codes fail closed as `fail`. */
+const REASON_DISPOSITIONS: Readonly<Record<string, 'fail' | 'insufficient-evidence'>> = Object.freeze({
+  'preregistration-digest-mismatch': 'fail',
+  'preregistration-frozen-in-future': 'fail',
+  'heldout-records-missing': 'insufficient-evidence',
+  'heldout-evaluated-at-invalid': 'fail',
+  'heldout-not-after-preregistration': 'fail',
+  'heldout-evaluated-in-future': 'fail',
+  'heldout-split-mismatch': 'fail',
+  'heldout-records-invalid': 'fail',
+  'heldout-slice-unregistered': 'fail',
+  'minimum-total-support-missing': 'insufficient-evidence',
+  'slice-support-missing': 'insufficient-evidence',
+  'class-support-missing': 'insufficient-evidence',
+  'gate-blocking-slice-support-missing': 'insufficient-evidence',
+  'confidence-interval-unsupported': 'insufficient-evidence',
+  'false-support-bound-exceeded': 'fail',
+  'false-ready-bound-exceeded': 'fail',
+  'quality-non-inferiority-pending-paired-interval': 'insufficient-evidence',
+  'total-economics-unknown': 'insufficient-evidence',
+  'total-economics-not-positive': 'fail',
+});
+
+function reasonDisposition(reason: string): 'fail' | 'insufficient-evidence' {
+  const code = reason.split(':')[0]!;
+  return hasOwn(REASON_DISPOSITIONS, code) ? REASON_DISPOSITIONS[code]! : 'fail';
+}
+
+/**
+ * Evaluates held-out records against a preregistration anchored by a separately trusted digest.
+ * Structurally invalid preregistrations throw; every evidence problem is a reason code.
+ */
+export function evaluateSdlcScreeningPreregistration(
+  preregistration: SdlcScreeningPreregistration,
+  trustedPreregistrationDigest: `sha256:${string}`,
+  records: SdlcScreeningHeldoutRecords | null,
+  nowEpochMs: number,
+): SdlcScreeningPreregistrationResult {
+  const frozenAt = validatePreregistration(preregistration);
+  if (!Number.isSafeInteger(nowEpochMs) || nowEpochMs < 0) throw new SdlcScreeningValidationError('Invalid preregistration clock');
   const reasons: string[] = [];
-  if (report.evaluatedAt && Date.parse(report.evaluatedAt) <= frozenAt) reasons.push('heldout-not-after-preregistration');
-  if (!heldoutReportFinite(report)) reasons.push('heldout-report-invalid');
+  const finish = (heldout: SdlcScreeningHeldoutReport | null): SdlcScreeningPreregistrationResult => {
+    const unique = uniqueStrings(reasons);
+    const dispositions = unique.map(reasonDisposition);
+    return { decision: dispositions.includes('fail') ? 'fail' : unique.length ? 'insufficient-evidence' : 'pass', reasons: unique, heldout };
+  };
+  if (!isDigest(trustedPreregistrationDigest) || sdlcScreeningPreregistrationDigest(preregistration) !== trustedPreregistrationDigest) {
+    reasons.push('preregistration-digest-mismatch');
+  }
+  if (frozenAt > nowEpochMs) reasons.push('preregistration-frozen-in-future');
+  if (!records) {
+    reasons.push('heldout-records-missing');
+    return finish(null);
+  }
+  const evaluatedAt = isRecord(records) && typeof records.evaluatedAt === 'string' ? Date.parse(records.evaluatedAt) : Number.NaN;
+  if (!Number.isFinite(evaluatedAt)) reasons.push('heldout-evaluated-at-invalid');
+  else {
+    if (evaluatedAt < frozenAt) reasons.push('heldout-not-after-preregistration');
+    if (evaluatedAt > nowEpochMs) reasons.push('heldout-evaluated-in-future');
+  }
+  let report: SdlcScreeningHeldoutReport;
+  try {
+    report = computeSdlcScreeningHeldoutReport(records);
+  } catch {
+    reasons.push('heldout-records-invalid');
+    return finish(null);
+  }
+  if (report.heldoutSplitDigest !== preregistration.heldoutSplitDigest) reasons.push('heldout-split-mismatch');
+  for (const slice of Object.keys(report.slices)) {
+    if (!preregistration.slices.includes(slice)) reasons.push(`heldout-slice-unregistered:${slice}`);
+  }
+  report.gateBlockingSliceSupport = preregistration.gateBlockingSlices
+    .reduce((total, slice) => total + (report.slices[slice]?.n ?? 0), 0);
   if (report.totalSupport < preregistration.minimumTotalSupport) reasons.push('minimum-total-support-missing');
+  for (const slice of preregistration.slices) {
+    if ((report.slices[slice]?.n ?? 0) < preregistration.minimumSliceSupport) reasons.push(`slice-support-missing:${slice}`);
+  }
   if (report.gateBlockingSliceSupport < preregistration.minimumGateBlockingSliceSupport) reasons.push('gate-blocking-slice-support-missing');
-  for (const [label, metric] of Object.entries({ support: report.support, contradiction: report.contradiction, unclear: report.unclear })) {
-    if (metric.n < preregistration.minimumGateBlockingSliceSupport) reasons.push(`class-support-missing:${label}`);
+  for (const [label, metric] of Object.entries(report.classes)) {
+    if (metric.n < preregistration.minimumSliceSupport) reasons.push(`class-support-missing:${label}`);
   }
-  for (const [label, metric] of Object.entries(report.slices)) {
-    if (metric.n < preregistration.minimumGateBlockingSliceSupport) reasons.push(`slice-support-missing:${label}`);
+  // Only the Wilson 95% interval is implemented; any other preregistered method/level fails closed.
+  const intervalSupported = preregistration.confidenceInterval.method === 'wilson' && preregistration.confidenceInterval.levelBps === 9_500;
+  if (!intervalSupported) reasons.push('confidence-interval-unsupported');
+  else {
+    if (report.falseSupport.upperBps === null) reasons.push('class-support-missing:false-support');
+    else if (report.falseSupport.upperBps > preregistration.maximumFalseSupportRateBps) reasons.push('false-support-bound-exceeded');
+    if (report.falseReady.upperBps === null) reasons.push('minimum-total-support-missing');
+    else if (report.falseReady.upperBps > preregistration.maximumFalseReadyRateBps) reasons.push('false-ready-bound-exceeded');
   }
-  if (report.falseSupportRateBps === null || report.falseSupportRateBps > preregistration.maximumFalseSupportRateBps) reasons.push('false-support-bound-failed');
-  if (report.falseReadyRateBps === null || report.falseReadyRateBps > preregistration.maximumFalseReadyRateBps) reasons.push('false-ready-bound-failed');
-  for (const [label, metric] of Object.entries({ support: report.support, contradiction: report.contradiction, unclear: report.unclear })) {
-    if (metric.precisionBps === null || metric.recallBps === null
-      || metric.precisionBps < preregistration.qualityNonInferiorityBps
-      || metric.recallBps < preregistration.qualityNonInferiorityBps) {
-      reasons.push(`quality-non-inferiority-failed:${label}`);
-    }
+  // TODO(#2622): paired non-inferiority needs pairedBinaryDifferenceInterval + pairedNonInferiority from
+  // feat/decision-paired-noninferiority over report.paired at the preregistered CI method/level and
+  // qualityNonInferiorityBps margin. Until that helper lands this fails closed: never pass, never PROMOTE.
+  reasons.push('quality-non-inferiority-pending-paired-interval');
+  if (preregistration.efficiencyClaim.enabled) {
+    const net = report.costUsd.netSavings;
+    if (net === null) reasons.push('total-economics-unknown');
+    else if (net <= 0 || (preregistration.efficiencyClaim.minimumPositiveTotalEconomicsUsd !== null
+      && net < preregistration.efficiencyClaim.minimumPositiveTotalEconomicsUsd)) reasons.push('total-economics-not-positive');
   }
-  if (preregistration.efficiencyClaim.enabled && (report.positiveTotalEconomicsUsd === null || report.positiveTotalEconomicsUsd <= 0 ||
-      (preregistration.efficiencyClaim.minimumPositiveTotalEconomicsUsd !== null && report.positiveTotalEconomicsUsd < preregistration.efficiencyClaim.minimumPositiveTotalEconomicsUsd))) {
-    reasons.push('positive-total-economics-missing');
-  }
-  return reasons.length ? { decision: reasons.some(reason => reason.includes('missing') || reason.includes('support'))
-    ? 'insufficient-evidence' : 'fail', reasons } : { decision: 'pass', reasons: [] };
-}
-
-function heldoutReportFinite(report: SdlcScreeningHeldoutReport): boolean {
-  const numbers: unknown[] = [
-    report.falseSupportRateBps, report.falseReadyRateBps, report.reviewerAgreementRateBps,
-    report.reviewerOverrideRateBps, report.gateBlockingSliceSupport, report.totalSupport,
-    report.positiveTotalEconomicsUsd,
-  ];
-  const metrics: SdlcMetricBlock[] = [
-    report.support, report.contradiction, report.unclear, report.calibrationRiskCoverage,
-    report.latencyMs, report.tokens, report.costUsd, report.reviewLoad, ...Object.values(report.slices),
-  ];
-  for (const metric of metrics) numbers.push(metric.n, metric.value);
-  for (const metric of [report.support, report.contradiction, report.unclear]) {
-    numbers.push(metric.precisionBps, metric.recallBps);
-  }
-  return numbers.every(value => value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0));
-}
-
-function integrityFindings(integrity: QualificationIntegrityMetadata): string[] {
-  const findings: string[] = [];
-  if (integrity.integrity_state !== 'verified') findings.push('integrity-not-verified');
-  if (integrity.integrity_mode === 'standard') findings.push('integrity-mode-standard');
-  if (integrity.trusted_score_source === 'local-unverified') findings.push('untrusted-score-source');
-  if (integrity.fresh_workspace_required && !integrity.fresh_workspace_verified) findings.push('fresh-workspace-unverified');
-  if (integrity.uncertainty === null) findings.push('uncertainty-missing');
-  if (integrity.paired_baseline === null) findings.push('paired-baseline-missing');
-  if (integrity.weak_signal_reason !== null) findings.push('weak-signal');
-  if (integrity.compromise_labels.length > 0) findings.push('compromised');
-  if (integrity.sample_n <= 0) findings.push('insufficient-samples');
-  if (integrity.release_gate.decision !== 'PROMOTE') findings.push(`upstream-integrity-${integrity.release_gate.decision.toLowerCase()}`);
-  return findings;
+  return finish(report);
 }
 
 export function buildSdlcScreeningReleaseReport(input: {
   preregistration: SdlcScreeningPreregistration;
-  heldout: SdlcScreeningHeldoutReport | null;
+  trustedPreregistrationDigest: `sha256:${string}`;
+  heldout: SdlcScreeningHeldoutRecords | null;
   integrity: QualificationIntegrityMetadata;
+  nowEpochMs: number;
 }): SdlcScreeningReleaseReport {
-  const preregistered = evaluateSdlcScreeningPreregistration(input.preregistration, input.heldout);
-  const upstream = input.integrity.release_gate.decision;
-  const integrity = integrityFindings(input.integrity);
-  const reasons = uniqueStrings([...preregistered.reasons, ...integrity]);
-  const decision: SdlcScreeningReleaseReport['decision'] = upstream === 'ROLLBACK'
-    || input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK'
-    : upstream === 'PROMOTE' && preregistered.decision === 'pass' && integrity.length === 0 ? 'PROMOTE' : 'HOLD';
+  const preregistered = evaluateSdlcScreeningPreregistration(
+    input.preregistration, input.trustedPreregistrationDigest, input.heldout, input.nowEpochMs);
+  const integrityProblems = qualificationIntegrityAllowlistProblems(input.integrity);
+  const readable = !integrityProblems.includes('integrity-invalid');
+  const compromised = readable && (input.integrity.release_gate.decision === 'ROLLBACK'
+    || input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0);
+  const decision: SdlcScreeningReleaseReport['decision'] = compromised ? 'ROLLBACK'
+    : readable && integrityProblems.length === 0 && preregistered.decision === 'pass'
+      && input.integrity.release_gate.decision === 'PROMOTE' ? 'PROMOTE' : 'HOLD';
   const unsigned = {
     schemaVersion: SDLC_SCREENING_RELEASE_VERSION,
     preregistration: input.preregistration,
-    heldout: input.heldout,
+    preregistrationDigest: sdlcScreeningPreregistrationDigest(input.preregistration),
+    trustedPreregistrationDigest: input.trustedPreregistrationDigest,
+    heldout: preregistered.heldout,
     integrity: input.integrity,
+    preregisteredDecision: preregistered.decision,
     decision,
-    reasons,
+    reasons: uniqueStrings([...preregistered.reasons, ...integrityProblems]),
   };
   return { ...unsigned, digest: digest(unsigned) };
 }
