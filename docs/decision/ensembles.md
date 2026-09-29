@@ -83,7 +83,11 @@ validator, retains each full `DecisionResult` by digest, converts successes and 
 a malformed member result (`invalid-output`), fallback-depth excess, runtime token/cost budget
 exhaustion, and unknown provider cost under an `unknownCost: reject` policy are recorded as failed
 member evidence rather than flattening the whole ensemble call. A sample that times out or rejects is
-charged its full reservation, since its provider usage is unknown; usage a provider reports after the
+charged its full reservation, since its provider usage is unknown. A result whose attempts report
+`null` input or output tokens is charged at least the sample's full token reservation: null usage is
+unknown, never zero. The policy contract has no separate unknown-token rule, so this always applies.
+The result's `actuals` (`attempts`, `tokens`, `costMicros`, `unknownUsageSamples`) and the
+`aiwg.budget.unknown_usage_samples` telemetry attribute count every sample charged this way; usage a provider reports after the
 deadline is not observed, so a late result that exceeded its reservation is not reflected in the
 reported actuals. Runtime telemetry is metadata-only: ensemble IDs, member counts, budgets/actuals,
 disagreement and disposition are emitted without inputs, prompts or response bodies. When no trace
@@ -186,7 +190,9 @@ The experimental runtime exports:
   canonically identical to it, because `promoteAlias` acts on the stored record. The alias's current
   revision must still be the record's pinned champion (revision and identity), and the record's
   eligibility ID must not appear anywhere in alias history, so a stale record cannot promote over a
-  newer champion and a promotion cannot be replayed after a rollback. It validates the report, then independently rebuilds it with
+  newer champion and a promotion cannot be replayed after a rollback. The replay guard is keyed by
+  eligibility ID only. Refusing reuse of the same approval reference under a new eligibility ID is
+  D09's responsibility when it records eligibility. It validates the report, then independently rebuilds it with
   `buildEnsembleIntegrityReport` from the trusted record, the eligibility, the alias history and the
   report's carried integrity fields and raw paired observations, and refuses unless the rebuilt report
   is canonically identical to the supplied one. The carried integrity fields must also hash
@@ -202,14 +208,20 @@ The experimental runtime exports:
   deltas. Because the record pins the digest of those integrity fields, deltas that differ from the
   approved shadow run, or that have no shadow binding, are refused. The binding uses the record's stable
   fields rather than its whole digest, since the record itself pins the integrity report. The receipts
-  digest is carried for audit only; promotion does not have the receipts to recompute it.
+  digest is carried for audit only; promotion does not have the receipts to recompute it. After the
+  gateway returns, the event must be kind `promoted` for this alias and eligibility ID, name the
+  challenger's identity digest and actual model, and have the revision after the pinned champion's.
+  Otherwise promotion throws `promotion-event-mismatch`. The gateway has already acted by then, so
+  the host must inspect alias history.
 - `rollbackChampionForNewRuns(...)` and `pinChampionForRun(...)`: rollback requires a valid approval
   reference, that the alias's current revision is this record's promoted challenger (kind
   `promoted`, the record's eligibility ID and challenger identity), and that the revision it replaced
-  is the record's rollback target. Otherwise it refuses without
-  calling the gateway, so nothing is appended to alias history. When allowed, it delegates to D09
-  `rollbackAlias` for future alias resolution, while already pinned active runs keep their original
-  champion revision.
+  is the record's rollback target. Otherwise it refuses without calling the gateway, so nothing is
+  appended to alias history. When allowed, it delegates to D09 `rollbackAlias` for future alias
+  resolution, while already pinned active runs keep their original champion revision. After
+  interleaved promotions and rollbacks, only the most recent promotion can be undone this way; an
+  earlier promotion can only be undone through the D09 registry (`rollbackAlias` with its own
+  approval).
 
 The D09 `CalibrationRegistry.promoteAlias` applies the same guard itself: it refuses when the alias's
 latest event is not the eligibility's rollback target, or when the eligibility ID was already used in

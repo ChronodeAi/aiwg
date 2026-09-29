@@ -85,6 +85,9 @@ export interface EnsembleExecutionResult {
   aggregate: DecisionEnsembleAggregate | null;
   memberResults: EnsembleMemberResult[];
   retainedResults: Record<string, DecisionResult>;
+  /** Charged spend. Samples without trusted usage (null tokens, timeout, rejection, malformed result)
+   * are charged their full reservation and counted in `unknownUsageSamples`. */
+  actuals: { attempts: number; tokens: number; costMicros: number; unknownUsageSamples: number };
 }
 
 export async function executeDecisionEnsemble(
@@ -112,6 +115,7 @@ export async function executeDecisionEnsemble(
       aggregate: null,
       memberResults: [],
       retainedResults: {},
+      actuals: { attempts: 0, tokens: 0, costMicros: 0, unknownUsageSamples: 0 },
     };
   }
 
@@ -133,6 +137,7 @@ export async function executeDecisionEnsemble(
   let actualAttempts = 0;
   let actualTokens = 0;
   let actualCostMicros = 0;
+  let unknownUsageSamples = 0;
   let inFlightAttempts = 0;
   let inFlightTokens = 0;
   let inFlightCostMicros = 0;
@@ -159,9 +164,11 @@ export async function executeDecisionEnsemble(
       inFlightCostMicros += reservation.costMicros;
       let settled = false;
       /** Moves the reservation into actual spend. Without trusted usage the full reserved bound is charged. */
-      const settle = (usage: { attempts: number; tokens: number; costMicros: number } = reservation) => {
+      const settle = (usage?: { attempts: number; tokens: number; costMicros: number }, unknownUsage = usage === undefined) => {
         if (settled) return;
         settled = true;
+        if (unknownUsage) unknownUsageSamples += 1;
+        usage ??= reservation;
         inFlightAttempts -= reservation.attempts;
         inFlightTokens -= reservation.tokens;
         inFlightCostMicros -= reservation.costMicros;
@@ -194,15 +201,18 @@ export async function executeDecisionEnsemble(
       }
 
       const attempts = result.spec.attempts.length;
-      const tokens = result.spec.attempts.reduce((sum, attempt) =>
+      const reportedTokens = result.spec.attempts.reduce((sum, attempt) =>
         sum + (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0), 0);
+      // Null token usage is unknown, not zero: charge at least the sample's full token reservation.
+      const unknownTokens = result.spec.attempts.some(attempt => attempt.usage.inputTokens === null || attempt.usage.outputTokens === null);
+      const tokens = unknownTokens ? Math.max(reportedTokens, reservation.tokens) : reportedTokens;
       const cost = resultCostMicros(policy, result);
       if (cost === null) {
-        settle({ attempts: Math.max(attempts, reservation.attempts), tokens: Math.max(tokens, reservation.tokens), costMicros: reservation.costMicros });
+        settle({ attempts: Math.max(attempts, reservation.attempts), tokens: Math.max(tokens, reservation.tokens), costMicros: reservation.costMicros }, true);
         exhausted = true;
         return syntheticMemberResult(policy, member, sampleIndex, 'unknown-cost', retainedResults, result);
       }
-      settle({ attempts, tokens, costMicros: cost });
+      settle({ attempts, tokens, costMicros: cost }, unknownTokens);
       if (attempts > member.fallbackDepth + 1) {
         return syntheticMemberResult(policy, member, sampleIndex, 'fallback-depth-exceeded', retainedResults, result);
       }
@@ -231,8 +241,10 @@ export async function executeDecisionEnsemble(
       'aiwg.budget.attempts.actual': actualAttempts,
       'aiwg.budget.tokens.actual': actualTokens,
       'aiwg.budget.cost_micros.actual': actualCostMicros,
+      'aiwg.budget.unknown_usage_samples': unknownUsageSamples,
     });
-    return { status: 'completed', reason: 'completed', policyDigest, budget, aggregate, memberResults, retainedResults };
+    return { status: 'completed', reason: 'completed', policyDigest, budget, aggregate, memberResults, retainedResults,
+      actuals: { attempts: actualAttempts, tokens: actualTokens, costMicros: actualCostMicros, unknownUsageSamples } };
   } finally {
     deadline.cancel();
   }
@@ -470,6 +482,11 @@ export function promoteChampionChallenger(input: {
     throw new EnsembleRuntimeError('paired deltas are not bound to a completed shadow run for this record', 'promotion-shadow-unbound');
   }
   const event = input.gateway.promoteAlias(record.eligibilityId, input.at);
+  if (!event || event.kind !== 'promoted' || event.alias !== record.alias || event.promotionEligibilityId !== record.eligibilityId
+    || event.actualIdentityDigest !== record.challenger.identityDigest || event.actualModel !== record.challenger.actualModel
+    || event.revision !== current.revision + 1) {
+    throw new EnsembleRuntimeError('D09 gateway returned a promotion event that does not move the alias from the pinned champion to this record\'s challenger; inspect alias history', 'promotion-event-mismatch');
+  }
   emitEnsembleSpan(input.telemetry, input.now, {
     'aiwg.ensemble.champion_challenger.id': record.id,
     'aiwg.ensemble.alias': record.alias,

@@ -774,7 +774,10 @@ describe('D17 ensemble runtime (#2611)', () => {
       const { record: unbound, items } = tinyChampionChallenger();
       const history: AliasEvent[] = [{ revision: 1, alias: unbound.alias, actualIdentityDigest: unbound.champion.identityDigest,
         actualModel: unbound.champion.actualModel, recordedAt: '2026-09-01T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null }];
-      const gatewayFor = (record: DecisionChampionChallenger) => ({ aliasHistory: () => history, promoteAlias: vi.fn(),
+      const gatewayFor = (record: DecisionChampionChallenger) => ({ aliasHistory: () => history,
+        promoteAlias: vi.fn((eligibilityId: string, when: string): AliasEvent => ({ revision: 2, alias: record.alias,
+          actualIdentityDigest: record.challenger.identityDigest, actualModel: record.challenger.actualModel, recordedAt: when,
+          kind: 'promoted', promotionEligibilityId: eligibilityId })),
         rollbackAlias: vi.fn(), promotionEligibility: () => eligibility(record) });
       // Fabricated: no shadow run at all, the approved integrity fields just name a baseline ID.
       const noShadow = { ...integrity('PROMOTE'), paired_baseline: { id: 'champion-shadow' } };
@@ -806,6 +809,69 @@ describe('D17 ensemble runtime (#2611)', () => {
       expect(real.decision).toBe('PROMOTE');
       promoteChampionChallenger({ record, integrityReport: real, eligibility: eligibility(record), gateway, at });
       expect(gateway.promoteAlias).toHaveBeenCalledWith(record.eligibilityId, at);
+    });
+  });
+
+  describe('pre-merge review regressions', () => {
+    const at = '2026-09-06T00:00:00.000Z';
+
+    it('PM-01 charges the full token reservation when a member reports null token usage and reports it as unknown', async () => {
+      const policy = smallPolicy();
+      policy.members[0]!.samples = 4;
+      policy.ceilings = { ...policy.ceilings, attempts: 4, tokens: 40, costMicros: 40, deadlineMs: 20 };
+      const spans: DecisionTelemetrySpan[] = [];
+      const result = await executeDecisionEnsemble(policy, {
+        enabled: true,
+        invocationId: 'null-token-usage',
+        authorizeMember: () => true,
+        now: () => 0,
+        delay: () => new Promise(() => undefined),
+        dispatch: async request => withAttempts(request.member, request.sampleIndex, 1, { inputTokens: null, outputTokens: null, costUsd: 0.00001 }),
+        telemetry: { hook: { emit: span => { spans.push(span); } } },
+      });
+      expect((result as { actuals?: unknown }).actuals).toEqual({ attempts: 4, tokens: 40, costMicros: 40, unknownUsageSamples: 4 });
+      expect(spans[0]!.attributes).toMatchObject({ 'aiwg.budget.tokens.actual': 40, 'aiwg.budget.unknown_usage_samples': 4 });
+
+      // Partially reported usage is charged at least the reservation, and a later overrun still stops dispatch.
+      const partial = smallPolicy();
+      partial.members[0]!.samples = 2;
+      partial.ceilings = { ...partial.ceilings, attempts: 2 };
+      let dispatched = 0;
+      const stopped = await executeDecisionEnsemble(partial, {
+        enabled: true,
+        invocationId: 'partial-token-usage',
+        authorizeMember: () => true,
+        now: () => 0,
+        delay: () => new Promise(() => undefined),
+        dispatch: async request => {
+          dispatched += 1;
+          return withAttempts(request.member, request.sampleIndex, 1, { inputTokens: null, outputTokens: 95, costUsd: 0.000001 });
+        },
+      });
+      expect(dispatched).toBe(1);
+      expect(stopped.memberResults.map(item => item.status)).toEqual(['failed', 'failed']);
+    });
+
+    it('PM-02 refuses a promotion event that does not move the alias to this record\'s challenger', () => {
+      const { record, promoteIntegrity } = tinyChampionChallenger();
+      const history: AliasEvent[] = [{ revision: 1, alias: record.alias, actualIdentityDigest: record.champion.identityDigest,
+        actualModel: record.champion.actualModel, recordedAt: '2026-09-01T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null }];
+      const integrityReport = buildEnsembleIntegrityReport({ record, integrity: promoteIntegrity, eligibility: eligibility(record),
+        pairedDeltas: record.pairedMetrics.map(metric => ({ metric: metric.metric, delta: 0, pairs: metric.minimumPairs })) });
+      const inconsistent = {
+        aliasHistory: () => history,
+        promotionEligibility: () => eligibility(record),
+        rollbackAlias: vi.fn(),
+        promoteAlias: (eligibilityId: string, when: string): AliasEvent => ({ revision: 2, alias: record.alias, actualIdentityDigest: hash('9'),
+          actualModel: 'some-other-model', recordedAt: when, kind: 'promoted', promotionEligibilityId: eligibilityId }),
+      };
+      expect(() => promoteChampionChallenger({ record, integrityReport, eligibility: eligibility(record), gateway: inconsistent, at }))
+        .toThrow(/promotion event/);
+      const skipped = { ...inconsistent, promoteAlias: (eligibilityId: string, when: string): AliasEvent => ({ revision: 5, alias: record.alias,
+        actualIdentityDigest: record.challenger.identityDigest, actualModel: record.challenger.actualModel, recordedAt: when, kind: 'promoted',
+        promotionEligibilityId: eligibilityId }) };
+      expect(() => promoteChampionChallenger({ record, integrityReport, eligibility: eligibility(record), gateway: skipped, at }))
+        .toThrow(/promotion event/);
     });
   });
 });
