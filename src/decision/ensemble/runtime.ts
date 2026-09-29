@@ -52,6 +52,9 @@ export interface EnsembleMemberDispatchRequest {
   invocationId: string;
   deadlineEpochMs: number;
   signal: AbortSignal;
+  /** Hard per-call limits: this sample's reservation. The ensemble ceilings hold only when the
+   * dispatcher enforces them; reported usage above them is a budget violation that stops dispatch. */
+  limits: { attempts: number; tokens: number; costMicros: number };
 }
 
 export interface EnsembleRuntimeTelemetry {
@@ -172,6 +175,7 @@ export async function executeDecisionEnsemble(
         result = await dispatchWithDeadline(options.dispatch({
           policy, policyDigest, member: structuredClone(member), sampleIndex,
           invocationId: `${options.invocationId}:${member.id}:${sampleIndex}`, deadlineEpochMs, signal,
+          limits: { attempts: reservation.attempts, tokens: reservation.tokens, costMicros: reservation.costMicros },
         }), signal);
       } catch (error) {
         // A timed-out or rejected dispatch may still have spent its reservation; it is never refunded.
@@ -202,7 +206,8 @@ export async function executeDecisionEnsemble(
       if (attempts > member.fallbackDepth + 1) {
         return syntheticMemberResult(policy, member, sampleIndex, 'fallback-depth-exceeded', retainedResults, result);
       }
-      if (actualAttempts > budget.effective.attempts || actualTokens > budget.effective.tokens
+      if (attempts > reservation.attempts || tokens > reservation.tokens || cost > reservation.costMicros
+        || actualAttempts > budget.effective.attempts || actualTokens > budget.effective.tokens
         || actualCostMicros > budget.effective.costMicros || now() > deadlineEpochMs) {
         exhausted = true;
         return syntheticMemberResult(policy, member, sampleIndex, 'budget-exhausted', retainedResults, result);
@@ -285,6 +290,57 @@ export function championChallengerInputSetDigest(items: readonly ShadowInputItem
   })).sort((a, b) => compareEnsembleKeys(a.id, b.id)));
 }
 
+/** Shadow binding a #2037/#2048 integrity report must carry at `paired_baseline.championChallengerShadow`
+ * (alongside any upstream paired-baseline fields) for its paired deltas to be promotable. It binds the deltas and per-item receipts of one completed shadow run to the record's
+ * stable identity fields (not its whole digest, which pins the integrity report itself). */
+export interface ChampionChallengerShadowBaseline {
+  kind: 'decision-champion-challenger-shadow/v1';
+  recordId: string;
+  inputSetDigest: EnsembleDigest;
+  thresholdsDigest: EnsembleDigest;
+  championIdentityDigest: EnsembleDigest;
+  challengerIdentityDigest: EnsembleDigest;
+  pairedDeltasDigest: EnsembleDigest;
+  receiptsDigest: EnsembleDigest;
+}
+
+export function championChallengerShadowBaseline(
+  recordInput: unknown,
+  shadow: Pick<ChampionChallengerShadowResult, 'status' | 'pairedDeltas' | 'receipts'>,
+): ChampionChallengerShadowBaseline {
+  const { record } = validateChampionChallenger(recordInput);
+  const items = new Set(shadow.receipts.map(receipt => receipt.itemId));
+  if (shadow.status !== 'completed' || shadow.receipts.length !== record.inputSet.itemCount || items.size !== shadow.receipts.length) {
+    throw new EnsembleRuntimeError('a shadow baseline needs one completed receipt per frozen input item', 'shadow-incomplete');
+  }
+  return {
+    ...shadowBaselineIdentity(record),
+    pairedDeltasDigest: pairedDeltasDigest(shadow.pairedDeltas),
+    receiptsDigest: ensembleContractDigest([...shadow.receipts].sort((a, b) => compareEnsembleKeys(a.itemId, b.itemId))),
+  };
+}
+
+function shadowBaselineIdentity(record: DecisionChampionChallenger): Omit<ChampionChallengerShadowBaseline, 'pairedDeltasDigest' | 'receiptsDigest'> {
+  return {
+    kind: 'decision-champion-challenger-shadow/v1',
+    recordId: record.id,
+    inputSetDigest: record.inputSet.digest,
+    thresholdsDigest: record.preregistration.thresholdsDigest,
+    championIdentityDigest: record.champion.identityDigest,
+    challengerIdentityDigest: record.challenger.identityDigest,
+  };
+}
+
+function pairedDeltasDigest(deltas: readonly PairedDeltaObservation[]): EnsembleDigest {
+  return ensembleContractDigest(deltas.map(item => ({ metric: item.metric, delta: item.delta, pairs: item.pairs }))
+    .sort((a, b) => compareEnsembleKeys(a.metric, b.metric)));
+}
+
+/** The alias's current revision: the event with the highest revision. */
+function currentAliasEvent(history: readonly AliasEvent[]): AliasEvent | undefined {
+  return history.reduce<AliasEvent | undefined>((latest, event) => !latest || event.revision > latest.revision ? event : latest, undefined);
+}
+
 export async function runChampionChallengerShadow(
   recordInput: unknown,
   options: ChampionChallengerShadowOptions,
@@ -338,6 +394,8 @@ export async function runChampionChallengerShadow(
 
 export interface ChampionAliasGateway {
   aliasHistory(alias: string): readonly AliasEvent[];
+  /** D09's stored eligibility record, the one `promoteAlias` acts on (`CalibrationRegistry.promotionEligibility`). */
+  promotionEligibility(eligibilityId: string): PromotionEligibility | null;
   promoteAlias(eligibilityId: string, at: string): AliasEvent;
   rollbackAlias(alias: string, targetRevision: number, approvalReference: string, at: string): AliasEvent;
 }
@@ -372,6 +430,19 @@ export function promoteChampionChallenger(input: {
 }): AliasEvent {
   const aliasHistory = input.gateway.aliasHistory((input.record as DecisionChampionChallenger).alias);
   const { record, digest } = validateChampionChallenger(input.record, { eligibility: input.eligibility, aliasHistory });
+  // The gateway promotes D09's stored record, so that is the one that must have been validated.
+  const stored = input.gateway.promotionEligibility(record.eligibilityId);
+  if (!stored || canonicalJson(stored) !== canonicalJson(input.eligibility)) {
+    throw new EnsembleRuntimeError('supplied eligibility does not match the D09 stored promotion eligibility', 'promotion-eligibility-mismatch');
+  }
+  const current = currentAliasEvent(aliasHistory);
+  if (!current || current.kind === 'retired' || current.revision !== record.champion.aliasRevision
+    || current.actualIdentityDigest !== record.champion.identityDigest) {
+    throw new EnsembleRuntimeError('alias no longer holds the champion this record pins', 'promotion-stale-champion');
+  }
+  if (aliasHistory.some(event => event.promotionEligibilityId === record.eligibilityId)) {
+    throw new EnsembleRuntimeError(`promotion eligibility ${record.eligibilityId} was already used`, 'promotion-replayed');
+  }
   const report = validateEnsembleIntegrityReport(input.integrityReport);
   // Never trust the supplied report's findings, flags or decision: rebuild it from the trusted
   // record, D09 eligibility and alias history, and require the exact same canonical report.
@@ -390,6 +461,13 @@ export function promoteChampionChallenger(input: {
   }
   if (ensembleContractDigest(report.integrity) !== record.evaluationIntegrityReport.digest) {
     throw new EnsembleRuntimeError('integrity fields do not match the record\'s pinned evaluation-integrity report digest', 'promotion-integrity-binding');
+  }
+  const pairedBaseline = report.integrity.paired_baseline as { championChallengerShadow?: unknown } | null;
+  const baseline = pairedBaseline && typeof pairedBaseline === 'object' ? pairedBaseline.championChallengerShadow : null;
+  const { receiptsDigest, ...boundFields } = (baseline && typeof baseline === 'object' ? baseline : {}) as Partial<ChampionChallengerShadowBaseline>;
+  if (canonicalJson(boundFields) !== canonicalJson({ ...shadowBaselineIdentity(record), pairedDeltasDigest: pairedDeltasDigest(report.pairedDeltas) })
+    || typeof receiptsDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(receiptsDigest)) {
+    throw new EnsembleRuntimeError('paired deltas are not bound to a completed shadow run for this record', 'promotion-shadow-unbound');
   }
   const event = input.gateway.promoteAlias(record.eligibilityId, input.at);
   emitEnsembleSpan(input.telemetry, input.now, {
@@ -414,12 +492,16 @@ export function rollbackChampionForNewRuns(input: {
   }
   const aliasHistory = input.gateway.aliasHistory((input.record as DecisionChampionChallenger).alias);
   const { record } = validateChampionChallenger(input.record, { aliasHistory });
-  // Only undo this record's own promotion: the alias's current revision must be the promoted challenger.
-  const current = aliasHistory.reduce<AliasEvent | undefined>((latest, event) => !latest || event.revision > latest.revision ? event : latest, undefined);
+  // Only undo this record's own promotion: the alias's current revision must be the promoted
+  // challenger, and the revision it replaced must be the pinned champion (the rollback target).
+  const current = currentAliasEvent(aliasHistory);
+  const replaced = current && currentAliasEvent(aliasHistory.filter(event => event.revision < current.revision));
   if (!current || current.kind !== 'promoted' || current.alias !== record.alias || current.promotionEligibilityId !== record.eligibilityId
-    || current.actualIdentityDigest !== record.challenger.identityDigest || current.actualModel !== record.challenger.actualModel
-    || current.revision <= record.rollbackTarget.aliasRevision) {
+    || current.actualIdentityDigest !== record.challenger.identityDigest || current.actualModel !== record.challenger.actualModel) {
     throw new EnsembleRuntimeError('rollback requires the alias to currently hold this record\'s promoted challenger', 'rollback-not-promoted');
+  }
+  if (!replaced || replaced.revision !== record.rollbackTarget.aliasRevision || replaced.actualIdentityDigest !== record.rollbackTarget.identityDigest) {
+    throw new EnsembleRuntimeError('rollback requires the promotion to have directly replaced the pinned champion', 'rollback-champion-mismatch');
   }
   const event = input.gateway.rollbackAlias(record.alias, record.rollbackTarget.aliasRevision, input.approvalReference, input.at);
   emitEnsembleSpan(input.telemetry, input.now, {

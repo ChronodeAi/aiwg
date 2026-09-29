@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildEnsembleIntegrityReport,
   championChallengerInputSetDigest,
+  championChallengerShadowBaseline,
   ensembleContractDigest,
   aggregateEnsembleResults,
   BoundedDecisionMetrics,
@@ -32,6 +33,9 @@ import {
   type IntegrityGateDecision,
   type PromotionEligibility,
   type QualificationIntegrityMetadata,
+  type CalibrationIdentity,
+  CalibrationRegistry,
+  calibrationIdentityDigest,
 } from '../../../src/decision/index.js';
 import { readFixture, records } from './ensemble-fixtures.js';
 
@@ -126,13 +130,28 @@ class FixtureAdapter implements DecisionAdapter {
   }
 }
 
-function tinyChampionChallenger() {
+function tinyChampionChallenger(mutate: (record: DecisionChampionChallenger) => void = () => undefined) {
   const items = [{ id: 'a', input: { text: 'alpha' }, slice: 'all' }, { id: 'b', input: { text: 'beta' }, slice: 'all' }];
   const record = structuredClone(ccBase);
   record.inputSet = { ...record.inputSet, itemCount: items.length, digest: championChallengerInputSetDigest(items) };
   record.pairedMetrics = record.pairedMetrics.map(metric => ({ ...metric, minimumPairs: metric.metric === 'slice' ? 1 : 2 }));
-  record.evaluationIntegrityReport = { ...record.evaluationIntegrityReport, digest: ensembleContractDigest(integrity('PROMOTE')) };
-  return { record: preregisterChampionChallengerThresholds(record), items };
+  mutate(record);
+  const registered = preregisterChampionChallengerThresholds(record);
+  // Stands in for a completed shadow run whose deltas are the passing zeros most promotion tests use.
+  const shadow = { status: 'completed' as const, pairedDeltas: registered.pairedMetrics.map(metric => ({ metric: metric.metric, delta: 0, pairs: metric.minimumPairs })),
+    receipts: items.map(item => ({ itemId: item.id, champion: hash('a'), challenger: hash('c') })) };
+  const promoteIntegrity = bindShadow(integrity('PROMOTE'), registered, shadow);
+  return { record: bindIntegrity(registered, promoteIntegrity), items, promoteIntegrity };
+}
+
+function bindShadow(fields: QualificationIntegrityMetadata, record: DecisionChampionChallenger,
+  shadow: Parameters<typeof championChallengerShadowBaseline>[1]): QualificationIntegrityMetadata {
+  return { ...fields, paired_baseline: { id: 'champion-shadow', championChallengerShadow: championChallengerShadowBaseline(record, shadow) } };
+}
+
+/** Pins the record (and so its D09 eligibility) to exactly these integrity fields. */
+function bindIntegrity(record: DecisionChampionChallenger, fields: QualificationIntegrityMetadata): DecisionChampionChallenger {
+  return { ...record, evaluationIntegrityReport: { ...record.evaluationIntegrityReport, digest: ensembleContractDigest(fields) } };
 }
 
 function eligibility(record: DecisionChampionChallenger): PromotionEligibility {
@@ -365,12 +384,13 @@ describe('D17 ensemble runtime (#2611)', () => {
   });
 
   it('DRF-RUN-02 gates promotion on D09 plus eval-integrity and rolls back only new run pins', () => {
-    const { record } = tinyChampionChallenger();
+    const { record, promoteIntegrity } = tinyChampionChallenger();
     const active = pinChampionForRun(record, 'active-run');
     const history: AliasEvent[] = [{ revision: 1, alias: record.alias, actualIdentityDigest: record.champion.identityDigest,
       actualModel: record.champion.actualModel, recordedAt: '2026-09-01T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null }];
     const gateway = {
       aliasHistory: () => history,
+      promotionEligibility: () => eligibility(record),
       promoteAlias: (eligibilityId: string, at: string) => {
         const event: AliasEvent = { revision: history.length + 1, alias: record.alias, actualIdentityDigest: record.challenger.identityDigest,
           actualModel: record.challenger.actualModel, recordedAt: at, kind: 'promoted', promotionEligibilityId: eligibilityId };
@@ -387,15 +407,15 @@ describe('D17 ensemble runtime (#2611)', () => {
     };
     const deltas = record.pairedMetrics.map(metric => ({ metric: metric.metric, delta: metric.metric === 'quality' || metric.metric === 'slice' ? 0 : 0,
       pairs: metric.minimumPairs }));
-    const report = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), pairedDeltas: deltas, eligibility: eligibility(record) });
-    expect(promoteChampionChallenger({ record, integrityReport: report, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
-      .toMatchObject({ kind: 'promoted', actualIdentityDigest: record.challenger.identityDigest });
+    const report = buildEnsembleIntegrityReport({ record, integrity: promoteIntegrity, pairedDeltas: deltas, eligibility: eligibility(record) });
     const holdReport = buildEnsembleIntegrityReport({ record, integrity: integrity('HOLD'), pairedDeltas: deltas, eligibility: eligibility(record) });
     expect(() => promoteChampionChallenger({ record, integrityReport: holdReport, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
       .toThrow(/promotion requires/);
     const forged = { ...holdReport, decision: 'PROMOTE' as const };
     expect(() => promoteChampionChallenger({ record, integrityReport: forged, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
       .toThrow(/integrity report/);
+    expect(promoteChampionChallenger({ record, integrityReport: report, eligibility: eligibility(record), gateway, at: '2026-09-06T00:00:00.000Z' }))
+      .toMatchObject({ kind: 'promoted', actualIdentityDigest: record.challenger.identityDigest });
     expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: ' ', at: '2026-09-07T00:00:00.000Z' }))
       .toThrow(/approval reference/);
     expect(rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at: '2026-09-07T00:00:00.000Z' }))
@@ -439,6 +459,7 @@ describe('D17 ensemble runtime (#2611)', () => {
         history,
         calls,
         aliasHistory: () => history,
+        promotionEligibility: () => eligibility(record),
         promoteAlias: (eligibilityId: string, when: string) => {
           calls.push(`promote:${eligibilityId}`);
           const event: AliasEvent = { revision: history.length + 1, alias: record.alias, actualIdentityDigest: record.challenger.identityDigest,
@@ -478,7 +499,7 @@ describe('D17 ensemble runtime (#2611)', () => {
     });
 
     it('R2-02 rebuilds the report on promotion: loosened thresholds and a different integrity report cannot promote', () => {
-      const { record } = tinyChampionChallenger();
+      const { record, promoteIntegrity } = tinyChampionChallenger();
       const gateway = aliasGateway(record);
       const failing = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), eligibility: eligibility(record),
         pairedDeltas: record.pairedMetrics.map(metric => ({ metric: metric.metric, delta: metric.metric === 'quality' ? -0.5 : 0, pairs: metric.minimumPairs })) });
@@ -487,13 +508,13 @@ describe('D17 ensemble runtime (#2611)', () => {
         pairedDeltas: failing.pairedDeltas.map(item => item.metric === 'quality' ? { ...item, bound: -1, passed: true } : item) });
       expect(() => promoteChampionChallenger({ record, integrityReport: loosened, eligibility: eligibility(record), gateway, at }))
         .toThrow(/does not match the report rebuilt/);
-      const otherIntegrity = buildEnsembleIntegrityReport({ record, integrity: { ...integrity('PROMOTE'), sample_n: 3 },
+      const otherIntegrity = buildEnsembleIntegrityReport({ record, integrity: { ...promoteIntegrity, sample_n: 3 },
         eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
       expect(otherIntegrity.decision).toBe('PROMOTE');
       expect(() => promoteChampionChallenger({ record, integrityReport: otherIntegrity, eligibility: eligibility(record), gateway, at }))
         .toThrow(/evaluation-integrity report digest/);
       expect(gateway.calls).toEqual([]);
-      const honest = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
+      const honest = buildEnsembleIntegrityReport({ record, integrity: promoteIntegrity, eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
       expect(promoteChampionChallenger({ record, integrityReport: honest, eligibility: eligibility(record), gateway, at })).toMatchObject({ kind: 'promoted' });
     });
 
@@ -521,11 +542,15 @@ describe('D17 ensemble runtime (#2611)', () => {
         const result = await executeDecisionEnsemble(policy, {
           enabled: true,
           invocationId: 'reserve-actual',
+          // Fixed clock and a deadline that never fires keep the budget assertions independent of host load.
+          now: () => 0,
+          delay: () => new Promise(() => undefined),
           authorizeMember: () => true,
           dispatch: async request => { dispatched += 1; return withAttempts(request.member, request.sampleIndex, 1, usage); },
         });
+        // Sample 0 overran its 10-unit reservation (a budget violation), so sample 1 is never dispatched.
         expect(dispatched).toBe(1);
-        expect(result.memberResults.map(item => item.status)).toEqual(['succeeded', 'failed']);
+        expect(result.memberResults.map(item => item.status)).toEqual(['failed', 'failed']);
         expect(result.retainedResults[result.memberResults[1]!.resultDigest]?.spec).toMatchObject({ status: 'error', reason: 'budget-exhausted' });
       }
       const concurrent = smallPolicy();
@@ -550,9 +575,9 @@ describe('D17 ensemble runtime (#2611)', () => {
         });
         await vi.advanceTimersByTimeAsync(5);
         const result = await running;
-        // Sample 2 would fit against actual spend alone (70 + 40 <= 120), but sample 1 still holds a 40-token reservation.
+        // Sample 0 overran its 40-token reservation while sample 1 was in flight; the overrun stops sample 2.
         expect(started).toEqual([0, 1]);
-        expect(result.memberResults.map(item => item.status)).toEqual(['succeeded', 'failed', 'failed']);
+        expect(result.memberResults.map(item => item.status)).toEqual(['failed', 'failed', 'failed']);
       } finally {
         vi.useRealTimers();
       }
@@ -611,7 +636,7 @@ describe('D17 ensemble runtime (#2611)', () => {
     });
 
     it('R2-07 rollback refuses, without appending an event, unless the alias currently holds the promoted challenger', () => {
-      const { record } = tinyChampionChallenger();
+      const { record, promoteIntegrity } = tinyChampionChallenger();
       const gateway = aliasGateway(record);
       expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at }))
         .toThrow(/promoted challenger/);
@@ -621,11 +646,166 @@ describe('D17 ensemble runtime (#2611)', () => {
       expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at })).toThrow(/promoted challenger/);
       expect(gateway.calls).toEqual([]);
       gateway.history.pop();
-      const report = buildEnsembleIntegrityReport({ record, integrity: integrity('PROMOTE'), eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
+      const report = buildEnsembleIntegrityReport({ record, integrity: promoteIntegrity, eligibility: eligibility(record), pairedDeltas: passingDeltas(record) });
       promoteChampionChallenger({ record, integrityReport: report, eligibility: eligibility(record), gateway, at });
       expect(rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-1', at })).toMatchObject({ kind: 'rolled-back', revision: 3 });
       expect(() => rollbackChampionForNewRuns({ record, gateway, approvalReference: 'incident-2', at })).toThrow(/promoted challenger/);
       expect(gateway.history.map(item => item.kind)).toEqual(['observed', 'promoted', 'rolled-back']);
+    });
+  });
+
+  describe('round-3 review regressions', () => {
+    const at = '2026-09-06T00:00:00.000Z';
+    const sha = (character: string) => `sha256:${character.repeat(64)}` as const;
+    const identity = (actualModel: string): CalibrationIdentity => ({ provider: 'jev', backend: 'fixture', actualModel, primitive: 'choice',
+      definitionDigest: sha('a'), adapterVersion: '1.0.0', dataset: { id: 'workflow', hash: sha('b') }, slice: { id: 'all', hash: sha('c') },
+      calibrator: { id: 'isotonic', version: '1', parametersDigest: sha('d') } });
+    const passing = (record: DecisionChampionChallenger) => record.pairedMetrics.map(metric => ({ metric: metric.metric, delta: 0, pairs: metric.minimumPairs }));
+    /** A record whose roles use real D09 identity digests, so the real CalibrationRegistry can act as the gateway. */
+    function registryScenario() {
+      const champion = identity('jev-2026-09-01');
+      const challenger = identity('jev-2026-10-01');
+      const registry = new CalibrationRegistry();
+      const scenario = tinyChampionChallenger(record => {
+        record.champion = { ...record.champion, identityDigest: calibrationIdentityDigest(champion), actualModel: champion.actualModel, aliasRevision: 1 };
+        record.challenger = { ...record.challenger, identityDigest: calibrationIdentityDigest(challenger), actualModel: challenger.actualModel };
+        record.rollbackTarget = { aliasRevision: 1, identityDigest: calibrationIdentityDigest(champion) };
+      });
+      registry.observeAlias(scenario.record.alias, champion, '2026-09-01T00:00:00.000Z');
+      return { ...scenario, registry, champion, challenger };
+    }
+    const report = (record: DecisionChampionChallenger, integrityFields: QualificationIntegrityMetadata) =>
+      buildEnsembleIntegrityReport({ record, integrity: integrityFields, eligibility: eligibility(record), pairedDeltas: passing(record) });
+
+    it('R3-01 (P9) validates the eligibility D09 actually promotes, not a caller-supplied copy', () => {
+      const { record, registry, promoteIntegrity } = registryScenario();
+      const heldIntegrity: QualificationIntegrityMetadata = { ...integrity('HOLD'), integrity_state: 'unverified' };
+      registry.recordPromotionEligibility({ ...eligibility(record),
+        evaluationIntegrityReport: { ...record.evaluationIntegrityReport, digest: ensembleContractDigest(heldIntegrity) } });
+      expect(() => promoteChampionChallenger({ record, integrityReport: report(record, promoteIntegrity), eligibility: eligibility(record), gateway: registry, at }))
+        .toThrow(/eligibility/);
+      expect(registry.aliasHistory(record.alias).map(event => event.kind)).toEqual(['observed']);
+    });
+
+    it('R3-02 (P8) refuses to promote a stale record over a newer champion, in the runtime and in the D09 registry', () => {
+      const { record, registry, promoteIntegrity } = registryScenario();
+      registry.recordPromotionEligibility(eligibility(record));
+      registry.observeAlias(record.alias, identity('jev-2026-09-15'), '2026-09-15T00:00:00.000Z');
+      expect(() => promoteChampionChallenger({ record, integrityReport: report(record, promoteIntegrity), eligibility: eligibility(record), gateway: registry, at }))
+        .toThrow(/champion/);
+      expect(() => registry.promoteAlias(record.eligibilityId, at)).toThrow(/champion/);
+      expect(registry.aliasHistory(record.alias).map(event => event.kind)).toEqual(['observed', 'observed']);
+    });
+
+    it('R3-03 (P12) rollback refuses when the promotion did not directly replace the pinned champion', () => {
+      const { record } = tinyChampionChallenger();
+      const history: AliasEvent[] = [
+        { revision: 1, alias: record.alias, actualIdentityDigest: record.champion.identityDigest, actualModel: record.champion.actualModel,
+          recordedAt: '2026-09-01T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null },
+        { revision: 2, alias: record.alias, actualIdentityDigest: hash('7'), actualModel: 'newer-champion',
+          recordedAt: '2026-09-02T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null },
+        { revision: 3, alias: record.alias, actualIdentityDigest: record.challenger.identityDigest, actualModel: record.challenger.actualModel,
+          recordedAt: '2026-09-03T00:00:00.000Z', kind: 'promoted', promotionEligibilityId: record.eligibilityId },
+      ];
+      const rollbackAlias = vi.fn();
+      expect(() => rollbackChampionForNewRuns({ record, approvalReference: 'incident-1', at,
+        gateway: { aliasHistory: () => history, promoteAlias: vi.fn(), rollbackAlias, promotionEligibility: () => eligibility(record) } }))
+        .toThrow(/champion/);
+      expect(rollbackAlias).not.toHaveBeenCalled();
+    });
+
+    it('R3-04 (P7) refuses to replay a promotion after an incident rollback', () => {
+      const { record, registry, promoteIntegrity } = registryScenario();
+      registry.recordPromotionEligibility(eligibility(record));
+      const integrityReport = report(record, promoteIntegrity);
+      promoteChampionChallenger({ record, integrityReport, eligibility: eligibility(record), gateway: registry, at });
+      rollbackChampionForNewRuns({ record, gateway: registry, approvalReference: 'incident-1', at: '2026-09-07T00:00:00.000Z' });
+      expect(() => promoteChampionChallenger({ record, integrityReport, eligibility: eligibility(record), gateway: registry, at: '2026-09-08T00:00:00.000Z' }))
+        .toThrow();
+      expect(() => registry.promoteAlias(record.eligibilityId, '2026-09-08T00:00:00.000Z')).toThrow();
+      expect(registry.aliasHistory(record.alias).map(event => event.kind)).toEqual(['observed', 'promoted', 'rolled-back']);
+    });
+
+    it('R3-05 (P3) passes each call its reservation as a hard limit and treats overruns as budget violations that stop dispatch', async () => {
+      const concurrent = smallPolicy();
+      concurrent.members[0]!.samples = 3;
+      concurrent.ceilings = { ...concurrent.ceilings, attempts: 3, concurrency: 3 };
+      const limits: unknown[] = [];
+      const spans: DecisionTelemetrySpan[] = [];
+      const result = await executeDecisionEnsemble(concurrent, {
+        enabled: true,
+        invocationId: 'per-call-cap',
+          // Fixed clock and a deadline that never fires keep the budget assertions independent of host load.
+          now: () => 0,
+          delay: () => new Promise(() => undefined),
+        authorizeMember: () => true,
+        dispatch: async request => {
+          limits.push((request as { limits?: unknown }).limits);
+          return withAttempts(request.member, request.sampleIndex, 1, { inputTokens: 95, outputTokens: 0, costUsd: 0.000001 });
+        },
+        telemetry: { hook: { emit: span => { spans.push(span); } } },
+      });
+      expect(limits).toEqual(Array.from({ length: 3 }, () => ({ attempts: 1, tokens: 10, costMicros: 10 })));
+      expect(result.memberResults.map(item => item.status)).toEqual(['failed', 'failed', 'failed']);
+      expect(result.aggregate?.outcome).toMatchObject({ disposition: 'defer' });
+      expect(spans[0]!.attributes['aiwg.budget.tokens.actual']).toBe(285);
+
+      const serial = smallPolicy();
+      serial.members[0]!.samples = 4;
+      serial.ceilings = { ...serial.ceilings, attempts: 4, tokens: 1000, costMicros: 1000, deadlineMs: 20 };
+      let dispatched = 0;
+      const stopped = await executeDecisionEnsemble(serial, {
+        enabled: true,
+        invocationId: 'overrun-stops',
+          // Fixed clock and a deadline that never fires keep the budget assertions independent of host load.
+          now: () => 0,
+          delay: () => new Promise(() => undefined),
+        authorizeMember: () => true,
+        dispatch: async request => {
+          dispatched += 1;
+          return withAttempts(request.member, request.sampleIndex, 1, { inputTokens: 95, outputTokens: 0, costUsd: 0.000001 });
+        },
+      });
+      expect(dispatched).toBe(1);
+      expect(stopped.memberResults.every(item => item.status === 'failed')).toBe(true);
+    });
+
+    it('R3-06 (P10) refuses paired deltas that are not bound to a shadow run, and promotes deltas from a real one', async () => {
+      const { record: unbound, items } = tinyChampionChallenger();
+      const history: AliasEvent[] = [{ revision: 1, alias: unbound.alias, actualIdentityDigest: unbound.champion.identityDigest,
+        actualModel: unbound.champion.actualModel, recordedAt: '2026-09-01T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null }];
+      const gatewayFor = (record: DecisionChampionChallenger) => ({ aliasHistory: () => history, promoteAlias: vi.fn(),
+        rollbackAlias: vi.fn(), promotionEligibility: () => eligibility(record) });
+      // Fabricated: no shadow run at all, the approved integrity fields just name a baseline ID.
+      const noShadow = { ...integrity('PROMOTE'), paired_baseline: { id: 'champion-shadow' } };
+      const fabricated = bindIntegrity(unbound, noShadow);
+      const fabricatedGateway = gatewayFor(fabricated);
+      expect(() => promoteChampionChallenger({ record: fabricated, integrityReport: report(fabricated, noShadow), eligibility: eligibility(fabricated), at,
+        gateway: fabricatedGateway })).toThrow(/shadow/);
+      expect(fabricatedGateway.promoteAlias).not.toHaveBeenCalled();
+
+      const shadow = await runChampionChallengerShadow(unbound, {
+        enabled: true, invocationId: 'bound-shadow', items,
+        evaluate: async ({ role, item }): Promise<ChampionChallengerObservation> => {
+          const challenger = role === 'challenger';
+          return { inputDigest: ensembleContractDigest(item.input), receiptDigest: hash(challenger ? 'c' : 'a'),
+            quality: challenger ? 0.91 : 0.9, calibration: challenger ? 0.051 : 0.05, riskCoverage: challenger ? 0.8 : 0.78,
+            abstention: challenger ? 0.1 : 0.11, latencyMs: challenger ? 120 : 100, tokens: challenger ? 50 : 45,
+            costMicros: challenger ? 20 : 15, slice: challenger ? 0.92 : 0.9 };
+        },
+      });
+      const shadowIntegrity = bindShadow(integrity('PROMOTE'), unbound, shadow);
+      const record = bindIntegrity(unbound, shadowIntegrity);
+      // Different (still passing) deltas than the shadow run produced are refused.
+      const madeUp = buildEnsembleIntegrityReport({ record, integrity: shadowIntegrity, eligibility: eligibility(record), pairedDeltas: passing(record) });
+      expect(madeUp.decision).toBe('PROMOTE');
+      const gateway = gatewayFor(record);
+      expect(() => promoteChampionChallenger({ record, integrityReport: madeUp, eligibility: eligibility(record), gateway, at })).toThrow(/shadow/);
+      expect(gateway.promoteAlias).not.toHaveBeenCalled();
+      const real = buildEnsembleIntegrityReport({ record, integrity: shadowIntegrity, eligibility: eligibility(record), pairedDeltas: shadow.pairedDeltas });
+      expect(real.decision).toBe('PROMOTE');
+      promoteChampionChallenger({ record, integrityReport: real, eligibility: eligibility(record), gateway, at });
+      expect(gateway.promoteAlias).toHaveBeenCalledWith(record.eligibilityId, at);
     });
   });
 });

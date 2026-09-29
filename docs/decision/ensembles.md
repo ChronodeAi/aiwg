@@ -68,7 +68,14 @@ When enabled, trusted host authorization is mandatory: if no authorization callb
 or if it rejects a member for security, privacy, region, capability or budget reasons, no member is
 invoked. Before every dispatch the wrapper checks the sample's planned reservation against actual
 spend so far plus every in-flight reservation, for attempts, tokens and cost, and against the member
-ceiling; a sample that would not fit is not dispatched and is recorded as `budget-exhausted`. It runs
+ceiling; a sample that would not fit is not dispatched and is recorded as `budget-exhausted`. Each
+dispatch request carries that reservation as hard per-call `limits` (`attempts`, `tokens`,
+`costMicros`). The wrapper cannot stop a provider call that is already running, so the ensemble
+ceilings hold only when the dispatcher enforces those per-call limits. A result that reports usage
+above its reservation is a budget violation: that member is recorded as `budget-exhausted`, the
+overrun is included in the reported actuals, and no further sample is dispatched. Samples that were
+already in flight when the overrun was observed can still add spend, so with concurrency above one, a
+dispatcher that ignores its limits can exceed a ceiling by up to the in-flight calls' overruns. It runs
 admitted samples under the effective concurrency and an injected-clock deadline, passes each member to
 an injected dispatch callback, validates each returned value with the existing `DecisionResult`
 validator, retains each full `DecisionResult` by digest, converts successes and all failure paths into
@@ -174,20 +181,39 @@ The experimental runtime exports:
   digest, and the result reports paired quality, calibration, risk-coverage, abstention, latency,
   tokens, cost and slice deltas.
 - `promoteChampionChallenger(...)`: consumes the D09 `PromotionEligibility`, the D17 integrity report
-  and immutable alias history. It validates the report, then independently rebuilds it with
+  and immutable alias history. The gateway must expose D09's stored eligibility
+  (`promotionEligibility(id)`, as `CalibrationRegistry` does), and the supplied eligibility must be
+  canonically identical to it, because `promoteAlias` acts on the stored record. The alias's current
+  revision must still be the record's pinned champion (revision and identity), and the record's
+  eligibility ID must not appear anywhere in alias history, so a stale record cannot promote over a
+  newer champion and a promotion cannot be replayed after a rollback. It validates the report, then independently rebuilds it with
   `buildEnsembleIntegrityReport` from the trusted record, the eligibility, the alias history and the
   report's carried integrity fields and raw paired observations, and refuses unless the rebuilt report
   is canonically identical to the supplied one. The carried integrity fields must also hash
   (`ensembleContractDigest`) to the record's pinned `evaluationIntegrityReport.digest`. Alias movement
   is delegated to the D09 gateway only when the rebuilt decision is `PROMOTE` for the exact
   champion/challenger record. A report whose decision, findings, passed flags or thresholds were
-  edited, even with a recomputed digest, is refused.
+  edited, even with a recomputed digest, is refused. The paired deltas must also be bound to a shadow
+  run: the integrity fields must carry `paired_baseline.championChallengerShadow`, produced by
+  `championChallengerShadowBaseline(record, shadowResult)` from a completed
+  `runChampionChallengerShadow` result. It names the record ID, input-set digest, thresholds digest,
+  both role identities, a digest of the shadow run's paired deltas and a digest of its per-item
+  receipts. Promotion recomputes everything except the receipts digest from the record and the report's
+  deltas. Because the record pins the digest of those integrity fields, deltas that differ from the
+  approved shadow run, or that have no shadow binding, are refused. The binding uses the record's stable
+  fields rather than its whole digest, since the record itself pins the integrity report. The receipts
+  digest is carried for audit only; promotion does not have the receipts to recompute it.
 - `rollbackChampionForNewRuns(...)` and `pinChampionForRun(...)`: rollback requires a valid approval
-  reference and that the alias's current revision is this record's promoted challenger (kind
-  `promoted`, the record's eligibility ID and challenger identity). Otherwise it refuses without
+  reference, that the alias's current revision is this record's promoted challenger (kind
+  `promoted`, the record's eligibility ID and challenger identity), and that the revision it replaced
+  is the record's rollback target. Otherwise it refuses without
   calling the gateway, so nothing is appended to alias history. When allowed, it delegates to D09
   `rollbackAlias` for future alias resolution, while already pinned active runs keep their original
   champion revision.
+
+The D09 `CalibrationRegistry.promoteAlias` applies the same guard itself: it refuses when the alias's
+latest event is not the eligibility's rollback target, or when the eligibility ID was already used in
+alias history. It also exposes `promotionEligibility(id)`.
 
 ## Eval-integrity report extension
 
