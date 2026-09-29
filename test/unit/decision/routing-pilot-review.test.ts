@@ -478,6 +478,7 @@ describe('D28 routing pilot review regressions (#2620)', () => {
     }
     const gateway = () => ({
       aliasHistory: () => history,
+      promotionEligibility: () => null,
       promoteAlias: () => { throw new Error('out of scope'); },
       rollbackAlias: vi.fn((alias: string, _target: number, _approval: string, at: string): AliasEvent => ({
         revision: 3, alias, actualIdentityDigest: record.rollbackTarget.identityDigest, actualModel: record.champion.actualModel,
@@ -506,6 +507,18 @@ describe('D28 routing pilot review regressions (#2620)', () => {
         championChallenger: record, driftPolicy, driftSignal: signal, approvalReference: 'review-2620',
         gateway: gateway(), control: control({ mutateRunsOnRestore: true }), at: '2026-09-29T00:00:00.000Z',
       })).rejects.toThrow(/active run pins changed/);
+    });
+
+    it('ROUTE-F19 a D17-refused rollback leaves the routing policy untouched but the Jev circuit open', async () => {
+      const routing = control();
+      const observedOnly = { ...gateway(), aliasHistory: () => history.slice(0, 1) };
+      await expect(runRoutingControlDrill({
+        championChallenger: record, driftPolicy, driftSignal: signal, approvalReference: 'review-2620',
+        gateway: observedOnly, control: routing, at: '2026-09-29T00:00:00.000Z',
+      })).rejects.toThrow(/promoted challenger/);
+      expect(routing.restorePolicy).not.toHaveBeenCalled();
+      expect(routing.policies).toEqual([v1, v2]);
+      expect(routing.opened).toEqual(['restore-champion']);
     });
 
     it('ROUTE-F19 has no prior policy to restore to and refuses to invent one', async () => {

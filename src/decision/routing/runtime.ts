@@ -365,14 +365,15 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
       const prior = [...history].reverse().find(pin => pin.version !== previousPolicy.version || pin.digest !== previousPolicy.digest);
       if (!prior) throw new RoutingContractError('rollback requires a prior pinned routing policy');
       openCircuit('restore-champion');
+      // D17 checks its own preconditions before acting, so a refused alias rollback leaves the routing policy untouched.
+      rollbackEvent = rollbackChampionForNewRuns({
+        record: input.championChallenger, gateway: input.gateway, approvalReference: input.approvalReference, at: input.at,
+      });
       restoredPolicy = control.restorePolicy(prior, input.approvalReference, input.at);
       const current = control.policyHistory().at(-1);
       if (canonicalJson(restoredPolicy) !== canonicalJson(prior) || canonicalJson(current) !== canonicalJson(prior)) {
         throw new RoutingContractError('routing policy restore did not install the prior pinned policy');
       }
-      rollbackEvent = rollbackChampionForNewRuns({
-        record: input.championChallenger, gateway: input.gateway, approvalReference: input.approvalReference, at: input.at,
-      });
     },
     alert: async () => undefined,
     'route-to-review': contain('route-to-review'),

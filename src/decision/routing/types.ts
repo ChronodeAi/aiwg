@@ -1,6 +1,7 @@
 import type { DecisionProjectionEvidence, DecisionProjectionPolicy } from '../projection.js';
 import type { DecisionChampionChallenger, DecisionDriftResponse, DriftSignal, EnsembleDigest } from '../ensemble/types.js';
 import type { AliasEvent } from '../calibration/types.js';
+import type { ChampionAliasGateway } from '../ensemble/runtime.js';
 import type { PairedDifferenceInterval } from '../qualification/quality.js';
 import type { QualificationIntegrityMetadata } from '../qualification/release.js';
 
@@ -378,11 +379,8 @@ export interface RoutingControlDrillInput {
   driftPolicy: DecisionDriftResponse;
   driftSignal: DriftSignal;
   approvalReference: string;
-  gateway: {
-    aliasHistory(alias: string): readonly AliasEvent[];
-    promoteAlias(eligibilityId: string, at: string): AliasEvent;
-    rollbackAlias(alias: string, targetRevision: number, approvalReference: string, at: string): AliasEvent;
-  };
+  /** The D17 alias gateway (`CalibrationRegistry` implements it); rollback delegates to `rollbackChampionForNewRuns`. */
+  gateway: ChampionAliasGateway;
   control: RoutingPolicyControl;
   at: string;
 }

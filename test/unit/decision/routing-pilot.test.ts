@@ -198,6 +198,7 @@ describe('D28 routing pilot (#2620)', () => {
       championChallenger: record, driftPolicy, driftSignal: signal, approvalReference: 'review-2620',
       gateway: {
         aliasHistory: () => history,
+        promotionEligibility: () => null,
         promoteAlias: () => { throw new Error('promotion is out of scope for rollback drill'); },
         rollbackAlias: rollback,
       },
