@@ -320,6 +320,62 @@ describe('D28 routing pilot review regressions (#2620)', () => {
     });
   });
 
+  describe('every exit path returns a receipt', () => {
+    it('ROUTE-EXIT-01 contains throwing hooks without losing recorded attempts', async () => {
+      const denied = await shadowRun(policy(), task(), { reserve: async () => { throw new Error('admission down'); } });
+      expect(denied.dispatched).toEqual([]);
+      expect(denied.receipt.skipped).toEqual([{ routeId: 'reasoning', reason: 'reservation-denied' }]);
+      expect(denied.receipt.status).toBe('review');
+
+      const released = await shadowRun(policy(), task(), { release: async () => { throw new Error('ledger down'); } });
+      expect(released.receipt.status).toBe('selected');
+      expect(released.receipt.budget.spentMicros).toBe(500);
+
+      const rejected = await shadowRun(policy(), task(), { dispatch: async () => { throw new Error('transport down'); } });
+      expect(rejected.receipt.reason).toBe('cost-unknown');
+      expect(rejected.receipt.attempts).toMatchObject([{ status: 'failed', reason: 'rejected' }]);
+
+      const hungWithBrokenTimer = await shadowRun(policy(), task(), {
+        timer: async () => { throw new Error('timer down'); },
+        dispatch: () => new Promise<RoutingDispatchResult>(() => undefined),
+      });
+      expect(hungWithBrokenTimer.receipt.attempts).toMatchObject([{ reason: 'timeout' }]);
+
+      let reads = 0;
+      const clockFails = await shadowRun(policy(), task(), {
+        now: () => (reads++ < 2 ? 1_000 : Number.NaN),
+        dispatch: async ({ candidate: selected }) => success(selected),
+      });
+      expect(clockFails.receipt).toMatchObject({ status: 'review', reason: 'runtime-error', selectedRouteId: null });
+      // Every granted reservation was released, even on the failing paths (the other runs replace the recording hooks).
+      for (const item of [rejected, hungWithBrokenTimer, clockFails]) {
+        const calls = item.hooks.calls;
+        expect(calls.filter(call => call.startsWith('reserve:')).length).toBe(calls.filter(call => call.startsWith('release:')).length);
+      }
+      for (const item of [denied, released, rejected, hungWithBrokenTimer, clockFails]) expectValidReceipt(item.receipt);
+    });
+
+    it('ROUTE-EXIT-02 cancellation stops before dispatch and after an in-flight abort', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      const early = await shadowRun(policy(), task(), { signal: controller.signal });
+      expect(early.dispatched).toEqual([]);
+      expect(early.receipt.reason).toBe('cancelled');
+
+      const late = new AbortController();
+      const inflight = await shadowRun(policy(), task(), {
+        signal: late.signal,
+        dispatch: ({ signal }) => new Promise<RoutingDispatchResult>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          late.abort();
+        }),
+      });
+      expect(inflight.receipt.attempts).toMatchObject([{ reason: 'cancelled' }]);
+      expect(inflight.receipt.status).toBe('review');
+      expectValidReceipt(inflight.receipt);
+    });
+  });
+
   it('ROUTE-F11 projects and redacts every model-visible field; description never crosses', async () => {
     const secretDescription = 'deploy with sk-proj-abcdefghijklmnop1234';
     let request: unknown;

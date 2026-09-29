@@ -1588,8 +1588,8 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "source-module",
-      "digest": "sha256:3d6cf8779630e39ce485b5feaffd5c1183e14d5f40ed8f979df712fb70235370",
-      "expectedOutcome": "D28 offline routing pilot example with hard-constraint filtering, fake Jev evidence and fake dispatch",
+      "digest": "sha256:d056af367700b9a10f0f0494807e519f17cc4026229bfd2a736a9704d9ea8c11",
+      "expectedOutcome": "D28 offline shadow routing example: hard-constraint filtering, deterministic route executed, fake Jev evidence recorded as a counterfactual",
       "links": [
         "JEV-16",
         "#2620"

@@ -187,6 +187,8 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
         if (options.signal?.aborted) { stop('cancelled'); break routes; }
         if (clock() + route.operations.deadlineMs > limits.deadlineEpochMs) { skip(route.id, 'deadline-exhausted'); continue routes; }
       }
+      // Read the clock before reserving: nothing between a granted reservation and its release may throw.
+      const attemptDeadline = clock() + route.operations.deadlineMs;
       let granted = false;
       try { granted = await reserve(route, ordinal + 1) === true; } catch { granted = false; }
       if (!granted) { skip(route.id, 'reservation-denied'); continue routes; }
@@ -194,8 +196,6 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
       ordinal += 1;
       triesOnRoute += 1;
       if (index > 0 && triesOnRoute === 1) fallbacksUsed += 1;
-      const startedAt = clock();
-      const attemptDeadline = startedAt + route.operations.deadlineMs;
       const outcome = await raceDispatch(dispatch, route, ordinal, attemptDeadline, route.operations.deadlineMs, timer, options.signal);
       const result = outcome.forced ? failedDispatch(outcome.forced) : outcome.result;
       const charged = result ? result.costMicros : null;
@@ -251,7 +251,6 @@ Promise<{ result: RoutingDispatchResult | null; forced: 'timeout' | 'cancelled' 
   if (parent?.aborted) controller.abort();
   else parent?.addEventListener('abort', onParent, { once: true });
   type Outcome = { kind: 'result'; value: unknown } | { kind: 'rejected' } | { kind: 'timeout' } | { kind: 'cancelled' };
-  const never = new Promise<never>(() => undefined);
   let pending: Promise<unknown>;
   try {
     pending = Promise.resolve(dispatch({ candidate, attemptOrdinal, deadlineEpochMs, signal: controller.signal }));
@@ -261,7 +260,8 @@ Promise<{ result: RoutingDispatchResult | null; forced: 'timeout' | 'cancelled' 
   try {
     const outcome = await Promise.race<Outcome>([
       pending.then(value => ({ kind: 'result' as const, value }), () => ({ kind: 'rejected' as const })),
-      Promise.resolve().then(() => timer(budgetMs, timerControl.signal)).then(() => ({ kind: 'timeout' as const }), () => never),
+      // A timer that fails before the race settles cannot prove the deadline holds, so it counts as a timeout.
+      Promise.resolve().then(() => timer(budgetMs, timerControl.signal)).then(() => ({ kind: 'timeout' as const }), () => ({ kind: 'timeout' as const })),
       new Promise<Outcome>(resolve => {
         if (controller.signal.aborted) resolve({ kind: 'cancelled' });
         controller.signal.addEventListener('abort', () => resolve({ kind: 'cancelled' }), { once: true });
@@ -309,7 +309,7 @@ async function counterfactual(policy: RoutingPolicy, task: RoutingTask, eligible
         candidates: frozenRoutingClone(eligible.map(item => item.summary)),
       })),
       Promise.resolve().then(() => (options.timer ?? realTimer)(policy.ceilings.deadlineMs, timerControl.signal))
-        .then(() => { throw new RoutingContractError('Jev evidence timed out'); }, () => new Promise<never>(() => undefined)),
+        .then(() => { throw new RoutingContractError('Jev evidence timed out'); }, () => { throw new RoutingContractError('Jev evidence timer failed'); }),
     ]);
   } catch {
     return review('jev-evidence-unavailable', projection);
