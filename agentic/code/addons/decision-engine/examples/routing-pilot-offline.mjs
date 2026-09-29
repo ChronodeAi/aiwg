@@ -57,6 +57,8 @@ const task = {
   requirements: {
     capabilities: ['code'], privacy: 'internal', authorizationScopes: ['example'], region: 'us', tools: ['read'],
     contextBytes: 1024, allowlist: ['economy', 'reasoning'], maxCostMicros: 1000, deadlineMs: 2000,
+    providers: ['openai'],
+    authorized: { tools: ['read'], network: false, filesystem: 'read', secrets: [], actions: ['advise'] },
   },
   state: { text: 'Synthetic routing example. No credentials, locators or private data.' },
   projection: {
@@ -71,9 +73,12 @@ const task = {
   },
 };
 
+// Shadow mode: the deterministic route ('reasoning') executes; the Jev-assisted choice is only recorded.
 const receipt = await runRoutingPilot(policy, task, {
   enabled: true,
   now: () => 1_779_998_400_000,
+  reserve: async () => true,
+  release: async () => undefined,
   evidence: async request => ({
     schemaVersion: 'decision-routing-jev-evidence/v1',
     provider: 'jev',
@@ -82,7 +87,7 @@ const receipt = await runRoutingPilot(policy, task, {
     calibration: 'calibrated',
     provenance: { adapterVersion: 'fixture-1.0.0', requestDigest: hash('5'), responseDigest: hash('6') },
     taskComplexity: 0.35,
-    ambiguity: 0.1,
+    ambiguity: 0.03,
     distributions: request.candidates.map(candidate => ({
       routeId: candidate.id,
       taskFit: routes.find(item => item.candidate.id === candidate.id).taskFit,
@@ -107,6 +112,7 @@ const receipt = await runRoutingPilot(policy, task, {
 console.log(JSON.stringify({
   status: receipt.status,
   selectedRouteId: receipt.selectedRouteId,
+  counterfactual: receipt.counterfactual,
   eligibleRouteIds: receipt.eligibleRouteIds,
   attempts: receipt.attempts.map(attempt => ({ routeId: attempt.routeId, status: attempt.status, actualModel: attempt.actualModel })),
   costMicros: receipt.usage.costMicros,

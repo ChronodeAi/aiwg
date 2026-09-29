@@ -52,6 +52,8 @@ npm run build:cli
 node agentic/code/addons/decision-engine/examples/routing-pilot-offline.mjs
 ```
 
-It demonstrates hard-constraint filtering, D10 projection, deterministic utility
-selection, retained attempts and default shadow-only semantics. It is not live
-Jev, held-out quality, security/privacy approval or production rollout evidence.
+It demonstrates hard-constraint filtering, D10 projection with redaction,
+shadow semantics (the deterministic route executes; the Jev-assisted utility
+choice is recorded only as `counterfactual`), mandatory reservation hooks and
+retained attempts. It is not live Jev, held-out quality, security/privacy
+approval or production rollout evidence.

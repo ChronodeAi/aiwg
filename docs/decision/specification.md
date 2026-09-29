@@ -183,24 +183,37 @@ Qualification must separately measure task accuracy, abstention, calibration, la
 
 ## 8. Capability-constrained routing pilot
 
-`decision-routing-policy/v1` is a default-off/shadow-only D28 pilot contract.
-It may select only from a trusted inventory of route candidates that have
-already passed deterministic privacy, authorization, region, tool, context,
-allowlist, budget, deadline, health and executable checks. Ineligible routes do
-not enter Jev criteria and are recorded only by sanitized reason codes.
+`decision-routing-policy/v1` is a default-off D28 pilot contract. Its only
+enabled mode, `shadow`, executes the existing deterministic route
+(`defaultRouteId`, then `deterministicFallbackRouteId`) and records the
+Jev-assisted choice as a counterfactual that is never dispatched. Tasks
+(`decision-routing-task/v1` schema) are closed. Eligibility checks privacy,
+authorization, region, tools, context, the allowlist, budget, deadline,
+health, executable status, capabilities, the provider allowlist and an ordinary
+authorization ceiling that a binding may not exceed. These checks run before
+any Jev call. Ineligible routes do not enter Jev criteria and are recorded
+only as sanitized reason codes.
 
-The Jev input is limited to D10-projected task state and sanitized summaries of
-eligible candidates. Jev may provide bounded task-fit, complexity and ambiguity
-evidence, but it cannot add route IDs, grant permissions, change prices,
-override health, authorize execution or optimize cost directly. Unknown cost,
-unknown calibration, incompatible evidence profiles and malformed output fail
-closed to review/no-route.
+Jev receives only D10-projected, redacted task state and sanitized summaries
+of eligible routes; the task description is never model-visible. Evidence must
+be schema-valid, finite, calibrated, from the projected model and a compatible
+profile, and complete and unique over the eligible set. Otherwise the
+counterfactual is review. Ambiguity above the policy threshold falls back to
+the deterministic route.
 
-The routing receipt preserves route pins, eligibility/exclusion reasons, Jev
-provenance and distributions, selected route, policy version, actual
-worker/model, attempts/fallbacks, usage/cost and verified outcome. Fallbacks
-reuse only still-eligible candidates with bounded attempts and no retry storm.
-The shadow report extends eval-integrity fields and cannot upgrade
-`HOLD`/`ROLLBACK`; promotion requires preregistered sample, slice, CI,
-non-inferiority, failure/rework/fallback, budget and positive net-economics
-thresholds. See [routing pilot](routing-pilot.md).
+Execution requires reservation and release hooks. It enforces a cumulative
+budget and a `min(task, policy)` deadline before each dispatch, races each
+dispatch against its deadline and aborts it on timeout, honours per-route and
+policy attempt ceilings, opens provider circuits on outage or rate limit,
+applies bounded backoff, and validates each dispatch result for shape, model
+substitution and actual cost. The receipt preserves route pins,
+eligibility/exclusion reasons, Jev provenance and distributions, the
+counterfactual, the selected route, policy version, actual worker/model,
+attempts, skips, fallbacks, budget, usage/cost and verified outcome.
+
+The shadow report requires a trusted preregistration digest with a paired task
+set and slices, the shared paired non-inferiority interval, preregistered rate,
+latency, provider-call, budget and risk-adjusted economics gates, and the
+shared eval-integrity findings. It cannot upgrade `HOLD`/`ROLLBACK`, and it is
+verified by rebuilding it from its carried inputs. See [routing
+pilot](routing-pilot.md).
