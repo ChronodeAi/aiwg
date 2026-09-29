@@ -11,7 +11,7 @@ Exact input versions pass applicable checks; operation and cost fall within reco
 ## Activities
 Use supported reference modes; specify coherent action phases and useful edit handles. Submit bounded runs, record task IDs, reconcile uncertainty, inspect temporal results.
 
-Load with `aiwg show skill <name>`: film-provider-preflight, film-motion-coverage, film-review-gate.
+Load with `aiwg show skill <name>`: film-provider-preflight, film-reference-footage, film-motion-coverage, film-review-gate.
 
 ## Outputs and owners
 Run receipts, candidate takes, playback/contact review and accepted selections.
