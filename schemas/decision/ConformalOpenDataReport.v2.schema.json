@@ -9,6 +9,7 @@
     "issue",
     "outcome",
     "status",
+    "scoreMode",
     "preregistrationHash",
     "frozenSampleDigest",
     "splitHashes",
@@ -26,6 +27,7 @@
     "issue": { "const": 2613 },
     "outcome": { "enum": ["GO", "CONDITIONAL", "NO-GO", "INSUFFICIENT EVIDENCE"] },
     "status": { "const": "experimental-default-off" },
+    "scoreMode": { "enum": ["synthetic", "live"] },
     "preregistrationHash": { "$ref": "#/$defs/sha" },
     "frozenSampleDigest": { "$ref": "#/$defs/sha" },
     "splitHashes": {
@@ -45,16 +47,43 @@
       "additionalProperties": false,
       "required": ["providerCalls", "inputTokens", "outputTokens", "costUsd"],
       "properties": {
-        "providerCalls": { "const": 0 },
-        "inputTokens": { "const": 0 },
-        "outputTokens": { "const": 0 },
-        "costUsd": { "const": 0 }
+        "providerCalls": { "type": "integer", "minimum": 0 },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "costUsd": { "type": "number", "minimum": 0 }
       }
     },
     "compatibility": { "type": "object" },
     "tasks": { "type": "object", "minProperties": 1 },
     "gaps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-    "integrity": { "type": "object" },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["release_gate", "conformal"],
+      "properties": {
+        "release_gate": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["decision"],
+          "properties": {
+            "decision": { "enum": ["HOLD", "ROLLBACK"] }
+          }
+        },
+        "conformal": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["schemaVersion", "outcome", "preregistrationHash", "frozenSampleDigest", "perExampleHash", "scoreMeaning"],
+          "properties": {
+            "schemaVersion": { "const": "conformal-evidence/v2" },
+            "outcome": { "enum": ["GO", "CONDITIONAL", "NO-GO", "INSUFFICIENT EVIDENCE"] },
+            "preregistrationHash": { "$ref": "#/$defs/sha" },
+            "frozenSampleDigest": { "$ref": "#/$defs/sha" },
+            "perExampleHash": { "$ref": "#/$defs/sha" },
+            "scoreMeaning": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
     "perExampleHash": { "$ref": "#/$defs/sha" },
     "latency": {
       "type": "object",

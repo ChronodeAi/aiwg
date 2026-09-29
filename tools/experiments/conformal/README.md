@@ -21,20 +21,32 @@ node --import tsx tools/experiments/conformal/collect-jev.v2.mjs --limit 25
 The v2 frozen sample contains labels and text only. It hashes train,
 calibration, final-test and shift splits before any score exists. The offline
 runner proves the full analysis path with a deterministic synthetic-score
-stand-in and produces `INSUFFICIENT EVIDENCE`; no live Jev scores, D09
-calibration approval, or D14 provider-backed lineage are claimed. The live
-collector is dry-run by default, estimates calls and cost, refuses more than the
-manifest item cap, refuses any estimate above USD 8.00, and requires
-`AIWG_DECISION_JEV_LIVE_SMOKE=1`, `AIWG_DECISION_JEV_API_KEY`, and
-`AIWG_DECISION_JEV_REGION` before using the normalized Jev decision runtime.
+stand-in and produces `INSUFFICIENT EVIDENCE`; synthetic mode can never yield
+`GO`. Supplying `--scores LIVE.jsonl` validates score IDs, frozen split hashes
+and compatibility keys before computing exactly one preregistered outcome.
+No live Jev scores, D09 calibration approval, or D14 provider-backed lineage
+are claimed in the committed artifacts. The live collector is dry-run by default,
+estimates calls and cost, refuses more than the manifest item cap, refuses any
+estimate above USD 8.00, reserves a conservative per-call bound before each call
+or retry, fsyncs each JSONL record as it completes, resumes by completed ID, and
+requires `AIWG_DECISION_JEV_LIVE_SMOKE=1`, `AIWG_DECISION_JEV_API_KEY`, and
+`AIWG_DECISION_JEV_REGION` before using the normalized Jev decision runtime. The
+default live output is under `$XDG_STATE_HOME/aiwg/conformal-2613/` or
+`$HOME/.local/state/aiwg/conformal-2613/`, not inside the repository.
 
 Source files frozen on 2026-09-29:
 
 | Dataset | Raw file | SHA-256 | License |
 |---|---|---|---|
-| CLINC150 | `https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json` | `36923c3705a59e08fe9c3883d8bc2dd966ef93e22cb78ac41171782a698d56e0` | CC-BY-4.0 |
+| CLINC150 | `https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json` | `36923c3705a59e08fe9c3883d8bc2dd966ef93e22cb78ac41171782a698d56e0` | CC-BY-3.0; license file `https://raw.githubusercontent.com/clinc/oos-eval/master/LICENSE` sha256 `e6bc9e9c474700b708f568bac9e5a8a9bcb2b1dad53442f5ba449fcb848b8e76` |
 | Banking77 | `https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/train.csv` | `b06e26ac675513959a63135f11b94ea7786ed02da65db93a5650d8838cbc664b` | CC-BY-4.0 |
 | Banking77 | `https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/test.csv` | `d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d` | CC-BY-4.0 |
+
+Banking77 nominal train, calibration and final-test rows are all drawn from
+`train.csv`; Banking77 source-separated shift rows are drawn from `test.csv`.
+This v2 re-freeze occurred before any live scores existed. Per-class coverage is
+reported as unsupported unless a class has at least 50 rows, which this bounded
+high-cardinality sample does not provide for individual intent classes.
 
 Closed schemas for the v2 preregistration, frozen sample and report live under
 `schemas/decision/Conformal*.v2.schema.json`.

@@ -28,6 +28,8 @@ async function download(file) {
     dataset: file.dataset,
     url: file.url,
     license: file.license,
+    licenseUrl: file.licenseUrl,
+    ...(file.licenseSha256 ? { licenseSha256: file.licenseSha256 } : {}),
     retrievalDate,
     sha256: file.sha256,
     bytes: readFileSync(target).byteLength,
@@ -47,7 +49,7 @@ const frozen = buildOpenDataFrozen({
 });
 
 mkdirSync(dirname(output), { recursive: true });
-writeFileSync(output, `${JSON.stringify(frozen, null, 2)}\n`);
+writeFileSync(output, `${JSON.stringify(frozen)}\n`);
 console.log(JSON.stringify({
   output,
   preregistrationHash: digest(preregistration),

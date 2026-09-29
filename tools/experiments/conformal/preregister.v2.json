@@ -19,7 +19,7 @@
       "primitive": "choice",
       "dataset": "CLINC150",
       "datasetUrl": "https://github.com/clinc/oos-eval",
-      "license": "CC-BY-4.0",
+      "license": "CC-BY-3.0",
       "definition": "Classify a user utterance into one CLINC150 intent or the explicit oos class.",
       "shift": "The oos_test split is frozen as a controlled OOD slice and is not used for train or calibration."
     },
@@ -30,7 +30,7 @@
       "datasetUrl": "https://github.com/PolyAI-LDN/task-specific-datasets/tree/master/banking_data",
       "license": "CC-BY-4.0",
       "definition": "Classify a banking support utterance into one Banking77 intent.",
-      "shift": "The canonical test CSV is source-separated from the training CSV; a disjoint portion is held as a shift slice."
+      "shift": "Nominal train/calibration/final-test rows are sampled from train.csv; the canonical test.csv is reserved as a source-separated shift slice."
     }
   ],
   "pins": {
@@ -44,7 +44,7 @@
     "train": "Frozen labels/text only. Used for synthetic calibrated-risk baseline bins; no conformal quantile fitting.",
     "calibration": "Frozen labels/text only. Used to fit conformal thresholds before final-test scoring.",
     "finalTest": "Frozen labels/text only. Evaluated after calibration profile and gates are fixed.",
-    "shift": "Frozen labels/text only. CLINC OOS plus Banking77 source-separated rows; demonstrates assumption degradation."
+    "shift": "Frozen labels/text only. CLINC OOS plus Banking77 test.csv rows source-separated from Banking77 train.csv; demonstrates where exchangeability assumptions are out of scope."
   },
   "coverageTarget": 0.9,
   "usefulnessGates": {
@@ -56,7 +56,7 @@
     "maximumSelectiveRisk": 0.12,
     "mustNotUpgradeIntegrityHoldOrRollback": true
   },
-  "sampleSizeRationale": "The bounded sample keeps git small while preserving at least 200 final-test rows per task and at least 50 rows on reported shift slices. It is adequate to prove deterministic mechanics, not production representativeness.",
+  "sampleSizeRationale": "The bounded sample keeps git small while preserving at least 200 final-test rows per task and at least 50 rows on reported shift slices. Per-class support is intentionally sparse for high-cardinality intent labels; class-conditional coverage is reported as unsupported unless n >= 50 for the class. The sample is adequate to prove deterministic mechanics, not production representativeness.",
   "baselines": [
     "raw primitive threshold: selected Choice probability >= 0.75",
     "synthetic calibrated-risk threshold: train-only top-score decile Wilson upper error <= 0.12; not an approved D09 calibration profile",
@@ -65,7 +65,7 @@
   ],
   "metrics": [
     "marginal coverage with Wilson interval",
-    "class and slice coverage when n >= 50",
+    "slice coverage when n >= 50; class-conditional coverage is unsupported for v2 classes with n < 50",
     "mean, p50, p90 and p95 set size",
     "abstention/review load",
     "selective risk",
@@ -89,7 +89,11 @@
     "offlineTokens": 0,
     "offlineUsd": 0,
     "liveHardCeilingUsd": 8,
+    "conservativeMaxTokensPerCall": 2000,
+    "conservativeUsdPerMillionTokens": 5,
     "estimatedUsdPerItem": 0.01,
+    "maxRetriesPerItem": 1,
+    "maxConsecutiveErrors": 3,
     "liveMaxItems": 600,
     "sampleMaxItems": 3000
   },
@@ -98,7 +102,7 @@
     "requiredEnv": "AIWG_DECISION_JEV_LIVE_SMOKE=1",
     "credentialEnv": "AIWG_DECISION_JEV_API_KEY",
     "dryRunDefault": true,
-    "networkRule": "No live provider call occurs unless the env gate is set, a credential is present, and the estimated cost is <= liveHardCeilingUsd and liveMaxItems."
+    "networkRule": "No live provider call occurs unless the env gate is set, a credential and region are present, and the collector can reserve conservativeMaxTokensPerCall * conservativeUsdPerMillionTokens / 1,000,000 USD before each call or retry without exceeding liveHardCeilingUsd and liveMaxItems. Provider-reported usage replaces the conservative charge when present."
   },
   "outcomeRule": "Offline synthetic-score execution can prove the pipeline and produce INSUFFICIENT EVIDENCE only. GO or CONDITIONAL requires separately approved live Jev scores or other representative held-out scores, D10 projection authorization, D14 lineage/retention evidence, and approved D09/D11 calibration evidence.",
   "nonGoals": [

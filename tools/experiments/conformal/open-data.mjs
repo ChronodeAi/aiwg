@@ -1,5 +1,16 @@
+import {
+  canonical,
+  digest,
+  predictionSet,
+  quantile,
+  rowHash,
+  top as topIndex,
+  wilson,
+} from './prototype.mjs';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+
+export { canonical, digest, predictionSet, quantile, rowHash, topIndex, wilson };
 
 export const RAW_FILES = [
   {
@@ -7,7 +18,9 @@ export const RAW_FILES = [
     dataset: 'CLINC150',
     url: 'https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json',
     localPath: 'clinc/data_full.json',
-    license: 'CC-BY-4.0',
+    license: 'CC-BY-3.0',
+    licenseUrl: 'https://raw.githubusercontent.com/clinc/oos-eval/master/LICENSE',
+    licenseSha256: 'e6bc9e9c474700b708f568bac9e5a8a9bcb2b1dad53442f5ba449fcb848b8e76',
     sha256: '36923c3705a59e08fe9c3883d8bc2dd966ef93e22cb78ac41171782a698d56e0',
   },
   {
@@ -16,6 +29,7 @@ export const RAW_FILES = [
     url: 'https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/train.csv',
     localPath: 'banking/train.csv',
     license: 'CC-BY-4.0',
+    licenseUrl: 'https://github.com/PolyAI-LDN/task-specific-datasets/blob/master/LICENSE',
     sha256: 'b06e26ac675513959a63135f11b94ea7786ed02da65db93a5650d8838cbc664b',
   },
   {
@@ -24,6 +38,7 @@ export const RAW_FILES = [
     url: 'https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/test.csv',
     localPath: 'banking/test.csv',
     license: 'CC-BY-4.0',
+    licenseUrl: 'https://github.com/PolyAI-LDN/task-specific-datasets/blob/master/LICENSE',
     sha256: 'd12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d',
   },
 ];
@@ -35,22 +50,18 @@ export const SAMPLE_POLICY = {
   banking: { trainPerIntent: 5, calibrationPerIntent: 3, finalPerIntent: 3, sourceShiftPerIntent: 2 },
 };
 
-export function canonical(value) {
-  return JSON.stringify(value, (_key, entry) => entry && typeof entry === 'object' && !Array.isArray(entry)
-    ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b))) : entry);
-}
-
-export function digest(value) {
-  const input = typeof value === 'string' || Buffer.isBuffer(value) ? value : canonical(value);
-  return `sha256:${createHash('sha256').update(input).digest('hex')}`;
-}
-
 export function fileSha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+export function experimentCodeVersion(root = new URL('./', import.meta.url)) {
+  return digest([
+    readFileSync(new URL('open-data.mjs', root), 'utf8'),
+    readFileSync(new URL('run.v2.mjs', root), 'utf8'),
+  ].join('\n'));
+}
+
 export const orderedRows = rows => [...rows].sort((a, b) => a.id.localeCompare(b.id));
-export const rowHash = rows => digest(orderedRows(rows));
 
 function stableHex(seed, ...parts) {
   return createHash('sha256').update([seed, ...parts].join('\0')).digest('hex');
@@ -192,12 +203,12 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
     ],
     finalTest: [
       ...sampleRows(clinc.final, 'finalTest', 'clinc-final', SAMPLE_POLICY.clinc.finalPerIntent),
-      ...sampleRows(banking.test, 'finalTest', 'banking-final', SAMPLE_POLICY.banking.finalPerIntent),
+      ...sampleRows(banking.train, 'finalTest', 'banking-train', SAMPLE_POLICY.banking.finalPerIntent,
+        SAMPLE_POLICY.banking.trainPerIntent + SAMPLE_POLICY.banking.calibrationPerIntent),
     ],
     shift: [
       ...fixedCount(clinc.oosShift, 'shift', 'clinc-oos-shift', SAMPLE_POLICY.clinc.oosShift),
-      ...sampleRows(banking.test, 'shift', 'banking-final', SAMPLE_POLICY.banking.sourceShiftPerIntent,
-        SAMPLE_POLICY.banking.finalPerIntent),
+      ...sampleRows(banking.test, 'shift', 'banking-test-source-shift', SAMPLE_POLICY.banking.sourceShiftPerIntent),
     ],
   };
   const allRows = Object.values(splits).flat();
@@ -218,7 +229,7 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
     'banking77-intent-choice': {
       primitive: 'choice',
       labels: banking.labels,
-      datasetPopulation: 'Banking77 intent classification with canonical source-separated test file',
+      datasetPopulation: 'Banking77 train.csv nominal splits with canonical test.csv reserved for source-separated shift',
       definitionVersion: 'banking77-intent-choice/v2',
     },
   };
@@ -226,7 +237,7 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
     schemaVersion: 'conformal-open-data-frozen/v2',
     issue: 2613,
     retrievalDate,
-    license: 'CC-BY-4.0',
+    license: 'mixed: CLINC150 CC-BY-3.0; Banking77 CC-BY-4.0',
     preregistrationHash: digest(preregistration),
     samplePolicy: SAMPLE_POLICY,
     sourceFiles,
@@ -234,7 +245,17 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
     splitHashes: Object.fromEntries(Object.entries(splits).map(([name, rows]) => [name, rowHash(rows)])),
     splits: Object.fromEntries(Object.entries(splits).map(([name, rows]) => [name, orderedRows(rows)])),
   };
-  return { ...frozen, sampleDigest: digest({ tasks, splitHashes: frozen.splitHashes, splits: frozen.splits }) };
+  return {
+    ...frozen,
+    sampleDigest: digest({
+      license: frozen.license,
+      retrievalDate,
+      sourceFiles,
+      tasks,
+      splitHashes: frozen.splitHashes,
+      splits: frozen.splits,
+    }),
+  };
 }
 
 export function verifyFrozenOpenData(frozen, preregistration) {
@@ -254,8 +275,10 @@ export function verifyFrozenOpenData(frozen, preregistration) {
     }
   }
   if (Object.values(frozen.splits).flat().length > frozen.samplePolicy.maxItems) throw new Error('sample exceeds manifest max');
-  const { tasks, splitHashes, splits } = frozen;
-  if (digest({ tasks, splitHashes, splits }) !== frozen.sampleDigest) throw new Error('sample digest mismatch');
+  const { license, retrievalDate, sourceFiles, tasks, splitHashes, splits } = frozen;
+  if (digest({ license, retrievalDate, sourceFiles, tasks, splitHashes, splits }) !== frozen.sampleDigest) {
+    throw new Error('sample digest mismatch');
+  }
 }
 
 export function syntheticChoiceDistribution(row, task) {
@@ -279,48 +302,45 @@ export function syntheticChoiceDistribution(row, task) {
   return rounded;
 }
 
-export function quantile(scores, alpha) {
-  if (!(alpha > 0 && alpha < 1) || !scores.length || scores.some(score => !Number.isFinite(score) || score < 0 || score > 1)) {
-    throw new Error('invalid calibration scores');
-  }
-  const rank = Math.ceil((scores.length + 1) * (1 - alpha));
-  return rank > scores.length ? Infinity : [...scores].sort((a, b) => a - b)[rank - 1];
-}
-
-export const predictionSet = (probabilities, q) => probabilities.flatMap((probability, index) => 1 - probability <= q ? [index] : []);
-export const topIndex = probabilities => probabilities.indexOf(Math.max(...probabilities));
-
-export function fitConformalProfile(rows, frozen, taskId, alpha, codeVersion) {
+export function compatibilityForTask(frozen, taskId, alpha, codeVersion, overrides = {}) {
   const task = frozen.tasks[taskId];
-  const calibration = rows.map(row => {
-    const probabilities = syntheticChoiceDistribution(row, task);
-    return 1 - probabilities[row.labelIndex];
-  });
   return {
-    schemaVersion: 'conformal-derived-profile/v2',
-    compatibility: {
-      servedModel: 'synthetic-score-stand-in/v2',
-      primitive: task.primitive,
-      definition: digest({ taskId, task }),
-      adapter: 'synthetic-open-data/v2',
-      datasetPopulation: task.datasetPopulation,
-      method: 'lac-v1',
-      calibrationSplit: rowHash(rows),
-      codeVersion,
-      alpha,
-    },
-    q: quantile(calibration, alpha),
+    servedModel: overrides.servedModel ?? 'synthetic-score-stand-in/v2',
+    primitive: task.primitive,
+    definition: digest({ taskId, task }),
+    adapter: overrides.adapter ?? 'synthetic-open-data/v2',
+    datasetPopulation: task.datasetPopulation,
+    method: overrides.method ?? 'lac-v1',
+    calibrationSplit: overrides.calibrationSplit,
+    codeVersion,
+    alpha,
   };
 }
 
-export function wilson(k, n) {
-  if (!n) return null;
-  const z = 1.959963984540054;
-  const p = k / n;
-  const d = 1 + z * z / n;
-  const c = (p + z * z / (2 * n)) / d;
-  const h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
-  return { lower: c - h, upper: c + h };
+export function assertCompatibleProfile(actual, expected) {
+  for (const field of ['servedModel', 'primitive', 'definition', 'adapter', 'datasetPopulation', 'method', 'calibrationSplit']) {
+    if (actual?.[field] !== expected?.[field]) throw new Error(`incompatible conformal profile: ${field}`);
+  }
+}
+
+export function fitConformalProfile(rows, frozen, taskId, alpha, codeVersion, options = {}) {
+  const task = frozen.tasks[taskId];
+  const getProbabilities = options.probabilitiesForRow ?? (row => syntheticChoiceDistribution(row, task));
+  const calibration = rows.map(row => {
+    const probabilities = getProbabilities(row);
+    return 1 - probabilities[row.labelIndex];
+  });
+  const compatibility = compatibilityForTask(frozen, taskId, alpha, codeVersion, {
+    servedModel: options.servedModel,
+    adapter: options.adapter,
+    method: options.method,
+    calibrationSplit: rowHash(rows),
+  });
+  return {
+    schemaVersion: 'conformal-derived-profile/v2',
+    compatibility,
+    q: quantile(calibration, alpha),
+  };
 }
 
 export function metrics(scored) {
