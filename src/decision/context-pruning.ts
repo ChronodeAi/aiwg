@@ -2,6 +2,13 @@ import { ContextBudgetManager, type BudgetConfig, type ContextItem } from '../me
 import { sha256 } from './compile-cache/identity.js';
 import { admitEntry } from './entry.js';
 import type { ContextQuestion } from './context-plan.js';
+import {
+  PairedDifferenceError,
+  pairedBinaryDifferenceInterval,
+  pairedMeanDifferenceBootstrap,
+  pairedNonInferiority,
+  type PairedDifferenceInterval,
+} from './qualification/quality.js';
 import type { QualificationIntegrityMetadata } from './qualification/release.js';
 
 export const CONTEXT_PRUNING_PROTECTED_POLICY_VERSION = 'decision-context-protected/v1' as const;
@@ -73,7 +80,6 @@ export interface ContextPruningCandidate {
     localOnly: boolean;
     legalAction: 'none' | 'requires-review';
   };
-  deterministicFallbackAction?: ContextPruningAction;
 }
 
 export interface ContextProtectedClassification {
@@ -160,6 +166,8 @@ export interface ContextPruningRun {
   downstreamItemIds: string[];
   receipts: ContextPruningReceipt[];
   disabledReason: 'configured-disabled' | 'drift-or-monitoring-regression' | null;
+  /** The ContextBudgetManager selection used as the prior deterministic fallback; null when no budget is configured. */
+  deterministicBaseline: ContextBudgetManagerBaseline | null;
 }
 
 interface ContextPruningActionDecision {
@@ -198,17 +206,38 @@ export interface ContextPruningEvaluationPlan {
   exclusions: ContextPruningEvaluationExclusion[];
 }
 
+export const CONTEXT_PRUNING_QUALITY_METRICS = [
+  'downstream-task-success',
+  'requirement-coverage',
+  'factual-coverage',
+  'citation-accuracy',
+  'human-preference',
+] as const;
+export type ContextPruningQualityMetricName = typeof CONTEXT_PRUNING_QUALITY_METRICS[number];
+/** `binary` outcomes are 0 or 1 per pair; `bounded` outcomes are finite scores in [0, 1] per pair. */
+export type ContextPruningQualityScale = 'binary' | 'bounded';
+
 export interface ContextPruningPreregistration {
   schemaVersion: typeof CONTEXT_PRUNING_PREREGISTRATION_SCHEMA;
   id: string;
   registeredAt: string;
-  holdoutAccessedAt: string | null;
   thresholds: {
     protectedRetentionBps: 10_000;
-    confidenceInterval: { method: 'wilson' | 'bootstrap'; levelBps: number };
+    confidenceInterval: {
+      levelBps: number;
+      binaryMethod: 'newcombe-10' | 'tango';
+      boundedMethod: 'percentile-bootstrap';
+      bootstrapSeed: number;
+      bootstrapResamples: number;
+    };
+    /** Every quality metric, each exactly once, with the scale its raw per-pair outcomes use. */
+    qualityMetrics: { metric: ContextPruningQualityMetricName; scale: ContextPruningQualityScale }[];
+    /** Every slice the report must support; slices absent from the pair records count as zero. */
+    slices: string[];
     minimumOverallN: number;
     minimumSliceN: number;
     powerRule: string | null;
+    /** Non-positive integer bps: -250 lets the candidate be at most 2.5 points worse. */
     qualityNonInferiorityMarginBps: number;
     positiveTotalTokenTarget: number;
     positiveTotalCostTargetUsd: number;
@@ -216,25 +245,43 @@ export interface ContextPruningPreregistration {
   digest: `sha256:${string}`;
 }
 
+/** One frozen paired task: the same task run with the baseline context and with the pruned context. */
+export interface ContextPruningPairRecord {
+  pairId: string;
+  slice: string;
+}
+
+export interface ContextPruningQualityOutcomes {
+  metric: ContextPruningQualityMetricName;
+  /** Raw per-pair outcomes; each metric has its own n. */
+  pairs: { pairId: string; baseline: number; candidate: number }[];
+}
+
+export interface ContextPruningPromptCacheArm {
+  hits: number;
+  misses: number;
+  /** Provider-reported cached (cache-read) prompt tokens for this arm. */
+  cachedInputTokens: number;
+}
+
 export interface ContextPruningPairedMetrics {
-  sampleN: number;
-  sliceCounts: Record<string, number>;
-  downstreamTaskSuccessDeltaBps: number | null;
-  requirementCoverageDeltaBps: number | null;
-  factualCoverageDeltaBps: number | null;
-  citationAccuracyDeltaBps: number | null;
-  humanPreferenceDeltaBps: number | null;
+  pairs: ContextPruningPairRecord[];
+  quality: ContextPruningQualityOutcomes[];
   protectedRetentionBps: number;
   providerUsage: ContextPruningUsageAccounting;
   estimatorUsage: ContextPruningUsageAccounting;
   totalCalls: number;
   latencyMs: { p50: number | null; p95: number | null; p99: number | null };
-  promptCache: { hits: number; misses: number; avoidedPromptTokens: number };
-  sharedStateAccounting: 'request-owned-once' | 'not-applicable';
+  /** Provider-reported prompt-cache usage for both downstream arms; reconciled against providerUsage. */
+  promptCache: { baseline: ContextPruningPromptCacheArm; prunedDownstream: ContextPruningPromptCacheArm };
+  /** Share-once Jev state accounting is not implemented; only `not-applicable` is accepted. */
+  sharedStateAccounting: 'not-applicable';
 }
 
 export interface ContextPruningUsageTotal {
   inputTokens: number;
+  /** Provider-reported cached prompt tokens (subset of inputTokens); null when not observed (estimator usage). */
+  cachedInputTokens: number | null;
   outputTokens: number;
   costUsd: number | null;
 }
@@ -245,7 +292,6 @@ export interface ContextPruningUsageAccounting {
   decisionCalls: ContextPruningUsageTotal;
   fallbackCalls: ContextPruningUsageTotal;
   transformationCalls: ContextPruningUsageTotal;
-  cacheEffect: { avoidedTokens: number; avoidedCostUsd: number | null };
 }
 
 export interface ContextBudgetManagerBaseline {
@@ -256,11 +302,36 @@ export interface ContextBudgetManagerBaseline {
   tokensFreed: number;
 }
 
+export interface ContextPruningQualityResult {
+  metric: ContextPruningQualityMetricName;
+  scale: ContextPruningQualityScale;
+  n: number;
+  interval: PairedDifferenceInterval | null;
+  decision: 'non-inferior' | 'not-non-inferior' | 'insufficient';
+}
+
+export interface ContextPruningDerivedEvidence {
+  sampleN: number;
+  sliceSupport: Record<string, number>;
+  quality: ContextPruningQualityResult[];
+  providerSavings: {
+    totalTokens: number;
+    /** Savings after removing provider-reported cached prompt tokens from every arm. */
+    uncachedTokens: number;
+    costUsd: number | null;
+    /** Signed: prunedDownstream cached tokens minus baseline cached tokens. Negative means pruning lost cache hits. */
+    cachedInputTokensDelta: number;
+  };
+  estimatorSavings: { totalTokens: number };
+}
+
 export interface ContextPruningEvaluationReport {
   schemaVersion: typeof CONTEXT_PRUNING_EVALUATION_REPORT_SCHEMA;
   preregistration: ContextPruningPreregistration;
+  holdoutAccessedAt: string | null;
   integrity: QualificationIntegrityMetadata;
   metrics: ContextPruningPairedMetrics;
+  derived: ContextPruningDerivedEvidence;
   missingInputs: string[];
   findings: string[];
   upstreamDecision: 'PROMOTE' | 'HOLD' | 'ROLLBACK';
@@ -421,6 +492,12 @@ export interface ApplyContextPruningInput {
   evidence?: readonly ContextPruningDecisionEvidence[];
   now?: () => string;
   monitoringRegression?: boolean;
+  /**
+   * When set, the existing deterministic ContextBudgetManager selection under this budget is the prior
+   * deterministic fallback, and every candidate must carry its host-owned content. When absent, the prior
+   * behavior is "no pruning", so the fallback proposal is keep.
+   */
+  budget?: Partial<BudgetConfig>;
 }
 
 export function applyContextPruningPilot(input: ApplyContextPruningInput): ContextPruningRun {
@@ -432,40 +509,27 @@ export function applyContextPruningPilot(input: ApplyContextPruningInput): Conte
     : input.policy.mode === 'disabled' ? 'configured-disabled' : null;
   const mode: ContextPruningRun['mode'] = disabledReason ? 'deterministic-fallback' : input.policy.mode;
   const classifications = classifyContextPruningCandidates(input.candidates);
+  const deterministicBaseline = input.budget === undefined ? null
+    : computeContextBudgetManagerBaseline(input.candidates, input.budget);
+  const deterministicDrops = new Set(deterministicBaseline?.droppedItemIds ?? []);
   const receipts = input.candidates.map(candidate => {
     validateContextPruningCandidate(candidate);
     const classification = classifications.get(candidate.itemId)!;
     const itemEvidence = evidence.get(candidate.itemId);
-    const decision = decideContextAction(candidate, classification, input.policy, itemEvidence, disabledReason);
-    return buildContextPruningReceipt(candidate, classification, decision, mode, now());
+    const fallbackAction: ContextPruningAction = deterministicDrops.has(candidate.itemId) ? 'drop' : 'keep';
+    const decision = decideContextAction(candidate, classification, input.policy, itemEvidence, disabledReason, fallbackAction);
+    return buildContextPruningReceipt(candidate, classification, decision, now());
   });
   return {
     schemaVersion: 'decision-context-pruning-run/v1',
     mode,
     baselineItemIds: baseline,
-    downstreamItemIds: baseline,
+    // A distinct array: callers that mutate one list cannot silently alter the other.
+    downstreamItemIds: [...baseline],
     receipts,
     disabledReason,
+    deterministicBaseline,
   };
-}
-
-export function renderContextPrompt(items: readonly ContextPruningCandidate[]): string {
-  return items.map(item => {
-    validateContextPruningCandidate(item);
-    return `--- ${item.itemId} ${item.locator}\n${item.content ?? item.contentDigest}`;
-  }).join('\n');
-}
-
-export function assertShadowPromptByteIdentical(baseline: string, shadow: ContextPruningRun, candidates: readonly ContextPruningCandidate[]): void {
-  const byId = new Map(candidates.map(candidate => [candidate.itemId, candidate]));
-  const rendered = renderContextPrompt(shadow.downstreamItemIds.map(id => {
-    const item = byId.get(id);
-    if (!item) throw new ContextPruningError(`missing item '${id}'`, 'semantic');
-    return item;
-  }));
-  if (Buffer.compare(Buffer.from(baseline), Buffer.from(rendered)) !== 0) {
-    throw new ContextPruningError('shadow mode changed the downstream prompt bytes', 'semantic');
-  }
 }
 
 export function validateContextPruningReceipt(receipt: ContextPruningReceipt): ContextPruningReceipt {
@@ -503,17 +567,29 @@ export function createContextPruningPreregistration(
 export function validateContextPruningPreregistration(value: ContextPruningPreregistration): ContextPruningPreregistration {
   requirePlain(value, 'preregistration');
   const t = value.thresholds;
+  const ci = t?.confidenceInterval;
+  const metrics = Array.isArray(t?.qualityMetrics) ? t.qualityMetrics : [];
+  const slices = Array.isArray(t?.slices) ? t.slices : [];
+  const bootstrapTail = ci && Number.isSafeInteger(ci.bootstrapResamples) && Number.isSafeInteger(ci.levelBps)
+    ? Math.floor(ci.bootstrapResamples * (10_000 - ci.levelBps) / 20_000) : 0;
   if (value.schemaVersion !== CONTEXT_PRUNING_PREREGISTRATION_SCHEMA || !value.id
     || !Number.isFinite(Date.parse(value.registeredAt))
-    || (value.holdoutAccessedAt !== null && (!Number.isFinite(Date.parse(value.holdoutAccessedAt))
-      || Date.parse(value.holdoutAccessedAt) <= Date.parse(value.registeredAt)))
-    || t.protectedRetentionBps !== 10_000
-    || !['wilson', 'bootstrap'].includes(t.confidenceInterval.method)
-    || !Number.isSafeInteger(t.confidenceInterval.levelBps) || t.confidenceInterval.levelBps < 5_000 || t.confidenceInterval.levelBps > 9_999
-    || !Number.isSafeInteger(t.minimumOverallN) || t.minimumOverallN < 1
+    || !t || t.protectedRetentionBps !== 10_000 || !ci
+    // pairedBinaryDifferenceInterval accepts only levels strictly between 5000 and 9999.
+    || !Number.isSafeInteger(ci.levelBps) || ci.levelBps <= 5_000 || ci.levelBps >= 9_999
+    || !['newcombe-10', 'tango'].includes(ci.binaryMethod) || ci.boundedMethod !== 'percentile-bootstrap'
+    || !Number.isSafeInteger(ci.bootstrapSeed) || ci.bootstrapSeed < 0 || ci.bootstrapSeed > 0xffff_ffff
+    || !Number.isSafeInteger(ci.bootstrapResamples) || ci.bootstrapResamples > 1_000_000 || bootstrapTail < 5
+    || metrics.length !== CONTEXT_PRUNING_QUALITY_METRICS.length
+    || new Set(metrics.map(item => item?.metric)).size !== metrics.length
+    || metrics.some(item => !CONTEXT_PRUNING_QUALITY_METRICS.includes(item?.metric) || !['binary', 'bounded'].includes(item.scale))
+    || slices.length === 0 || new Set(slices).size !== slices.length
+    || slices.some(slice => typeof slice !== 'string' || !slice.trim())
+    || !Number.isSafeInteger(t.minimumOverallN) || t.minimumOverallN < 2
     || !Number.isSafeInteger(t.minimumSliceN) || t.minimumSliceN < 1
-    || (t.powerRule !== null && !t.powerRule.trim())
-    || !Number.isFinite(t.qualityNonInferiorityMarginBps) || t.qualityNonInferiorityMarginBps > 0
+    || (t.powerRule !== null && (typeof t.powerRule !== 'string' || !t.powerRule.trim()))
+    || !Number.isSafeInteger(t.qualityNonInferiorityMarginBps) || t.qualityNonInferiorityMarginBps > 0
+    || t.qualityNonInferiorityMarginBps < -10_000
     || !Number.isSafeInteger(t.positiveTotalTokenTarget) || t.positiveTotalTokenTarget <= 0
     || !Number.isFinite(t.positiveTotalCostTargetUsd) || t.positiveTotalCostTargetUsd <= 0) {
     throw new ContextPruningError('invalid context pruning preregistration', 'schema');
@@ -523,58 +599,87 @@ export function validateContextPruningPreregistration(value: ContextPruningPrere
   return value;
 }
 
+/**
+ * Builds the paired evaluation report. `trustedPreregistrationDigest` must come from a separately anchored
+ * record made before holdout access (as evaluatePreregisteredBinaryBenchmark requires): a caller-created
+ * preregistration cannot attest itself. A report without a recorded holdout access time cannot PROMOTE.
+ */
 export function buildContextPruningEvaluationReport(input: {
   preregistration: ContextPruningPreregistration;
+  trustedPreregistrationDigest: `sha256:${string}`;
+  holdoutAccessedAt: string | null;
   integrity: QualificationIntegrityMetadata;
   metrics: ContextPruningPairedMetrics;
   missingInputs?: readonly string[];
 }): ContextPruningEvaluationReport {
   const preregistration = validateContextPruningPreregistration(input.preregistration);
-  validateMetrics(input.metrics);
+  if (typeof input.trustedPreregistrationDigest !== 'string' || !SHA.test(input.trustedPreregistrationDigest)
+    || preregistration.digest !== input.trustedPreregistrationDigest) {
+    throw new ContextPruningError('preregistration is not anchored to the trusted digest', 'semantic');
+  }
+  const holdoutAccessedAt = input.holdoutAccessedAt;
+  if (holdoutAccessedAt !== null && (typeof holdoutAccessedAt !== 'string' || !Number.isFinite(Date.parse(holdoutAccessedAt))
+    || Date.parse(holdoutAccessedAt) <= Date.parse(preregistration.registeredAt))) {
+    throw new ContextPruningError('holdout access must be recorded after preregistration', 'semantic');
+  }
+  validateIntegrity(input.integrity);
+  const thresholds = preregistration.thresholds;
+  validateMetrics(input.metrics, preregistration);
+  const metrics = input.metrics;
   const findings = new Set<string>();
   const missing = new Set(input.missingInputs ?? []);
-  if (input.metrics.sampleN < preregistration.thresholds.minimumOverallN) findings.add('insufficient-overall-sample');
-  if (Object.keys(input.metrics.sliceCounts).length === 0) findings.add('insufficient-slices');
-  for (const [slice, count] of Object.entries(input.metrics.sliceCounts)) {
-    if (count < preregistration.thresholds.minimumSliceN) findings.add(`insufficient-slice:${slice}`);
+  if (holdoutAccessedAt === null) findings.add('holdout-access-unrecorded');
+
+  const sliceSupport = Object.fromEntries(thresholds.slices.map(slice => [slice, 0]));
+  for (const pair of metrics.pairs) sliceSupport[pair.slice]! += 1;
+  if (metrics.pairs.length < thresholds.minimumOverallN) findings.add('insufficient-overall-sample');
+  for (const slice of thresholds.slices) {
+    if (sliceSupport[slice]! < thresholds.minimumSliceN) findings.add(`insufficient-slice:${slice}`);
   }
-  if (input.metrics.protectedRetentionBps < 10_000) findings.add('protected-retention-breach');
-  const qualityDeltas = [
-    input.metrics.downstreamTaskSuccessDeltaBps,
-    input.metrics.requirementCoverageDeltaBps,
-    input.metrics.factualCoverageDeltaBps,
-    input.metrics.citationAccuracyDeltaBps,
-    input.metrics.humanPreferenceDeltaBps,
-  ];
-  if (qualityDeltas.some(value => value === null)) findings.add('quality-metric-missing');
-  const ci = preregistration.thresholds.confidenceInterval;
-  if (ci.method !== 'wilson') findings.add(`quality-ci-method-unsupported:${ci.method}`);
-  if (ci.method === 'wilson' && qualityDeltas.some(value => value !== null
-    && wilsonDeltaLowerBoundBps(value, input.metrics.sampleN, ci.levelBps) < preregistration.thresholds.qualityNonInferiorityMarginBps)) {
-    findings.add('quality-non-inferiority-failed');
+  if (metrics.protectedRetentionBps < 10_000) findings.add('protected-retention-breach');
+
+  const quality = thresholds.qualityMetrics.map(({ metric, scale }) =>
+    evaluateQualityMetric(metric, scale, metrics.quality.find(item => item.metric === metric), preregistration));
+  for (const result of quality) {
+    if (result.decision === 'not-non-inferior') {
+      findings.add('quality-non-inferiority-failed');
+      findings.add(`quality-non-inferiority-failed:${result.metric}`);
+    } else if (result.decision === 'insufficient') {
+      findings.add(result.n === 0 ? `quality-metric-missing:${result.metric}` : `insufficient-quality-sample:${result.metric}`);
+    }
   }
-  const providerSavings = usageSavings(input.metrics.providerUsage);
-  const estimatorSavings = usageSavings(input.metrics.estimatorUsage);
-  if (providerSavings.tokens < preregistration.thresholds.positiveTotalTokenTarget) findings.add('provider-token-target-not-met');
-  if (estimatorSavings.tokens < preregistration.thresholds.positiveTotalTokenTarget) findings.add('estimator-token-target-not-met');
-  if (providerSavings.costUsd === null || providerSavings.costUsd < preregistration.thresholds.positiveTotalCostTargetUsd) {
-    findings.add('provider-cost-target-not-met');
+
+  const providerSavings = providerUsageSavings(metrics.providerUsage);
+  const estimatorSavings = { totalTokens: totalSavings(metrics.estimatorUsage, 'total') };
+  if (providerSavings.totalTokens < 0 || providerSavings.uncachedTokens < 0
+    || (providerSavings.costUsd !== null && providerSavings.costUsd < 0)) {
+    findings.add('negative-net-economics');
   }
+  if (providerSavings.totalTokens < thresholds.positiveTotalTokenTarget
+    || providerSavings.uncachedTokens < thresholds.positiveTotalTokenTarget) findings.add('provider-token-target-not-met');
+  if (estimatorSavings.totalTokens < thresholds.positiveTotalTokenTarget) findings.add('estimator-token-target-not-met');
+  if (providerSavings.costUsd === null) findings.add('provider-cost-unknown');
+  else if (providerSavings.costUsd < thresholds.positiveTotalCostTargetUsd) findings.add('provider-cost-target-not-met');
+
   if (input.integrity.integrity_state !== 'verified') findings.add('integrity-not-verified');
-  if (input.integrity.release_gate.decision === 'ROLLBACK') findings.add('upstream-rollback');
-  if (input.integrity.release_gate.decision === 'HOLD') findings.add('upstream-hold');
-  for (const name of missing) findings.add(`missing-input:${name}`);
   const upstreamDecision = input.integrity.release_gate.decision;
-  const decision = upstreamDecision === 'ROLLBACK' || input.metrics.protectedRetentionBps < 10_000 ? 'ROLLBACK'
-    : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
-  const advisory = [...findings].some(item => item.startsWith('insufficient-') || item === 'quality-metric-missing'
-    || item.startsWith('quality-ci-method-unsupported:') || item.startsWith('missing-input:'))
+  if (upstreamDecision === 'ROLLBACK') findings.add('upstream-rollback');
+  if (upstreamDecision === 'HOLD') findings.add('upstream-hold');
+  for (const name of missing) findings.add(`missing-input:${name}`);
+  // Automatic rollback triggers from the D26 rollout plan: protected miss, quality regression, negative economics.
+  const rollback = upstreamDecision === 'ROLLBACK' || findings.has('protected-retention-breach')
+    || findings.has('quality-non-inferiority-failed') || findings.has('negative-net-economics');
+  const decision = rollback ? 'ROLLBACK' : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
+  const advisory = [...findings].some(item => item.startsWith('insufficient-') || item.startsWith('quality-metric-missing:')
+    || item.startsWith('missing-input:') || item === 'holdout-access-unrecorded' || item === 'provider-cost-unknown')
     ? 'INSUFFICIENT EVIDENCE' : null;
   const payload: Omit<ContextPruningEvaluationReport, 'digest'> = {
     schemaVersion: CONTEXT_PRUNING_EVALUATION_REPORT_SCHEMA,
     preregistration,
+    holdoutAccessedAt,
     integrity: input.integrity,
-    metrics: input.metrics,
+    metrics,
+    derived: { sampleN: metrics.pairs.length, sliceSupport, quality, providerSavings, estimatorSavings },
     missingInputs: [...missing].sort(),
     findings: [...findings].sort(),
     upstreamDecision,
@@ -582,6 +687,42 @@ export function buildContextPruningEvaluationReport(input: {
     advisory,
   };
   return { ...payload, digest: contextPruningDigest(payload) };
+}
+
+function evaluateQualityMetric(
+  metric: ContextPruningQualityMetricName,
+  scale: ContextPruningQualityScale,
+  outcomes: ContextPruningQualityOutcomes | undefined,
+  preregistration: ContextPruningPreregistration,
+): ContextPruningQualityResult {
+  const { confidenceInterval: ci, minimumOverallN, qualityNonInferiorityMarginBps } = preregistration.thresholds;
+  const pairs = outcomes?.pairs ?? [];
+  const insufficient = (interval: PairedDifferenceInterval | null = null): ContextPruningQualityResult =>
+    ({ metric, scale, n: pairs.length, interval, decision: 'insufficient' });
+  if (pairs.length < minimumOverallN) return insufficient();
+  let interval: PairedDifferenceInterval;
+  try {
+    if (scale === 'binary') {
+      const counts = { both: 0, candidateOnly: 0, baselineOnly: 0, neither: 0 };
+      for (const pair of pairs) {
+        if (pair.candidate === 1 && pair.baseline === 1) counts.both++;
+        else if (pair.candidate === 1) counts.candidateOnly++;
+        else if (pair.baseline === 1) counts.baselineOnly++;
+        else counts.neither++;
+      }
+      interval = pairedBinaryDifferenceInterval({ counts, levelBps: ci.levelBps, method: ci.binaryMethod });
+    } else {
+      interval = pairedMeanDifferenceBootstrap({
+        differences: pairs.map(pair => pair.candidate - pair.baseline), levelBps: ci.levelBps,
+        seed: ci.bootstrapSeed, resamples: ci.bootstrapResamples, bounds: [-1, 1],
+      });
+    }
+  } catch (error) {
+    if (error instanceof PairedDifferenceError) return insufficient();
+    throw error;
+  }
+  const verdict = pairedNonInferiority({ interval, marginBps: qualityNonInferiorityMarginBps });
+  return { metric, scale, n: pairs.length, interval, decision: verdict.decision };
 }
 
 function pruningSubject(candidate: ContextPruningCandidate): string {
@@ -594,21 +735,24 @@ function decideContextAction(
   policy: ContextPruningPolicy,
   evidence: ContextPruningDecisionEvidence | undefined,
   disabledReason: ContextPruningRun['disabledReason'],
+  fallbackAction: ContextPruningAction,
 ): ContextPruningActionDecision {
-  if (classification.protected) return { proposedAction: 'keep', appliedAction: 'keep', mode: policy.mode,
+  if (classification.protected) return { proposedAction: 'keep', appliedAction: 'keep',
+    mode: disabledReason ? 'deterministic-fallback' : policy.mode,
     reason: 'protected-item', decisionReceiptDigest: null, transformation: null };
-  if (disabledReason) return fallback(candidate, disabledReason === 'configured-disabled' ? 'disabled' : 'drift-or-monitoring-regression');
-  if (policy.mode === 'disabled') return fallback(candidate, 'disabled');
-  if (!evidence || evidence.itemId !== candidate.itemId || evidence.subject !== pruningSubject(candidate)) return fallback(candidate, 'invalid-evidence');
-  if (evidence.status === 'cancelled') return fallback(candidate, 'cancelled');
-  if (evidence.status === 'incomplete') return fallback(candidate, 'incomplete-state');
-  if (evidence.status === 'uncalibrated') return fallback(candidate, 'uncalibrated');
-  if (evidence.status === 'drifted') return fallback(candidate, 'drift-or-monitoring-regression');
-  if (evidence.status === 'failed') return fallback(candidate, 'evaluation-failed');
+  const fallback = (reason: ContextPruningReceipt['reason']) => deterministicFallback(fallbackAction, reason);
+  if (disabledReason) return fallback(disabledReason === 'configured-disabled' ? 'disabled' : 'drift-or-monitoring-regression');
+  if (policy.mode === 'disabled') return fallback('disabled');
+  if (!evidence || evidence.itemId !== candidate.itemId || evidence.subject !== pruningSubject(candidate)) return fallback('invalid-evidence');
+  if (evidence.status === 'cancelled') return fallback('cancelled');
+  if (evidence.status === 'incomplete') return fallback('incomplete-state');
+  if (evidence.status === 'uncalibrated') return fallback('uncalibrated');
+  if (evidence.status === 'drifted') return fallback('drift-or-monitoring-regression');
+  if (evidence.status === 'failed') return fallback('evaluation-failed');
   if (policy.modelIdentityDigest === null || policy.calibrationDigest === null
     || evidence.modelIdentityDigest === undefined || evidence.calibrationDigest === undefined
     || evidence.modelIdentityDigest !== policy.modelIdentityDigest || evidence.calibrationDigest !== policy.calibrationDigest) {
-    return fallback(candidate, 'drift-or-monitoring-regression');
+    return fallback('drift-or-monitoring-regression');
   }
   const confidenceBps = evidence.confidenceBps;
   const marginBps = evidence.marginBps;
@@ -617,12 +761,12 @@ function decideContextAction(
     || !Number.isSafeInteger(confidenceBps) || !Number.isSafeInteger(marginBps)
     || confidenceBps < policy.minimumConfidenceBps || marginBps < policy.minimumMarginBps
     || evidence.calibrated !== true || !evidence.decisionReceiptDigest || !SHA.test(evidence.decisionReceiptDigest)) {
-    return fallback(candidate, evidence.status === 'uncertain' ? 'uncertain-evidence' : 'invalid-evidence');
+    return fallback(evidence.status === 'uncertain' ? 'uncertain-evidence' : 'invalid-evidence');
   }
   const proposed = evidence.proposedAction;
-  if (!policy.allowedDestructiveActions.includes(proposed) && proposed !== 'keep') return fallback(candidate, 'policy-denied-action');
+  if (!policy.allowedDestructiveActions.includes(proposed) && proposed !== 'keep') return fallback('policy-denied-action');
   if ((proposed === 'truncate' || proposed === 'summarize') && !validTransformation(evidence.transformation, proposed, candidate.contentDigest)) {
-    return fallback(candidate, 'unsupported-transformation');
+    return fallback('unsupported-transformation');
   }
   return {
     proposedAction: proposed,
@@ -634,8 +778,7 @@ function decideContextAction(
   };
 }
 
-function fallback(candidate: ContextPruningCandidate, reason: ContextPruningReceipt['reason']) {
-  const action = candidate.deterministicFallbackAction ?? 'keep';
+function deterministicFallback(action: ContextPruningAction, reason: ContextPruningReceipt['reason']) {
   return {
     proposedAction: action,
     appliedAction: 'keep' as const,
@@ -653,7 +796,6 @@ function buildContextPruningReceipt(
   candidate: ContextPruningCandidate,
   classification: ContextProtectedClassification,
   decision: ContextPruningActionDecision,
-  runMode: ContextPruningRun['mode'],
   createdAt: string,
 ): ContextPruningReceipt {
   const transformation = decision.transformation ?? null;
@@ -666,7 +808,7 @@ function buildContextPruningReceipt(
     classification,
     proposedAction: decision.proposedAction,
     appliedAction: decision.appliedAction,
-    mode: runMode,
+    mode: decision.mode,
     reason: decision.reason,
     decisionReceiptDigest: decision.decisionReceiptDigest,
     reversibleReference: {
@@ -692,13 +834,19 @@ export function computeContextBudgetManagerBaseline(
   const manager = new ContextBudgetManager(process.cwd(), config);
   for (const candidate of candidates) {
     validateContextPruningCandidate(candidate);
-    manager.addItem(candidate.itemId, candidate.content ?? candidate.contentDigest, sourceTypeForBudget(candidate), candidate.priority);
+    // ContextBudgetManager sizes item text itself; sizing the digest string would understate real content.
+    if (candidate.content === undefined) {
+      throw new ContextPruningError(`ContextBudgetManager baseline requires host-owned content for '${candidate.itemId}'`, 'invalid-input');
+    }
+    // The envelope priority is passed as ContextBudgetManager similarity; the manager derives its own priority.
+    manager.addItem(candidate.itemId, candidate.content, sourceTypeForBudget(candidate), candidate.priority);
   }
   const result = manager.degrade();
   return {
     source: 'ContextBudgetManager',
     usage: {
       inputTokens: result.kept.reduce((sum, item) => sum + item.tokens, 0),
+      cachedInputTokens: null,
       outputTokens: 0,
       costUsd: null,
     },
@@ -725,8 +873,7 @@ function validateContextPruningCandidate(candidate: ContextPruningCandidate): vo
     || !candidate.taskSubject || !candidate.dataPolicy
     || !['allowed', 'denied'].includes(candidate.dataPolicy.externalEvaluation)
     || typeof candidate.dataPolicy.localOnly !== 'boolean'
-    || !['none', 'requires-review'].includes(candidate.dataPolicy.legalAction)
-    || (candidate.deterministicFallbackAction !== undefined && !['keep', 'drop', 'truncate', 'summarize'].includes(candidate.deterministicFallbackAction))) {
+    || !['none', 'requires-review'].includes(candidate.dataPolicy.legalAction)) {
     throw new ContextPruningError('invalid context candidate', 'schema');
   }
   try { admitEntry(candidate); } catch {
@@ -746,86 +893,96 @@ function validatePolicy(policy: ContextPruningPolicy): void {
   }
 }
 
-function validateMetrics(metrics: ContextPruningPairedMetrics): void {
-  if (!Number.isSafeInteger(metrics.sampleN) || metrics.sampleN < 0
-    || Object.values(metrics.sliceCounts).some(value => !Number.isSafeInteger(value) || value < 0)
-    || !Number.isSafeInteger(metrics.protectedRetentionBps) || metrics.protectedRetentionBps < 0 || metrics.protectedRetentionBps > 10_000
-    || metrics.sharedStateAccounting !== 'request-owned-once' && metrics.sharedStateAccounting !== 'not-applicable'
-    || !usageAccounting(metrics.providerUsage) || !usageAccounting(metrics.estimatorUsage)
-    || !Number.isSafeInteger(metrics.totalCalls) || metrics.totalCalls < 0
-    || !Number.isSafeInteger(metrics.promptCache.hits) || !Number.isSafeInteger(metrics.promptCache.misses)
-    || !Number.isSafeInteger(metrics.promptCache.avoidedPromptTokens)) {
-    throw new ContextPruningError('invalid context pruning metrics', 'schema');
+function validateIntegrity(integrity: QualificationIntegrityMetadata): void {
+  if (!integrity || typeof integrity !== 'object' || !integrity.release_gate
+    || !['PROMOTE', 'HOLD', 'ROLLBACK'].includes(integrity.release_gate.decision)
+    || typeof integrity.integrity_state !== 'string') {
+    throw new ContextPruningError('invalid eval-integrity metadata', 'schema');
   }
 }
 
-function usage(value: ContextPruningUsageTotal): boolean {
-  return Number.isSafeInteger(value.inputTokens) && value.inputTokens >= 0
-    && Number.isSafeInteger(value.outputTokens) && value.outputTokens >= 0
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+function validateMetrics(metrics: ContextPruningPairedMetrics, preregistration: ContextPruningPreregistration): void {
+  requirePlain(metrics, 'metrics');
+  const slices = new Set(preregistration.thresholds.slices);
+  const pairs = Array.isArray(metrics.pairs) ? metrics.pairs : null;
+  const pairIds = new Set(pairs?.map(pair => pair?.pairId));
+  if (!pairs || pairIds.size !== pairs.length
+    || pairs.some(pair => !pair || typeof pair.pairId !== 'string' || !pair.pairId || !slices.has(pair.slice))) {
+    throw new ContextPruningError('pair records must have unique IDs and preregistered slices', 'schema');
+  }
+  const scales = new Map(preregistration.thresholds.qualityMetrics.map(item => [item.metric, item.scale]));
+  const quality = Array.isArray(metrics.quality) ? metrics.quality : null;
+  if (!quality || new Set(quality.map(item => item?.metric)).size !== quality.length
+    || quality.some(item => !item || !scales.has(item.metric) || !Array.isArray(item.pairs))) {
+    throw new ContextPruningError('quality outcomes must name each preregistered metric at most once', 'schema');
+  }
+  for (const item of quality) {
+    const scale = scales.get(item.metric)!;
+    const seen = new Set<string>();
+    for (const pair of item.pairs) {
+      const inRange = (value: unknown) => typeof value === 'number' && Number.isFinite(value)
+        && (scale === 'binary' ? value === 0 || value === 1 : value >= 0 && value <= 1);
+      if (!pair || !pairIds.has(pair.pairId) || seen.has(pair.pairId) || !inRange(pair.baseline) || !inRange(pair.candidate)) {
+        throw new ContextPruningError(`quality outcome for '${item.metric}' is out of range or not reconciled with the pair records`, 'schema');
+      }
+      seen.add(pair.pairId);
+    }
+  }
+  if (!isCount(metrics.protectedRetentionBps) || metrics.protectedRetentionBps > 10_000
+    || metrics.sharedStateAccounting !== 'not-applicable'
+    || !usageAccounting(metrics.providerUsage, 'provider') || !usageAccounting(metrics.estimatorUsage, 'estimator')
+    || !isCount(metrics.totalCalls) || !metrics.latencyMs
+    || [metrics.latencyMs.p50, metrics.latencyMs.p95, metrics.latencyMs.p99]
+      .some(value => value !== null && (!Number.isFinite(value) || value < 0))) {
+    throw new ContextPruningError('invalid context pruning metrics', 'schema');
+  }
+  const cache = metrics.promptCache;
+  for (const arm of ['baseline', 'prunedDownstream'] as const) {
+    const reported = cache?.[arm];
+    const usage = metrics.providerUsage[arm];
+    // Cache credit is never a caller assertion: it must match provider-reported usage for the same arm.
+    if (!reported || !isCount(reported.hits) || !isCount(reported.misses) || !isCount(reported.cachedInputTokens)
+      || reported.cachedInputTokens !== usage.cachedInputTokens
+      || (reported.cachedInputTokens > 0 && reported.hits === 0)) {
+      throw new ContextPruningError(`prompt-cache usage for '${arm}' does not reconcile with provider usage`, 'semantic');
+    }
+  }
+}
+
+const USAGE_ARMS = ['baseline', 'prunedDownstream', 'decisionCalls', 'fallbackCalls', 'transformationCalls'] as const;
+
+function usage(value: ContextPruningUsageTotal, source: 'provider' | 'estimator'): boolean {
+  return Boolean(value) && isCount(value.inputTokens) && isCount(value.outputTokens)
+    && (source === 'provider'
+      ? isCount(value.cachedInputTokens) && value.cachedInputTokens <= value.inputTokens
+      : value.cachedInputTokens === null)
     && (value.costUsd === null || (Number.isFinite(value.costUsd) && value.costUsd >= 0));
 }
 
-function usageAccounting(value: ContextPruningUsageAccounting): boolean {
-  return Boolean(value) && usage(value.baseline) && usage(value.prunedDownstream) && usage(value.decisionCalls)
-    && usage(value.fallbackCalls) && usage(value.transformationCalls)
-    && Number.isSafeInteger(value.cacheEffect.avoidedTokens) && value.cacheEffect.avoidedTokens >= 0
-    && (value.cacheEffect.avoidedCostUsd === null || (Number.isFinite(value.cacheEffect.avoidedCostUsd)
-      && value.cacheEffect.avoidedCostUsd >= 0));
+function usageAccounting(value: ContextPruningUsageAccounting, source: 'provider' | 'estimator'): boolean {
+  return Boolean(value) && typeof value === 'object'
+    && Object.keys(value).sort().join() === [...USAGE_ARMS].sort().join()
+    && USAGE_ARMS.every(arm => usage(value[arm], source));
 }
 
-function usageSavings(value: ContextPruningUsageAccounting): { tokens: number; costUsd: number | null } {
-  const spentTokens = tokens(value.prunedDownstream) + tokens(value.decisionCalls) + tokens(value.fallbackCalls)
-    + tokens(value.transformationCalls) - value.cacheEffect.avoidedTokens;
+/** Baseline arm minus every pruned-arm call (downstream, decision, fallback, transformation). */
+function totalSavings(value: ContextPruningUsageAccounting, basis: 'total' | 'uncached'): number {
+  const tokens = (item: ContextPruningUsageTotal) => item.inputTokens + item.outputTokens
+    - (basis === 'uncached' ? item.cachedInputTokens ?? 0 : 0);
+  return tokens(value.baseline) - USAGE_ARMS.filter(arm => arm !== 'baseline').reduce((sum, arm) => sum + tokens(value[arm]), 0);
+}
+
+function providerUsageSavings(value: ContextPruningUsageAccounting): ContextPruningDerivedEvidence['providerSavings'] {
+  const costs = USAGE_ARMS.map(arm => value[arm].costUsd);
   return {
-    tokens: tokens(value.baseline) - spentTokens,
-    costUsd: costSavings(value),
+    totalTokens: totalSavings(value, 'total'),
+    uncachedTokens: totalSavings(value, 'uncached'),
+    costUsd: costs.some(cost => cost === null) ? null
+      : value.baseline.costUsd! - USAGE_ARMS.filter(arm => arm !== 'baseline').reduce((sum, arm) => sum + value[arm].costUsd!, 0),
+    cachedInputTokensDelta: value.prunedDownstream.cachedInputTokens! - value.baseline.cachedInputTokens!,
   };
-}
-
-function tokens(value: ContextPruningUsageTotal): number {
-  return value.inputTokens + value.outputTokens;
-}
-
-function costSavings(value: ContextPruningUsageAccounting): number | null {
-  const costs = [value.baseline.costUsd, value.prunedDownstream.costUsd, value.decisionCalls.costUsd,
-    value.fallbackCalls.costUsd, value.transformationCalls.costUsd, value.cacheEffect.avoidedCostUsd];
-  if (costs.some(cost => cost === null)) return null;
-  return value.baseline.costUsd! - (value.prunedDownstream.costUsd! + value.decisionCalls.costUsd!
-    + value.fallbackCalls.costUsd! + value.transformationCalls.costUsd! - value.cacheEffect.avoidedCostUsd!);
-}
-
-function wilsonDeltaLowerBoundBps(deltaBps: number, n: number, levelBps: number): number {
-  if (n <= 0) return Number.NEGATIVE_INFINITY;
-  const p = (deltaBps + 10_000) / 20_000;
-  const z = normalQuantile(0.5 + levelBps / 20_000);
-  const denominator = 1 + z * z / n;
-  const center = (p + z * z / (2 * n)) / denominator;
-  const margin = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denominator;
-  return Math.max(-10_000, (center - margin) * 20_000 - 10_000);
-}
-
-function normalQuantile(p: number): number {
-  if (p <= 0 || p >= 1) throw new ContextPruningError('invalid confidence interval level', 'schema');
-  const a = [-39.6968302866538, 220.946098424521, -275.928510446969, 138.357751867269, -30.6647980661472, 2.50662827745924];
-  const b = [-54.4760987982241, 161.585836858041, -155.698979859887, 66.8013118877197, -13.2806815528857];
-  const c = [-0.00778489400243029, -0.322396458041136, -2.40075827716184, -2.54973253934373, 4.37466414146497, 2.93816398269878];
-  const d = [0.00778469570904146, 0.32246712907004, 2.445134137143, 3.75440866190742];
-  const plow = 0.02425;
-  const phigh = 1 - plow;
-  if (p < plow) {
-    const q = Math.sqrt(-2 * Math.log(p));
-    return (((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!)
-      / ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1);
-  }
-  if (p > phigh) {
-    const q = Math.sqrt(-2 * Math.log(1 - p));
-    return -(((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!)
-      / ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1);
-  }
-  const q = p - 0.5;
-  const r = q * q;
-  return (((((a[0]! * r + a[1]!) * r + a[2]!) * r + a[3]!) * r + a[4]!) * r + a[5]!) * q
-    / (((((b[0]! * r + b[1]!) * r + b[2]!) * r + b[3]!) * r + b[4]!) * r + 1);
 }
 
 function sourceTypeForBudget(candidate: ContextPruningCandidate): ContextItem['source']['type'] {

@@ -36,8 +36,7 @@
         "localOnly": { "type": "boolean" },
         "legalAction": { "enum": ["none", "requires-review"] }
       }
-    },
-    "deterministicFallbackAction": { "enum": ["keep", "drop", "truncate", "summarize"] }
+    }
   },
   "$defs": {
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
