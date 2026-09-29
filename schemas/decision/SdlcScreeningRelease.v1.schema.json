@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json",
+  "title": "SdlcScreeningRelease",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "preregistration", "heldout", "integrity", "decision", "reasons", "digest"],
+  "properties": {
+    "schemaVersion": { "const": "decision-sdlc-screening-release/v1" },
+    "preregistration": { "$ref": "#/$defs/preregistration" },
+    "heldout": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/heldout" }
+      ]
+    },
+    "integrity": { "$ref": "#/$defs/integrity" },
+    "decision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
+    "reasons": { "type": "array", "items": { "type": "string" } },
+    "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "bps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "bpsOrNull": { "type": ["integer", "null"], "minimum": 0, "maximum": 10000 },
+    "preregistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "planId", "frozenAt", "maximumFalseSupportRateBps", "maximumFalseReadyRateBps", "minimumTotalSupport", "minimumGateBlockingSliceSupport", "confidenceInterval", "qualityNonInferiorityBps", "efficiencyClaim"],
+      "properties": {
+        "schemaVersion": { "const": "decision-sdlc-screening-preregistration/v1" },
+        "planId": { "type": "string", "minLength": 1 },
+        "frozenAt": { "type": "string", "format": "date-time" },
+        "maximumFalseSupportRateBps": { "$ref": "#/$defs/bps" },
+        "maximumFalseReadyRateBps": { "$ref": "#/$defs/bps" },
+        "minimumTotalSupport": { "type": "integer", "minimum": 1 },
+        "minimumGateBlockingSliceSupport": { "type": "integer", "minimum": 1 },
+        "confidenceInterval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "levelBps"],
+          "properties": {
+            "method": { "enum": ["wilson", "exact-binomial"] },
+            "levelBps": { "$ref": "#/$defs/bps" }
+          }
+        },
+        "qualityNonInferiorityBps": { "$ref": "#/$defs/bps" },
+        "efficiencyClaim": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "minimumPositiveTotalEconomicsUsd"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minimumPositiveTotalEconomicsUsd": { "type": ["number", "null"], "minimum": 0 }
+          }
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n", "value"],
+      "properties": {
+        "n": { "type": "integer", "minimum": 0 },
+        "value": { "type": ["number", "null"] }
+      }
+    },
+    "classMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["n", "value", "precisionBps", "recallBps"],
+      "properties": {
+        "n": { "type": "integer", "minimum": 0 },
+        "value": { "type": ["number", "null"] },
+        "precisionBps": { "$ref": "#/$defs/bpsOrNull" },
+        "recallBps": { "$ref": "#/$defs/bpsOrNull" }
+      }
+    },
+    "heldout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "support", "contradiction", "unclear", "calibrationRiskCoverage", "falseSupportRateBps", "falseReadyRateBps", "reviewerAgreementRateBps", "reviewerOverrideRateBps", "slices", "latencyMs", "tokens", "costUsd", "reviewLoad", "gateBlockingSliceSupport", "totalSupport", "positiveTotalEconomicsUsd"],
+      "properties": {
+        "schemaVersion": { "const": "decision-sdlc-screening-heldout-report/v1" },
+        "support": { "$ref": "#/$defs/classMetric" },
+        "contradiction": { "$ref": "#/$defs/classMetric" },
+        "unclear": { "$ref": "#/$defs/classMetric" },
+        "calibrationRiskCoverage": { "$ref": "#/$defs/metric" },
+        "falseSupportRateBps": { "$ref": "#/$defs/bpsOrNull" },
+        "falseReadyRateBps": { "$ref": "#/$defs/bpsOrNull" },
+        "reviewerAgreementRateBps": { "$ref": "#/$defs/bpsOrNull" },
+        "reviewerOverrideRateBps": { "$ref": "#/$defs/bpsOrNull" },
+        "slices": { "type": "object", "additionalProperties": { "$ref": "#/$defs/metric" } },
+        "latencyMs": { "$ref": "#/$defs/metric" },
+        "tokens": { "$ref": "#/$defs/metric" },
+        "costUsd": { "$ref": "#/$defs/metric" },
+        "reviewLoad": { "$ref": "#/$defs/metric" },
+        "gateBlockingSliceSupport": { "type": "integer", "minimum": 0 },
+        "totalSupport": { "type": "integer", "minimum": 0 },
+        "positiveTotalEconomicsUsd": { "type": ["number", "null"] }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sample_n", "uncertainty", "paired_baseline", "integrity_mode", "fresh_workspace_required", "fresh_workspace_verified", "integrity_state", "trusted_score_source", "compromise_labels", "weak_signal_reason", "release_gate"],
+      "properties": {
+        "sample_n": { "type": "integer", "minimum": 0 },
+        "uncertainty": {},
+        "paired_baseline": {},
+        "integrity_mode": { "type": "string", "minLength": 1 },
+        "fresh_workspace_required": { "type": "boolean" },
+        "fresh_workspace_verified": { "type": "boolean" },
+        "integrity_state": { "type": "string", "minLength": 1 },
+        "trusted_score_source": { "type": "string", "minLength": 1 },
+        "compromise_labels": { "type": "array", "items": { "type": "string" } },
+        "weak_signal_reason": { "type": ["string", "null"] },
+        "release_gate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["decision", "reasons"],
+          "properties": {
+            "decision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
+            "reasons": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

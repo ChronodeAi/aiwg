@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/SdlcEvidenceScreening.v1.schema.json",
+  "title": "SdlcEvidenceScreening",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mode", "inventory", "subject", "nowEpochMs"],
+  "properties": {
+    "schemaVersion": { "const": "decision-sdlc-evidence-screening/v1" },
+    "mode": { "enum": ["disabled", "shadow", "advisory"] },
+    "inventory": { "$ref": "#/$defs/inventory" },
+    "subject": {
+      "oneOf": [
+        { "$ref": "#/$defs/citationSubject" },
+        { "$ref": "#/$defs/criterionSubject" }
+      ]
+    },
+    "observation": {
+      "oneOf": [
+        { "$ref": "#/$defs/citationObservation" },
+        { "$ref": "#/$defs/criterionObservation" }
+      ]
+    },
+    "nowEpochMs": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "bps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "stringId": { "type": "string", "minLength": 1 },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stringId" },
+        "version": { "$ref": "#/$defs/stringId" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimIds", "requirementIds", "sourceIds", "locators", "criterionIds", "evidenceIds"],
+      "properties": {
+        "claimIds": { "type": "array", "items": { "$ref": "#/$defs/stringId" } },
+        "requirementIds": { "type": "array", "items": { "$ref": "#/$defs/stringId" } },
+        "sourceIds": { "type": "array", "items": { "$ref": "#/$defs/stringId" } },
+        "locators": { "type": "array", "items": { "$ref": "#/$defs/stringId" } },
+        "criterionIds": { "type": "array", "items": { "$ref": "#/$defs/stringId" } },
+        "evidenceIds": { "type": "array", "items": { "$ref": "#/$defs/stringId" } }
+      }
+    },
+    "sourceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest", "locator", "locatorExists", "retrieved", "contentDigest", "provenanceVerified", "publicationAuthorized", "trust", "sensitivity"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stringId" },
+        "version": { "$ref": "#/$defs/stringId" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "locator": { "$ref": "#/$defs/stringId" },
+        "locatorExists": { "type": "boolean" },
+        "retrieved": { "type": "boolean" },
+        "contentDigest": { "$ref": "#/$defs/digest" },
+        "provenanceVerified": { "type": "boolean" },
+        "publicationAuthorized": { "type": "boolean" },
+        "trust": { "enum": ["untrusted", "verified"] },
+        "sensitivity": { "enum": ["public", "internal", "confidential", "restricted"] }
+      }
+    },
+    "gateEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest", "type", "required", "present", "passed"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stringId" },
+        "version": { "$ref": "#/$defs/stringId" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "type": { "enum": ["artifact", "test-result", "approval", "signature", "schema"] },
+        "required": { "type": "boolean" },
+        "present": { "type": "boolean" },
+        "passed": { "type": "boolean" },
+        "expiresAtEpochMs": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "citationSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "subjectId", "claimId", "requirementIds", "sourceId", "locator", "evidence"],
+      "properties": {
+        "kind": { "const": "citation" },
+        "subjectId": { "$ref": "#/$defs/stringId" },
+        "claimId": { "$ref": "#/$defs/stringId" },
+        "requirementIds": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/stringId" } },
+        "sourceId": { "$ref": "#/$defs/stringId" },
+        "locator": { "$ref": "#/$defs/stringId" },
+        "evidence": { "type": "array", "minItems": 1, "maxItems": 1, "items": { "$ref": "#/$defs/sourceEvidence" } }
+      }
+    },
+    "criterionSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "subjectId", "criterionId", "requirementIds", "evidence"],
+      "properties": {
+        "kind": { "const": "phase-criterion" },
+        "subjectId": { "$ref": "#/$defs/stringId" },
+        "criterionId": { "$ref": "#/$defs/stringId" },
+        "requirementIds": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/stringId" } },
+        "evidence": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/gateEvidence" } }
+      }
+    },
+    "citationObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "claimId", "sourceId", "locator", "support", "supportStrengthBps", "injection", "confidenceBps", "model", "attempts"],
+      "properties": {
+        "kind": { "const": "citation" },
+        "claimId": { "$ref": "#/$defs/stringId" },
+        "sourceId": { "$ref": "#/$defs/stringId" },
+        "locator": { "$ref": "#/$defs/stringId" },
+        "support": { "enum": ["supports", "does-not-support", "contradicts", "unclear"] },
+        "supportStrengthBps": { "$ref": "#/$defs/bps" },
+        "injection": { "enum": ["yes", "no", "unclear"] },
+        "confidenceBps": { "$ref": "#/$defs/bps" },
+        "model": { "$ref": "#/$defs/stringId" },
+        "attempts": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "criterionObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "criterionId", "evidenceIds", "relevance", "completeness", "contradiction", "ambiguity", "reviewerAttention", "confidenceBps", "model", "attempts"],
+      "properties": {
+        "kind": { "const": "phase-criterion" },
+        "criterionId": { "$ref": "#/$defs/stringId" },
+        "evidenceIds": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/stringId" } },
+        "relevance": { "enum": ["relevant", "irrelevant", "unclear"] },
+        "completeness": { "enum": ["complete", "incomplete", "unclear"] },
+        "contradiction": { "enum": ["none", "present", "unclear"] },
+        "ambiguity": { "enum": ["low", "high", "unclear"] },
+        "reviewerAttention": { "enum": ["needed", "not-needed"] },
+        "confidenceBps": { "$ref": "#/$defs/bps" },
+        "model": { "$ref": "#/$defs/stringId" },
+        "attempts": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

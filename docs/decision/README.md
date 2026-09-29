@@ -49,5 +49,10 @@ The [offline pattern playground](pattern-playground.md) provides discoverable,
 sanitized examples and a governed authoring checklist without requiring network
 access or a provider credential.
 
+The experimental [SDLC evidence readiness screening](sdlc-screening.md) pack
+adds default-off citation and phase-gate advisory screening. Deterministic
+gate/citation checks remain authoritative, and held-out/live quality evidence
+is scaffolded but pending.
+
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

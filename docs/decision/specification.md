@@ -180,3 +180,25 @@ Portable defaults for initial implementation: feature disabled; explicit binding
 Schemas validate structure; the semantic validator proves references, input projections, answer domains, rule predicates, acceptance profiles, distribution invariants and binding coverage. `fixtures/conformance.json` defines runtime acceptance cases to implement. `validate.py` checks design fixtures and selected semantic examples today; it is not the production runtime or complete transport conformance suite.
 
 Qualification must separately measure task accuracy, abstention, calibration, latency and cost on a representative held-out set. No model-quality or performance equivalence follows from the one synthetic live request. Source observation date: 2026-09-20; all vendor limits/model aliases are revalidated when implementing.
+
+## 8. SDLC evidence screening pack
+
+`decision-sdlc-evidence-screening/v1` is an experimental, default-off pack over
+the runtime contract above. Its subject is either one citation claim/source pair
+or one phase-gate criterion/evidence bundle. It is not a new authority path:
+deterministic locator, provenance, artifact, test, approval, signature, schema
+and expiry checks run before semantic evidence and cannot be upgraded by model
+output.
+
+The pack's closed schemas enumerate citation support, contradiction, unclear,
+phase-criterion relevance, completeness, contradiction, ambiguity and reviewer
+attention. Unknown claim, source, locator, criterion, evidence, approval or
+requirement IDs fail validation. Review-required receipts may be bridged into
+D13 durable review, but the caller still owns review creation, authorization and
+idempotent resume.
+
+Promotion remains held-out gated. `decision-sdlc-screening-preregistration/v1`
+pins false-support/false-ready bounds, slice support, confidence intervals,
+quality non-inferiority and economics. Missing held-out or slice support is
+`INSUFFICIENT_EVIDENCE`; the release report carries eval-integrity without
+upgrading upstream `HOLD` or `ROLLBACK`.
