@@ -49,5 +49,11 @@ The [offline pattern playground](pattern-playground.md) provides discoverable,
 sanitized examples and a governed authoring checklist without requiring network
 access or a provider credential.
 
+Experimental [multimodal preprocessing lineage](preprocessing-lineage.md)
+records how text-only decision input was derived from non-text sources using
+recorded OCR, ASR, caption, or image-description fixtures. It is default-off,
+does not add native media support to Jev, and stores receipt/trace references
+instead of raw media or derived text bodies.
+
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

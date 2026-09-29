@@ -145,6 +145,7 @@ export const DECISION_RESULT_V1ALPHA2_FIELDS = [
   { field: 'calibrationCompatibility', scope: 'decision', owner: 'D09', semantic: 'calibration-pin' },
   { field: 'cache', scope: 'ruleset', owner: 'D15', semantic: 'result-cache-receipt' },
   { field: 'projection', scope: 'ruleset', owner: 'D10', semantic: 'projection-opt-out' },
+  { field: 'preprocessingLineage', scope: 'ruleset', owner: 'D24', semantic: 'trust-projection' },
 ] as const;
 
 /** JSON paths of every v1alpha2-only field present in a DecisionResult or RulesetResult. */

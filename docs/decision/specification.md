@@ -171,6 +171,21 @@ Discovery adds authored decision/ruleset/binding data classifications, schema li
 
 Definition authorship and binding selection are trusted control inputs; model states and responses are untrusted data. Separate review of changes to rule outcomes, egress destinations, and executor permissions under existing workspace policy. Default logs contain only identities, counts, timings and reason codes. Raw state/response capture is disabled; the evidence here is deliberately synthetic. Reject credentials embedded in portable configuration; fetch using injected logical resolver configuration. Never log bearer headers, raw errors containing payloads, vault paths or secret hashes.
 
+`PreprocessedEvidence.v1` is a separate, experimental lineage contract for
+text-only state derived from non-text sources; see
+[preprocessing lineage](preprocessing-lineage.md). It remains default-off and
+does not add native media input to Jev. A resolver may release derived text only
+after verifying source/output digests when available, ordered preprocessing
+continuity, selected segment locators, transformation links, quality/review
+flags, and independent raw/derived egress policy. Routine decision receipts
+carry only body-free lineage pins, digests, segment IDs, locator digests,
+quality flags, counts, durations and policy outcomes. Raw media,
+OCR/ASR/caption/image-description bodies and reviewer notes are not stored in
+default receipts or traces. Low-quality, truncated, incomplete, stale or
+derived-egress-denied lineage routes to review/no-action rather than an
+automatic pass. Preprocessor confidence remains preprocessor evidence and is
+not Jev confidence, calibrated risk or decision correctness.
+
 Jev key was inducted before first API use, verified by in-memory comparison, and retrieved from the vault for the smoke request. See sanitized receipt. The supplied operator file remains at mode 0600; no source deletion or reader-role provisioning is implied. Production rollout requires a least-privilege runtime reader through itops; it MUST NOT use the one-time administrative induction route. Per itops SOP, leaf secrets stay in the vault metadata catalog and are not mirrored to DATAGERRY.
 
 Portable defaults for initial implementation: feature disabled; explicit binding required; one evaluation at a time; 30s total deadline; 15s per attempt capped by remaining total; 3 attempts total; at most one retry per target; 250ms initial/2s maximum retry delay. Examples intentionally use tighter/different values and are normative only for their binding. Caller/graph/workspace caps always narrow these. Monetary limits require configured bound or explicit caller authorization for unknown-cost execution. Authentication/configuration errors are visible diagnostics, not silent fallback to a free or different model.

@@ -63,6 +63,121 @@
           "then": { "properties": { "providerAttempted": { "const": true }, "cacheEntryId": { "type": "null" } } }
         }
       ]
+    },
+    "preprocessingLineage": {
+      "description": "D24 body-free preprocessing lineage evidence. It links a decision receipt to non-text source preprocessing by pins, digests, counts, locators digests and policy outcomes only.",
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "const": "decision-preprocessing-lineage/v1" },
+        "references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/preprocessingReference" }
+        },
+        "traces": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/preprocessingTrace" }
+        }
+      },
+      "required": ["schemaVersion", "references", "traces"],
+      "additionalProperties": false
+    },
+    "pin": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "required": ["id", "version", "digest"],
+      "additionalProperties": false
+    },
+    "preprocessingReference": {
+      "type": "object",
+      "properties": {
+        "evidence": { "$ref": "#/$defs/pin" },
+        "sourceAssetId": { "type": "string", "minLength": 1 },
+        "sourceDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "outputId": { "type": "string", "minLength": 1 },
+        "outputVersion": { "type": "integer", "minimum": 1 },
+        "outputDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "selectedSegments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "ordinal": { "type": "integer", "minimum": 1 },
+              "locatorDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            },
+            "required": ["id", "ordinal", "locatorDigest"],
+            "additionalProperties": false
+          }
+        },
+        "quality": {
+          "type": "object",
+          "properties": {
+            "source": { "type": "string", "minLength": 1 },
+            "profile": { "type": "string", "minLength": 1 },
+            "label": { "type": "string", "minLength": 1 },
+            "score": { "type": "number", "minimum": 0, "maximum": 1 },
+            "flags": {
+              "type": "array",
+              "items": { "enum": ["low-quality", "truncated", "incomplete", "stale", "policy-limited", "human-corrected"] }
+            }
+          },
+          "required": ["source", "profile", "label", "score", "flags"],
+          "additionalProperties": false
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "trust": { "type": "string", "minLength": 1 },
+            "sensitivity": { "type": "string", "minLength": 1 },
+            "retention": { "type": "string", "minLength": 1 },
+            "residency": { "type": "string", "minLength": 1 },
+            "rawEgressAllowed": { "type": "boolean" },
+            "derivedEgressAllowed": { "type": "boolean" }
+          },
+          "required": ["trust", "sensitivity", "retention", "residency", "rawEgressAllowed", "derivedEgressAllowed"],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "evidence", "sourceAssetId", "sourceDigest", "outputId", "outputVersion",
+        "outputDigest", "selectedSegments", "quality", "policy"
+      ],
+      "additionalProperties": false
+    },
+    "preprocessingTrace": {
+      "type": "object",
+      "properties": {
+        "evidence": { "$ref": "#/$defs/pin" },
+        "stepIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "stepCount": { "type": "integer", "minimum": 0 },
+        "sourceDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "outputDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "selectedSegmentCount": { "type": "integer", "minimum": 0 },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "qualityFlags": {
+          "type": "array",
+          "items": { "enum": ["low-quality", "truncated", "incomplete", "stale", "policy-limited", "human-corrected"] }
+        },
+        "policyOutcome": { "enum": ["allowed", "review"] },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "low-quality", "truncated", "incomplete", "stale",
+              "raw-egress-denied", "derived-egress-denied", "unsupported-locator"
+            ]
+          }
+        }
+      },
+      "required": [
+        "evidence", "stepIds", "stepCount", "sourceDigest", "outputDigest",
+        "selectedSegmentCount", "durationMs", "qualityFlags", "policyOutcome", "reasons"
+      ],
+      "additionalProperties": false
     }
   },
   "type": "object",
@@ -211,6 +326,9 @@
         },
         "cache": {
           "$ref": "#/$defs/resultCacheCallerReceipt"
+        },
+        "preprocessingLineage": {
+          "$ref": "#/$defs/preprocessingLineage"
         },
         "projection": {
           "description": "Present only when the host explicitly dispatched unprojected input (D10 opt-out).",

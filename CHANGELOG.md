@@ -37,6 +37,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   services come only from an injected host registry or trusted
   `--host-policy-module`. Inline or misspelled advanced options are rejected,
   and Jev compile caching remains disabled unless the host opts in (#2739).
+- Experimental/default-off preprocessing lineage for text-only decision inputs
+  derived from scanned documents, audio, video, or images. It adds the closed
+  `PreprocessedEvidence.v1` schema, recorded OCR/ASR/caption/image-description
+  fixtures, resolver policy checks, body-free receipt links, docs, and an
+  offline Jev transport-spy example; it does not add live OCR/ASR/vision
+  dependencies or native media support to Jev (#2617).
 
 ### Fixed
 

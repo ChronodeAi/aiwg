@@ -30,3 +30,10 @@ fixture adapter declares `egress: { mode: 'none' }`, so it needs no policy.
 The Jev and LLM bindings pin the same `ruleset.json` and definitions. A backend
 swap changes only `bindingPath` (and runtime credential/worker configuration),
 not the ruleset, decisions, input, or outcome consumer.
+
+Recorded multimodal preprocessing lineage examples live under
+`test/fixtures/decision/preprocessing/` and are exercised by
+`test/unit/decision/preprocessed-evidence.test.ts`. They resolve OCR, ASR,
+caption, and image-description fixtures into ordinary text state before the
+existing projection/evaluation path. Jev still receives text only, never raw
+media, and the lineage feature is experimental and default-off.

@@ -1212,7 +1212,8 @@ function resultBase(request: DecisionEvaluationRequest, ruleset: ArtifactPin, bi
     apiVersion: resultVersion(request), kind: 'RulesetResult',
     metadata: { id: request.invocationId, version: '1.0.0', description: `Ruleset result for ${request.ruleset.metadata.id}` },
     spec: { ruleset, binding, runId: request.runId, invocationId: request.invocationId, status: 'error', reason: 'evaluation-failed', matchedRules: [], evaluations: {},
-      ...(isUnprojectedLocalOptOut(request.projection) ? { projection: { mode: 'unprojected-local', authority: 'host' } } : {}) },
+      ...(isUnprojectedLocalOptOut(request.projection) ? { projection: { mode: 'unprojected-local', authority: 'host' } } : {}),
+      ...(request.preprocessingLineage ? { preprocessingLineage: structuredClone(request.preprocessingLineage) } : {}) },
   };
 }
 
@@ -1228,7 +1229,7 @@ function resultVersion(request: DecisionEvaluationRequest): typeof DECISION_API_
     || request.ruleset.apiVersion === DECISION_API_VERSION_STRUCTURED || request.binding.apiVersion === DECISION_API_VERSION_STRUCTURED
     || Object.values(request.definitions).some(definition => definition.apiVersion === DECISION_API_VERSION_STRUCTURED)
     || request.batching || request.batchReceipts || request.scheduler?.enabled || request.providerPrefix || request.context
-    || request.resultCache?.policy.enabled) {
+    || request.resultCache?.policy.enabled || request.preprocessingLineage) {
     return DECISION_API_VERSION_STRUCTURED;
   }
   return DECISION_API_VERSION;
