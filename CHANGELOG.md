@@ -28,8 +28,6 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   help output, and setup wizard, and the kernel inventory is now 28 skills with
   11 quickrefs.
 
-## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
-
 ### Changed
 
 - **Film production gates from a production retrospective** - The film state
@@ -41,6 +39,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   and `film-revision-rounds` rules, and a `film-storyboard` template; provider
   preflight, delivery (loudness, true peak, black, stream list, frame count,
   hashes, captions) and edit-conform gates name the failures that production found.
+
+## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed
 
