@@ -7,6 +7,385 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
+
+### Fixed
+
+- The parallelism-cap assertion saturated dispatch slots with 250ms tasks
+  while the 5th dispatch's own admission work can outlast them on loaded
+  runners, freeing a slot so it resolved instead of rejecting. Saturating
+  tasks now hold for 8s so the cap check runs against genuinely saturated
+  slots. This unblocks npmjs publication, which gates on the full suite.
+- Discovery framework cache: `aiwg discover`/`show` retain framework
+  warnings, expose stale framework diagnostics with scoped repair, and
+  refresh rebuilt Fortemi caches (#272).
+
+## [2026.9.23] - 2026-09-27 - "CPU bound gates isolated measurement"
+
+### Fixed
+
+- The D05 load-harness CPU comparison gated the process-wide wall-clock
+  fallback — which includes the runner and sibling workers — against the
+  fixed manifest bound, failing conforming code on shared runners. The
+  publish container runs Node 20, which lacks `process.threadCpuUsage`, so
+  every publish run measured the fallback (observed 100 vs limit 80). The
+  manifest CPU bound now gates only isolated thread-CPU results; the
+  observed value stays recorded in resources for informational use.
+
+## [2026.9.22] - 2026-09-27 - "Doctor names installation drift"
+
+### Fixed
+
+- Under installation identity drift, `aiwg doctor` resolves providers from
+  the stale canonical install, so a provider that shipped after the install
+  (muse) was reported as a bare `Unknown provider: muse` — reading as a
+  registry defect when it is really a stale-install condition. When
+  `AIWG_INSTALLATION_DRIFT` is present, the check now names the stale
+  canonical install and points to `aiwg installation adopt` (#270).
+
+## [2026.9.21] - 2026-09-27 - "Decision runtime, effect ledger, and Muse Code provider"
+
+The Jev decision platform entries below cover the work merged after
+v2026.9.20. The decision runtime ships disabled by default and stays
+experimental where noted. Several entries close offline gaps only; the live
+qualification each one still needs is tracked in the follow-up issues named
+in the entry.
+
+### Changed
+
+- **Breaking (decision runtime):** state projection is now mandatory for
+  network egress. `evaluateDecisionRuleset` denies dispatch to any adapter that
+  does not declare `capabilities().egress = { mode: 'none' }` when no
+  `projection` policy is supplied, returning `data-boundary-denied` before
+  credential resolution or transport on single, native-batch and fallback
+  paths. Integrations that evaluated Jev or other network adapters without a
+  projection policy must add one, or (local and test harnesses only) pass the
+  host-only opt-out `projection: { mode: 'unprojected-local' }`, which is
+  recorded as `spec.projection` in the v1alpha2 result and receipt. Projection
+  origin and region are now bound to the adapter's declared destination
+  (`JevDecisionAdapter` gains a `region` option; an undeclared or `unknown`
+  region is denied), `restricted` fields need an explicit `maxSensitivity`
+  ceiling, and incomplete projected context downgrades results to `review`. The
+  Jev request `state` and the subagent prompt input now carry the trust
+  partition as `{ verified, untrusted }`. The `decision-evaluate` dispatcher
+  accepts `projectionPolicyPath` and `adapterOptions.jev`, and refuses
+  network-capable adapters without a policy (#2678, #2597).
+- Decision results that carry native-batch provenance (`attempts[].batch`,
+  `batchResult`), admission, context, or provider-prefix evidence are now
+  written as `decision.aiwg.io/v1alpha2`, including when the ruleset, binding,
+  and definitions are v1alpha1. The v1alpha1 `DecisionResult` and
+  `RulesetResult` schemas match the 2026.9.20 release again and reject these
+  fields. Every evaluator result and invocation receipt payload passes the
+  `assertDecisionResultWriterVersion` gate. Consumers that enable `batching`,
+  `batchReceipts`, `scheduler`, `providerPrefix`, or `context` must accept
+  v1alpha2 results. Released v1alpha1 results still validate unchanged. This
+  resolves the D07 writer-version follow-up (#2671).
+- The semantic result cache's `spec.cache` caller receipt is now defined in
+  the v1alpha2 `RulesetResult` schema and treated as a v1alpha2-only field, so
+  a cache-enabled evaluation always writes a v1alpha2 result. Cache events feed
+  the D14 metric pipeline through `resultCacheMetricsSink`, including `bypass`
+  and `single-flight`. `FileResultCacheStore` can be bound to the shared D10
+  lifecycle policy for retention, export, and cascading source-receipt
+  deletion. The result-cache doc adds a key construction security review
+  (#2609). Remaining limits: there is no encrypted store for confidential or
+  restricted classes, no distributed lease or fencing, no shadow
+  qualification, and storage file names are still unkeyed hashes (#2687).
+- D06 context planning now fails closed by default: `context` combined with
+  native batching and no `context.rollout` returns `context-unqualified`
+  before capability, credential or transport access instead of running
+  partitioned native batches unqualified. Set `rollout: { mode: 'observe-only' }`
+  or a qualified `enforce` mode, or disable batching. A stale context plan now
+  fails as `context-plan-stale` (previously `invalid-input`), and every context
+  rejection carries a body-free `spec.contextFailure` diagnostic with the
+  planned and current plan digests for stale plans.
+  `DecisionContextEvidence.v1` now requires estimator, profile, limit, margin
+  and estimation-error fields and closes every object. Incomplete context
+  downgrades to `review` / `insufficient-information` with no outcome, which
+  the v1alpha2 RulesetResult schema accepts (#2678).
+  `assertContextQualified` throws `rollout-unqualified` (#2599).
+- D05 admission rejections are recorded as `dispatchCertainty: 'not-sent'`
+  with the typed reason and admission evidence, so durable receipts end
+  `completed` instead of `execution-uncertain` for work that was never
+  dispatched. A dispatched attempt with an unknown outcome still ends
+  `execution-uncertain`. Admission controllers are now keyed by trusted
+  `workspace.id` through `DecisionAdmissionRegistry` rather than by scheduler
+  policy object identity; reusing a profile revision with different limits
+  fails closed as `invalid-definition`, and an unconfigured provider is
+  rejected as `unconfigured-provider`. Retry backoff releases the evaluator
+  scheduler permit in receipt-free runs, and a queued target timeout reports
+  `timeout` rather than `cancelled` (#2670).
+
+### Added
+
+- Experimental Muse Code provider (`--provider muse`, no aliases), per
+  `docs/architecture/adr-muse-provider-target.md`. It adds registry and
+  capability-matrix entries, model catalog rows marked unverified, and a
+  skill writer. Skills deploy to project `.agents/skills`, and to
+  `$XDG_CONFIG_HOME/muse/skills` only with `--scope user`. Other additions:
+  - a discover-first `AGENTS.md` bridge that needs workspace trust;
+  - one managed `SessionStart` hook in `.muse/hooks.json`, preserving
+    operator hooks and with a `--no-hooks` opt-out;
+  - an opt-in `--mcp` settings profile;
+  - export-first session import;
+  - an optional `muse exec` Ralph adapter;
+  - an opt-in, evidence-gated live smoke (`npm run smoke:muse:live`).
+
+  Delivered from GitHub PRs #257–#269 (jmagly/aiwg#225–#238). Verified
+  against an installed Muse Code 1.4.0 on 2026-09-25:
+  - Muse loads the deployed skills, the `AGENTS.md` bridge (trusted
+    workspaces only), the managed hook, and the `--mcp` server
+    (`mcp__aiwg__*` tools).
+  - `muse exec` behaves as the Ralph adapter expects: the `--json`
+    envelope, exit codes, `--session-id` create-or-continue, and `--`.
+  - Session logs live in `$XDG_DATA_HOME/muse/sessions`.
+  - `muse-spark-1.3` is observed in real runs.
+
+- Effect ledger foundation (experimental, library only). The v1 contract,
+  ADR, `schemas/effects/*` and golden fixtures pin effect IDs (`eff1_…`, plus
+  the `d13.review/v1` adapter derivation equal to D13's `reviewDigest`), DSSE
+  in-toto records, the keyring, checkpoints and exit codes (#2715). Shared
+  primitives move to `src/storage/protected-files.ts` and
+  `src/security/signing.ts`, and the credential store takes a configurable
+  service and account (#2716). The new `src/effects` library, exported from the
+  package API, records intents and outcomes in per-writer hash-chained
+  segments signed by a dedicated Ed25519 ledger key from the host secret
+  service, with first-writer-wins index files, payload-digest conflicts,
+  signed key rotation, signed checkpoints published to a git ref, D10
+  tombstones and `verifyLedger`. Storage resolves through the artifact store
+  and fails closed when an external root is unavailable (#2717, #2714).
+- Effect ledger verifiers, CLI and adoption (experimental).
+  - Verifiers: a tri-state (`present`, `absent`, `unknown`) verifier framework
+    with the built-in `git.commit`, `git.tag`, `file.digest` and
+    `decision.receipt` verifiers (#2718), and `tracker.comment`,
+    `tracker.issue.closed` and `tracker.pr.merged` for Gitea and GitHub. The
+    tracker verifiers resolve the tracker from the project config and git
+    remotes, never contact mirrors, follow the tracker access order and answer
+    `absent` only after a complete, authenticated read (#2719).
+  - CLI: `aiwg effect` with `id`, `intent`, `record`, `lookup`, `reconcile`,
+    `verify`, `checkpoint`, `kinds`, `keys` and `recover-lock`, JSON output and
+    the contract exit codes (0 present or recorded, 3 absent, 4 unknown, 5
+    conflict, 6 integrity failure, 7 artifact root unavailable). `record`
+    writes the signed intent, runs the verifier and appends `completed` in one
+    call. `kinds` lists the git, file, decision, review-continuation and tracker
+    kinds. The ledger key stays in the host secret service, and only key IDs
+    and public keys are printed. `recover-lock --authorize` removes a stale
+    ledger lock left by a dead writer and records the recovery. Scope and key
+    custody come from the `effects` block of `aiwg.config`. The aiwg-utils
+    `effect-ledger` skill and quickref phrases route agents to it (#2720).
+  - D13 review adoption: `LedgerReviewEffectJournal` records a signed intent
+    before a review continuation and `completed` only on a `present`
+    verification, and the `decision.review.continuation` verifier reads the
+    review store. Legacy HMAC receipts import as `completed` records (#2721,
+    answers #2677).
+  - D16, skills and #1567: an opt-in resolver out of `execution-unknown`.
+    The job worker can record a `decision.receipt` effect before it writes
+    the job record, and `reconcile(..., { resolveUnknown })` promotes an item
+    only on a `digest-match` verification through one gated contract
+    transition (`attempts[].resolution`); `state-match`, `absent` and
+    `unknown` never resolve, nothing is re-dispatched, and the default
+    reconciliation is unchanged. `aiwg effect probe` runs a verifier without
+    writing records (for "did this PR merge"). address-issues records its
+    cycle comment with the `aiwg-effect` marker and confirms merges with
+    `reconcile` or `probe`; issue-close guards its closing comment with
+    `lookup` and records the comment and the closure. Effect records link the
+    authorizing operator decision (`reviewApprovalLinks`), and
+    `aiwg effect verify --with-decisions` checks the decision chain and every
+    linked event (#2722, #1567).
+- D05 admission control offline gaps: reserved per-principal concurrency and
+  `maxPrincipalShare` caps on shared workspace and provider pools, token-bucket
+  fairness for large requests, breaker transitions recorded in admission
+  evidence and a bounded history, a profile-change audit trail, the admission
+  storm runbook with an executable drill, and load manifest v2 with an offline
+  fake-time harness and digest-bound result records. Live burst, spike and
+  soak runs, shadow and canary rollback, and a qualified load manifest are
+  tracked in #2682 (#2601).
+- D10 offline evidence: secret-material rejection for decision receipts, batch
+  receipts and result-cache entries; projection-policy and
+  `decision-lifecycle/v1` JSON schemas; subject-level lifecycle backup/restore
+  and cross-surface tombstone resolution; telemetry retention derived from the
+  common lifecycle policy; a real-evaluation stdout/stderr and activity-record
+  privacy capture harness; a projection policy matrix; and the D10
+  threat-control mapping (#2597).
+- D14 live decision telemetry: the evaluator records spans while it runs
+  instead of rebuilding them from the finished result, and W3C trace context
+  crosses the adapter and transport, durable invocation receipt (which records
+  an immutable `traceparent` and links replays), durable batch receipt, async
+  job and review boundaries. Review and action spans join the #1567 operator
+  audit chain. Live telemetry also records the D05 `decision.admit` span as
+  the admission happens (lease-scoped, with breaker transitions inside the
+  span) and a metadata-only D10 `decision.project` span for each applied
+  projection step or denial (#2601, #2678). All 11 required golden scenarios
+  run against the real runtimes, plus sanitized incident export and orphaned
+  link goldens. Live collector qualification and the telemetry-loss, egress,
+  credential and incident drills are tracked in #2685 (#2605).
+- Four-platform Grok Build qualification contract, live smoke receipt, upstream
+  drift check, and stable-promotion gate. The adapter remains experimental
+  until released-binary evidence is complete; Grok Build remains distinct
+  from Grok Bot and Grok web Build.
+- D04 native shared-state batching for compatible Jev evaluations. Independent
+  questions that share the same decision subject, projected state, stage,
+  adapter, target, egress policy, host policy and deadline can be sent as one
+  native provider request, with stable opaque question IDs; any missing,
+  extra, duplicate or wrong-primitive answer invalidates every sibling in that
+  request. Native batching is side-effect-free and disabled unless the caller
+  supplies an enabled `batching` policy. An evaluator-level native-versus-single
+  benchmark provides digest-verified TV01, TV08 and TV22 evidence (#2598).
+- D07 batch receipts and shared accounting: the `decision-batch-receipt/v1`
+  record owns each shared provider request's identity, append-only attempt
+  chronology, usage and cost, and evaluation results link to it rather than
+  copying shared totals. Usage is counted once per attempt, unknown cost stays
+  `unknown` (or `bounded-unknown` under a reviewed bound), a configured
+  `batchReceipts.maxCostMicros` fails closed before dispatch, and per-answer
+  allocations are reporting-only. Durable replay persists governed result
+  values, reconciles retries and split partitions, and rejects insecure
+  persistence directories. The two closure follow-ups are resolved in this
+  release: the writer-version gate (#2671, under Changed) and store integrity,
+  encryption and lifecycle (#2672, below) (#2602).
+- Durable decision batch receipt and result stores now seal every receipt
+  revision and result snapshot with a required HMAC-SHA256 integrity key,
+  encrypt result values at rest with AES-256-GCM bound to tenant, project,
+  batch, question, answer and revision, and bind both stores to the
+  `decision-lifecycle/v1` receipt rule: retention expiry, D10 erasure with
+  body-free tombstones and result cascade, hold-aware sweeps, and restore that
+  refuses erased or expired content. `FileBatchReceiptStore` and
+  `FileBatchResultStore` constructors now require these options, and unkeyed
+  stores are refused until an explicit, authorized `migrateLegacy`. Replay of
+  an erased or expired durable batch never re-dispatches and reports the new
+  v1alpha2-only reason `batch-record-unavailable`; tampered or unmigrated state
+  reports `persistence-error` (#2672). The in-memory batch stores remain
+  unkeyed test fixtures, legal holds rely on the host hold authority, and
+  migration is a host API rather than a CLI command.
+- D08 primitive-aware acceptance policies keep provider values,
+  distributions, native confidence, derived statistics and calibrated risk
+  separate, compare in exact basis points, and route explicitly; quantized
+  probabilities and ties require declared review behavior. Shadow replay
+  against stored observations and promotion records are use-case scoped and
+  marked `actionAuthorization: not-authorized`. An acceptance result is
+  evidence, not action authorization (#2596).
+- D09 calibration registry and model-version compatibility: immutable
+  calibration artifacts keyed by the full evidence-producing identity, and
+  compatibility relations as the only way to reuse an artifact for another
+  identity. With a `calibrationCompatibility` binding, the evaluator pins a
+  compatibility decision per invocation and alias after the adapter reports
+  its actual model; a non-allow decision removes only the derived calibrated
+  risk, and the decision is recorded in `spec.calibrationCompatibility`.
+  Calibration is a population estimate, not a correctness guarantee (#2600).
+- D17 ensemble, champion/challenger and drift-response contracts:
+  experimental `DecisionEnsemblePolicy.v1`, `DecisionChampionChallenger.v1`,
+  `DecisionDriftResponse.v1`, `DecisionEnsembleAggregate.v1` and
+  `DecisionEnsembleIntegrityReport.v1` schemas, pure validators, a
+  deterministic reference aggregation library, and fixtures. Aggregates are
+  labelled a stability signal, not correctness, and integrity reports can only
+  keep or tighten `PROMOTE`/`HOLD`/`ROLLBACK`. There is no runtime
+  orchestration yet; execution, shadow routing and drift response remain on
+  #2611 (#2679).
+- D18 runnable Jev pattern packs and an offline-first playground, shipped in
+  the `aiwg/decision` API and the `decision-engine` addon's
+  `decision-playground` skill. Each fixture now runs through the production
+  `evaluateDecisionRuleset` with the pack's governed definitions, ruleset and
+  offline binding over a recorded-replay Jev transport, and live caps are
+  enforced before dispatch through scheduler admission (resolving #2673). The
+  `dependent-two-stage` pack stays `unavailable` until the D12 graph runtime
+  qualifies, live probes dispatch questions individually, provider-reported
+  overruns after a call route to review rather than being prevented, and
+  durable review remains experimental for production use (#2607).
+- D12 dependent decision DAGs: `decision-evaluate` skill resolution through
+  the capability catalog and a Flow invoker that passes only projected
+  evidence, approval stages behind Flow `gate` nodes, explicit `abstained` and
+  `unsupported` outcomes, seeded graph property tests, a paired offline
+  benchmark and unique DAG IDs. The runtime stays experimental; live benchmark
+  and G5/G6 qualification are tracked in #2686 (#2608).
+- D30 compile and prefix cache offline gaps: Jev and LLM-subagent adapter
+  compile, five cache schemas, pinned provider-prefix compatibility records,
+  metadata-only cache telemetry, an identity mutation and property suite,
+  evaluator parity tests, and CCP qualification evidence retained at an exact
+  commit. The measured G5 benchmark misses its target, so the compile cache
+  stays host opt-in and disabled for Jev; provider prefix-cache reporting and
+  live economics are tracked in #2683 (#2603).
+- D16 asynchronous jobs: killed-child crash fixtures at the submit, queue,
+  cancel and finalization write boundaries prove restart reconciliation
+  without replaying an executor. Live and deployment qualification is tracked
+  in #2688 (#2610).
+- D11 conformance harness: TV01–TV25 vendor vector definitions checked in with
+  recorded synthetic inputs, and all 25 execute offline; `CON-*`, expanded
+  `CNC-*`, real `DRF-*` drift and adversarial injection suites; M05, M07, M10
+  and M11 amendment suites linked into the G2/G4 gates; fixture provenance for
+  every decision fixture, example and retained evidence file with a
+  completeness test; a full-lifetime privacy capture over the aggregate run;
+  and gate flags derived from recorded evidence rather than caller-supplied
+  booleans, with every TV executor mapped (#2675). M05 now also asserts that
+  the review existence oracles stay closed, the aggregate release record is
+  retained at an exact commit under `docs/decision/evidence/` with a
+  fixture-provenance entry, and the two tests that wait on real child
+  processes are documented as legitimately process-based. DMN/OPA import
+  (M07, #2612) and live research egress (M08) are out of scope. Held-out
+  datasets, live Jev conformance and reviewer decisions are tracked in #2684
+  (#2604).
+- D13 durable human review and idempotent resume:
+  `runOfflineReviewAuthorizationFixture` runs eleven unauthorized attempts
+  against the real file store under a non-permissive
+  `PinnedReviewAuthorization` and proves zero unauthorized effects. The
+  packaging CI lane runs it with the durable and matrix fixtures from the packed
+  tarball, and so does the offline pattern smoke. `openSensitiveView` is an
+  access-audited, retention-bounded sensitive view: it is disabled unless the
+  pinned policy lists `sensitiveViewRoles`, it appends a
+  `sensitive-view-accessed` event before it reads host-held material, and it
+  never persists that material. An optional D10 lifecycle binding caps review
+  retention by the shared `review` rule, hides reviews past retention, applies
+  the rule's export setting, and lets `eraseDecisionSubject` tombstone or purge
+  reviews through opaque references, so an erased approval never executes.
+  Cross-process tests race claim and resume across four processes and SIGKILL
+  children at store publication seams and inside the executor. The docs state
+  that human approval is not model correctness, and that downstream
+  authorization and outcome verification stay mandatory. The review runtime
+  remains experimental. Production executor-side completion receipts stay
+  behind the pluggable `reconcile` and ledger interfaces. The production
+  authority, importer, executor ledger and live crash matrix are tracked in
+  #2677 (#2606).
+- The `decision-engine` addon is installable and usable from the npm package:
+  install is documented, bulk deploys (`aiwg use all`, framework deploys) no
+  longer include it, the examples ship in the addon, and the deployed
+  dispatcher finds its runtime from a deployed skill copy, covered by a
+  clean-install test (#2641).
+
+### Fixed
+
+- Muse Code integration fixes found by live testing against Muse Code 1.4.0:
+  - The managed `SessionStart` hook failed inside Muse. Muse rejects the JSON
+    report `aiwg refresh --quiet` prints as hook output, and provider
+    detection resolved `claude`. The hook now runs
+    `aiwg refresh --dry-run --quiet --provider muse > /dev/null`, and existing
+    managed hooks are upgraded in place.
+  - `aiwg sessions import` rejected real 1.4.0 exports. It now accepts
+    epoch-microsecond timestamps and null causation ids, skips retained
+    transaction frames, and has a fixture scrubbed from a real export.
+  - Ralph `muse exec` adapter:
+    - `parseOutput()` reads the verified `run.terminal.*` record for the answer
+      text and settlement.
+    - The prompt follows `--`, so a leading `-` no longer exits 2.
+    - AIWG's session id is passed as `--session-id` again, which pins or
+      continues the Muse session.
+  - The model catalog marks `muse-spark-1.3` active and observed.
+  - `npm run smoke:muse:live` now checks that Muse loads every deployed skill.
+- The packaged `decision-evaluate` dispatcher crashed with a `TypeError` for
+  any request with `receiptDirectory`, because it built the receipt store
+  without an integrity key. It now takes the key from host configuration
+  (`receiptIntegrityKeyRef`, optional `receiptIntegrityKeyEncoding`) and fails
+  closed with `receipt-integrity-key-missing` or `receipt-integrity-key-invalid`
+  before evaluation. The key's logical reference cannot be used as a backend
+  credential (#2639).
+- Decision schema validation compiled every caller schema on every call. Compiled
+  validators are now cached by canonical digest in bounded LRU caches, cutting
+  a warm ruleset evaluation from about 100 ms to about 2.4 ms and removing the
+  receipt barrier race test timeout under CPU contention (#2660).
+- Cross-scope existence oracles in the D30 compile cache and the D13 review
+  store are closed. Missing, out-of-scope and unauthorized reviews raise the
+  same `ReviewAccessError('Review not found')`, and each tenant and project
+  keeps reviews in its own keyed directory, so review IDs are unique per scope
+  and flat-layout revision files are not migrated. The compile cache is bound
+  to `decision-lifecycle/v1` with body-free tombstones and no restore after
+  delete (#2674).
+
 ## [2026.9.20] - 2026-09-21 - "Stable channels and exact-source evidence"
 
 ### Changed
@@ -61,6 +440,29 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   integration guidance.
 - Provider-neutral bot handoff and build verification guides, plus Grok Build
   CI setup and Grok Bot product guidance.
+
+### Omitted from the 2026.9.19 notes
+
+These decision changes shipped in v2026.9.19 but were folded into the
+baseline entry above when the release was published. They are recorded here
+after the fact; the release and its date are unchanged.
+
+- The Jev transport follows the official SDK request, retry and cancellation
+  semantics: normalized request IDs, retry hints, HTTP status classification
+  and credential failures, with bounded response and origin handling and
+  preserved transport provenance. Custom Jev origins fail closed unless
+  approved, approved origins are pinned to vetted DNS addresses over isolated
+  sockets, and JSON parsing is bounded (#2593).
+- Structured `decision.aiwg.io/v1alpha2` instruction and criteria entries:
+  bounded portable JSON values are admitted and validated before
+  canonicalization and mapped to the Jev and LLM-subagent adapters, with
+  v1alpha2 schemas for every decision artifact kind, dual v1alpha1/v1alpha2
+  readers, explicit conversion, and OPS-008 writer and rollback gates. Unsafe
+  YAML, empty instructions and proxy or accessor arrays are rejected (#2594).
+- Invocation receipts are acquired and persisted atomically before remote
+  execution, as immutable HMAC-protected revisions published without locks.
+  Ambiguous receipt retries are rejected, live locks are guarded, and replay
+  and crash integrity are covered by tests (#2595).
 
 ## [2026.9.18] - 2026-09-21 - "Dataset conformance binds prior stable evidence"
 

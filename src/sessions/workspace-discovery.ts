@@ -82,8 +82,8 @@ interface DiscoverableProvider {
 }
 
 const MANUAL_EXPORT_PROVIDERS = new Set<SessionProviderId>([
-  'copilot', 'hermes', 'opencode', 'openclaw', 'openhuman', 'grokbot',
-  'warp', 'devin-desktop', 'generic',
+  'copilot', 'hermes', 'opencode', 'openclaw', 'openhuman', 'grokbot', 'grok-build',
+  'warp', 'devin-desktop', 'muse', 'generic',
 ]);
 
 export async function discoverWorkspaceHistories(
@@ -218,13 +218,17 @@ export async function discoverWorkspaceHistories(
   for (const provider of SESSION_PROVIDER_IDS) {
     if (reports.has(provider)) continue;
     const manual = MANUAL_EXPORT_PROVIDERS.has(provider);
+    const grokBuild = provider === 'grok-build';
     reports.set(provider, providerReport(
       provider,
       manual ? 'export-required' : 'not-checked',
       manual ? 'manual-export' : 'unsupported',
       [],
-      manual ? 'EXPLICIT_EXPORT_REQUIRED' : 'PROVIDER_NOT_CHECKED',
-      manual
+      grokBuild ? 'CLI_EXPORT_REQUIRED'
+        : manual ? 'EXPLICIT_EXPORT_REQUIRED' : 'PROVIDER_NOT_CHECKED',
+      grokBuild
+        ? 'Run `grok sessions list` or `grok sessions search`, then export an authorized session with `grok export <id> <id>.md`; Grok Build resolves $GROK_HOME itself.'
+        : manual
         ? `Select and authorize a supported ${provider} export before importing it.`
         : `No discovery strategy is registered for ${provider}.`,
     ));

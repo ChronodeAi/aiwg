@@ -51,6 +51,8 @@
     "security/supply-chain-hardening",
     "research/asset-authenticity-and-provenance",
     "architecture/adr-cross-asset-attestation-envelope",
+    "architecture/adr-effect-ledger",
+    "contracts/effect-ledger.v1",
     "install/web-backed-resources",
     "install/non-interactive",
     "quickstart",
@@ -70,8 +72,12 @@
     "integrations/grokbot-quickstart",
     "integrations/grokbot-cloud-session-global-install",
     "integrations/grokbot-native-surfaces-evidence",
+    "integrations/grok-build-quickstart",
+    "providers/grok-build-qualification",
+    "migration/grok-build-from-claude-workaround",
     "integrations/grokbot-linux-puw",
     "migration/grokbot-from-cursor-workaround",
+    "integrations/muse-quickstart",
     "integrations/hermes-quickstart",
     "integrations/openhuman-quickstart",
     "integrations/openclaw-quickstart",
@@ -103,6 +109,7 @@
     "configuration/aiwg-config",
     "architecture/adr-deepseek-harness-runtime",
     "architecture/adr-grokbot-provider-target",
+    "architecture/adr-muse-provider-target",
     "architecture/adr-artifact-output-destinations",
     "context-tier-model",
     "context-engineering-contract",
@@ -788,6 +795,13 @@
       "parent": "integrations"
     },
     {
+      "id": "integrations/muse-quickstart",
+      "title": "Muse Code",
+      "summary": "Connect AIWG to Muse Code (experimental, trust-workspace flow)",
+      "file": "integrations/muse-quickstart.md",
+      "parent": "integrations"
+    },
+    {
       "id": "integrations/hermes-quickstart",
       "title": "Hermes Agent",
       "summary": "Setup AIWG as an MCP sidecar for Hermes Agent",
@@ -1071,6 +1085,13 @@
       "parent": "reference"
     },
     {
+      "id": "architecture/adr-muse-provider-target",
+      "title": "ADR: Muse Code provider target",
+      "summary": "Provider id, skill roots, scope, hooks, MCP, and export-first session decisions for the experimental provider",
+      "file": "architecture/adr-muse-provider-target.md",
+      "parent": "reference"
+    },
+    {
       "id": "architecture/adr-artifact-output-destinations",
       "title": "Artifact Output Destinations",
       "summary": "Canonical storage, optional provider-native presentation, precedence, and provenance",
@@ -1131,6 +1152,20 @@
       "title": "Cross-Asset Attestation Decision",
       "summary": "DSSE and in-toto architecture decision for common AIWG artifact verification",
       "file": "architecture/adr-cross-asset-attestation-envelope.md",
+      "parent": "reference"
+    },
+    {
+      "id": "architecture/adr-effect-ledger",
+      "title": "Effect Ledger Decision",
+      "summary": "Signed proof and deduplication index for agent side effects, reconciled through target verifiers",
+      "file": "architecture/adr-effect-ledger.md",
+      "parent": "reference"
+    },
+    {
+      "id": "contracts/effect-ledger.v1",
+      "title": "Effect Ledger Contract v1",
+      "summary": "Effect IDs, DSSE records, keyring, checkpoints, tri-state verifiers and exit codes",
+      "file": "contracts/effect-ledger.v1.md",
       "parent": "reference"
     },
     {

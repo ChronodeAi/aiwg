@@ -26,7 +26,17 @@ Read the [normative specification](specification.md), [architecture](architectur
 Structured entry fields, version migration, and rollback rules are described in
 [structured entries](structured-entries.md).
 Jev request, retry, cancellation, and egress behavior is documented in the
-[transport contract](jev-transport.md).
+[transport contract](jev-transport.md). State projection is mandatory for
+network-capable adapters; see [state projection](state-projection.md) and the
+[threat-control mapping](threat-control-mapping.md).
+
+The [ensemble, champion/challenger and drift-response contracts](ensembles.md)
+define versioned D17 schemas and pure validators. Their runtime is experimental
+and not implemented.
+
+The [offline pattern playground](pattern-playground.md) provides discoverable,
+sanitized examples and a governed authoring checklist without requiring network
+access or a provider credential.
 
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

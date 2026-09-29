@@ -378,6 +378,7 @@ describe('doctor: provider awareness (regression)', () => {
 
     expect(content).toMatch(/openhuman:\s*'OpenHuman'/);
     expect(content).toMatch(/grokbot:\s*'Grok Bot'/);
+    expect(content).toMatch(/muse:\s*'Muse Code'/);
     expect(content).toContain('checkOpenHumanHarnessTier2');
     expect(content).toContain('OpenHuman Tier-2 harness');
     expect(content).toContain("'agent', 'prompts'");
@@ -627,6 +628,14 @@ describe('tools/cli/doctor.mjs — context/memory firewall (#2040)', () => {
     expect(content).toContain('firewall.trust.quarantined');
     expect(content).toContain("record.reviewStatus === 'changed-review-required'");
   });
+
+  it('scans Muse Code through the firewall without an unknown-provider hole (#229)', () => {
+    // The doctor-side provider filter must admit muse, and the firewall
+    // PROVIDERS table must know its layout — otherwise `aiwg doctor
+    // --provider muse` degrades to `scan failed: Unknown provider 'muse'`.
+    expect(content).toMatch(/'grokbot', 'muse'\]/);
+    expect(content).toMatch(/provName === 'muse' && \(providerArg \|\| allProviders\)/);
+  });
 });
 
 // ── User registry override + shared parallelism defaults (#246 / #249) ──
@@ -662,5 +671,40 @@ describe('doctor: parallelism defaults use shared map (#249)', () => {
       : `max_parallel_subagents=${p.max_parallel_subagents} (provider default for ${primary})`;
     expect(isOverride).toBe(false);
     expect(label).toBe('max_parallel_subagents=4 (provider default for grokbot)');
+  });
+});
+
+// ── Drift-aware "Unknown provider" message (#270) ──
+
+describe('doctor: unknown-provider check names installation drift (#270)', () => {
+  const content = readFileSync(DOCTOR_SCRIPT, 'utf-8');
+
+  it('parses AIWG_INSTALLATION_DRIFT published by bin/aiwg.mjs', () => {
+    expect(content).toContain('process.env.AIWG_INSTALLATION_DRIFT');
+    expect(content).toContain('installationDrift');
+  });
+
+  it('keeps the bare message when no drift is active', () => {
+    expect(content).toContain('`Unknown provider: ${provName}${driftNote}`');
+  });
+
+  it('names the stale install and the repair path under drift', () => {
+    expect(content).toContain('installation identity drift');
+    expect(content).toContain('stale canonical install');
+    expect(content).toContain('aiwg installation adopt');
+  });
+
+  it('builds the drift-aware message only when drift is present', () => {
+    // Mirror the branch logic so the contract is pinned, not just the strings.
+    const buildMessage = (provName, installationDrift) => {
+      const driftNote = installationDrift
+        ? ' (installation identity drift: provider inventory read from stale canonical install; run `aiwg installation adopt` to repair)'
+        : '';
+      return `Unknown provider: ${provName}${driftNote}`;
+    };
+    expect(buildMessage('muse', null)).toBe('Unknown provider: muse');
+    expect(buildMessage('muse', { state: 'mismatch', drift: [] })).toBe(
+      'Unknown provider: muse (installation identity drift: provider inventory read from stale canonical install; run `aiwg installation adopt` to repair)',
+    );
   });
 });

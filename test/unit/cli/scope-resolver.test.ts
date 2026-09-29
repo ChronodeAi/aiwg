@@ -187,6 +187,35 @@ describe('mirrorToUserScope (#1156)', () => {
     expect(r.rules.count).toBe(0);
   });
 
+  it('refuses Grok Build user-scope symlink escapes before mirroring', async () => {
+    const skill = path.join(projectSkillsDir, 'aiwg-test');
+    await fs.mkdir(skill);
+    await fs.writeFile(path.join(skill, 'SKILL.md'), '# managed\n');
+    await fs.writeFile(path.join(skill, '.aiwg-managed'), 'aiwg\n');
+    const outside = path.join(tmpRoot, 'outside');
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, 'operator.txt'), 'keep\n');
+    const grokHome = path.join(tmpRoot, 'user', '.grok');
+    await fs.mkdir(grokHome, { recursive: true });
+    const userSkills = path.join(grokHome, 'skills');
+    const priorHome = process.env.GROK_HOME;
+    process.env.GROK_HOME = grokHome;
+    const paths = { agents: projectAgentsDir, skills: projectSkillsDir, commands: '', rules: '', behaviors: '' };
+    try {
+      await fs.symlink(outside, userSkills, 'dir');
+      await expect(mirrorToUserScope('grok-build', paths)).rejects.toThrow(/unsafe Grok Build user mirror root/);
+      await fs.rm(userSkills);
+      await fs.mkdir(userSkills);
+      await fs.symlink(outside, path.join(userSkills, 'aiwg-test'), 'dir');
+      await expect(mirrorToUserScope('grok-build', paths)).rejects.toThrow(/unsafe Grok Build user mirror target/);
+      expect(await fs.readFile(path.join(outside, 'operator.txt'), 'utf8')).toBe('keep\n');
+      await expect(fs.access(path.join(outside, 'SKILL.md'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      if (priorHome === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = priorHome;
+    }
+  });
+
   it('emits non-empty target dirs for claude', async () => {
     const r = await mirrorToUserScope('claude', {
       agents: projectAgentsDir,
@@ -211,6 +240,13 @@ describe('mirrorToUserScope (#1156)', () => {
     await fs.writeFile(path.join(projectSkillsDir, 'skill-bar', 'SKILL.md'), '# bar', 'utf-8');
     await fs.writeFile(path.join(projectCommandsDir, 'cmd-baz.md'), '# baz', 'utf-8');
 
+    const originalUserPaths = { ...USER_SCOPE_PATHS.claude };
+    Object.assign(USER_SCOPE_PATHS.claude, {
+      agents: path.join(tmpRoot, 'user', 'agents'),
+      skills: path.join(tmpRoot, 'user', 'skills'),
+      commands: path.join(tmpRoot, 'user', 'commands'),
+      rules: path.join(tmpRoot, 'user', 'rules'),
+    });
     const r = await mirrorToUserScope('claude', {
       agents: projectAgentsDir,
       skills: projectSkillsDir,
@@ -218,6 +254,7 @@ describe('mirrorToUserScope (#1156)', () => {
       rules: projectRulesDir,
       behaviors: '',
     });
+    Object.assign(USER_SCOPE_PATHS.claude, originalUserPaths);
 
     expect(r.skills.entries.sort()).toEqual(['skill-bar', 'skill-foo']);
     expect(r.skills.count).toBe(2);
@@ -278,6 +315,7 @@ describe('mirrorSkillDirsToUserScope', () => {
   it('inventories providers whose kernel source is already the user target', async () => {
     const target = path.join(tmpRoot, 'home', '.hermes', 'skills');
     await fs.mkdir(path.join(target, 'aiwg-status'), { recursive: true });
+    await fs.writeFile(path.join(target, 'aiwg-status', 'SKILL.md'), '---\n# aiwg:managed v1 bundled\n---\n', 'utf8');
 
     const result = await mirrorSkillDirsToUserScope([target], target);
 
@@ -315,11 +353,37 @@ describe('rejectOpenClawProjectScope (#1156)', () => {
 });
 
 describe('USER_SCOPE_PATHS coverage', () => {
-  it('covers all 12 supported providers', () => {
-    const expected = ['claude', 'codex', 'pi', 'copilot', 'cursor', 'opencode', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'factory', 'grokbot'];
+  it('covers all 14 supported providers', () => {
+    const expected = ['claude', 'codex', 'pi', 'copilot', 'cursor', 'opencode', 'warp', 'windsurf', 'hermes', 'openclaw', 'openhuman', 'factory', 'grokbot', 'muse'];
     for (const p of expected) {
       expect(USER_SCOPE_PATHS[p], `${p} should have user-scope paths`).toBeDefined();
     }
+  });
+
+  it('resolves muse user skills to the documented XDG root (#226)', () => {
+    const saved = process.env.XDG_CONFIG_HOME;
+    delete process.env.XDG_CONFIG_HOME;
+    expect(USER_SCOPE_PATHS.muse).toEqual({
+      agents: '',
+      skills: path.join(homedir(), '.config', 'muse', 'skills'),
+      commands: '',
+      rules: '',
+      behaviors: '',
+    });
+    if (saved === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = saved;
+  });
+
+  it('fails muse user skills closed on bad XDG metadata (#226)', () => {
+    const saved = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = 'relative/config';
+    expect(USER_SCOPE_PATHS.muse.skills).toBe('');
+    process.env.XDG_CONFIG_HOME = path.join(path.sep, 'tmp', 'muse-xdg');
+    expect(USER_SCOPE_PATHS.muse.skills).toBe(
+      path.join(path.sep, 'tmp', 'muse-xdg', 'muse', 'skills'),
+    );
+    if (saved === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = saved;
   });
 
   it('routes Pi user resources through the default agent directory without duplicate skill roots', () => {
@@ -431,4 +495,3 @@ describe('grokbot USER_SCOPE_PATHS fail-closed (#205/#207)', () => {
     expect(fresh.USER_SCOPE_PATHS.grokbot.skills).toBe('/tmp/grokbot-user-scope');
   });
 });
-

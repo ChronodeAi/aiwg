@@ -37,12 +37,12 @@ function parseArgs(args) {
     objective: null,
     completionCriteria: null,
     maxIterations: 5,
-    // #1450 P0: explicit 500K-context variant. Was 'opus' — under a 1M-context
-    // parent (claude-opus-4-7[1m]) the bare alias inherits 1M attributes, and
-    // most Claude accounts (Pro, Team standard) lack 1M access. claude-sonnet-4-6
-    // is broadly available and dramatically cheaper for headless dispatch.
+    // #1450 P0: explicit pinned ID. Was 'opus' — under a 1M-context parent
+    // (opus[1m]) the bare alias inherits 1M attributes, and most Claude
+    // accounts (Pro, Team standard) lack 1M access. claude-sonnet-5 is the
+    // standard (cost-effective) tier and much cheaper for headless dispatch.
     // See also #1442 (skill frontmatter pinning) and agent-deployment rule.
-    model: 'claude-sonnet-4-6',
+    model: 'claude-sonnet-5',
     // #1450 P0: cache-creation cost alone for a fresh claude headless session
     // is ~$1.60 sonnet / ~$3.90 opus. $2.0 per-iter was smaller than the cache
     // creation itself, causing every mission to abort at iteration 1.
@@ -71,7 +71,7 @@ function parseArgs(args) {
     enableAnalytics: true,        // Iteration analytics (#167)
     enableBestOutput: true,       // Best output tracking (#168)
     enableEarlyStopping: true,    // Early stopping (#149)
-    provider: 'claude',           // CLI provider (claude, codex, opencode, factory, pi, omp, deepseek-harness)
+    provider: 'claude',           // CLI provider (claude, codex, opencode, factory, pi, omp, deepseek-harness, muse)
     thinking: null,
     tools: null,
     verbose: false,               // Verbose per-iteration detail
@@ -274,7 +274,7 @@ ARGUMENTS:
 OPTIONS:
   -c, --completion <str>  Completion criteria (required for new loop)
   --max-iterations <n>    Maximum external iterations (default: 5)
-  --model <model>         Claude model variant (default: claude-sonnet-4-6, 500K)
+  --model <model>         Claude model variant (default: claude-sonnet-5, pinned ID)
                           Bare aliases (sonnet/opus) inherit parent context;
                           pinning a specific variant is required for headless.
   --budget <usd>          Budget per iteration in USD (default: 5.0)
@@ -300,7 +300,7 @@ OPTIONS:
   --timeout <min>         Timeout per iteration in minutes (default: 60)
   --mcp-config <json>     MCP server configuration JSON
   --gitea-issue           Create/link Gitea issue for tracking
-  --provider <name>       CLI provider: claude (default), codex, opencode, factory, pi, omp, deepseek-harness (dsh)
+  --provider <name>       CLI provider: claude (default), codex, opencode, factory, pi, omp, deepseek-harness (dsh), muse (experimental, #230)
   --thinking <level>      Provider thinking level (Pi: off..max)
   --tools <names>         Comma-separated provider tool allow-list
 
@@ -560,7 +560,7 @@ async function main() {
   await ensureProvidersRegistered();
   const providerName = options.provider || 'claude';
   if (!hasProvider(providerName)) {
-    console.error(`Error: Unknown provider '${providerName}'. Available: claude, codex, opencode, factory, pi, omp, deepseek-harness (dsh)`);
+    console.error(`Error: Unknown provider '${providerName}'. Available: claude, codex, opencode, factory, pi, omp, deepseek-harness (dsh), muse (experimental, disable: AIWG_MUSE_RALPH_ENABLED=0)`);
     process.exit(1);
   }
 

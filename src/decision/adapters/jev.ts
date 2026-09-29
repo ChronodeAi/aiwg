@@ -1,13 +1,20 @@
 import type {
   AdapterCapabilities,
   AdapterObservation,
+  DecisionAdapterBatchObservation,
+  DecisionAdapterBatchRequest,
+  DecisionAdapterCompileRequest,
   DecisionAdapterRequest,
   DecisionAdapter,
+  DecisionDefinition,
   DecisionFailureReason,
   DecisionUsage,
+  JsonValue,
 } from '../types.js';
 import { DecisionValidationError, validateDecisionValue, validateDistribution } from '../validate.js';
 import { canonicalJson } from '../../security/artifact-trust.js';
+import { partitionProjectedState } from '../projection.js';
+import { isTraceparent } from '../telemetry/context.js';
 import { runInNewContext } from 'node:vm';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -27,6 +34,12 @@ interface JevAdapterOptions {
   /** Fake pinned transport seam for offline tests. Production uses Node HTTPS. */
   pinnedFetch?: (url: URL, init: RequestInit, pin: PinnedAddress) => Promise<Response>;
   now?: () => number;
+  /**
+   * Host-declared deployment region. Jev exposes no region control, so this is a
+   * declared attribute without transport enforcement. Omitted means unknown, and
+   * the evaluator then denies every projection policy for this adapter.
+   */
+  region?: string;
 }
 
 interface PinnedAddress { address: string; family: 4 }
@@ -55,6 +68,7 @@ export class JevDecisionAdapter implements DecisionAdapter {
   private readonly resolveAddresses: (hostname: string) => Promise<readonly string[]>;
   private readonly pinnedFetch: NonNullable<JevAdapterOptions['pinnedFetch']>;
   private readonly now: () => number;
+  private readonly region: string | null;
 
   constructor(options: JevAdapterOptions = {}) {
     this.endpoint = options.endpoint ?? JEV_ENDPOINT;
@@ -63,17 +77,30 @@ export class JevDecisionAdapter implements DecisionAdapter {
     this.resolveAddresses = options.resolveAddresses ?? systemResolveAddresses;
     this.pinnedFetch = options.pinnedFetch ?? pinnedHttpsFetch;
     this.now = options.now ?? Date.now;
+    this.region = options.region?.trim() ? options.region : null;
   }
 
   async capabilities(): Promise<AdapterCapabilities> {
     return {
       answerKinds: ['choice', 'ordinal-score', 'truth-probability'],
-      features: ['typed-output', 'probability-distribution', 'structured-entries'],
+      features: ['typed-output', 'probability-distribution', 'structured-entries', 'native-shared-state-batch'],
       maxOptions: 255,
       maxLevels: 10,
       confidenceProfiles: ['typesafe-distribution-v1', 'typesafe-truth-v1'],
       executable: true,
+      batch: { native: true, atomic: true, executionEnvelope: new URL(this.endpoint).origin },
+      // The effective request origin; the evaluator binds projection policy to it.
+      egress: { mode: 'network', origin: new URL(this.endpoint).origin, region: this.region },
     };
+  }
+
+  /**
+   * Local compilation of the stable question payload. Jev exposes no
+   * server-side compile or prompt-prefix API, so this only prepares the
+   * request bytes the evaluator would otherwise rebuild on every call.
+   */
+  async compile(request: DecisionAdapterCompileRequest): Promise<JsonValue> {
+    return compileJevQuestion(request.definition);
   }
 
   async evaluate(request: DecisionAdapterRequest): Promise<AdapterObservation> {
@@ -105,15 +132,15 @@ export class JevDecisionAdapter implements DecisionAdapter {
     const signal = AbortSignal.any([request.signal, deadline]);
     let body: string;
     try {
-      body = JSON.stringify({ state: request.input, model: request.target.model,
-        questions: { [request.alias]: toJevQuestion(request) } });
+      body = JSON.stringify({ state: jevState(request), model: request.target.model,
+        questions: { [request.questionId ?? request.alias]: jevQuestion(request) } });
     } catch { return failure('invalid-request', { dispatchCertainty: 'not-sent' }); }
     if (request.signal.aborted) return externalInterruption(request, 'not-sent');
     let response: Response;
     try {
       const init: RequestInit = {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...traceHeaders(request.traceContext) },
         body,
         signal,
         redirect: 'error',
@@ -187,6 +214,99 @@ export class JevDecisionAdapter implements DecisionAdapter {
           : failure('invalid-output', metadata);
     }
   }
+
+  async evaluateMany(batch: DecisionAdapterBatchRequest): Promise<DecisionAdapterBatchObservation> {
+    const requests = batch.requests;
+    const request = requests[0];
+    if (!request || requests.length < 2 || requests.some(candidate =>
+      canonicalJson(candidate.input) !== canonicalJson(request.input)
+      || canonicalJson(batchTargetEnvelope(candidate.target)) !== canonicalJson(batchTargetEnvelope(request.target))
+      || candidate.deadlineEpochMs !== request.deadlineEpochMs
+      || !candidate.questionId)) {
+      return batchFailure(requests, failure('invalid-request', { dispatchCertainty: 'not-sent' }));
+    }
+    const ids = requests.map(candidate => candidate.questionId!);
+    if (new Set(ids).size !== ids.length) return batchFailure(requests, failure('invalid-request', { dispatchCertainty: 'not-sent' }));
+    if (request.signal.aborted) return batchFailure(requests, externalInterruption(request, 'not-sent'));
+    if (this.now() >= request.deadlineEpochMs) return batchFailure(requests,
+      failure('timeout', { termination: 'target-timeout', dispatchCertainty: 'not-sent' }));
+    let pin: PinnedAddress | null;
+    try { pin = await withAbort(authorizeEndpoint(this.endpoint, this.allowedOrigins, this.resolveAddresses), request.signal); }
+    catch { return batchFailure(requests, request.signal.aborted ? externalInterruption(request, 'not-sent')
+      : failure('data-boundary-denied', { dispatchCertainty: 'not-sent' })); }
+    let token: string;
+    try {
+      if (!request.target.credentialRef) return batchFailure(requests, failure('unauthorized', { dispatchCertainty: 'not-sent' }));
+      const credential = new Uint8Array(await withAbort(request.resolveCredential(request.target.credentialRef), request.signal));
+      try { token = new TextDecoder('utf-8', { fatal: true }).decode(credential); }
+      finally { credential.fill(0); }
+      if (!token || /[\r\n\u0000-\u001f\u007f]/.test(token)) {
+        return batchFailure(requests, failure('authentication', { dispatchCertainty: 'not-sent' }));
+      }
+    } catch (error) {
+      if (request.signal.aborted) return batchFailure(requests, externalInterruption(request, 'not-sent'));
+      const category = error instanceof JevCredentialError ? error.category : null;
+      const reason = category === 'missing' ? 'authentication'
+        : category === 'denied' || category === 'configuration' || error instanceof DecisionValidationError ? 'unauthorized'
+          : 'executor-unavailable';
+      return batchFailure(requests, failure(reason, { dispatchCertainty: 'not-sent' }));
+    }
+    const deadline = AbortSignal.timeout(Math.max(1, request.deadlineEpochMs - this.now()));
+    const signal = AbortSignal.any([request.signal, deadline]);
+    let body: string;
+    try {
+      body = JSON.stringify({ state: jevState(request), model: request.target.model,
+        questions: Object.fromEntries(requests.map(candidate => [candidate.questionId!, jevQuestion(candidate)])) });
+    } catch { return batchFailure(requests, failure('invalid-request', { dispatchCertainty: 'not-sent' })); }
+    let response: Response;
+    try {
+      const init: RequestInit = { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json',
+        ...traceHeaders(batch.traceContext) }, body, signal, redirect: 'error' };
+      response = pin ? await this.pinnedFetch(new URL(this.endpoint), init, pin) : await this.fetchImpl(this.endpoint, init);
+    } catch (error) {
+      const observation = request.signal.aborted ? externalInterruption(request, 'unknown')
+        : deadline.aborted ? failure('timeout', { termination: 'target-timeout', remoteExecution: 'unknown', dispatchCertainty: 'unknown' })
+          : error instanceof Error && error.name === 'AbortError'
+            ? failure('cancelled', { termination: 'backend-cancelled', remoteExecution: 'unknown', dispatchCertainty: 'unknown' })
+            : failure('network-transient', { remoteExecution: 'unknown', dispatchCertainty: 'unknown' });
+      return batchFailure(requests, observation);
+    }
+    const correlation = requestId(response.headers);
+    let metadata: Partial<AdapterObservation> = { ...correlation, httpStatus: response.status, dispatchCertainty: 'terminal-response' };
+    if (!headersWithinLimit(response.headers)) {
+      await response.body?.cancel().catch(() => undefined);
+      return batchFailure(requests, failure('invalid-output', metadata));
+    }
+    let finalOrigin: string | null = null;
+    try { if (response.url) finalOrigin = new URL(response.url).origin; } catch { finalOrigin = 'invalid'; }
+    if (finalOrigin && finalOrigin !== new URL(this.endpoint).origin || response.status >= 300 && response.status < 400) {
+      await response.body?.cancel().catch(() => undefined);
+      return batchFailure(requests, failure('data-boundary-denied', metadata));
+    }
+    if (!response.ok) {
+      try { await readBoundedBody(response, signal); } catch { return batchFailure(requests, failure('invalid-output', metadata)); }
+      const retryAfterMs = parseRetryAfter(response.headers, this.now());
+      return batchFailure(requests, failure(mapStatus(response.status), { ...metadata, ...(retryAfterMs === null ? {} : { retryAfterMs }) }));
+    }
+    try {
+      const parsed = parseBoundedJson(await readBoundedBody(response, signal));
+      const normalized = normalizeBatchResponse(requests, parsed).map(answer => ({
+        questionId: answer.questionId,
+        observation: { ...answer.observation, ...metadata },
+      }));
+      return { answers: normalized, sharedUsage: normalizeUsage(asRecord(parsed).usage) };
+    } catch {
+      return batchFailure(requests, failure('invalid-output', metadata));
+    }
+  }
+}
+
+function batchTargetEnvelope(target: DecisionAdapterRequest['target']): Record<string, unknown> {
+  return {
+    adapter: target.adapter, adapterVersion: target.adapterVersion, model: target.model,
+    credentialRef: target.credentialRef ?? null, subagent: target.subagent ?? null,
+    timeoutMs: target.timeoutMs, retry: target.retry,
+  };
 }
 
 async function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -200,21 +320,43 @@ async function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
   finally { signal.removeEventListener('abort', onAbort); }
 }
 
-function toJevQuestion(request: DecisionAdapterRequest): Record<string, unknown> {
-  const { answer } = request.definition.spec;
+export const JEV_COMPILED_QUESTION_FORMAT = 'jev-question/v1';
+
+/**
+ * The question is kept as JSON text so its key order, and therefore the
+ * request bytes, survive canonical cache storage unchanged.
+ */
+export function compileJevQuestion(definition: DecisionDefinition): { format: typeof JEV_COMPILED_QUESTION_FORMAT; question: string } {
+  return { format: JEV_COMPILED_QUESTION_FORMAT, question: JSON.stringify(toJevQuestion(definition)) };
+}
+
+/** Cached and uncached calls both decode a compiled artifact; a malformed one fails before dispatch. */
+function jevQuestion(request: DecisionAdapterRequest): Record<string, unknown> {
+  const artifact = (request.compiledArtifact ?? compileJevQuestion(request.definition)) as Record<string, unknown> | null;
+  if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact) || Object.keys(artifact).length !== 2
+    || artifact.format !== JEV_COMPILED_QUESTION_FORMAT || typeof artifact.question !== 'string') {
+    throw new Error('invalid compiled Jev question');
+  }
+  const question = JSON.parse(artifact.question) as unknown;
+  if (!question || typeof question !== 'object' || Array.isArray(question)) throw new Error('invalid compiled Jev question');
+  return question as Record<string, unknown>;
+}
+
+function toJevQuestion(definition: DecisionDefinition): Record<string, unknown> {
+  const { answer } = definition.spec;
   if (answer.kind === 'choice') {
     return {
       type: 'choice',
-      instructions: request.definition.spec.question,
+      instructions: definition.spec.question,
       criteria: Object.fromEntries(answer.options.map(option => [option.id, option.description])),
     };
   }
   if (answer.kind === 'ordinal-score') {
-    return { type: 'score', instructions: request.definition.spec.question, criteria: answer.levels };
+    return { type: 'score', instructions: definition.spec.question, criteria: answer.levels };
   }
   return {
     type: 'noul',
-    instructions: request.definition.spec.question,
+    instructions: definition.spec.question,
     criteria: { true: answer.trueDescription, false: answer.falseDescription },
   };
 }
@@ -222,10 +364,26 @@ function toJevQuestion(request: DecisionAdapterRequest): Record<string, unknown>
 function normalizeResponse(request: DecisionAdapterRequest, value: unknown): AdapterObservation {
   const body = asRecord(value);
   const answers = asRecord(body.answers);
-  if (Object.keys(answers).length !== 1 || !Object.prototype.hasOwnProperty.call(answers, request.alias)) {
+  const questionId = request.questionId ?? request.alias;
+  if (Object.keys(answers).length !== 1 || !Object.prototype.hasOwnProperty.call(answers, questionId)) {
     throw new DecisionValidationError('Jev response must contain exactly the requested answer key');
   }
-  const answer = asRecord(answers[request.alias]);
+  return normalizeAnswer(request, body, questionId);
+}
+
+function normalizeBatchResponse(requests: readonly DecisionAdapterRequest[], value: unknown): Array<{ questionId: string; observation: AdapterObservation }> {
+  const body = asRecord(value);
+  const answers = asRecord(body.answers);
+  const ids = requests.map(request => request.questionId!);
+  if (Object.keys(answers).length !== ids.length || ids.some(id => !Object.prototype.hasOwnProperty.call(answers, id))) {
+    throw new DecisionValidationError('Jev batch response must exactly match requested answer keys');
+  }
+  return requests.map(request => ({ questionId: request.questionId!, observation: normalizeAnswer(request, body, request.questionId!) }));
+}
+
+function normalizeAnswer(request: DecisionAdapterRequest, body: Record<string, unknown>, questionId: string): AdapterObservation {
+  const answers = asRecord(body.answers);
+  const answer = asRecord(answers[questionId]);
   const model = typeof body.model === 'string' && body.model ? body.model : null;
   const usage = normalizeUsage(body.usage);
   const kind = request.definition.spec.answer.kind;
@@ -257,6 +415,13 @@ function normalizeResponse(request: DecisionAdapterRequest, value: unknown): Ada
     source: 'provider', profile: 'typesafe-truth-v1', calibration: 'vendor-claimed',
     confidence: null, distribution: null, calibrationRef: null,
   });
+}
+
+function batchFailure(requests: readonly DecisionAdapterRequest[], observation: AdapterObservation): DecisionAdapterBatchObservation {
+  return {
+    answers: requests.map(request => ({ questionId: request.questionId ?? request.alias, observation: { ...observation } })),
+    sharedUsage: observation.usage,
+  };
 }
 
 function success(value: string | number, actualModel: string | null, usage: DecisionUsage, uncertaintyValue: AdapterObservation['uncertainty']): AdapterObservation {
@@ -325,6 +490,11 @@ function mapStatus(status: number): DecisionFailureReason {
   return 'invalid-request';
 }
 
+/** Forward only a well-formed W3C traceparent; anything else is dropped, never echoed. */
+function traceHeaders(context: DecisionAdapterRequest['traceContext']): Record<string, string> {
+  return isTraceparent(context?.traceparent) ? { traceparent: context!.traceparent } : {};
+}
+
 function parseRetryAfter(headers: Headers, now: number): number | null {
   const milliseconds = headers.get('retry-after-ms');
   if (milliseconds !== null && /^\d+(?:\.\d+)?$/.test(milliseconds.trim())) {
@@ -358,9 +528,39 @@ function safeRequestId(value: unknown): string | null {
 }
 
 function parseBoundedJson(text: string): unknown {
-  // VM timeout interrupts synchronous parsing; input is a value, never source code.
-  // Clone into this realm so entry admission sees ordinary local JSON prototypes.
+  rejectDuplicateAnswerKeys(text);
   return structuredClone(runInNewContext('JSON.parse(input)', { input: text }, { timeout: MAX_PARSE_MS }));
+}
+
+/** Detect duplicate keys in the response's answer map before JSON.parse erases them. */
+function rejectDuplicateAnswerKeys(text: string): void {
+  const marker = /"answers"\s*:\s*\{/g.exec(text);
+  if (!marker) return;
+  let index = marker.index + marker[0].length;
+  let depth = 1;
+  const keys = new Set<string>();
+  while (index < text.length && depth > 0) {
+    const char = text[index]!;
+    if (char === '"') {
+      const start = index++;
+      let escaped = false;
+      while (index < text.length) {
+        const next = text[index++]!;
+        if (escaped) escaped = false;
+        else if (next === '\\') escaped = true;
+        else if (next === '"') break;
+      }
+      if (depth === 1 && /^\s*:/.test(text.slice(index))) {
+        const key = JSON.parse(text.slice(start, index)) as string;
+        if (keys.has(key)) throw new DecisionValidationError('duplicate Jev answer key');
+        keys.add(key);
+      }
+      continue;
+    }
+    if (char === '{' || char === '[') depth += 1;
+    else if (char === '}' || char === ']') depth -= 1;
+    index += 1;
+  }
 }
 
 function headersWithinLimit(headers: Headers): boolean {
@@ -474,4 +674,12 @@ async function pinnedHttpsFetch(url: URL, init: RequestInit, pin: PinnedAddress)
     outgoing.on('close', () => init.signal?.removeEventListener('abort', onAbort));
     outgoing.end(init.body as string);
   });
+}
+
+/**
+ * Projected state keeps its host-declared trust partition in the provider body:
+ * verified evidence and untrusted content travel under separate keys.
+ */
+function jevState(request: DecisionAdapterRequest): unknown {
+  return request.projectionEvidence ? partitionProjectedState(request.input, request.projectionEvidence) : request.input;
 }

@@ -55,6 +55,12 @@ function schemaRoot(): string {
 function getValidators(): Map<string, ValidateFunction> {
   if (validators) return validators;
   const ajv = new Ajv2020({ strict: false, allErrors: true, validateFormats: false });
+  const admissionSchema = JSON.parse(readFileSync(resolve(schemaRoot(), 'DecisionAdmissionEvidence.v1.schema.json'), 'utf8')) as JsonSchema;
+  const contextEvidenceSchema = JSON.parse(readFileSync(resolve(schemaRoot(), 'DecisionContextEvidence.v1.schema.json'), 'utf8')) as JsonSchema;
+  const providerPrefixSchema = JSON.parse(readFileSync(resolve(schemaRoot(), 'DecisionProviderPrefixEvidence.v1.schema.json'), 'utf8')) as JsonSchema;
+  ajv.addSchema(admissionSchema);
+  ajv.addSchema(contextEvidenceSchema);
+  ajv.addSchema(providerPrefixSchema);
   validators = new Map();
   for (const [kind, filename] of Object.entries(schemaFiles) as Array<[DecisionKind, string]>) {
     const schema = JSON.parse(readFileSync(resolve(schemaRoot(), filename), 'utf8')) as JsonSchema;
@@ -121,6 +127,78 @@ export function assertDecisionWriterVersion(value: unknown, semantic: DecisionCh
   }
 }
 
+/**
+ * Result evidence that exists only in the v1alpha2 DecisionResult and RulesetResult
+ * schemas, with the contract addition that owns each field. v1alpha1 results never
+ * carry these fields; writers must label any result that does as v1alpha2.
+ */
+export const DECISION_RESULT_V1ALPHA2_FIELDS = [
+  { field: 'batchResult', scope: 'decision', owner: 'D07', semantic: 'batch-receipt' },
+  { field: 'batch', scope: 'attempt', owner: 'D04', semantic: 'batch-provenance' },
+  { field: 'admission', scope: 'attempt', owner: 'D05', semantic: 'admission-evidence' },
+  { field: 'context', scope: 'decision', owner: 'D06', semantic: 'context-evidence' },
+  { field: 'context', scope: 'ruleset', owner: 'D06', semantic: 'context-evidence' },
+  { field: 'contextFailure', scope: 'ruleset', owner: 'D06', semantic: 'context-evidence' },
+  { field: 'providerPrefix', scope: 'attempt', owner: 'D30', semantic: 'provider-prefix-evidence' },
+  { field: 'acceptance', scope: 'decision', owner: 'D08', semantic: 'acceptance-uncertainty' },
+  { field: 'calibrationCompatibility', scope: 'decision', owner: 'D09', semantic: 'calibration-pin' },
+  { field: 'cache', scope: 'ruleset', owner: 'D15', semantic: 'result-cache-receipt' },
+  { field: 'projection', scope: 'ruleset', owner: 'D10', semantic: 'projection-opt-out' },
+] as const;
+
+/** JSON paths of every v1alpha2-only field present in a DecisionResult or RulesetResult. */
+export function decisionResultV1Alpha2Fields(value: unknown): string[] {
+  const found: string[] = [];
+  const spec = (document: unknown): Record<string, unknown> | undefined => {
+    const inner = document && typeof document === 'object' ? (document as { spec?: unknown }).spec : undefined;
+    return inner && typeof inner === 'object' && !Array.isArray(inner) ? inner as Record<string, unknown> : undefined;
+  };
+  const visitDecision = (document: unknown, path: string): void => {
+    const decision = spec(document);
+    if (!decision) return;
+    for (const entry of DECISION_RESULT_V1ALPHA2_FIELDS) {
+      if (entry.scope === 'decision' && Object.hasOwn(decision, entry.field)) found.push(`${path}.spec.${entry.field}`);
+    }
+    if (!Array.isArray(decision.attempts)) return;
+    decision.attempts.forEach((attempt, index) => {
+      if (!attempt || typeof attempt !== 'object') return;
+      for (const entry of DECISION_RESULT_V1ALPHA2_FIELDS) {
+        if (entry.scope === 'attempt' && Object.hasOwn(attempt, entry.field)) found.push(`${path}.spec.attempts[${index}].${entry.field}`);
+      }
+    });
+  };
+  const kind = value && typeof value === 'object' ? (value as { kind?: unknown }).kind : undefined;
+  if (kind === 'DecisionResult') visitDecision(value, '$');
+  if (kind === 'RulesetResult') {
+    const ruleset = spec(value);
+    for (const entry of DECISION_RESULT_V1ALPHA2_FIELDS) {
+      if (entry.scope === 'ruleset' && ruleset && Object.hasOwn(ruleset, entry.field)) found.push(`$.spec.${entry.field}`);
+    }
+    const evaluations = ruleset?.evaluations;
+    if (evaluations && typeof evaluations === 'object' && !Array.isArray(evaluations)) {
+      for (const [alias, evaluation] of Object.entries(evaluations)) visitDecision(evaluation, `$.spec.evaluations.${alias}`);
+    }
+  }
+  return found;
+}
+
+/**
+ * Writer gate for every runtime DecisionResult/RulesetResult writer, including
+ * invocation receipt payloads. A result that carries v1alpha2-only evidence must be
+ * labelled v1alpha2; a v1alpha1 label on such a result is rejected before validation.
+ */
+export function assertDecisionResultWriterVersion(value: unknown): asserts value is DecisionResult | RulesetResult {
+  const kind = value && typeof value === 'object' ? (value as { kind?: unknown }).kind : undefined;
+  if (kind !== 'DecisionResult' && kind !== 'RulesetResult') {
+    throw new DecisionValidationError('Result writer accepts only DecisionResult or RulesetResult documents');
+  }
+  const fields = decisionResultV1Alpha2Fields(value);
+  if (fields.length && (value as { apiVersion?: unknown }).apiVersion !== DECISION_API_VERSION_STRUCTURED) {
+    throw new DecisionValidationError(`${kind} carrying ${fields.join(', ')} requires ${DECISION_API_VERSION_STRUCTURED}`);
+  }
+  validateDecisionDocument(value);
+}
+
 /** A rollback reader may inspect v1alpha2, but cannot execute or rewrite it. */
 export function readDecisionDocumentForRollback(value: unknown, mode: 'read-only' | 'execute'): {
   document: Readonly<DecisionDefinition | DecisionRuleset | DecisionBinding | DecisionResult | RulesetResult>;
@@ -141,12 +219,50 @@ function deepFreeze(value: unknown): void {
   Object.freeze(value);
 }
 
+/**
+ * Compiled caller-schema validators, keyed by the sha256 of the schema's
+ * canonical JSON, so equal content shares a validator and different content
+ * never does. Each miss compiles a detached clone in a fresh Ajv instance, so
+ * later mutation of the caller's object or another schema's `$id` cannot leak
+ * into a cached entry. Bounded LRU; failed compiles are never cached.
+ */
+const SCHEMA_CACHE_LIMIT = 256;
+const strictSchemaDigests = new Map<string, true>();
+const permissiveValidators = new Map<string, ValidateFunction>();
+
+function schemaDigest(schema: JsonSchema): string | null {
+  try { return createHash('sha256').update(canonicalJson(schema)).digest('hex'); }
+  catch { return null; } // Not canonical JSON (for example an undefined member): compile uncached.
+}
+
+/** Only a cacheable (canonical JSON) schema needs a private copy. */
+function detached(schema: JsonSchema, digest: string | null): JsonSchema {
+  return digest === null ? schema : structuredClone(schema);
+}
+
+function cached<T>(cache: Map<string, T>, digest: string | null, build: () => T): T {
+  if (digest !== null) {
+    const hit = cache.get(digest);
+    if (hit !== undefined) {
+      cache.delete(digest);
+      cache.set(digest, hit);
+      return hit;
+    }
+  }
+  const value = build();
+  if (digest !== null) {
+    cache.set(digest, value);
+    if (cache.size > SCHEMA_CACHE_LIMIT) cache.delete(cache.keys().next().value!);
+  }
+  return value;
+}
+
 export function validateAgainstSchema(schema: JsonSchema, value: unknown, label: string): void {
-  assertLocalSchema(schema, label);
-  const ajv = new Ajv2020({ strict: false, allErrors: true, validateFormats: false });
+  const digest = assertLocalSchema(schema, label);
   let validate: ValidateFunction;
   try {
-    validate = ajv.compile(schema);
+    validate = cached(permissiveValidators, digest, () =>
+      new Ajv2020({ strict: false, allErrors: true, validateFormats: false }).compile(detached(schema, digest)));
   } catch (error) {
     throw new DecisionValidationError(`${label} is not a supported local draft 2020-12 schema: ${errorMessage(error)}`);
   }
@@ -199,6 +315,9 @@ export function validateBinding(binding: DecisionBinding, ruleset: DecisionRules
   }
   for (const [alias, evaluation] of Object.entries(binding.spec.evaluations)) {
     for (const target of evaluation.targets) {
+      if (target.acceptance.mode === 'primitive-policy' && binding.apiVersion !== DECISION_API_VERSION_STRUCTURED) {
+        throw new DecisionValidationError(`${alias} primitive-aware acceptance requires ${DECISION_API_VERSION_STRUCTURED}`);
+      }
       if (target.retry.maxDelayMs < target.retry.initialDelayMs) {
         throw new DecisionValidationError(`${alias} retry maxDelayMs must be >= initialDelayMs`);
       }
@@ -261,7 +380,7 @@ export function validateDistribution(definition: DecisionDefinition, distributio
   }
 }
 
-function assertLocalSchema(schema: JsonSchema, label: string): void {
+function assertLocalSchema(schema: JsonSchema, label: string): string | null {
   const visit = (value: unknown, stack: Set<unknown>, depth: number): void => {
     if (depth > 64) throw new DecisionValidationError(`${label} exceeds maximum schema depth`);
     if (!value || typeof value !== 'object') return;
@@ -277,12 +396,18 @@ function assertLocalSchema(schema: JsonSchema, label: string): void {
     stack.delete(value);
   };
   visit(schema, new Set(), 0);
+  // The structural walk above runs on every call; only the strict compile is cached.
+  const digest = schemaDigest(schema);
   try {
-    new Ajv2020({ strictSchema: true, strictTypes: false, strictTuples: false,
-      strictRequired: false, validateFormats: false }).compile(schema);
+    cached(strictSchemaDigests, digest, () => {
+      new Ajv2020({ strictSchema: true, strictTypes: false, strictTuples: false,
+        strictRequired: false, validateFormats: false }).compile(detached(schema, digest));
+      return true as const;
+    });
   } catch (error) {
     throw new DecisionValidationError(`${label} uses an unsupported schema construct: ${errorMessage(error)}`);
   }
+  return digest;
 }
 
 function assertPredicateAliases(predicate: DecisionPredicate, aliases: Set<string>): void {

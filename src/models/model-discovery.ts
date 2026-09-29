@@ -58,12 +58,26 @@ export const PROVIDER_DISCOVERY_DECISIONS: Record<string, ProviderDiscoveryDecis
     reason: 'Grok Bot is a desktop multi-agent runtime with no verified non-interactive model-list command; AIWG does not invent xAI/Grok API enumeration as Grok Bot entitlement.',
     documentation: 'https://github.com/jmagly/aiwg/blob/main/docs/architecture/adr-grokbot-provider-target.md',
   },
+  'grok-build': {
+    provider: 'grok-build',
+    status: 'native',
+    interface: 'grok inspect --json plus bounded model fields from reported config sources',
+    reason: 'Inspect is the authority for active configuration layers; current releases require reading only model-selection fields from those files.',
+    documentation: 'https://docs.x.ai/build/settings',
+  },
   hermes: {
     provider: 'hermes',
     status: 'unsupported',
     interface: null,
     reason: 'hermes model is interactive; the optional API server /v1/models endpoint requires a separately running service and represents that service rather than local CLI entitlement.',
     documentation: 'https://hermes-agent.nousresearch.com/docs/reference/cli-commands',
+  },
+  muse: {
+    provider: 'muse',
+    status: 'unsupported',
+    interface: null,
+    reason: 'Muse Code is a terminal/CI coding agent with no verified non-interactive model-list command; AIWG does not invent Meta Model API enumeration as Muse Code entitlement.',
+    documentation: 'https://github.com/jmagly/aiwg/blob/main/docs/architecture/adr-muse-provider-target.md',
   },
   opencode: {
     provider: 'opencode',
@@ -114,11 +128,31 @@ export const PROVIDER_DISCOVERY_DECISIONS: Record<string, ProviderDiscoveryDecis
 
 export interface DiscoveredModel {
   id: string;
+  /** Provider-local selector. For Grok Build this is the config table alias, not necessarily an API id. */
+  alias?: string;
+  apiModelId?: string;
   displayName?: string;
   llmProvider?: string;
   hidden?: boolean;
   isDefault?: boolean;
   reasoningEfforts?: string[];
+  capabilities?: string[];
+  credentialState?: 'available' | 'unavailable' | 'session' | 'unknown';
+}
+
+export interface ModelValueProvenance {
+  value: string | string[] | boolean | number | null;
+  source: string;
+  scope: string;
+  precedence: number;
+  constraint?: 'pin' | 'allowlist';
+}
+
+export interface ProviderModelPolicyReport {
+  layers: Array<{ scope: string; source: string; precedence: number; policyConstraint: boolean }>;
+  selected: Record<string, ModelValueProvenance>;
+  constraints: Array<{ key: string; source: string; precedence: number; kind: 'pin' | 'allowlist' }>;
+  diagnostics: string[];
 }
 
 export interface ProviderModelDiscovery {
@@ -130,6 +164,7 @@ export interface ProviderModelDiscovery {
   models: DiscoveredModel[];
   errorKind?: 'authentication' | 'rate-limit' | 'timeout' | 'unsupported' | 'invalid-output' | 'command';
   error?: string;
+  policy?: ProviderModelPolicyReport;
 }
 
 export interface CommandResult {
@@ -175,6 +210,7 @@ export interface ModelDiscoveryOptions {
   fetchImpl?: typeof fetch;
   now?: () => Date;
   omp?: { profile?: string; config?: string[]; extensions?: boolean; cwd?: string };
+  grokBuild?: { cwd?: string; env?: NodeJS.ProcessEnv; command?: string };
   nativeDiscoverers?: Record<string, () => Promise<ProviderModelDiscovery>>;
 }
 
@@ -198,6 +234,17 @@ export function classifyDiscoveryError(
   if (/(?:429|rate.?limit|too many requests|quota)/i.test(message)) return 'rate-limit';
   if (/(?:timed? out|timeout)/i.test(message)) return 'timeout';
   return 'command';
+}
+
+const SECRET_ASSIGNMENT = /((?:api[_-]?key|authorization|token|secret|password|cookie|extra_headers?)\s*[=:]\s*)([^\s,}\]]+)/gi;
+const BEARER_SECRET = /(bearer\s+)[A-Za-z0-9._~+/=-]+/gi;
+
+/** Keep native diagnostics useful without ever echoing credential material. */
+export function redactModelDiscoveryText(value: string): string {
+  return value
+    .replace(SECRET_ASSIGNMENT, '$1[REDACTED]')
+    .replace(BEARER_SECRET, '$1[REDACTED]')
+    .slice(0, 4096);
 }
 
 export const runModelDiscoveryCommand: ModelDiscoveryCommandRunner = (
@@ -411,23 +458,34 @@ function isFresh(
   return Number.isFinite(age) && age >= 0 && age <= ttlMs;
 }
 
+/** Tier families by name, anchored on separators so `solution` or `lunar` do not match. */
+const FLAGSHIP_FAMILY = /(?:^|[/:._-])(?:fable|astra)(?:$|[/:._[-]|\d)/i;
+const PREMIUM_FAMILY = /(?:^|[/:._-])(?:opus|sol)(?:$|[/:._[-]|\d)/i;
+const STANDARD_FAMILY = /(?:^|[/:._-])(?:sonnet|terra)(?:$|[/:._[-]|\d)/i;
+
 export function selectRoleModels(models: DiscoveredModel[]): {
   reasoning?: DiscoveredModel;
   coding?: DiscoveredModel;
   efficiency?: DiscoveredModel;
 } {
-  const visible = models.filter(model => !model.hidden);
+  // Flagship families are user-elected only (epic #2642): discovery never
+  // assigns them to a role, even when the provider marks one as its default.
+  const visible = models.filter(model => !model.hidden && !FLAGSHIP_FAMILY.test(model.id));
   if (visible.length === 0) return {};
-  const coding = visible.find(model => model.isDefault)
+  const coding = visible.find(model => STANDARD_FAMILY.test(model.id))
+    ?? visible.find(model => model.isDefault && !PREMIUM_FAMILY.test(model.id))
+    ?? visible.find(model => model.isDefault)
     ?? visible.find(model => /(?:codex|code|sonnet|gpt)/i.test(model.id))
     ?? visible[0];
-  const efficiency = visible.find(model => /(?:mini|spark|haiku|light|flash)/i.test(model.id))
+  const efficiency = visible.find(model => /(?:mini|spark|haiku|light|flash|luna)/i.test(model.id))
     ?? [...visible].sort(
       (a, b) => (a.reasoningEfforts?.length ?? 0) - (b.reasoningEfforts?.length ?? 0),
     )[0];
-  const reasoningCandidates = visible.filter(model =>
+  const premium = visible.filter(model => PREMIUM_FAMILY.test(model.id));
+  const reasoningCandidates = premium.length > 0 ? premium : visible.filter(model =>
     /(?:opus|reason|ultra|max|pro(?:[-_/]|$))/i.test(model.id)
-  );
+);
+
   const reasoning = [...(reasoningCandidates.length > 0 ? reasoningCandidates : visible)].sort((a, b) => {
     const effortDelta = (b.reasoningEfforts?.length ?? 0) - (a.reasoningEfforts?.length ?? 0);
     if (effortDelta !== 0) return effortDelta;
@@ -589,7 +647,7 @@ export async function resolveDynamicModelCatalog(
     };
   }
 
-  if (!options.allowNetwork) {
+  if (!options.allowNetwork && !options.nativeDiscoverers) {
     return {
       ...staticCatalog,
       discovery: {
@@ -631,6 +689,10 @@ export async function resolveDynamicModelCatalog(
     openclaw: () => discoverOpenClawModels(),
     pi: () => discoverPiModels(),
     omp: () => discoverOmpModels(process.env.AIWG_OMP_BIN || 'omp', runModelDiscoveryCommand, options.omp),
+    'grok-build': async () => {
+      const { discoverGrokBuildModels } = await import('./grok-build-models.js');
+      return discoverGrokBuildModels(options.grokBuild);
+    },
   };
   const providerDiscovery: Record<string, ProviderModelDiscovery> = {};
   for (const provider of available) {

@@ -306,8 +306,8 @@ export function loadModelConfig(srcRoot) {
   // Fallback to hardcoded defaults if no config found
   return {
     claude: {
-      reasoning: { model: 'claude-opus-4-7' },
-      coding: { model: 'claude-sonnet-4-6' },
+      reasoning: { model: 'claude-opus-5' },
+      coding: { model: 'claude-sonnet-5' },
       efficiency: { model: 'claude-haiku-4-5' }
     },
     factory: {
@@ -316,8 +316,8 @@ export function loadModelConfig(srcRoot) {
       efficiency: { model: 'light' }
     },
     shorthand: {
-      'opus': 'claude-opus-4-7',
-      'sonnet': 'claude-sonnet-4-6',
+      'opus': 'claude-opus-5',
+      'sonnet': 'claude-sonnet-5',
       'haiku': 'claude-haiku-4-5',
       'inherit': 'inherit'
     },
@@ -2269,6 +2269,9 @@ export function discoverAddons(srcRoot) {
 
     // Skip addons marked devOnly — they are contributor tools, not end-user deployables
     if (manifest.devOnly === true) continue;
+    // explicitInstall addons deploy only when named (`aiwg use <addon>`), never
+    // as part of a framework or `all` bulk deploy (#2641).
+    if (manifest.explicitInstall === true) continue;
 
     addons.push({
       name: entry.name,

@@ -1,13 +1,13 @@
 /**
  * Practical end-to-end coverage for `aiwg use --provider grok-build`.
  * Project deploy, $GROK_HOME user mirroring, registry record, and receipts.
- * Full remove + live `grok inspect` binary verification remain separate from
- * this deterministic absent-binary integration path.
+ * Reviewed project removal is covered here; live `grok inspect` verification
+ * remains separate from this deterministic absent-binary integration path.
  *
  * @issue #2575
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,11 +53,60 @@ function runUse(args: string[], env: NodeJS.ProcessEnv, cwd: string) {
   };
 }
 
+function runRemoval(args: string[], env: NodeJS.ProcessEnv, cwd: string) {
+  // CI builds the packaged CLI before tests. Exercise that path when available;
+  // source-only local test runs can still validate the removal contract.
+  if (!existsSync(path.join(REPO_ROOT, 'dist/src/cli/router.js'))) return runUse(args, env, cwd);
+  const routerUrl = pathToFileURL(path.join(REPO_ROOT, 'dist/src/cli/router.js')).href;
+  const runner = `import { run } from ${JSON.stringify(routerUrl)}; await run(process.argv.slice(1), { cwd: process.env.AIWG_TEST_PROJECT_ROOT }); process.exit(typeof process.exitCode === 'number' ? process.exitCode : 0);`;
+  const result = spawnSync(process.execPath, ['--eval', runner, ...args], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    timeout: 180_000,
+    env: { ...process.env, ...env, NO_UPDATE_NOTIFIER: '1' },
+  });
+  return { status: result.status ?? 1, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+}
+
 describe('aiwg use grok-build e2e (#2575)', () => {
+  it('fails a user-scope mirror before writing through a linked skill root', () => {
+    const home = isolated('aiwg-grok-user-link-home-');
+    const project = isolated('aiwg-grok-user-link-project-');
+    const outside = isolated('aiwg-grok-user-link-outside-');
+    const grokHome = path.join(home, 'grok');
+    mkdirSync(grokHome);
+    writeFileSync(path.join(outside, 'operator.txt'), 'keep\n');
+    symlinkSync(outside, path.join(grokHome, 'skills'), 'dir');
+    mkdirSync(path.join(home, '.aiwg'), { recursive: true });
+    writeFileSync(path.join(home, '.aiwg', 'channel.json'), JSON.stringify({
+      channel: 'edge', edgePath: REPO_ROOT, devMode: true,
+    }));
+    const result = runUse(['use', 'sdlc', '--provider', 'grok-build', '--scope', 'user', '--no-project-local', '--no-utils', '--json'], {
+      HOME: home,
+      USERPROFILE: home,
+      GROK_HOME: grokHome,
+      AIWG_TEST_PROJECT_ROOT: project,
+      AIWG_USER_REGISTRY_PATH: path.join(home, '.aiwg', 'installed.json'),
+      PATH: path.dirname(process.execPath),
+    }, project);
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain('unsafe Grok Build user mirror root');
+    expect(readFileSync(path.join(outside, 'operator.txt'), 'utf8')).toBe('keep\n');
+    expect(readdirSync(outside)).toEqual(['operator.txt']);
+  }, 180_000);
+
   it('deploys project kernel skills, mirrors to $GROK_HOME, and records registry/receipts', () => {
     const home = isolated('aiwg-grok-use-home-');
     const project = isolated('aiwg-grok-use-project-');
     const grokHome = path.join(home, 'custom-grok-home');
+    const operatorProjectSkill = path.join(project, '.grok', 'skills', 'operator', 'SKILL.md');
+    const operatorUserSkill = path.join(grokHome, 'skills', 'operator', 'SKILL.md');
+    mkdirSync(path.dirname(operatorProjectSkill), { recursive: true });
+    mkdirSync(path.dirname(operatorUserSkill), { recursive: true });
+    writeFileSync(operatorProjectSkill, '# Operator-owned project skill\n');
+    writeFileSync(operatorUserSkill, '# Operator-owned user skill\n');
+    const operatorConfig = '[mcp_servers.operator]\ncommand = "operator-tool"\n# SECRET_CANARY_2580\n';
+    writeFileSync(path.join(project, '.grok', 'config.toml'), operatorConfig);
     mkdirSync(path.join(home, '.aiwg'), { recursive: true });
     writeFileSync(path.join(home, '.aiwg', 'channel.json'), JSON.stringify({
       channel: 'edge',
@@ -66,7 +115,7 @@ describe('aiwg use grok-build e2e (#2575)', () => {
     }));
     const userRegistry = path.join(home, '.aiwg', 'installed.json');
 
-    const use = runUse([
+    const useArgs = [
       'use', 'sdlc',
       '--provider', 'grok-build',
       '--target', project,
@@ -74,7 +123,8 @@ describe('aiwg use grok-build e2e (#2575)', () => {
       '--no-project-local',
       '--no-utils',
       '--json',
-    ], {
+    ];
+    const useEnv = {
       HOME: home,
       USERPROFILE: home,
       XDG_CACHE_HOME: path.join(home, '.cache'),
@@ -85,9 +135,18 @@ describe('aiwg use grok-build e2e (#2575)', () => {
       GROK_HOME: grokHome,
       // Keep the runner's Node executable available without normal Grok install roots.
       PATH: path.dirname(process.execPath),
-    }, project);
+    };
+    const use = runUse(useArgs, useEnv, project);
 
     expect(use.status, use.stderr || use.stdout).toBe(0);
+    expect(readFileSync(operatorProjectSkill, 'utf8')).toBe('# Operator-owned project skill\n');
+    expect(readFileSync(operatorUserSkill, 'utf8')).toBe('# Operator-owned user skill\n');
+    expect(readFileSync(path.join(project, '.grok', 'config.toml'), 'utf8')).toBe(operatorConfig);
+    expect(use.stdout + use.stderr).not.toContain('SECRET_CANARY_2580');
+    const repeated = runUse(useArgs, useEnv, project);
+    expect(repeated.status, repeated.stderr || repeated.stdout).toBe(0);
+    expect(readFileSync(operatorProjectSkill, 'utf8')).toBe('# Operator-owned project skill\n');
+    expect(readFileSync(operatorUserSkill, 'utf8')).toBe('# Operator-owned user skill\n');
     expect(use.json).toMatchObject({
       schema: 'aiwg.use.result.v1',
     });
@@ -101,8 +160,11 @@ describe('aiwg use grok-build e2e (#2575)', () => {
     expect(projectSkills.length).toBeLessThan(80);
     // No full-corpus dump into the standard mirror without --copy-all.
     expect(existsSync(path.join(project, '.grok', '.aiwg', 'skills'))).toBe(false);
-    // Agents/rules writers deferred — should not invent agent trees.
-    expect(existsSync(path.join(project, '.grok', 'agents'))).toBe(false);
+    // Qualified native agent writer deploys the model-worker wrappers (#2577).
+    const projectAgents = path.join(project, '.grok', 'agents');
+    expect(existsSync(projectAgents)).toBe(true);
+    expect(readdirSync(projectAgents).filter(name => name.endsWith('.md')).length).toBeGreaterThan(0);
+    expect(existsSync(path.join(project, '.grok', 'rules'))).toBe(false);
 
     // User-scope mirror via $GROK_HOME/skills
     expect(existsSync(path.join(grokHome, 'skills'))).toBe(true);
@@ -137,6 +199,7 @@ describe('aiwg use grok-build e2e (#2575)', () => {
       scope: 'user',
       disposition: 'local-source',
     });
+    expect(readFileSync(evidencePath, 'utf8')).not.toContain('SECRET_CANARY_2580');
 
     expect(use.json).toMatchObject({
       providers: [expect.objectContaining({
@@ -146,5 +209,38 @@ describe('aiwg use grok-build e2e (#2575)', () => {
         ]),
       })],
     });
+
+    const managedSkill = path.join(project, '.grok', 'skills', 'aiwg-help', 'SKILL.md');
+    const originalSkill = readFileSync(managedSkill, 'utf8');
+    writeFileSync(managedSkill, `${originalSkill}\nOperator modification.\n`);
+    const modifiedPreview = runRemoval(['remove', 'grok-build', '--provider', 'grok-build', '--dry-run'], useEnv, project);
+    expect(modifiedPreview.status).toBe(1);
+    expect(modifiedPreview.stdout + modifiedPreview.stderr).toContain('Preserved modified or unverifiable: .grok/skills/aiwg-help');
+    expect(readFileSync(managedSkill, 'utf8')).toContain('Operator modification.');
+    writeFileSync(managedSkill, originalSkill);
+
+    const addedFile = path.join(path.dirname(managedSkill), 'operator-note.txt');
+    writeFileSync(addedFile, 'Preserve this operator file.\n');
+    const addedFilePreview = runRemoval(['remove', 'grok-build', '--provider', 'grok-build', '--dry-run'], useEnv, project);
+    expect(addedFilePreview.status).toBe(1);
+    expect(existsSync(addedFile)).toBe(true);
+    rmSync(addedFile);
+
+    const preview = runRemoval(['remove', 'grok-build', '--provider', 'grok-build', '--dry-run'], useEnv, project);
+    expect(preview.status, preview.stderr).toBe(0);
+    expect(preview.stdout).toContain('Would remove');
+    expect(preview.stdout).not.toContain(operatorProjectSkill);
+    expect(preview.stdout).not.toContain('SECRET_CANARY_2580');
+    expect(existsSync(managedSkill)).toBe(true);
+
+    const removal = runRemoval(['remove', 'grok-build', '--provider', 'grok-build'], useEnv, project);
+    expect(removal.status, removal.stderr).toBe(0);
+    expect(existsSync(managedSkill)).toBe(false);
+    expect(readdirSync(projectAgents).filter(name => name.endsWith('.md'))).toHaveLength(0);
+    expect(readFileSync(operatorProjectSkill, 'utf8')).toBe('# Operator-owned project skill\n');
+    expect(readFileSync(operatorUserSkill, 'utf8')).toBe('# Operator-owned user skill\n');
+    expect(readFileSync(path.join(project, '.grok', 'config.toml'), 'utf8')).toBe(operatorConfig);
+    expect(existsSync(path.join(project, 'AGENTS.md'))).toBe(true);
+    expect(JSON.parse(readFileSync(path.join(project, '.aiwg', 'aiwg.config'), 'utf8')).installed?.sdlc).toBeUndefined();
   }, 180_000);
 });

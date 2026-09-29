@@ -80,6 +80,7 @@ contains access or refresh tokens.
 - [Documentation Commands](#documentation-commands)
 - [SDLC Orchestration Commands](#sdlc-orchestration-commands)
 - [Index Commands](#index-commands)
+- [Effect Ledger Commands](#effect-ledger-commands)
 - [Configuration Commands](#configuration-commands)
 - [Agentic Tools (RLM)](#agentic-tools-rlm)
 - [Addon Commands](#addon-commands)
@@ -260,7 +261,7 @@ aiwg doctor [--provider <name>] [--all-providers] [--project-local] [--quiet]
 
 **Flags:**
 
-- `--provider <name>` — Inspect a specific provider's deployment paths (claude, codex, copilot, cursor, factory, grokbot, hermes, opencode, openclaw, openhuman, omp, pi, warp, or devin). Defaults to auto-detect across deployed providers.
+- `--provider <name>` — Inspect a specific provider's deployment paths (claude, codex, copilot, cursor, factory, grokbot, grok-build, hermes, muse, opencode, openclaw, openhuman, omp, pi, warp, or devin). Defaults to auto-detect across deployed providers.
 - `--all-providers` — Enumerate every supported provider, including ones with nothing deployed.
 - `--project-local` — Show only the project-local artifacts section. Exit code reflects only project-local findings.
 - `--quiet` — Suppress informational subsections (counts, shadows). Show only failures.
@@ -560,7 +561,7 @@ aiwg use <framework|addon>
 
 **Options:**
 
-- `--provider <name>` - Target platform (claude, copilot, factory, cursor, devin, warp, codex, opencode, grokbot, hermes, openclaw, openhuman, pi, local)
+- `--provider <name>` - Target platform (claude, copilot, factory, cursor, devin, warp, codex, opencode, grokbot, grok-build, hermes, muse, openclaw, openhuman, pi, local)
 - `--scope user` / `--user` - Additively deploy to the project and mirror the
   artifacts into the provider's user-level discovery paths.
 - `--global` - Install framework and kernel assets into provider user-level
@@ -599,6 +600,11 @@ being falsely described as pinned.
 - `--ci-hooks-enabled` - Also deploy CI workflow files to `.github/workflows/` and/or `.gitea/workflows/` (opt-in; detects forge from `.git/config`). Review deployed files before committing.
 - `--harness-agents <list>` - OpenHuman only: emit selected native `spawn_subagent` TOML agents with a comma-separated list (for example `test-engineer,security-auditor`). Without this flag, OpenHuman deploys kernel skills/rules only.
 - `--no-harness-agents` - OpenHuman only: explicitly skip native TOML harness agents and deploy only kernel skills/rules.
+- `--no-hooks` - Muse provider: skip the AIWG-managed project hooks (`.muse/hooks.json`; installed by default).
+  Other providers ignore it.
+- `--mcp` - Muse provider only: opt in to the AIWG MCP settings profile, merging the `aiwg` stdio server
+  (`aiwg mcp serve`, `mode: optional`) into the `mcp_servers` block of the operator's Muse user settings
+  (`$XDG_CONFIG_HOME/muse/settings.json`). A default `aiwg use --provider muse` never touches MCP or user settings.
 - `--skip-commands-migration` - Skip deleting the legacy commands directory (warns about duplicate entries in the command palette)
 - `--profile <name>` - Select a topology profile for addons that declare multiple page templates (e.g., `llm-wiki` ships `book-companion | personal | research-deep-dive | business-team | generic`). Without the flag, an interactive prompt appears on TTY. The selection is written to `.aiwg/<namespace>/config.json` so subsequent skill invocations pick the right template.
 
@@ -627,6 +633,11 @@ deployed alone: running it after `aiwg use sdlc` does not remove the SDLC agent
 surface. In a project whose only recorded deployment is the bulk install itself,
 it still clears flat artifacts left by the pre-kernel bulk default.
 
+Bulk deploys skip addons whose manifest sets `"devOnly": true` (`aiwg-dev`) or
+`"explicitInstall": true` (`decision-engine`). These are deployed only when
+named, for example `aiwg use decision-engine`. `autoInstall: false` is not an
+exclusion: most addons declare it and are still part of `aiwg use all`.
+
 **Capabilities:** cli, framework, deployment, addon
 **Platforms:** All
 **Tools:** Read, Write, Bash, Glob
@@ -646,7 +657,7 @@ aiwg use sdlc --provider copilot
 # Deploy marketing framework
 aiwg use marketing
 
-# Deploy all frameworks and addons (auto-discovers all addons in agentic/code/addons/ except those marked devOnly)
+# Deploy all frameworks and addons (auto-discovers all addons in agentic/code/addons/ except those marked devOnly or explicitInstall)
 aiwg use all
 
 # Deploy RLM addon (recursive context decomposition)
@@ -669,7 +680,7 @@ aiwg use sdlc --model sonnet
 aiwg use sdlc --reasoning opus --coding sonnet --efficiency haiku
 
 # Use a specific model ID on Factory
-aiwg use sdlc --provider factory --coding-model gpt-5.3-codex
+aiwg use sdlc --provider factory --coding-model gpt-5.6-terra
 
 # Blanket with per-tier override
 aiwg use sdlc --model sonnet --reasoning opus
@@ -747,6 +758,7 @@ reload are shown with `--verbose`.
 | Google Antigravity CLI (experimental) | `antigravity` (`agy`) | `.agents/agents/`, `.agents/skills/`, project `AGENTS.md`; global skills unsupported | — |
 | Oh My Pi (experimental) | `omp` (`oh-my-pi`) | `.omp/agents/`, `.omp/prompts/`, `.omp/rules/`, `.agents/skills/`, `.omp/AGENTS.md` | Explicit extension bridge |
 | Pi Coding Agent (experimental) | `pi` | `.agents/skills/`, `.pi/prompts/`, `.pi/.aiwg/skills/`, `.pi/extensions/aiwg-bridge.ts`, project `AGENTS.md` | Trust-gated extension bridge (tool policy only) |
+| Muse Code (experimental) | `muse` | project `.agents/skills/`, `AGENTS.md` (discover-first; workspace trust required); `$XDG_CONFIG_HOME/muse/skills/` with `--scope user` | — |
 | Claude Code    | `claude`        | `.claude/agents/`, `.claude/commands/`, `.claude/skills/`, `.claude/rules/`                                           | —         |
 | GitHub Copilot | `copilot`       | `.github/agents/`, `.github/copilot-rules/`, `.github/skills/`                                                        | —         |
 | Factory AI     | `factory`       | `.factory/droids/`, `.factory/commands/`, `.factory/skills/`, `.factory/rules/`                                       | —         |
@@ -755,7 +767,9 @@ reload are shown with `--verbose`.
 | Warp Terminal  | `warp`          | `.warp/agents/`, `.warp/commands/`, `.warp/skills/`, `.warp/rules/`, `WARP.md` (aggregated)                           | —         |
 | OpenAI/Codex   | `codex`         | `.codex/agents/`, `~/.codex/prompts/`, `.agents/skills/`, `.codex/rules/`                                             | —         |
 | OpenCode       | `opencode`      | `.opencode/agent/`, `.opencode/commands/`, `.opencode/skill/`, `.opencode/rule/`                                      | —         |
-| Hermes         | `grokbot`, `hermes`        | `~/.hermes/skills/`, `AGENTS.md` (lean)                                                                               | —         |
+| Grok Bot       | `grokbot`      | `AGENTS.md` bridge; optional configured user skills root                                                       | —         |
+| Grok Build (experimental) | `grok-build` | `WORKSPACE.md` via `AGENTS.md`, `.grok/agents/`, `.grok/skills/`, `$GROK_HOME/skills/`; [qualification](../providers/grok-build-qualification.md) | Trust-gated MCP/hooks |
+| Hermes         | `hermes`       | `~/.hermes/skills/`, `AGENTS.md` (lean)                                                                        | —         |
 | OpenClaw       | `openclaw`      | `~/.openclaw/agents/`, `~/.openclaw/commands/`, `~/.openclaw/skills/`, `~/.openclaw/rules/`, `~/.openclaw/behaviors/` | ✓         |
 | OpenHuman      | `openhuman`     | `~/.openhuman/skills/`, `~/.openhuman/.aiwg/rules/`, optional `~/.openhuman/agents/aiwg_*.toml`, project `AGENTS.md`  | —         |
 | Local/Ollama   | `local`         | Same as `claude` (local model, Claude Code paths)                                                                     | —         |
@@ -773,6 +787,13 @@ On first run after the commands-to-skills migration, `aiwg use` detects an exist
 - **Warp**: Agents and commands also aggregated into `WARP.md` for single-file context loading
 - **OpenHuman**: Kernel skills and rule bodies are user-global; the default deploy emits no markdown persona copies. Project context is rendered into `AGENTS.md`, and curated native TOML agents are opt-in with `--harness-agents`.
 - **Hermes**: Not a spawnable CLI — access via `ollama run hermes3` or MCP sidecar; deploy sets up skills and a lean AGENTS.md
+- **Muse Code**: Experimental; user-scope skills resolve from
+  `$XDG_CONFIG_HOME/muse/skills/` (default `~/.config/muse/skills`) at deploy
+  time, failing closed on bad XDG metadata. Project skills deploy to
+  `.agents/skills/`. Context loads discover-first from `AGENTS.md` only after
+  the workspace is trusted — trust the workspace when prompted, then start a
+  new Muse session (no Cursor-style window reload applies). See the
+  [Muse Code operational reference](https://github.com/jmagly/aiwg/blob/main/docs/agents/providers/muse.md).
 - **OpenClaw**: Only provider with behaviors support (`~/.openclaw/behaviors/`); all artifacts deploy to home directory
 - **Local/Ollama**: Uses Claude Code path layout; specify `--coding-model ollama/<model>` to route coding tasks to the local model
 
@@ -1677,7 +1698,7 @@ aiwg mcp serve --toolsets=all                      # everything (66 tools)
 - Starts stdio-based MCP server
 - Exposes 15 core tools by default (discover, _-list/_-show pairs, command-run, and artifact-read/write)
 - Additional 51 tools available via opt-in toolsets
-- Supports Claude Desktop, Cursor, Factory, Hermes (as MCP sidecar)
+- Supports Claude Code (CLI and Desktop Code tab), Cursor, Factory, Hermes (as MCP sidecar)
 
 **Default surface (15 tools; schema cost should be re-measured after tool changes)**:
 
@@ -1713,14 +1734,14 @@ aiwg mcp install <client>
 **Actions:**
 
 - Generates client-specific config
-- Adds to `~/.config/claude/config.json` (Claude Desktop)
+- Adds to `.claude/settings.local.json` (Claude Code — CLI and Desktop Code tab; see [MCP README](../mcp/README.md#claude-code))
 - Adds to `.cursor/config.json` (Cursor)
 - Shows manual steps if auto-install fails
 
 **Example:**
 
 ```bash
-# Install for Claude Desktop
+# Install for Claude Code (CLI and Claude Desktop's Code tab)
 aiwg mcp install claude
 
 # Preview config
@@ -1983,7 +2004,7 @@ aiwg catalog info <model-id>
 
 **Arguments:**
 
-- `<model-id>` - Model identifier (e.g., `claude-opus-4-6`)
+- `<model-id>` - Model identifier (e.g., `claude-opus-5`)
 
 #### catalog search
 
@@ -4204,7 +4225,7 @@ and the
 
 ### Best-practice usage guidance
 
-Discovery is the operator surface that makes the **kernel + on-demand model** work across all 17 named provider integrations (Google Antigravity CLI, Claude Code, OpenAI Codex, GitHub Copilot, Cursor, DeepSeek Harness, Factory AI, Grok Bot, Grok Build, Hermes, OpenCode, OpenClaw, OpenHuman, Pi Coding Agent from pi.dev, Oh My Pi, Warp Terminal, and Devin Desktop). Each provider deploys a small kernel set on its supported skill surface; everything else is reached via `aiwg discover`.
+Discovery is the operator surface that makes the **kernel + on-demand model** work across all 18 named provider integrations (Google Antigravity CLI, Claude Code, OpenAI Codex, GitHub Copilot, Cursor, DeepSeek Harness, Factory AI, Grok Bot, Grok Build, Muse Code, Hermes, OpenCode, OpenClaw, OpenHuman, Pi Coding Agent from pi.dev, Oh My Pi, Warp Terminal, and Devin Desktop). Each provider deploys a small kernel set on its supported skill surface; everything else is reached via `aiwg discover`.
 
 **Lead with discovery, not with memory.** When a user describes a capability, query first:
 
@@ -4839,6 +4860,125 @@ aiwg index migrate-legacy --all --json
 
 If `metadata.json` is missing, unreadable, or has an incompatible schema
 version, the command reports `needs-rebuild` instead of silently falling back.
+
+---
+
+## Effect Ledger Commands
+
+The effect ledger is a signed proof and deduplication index for side effects:
+tracker comments, PR merges, issue closes, git commits and tags, files and
+decision receipts. It proves what AIWG recorded and what a verifier observed.
+It never authorizes or replays an effect. The
+[effect ledger contract](../contracts/effect-ledger.v1.md) pins the record
+format, the verifier rules and the exit codes.
+
+### effect
+
+```bash
+aiwg effect id         <identity>
+aiwg effect intent     <identity> <payload> [--link key=value]...
+aiwg effect record     <identity> <payload> [--unverified] [expectations] [--link key=value]...
+aiwg effect lookup     <effect-id> | <identity>
+aiwg effect reconcile  <effect-id> | <identity> [expectations] [--link key=value]...
+aiwg effect probe      <identity> [--effect-id <id>] [--since <iso>] [expectations]
+aiwg effect verify     [--trusted-keyid <keyid>]... [--with-decisions <audit.jsonl>]
+aiwg effect checkpoint
+aiwg effect kinds
+aiwg effect keys       list | init | rotate [--reason scheduled|custody-change|compromise]
+aiwg effect recover-lock [--lock <name> --authorize]
+```
+
+| Subcommand | What it does |
+|---|---|
+| `id` | Prints the effect ID for an identity without writing anything. With `--format text` it prints the bare ID |
+| `intent` | Appends a signed `intent` record before the effect |
+| `record` | Intent, verify and completed in one command: appends the intent, runs the kind's verifier and appends `completed` when the target shows the effect. An `absent` or `unknown` result is appended as `reconciled`. `--unverified` records the intent only |
+| `lookup` | Reports everything recorded for an effect ID, merged across writers |
+| `reconcile` | Asks the kind's verifier again and appends a `reconciled` record. A `present` result also records `completed` |
+| `probe` | Read-only: runs the kind's verifier once and writes no records, with the same exit codes (0 present, 3 absent, 4 unknown). Use it for ad-hoc checks such as "did this PR merge". `--effect-id` probes for a specific marker ID; `--since` stands in for the intent time |
+| `verify` | Checks the keyring, every signature and key window, the hash chain, the index and the latest checkpoint. `--with-decisions <audit.jsonl>` also verifies the #1567 operator-decision chain and that every linked `operatorDecisionEventId` (and `operatorDecisionRecordHash`) exists in it; a broken chain or a missing event exits 6 |
+| `checkpoint` | Signs a checkpoint over every writer's segment head and publishes it to the independent sink (a git ref by default) |
+| `kinds` | Lists every kind the verifier registry holds, with its version and whether it can report `absent` |
+| `keys` | `list` shows key IDs and public keys only. `init` provisions the ledger key in the host secret service and writes the genesis keyring. `rotate` stages a successor key, signs the rotation with both keys and promotes the successor |
+| `recover-lock` | Without `--lock`, inspects the ledger locks. With `--lock <name> --authorize`, removes a stale lock left by a dead writer and records the recovery in the ledger |
+
+**Identity.** `--kind <kind> --target <scheme:ref>` plus context members from
+`--context '<json>'`, repeated `--ctx key=value`, or the tracker shortcuts
+`--issue <n> --action <name> --cycle <n>`. A D13 review continuation uses
+`--review <id> --continuation <id> --proposal-version <n>`, which selects the
+`d13.review/v1` derivation and the `review` subsystem.
+
+**Payload.** `--payload-file <path>` digests the exact bytes the effect sends
+(`-` reads stdin), or `--payload-digest sha256:<hex>` gives the digest. Raw
+payloads are never recorded or printed.
+
+**Expectations.** `--expect-digest`, `--expect-object`, `--signed`,
+`--timeout-ms` and `--verifier-version` are passed to the verifier.
+
+**Links.** `--link operatorDecisionEventId=sha256:<hex>` and
+`--link operatorDecisionRecordHash=sha256:<hex>` bind a record to the #1567
+operator decision that authorized it (D13 event IDs come from
+`reviewOperatorEventId`); `traceId`, `spanId` and `toolCallId` are correlation
+links. Links are references, never evidence.
+
+**Tracker kinds.** `tracker.comment`, `tracker.issue.closed` and
+`tracker.pr.merged` take a target `gitea:owner/repo#N` or
+`github:owner/repo#N`. The tracker comes from the `remotes` block of
+`aiwg.config` and the repository's remote URLs; a target on any other forge or
+repository is `unknown` / `tracker-blocked` and sends no request. Reads use the
+tracker HTTP API with `AIWG_GITEA_TOKEN`/`GITEA_TOKEN` or
+`AIWG_GITHUB_TOKEN`/`GITHUB_TOKEN`, then `gh` for GitHub. A comment matches
+exactly when it carries `<!-- aiwg-effect: <effect-id> -->` and was written by
+the pinned `tracker_actor`.
+
+**Common options.** `--subsystem review|job|delivery|custom` (default
+`delivery`), `--project-dir <dir>`, and `--format json|text`. Output is JSON by
+default, and every JSON document has a `schema` member (for example
+`aiwg.effect.record.v1` or `aiwg.effect.error.v1`).
+
+**Host configuration.** Scope and key custody come from the `effects` block of
+`aiwg.config`, never from command arguments:
+
+```json
+{
+  "effects": {
+    "tenant": "local",
+    "project": "owner/repo",
+    "writer": "cli",
+    "keyProvider": { "type": "credential-store", "service": "effects.aiwg.io" }
+  }
+}
+```
+
+The ledger key lives in the host secret service under the account
+`ledger/<tenant>/<project>/<subsystem>` unless `keyProvider.account` overrides
+it. `"type": "file"` with a `path` selects an explicit mode-0600 file fallback
+for hosts without a secret service. The private key is never printed.
+
+**Stale lock recovery.** A crashed writer can leave a lock under
+`effects/<subsystem>/locks/`. Later writers wait and then fail rather than take
+it. `aiwg effect recover-lock --lock <name> --authorize` removes such a lock
+only when its owner process is dead. It refuses a live owner and a PID that a
+newer process has reused (exit 5), and an owner it cannot verify (exit 4). It
+records the recovery as a signed `x.aiwg.ledger-lock-recovery` effect. Run it
+only with the operator's approval.
+
+**Exit codes.**
+
+| Code | Meaning |
+|---|---|
+| `0` | Present or recorded, including an idempotent replay (`"idempotent":true`) or an intact ledger |
+| `1` | Internal error, including a missing ledger key or a lock timeout |
+| `2` | Usage error: invalid arguments, unknown subcommand, malformed effect ID or unknown kind |
+| `3` | Absent: the verifier reported `absent`, or `lookup` found no record (or a `failed` outcome) |
+| `4` | Unknown: the verifier reported `unknown`, or `lookup` found an intent with no outcome |
+| `5` | Conflict: the same effect ID with a different payload digest |
+| `6` | Integrity failure: a signature, key window, chain link, record hash, checkpoint or scope check failed |
+| `7` | Artifact root unavailable: nothing was written and there is no local fallback |
+
+**Capabilities:** cli, effects, idempotency, verification, signing, provenance
+**Platforms:** All
+**Tools:** Read, Bash
 
 ---
 
@@ -5775,6 +5915,9 @@ aiwg use sdlc --provider hermes
 
 # OpenClaw (includes behaviors in ~/.openclaw/behaviors/)
 aiwg use sdlc --provider openclaw
+
+# Muse Code (experimental — discover-first AGENTS.md; user skills via $XDG_CONFIG_HOME/muse/skills)
+aiwg use sdlc --provider muse
 
 # Local / Ollama  (Claude Code paths, route coding tasks to local model)
 aiwg use sdlc --provider local --coding-model ollama/qwen3.5:9b

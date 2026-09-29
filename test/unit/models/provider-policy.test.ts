@@ -13,12 +13,12 @@ describe('provider model registry', () => {
   it('covers every audited provider with sourced, dated capability entries', () => {
     const registry = loadProviderModelCapabilities();
     expect(Object.keys(registry.providers).sort()).toEqual([
-      'antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'grokbot', 'hermes',
-      'omp', 'openclaw', 'opencode', 'openhuman', 'pi', 'warp', 'windsurf',
+      'antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'grok-build', 'grokbot', 'hermes',
+      'muse', 'omp', 'openclaw', 'opencode', 'openhuman', 'pi', 'warp', 'windsurf',
     ]);
     for (const capability of Object.values(registry.providers)) {
       expect(capability.sourceUrl).toMatch(/^https:\/\//);
-      expect(capability.verifiedAt).toMatch(/^2026-(?:07-20|09-04|09-05|09-15)$/);
+      expect(capability.verifiedAt).toMatch(/^2026-(?:07-20|09-04|09-05|09-15|09-21|09-24|09-25)$/);
       expect(capability.identifierSyntax).not.toBe('');
       expect(capability.verification).not.toBe('');
     }
@@ -27,7 +27,7 @@ describe('provider model registry', () => {
     const catalog = loadProviderModelCatalog();
     expect(catalog.version).toBe('1.0.0');
     expect(catalog.staleAfterDays).toBeGreaterThan(0);
-    expect(catalog.providers.codex.roles.coding.id).toBe('gpt-5.5');
+    expect(catalog.providers.codex.roles.coding.id).toBe('gpt-5.6-terra');
   });
 });
 describe('project/user model config validation', () => {
@@ -64,7 +64,7 @@ describe('provider-aware compilation', () => {
     const result = compileModelPolicy({ provider: 'codex', artifact: 'agent', policy });
     expect(result.outcome).toBe('native');
     expect(result.fields).toEqual({
-      model: 'gpt-5.4-mini',
+      model: 'gpt-5.6-luna',
       model_reasoning_effort: 'low',
     });
   });
@@ -142,6 +142,7 @@ describe('provider-aware compilation', () => {
     ['cursor', 'native', true],
     ['factory', 'native', true],
     ['hermes', 'global-only', false],
+    ['muse', 'unsupported', false],
     ['opencode', 'native', true],
     ['openclaw', 'native', true],
     ['openhuman', 'compiled', true],

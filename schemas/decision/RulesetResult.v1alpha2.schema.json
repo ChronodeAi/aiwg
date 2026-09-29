@@ -1,6 +1,70 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aiwg.io/schemas/decision/RulesetResult.v1alpha2.schema.json",
+  "$defs": {
+    "acceptanceEvidence": {
+      "type": "object",
+      "properties": {
+        "policyVersion": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "uncertaintyProfile": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "disposition": { "enum": ["act", "review", "reject", "fallback"] },
+        "matchedRule": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "fallbackTarget": { "type": "string", "minLength": 1 },
+        "reason": { "enum": ["matched", "default", "missing-evidence", "invalid-evidence", "tie", "calibration-required"] },
+        "values": {
+          "type": "object",
+          "propertyNames": { "enum": ["yes-probability", "selected-probability", "native-confidence", "top-two-margin", "entropy", "concentration", "expected-score", "dispersion", "calibrated-risk"] },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "value": { "type": "number" },
+              "normalizedBps": { "type": "number", "minimum": 0, "maximum": 10000 },
+              "provenance": { "enum": ["provider-value", "provider-confidence", "provider-distribution", "derived", "calibrated"] },
+              "calibrationRef": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] }
+            },
+            "required": ["value", "normalizedBps", "provenance", "calibrationRef"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["policyVersion", "uncertaintyProfile", "disposition", "matchedRule", "reason", "values"],
+      "additionalProperties": false
+    },
+    "resultCacheCallerReceipt": {
+      "description": "D15 caller-level result-cache receipt. Historical evaluation attempts in a hit belong to the source invocation.",
+      "type": "object",
+      "properties": {
+        "disposition": { "enum": ["cache-hit", "cache-miss-fill", "bypass"] },
+        "callerInvocationId": { "type": "string", "minLength": 1 },
+        "sourceInvocationId": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "sourceReceiptId": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "originalEvaluatedAtEpochMs": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "cacheEntryId": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "createdAtEpochMs": { "type": "integer", "minimum": 0 },
+        "providerAttempted": { "type": "boolean" }
+      },
+      "required": ["disposition", "callerInvocationId", "sourceInvocationId", "sourceReceiptId", "originalEvaluatedAtEpochMs", "cacheEntryId", "createdAtEpochMs", "providerAttempted"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "disposition": { "const": "cache-hit" } } },
+          "then": {
+            "properties": {
+              "providerAttempted": { "const": false },
+              "sourceInvocationId": { "type": "string" },
+              "sourceReceiptId": { "type": "string" },
+              "originalEvaluatedAtEpochMs": { "type": "integer" },
+              "cacheEntryId": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "disposition": { "const": "bypass" } } },
+          "then": { "properties": { "providerAttempted": { "const": true }, "cacheEntryId": { "type": "null" } } }
+        }
+      ]
+    }
+  },
   "type": "object",
   "properties": {
     "apiVersion": {
@@ -125,9 +189,12 @@
             "persistence-error",
             "replay-mismatch",
             "execution-uncertain",
+            "batch-record-unavailable",
             "no-match",
             "conflicting-outcomes",
-            "evaluation-failed"
+            "evaluation-failed",
+            "context-plan-stale",
+            "context-unqualified"
           ]
         },
         "outcome": {},
@@ -138,6 +205,45 @@
             "minLength": 1
           },
           "minItems": 0
+        },
+        "context": {
+          "$ref": "DecisionContextEvidence.v1.schema.json"
+        },
+        "cache": {
+          "$ref": "#/$defs/resultCacheCallerReceipt"
+        },
+        "projection": {
+          "description": "Present only when the host explicitly dispatched unprojected input (D10 opt-out).",
+          "type": "object",
+          "properties": {
+            "mode": { "const": "unprojected-local" },
+            "authority": { "const": "host" }
+          },
+          "required": ["mode", "authority"],
+          "additionalProperties": false
+        },
+        "contextFailure": {
+          "type": "object",
+          "description": "Body-free D06 context preflight rejection diagnostic.",
+          "properties": {
+            "schemaVersion": { "const": "decision-context-failure/v1" },
+            "reason": {
+              "enum": [
+                "invalid-input",
+                "invalid-profile",
+                "estimator-profile-mismatch",
+                "oversized-state",
+                "oversized-question",
+                "dependency-error",
+                "stale-plan",
+                "rollout-unqualified"
+              ]
+            },
+            "plannedDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "currentDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          },
+          "required": ["schemaVersion", "reason"],
+          "additionalProperties": false
         },
         "evaluations": {
           "type": "object",
@@ -303,6 +409,7 @@
                       "persistence-error",
                       "replay-mismatch",
                       "execution-uncertain",
+                      "batch-record-unavailable",
                       "no-match",
                       "conflicting-outcomes",
                       "evaluation-failed"
@@ -369,6 +476,15 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "calibratedRisk": {
+                            "type": "object",
+                            "properties": {
+                              "value": { "type": "number", "minimum": 0, "maximum": 1 },
+                              "calibrationRef": { "type": "string", "minLength": 1 }
+                            },
+                            "required": ["value", "calibrationRef"],
+                            "additionalProperties": false
                           }
                         },
                         "required": [
@@ -385,6 +501,9 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "acceptance": {
+                    "$ref": "#/$defs/acceptanceEvidence"
                   },
                   "attempts": {
                     "type": "array",
@@ -484,6 +603,7 @@
                             "persistence-error",
                             "replay-mismatch",
                             "execution-uncertain",
+                            "batch-record-unavailable",
                             "no-match",
                             "conflicting-outcomes",
                             "evaluation-failed"
@@ -577,6 +697,23 @@
                         },
                         "remoteExecution": {
                           "const": "unknown"
+                        },
+                        "admission": {
+                          "$ref": "DecisionAdmissionEvidence.v1.schema.json"
+                        },
+                        "providerPrefix": {
+                          "$ref": "DecisionProviderPrefixEvidence.v1.schema.json"
+                        },
+                        "batch": {
+                          "type": "object",
+                          "properties": {
+                            "mode": { "enum": ["native", "single"] },
+                            "groupId": { "type": "string", "pattern": "^(batch|single)_[0-9a-f]{24}$" },
+                            "questionId": { "type": "string", "pattern": "^q_[0-9a-f]{24}$" },
+                            "degradationReason": { "enum": ["disabled", "unsupported", "ineligible"] }
+                          },
+                          "required": ["mode", "groupId", "questionId"],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -595,6 +732,40 @@
                       "additionalProperties": false
                     },
                     "minItems": 0
+                  },
+                  "calibrationCompatibility": {
+                    "type": "object",
+                    "required": ["schemaVersion", "pinId", "runId", "requestedAlias", "actualModel", "aliasRevision", "artifactId", "artifactDigest", "state", "action", "reasons", "decidedAt"],
+                    "properties": {
+                      "schemaVersion": { "const": "decision-calibration-compatibility/v1" },
+                      "pinId": { "type": "string", "minLength": 1 },
+                      "runId": { "type": "string", "minLength": 1 },
+                      "requestedAlias": { "type": "string", "minLength": 1 },
+                      "actualModel": { "type": "string", "minLength": 1 },
+                      "aliasRevision": { "type": ["integer", "null"], "minimum": 1 },
+                      "artifactId": { "type": ["string", "null"] },
+                      "artifactDigest": { "anyOf": [{ "type": "null" }, { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }] },
+                      "state": { "enum": ["exact", "approved-compatible", "shadow-required", "incompatible", "unknown"] },
+                      "action": { "enum": ["allow", "fail", "defer", "shadow", "require-approval"] },
+                      "reasons": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                      "decidedAt": { "type": "string", "format": "date-time" }
+                    },
+                    "additionalProperties": false
+                  },
+                  "batchResult": {
+                    "type": "object",
+                    "properties": {
+                      "schemaVersion": { "const": "decision-batch-result-ref/v1" },
+                      "batchId": { "type": "string", "minLength": 1 },
+                      "receiptRevision": { "type": "integer", "minimum": 1 },
+                      "questionId": { "type": "string", "minLength": 1 },
+                      "answerId": { "type": "string", "minLength": 1 }
+                    },
+                    "required": ["schemaVersion", "batchId", "receiptRevision", "questionId", "answerId"],
+                    "additionalProperties": false
+                  },
+                  "context": {
+                    "$ref": "DecisionContextEvidence.v1.schema.json"
                   }
                 },
                 "required": [
@@ -678,16 +849,15 @@
       "additionalProperties": false,
       "allOf": [
         {
+          "$comment": "An incomplete-context downgrade (D06/D10) is review with reason insufficient-information and no outcome.",
           "if": {
-            "properties": {
-              "status": {
-                "enum": [
-                  "completed",
-                  "defaulted",
-                  "review"
-                ]
+            "anyOf": [
+              { "properties": { "status": { "enum": ["completed", "defaulted"] } } },
+              {
+                "properties": { "status": { "const": "review" } },
+                "not": { "properties": { "reason": { "const": "insufficient-information" } }, "required": ["reason"] }
               }
-            }
+            ]
           },
           "then": {
             "properties": {

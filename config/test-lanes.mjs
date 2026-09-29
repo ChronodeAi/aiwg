@@ -7,6 +7,7 @@ export const packagingFiles = [
   'test/integration/global-install-native-policy.test.ts',
   'test/integration/tarball-allowlist-packaging.test.ts',
   'test/integration/dataset-contract-packaging.test.ts',
+  'test/integration/decision-engine-clean-install.test.ts',
 ];
 export const artifactIndexFiles = [
   'test/integration/artifacts/dependency-graph.test.ts',
@@ -16,6 +17,7 @@ export const artifactIndexFiles = [
 export const discoveryFiles = ['test/integration/artifacts/discover-fortemi-corpus.test.ts'];
 export const nodeFiles = [
   'tools/ralph-external/*.test.mjs', 'test/unit/ralph/*.test.mjs',
+  'test/unit/providers/grok-build-qualification.test.mjs',
   'test/contract/agentic-publication-source.test.mjs',
   'test/contract/setup-manifest-site-dispatch.test.mjs',
   'test/contract/site-manifest-release-dispatch.test.mjs',

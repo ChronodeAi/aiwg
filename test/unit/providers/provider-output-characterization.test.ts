@@ -130,6 +130,21 @@ const USE_PATH_GOLDENS = {
     },
     kernelSkills: resolveHermesHomePath('skills'),
   },
+  // #236: Muse Code — mixed deploy target; skill writer lands at the
+  // Muse-native project root (.agents/skills); no agents/commands/rules
+  // file surface (indexed via aiwg discover / aiwg show). The user root is
+  // XDG-resolved at deploy time, never a static golden path.
+  muse: {
+    deployTarget: 'mixed',
+    artifacts: {
+      agents: null,
+      commands: null,
+      skills: '.agents/skills',
+      rules: null,
+      behaviors: null,
+    },
+    kernelSkills: '.agents/skills',
+  },
   opencode: {
     deployTarget: 'project',
     artifacts: {
@@ -206,6 +221,8 @@ const REGENERATE_FILE_GOLDENS: Record<string, string[]> = {
   factory: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   grokbot: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   hermes: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', '.hermes.md'],
+  // #236: muse emits the discover-first AGENTS.md bridge (no CLAUDE.md shim).
+  muse: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   opencode: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
   warp: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md', 'WARP.md'],
   windsurf: ['AIWG.md', '.aiwg/AIWG.md', 'AGENTS.md'],
@@ -266,6 +283,41 @@ describe('provider output characterization for registry migration', () => {
     }
   });
 
+  it('captures the muse discover-first bridge wording and documented XDG user root', async () => {
+    // #236: muse's AGENTS.md is the discover-first bridge (ADR): trust-gated
+    // load caveat, Muse-native instruction order, no CLAUDE.md shim, no
+    // foreign-provider or invented skill-tree wording.
+    const { regenerateHandler } = await import('../../../src/cli/handlers/regenerate.js');
+    const { resolveMuseXdgSkillsDir } = await import('../../../src/providers/muse-paths.js');
+
+    const tmpDir = makeTmpDir('muse-bridge');
+    const homeDir = makeTmpDir('muse-bridge-home');
+    const xdgDir = makeTmpDir('muse-bridge-xdg');
+    tmpDirs.push(tmpDir, homeDir, xdgDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('USERPROFILE', homeDir);
+    writeConfig(tmpDir, 'muse');
+
+    const result = await regenerateHandler.execute(makeCtx(tmpDir, ['--provider', 'muse']));
+    expect(result.exitCode).toBe(0);
+
+    const agentsMd = readFileSync(join(tmpDir, 'AGENTS.md'), 'utf8');
+    expect(agentsMd).toContain('first-run trust prompt');
+    expect(agentsMd).toContain('aiwg discover');
+    expect(agentsMd).not.toContain('CLAUDE.md');
+    expect(agentsMd).not.toContain('.cursor');
+    expect(agentsMd).not.toContain('~/.muse');
+    expect(agentsMd).not.toContain('~/.agents/skills');
+
+    // Skill roots per ADR: project `.agents/skills`, user
+    // `$XDG_CONFIG_HOME/muse/skills` (default `~/.config/muse/skills`).
+    expect(getProviderDefinition('muse')?.paths.kernelSkills).toBe('.agents/skills');
+    expect(resolveMuseXdgSkillsDir({ XDG_CONFIG_HOME: xdgDir }, homeDir)).toBe(
+      join(xdgDir, 'muse', 'skills'),
+    );
+    expect(resolveMuseXdgSkillsDir({}, homeDir)).toBe(join(homeDir, '.config', 'muse', 'skills'));
+  });
+
   it('captures runtime .mjs MCP provider config paths under temp HOME', async () => {
     const homeDir = makeTmpDir('mcp-home');
     const projectDir = makeTmpDir('mcp-project');
@@ -287,6 +339,7 @@ describe('provider output characterization for registry migration', () => {
       'cursor',
       'factory',
       'codex',
+      'grok-build',
       'opencode',
       'windsurf',
       'warp',
@@ -305,6 +358,8 @@ describe('provider output characterization for registry migration', () => {
     expect(getProviderConfigPath('factory', projectDir)).toBe(resolve(homeDir, '.factory/mcp.json'));
     expect(getProviderConfigPath('codex', projectDir)).toBe(resolve(homeDir, '.codex/config.toml'));
     expect(getProviderConfigPath('openai', projectDir)).toBe(resolve(homeDir, '.codex/config.toml'));
+    expect(getProviderConfigPath('grok-build', projectDir)).toBe(resolve(projectDir, '.grok/config.toml'));
+    expect(getProviderConfigPath('grok-build', projectDir, { scope: 'user' })).toBe(resolve(homeDir, '.grok/config.toml'));
     expect(getProviderConfigPath('opencode', projectDir)).toBe(resolve(projectDir, 'opencode.json'));
     expect(getProviderConfigPath('windsurf', projectDir)).toBe(resolve(homeDir, '.codeium/windsurf/mcp_config.json'));
     expect(getProviderConfigPath('warp', projectDir)).toBe(resolve(homeDir, '.warp/mcp.json'));

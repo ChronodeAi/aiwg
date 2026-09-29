@@ -301,6 +301,402 @@
       "publication": {
         "public": true
       }
+    },
+    {
+      "logicalName": "decision.review",
+      "id": "https://aiwg.io/schemas/decision/DecisionReview.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionReview.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "decision-review-runtime", "boundary": "Durable human review lifecycle", "path": "src/decision/review/validate.ts" }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.calibration-artifact",
+      "id": "https://aiwg.io/schemas/decision/CalibrationArtifact.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/CalibrationArtifact.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "decision-calibration-registry", "boundary": "Immutable calibration evidence", "path": "src/decision/calibration/registry.ts" }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.calibration-compatibility",
+      "id": "https://aiwg.io/schemas/decision/CalibrationCompatibility.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/CalibrationCompatibility.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "decision-calibration-registry", "boundary": "Pinned model compatibility decisions", "path": "src/decision/calibration/registry.ts" }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.calibration-governance-receipt",
+      "id": "https://aiwg.io/schemas/decision/CalibrationGovernanceReceipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/CalibrationGovernanceReceipt.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "decision-calibration-registry", "boundary": "Append-only promotion and rollback evidence", "path": "src/decision/calibration/receipts.ts" }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.admission-evidence",
+      "id": "https://aiwg.io/schemas/decision/DecisionAdmissionEvidence.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionAdmissionEvidence.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "decision-scheduler", "boundary": "Metadata-only provider admission evidence", "path": "src/decision/admission.ts" }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.batch-receipt",
+      "id": "https://aiwg.io/schemas/decision/BatchReceipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/BatchReceipt.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "decision-batch-receipts", "boundary": "Durable native-batch accounting and replay evidence", "path": "src/decision/batch-receipts/receipt.ts" }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.telemetry-trace",
+      "id": "https://aiwg.io/schemas/decision/DecisionTelemetryTrace.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionTelemetryTrace.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [
+        { "id": "decision-telemetry", "boundary": "Redacted decision trace and lifecycle evidence", "path": "src/decision/telemetry/trace.ts" }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.compile-cache-identity",
+      "id": "https://aiwg.io/schemas/decision/DecisionCompileCacheIdentity.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionCompileCacheIdentity.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-compile-cache", "boundary": "Compilation artifact semantic identity", "path": "src/decision/compile-cache/identity.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.compile-cache-entry",
+      "id": "https://aiwg.io/schemas/decision/DecisionCompileCacheEntry.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionCompileCacheEntry.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-compile-cache", "boundary": "Live compilation artifact record", "path": "src/decision/compile-cache/records.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.compile-cache-tombstone",
+      "id": "https://aiwg.io/schemas/decision/DecisionCompileCacheTombstone.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionCompileCacheTombstone.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-compile-cache", "boundary": "Body-free D10 tombstone record", "path": "src/decision/compile-cache/records.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.provider-prefix-identity",
+      "id": "https://aiwg.io/schemas/decision/DecisionProviderPrefixIdentity.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionProviderPrefixIdentity.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-prefix-cache", "boundary": "Provider prompt-prefix semantic identity", "path": "src/decision/compile-cache/identity.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.provider-prefix-compatibility",
+      "id": "https://aiwg.io/schemas/decision/DecisionProviderPrefixCompatibility.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionProviderPrefixCompatibility.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-prefix-cache", "boundary": "Pinned provider-prefix reuse compatibility", "path": "src/decision/compile-cache/compatibility.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.cache-telemetry",
+      "id": "https://aiwg.io/schemas/decision/DecisionCacheTelemetry.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionCacheTelemetry.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-telemetry", "boundary": "Metadata-only cache layer telemetry", "path": "src/decision/telemetry/mapping.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.provider-prefix-evidence",
+      "id": "https://aiwg.io/schemas/decision/DecisionProviderPrefixEvidence.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionProviderPrefixEvidence.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-prefix-cache", "boundary": "Provider-reported prefix reuse evidence", "path": "src/decision/compile-cache/provider-prefix.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.result-cache-entry",
+      "id": "https://aiwg.io/schemas/decision/DecisionResultCacheEntry.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionResultCacheEntry.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-result-cache", "boundary": "Semantic result reuse evidence", "path": "src/decision/result-cache/cache.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.job",
+      "id": "https://aiwg.io/schemas/decision/DecisionJob.v1.schema.json",
+      "version": "1.1.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionJob.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-job-contract", "boundary": "Offline job and item lifecycle validation", "path": "src/decision/job-contract.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.graph",
+      "id": "https://aiwg.io/schemas/decision/DecisionGraph.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionGraph.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-graph-planner", "boundary": "Offline dependent-stage contract", "path": "src/decision/graph.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-evidence",
+      "id": "https://aiwg.io/schemas/decision/DecisionContextEvidence.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionContextEvidence.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-evaluator", "boundary": "Body-free context plan and actual usage evidence", "path": "src/decision/evaluate.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.ensemble-policy",
+      "id": "https://aiwg.io/schemas/decision/DecisionEnsemblePolicy.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionEnsemblePolicy.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-ensemble-contract", "boundary": "D17 bounded ensemble policy; contract only, runtime disabled", "path": "src/decision/ensemble/contract.ts" }],
+      "fixtures": {
+        "valid": ["test/fixtures/decision/ensemble/ensemble-policy.v1.valid.json"],
+        "invalid": ["test/fixtures/decision/ensemble/ensemble-policy.v1.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/decision/ensemble/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/ensemble/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.champion-challenger",
+      "id": "https://aiwg.io/schemas/decision/DecisionChampionChallenger.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionChampionChallenger.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-ensemble-contract", "boundary": "D17 champion/challenger pins over D09 eligibility; no alias movement", "path": "src/decision/ensemble/contract.ts" }],
+      "fixtures": {
+        "valid": ["test/fixtures/decision/ensemble/champion-challenger.v1.valid.json"],
+        "invalid": ["test/fixtures/decision/ensemble/champion-challenger.v1.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/decision/ensemble/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/ensemble/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.drift-response",
+      "id": "https://aiwg.io/schemas/decision/DecisionDriftResponse.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionDriftResponse.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-ensemble-contract", "boundary": "D17 drift signal to configured response map; responses are not executed", "path": "src/decision/ensemble/contract.ts" }],
+      "fixtures": {
+        "valid": ["test/fixtures/decision/ensemble/drift-response.v1.valid.json"],
+        "invalid": ["test/fixtures/decision/ensemble/drift-response.v1.invalid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/decision/ensemble/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/ensemble/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.ensemble-aggregate",
+      "id": "https://aiwg.io/schemas/decision/DecisionEnsembleAggregate.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionEnsembleAggregate.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-ensemble-contract", "boundary": "Derived agreement evidence; never a calibrated correctness claim", "path": "src/decision/ensemble/contract.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/ensemble/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/ensemble/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.ensemble-integrity-report",
+      "id": "https://aiwg.io/schemas/decision/DecisionEnsembleIntegrityReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionEnsembleIntegrityReport.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-ensemble-contract", "boundary": "#2037/#2048 eval-integrity extension that cannot upgrade HOLD or ROLLBACK", "path": "src/decision/ensemble/contract.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/ensemble/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/ensemble/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.projection-policy",
+      "id": "https://aiwg.io/schemas/decision/DecisionProjectionPolicy.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionProjectionPolicy.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-projection", "boundary": "Host-owned state projection and egress policy", "path": "src/decision/projection.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.lifecycle-policy",
+      "id": "https://aiwg.io/schemas/decision/DecisionLifecyclePolicy.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionLifecyclePolicy.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-lifecycle", "boundary": "Common host lifecycle controls for every decision surface", "path": "src/decision/lifecycle.ts" }],
+      "publication": { "public": true }
     }
   ]
 }

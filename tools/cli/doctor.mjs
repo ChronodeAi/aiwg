@@ -82,6 +82,21 @@ const { auditProjectArtifactHealth } = await importImpl(
 // getFrameworkRoot() resolves correctly for npm global installs, edge, and dev channels.
 const AIWG_ROOT = process.env.AIWG_ROOT || await getFrameworkRoot();
 
+// Installation identity drift, when present, is published by bin/aiwg.mjs for
+// read-only commands that keep running against a stale canonical install
+// (#270). The provider inventory below is read from AIWG_ROOT, so an
+// "unknown provider" under drift means the install predates the provider —
+// not that the provider is unregistered. Parse once so per-check messages
+// can name the drift instead of implying a registry defect.
+let installationDrift = null;
+try {
+  installationDrift = process.env.AIWG_INSTALLATION_DRIFT
+    ? JSON.parse(process.env.AIWG_INSTALLATION_DRIFT)
+    : null;
+} catch {
+  installationDrift = null;
+}
+
 const checks = [];
 
 // ---- Provider awareness (#1057) ----------------------------------------
@@ -109,6 +124,7 @@ const PROVIDER_LABELS = {
   omp: 'Oh My Pi',
   hermes:   'Hermes',
   grokbot:  'Grok Bot',
+  muse:     'Muse Code',
 };
 
 // Quick-detect dirs (agents-only) — used when no --provider flag is given.
@@ -871,7 +887,13 @@ async function runDoctor() {
     const provider = await loadProvider(provName);
     const label = PROVIDER_LABELS[provName] || provName;
     if (!provider || !provider.paths) {
-      check(`${label} Agents`, 'warn', `Unknown provider: ${provName}`);
+      // #270: under installation identity drift the provider inventory comes
+      // from the stale canonical install, so name the drift instead of
+      // reporting a bare "Unknown provider" that reads as a registry defect.
+      const driftNote = installationDrift
+        ? ' (installation identity drift: provider inventory read from stale canonical install; run `aiwg installation adopt` to repair)'
+        : '';
+      check(`${label} Agents`, 'warn', `Unknown provider: ${provName}${driftNote}`);
       continue;
     }
 
@@ -969,6 +991,10 @@ async function runDoctor() {
       } catch {
         check(`${label} Agents`, 'info', `No agents deployed at ${agentsPathRel}`);
       }
+    } else if (provName === 'muse' && (providerArg || allProviders)) {
+      // Muse Code has no file-based agent surface by design: agents, commands,
+      // and rules stay indexed and are reached via `aiwg discover` / `aiwg show`.
+      check(`${label} Agents`, 'info', 'No native agent surface — agents are indexed; use `aiwg discover` / `aiwg show`');
     } else if (providerArg || allProviders) {
       // User explicitly asked about this provider — be explicit when missing.
       check(`${label} Agents`, 'info', `No agents deployed (run: aiwg use sdlc --provider ${provName})`);
@@ -1089,7 +1115,7 @@ async function runDoctor() {
   if (!noBudgetCheck) {
     try {
       const supported = providersToCheck.filter((name) =>
-        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot'].includes(name),
+        ['antigravity', 'claude', 'codex', 'copilot', 'cursor', 'deepseek-harness', 'factory', 'opencode', 'pi', 'omp', 'warp', 'windsurf', 'hermes', 'openhuman', 'grokbot', 'muse'].includes(name),
       );
       const firewall = await scanContextMemoryFirewall({
         rootDir: process.cwd(),
@@ -2004,8 +2030,8 @@ async function runDoctor() {
     );
     const registry = JSON.parse(await fs.readFile(registryPath, 'utf-8'));
     const PINNED_MAP = {
-      sonnet: 'claude-sonnet-4-6',
-      opus:   'claude-opus-4-7',
+      sonnet: 'claude-sonnet-5',
+      opus:   'claude-opus-5',
       haiku:  'claude-haiku-4-5',
     };
     for (const provName of providersToCheck) {

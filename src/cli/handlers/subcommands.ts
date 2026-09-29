@@ -26,6 +26,7 @@ import { getProjectDir } from "../../config/aiwg-config.js";
 import { formatDeployedWorkspaceSignalPlan, readWorkspaceSignalPlan } from "../workspace-signals.js";
 import * as path from "node:path";
 import * as fsSync from "node:fs";
+import { pathToFileURL } from "node:url";
 
 /** Generate or deploy the canonical project quickref. */
 export const quickrefHandler: CommandHandler = {
@@ -796,6 +797,36 @@ export const removeHandler: CommandHandler = {
     // updates the registry.
     if (ctx.args.includes('--user') || isScopeUser(ctx.args)) {
       return await removeUserScopeDeploy(ctx.args);
+    }
+
+    if (firstRemovePositional(ctx.args) === 'grok-build') {
+      const providerParse = parseRemoveProvider(ctx.args);
+      if (providerParse.provider !== 'grok-build' || providerParse.error) {
+        return { exitCode: 1, message: 'Use aiwg remove grok-build --provider grok-build [--dry-run] for reviewed project-scope removal.' };
+      }
+      const frameworkRoot = await getFrameworkRoot();
+      const { uninstall } = (await import(pathToFileURL(path.join(frameworkRoot, 'tools/agents/providers/grok-build.mjs')).href)) as typeof import('../../../tools/agents/providers/grok-build.mjs');
+      const { readAiwgConfig, writeAiwgConfig } = await import('../../config/aiwg-config.js');
+      const target = getProjectDir({ cwd: ctx.cwd }, ctx.args);
+      const dryRun = ctx.args.includes('--dry-run');
+      const report = uninstall(target, { dryRun, srcRoot: frameworkRoot });
+      if (!dryRun && report.skipped.length === 0) {
+        const config = await readAiwgConfig(target);
+        if (config) {
+          for (const [name, entry] of Object.entries(config.installed ?? {})) {
+            delete entry.deployedTo?.['grok-build'];
+            if (Object.keys(entry.deployedTo ?? {}).length === 0) delete config.installed[name];
+          }
+          await writeAiwgConfig(target, config);
+        }
+      }
+      const lines = [
+        `${dryRun ? 'Would remove' : 'Removed'} ${dryRun ? report.planned.length : report.removed.length} unchanged AIWG-owned Grok Build artifact(s).`,
+        ...report.planned.map(relative => `  ${relative}`),
+        ...report.skipped.map(relative => `  Preserved modified or unverifiable: ${relative}`),
+        'Operator-owned Grok content and shared context files are preserved.',
+      ];
+      return { exitCode: report.skipped.length ? 1 : 0, message: lines.join('\n') };
     }
 
     // #1037 — Project-local-aware remove. If the first positional arg matches
