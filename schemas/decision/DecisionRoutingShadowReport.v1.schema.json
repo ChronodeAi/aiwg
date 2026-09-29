@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionRoutingShadowReport.v1.schema.json",
+  "title": "Decision Routing Shadow Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "policy", "preregistration", "thresholds", "arms", "comparisons", "integrity", "decision", "reasons", "digest"],
+  "properties": {
+    "schemaVersion": { "const": "decision-routing-shadow-report/v1" },
+    "id": { "$ref": "#/$defs/name" },
+    "policy": { "$ref": "#/$defs/pin" },
+    "preregistration": {
+      "type": "object", "additionalProperties": false, "required": ["thresholdsDigest", "registeredAt", "holdoutAccessedAt"],
+      "properties": {
+        "thresholdsDigest": { "$ref": "#/$defs/digest" },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "holdoutAccessedAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "thresholds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minimumOverallN", "minimumSliceN", "ciMethod", "ciLevel", "qualityNonInferiorityMargin", "maxFailureRate", "maxReworkRate", "maxFallbackRate", "budgetComplianceRequired", "positiveNetEconomicsRequired"],
+      "properties": {
+        "minimumOverallN": { "type": "integer", "minimum": 1 },
+        "minimumSliceN": { "type": "integer", "minimum": 1 },
+        "ciMethod": { "const": "wilson" },
+        "ciLevel": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "qualityNonInferiorityMargin": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maxFailureRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maxReworkRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maxFallbackRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "budgetComplianceRequired": { "type": "boolean" },
+        "positiveNetEconomicsRequired": { "type": "boolean" }
+      }
+    },
+    "arms": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "$ref": "#/$defs/arm" } },
+    "comparisons": {
+      "type": "object", "additionalProperties": false, "required": ["baselineArm", "candidateArm", "qualityDelta", "netSavingsMicros", "budgetCompliant"],
+      "properties": {
+        "baselineArm": { "enum": ["fixed", "heuristic"] },
+        "candidateArm": { "const": "jev-assisted" },
+        "qualityDelta": { "type": ["number", "null"] },
+        "netSavingsMicros": { "type": ["integer", "null"] },
+        "budgetCompliant": { "type": "boolean" }
+      }
+    },
+    "integrity": { "type": "object", "additionalProperties": true },
+    "decision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
+    "reasons": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "pin": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version", "digest"],
+      "properties": { "id": { "$ref": "#/$defs/name" }, "version": { "type": "string", "minLength": 1 }, "digest": { "$ref": "#/$defs/digest" } }
+    },
+    "arm": {
+      "type": "object", "additionalProperties": false,
+      "required": ["arm", "sampleN", "slices", "successRate", "failureRate", "reworkRate", "fallbackRate", "selectiveCoverage", "humanOverrideRate", "providerCalls", "inputTokens", "outputTokens", "totalCostMicros", "latencyMsP95", "policyViolations"],
+      "properties": {
+        "arm": { "enum": ["fixed", "heuristic", "jev-assisted"] },
+        "sampleN": { "type": "integer", "minimum": 0 },
+        "slices": { "type": "object", "additionalProperties": { "$ref": "#/$defs/slice" } },
+        "successRate": { "$ref": "#/$defs/rate" },
+        "failureRate": { "$ref": "#/$defs/rate" },
+        "reworkRate": { "$ref": "#/$defs/rate" },
+        "fallbackRate": { "$ref": "#/$defs/rate" },
+        "selectiveCoverage": { "$ref": "#/$defs/rate" },
+        "humanOverrideRate": { "$ref": "#/$defs/rate" },
+        "providerCalls": { "type": "integer", "minimum": 0 },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "totalCostMicros": { "type": "integer", "minimum": 0 },
+        "latencyMsP95": { "type": "integer", "minimum": 0 },
+        "policyViolations": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "slice": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sampleN", "successRate", "failureRate", "reworkRate", "fallbackRate"],
+      "properties": {
+        "sampleN": { "type": "integer", "minimum": 0 },
+        "successRate": { "$ref": "#/$defs/rate" },
+        "failureRate": { "$ref": "#/$defs/rate" },
+        "reworkRate": { "$ref": "#/$defs/rate" },
+        "fallbackRate": { "$ref": "#/$defs/rate" }
+      }
+    },
+    "rate": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

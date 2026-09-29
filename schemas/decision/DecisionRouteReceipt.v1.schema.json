@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionRouteReceipt.v1.schema.json",
+  "title": "Decision Route Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "routing", "task", "status", "reason", "candidatePins", "eligibleRouteIds", "excluded", "jev", "selectedRouteId", "selectionReason", "actual", "attempts", "fallbacks", "usage", "outcome", "createdAtEpochMs", "digest"],
+  "properties": {
+    "schemaVersion": { "const": "decision-route-receipt/v1" },
+    "routing": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version", "policyVersion", "mode", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/name" }, "version": { "type": "string" }, "policyVersion": { "$ref": "#/$defs/name" },
+        "mode": { "enum": ["disabled", "shadow"] }, "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "task": {
+      "type": "object", "additionalProperties": false, "required": ["id", "projection"],
+      "properties": { "id": { "$ref": "#/$defs/name" }, "projection": { "type": ["object", "null"], "additionalProperties": true } }
+    },
+    "status": { "enum": ["disabled", "no-route", "review", "selected"] },
+    "reason": { "type": "string", "minLength": 1 },
+    "candidatePins": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/candidatePin" } },
+    "eligibleRouteIds": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+    "excluded": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["routeId", "reasons"],
+        "properties": {
+          "routeId": { "$ref": "#/$defs/name" },
+          "reasons": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/exclusionReason" } }
+        }
+      }
+    },
+    "jev": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/jevEvidence" }] },
+    "selectedRouteId": { "type": ["string", "null"], "minLength": 1 },
+    "selectionReason": { "type": "string", "minLength": 1 },
+    "actual": {
+      "type": "object", "additionalProperties": false, "required": ["workerId", "provider", "model"],
+      "properties": {
+        "workerId": { "type": ["string", "null"] }, "provider": { "type": ["string", "null"] }, "model": { "type": ["string", "null"] }
+      }
+    },
+    "attempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } },
+    "fallbacks": { "type": "array", "items": { "$ref": "#/$defs/name" } },
+    "usage": { "$ref": "#/$defs/usage" },
+    "outcome": {
+      "type": "object", "additionalProperties": false, "required": ["verified", "label"],
+      "properties": { "verified": { "type": ["boolean", "null"] }, "label": { "type": ["string", "null"] } }
+    },
+    "createdAtEpochMs": { "type": "integer", "minimum": 0 },
+    "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "pin": {
+      "type": "object", "additionalProperties": false, "required": ["id", "version", "digest"],
+      "properties": { "id": { "$ref": "#/$defs/name" }, "version": { "type": "string", "minLength": 1 }, "digest": { "$ref": "#/$defs/digest" } }
+    },
+    "candidatePin": {
+      "type": "object", "additionalProperties": false,
+      "required": ["routeId", "binding", "model", "subagent", "health", "priceCatalogVersion", "latencyMsP95", "costMicrosPerAttempt"],
+      "properties": {
+        "routeId": { "$ref": "#/$defs/name" },
+        "binding": { "$ref": "#/$defs/pin" },
+        "model": {
+          "type": "object", "additionalProperties": false, "required": ["provider", "backend", "requested", "pinnedVersion"],
+          "properties": {
+            "provider": { "$ref": "#/$defs/name" },
+            "backend": { "$ref": "#/$defs/name" },
+            "requested": { "$ref": "#/$defs/name" },
+            "pinnedVersion": { "$ref": "#/$defs/name" }
+          }
+        },
+        "subagent": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/pin" }] },
+        "health": { "enum": ["healthy", "degraded", "rate-limited", "outage", "circuit-open"] },
+        "priceCatalogVersion": { "$ref": "#/$defs/name" },
+        "latencyMsP95": { "type": "integer", "minimum": 0 },
+        "costMicrosPerAttempt": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "exclusionReason": { "enum": ["privacy-denied", "authorization-denied", "region-denied", "tool-denied", "context-denied", "allowlist-denied", "budget-denied", "deadline-denied", "health-denied", "not-executable", "capability-denied", "reservation-denied"] },
+    "usage": {
+      "type": "object", "additionalProperties": false, "required": ["inputTokens", "outputTokens", "costMicros"],
+      "properties": {
+        "inputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
+        "costMicros": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "attempt": {
+      "type": "object", "additionalProperties": false, "required": ["ordinal", "routeId", "status", "reason", "actualProvider", "actualModel", "workerId", "usage", "latencyMs"],
+      "properties": {
+        "ordinal": { "type": "integer", "minimum": 1 },
+        "routeId": { "$ref": "#/$defs/name" },
+        "status": { "enum": ["succeeded", "failed", "skipped"] },
+        "reason": { "enum": ["none", "rate-limit", "outage", "circuit-open", "timeout", "rejected", "failed", "not-attempted"] },
+        "actualProvider": { "type": ["string", "null"] },
+        "actualModel": { "type": ["string", "null"] },
+        "workerId": { "type": ["string", "null"] },
+        "usage": { "$ref": "#/$defs/usage" },
+        "latencyMs": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "jevEvidence": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "provider", "model", "profile", "calibration", "provenance", "taskComplexity", "ambiguity", "distributions"],
+      "properties": {
+        "schemaVersion": { "const": "decision-routing-jev-evidence/v1" },
+        "provider": { "const": "jev" },
+        "model": { "$ref": "#/$defs/name" },
+        "profile": { "$ref": "#/$defs/name" },
+        "calibration": { "enum": ["calibrated", "uncalibrated", "unknown"] },
+        "provenance": {
+          "type": "object", "additionalProperties": false, "required": ["adapterVersion", "requestDigest", "responseDigest"],
+          "properties": { "adapterVersion": { "type": "string" }, "requestDigest": { "$ref": "#/$defs/digest" }, "responseDigest": { "$ref": "#/$defs/digest" } }
+        },
+        "taskComplexity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "ambiguity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "distributions": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["routeId", "taskFit", "reasoningNeed"],
+            "properties": { "routeId": { "$ref": "#/$defs/name" }, "taskFit": { "type": "number", "minimum": 0, "maximum": 1 }, "reasoningNeed": { "type": "number", "minimum": 0, "maximum": 1 } }
+          }
+        }
+      }
+    }
+  }
+}

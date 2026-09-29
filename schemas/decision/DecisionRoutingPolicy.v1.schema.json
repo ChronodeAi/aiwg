@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionRoutingPolicy.v1.schema.json",
+  "title": "Decision Routing Policy",
+  "description": "D28 default-off/shadow policy for capability-constrained route selection. It cannot grant permissions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "version", "mode", "policyVersion", "candidates", "defaultRouteId", "deterministicFallbackRouteId", "utility", "ceilings", "jevEvidence"],
+  "properties": {
+    "schemaVersion": { "const": "decision-routing-policy/v1" },
+    "id": { "$ref": "#/$defs/name" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "mode": { "enum": ["disabled", "shadow"] },
+    "policyVersion": { "$ref": "#/$defs/name" },
+    "candidates": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/candidate" } },
+    "defaultRouteId": { "type": ["string", "null"], "minLength": 1 },
+    "deterministicFallbackRouteId": { "type": ["string", "null"], "minLength": 1 },
+    "utility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["taskFit", "complexityFit", "ambiguityPenalty", "latencyPenalty", "costPenalty", "healthPenalty"],
+      "properties": {
+        "taskFit": { "$ref": "#/$defs/nonnegativeNumber" },
+        "complexityFit": { "$ref": "#/$defs/nonnegativeNumber" },
+        "ambiguityPenalty": { "$ref": "#/$defs/nonnegativeNumber" },
+        "latencyPenalty": { "$ref": "#/$defs/nonnegativeNumber" },
+        "costPenalty": { "$ref": "#/$defs/nonnegativeNumber" },
+        "healthPenalty": { "$ref": "#/$defs/nonnegativeNumber" }
+      }
+    },
+    "ceilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxAttempts", "maxFallbacks", "maxCostMicros", "deadlineMs", "retryDelayMs", "unknownCost"],
+      "properties": {
+        "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "maxFallbacks": { "type": "integer", "minimum": 0, "maximum": 15 },
+        "maxCostMicros": { "type": "integer", "minimum": 0 },
+        "deadlineMs": { "type": "integer", "minimum": 1 },
+        "retryDelayMs": { "type": "integer", "minimum": 0 },
+        "unknownCost": { "const": "reject" }
+      }
+    },
+    "jevEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "calibrationRequired", "compatibleProfiles", "uncertaintyThresholdBps"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "calibrationRequired": { "type": "boolean" },
+        "compatibleProfiles": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+        "uncertaintyThresholdBps": { "$ref": "#/$defs/bps" }
+      }
+    }
+  },
+  "$defs": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$" },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "bps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+    "nonnegativeNumber": { "type": "number", "minimum": 0 },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/name" },
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "binding", "model", "subagent", "capabilities", "permissions", "policy", "operations"],
+      "properties": {
+        "id": { "$ref": "#/$defs/name" },
+        "binding": { "$ref": "#/$defs/pin" },
+        "subagent": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/pin" }] },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "backend", "requested", "pinnedVersion"],
+          "properties": {
+            "provider": { "$ref": "#/$defs/name" },
+            "backend": { "$ref": "#/$defs/name" },
+            "requested": { "$ref": "#/$defs/name" },
+            "pinnedVersion": { "$ref": "#/$defs/name" }
+          }
+        },
+        "capabilities": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tools", "network", "filesystem", "secrets", "actions"],
+          "properties": {
+            "tools": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+            "network": { "type": "boolean" },
+            "filesystem": { "enum": ["none", "read", "write"] },
+            "secrets": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+            "actions": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } }
+          }
+        },
+        "policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["privacy", "authorizationScopes", "regions", "contextBytes", "allowlisted", "executable"],
+          "properties": {
+            "privacy": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+            "authorizationScopes": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+            "regions": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
+            "contextBytes": { "type": "integer", "minimum": 0 },
+            "allowlisted": { "type": "boolean" },
+            "executable": { "type": "boolean" }
+          }
+        },
+        "operations": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["health", "latencyMsP95", "priceCatalogVersion", "costMicrosPerAttempt", "maxAttempts", "deadlineMs"],
+          "properties": {
+            "health": { "enum": ["healthy", "degraded", "rate-limited", "outage", "circuit-open"] },
+            "latencyMsP95": { "type": "integer", "minimum": 0 },
+            "priceCatalogVersion": { "$ref": "#/$defs/name" },
+            "costMicrosPerAttempt": { "type": ["integer", "null"], "minimum": 0 },
+            "maxAttempts": { "type": "integer", "minimum": 1 },
+            "deadlineMs": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  }
+}
