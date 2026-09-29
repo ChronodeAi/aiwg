@@ -193,21 +193,39 @@ output.
 The pack's closed schemas enumerate citation support, contradiction, unclear,
 phase-criterion relevance, completeness, contradiction, ambiguity and reviewer
 attention. Unknown claim, source, locator, criterion, evidence, approval or
-requirement IDs produce non-pass receipts in screening modes. Phase-criterion
-required evidence comes only from the trusted pinned gate policy's
-criterion-to-evidence map; caller bundle `required` flags are not authority.
-Evidence owned by another criterion or claim/source pair cannot satisfy the
-subject. D10 projection gates trust, sensitivity and content digests before
-source content is model-visible, and D08 primitive acceptance plus D09
-calibration compatibility route low-margin or incompatible observations to
-review. Review-required receipts always create D13 durable-review input when
-screening is enabled; presentation is metadata-only/redacted and the caller
-still owns review authorization and idempotent resume.
+requirement IDs produce non-pass receipts in screening modes, and malformed
+inputs produce receipts rather than exceptions (an invalid `mode` throws).
+Evidence facts such as `present`, `passed` and `retrieved` are caller-asserted;
+the pack fails closed on what it is told and hosts must source those facts from
+the deterministic validators.
+
+The criterion-to-required-evidence map and evidence ownership (including each
+citation source's trust and sensitivity) come only from an
+`SdlcGateEvidencePolicy` artifact that the host supplies in a separate trust
+context and that is verified against a host pin with `assertArtifactPin`. The
+request can only reference that pin; a mismatched pin or an inline policy is
+non-ready. Every bundle item is inspected: duplicate IDs are rejected, and
+missing, failed, expired, foreign or unowned evidence is non-ready. Omitted
+source content is unverified. D10 projection uses the policy's trust and
+sensitivity, D08 primitive acceptance requires native provider distributions,
+and D09 compatibility is resolved through the calibration registry; a missing
+calibration, a missing distribution or any injection answer other than a
+confident `no` routes to review. Review-required receipts always create D13
+durable-review input when screening is enabled; presentation is
+metadata-only/redacted and the caller still owns review authorization and
+idempotent resume. AIWG has no programmatic SDLC phase-gate evaluator, so the
+pack makes no byte-identity claim about one; its outcome adapter only passes a
+host-supplied outcome through unchanged.
 
 Promotion remains held-out gated. `decision-sdlc-screening-preregistration/v1`
-pins false-support/false-ready bounds, slice support, confidence intervals,
-quality non-inferiority and economics. Missing held-out or slice support is
-`INSUFFICIENT_EVIDENCE`; NaN, negative metrics, zero-support classes/slices,
-frozen-plan/evaluation-time violations and unverified eval integrity fail
-closed. The release report carries eval-integrity without upgrading upstream
-`HOLD` or `ROLLBACK`.
+pins the held-out split digest, preregistered slices, false-support/false-ready
+bounds, total/slice/gate-blocking support, the confidence-interval method/level,
+the paired non-inferiority margin and economics, and is anchored by a separately
+trusted digest. Held-out metrics are computed from per-sample records with the
+qualification quality helpers, never caller-asserted. Missing records or support
+is `INSUFFICIENT_EVIDENCE`; digest, time-order, split, bound and economics
+violations fail. Paired non-inferiority is pending the shared paired-interval
+helper and fails closed as insufficient evidence meanwhile, so the release report
+cannot currently `PROMOTE`. Integrity is checked against an allowlist of verified
+mode/state/score-source combinations, and upstream `HOLD` or `ROLLBACK` is never
+upgraded.
