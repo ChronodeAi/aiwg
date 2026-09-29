@@ -22,13 +22,24 @@
     "dataset": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "digest", "splitMethod", "minimumTotal", "minimumPerSupportedSlice"],
+      "required": ["id", "digest", "splitMethod", "minimumTotal", "minimumPerSupportedSlice", "splitDigests"],
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "digest": { "$ref": "#/$defs/digest" },
         "splitMethod": { "enum": ["time", "source"] },
         "minimumTotal": { "type": "integer", "minimum": 1 },
-        "minimumPerSupportedSlice": { "type": "integer", "minimum": 1 }
+        "minimumPerSupportedSlice": { "type": "integer", "minimum": 1 },
+        "splitDigests": {
+          "description": "Digests of the frozen tuning, calibration and test memberships, pinned before holdout access.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["tuning", "calibration", "test"],
+          "properties": {
+            "tuning": { "$ref": "#/$defs/digest" },
+            "calibration": { "$ref": "#/$defs/digest" },
+            "test": { "$ref": "#/$defs/digest" }
+          }
+        }
       }
     },
     "slices": {
@@ -65,7 +76,12 @@
       "properties": {
         "maximumFalseDuplicateRate": { "$ref": "#/$defs/unit" },
         "maximumFalseAutoRate": { "$ref": "#/$defs/unit" },
-        "qualityNonInferiorityMargin": { "type": "number", "minimum": -1, "maximum": 1 },
+        "qualityNonInferiorityMargin": {
+          "description": "Cascade-minus-baseline accuracy margin; non-positive. -0.02 allows the cascade to be at most two points worse. Superiority (positive) margins are not supported.",
+          "type": "number",
+          "minimum": -1,
+          "maximum": 0
+        },
         "minimumAcceptedCoverage": { "$ref": "#/$defs/unit" },
         "confidenceInterval": {
           "type": "object",

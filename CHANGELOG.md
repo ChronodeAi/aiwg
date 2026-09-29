@@ -11,9 +11,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 - Experimental, default-off issue triage shadow pilot contracts and runtime for
   Jev classification, completeness/clarification scoring, and deterministic
-  duplicate reranking. The offline harness adds closed schemas, leakage and
-  no-tracker-mutation guards, preregistration and report generation, and does
-  not claim live Jev, held-out, or human-review qualification (#2618).
+  duplicate reranking. The offline harness adds closed schemas, point-in-time
+  candidate replay, shared credential redaction, a tracker-free runtime,
+  preregistered split and threshold manifests, and report gates that use paired
+  non-inferiority, Wilson bounds and receipt-reconciled economics. It does not
+  claim live Jev, held-out, or human-review qualification (#2618).
 - Shared paired non-inferiority intervals and a fail-closed margin check for decision pilots (#2618, #2619, #2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,

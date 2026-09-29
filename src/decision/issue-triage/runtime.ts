@@ -4,8 +4,10 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
+import { redactText, type OrganizationRedactionPattern } from '../../governance/redaction.js';
 import { canonicalJson } from '../../security/artifact-trust.js';
 import { correlateAtomicBatch } from '../batch.js';
+import type { CompatibilityDecision } from '../calibration/types.js';
 import { admitEntry } from '../entry.js';
 import { projectDecisionState, type DecisionProjectionField, type DecisionProjectionPolicy } from '../projection.js';
 import {
@@ -13,7 +15,11 @@ import {
   evaluateOrdinalHeldout,
   evaluateRankingHeldout,
   freezeQualificationSplit,
-  type BinaryQualificationSample,
+  pairedBinaryDifferenceInterval,
+  pairedNonInferiority,
+  verifyQualificationSplits,
+  wilsonScoreInterval,
+  type QualificationSplit,
 } from '../qualification/quality.js';
 import { artifactDigest } from '../validate.js';
 import type {
@@ -30,10 +36,12 @@ import type {
   IssueTriageIssueRecord,
   IssueTriageModelResponse,
   IssueTriageModelState,
+  IssueTriageNonInferiority,
   IssueTriagePilotPack,
   IssueTriageProjection,
   IssueTriageShadowArtifact,
-  IssueTriageTrackerClient,
+  IssueTriageSliceMetrics,
+  IssueTriageUsageReceipt,
   IssueTriageValidatedResponse,
   MulticlassMetrics,
   PrecisionRecallF1,
@@ -55,12 +63,20 @@ const SCHEMA_FILES: Record<SchemaKind, string> = {
 };
 
 const GATE_RANK: Record<IssueTriageGateDecision, number> = { PROMOTE: 0, HOLD: 1, ROLLBACK: 2 };
-const MUTATION_METHODS = ['createIssue', 'editIssue', 'addLabel', 'assignIssue', 'commentIssue', 'closeIssue', 'mergeIssue'] as const;
 const FINAL_FIELDS = ['finalLabels', 'finalDuplicateOf', 'resolution', 'closedAt'] as const;
 const RESPONSE_FIELDS = ['issueId', 'issueType', 'area', 'urgency', 'completeness', 'clarificationNeed', 'duplicate',
-  'uncertaintyProfile', 'accepted', 'actualModel', 'requestedModel', 'latencyMs', 'usage', 'calls', 'retries', 'fallbacks', 'cacheHit'] as const;
+  'uncertaintyProfile', 'accepted', 'actualModel', 'requestedModel', 'latencyMs', 'usage', 'usageReceipts', 'calls', 'retries', 'fallbacks',
+  'cacheHit'] as const;
 const DUPLICATE_RESPONSE_FIELDS = ['issueId', 'rank'] as const;
 const METADATA_ALLOWLIST = ['component', 'provider', 'framework', 'source', 'environment', 'reproduction'] as const;
+const CANDIDATE_FIELDS = ['id', 'repository', 'createdAt', 'revisions'] as const;
+const REVISION_FIELDS = ['observedAt', 'title', 'body'] as const;
+const RECEIPT_FIELDS = ['kind', 'requestId', 'inputTokens', 'outputTokens', 'costUsd'] as const;
+// Formats the shared governance redactor does not cover on its own.
+const ISSUE_TRIAGE_REDACTION_PATTERNS: readonly OrganizationRedactionPattern[] = [
+  { id: 'jwt', pattern: '\\beyJ[A-Za-z0-9_-]{4,}\\.[A-Za-z0-9_-]{4,}\\.[A-Za-z0-9_-]{4,}' },
+  { id: 'aws-access-key', pattern: '\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b' },
+];
 
 let validators: Map<SchemaKind, ValidateFunction> | null = null;
 
@@ -138,6 +154,19 @@ export function validateIssueTriageEvaluationManifest(value: unknown): IssueTria
   }
   if (manifest.thresholds.minimumTotalSamples < manifest.dataset.minimumTotal) problems.push('threshold minimum total is below dataset minimum');
   if (manifest.thresholds.minimumPerSliceSamples < manifest.dataset.minimumPerSupportedSlice) problems.push('threshold per-slice minimum is below dataset minimum');
+  const marginBps = manifest.thresholds.qualityNonInferiorityMargin * 10000;
+  if (manifest.thresholds.qualityNonInferiorityMargin > 0) {
+    problems.push('thresholds.qualityNonInferiorityMargin must be <= 0; a positive margin is a superiority test, which is not supported');
+  } else if (Math.abs(marginBps - Math.round(marginBps)) > 1e-6) {
+    problems.push('thresholds.qualityNonInferiorityMargin must be a whole number of basis points');
+  }
+  const sliceIds = new Set<string>();
+  for (const slice of manifest.slices) {
+    if (sliceIds.has(slice.id)) problems.push(`slice id ${slice.id} is duplicated`);
+    sliceIds.add(slice.id);
+  }
+  const splitDigests = Object.values(manifest.dataset.splitDigests);
+  if (new Set(splitDigests).size !== splitDigests.length) problems.push('split digests must be distinct');
   if (manifest.holdout.holdoutAccessedAt !== null
     && Date.parse(manifest.holdout.holdoutAccessedAt) <= Date.parse(manifest.holdout.thresholdsRegisteredAt)) {
     problems.push('thresholds must be preregistered before holdout access');
@@ -203,6 +232,30 @@ function issueText(issue: { title: string; body: string }): string {
   return `${issue.title}\n${issue.body}`;
 }
 
+/**
+ * The candidate revision visible as of `asOf`: the latest revision observed at or before it. Candidates without
+ * such a revision are excluded, so a later title, label or state edit can never reach the replayed issue.
+ */
+function candidateAsOf(candidate: IssueTriageCandidateInput, asOf: number): { title: string; body: string } | null {
+  for (const key of Object.keys(candidate)) {
+    if (!(CANDIDATE_FIELDS as readonly string[]).includes(key)) {
+      throw new IssueTriagePilotError(`candidate ${candidate.id} carries mutable current-state field ${key}; supply point-in-time revisions`);
+    }
+  }
+  if (!Array.isArray(candidate.revisions)) throw new IssueTriagePilotError(`candidate ${candidate.id} requires point-in-time revisions`);
+  let visible: { at: number; title: string; body: string } | null = null;
+  for (const revision of candidate.revisions) {
+    if (Object.keys(revision).some(key => !(REVISION_FIELDS as readonly string[]).includes(key))
+      || typeof revision.title !== 'string' || typeof revision.body !== 'string') {
+      throw new IssueTriagePilotError(`candidate ${candidate.id} revision must contain only observedAt, title and body`);
+    }
+    const at = Date.parse(revision.observedAt);
+    if (!Number.isFinite(at)) throw new IssueTriagePilotError(`candidate ${candidate.id} revision has an invalid observedAt`);
+    if (at <= asOf && (visible === null || at >= visible.at)) visible = { at, title: revision.title, body: revision.body };
+  }
+  return visible && { title: visible.title, body: visible.body };
+}
+
 export function deterministicIssueDuplicateCandidates(
   issue: IssueTriageIssueRecord,
   corpus: readonly IssueTriageCandidateInput[],
@@ -210,21 +263,24 @@ export function deterministicIssueDuplicateCandidates(
 ): IssueTriageCandidateLineage {
   const query = tokens(issueText(issue));
   const issueCreatedAt = Date.parse(issue.createdAt);
+  if (!Number.isFinite(issueCreatedAt)) throw new IssueTriagePilotError('triaged issue createdAt is invalid');
   const scored = corpus
     .filter(candidate => candidate.id !== issue.id && candidate.repository === issue.repository
-      && Number.isFinite(issueCreatedAt) && Date.parse(candidate.createdAt) <= issueCreatedAt)
-    .map(candidate => {
-      const candidateTokens = tokens(issueText(candidate));
+      && Date.parse(candidate.createdAt) <= issueCreatedAt)
+    .flatMap(candidate => {
+      const snapshot = candidateAsOf(candidate, issueCreatedAt);
+      if (!snapshot) return [];
+      const candidateTokens = tokens(issueText(snapshot));
       const overlap = [...query].filter(token => candidateTokens.has(token)).length;
       const union = new Set([...query, ...candidateTokens]).size || 1;
-      return {
+      return [{
         issueId: candidate.id,
         repository: candidate.repository,
-        title: candidate.title,
+        title: redactCredentialMaterial(snapshot.title),
         rank: 0,
         score: overlap / union,
-        sourceDigest: digest(candidate),
-      };
+        sourceDigest: digest({ id: candidate.id, repository: candidate.repository, createdAt: candidate.createdAt, ...snapshot }),
+      }];
     })
     .filter(candidate => candidate.score > 0)
     .sort((left, right) => right.score - left.score || left.issueId.localeCompare(right.issueId))
@@ -233,16 +289,16 @@ export function deterministicIssueDuplicateCandidates(
   return { generator: 'deterministic-token-overlap-v1', queryDigest: digest({ id: issue.id, text: issueText(issue) }), candidates: scored, noneOutcome: 'none' };
 }
 
+/** Shared governance redactor plus JWT and AWS STS key formats; fails closed on oversized input. */
 function redactCredentialMaterial(value: string): string {
-  return value
-    .replace(/bearer\s+[a-z0-9._~+/=-]+/gi, 'bearer [REDACTED]')
-    .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]')
-    .replace(/(?:api[_-]?key|token|password|credential)\s*[:=]\s*["']?[^"'\s]+/gi, match => `${match.split(/[:=]/)[0]}=[REDACTED]`);
+  return redactText(value, { organizationPatterns: ISSUE_TRIAGE_REDACTION_PATTERNS, includeLength: false }).text;
 }
 
 function allowedMetadata(metadata: IssueTriageIssueRecord['metadata']): IssueTriageModelState['issue']['metadata'] | undefined {
   if (!metadata) return undefined;
-  const entries = Object.entries(metadata).filter(([key]) => (METADATA_ALLOWLIST as readonly string[]).includes(key));
+  const entries = Object.entries(metadata)
+    .filter(([key]) => (METADATA_ALLOWLIST as readonly string[]).includes(key))
+    .map(([key, value]) => [key, typeof value === 'string' ? redactCredentialMaterial(value) : value] as const);
   return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
@@ -276,13 +332,13 @@ export async function projectIssueTriageModelState(
     issue: {
       id: issue.id,
       repository: issue.repository,
-      title: issue.title,
+      title: redactCredentialMaterial(issue.title),
       body: redactCredentialMaterial(issue.body),
       createdAt: issue.createdAt,
-      ...(issue.author === undefined ? {} : { author: issue.author }),
+      ...(issue.author === undefined ? {} : { author: redactCredentialMaterial(issue.author) }),
       ...(metadata === undefined ? {} : { metadata }),
     },
-    duplicateCandidates: lineage.candidates,
+    duplicateCandidates: lineage.candidates.map(item => ({ ...item, title: redactCredentialMaterial(item.title) })),
     allowed: {
       issueTypes: pack.taxonomies.issueTypes,
       areas: pack.taxonomies.areas,
@@ -360,40 +416,68 @@ export function validateIssueTriageModelResponse(
   if ([response.calls.jev, response.calls.fallbackModel, response.retries, response.fallbacks].some(value => !Number.isSafeInteger(value) || value < 0)) {
     problems.push('call, retry and fallback counts must be nonnegative integers');
   }
+  problems.push(...usageReconciliationProblems(response));
   semantic(problems, 'issue triage model response rejected');
+  const compatibility = calibration.registry
+    ? calibration.registry.registry.resolve(calibration.registry.request, calibration.registry.policy)
+    : null;
   const profileCompatible = pack.acceptance.uncertaintyProfiles.includes(calibration.uncertaintyProfile)
     && calibration.uncertaintyProfile === response.uncertaintyProfile;
-  const modelCompatible = calibration.requestedModel === response.requestedModel
+  const aliasCompatible = calibration.requestedModel === response.requestedModel
     && calibration.actualModel === response.actualModel
-    && calibration.compatibleActualModels.includes(response.actualModel)
-    && (calibration.compatibility === undefined || calibration.compatibility.action === 'allow');
-  const acceptedScoring = response.accepted && profileCompatible && modelCompatible;
+    && calibration.compatibleActualModels.includes(response.actualModel);
+  // The registry pin must describe this response's alias and served model; drift or an unknown identity is not "allow".
+  const registryDrift = compatibility !== null && (compatibility.requestedAlias !== response.requestedModel
+    || compatibility.actualModel !== response.actualModel || compatibility.reasons.includes('alias-drift') || compatibility.state === 'unknown');
+  const registryCompatible = compatibility === null
+    ? pack.acceptance.calibration !== 'required'
+    : compatibility.action === 'allow' && !registryDrift;
+  const modelCompatible = aliasCompatible && !registryDrift;
+  const acceptedScoring = response.accepted && profileCompatible && modelCompatible && registryCompatible;
   const reason = acceptedScoring ? 'compatible' : !response.accepted ? 'defer-response-rejected'
     : modelCompatible ? 'defer-calibration-incompatible' : 'defer-drift';
   const driftEvent = modelCompatible ? null : `model-drift:${response.requestedModel}->${response.actualModel}`;
-  return { ...response, acceptance: { acceptedScoring, reason, driftEvent } };
+  return { ...response, acceptance: { acceptedScoring, reason, driftEvent, compatibility } };
 }
 
-export function assertNoTrackerMutations(client: IssueTriageTrackerClient): void {
-  for (const method of MUTATION_METHODS) {
-    const value = client[method];
-    if (value !== undefined) throw new IssueTriagePilotError(`tracker mutation hook ${method} is not accepted by shadow runtime`);
+/**
+ * Caller totals are derived values; the provider-reported receipts are authoritative. Totals, per-kind call
+ * counts and the cache flag must all agree with the receipts, and a null receipt value makes the total null.
+ */
+function usageReconciliationProblems(response: IssueTriageModelResponse): string[] {
+  const problems: string[] = [];
+  const receipts = response.usageReceipts;
+  if (!Array.isArray(receipts)) return ['usage receipts are required'];
+  const ids = new Set<string>();
+  for (const receipt of receipts) {
+    if (!receipt || typeof receipt !== 'object' || Object.keys(receipt).some(key => !(RECEIPT_FIELDS as readonly string[]).includes(key))
+      || !['jev', 'fallback-model', 'cache'].includes(receipt.kind) || typeof receipt.requestId !== 'string' || !receipt.requestId.trim()
+      || [receipt.inputTokens, receipt.outputTokens].some(value => value !== null && (!Number.isSafeInteger(value) || value < 0))
+      || (receipt.costUsd !== null && (!Number.isFinite(receipt.costUsd) || receipt.costUsd < 0))) {
+      problems.push('usage receipt is malformed');
+      continue;
+    }
+    if (ids.has(receipt.requestId)) problems.push(`usage receipt ${receipt.requestId} is duplicated`);
+    ids.add(receipt.requestId);
   }
+  if (problems.length) return problems;
+  const count = (kind: IssueTriageUsageReceipt['kind']) => receipts.filter(receipt => receipt.kind === kind).length;
+  if (count('jev') !== response.calls.jev) problems.push('Jev call count does not match provider receipts');
+  if (count('fallback-model') !== response.calls.fallbackModel) problems.push('fallback call count does not match provider receipts');
+  if ((count('cache') > 0) !== response.cacheHit) problems.push('cache flag does not match cache receipts');
+  for (const key of ['inputTokens', 'outputTokens', 'costUsd'] as const) {
+    const total = receiptTotal(receipts, key);
+    const claimed = response.usage[key];
+    if (total === null ? claimed !== null : claimed === null || Math.abs(claimed - total) > 1e-9) {
+      problems.push(`usage ${key} does not match provider receipts`);
+    }
+  }
+  return problems;
 }
 
-export function forbiddenIssueTriageTrackerClient(): Required<IssueTriageTrackerClient> {
-  const fail = (method: string) => () => {
-    throw new IssueTriagePilotError(`tracker mutation ${method} is forbidden in issue triage shadow mode`);
-  };
-  return {
-    createIssue: fail('createIssue'),
-    editIssue: fail('editIssue'),
-    addLabel: fail('addLabel'),
-    assignIssue: fail('assignIssue'),
-    commentIssue: fail('commentIssue'),
-    closeIssue: fail('closeIssue'),
-    mergeIssue: fail('mergeIssue'),
-  };
+function receiptTotal(receipts: readonly IssueTriageUsageReceipt[], key: 'inputTokens' | 'outputTokens' | 'costUsd'): number | null {
+  if (receipts.some(receipt => receipt[key] === null)) return null;
+  return receipts.reduce((sum, receipt) => sum + (receipt[key] as number), 0);
 }
 
 export async function runIssueTriageShadow(
@@ -405,11 +489,9 @@ export async function runIssueTriageShadow(
 ): Promise<IssueTriageShadowArtifact> {
   const active = validateIssueTriagePilotPack(pack);
   if (active.mode !== 'offline-shadow') throw new IssueTriagePilotError('issue triage shadow run requires offline-shadow mode');
-  const tracker = forbiddenIssueTriageTrackerClient();
   const lineage = deterministicIssueDuplicateCandidates(issue, corpus, active);
   const projection = await projectIssueTriageModelState(active, issue, lineage);
   const validated = validateIssueTriageModelResponse(active, projection, response, calibration);
-  void tracker;
   return {
     schemaVersion: 'decision-issue-triage-shadow-artifact/v1',
     mode: 'offline-shadow',
@@ -439,22 +521,43 @@ function failureArtifact(error: unknown): IssueTriageShadowFailureArtifact {
   };
 }
 
+type IssueTriageArtifactRecorder = (artifact: IssueTriageShadowArtifact | IssueTriageShadowFailureArtifact) => void | Promise<void>;
+
+/**
+ * Records without ever throwing or leaving a rejected promise. A recorder failure on a success artifact is
+ * retried once as a failure artifact; a failing failure record is dropped, because the shadow path must not
+ * change the host workflow.
+ */
+function containedRecord(record: IssueTriageArtifactRecorder, artifact: IssueTriageShadowArtifact | IssueTriageShadowFailureArtifact,
+  retry: boolean): void {
+  const onError = (error: unknown) => { if (retry) containedRecord(record, failureArtifact(error), false); };
+  try {
+    const pending = record(artifact);
+    if (pending && typeof (pending as Promise<void>).then === 'function') (pending as Promise<void>).then(undefined, onError);
+  } catch (error) {
+    onError(error);
+  }
+}
+
 export function applyIssueTriagePilot<T>(
   enabled: boolean,
   previousWorkflowResult: T,
   shadow: () => IssueTriageShadowArtifact | Promise<IssueTriageShadowArtifact>,
-  recordArtifact: (artifact: IssueTriageShadowArtifact | IssueTriageShadowFailureArtifact) => void = () => {},
+  recordArtifact: IssueTriageArtifactRecorder = () => {},
 ): T {
   if (!enabled) return previousWorkflowResult;
   try {
     const artifact = shadow();
-    if (typeof (artifact as Promise<IssueTriageShadowArtifact>).then === 'function') {
-      void (artifact as Promise<IssueTriageShadowArtifact>).then(recordArtifact, error => recordArtifact(failureArtifact(error)));
+    if (artifact && typeof (artifact as Promise<IssueTriageShadowArtifact>).then === 'function') {
+      (artifact as Promise<IssueTriageShadowArtifact>).then(
+        resolved => containedRecord(recordArtifact, resolved, true),
+        error => containedRecord(recordArtifact, failureArtifact(error), false),
+      ).then(undefined, () => {});
     } else {
-      recordArtifact(artifact as IssueTriageShadowArtifact);
+      containedRecord(recordArtifact, artifact as IssueTriageShadowArtifact, true);
     }
   } catch (error) {
-    recordArtifact(failureArtifact(error));
+    containedRecord(recordArtifact, failureArtifact(error), false);
   }
   return previousWorkflowResult;
 }
@@ -489,23 +592,8 @@ function binary(samples: readonly IssueTriageEvaluationSample[], predicted: (sam
   return { sampleN: samples.length, ...prf(tp, fp, fn) };
 }
 
-function sumKnown(samples: readonly IssueTriageEvaluationSample[], key: 'inputTokens' | 'outputTokens' | 'costUsd'): number | null {
-  const values = samples.map(sample => sample.cascade.usage[key]);
-  if (values.some(value => value === null)) return null;
-  return (values as number[]).reduce((sum, value) => sum + value, 0);
-}
-
-function quantiles(values: readonly number[]): { p50: number; p95: number; p99: number } {
-  if (!values.length) return { p50: 0, p95: 0, p99: 0 };
-  const sorted = [...values].sort((left, right) => left - right);
-  const at = (q: number): number => sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)]!;
-  return { p50: at(0.5), p95: at(0.95), p99: at(0.99) };
-}
-
-function quality(samples: readonly IssueTriageEvaluationSample[], which: 'baseline' | 'cascade'): number {
-  if (!samples.length) return 0;
-  const matches = samples.filter(sample => correct(sample, which)).length;
-  return matches / samples.length;
+function rate(numerator: number, denominator: number): number {
+  return denominator ? numerator / denominator : 0;
 }
 
 function correct(sample: IssueTriageEvaluationSample, which: 'baseline' | 'cascade'): boolean {
@@ -524,33 +612,91 @@ function gateDecision(upstream: IssueTriageGateDecision, findings: readonly stri
   return 'PROMOTE';
 }
 
-function qualificationSplits(ids: readonly string[]) {
-  return [
-    freezeQualificationSplit('tuning', ['issue-triage-tuning-sentinel']),
-    freezeQualificationSplit('calibration', ['issue-triage-calibration-sentinel']),
-    freezeQualificationSplit('test', ids),
-  ];
+/** Supported interval level in bps, or null. The paired helpers accept integer levels strictly in (5000, 9999). */
+function levelInBps(confidenceInterval: IssueTriageEvaluationManifest['thresholds']['confidenceInterval']): number | null {
+  if (confidenceInterval.method !== 'wilson') return null;
+  const scaled = confidenceInterval.level * 10000;
+  const levelBps = Math.round(scaled);
+  return Math.abs(scaled - levelBps) < 1e-6 && levelBps > 5000 && levelBps < 9999 ? levelBps : null;
 }
 
-function wilsonLower(successes: number, n: number, _level: number): number {
-  if (n === 0) return 0;
-  const z = 1.959963984540054;
-  const rate = successes / n;
-  const denominator = 1 + z * z / n;
-  const center = (rate + z * z / (2 * n)) / denominator;
-  const margin = z * Math.sqrt(rate * (1 - rate) / n + z * z / (4 * n * n)) / denominator;
-  return Math.max(0, center - margin);
+/**
+ * The evaluated samples must be exactly the test split of splits frozen before scoring, and those splits must be
+ * the ones whose digests the manifest preregistered.
+ */
+function verifiedSplits(manifest: IssueTriageEvaluationManifest, splits: readonly QualificationSplit[],
+  samples: readonly IssueTriageEvaluationSample[]): QualificationSplit[] {
+  verifyQualificationSplits(splits);
+  const byName = new Map(splits.map(split => [split.name, split]));
+  const pinned = manifest.dataset.splitDigests;
+  if (byName.get('tuning')!.digest !== pinned.tuning || byName.get('calibration')!.digest !== pinned.calibration
+    || byName.get('test')!.digest !== pinned.test) {
+    throw new IssueTriagePilotError('evaluation split digests do not match the preregistered manifest');
+  }
+  const test = byName.get('test')!;
+  const ids = samples.map(sample => sample.id);
+  if (ids.length !== test.ids.length || new Set(ids).size !== ids.length || ids.some(id => !test.ids.includes(id))) {
+    throw new IssueTriagePilotError('evaluation samples do not match the frozen test split membership');
+  }
+  return [byName.get('tuning')!, byName.get('calibration')!, test];
 }
 
-function binaryHeldout(ids: readonly string[], samples: readonly BinaryQualificationSample[]) {
-  return evaluateBinaryHeldout(qualificationSplits(ids), samples);
+/** Scores a subset of the already-verified test split with the same frozen tuning/calibration splits. */
+function subsetSplits(splits: readonly QualificationSplit[], ids: readonly string[]): QualificationSplit[] {
+  return [splits[0]!, splits[1]!, freezeQualificationSplit('test', ids)];
 }
 
-function economicsBenefit(report: Pick<IssueTriageEvaluationReport, 'baselineComparison'>, metric: IssueTriageEvaluationManifest['thresholds']['benefit']['metric']): number | null {
-  if (metric === 'reviewer-time') return report.baselineComparison.delta.reviewerTimeMinutes === null
-    ? null : -report.baselineComparison.delta.reviewerTimeMinutes;
-  if (report.baselineComparison.delta.costUsd !== null) return -report.baselineComparison.delta.costUsd;
-  return report.baselineComparison.delta.tokens === null ? null : -report.baselineComparison.delta.tokens;
+/** Re-derives the deterministic ordering and checks the cascade's duplicate answer against it. */
+function verifySampleLineage(sample: IssueTriageEvaluationSample, pack: IssueTriagePilotPack): void {
+  const lineage = sample.lineage;
+  const where = `sample ${sample.id}`;
+  if (!lineage || lineage.generator !== pack.candidatePolicy.generator || lineage.noneOutcome !== 'none' || !Array.isArray(lineage.candidates)) {
+    throw new IssueTriagePilotError(`${where} lineage is missing or was not produced by the pinned generator`);
+  }
+  const candidates = lineage.candidates;
+  if (candidates.length > pack.candidatePolicy.maxCandidates || new Set(candidates.map(item => item.issueId)).size !== candidates.length
+    || candidates.some(item => item.issueId === 'none')) {
+    throw new IssueTriagePilotError(`${where} lineage exceeds the candidate policy or repeats an ID`);
+  }
+  for (let index = 0; index < candidates.length; index++) {
+    const current = candidates[index]!;
+    const previous = candidates[index - 1];
+    if (current.rank !== index + 1 || !Number.isFinite(current.score) || current.score <= 0 || current.score > 1
+      || (previous && (previous.score < current.score || (previous.score === current.score && previous.issueId.localeCompare(current.issueId) > 0)))) {
+      throw new IssueTriagePilotError(`${where} lineage is not deterministically ordered`);
+    }
+  }
+  const answer = sample.cascade.duplicate;
+  if (answer.issueId === 'none') {
+    if (answer.rank !== null) throw new IssueTriagePilotError(`${where} none duplicate outcome must not carry a rank`);
+    return;
+  }
+  const listed = candidates.find(item => item.issueId === answer.issueId);
+  if (!listed) throw new IssueTriagePilotError(`${where} duplicate ${answer.issueId} is not in the deterministic lineage`);
+  if (listed.rank !== answer.rank) {
+    throw new IssueTriagePilotError(`${where} duplicate rank for ${answer.issueId} does not match deterministic rank ${listed.rank}`);
+  }
+}
+
+function armUsage(samples: readonly IssueTriageEvaluationSample[], which: 'baseline' | 'cascade', key: 'inputTokens' | 'outputTokens' | 'costUsd'): number | null {
+  const totals = samples.map(sample => receiptTotal(sample[which].usageReceipts, key));
+  if (totals.some(total => total === null)) return null;
+  return (totals as number[]).reduce((sum, value) => sum + value, 0);
+}
+
+function sliceMetrics(samples: readonly IssueTriageEvaluationSample[]): IssueTriageSliceMetrics {
+  const accepted = samples.filter(sample => sample.cascade.acceptance.acceptedScoring);
+  const noneCases = samples.filter(sample => sample.label.duplicateOf === 'none');
+  const duplicateCases = samples.filter(sample => sample.label.duplicateOf !== 'none');
+  return {
+    cascadeQuality: rate(samples.filter(sample => correct(sample, 'cascade')).length, samples.length),
+    baselineQuality: rate(samples.filter(sample => correct(sample, 'baseline')).length, samples.length),
+    acceptedCoverage: rate(accepted.length, samples.length),
+    falseAutoRate: accepted.length ? accepted.filter(sample => !correct(sample, 'cascade')).length / accepted.length : null,
+    falseDuplicateRate: noneCases.length ? noneCases.filter(sample => sample.cascade.duplicate.issueId !== 'none').length / noneCases.length : null,
+    duplicateRecall: duplicateCases.length
+      ? duplicateCases.filter(sample => sample.cascade.duplicate.issueId === sample.label.duplicateOf).length / duplicateCases.length : null,
+  };
 }
 
 export function buildIssueTriageEvaluationReport(input: {
@@ -558,53 +704,141 @@ export function buildIssueTriageEvaluationReport(input: {
   manifest: IssueTriageEvaluationManifest;
   pack: IssueTriagePilotPack;
   samples: readonly IssueTriageEvaluationSample[];
+  /** Tuning/calibration/test memberships frozen before scoring; digests must match the manifest. */
+  splits: readonly QualificationSplit[];
   upstreamDecision: IssueTriageGateDecision;
 }): IssueTriageEvaluationReport {
   const pack = validateIssueTriagePilotPack(input.pack);
   const manifest = validateIssueTriageEvaluationManifest(input.manifest);
   const samples = [...input.samples];
+  if (!samples.length) throw new IssueTriagePilotError('issue triage evaluation requires at least one held-out sample');
+  const splits = verifiedSplits(manifest, input.splits, samples);
+  const registeredSlices = new Set(manifest.slices.map(slice => slice.id));
+  for (const sample of samples) {
+    if (sample.label.id !== sample.id) throw new IssueTriagePilotError(`sample ${sample.id} label id does not match`);
+    for (const slice of sample.label.slices) {
+      if (!registeredSlices.has(slice)) throw new IssueTriagePilotError(`sample ${sample.id} slice ${slice} is not preregistered`);
+    }
+    verifySampleLineage(sample, pack);
+  }
   const findings = new Set<string>();
+  const levelBps = levelInBps(manifest.thresholds.confidenceInterval);
+  if (levelBps === null) findings.add('confidence-interval-unsupported');
   if (samples.length < manifest.thresholds.minimumTotalSamples) findings.add('insufficient-total-samples');
-  if (manifest.thresholds.confidenceInterval.method !== 'wilson' || manifest.thresholds.confidenceInterval.level !== 0.95) {
-    findings.add('confidence-interval-unsupported');
-  }
-  for (const slice of manifest.slices) {
-    const count = samples.filter(sample => sample.label.slices.includes(slice.id)).length;
-    if (count < slice.minimumSupport) findings.add(`slice-insufficient:${slice.id}`);
-  }
+
+  const sliceReports = manifest.slices.map(slice => {
+    const members = samples.filter(sample => sample.label.slices.includes(slice.id));
+    const minimumSupport = Math.max(slice.minimumSupport, manifest.thresholds.minimumPerSliceSamples);
+    const status: 'supported' | 'insufficient' = members.length >= minimumSupport ? 'supported' : 'insufficient';
+    if (status === 'insufficient') findings.add(`slice-insufficient:${slice.id}`);
+    const suppressed = status === 'insufficient' && slice.aggregation === 'suppress-small-n';
+    return {
+      id: slice.id, dimension: slice.dimension, aggregation: slice.aggregation,
+      sampleN: suppressed ? null : members.length, minimumSupport, status, suppressed,
+      metrics: suppressed || !members.length ? null : sliceMetrics(members),
+    };
+  });
+
   const urgencyOrdinal = new Map(pack.urgencyRubric.map(level => [level.id, level.ordinal]));
-  const urgencyErrors = samples.map(sample => Math.abs(urgencyOrdinal.get(sample.cascade.urgency)! - urgencyOrdinal.get(sample.label.urgency)!));
-  if (samples.length) evaluateOrdinalHeldout(qualificationSplits(samples.map(sample => sample.id)), samples.map(sample => ({
+  const ordinalOf = (id: string, where: string): number => {
+    const ordinal = urgencyOrdinal.get(id);
+    if (ordinal === undefined) throw new IssueTriagePilotError(`${where} urgency ${id} is not in the governed rubric`);
+    return ordinal;
+  };
+  const ordinal = evaluateOrdinalHeldout(splits, samples.map(sample => ({
     id: sample.id,
-    trueLevel: urgencyOrdinal.get(sample.label.urgency)!,
-    predictedLevel: urgencyOrdinal.get(sample.cascade.urgency)!,
+    trueLevel: ordinalOf(sample.label.urgency, `sample ${sample.id} label`),
+    predictedLevel: ordinalOf(sample.cascade.urgency, `sample ${sample.id} cascade`),
     levels: pack.urgencyRubric.length,
   })));
+
   const duplicateCases = samples.filter(sample => sample.label.duplicateOf !== 'none');
   const noneCases = samples.filter(sample => sample.label.duplicateOf === 'none');
   const falseDuplicates = noneCases.filter(sample => sample.cascade.duplicate.issueId !== 'none').length;
   const duplicateHits = duplicateCases.filter(sample => sample.cascade.duplicate.issueId === sample.label.duplicateOf).length;
-  if (duplicateCases.length) evaluateRankingHeldout(qualificationSplits(duplicateCases.map(sample => sample.id)), duplicateCases.map(sample => ({
-    id: sample.id,
-    gold: { [sample.label.duplicateOf]: 1, none: 0 },
-    predicted: { [sample.label.duplicateOf]: sample.cascade.duplicate.issueId === sample.label.duplicateOf ? 1 : 0, none: sample.cascade.duplicate.issueId === 'none' ? 1 : 0 },
-  })));
+  const ranking = duplicateCases.length
+    ? evaluateRankingHeldout(subsetSplits(splits, duplicateCases.map(sample => sample.id)), duplicateCases.map(sample => {
+      const options = new Set([...sample.lineage.candidates.map(item => item.issueId), 'none', sample.label.duplicateOf]);
+      return {
+        id: sample.id,
+        gold: Object.fromEntries([...options].map(option => [option, option === sample.label.duplicateOf ? 1 : 0])),
+        predicted: Object.fromEntries([...options].map(option => [option, option === sample.cascade.duplicate.issueId ? 1 : 0])),
+      };
+    }))
+    : { sampleN: 0, comparablePairs: 0, concordance: null };
+  if (!duplicateCases.length) findings.add('duplicate-insufficient');
+  // Ranks below were re-validated against each sample's deterministic lineage.
   const topK: Record<string, number> = {};
   for (const k of [1, 3, 5]) {
-    const eligible = duplicateCases.filter(sample => sample.cascade.duplicate.rank !== null && sample.cascade.duplicate.rank <= k
-      && sample.cascade.duplicate.issueId === sample.label.duplicateOf).length;
-    topK[`top${k}`] = duplicateCases.length ? eligible / duplicateCases.length : 0;
+    topK[`top${k}`] = rate(duplicateCases.filter(sample => sample.cascade.duplicate.issueId === sample.label.duplicateOf
+      && sample.cascade.duplicate.rank !== null && sample.cascade.duplicate.rank <= k).length, duplicateCases.length);
   }
-  const ndcg = duplicateCases.length ? duplicateCases.reduce((sum, sample) => {
-    if (sample.cascade.duplicate.issueId !== sample.label.duplicateOf || sample.cascade.duplicate.rank === null) return sum;
-    return sum + 1 / Math.log2(sample.cascade.duplicate.rank + 1);
-  }, 0) / duplicateCases.length : 0;
-  const accepted = samples.filter(sample => sample.cascade.acceptance.acceptedScoring);
-  const acceptedCorrect = accepted.filter(sample => correct(sample, 'cascade')).length;
-  const calls = samples.reduce((acc, sample) => ({
-    jev: acc.jev + sample.cascade.calls.jev,
-    fallbackModel: acc.fallbackModel + sample.cascade.calls.fallbackModel,
-  }), { jev: 0, fallbackModel: 0 });
+  const ndcg = rate(duplicateCases.reduce((sum, sample) => sample.cascade.duplicate.issueId === sample.label.duplicateOf
+    && sample.cascade.duplicate.rank !== null ? sum + 1 / Math.log2(sample.cascade.duplicate.rank + 1) : sum, 0), duplicateCases.length);
+
+  // Selective risk and coverage come from the held-out helper: label 1 means "cascade answer correct".
+  const heldout = evaluateBinaryHeldout(splits, samples.map(sample => ({
+    id: sample.id,
+    slice: 'all',
+    label: 1,
+    probability: correct(sample, 'cascade') ? 1 : 0,
+    accepted: sample.cascade.acceptance.acceptedScoring,
+    latencyMs: sample.cascade.latencyMs,
+    inputTokens: receiptTotal(sample.cascade.usageReceipts, 'inputTokens'),
+    outputTokens: receiptTotal(sample.cascade.usageReceipts, 'outputTokens'),
+    costUsd: receiptTotal(sample.cascade.usageReceipts, 'costUsd'),
+    calls: sample.cascade.calls.jev + sample.cascade.calls.fallbackModel,
+    retries: sample.cascade.retries,
+    fallbacks: sample.cascade.fallbacks,
+  }))).overall;
+  const acceptedN = samples.filter(sample => sample.cascade.acceptance.acceptedScoring).length;
+  const acceptedErrors = heldout.selectiveRisk === null ? 0 : Math.round(heldout.selectiveRisk * acceptedN);
+  const selectiveRiskUpper = levelBps === null || acceptedN === 0 ? null
+    : wilsonScoreInterval({ events: acceptedErrors, n: acceptedN, levelBps })[1];
+  const coverageLower = levelBps === null ? null : wilsonScoreInterval({ events: acceptedN, n: samples.length, levelBps })[0];
+
+  const usageReconciled = samples.every(sample => usageReconciliationProblems(sample.baseline).length === 0
+    && usageReconciliationProblems(sample.cascade).length === 0);
+  if (!usageReconciled) findings.add('usage-unreconciled');
+
+  const baselineComparison = comparison(samples, usageReconciled);
+  let qualityNonInferiority: IssueTriageNonInferiority | null = null;
+  if (levelBps !== null) {
+    const counts = { both: 0, candidateOnly: 0, baselineOnly: 0, neither: 0 };
+    for (const sample of samples) {
+      const cascadeCorrect = correct(sample, 'cascade');
+      const baselineCorrect = correct(sample, 'baseline');
+      if (cascadeCorrect && baselineCorrect) counts.both++;
+      else if (cascadeCorrect) counts.candidateOnly++;
+      else if (baselineCorrect) counts.baselineOnly++;
+      else counts.neither++;
+    }
+    const marginBps = Math.round(manifest.thresholds.qualityNonInferiorityMargin * 10000);
+    const interval = pairedBinaryDifferenceInterval({ counts, levelBps, method: 'newcombe-10' });
+    const verdict = pairedNonInferiority({ interval, marginBps });
+    qualityNonInferiority = {
+      method: 'newcombe-hybrid-score', levelBps, marginBps, lowerBps: interval.lowerBps, upperBps: interval.upperBps,
+      estimateBps: interval.estimateBps, n: interval.n, decision: verdict.decision,
+    };
+    if (verdict.decision !== 'non-inferior') findings.add('quality-non-inferiority');
+    if (selectiveRiskUpper === null) findings.add('false-auto-insufficient');
+    else if (selectiveRiskUpper > manifest.thresholds.maximumFalseAutoRate) findings.add('false-auto-rate');
+    if (coverageLower! < manifest.thresholds.minimumAcceptedCoverage) findings.add('accepted-coverage');
+    if (!noneCases.length) findings.add('false-duplicate-insufficient');
+    else if (wilsonScoreInterval({ events: falseDuplicates, n: noneCases.length, levelBps })[1] > manifest.thresholds.maximumFalseDuplicateRate) {
+      findings.add('false-duplicate-rate');
+    }
+  }
+  const compatibilityRequired = pack.acceptance.calibration === 'required';
+  if (compatibilityRequired && samples.some(sample => sample.cascade.acceptance.acceptedScoring
+    && !registryAllows(sample.cascade.acceptance.compatibility, sample.cascade))) {
+    findings.add('calibration-required-unverified');
+  }
+  const benefit = economicsBenefit(baselineComparison, manifest.thresholds.benefit.metric);
+  if (benefit === null) findings.add('benefit-insufficient');
+  else if (benefit <= 0) findings.add('benefit-not-positive');
+
+  const sortedFindings = [...findings].sort();
   const report: IssueTriageEvaluationReport = {
     schemaVersion: 'decision-issue-triage-evaluation-report/v1',
     id: input.id,
@@ -617,100 +851,72 @@ export function buildIssueTriageEvaluationReport(input: {
     },
     classification: { issueType: multiclass(samples, 'issueType', pack), area: multiclass(samples, 'area', pack) },
     urgency: {
-      sampleN: samples.length,
-      meanAbsoluteError: urgencyErrors.length ? urgencyErrors.reduce((sum, value) => sum + value, 0) / urgencyErrors.length : 0,
-      exactRate: urgencyErrors.length ? urgencyErrors.filter(value => value === 0).length / urgencyErrors.length : 0,
+      sampleN: ordinal.sampleN,
+      meanAbsoluteError: ordinal.meanAbsoluteError,
+      normalizedAbsoluteError: ordinal.normalizedAbsoluteError,
+      exactRate: ordinal.exactRate,
     },
     completeness: binary(samples, sample => sample.cascade.completeness === 'complete', sample => sample.label.completeness === 'complete'),
     clarification: binary(samples, sample => sample.cascade.clarificationNeed === 'needed', sample => sample.label.clarificationNeed === 'needed'),
     duplicates: {
       sampleN: samples.length,
-      recall: duplicateCases.length ? duplicateHits / duplicateCases.length : 0,
+      duplicateN: duplicateCases.length,
+      noneN: noneCases.length,
+      recall: rate(duplicateHits, duplicateCases.length),
+      concordance: ranking.concordance,
+      comparablePairs: ranking.comparablePairs,
       ndcg,
       topK,
-      falseDuplicateRate: noneCases.length ? falseDuplicates / noneCases.length : 0,
-      noneRecall: noneCases.length ? (noneCases.length - falseDuplicates) / noneCases.length : 0,
+      falseDuplicateRate: rate(falseDuplicates, noneCases.length),
+      noneRecall: rate(noneCases.length - falseDuplicates, noneCases.length),
     },
-    slices: manifest.slices.map(slice => {
-      const sampleN = samples.filter(sample => sample.label.slices.includes(slice.id)).length;
-      return { id: slice.id, dimension: slice.dimension, sampleN, minimumSupport: slice.minimumSupport,
-        status: sampleN >= slice.minimumSupport ? 'supported' : 'insufficient' };
-    }),
+    slices: sliceReports,
     calibration: {
-      riskCoverage: acceptedCorrect / Math.max(1, samples.length),
-      acceptedCoverage: accepted.length / Math.max(1, samples.length),
+      riskCoverage: {
+        sampleN: heldout.sampleN, acceptedN, coverage: heldout.coverage, coverageLower,
+        selectiveRisk: heldout.selectiveRisk, selectiveRiskUpper,
+      },
       driftEvents: [...new Set(samples.map(sample => sample.cascade.acceptance.driftEvent).filter((value): value is string => value !== null))].sort(),
+      compatibilityRequired,
     },
     operations: {
-      reviewLoad: samples.filter(sample => !sample.cascade.acceptance.acceptedScoring || sample.cascade.clarificationNeed === 'needed').length / Math.max(1, samples.length),
-      overrideRate: samples.filter(sample => sample.label.reviewerWouldOverride).length / Math.max(1, samples.length),
-      latencyMs: quantiles(samples.map(sample => sample.cascade.latencyMs)),
-      tokens: { input: sumKnown(samples, 'inputTokens') as number | null, output: sumKnown(samples, 'outputTokens') as number | null },
-      costUsd: sumKnown(samples, 'costUsd') as number | null,
-      calls,
-      retryRate: samples.filter(sample => sample.cascade.retries > 0).length / Math.max(1, samples.length),
-      fallbackRate: samples.filter(sample => sample.cascade.fallbacks > 0).length / Math.max(1, samples.length),
-      cache: {
-        hits: samples.filter(sample => sample.cascade.cacheHit).length,
-        misses: samples.filter(sample => !sample.cascade.cacheHit).length,
+      reviewLoad: rate(samples.filter(sample => !sample.cascade.acceptance.acceptedScoring || sample.cascade.clarificationNeed === 'needed').length, samples.length),
+      overrideRate: rate(samples.filter(sample => sample.label.reviewerWouldOverride).length, samples.length),
+      latencyMs: heldout.latencyMs,
+      tokens: { input: armUsage(samples, 'cascade', 'inputTokens'), output: armUsage(samples, 'cascade', 'outputTokens') },
+      costUsd: armUsage(samples, 'cascade', 'costUsd'),
+      calls: {
+        jev: samples.reduce((sum, sample) => sum + sample.cascade.usageReceipts.filter(receipt => receipt.kind === 'jev').length, 0),
+        fallbackModel: samples.reduce((sum, sample) => sum + sample.cascade.usageReceipts.filter(receipt => receipt.kind === 'fallback-model').length, 0),
       },
+      retryRate: rate(samples.filter(sample => sample.cascade.retries > 0).length, samples.length),
+      fallbackRate: rate(samples.filter(sample => sample.cascade.fallbacks > 0).length, samples.length),
+      cache: {
+        hits: samples.filter(sample => sample.cascade.usageReceipts.some(receipt => receipt.kind === 'cache')).length,
+        misses: samples.filter(sample => !sample.cascade.usageReceipts.some(receipt => receipt.kind === 'cache')).length,
+      },
+      usageReconciled,
     },
-    baselineComparison: comparison(samples),
-    integrity: { upstreamDecision: input.upstreamDecision, findings: [...findings].sort() },
-    decision: gateDecision(input.upstreamDecision, [...findings]),
+    baselineComparison: { ...baselineComparison, qualityNonInferiority },
+    integrity: { upstreamDecision: input.upstreamDecision, findings: sortedFindings },
+    decision: gateDecision(input.upstreamDecision, sortedFindings),
   };
-  if (samples.length) {
-    const qualityMetrics = binaryHeldout(samples.map(sample => sample.id), samples.map(sample => ({
-      id: sample.id,
-      slice: sample.label.slices[0] ?? 'unspecified',
-      label: 1,
-      probability: correct(sample, 'cascade') ? 1 : 0,
-      accepted: sample.cascade.acceptance.acceptedScoring,
-      latencyMs: sample.cascade.latencyMs,
-      inputTokens: sample.cascade.usage.inputTokens,
-      outputTokens: sample.cascade.usage.outputTokens,
-      costUsd: sample.cascade.usage.costUsd,
-      calls: sample.cascade.calls.jev + sample.cascade.calls.fallbackModel,
-      retries: sample.cascade.retries,
-      fallbacks: sample.cascade.fallbacks,
-    })));
-    const cascadeQualityLower = 1 - qualityMetrics.overall.errorWilson95[1];
-    if (cascadeQualityLower < quality(samples, 'baseline') + manifest.thresholds.qualityNonInferiorityMargin) {
-      report.integrity.findings.push('quality-non-inferiority');
-    }
-    const falseAuto = accepted.length ? (accepted.length - acceptedCorrect) / accepted.length : null;
-    if (falseAuto === null) report.integrity.findings.push('false-auto-insufficient');
-    else if (falseAuto > manifest.thresholds.maximumFalseAutoRate) report.integrity.findings.push('false-auto-rate');
-    if (wilsonLower(accepted.length, samples.length, manifest.thresholds.confidenceInterval.level) < manifest.thresholds.minimumAcceptedCoverage) {
-      report.integrity.findings.push('accepted-coverage');
-    }
-  }
-  if (noneCases.length) {
-    const falseDuplicateMetrics = binaryHeldout(noneCases.map(sample => sample.id), noneCases.map(sample => ({
-      id: sample.id,
-      slice: sample.label.slices[0] ?? 'unspecified',
-      label: 0,
-      probability: sample.cascade.duplicate.issueId !== 'none' ? 1 : 0,
-      accepted: sample.cascade.acceptance.acceptedScoring,
-      latencyMs: sample.cascade.latencyMs,
-      inputTokens: sample.cascade.usage.inputTokens,
-      outputTokens: sample.cascade.usage.outputTokens,
-      costUsd: sample.cascade.usage.costUsd,
-      calls: sample.cascade.calls.jev + sample.cascade.calls.fallbackModel,
-      retries: sample.cascade.retries,
-      fallbacks: sample.cascade.fallbacks,
-    })));
-    if (falseDuplicateMetrics.overall.errorWilson95[1] > manifest.thresholds.maximumFalseDuplicateRate) {
-      report.integrity.findings.push('false-duplicate-rate');
-    }
-  } else {
-    report.integrity.findings.push('false-duplicate-insufficient');
-  }
-  const benefit = economicsBenefit(report, manifest.thresholds.benefit.metric);
-  if (benefit === null) report.integrity.findings.push('benefit-insufficient');
-  else if (benefit <= 0) report.integrity.findings.push('benefit-not-positive');
-  report.decision = gateDecision(input.upstreamDecision, report.integrity.findings);
   return validateIssueTriageEvaluationReport(report);
+}
+
+function registryAllows(compatibility: CompatibilityDecision | null, response: IssueTriageModelResponse): boolean {
+  return compatibility !== null && compatibility.action === 'allow' && compatibility.state !== 'unknown'
+    && compatibility.requestedAlias === response.requestedModel && compatibility.actualModel === response.actualModel;
+}
+
+/**
+ * Net benefit of the cascade over the baseline on the preregistered metric only. A null value means the
+ * evidence is insufficient; the token count is never substituted for an unknown cost.
+ */
+function economicsBenefit(comparisonArms: Omit<IssueTriageEvaluationReport['baselineComparison'], 'qualityNonInferiority'>,
+  metric: IssueTriageEvaluationManifest['thresholds']['benefit']['metric']): number | null {
+  const delta = metric === 'reviewer-time' ? comparisonArms.delta.reviewerTimeMinutes : comparisonArms.delta.costUsd;
+  return delta === null ? null : -delta;
 }
 
 function countBy(values: readonly string[]): Record<string, number> {
@@ -719,15 +925,21 @@ function countBy(values: readonly string[]): Record<string, number> {
   return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-function comparison(samples: readonly IssueTriageEvaluationSample[]): IssueTriageEvaluationReport['baselineComparison'] {
-  const arm = (which: 'baseline' | 'cascade') => ({
-    quality: quality(samples, which),
-    tokens: sumArm(samples, which, 'inputTokens', 'outputTokens'),
-    costUsd: sumArm(samples, which, 'costUsd'),
-    reviewerTimeMinutes: samples.some(sample => !Number.isFinite(sample.label.reviewerTimeBaselineMinutes)
-      || !Number.isFinite(sample.label.reviewerTimeCascadeMinutes)) ? null
-      : samples.reduce((sum, sample) => sum + (which === 'baseline' ? sample.label.reviewerTimeBaselineMinutes : sample.label.reviewerTimeCascadeMinutes), 0),
-  });
+/** Arm totals are summed from provider receipts; unreconciled usage leaves token and cost comparisons unknown. */
+function comparison(samples: readonly IssueTriageEvaluationSample[], usageReconciled: boolean)
+  : Omit<IssueTriageEvaluationReport['baselineComparison'], 'qualityNonInferiority'> {
+  const arm = (which: 'baseline' | 'cascade') => {
+    const input = armUsage(samples, which, 'inputTokens');
+    const output = armUsage(samples, which, 'outputTokens');
+    return {
+      quality: rate(samples.filter(sample => correct(sample, which)).length, samples.length),
+      tokens: !usageReconciled || input === null || output === null ? null : input + output,
+      costUsd: usageReconciled ? armUsage(samples, which, 'costUsd') : null,
+      reviewerTimeMinutes: samples.some(sample => !Number.isFinite(sample.label.reviewerTimeBaselineMinutes)
+        || !Number.isFinite(sample.label.reviewerTimeCascadeMinutes)) ? null
+        : samples.reduce((sum, sample) => sum + (which === 'baseline' ? sample.label.reviewerTimeBaselineMinutes : sample.label.reviewerTimeCascadeMinutes), 0),
+    };
+  };
   const baseline = arm('baseline');
   const cascade = arm('cascade');
   return {
@@ -741,17 +953,6 @@ function comparison(samples: readonly IssueTriageEvaluationSample[]): IssueTriag
         ? null : cascade.reviewerTimeMinutes - baseline.reviewerTimeMinutes,
     },
   };
-}
-
-function sumArm(samples: readonly IssueTriageEvaluationSample[], which: 'baseline' | 'cascade',
-  key: 'costUsd'): number | null;
-function sumArm(samples: readonly IssueTriageEvaluationSample[], which: 'baseline' | 'cascade',
-  key: 'inputTokens', second: 'outputTokens'): number | null;
-function sumArm(samples: readonly IssueTriageEvaluationSample[], which: 'baseline' | 'cascade',
-  key: 'inputTokens' | 'outputTokens' | 'costUsd', second?: 'outputTokens'): number | null {
-  const values = samples.flatMap(sample => second ? [sample[which].usage[key], sample[which].usage[second]] : [sample[which].usage[key]]);
-  if (values.some(value => value === null)) return null;
-  return (values as number[]).reduce((sum, value) => sum + value, 0);
 }
 
 export function issueTriageArtifactDigest(value: unknown): `sha256:${string}` {
