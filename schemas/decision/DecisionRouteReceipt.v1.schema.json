@@ -4,7 +4,7 @@
   "title": "Decision Route Receipt",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "routing", "task", "status", "reason", "candidatePins", "eligibleRouteIds", "excluded", "jev", "selectedRouteId", "selectionReason", "actual", "attempts", "fallbacks", "usage", "outcome", "createdAtEpochMs", "digest"],
+  "required": ["schemaVersion", "routing", "task", "status", "reason", "candidatePins", "eligibleRouteIds", "excluded", "jev", "counterfactual", "selectedRouteId", "selectionReason", "actual", "attempts", "skipped", "fallbacks", "budget", "deadlineEpochMs", "usage", "outcome", "createdAtEpochMs", "digest"],
   "properties": {
     "schemaVersion": { "const": "decision-route-receipt/v1" },
     "routing": {
@@ -16,7 +16,7 @@
     },
     "task": {
       "type": "object", "additionalProperties": false, "required": ["id", "projection"],
-      "properties": { "id": { "$ref": "#/$defs/name" }, "projection": { "type": ["object", "null"], "additionalProperties": true } }
+      "properties": { "id": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/name" }] }, "projection": { "type": ["object", "null"], "additionalProperties": true } }
     },
     "status": { "enum": ["disabled", "no-route", "review", "selected"] },
     "reason": { "type": "string", "minLength": 1 },
@@ -33,6 +33,16 @@
       }
     },
     "jev": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/jevEvidence" }] },
+    "counterfactual": {
+      "type": "object", "additionalProperties": false, "required": ["status", "reason", "routeId", "ranking"],
+      "description": "The Jev-assisted policy's shadow choice. It is never executed.",
+      "properties": {
+        "status": { "enum": ["not-evaluated", "selected", "deterministic-fallback", "review"] },
+        "reason": { "type": "string", "minLength": 1 },
+        "routeId": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/name" }] },
+        "ranking": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" } }
+      }
+    },
     "selectedRouteId": { "type": ["string", "null"], "minLength": 1 },
     "selectionReason": { "type": "string", "minLength": 1 },
     "actual": {
@@ -42,7 +52,22 @@
       }
     },
     "attempts": { "type": "array", "items": { "$ref": "#/$defs/attempt" } },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["routeId", "reason"],
+        "properties": {
+          "routeId": { "$ref": "#/$defs/name" },
+          "reason": { "enum": ["circuit-open", "budget-exhausted", "deadline-exhausted", "reservation-denied"] }
+        }
+      }
+    },
     "fallbacks": { "type": "array", "items": { "$ref": "#/$defs/name" } },
+    "budget": {
+      "type": "object", "additionalProperties": false, "required": ["limitMicros", "spentMicros"],
+      "properties": { "limitMicros": { "type": ["integer", "null"], "minimum": 0 }, "spentMicros": { "type": ["integer", "null"], "minimum": 0 } }
+    },
+    "deadlineEpochMs": { "type": ["integer", "null"], "minimum": 0 },
     "usage": { "$ref": "#/$defs/usage" },
     "outcome": {
       "type": "object", "additionalProperties": false, "required": ["verified", "label"],
@@ -80,7 +105,7 @@
         "costMicrosPerAttempt": { "type": ["integer", "null"], "minimum": 0 }
       }
     },
-    "exclusionReason": { "enum": ["privacy-denied", "authorization-denied", "region-denied", "tool-denied", "context-denied", "allowlist-denied", "budget-denied", "deadline-denied", "health-denied", "not-executable", "capability-denied", "reservation-denied"] },
+    "exclusionReason": { "enum": ["privacy-denied", "authorization-denied", "region-denied", "tool-denied", "context-denied", "allowlist-denied", "budget-denied", "deadline-denied", "health-denied", "not-executable", "capability-denied", "permission-denied", "provider-denied"] },
     "usage": {
       "type": "object", "additionalProperties": false, "required": ["inputTokens", "outputTokens", "costMicros"],
       "properties": {
@@ -94,8 +119,8 @@
       "properties": {
         "ordinal": { "type": "integer", "minimum": 1 },
         "routeId": { "$ref": "#/$defs/name" },
-        "status": { "enum": ["succeeded", "failed", "skipped"] },
-        "reason": { "enum": ["none", "rate-limit", "outage", "circuit-open", "timeout", "rejected", "failed", "not-attempted"] },
+        "status": { "enum": ["succeeded", "failed"] },
+        "reason": { "enum": ["none", "rate-limit", "outage", "circuit-open", "timeout", "rejected", "failed", "cancelled", "invalid-result", "substituted"] },
         "actualProvider": { "type": ["string", "null"] },
         "actualModel": { "type": ["string", "null"] },
         "workerId": { "type": ["string", "null"] },
@@ -113,12 +138,12 @@
         "calibration": { "enum": ["calibrated", "uncalibrated", "unknown"] },
         "provenance": {
           "type": "object", "additionalProperties": false, "required": ["adapterVersion", "requestDigest", "responseDigest"],
-          "properties": { "adapterVersion": { "type": "string" }, "requestDigest": { "$ref": "#/$defs/digest" }, "responseDigest": { "$ref": "#/$defs/digest" } }
+          "properties": { "adapterVersion": { "type": "string", "minLength": 1, "maxLength": 128 }, "requestDigest": { "$ref": "#/$defs/digest" }, "responseDigest": { "$ref": "#/$defs/digest" } }
         },
         "taskComplexity": { "type": "number", "minimum": 0, "maximum": 1 },
         "ambiguity": { "type": "number", "minimum": 0, "maximum": 1 },
         "distributions": {
-          "type": "array", "minItems": 1,
+          "type": "array", "minItems": 1, "maxItems": 16,
           "items": {
             "type": "object", "additionalProperties": false, "required": ["routeId", "taskFit", "reasoningNeed"],
             "properties": { "routeId": { "$ref": "#/$defs/name" }, "taskFit": { "type": "number", "minimum": 0, "maximum": 1 }, "reasoningNeed": { "type": "number", "minimum": 0, "maximum": 1 } }

@@ -587,6 +587,24 @@
       "publication": { "public": true }
     },
     {
+      "logicalName": "decision.routing-task",
+      "id": "https://aiwg.io/schemas/decision/DecisionRoutingTask.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionRoutingTask.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-routing-runtime", "boundary": "D28 closed task requirements and ordinary authorization ceiling; unknown requirements fail closed", "path": "src/decision/routing/runtime.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/routing/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/routing/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
       "logicalName": "decision.route-receipt",
       "id": "https://aiwg.io/schemas/decision/DecisionRouteReceipt.v1.schema.json",
       "version": "1.0.0",

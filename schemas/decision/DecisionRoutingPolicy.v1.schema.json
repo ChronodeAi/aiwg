@@ -10,7 +10,7 @@
     "schemaVersion": { "const": "decision-routing-policy/v1" },
     "id": { "$ref": "#/$defs/name" },
     "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
-    "mode": { "enum": ["disabled", "shadow"] },
+    "mode": { "enum": ["disabled", "shadow"], "description": "No mode executes a Jev-selected route; shadow executes only the deterministic route." },
     "policyVersion": { "$ref": "#/$defs/name" },
     "candidates": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/candidate" } },
     "defaultRouteId": { "type": ["string", "null"], "minLength": 1 },
@@ -37,7 +37,7 @@
         "maxFallbacks": { "type": "integer", "minimum": 0, "maximum": 15 },
         "maxCostMicros": { "type": "integer", "minimum": 0 },
         "deadlineMs": { "type": "integer", "minimum": 1 },
-        "retryDelayMs": { "type": "integer", "minimum": 0 },
+        "retryDelayMs": { "type": "integer", "minimum": 1, "maximum": 30000 },
         "unknownCost": { "const": "reject" }
       }
     },
@@ -47,7 +47,7 @@
       "required": ["enabled", "calibrationRequired", "compatibleProfiles", "uncertaintyThresholdBps"],
       "properties": {
         "enabled": { "type": "boolean" },
-        "calibrationRequired": { "type": "boolean" },
+        "calibrationRequired": { "const": true },
         "compatibleProfiles": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/name" } },
         "uncertaintyThresholdBps": { "$ref": "#/$defs/bps" }
       }
