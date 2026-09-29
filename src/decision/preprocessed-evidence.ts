@@ -1,7 +1,9 @@
 import { canonicalJson, sha256 } from '../security/artifact-trust.js';
 import { admitEntry } from './entry.js';
 import type { DecisionLifecycleHold, DecisionLifecycleReference, DecisionLifecycleTombstone } from './lifecycle.js';
-import { artifactDigest, preprocessedEvidenceSchemaErrors, preprocessingLineageSchemaErrors } from './validate.js';
+import {
+  artifactDigest, preprocessedEvidenceSchemaErrors, preprocessingLineageSchemaErrors, resolveJsonPointer,
+} from './validate.js';
 import type { ArtifactPin } from './types.js';
 
 export const PREPROCESSED_EVIDENCE_KIND = 'PreprocessedEvidence' as const;
@@ -125,6 +127,11 @@ export interface PreprocessedEvidenceReference {
   outputDigest: `sha256:${string}`;
   /** The D10 provider/origin this lineage was resolved (and egress-authorized) for. */
   destination: PreprocessingEgressDestination;
+  /**
+   * Where the resolved text sits in the decision input and the digest of that exact text. The
+   * evaluator refuses dispatch unless the input value at `pointer` has this digest.
+   */
+  input?: { pointer: string; textDigest: `sha256:${string}` };
   selectedSegments: Array<{
     id: string;
     ordinal: number;
@@ -171,7 +178,8 @@ export interface PreprocessedEvidenceTrace {
 }
 
 export type PreprocessingDispatchGateReason = PreprocessedEvidenceReviewReason
-  | 'unverified' | 'unavailable' | 'destination-mismatch' | 'destination-unbound' | 'malformed-lineage';
+  | 'unverified' | 'unavailable' | 'destination-mismatch' | 'destination-unbound' | 'malformed-lineage'
+  | 'input-unbound' | 'input-mismatch';
 
 /** Evaluator-written pre-dispatch verdict. Anything but `allowed` means no credential or transport call. */
 export interface PreprocessingDispatchGate {
@@ -211,6 +219,8 @@ export interface ResolvePreprocessedEvidenceOptions {
   requireRawEgress?: boolean;
   /** Tombstoned lineage records withhold text; held records route to review. */
   lifecycle?: PreprocessingLifecycleState;
+  /** JSON pointer of the decision input field that will carry `state.text` (required for evaluation). */
+  inputPointer?: string;
 }
 
 export interface PreprocessedEvidenceResolution {
@@ -224,6 +234,10 @@ export interface PreprocessedEvidenceResolution {
 export interface PreprocessingVerification {
   manifests: PreprocessedEvidence[];
   lifecycle?: PreprocessingLifecycleState;
+  /** Host acceptance thresholds, re-applied to the current manifests; stored trace status is never trusted. */
+  minQualityScore?: number;
+  maxAgeMs?: number;
+  now?: () => number;
 }
 
 export class PreprocessedEvidenceError extends Error {
@@ -290,14 +304,23 @@ export function resolvePreprocessedEvidence(
     return { status: 'ready', reasons: [], state: { text: '', lineage: [] },
       receiptEvidence: { schemaVersion: 'decision-preprocessing-lineage/v1', status: 'ready', references: [], traces: [] } };
   }
+  if (options.inputPointer !== undefined
+    && (typeof options.inputPointer !== 'string' || !/^(?:\/[^/]*)+$/.test(options.inputPointer))) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'input pointer must be a non-root JSON pointer');
+  }
   const resolved = manifests.map(manifest => resolveOne(manifest, options));
   const reasons = [...new Set(resolved.flatMap(item => item.reasons))];
   const status = reasons.length ? 'review' : 'ready';
+  const text = resolved.map(item => item.text).join('\n\n');
+  if (options.inputPointer !== undefined) {
+    const input = { pointer: options.inputPointer, textDigest: preprocessedEvidenceContentDigest(text) };
+    resolved.forEach(item => { item.reference.input = { ...input }; });
+  }
   return {
     status,
     reasons,
     state: {
-      text: resolved.map(item => item.text).join('\n\n'),
+      text,
       lineage: resolved.map(item => item.reference),
     },
     receiptEvidence: {
@@ -439,6 +462,7 @@ export function gatePreprocessedEvidenceDispatch(
   lineage: PreprocessedEvidenceReceiptEvidence,
   verification: PreprocessingVerification | undefined,
   destinations: Array<PreprocessingEgressDestination | null>,
+  input: unknown,
 ): PreprocessingDispatchGate {
   if (!isWellFormedPreprocessingLineage(lineage)) return { outcome: 'refused', reasons: ['malformed-lineage'] };
   const refused = new Set<PreprocessingDispatchGateReason>();
@@ -448,6 +472,14 @@ export function gatePreprocessedEvidenceDispatch(
       if (!sameDestination(reference.destination, destination)) refused.add('destination-mismatch');
       else if (!reference.policy.derivedEgressAllowed) refused.add('derived-egress-denied');
     }
+  }
+  if (refused.size) return { outcome: 'refused', reasons: [...refused] };
+  // The text actually in the decision input must be the resolved lineage text.
+  for (const reference of lineage.references) {
+    if (!reference.input) { refused.add('input-unbound'); continue; }
+    const value = resolveJsonPointer(input, reference.input.pointer);
+    if (!value.found || typeof value.value !== 'string'
+      || preprocessedEvidenceContentDigest(value.value) !== reference.input.textDigest) refused.add('input-mismatch');
   }
   if (refused.size) return { outcome: 'refused', reasons: [...refused] };
 
@@ -475,9 +507,13 @@ export function gatePreprocessedEvidenceDispatch(
       if (current.length !== 1) { review.add('unavailable'); continue; }
       try {
         if (checkPreprocessedEvidenceReference(reference, current[0]!).status !== 'current') review.add('stale');
-        if (verification.lifecycle) {
-          preprocessingLifecycleReasons(current[0]!, verification.lifecycle).forEach(reason => review.add(reason));
-        }
+        // Re-derive quality, trust, age, egress and lifecycle from the current manifest under host thresholds.
+        resolveOne(current[0]!, { destination: reference.destination,
+          ...(verification.minQualityScore !== undefined ? { minQualityScore: verification.minQualityScore } : {}),
+          ...(verification.maxAgeMs !== undefined ? { maxAgeMs: verification.maxAgeMs } : {}),
+          ...(verification.now ? { now: verification.now } : {}),
+          ...(verification.lifecycle ? { lifecycle: verification.lifecycle } : {}),
+        }).reasons.forEach(reason => review.add(reason));
       } catch {
         review.add('stale');
       }
@@ -708,8 +744,13 @@ function validateSegments(spec: PreprocessedEvidence['spec']): void {
   if (ordered.some((segment, index) => index > 0 && segment.outputRange.start < ordered[index - 1]!.outputRange.end)) {
     throw new PreprocessedEvidenceError('invalid-manifest', 'segment output ranges must follow ordinal order without overlap');
   }
+  const selectedIds = new Set<string>();
   for (const reference of spec.selectedSegments) {
     if (!isRecord(reference)) throw new PreprocessedEvidenceError('invalid-manifest', 'selected segment is malformed');
+    if (selectedIds.has(String(reference.segmentId))) {
+      throw new PreprocessedEvidenceError('invalid-manifest', 'selected segments contain duplicate segment IDs');
+    }
+    selectedIds.add(String(reference.segmentId));
     rejectUnknown(reference, ['segmentId', 'outputVersion', 'outputDigest'], 'selected segment');
     if (!nonEmpty(reference.segmentId) || !Number.isSafeInteger(reference.outputVersion)
       || reference.outputVersion < 1 || !validDigest(reference.outputDigest)) {

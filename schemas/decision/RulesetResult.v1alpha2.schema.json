@@ -102,7 +102,7 @@
     "preprocessingGateReason": {
       "anyOf": [
         { "$ref": "#/$defs/preprocessingReviewReason" },
-        { "enum": ["unverified", "unavailable", "destination-mismatch", "destination-unbound", "malformed-lineage"] }
+        { "enum": ["unverified", "unavailable", "destination-mismatch", "destination-unbound", "malformed-lineage", "input-unbound", "input-mismatch"] }
       ]
     },
     "pin": {
@@ -131,6 +131,15 @@
             "origin": { "type": "string", "minLength": 1 }
           },
           "required": ["provider", "origin"],
+          "additionalProperties": false
+        },
+        "input": {
+          "type": "object",
+          "properties": {
+            "pointer": { "type": "string", "pattern": "^(?:/[^/]*)+$" },
+            "textDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+          },
+          "required": ["pointer", "textDigest"],
           "additionalProperties": false
         },
         "selectedSegments": {

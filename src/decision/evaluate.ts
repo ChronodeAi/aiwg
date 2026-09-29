@@ -252,7 +252,7 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
   if (!isEmptyPreprocessingLineage(request.preprocessingLineage)) {
     const gate = gatePreprocessedEvidenceDispatch(request.preprocessingLineage!, request.preprocessingVerification,
       resolved.flatMap(item => request.binding.spec.evaluations[item.alias]!.targets
-        .map(target => preprocessingDestination(request, item.alias, target))));
+        .map(target => preprocessingDestination(request, item.alias, target))), request.input);
     base = { ...base, spec: { ...base.spec, preprocessingLineage: base.spec.preprocessingLineage
       ? { ...base.spec.preprocessingLineage, dispatchGate: gate }
       : { schemaVersion: 'decision-preprocessing-lineage/v1', status: 'review', references: [], traces: [], dispatchGate: gate } } };

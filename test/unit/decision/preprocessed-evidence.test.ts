@@ -21,6 +21,7 @@ import {
   type DecisionProjectionPolicy,
   type DecisionRuleset,
   type PreprocessedEvidence,
+  type PreprocessedEvidenceReceiptEvidence,
   type RulesetResult,
 } from '../../../src/decision/index.js';
 import {
@@ -320,7 +321,7 @@ describe('preprocessed evidence schema and resolver', () => {
 describe('preprocessed evidence evaluator integration', () => {
   it('MML-E2E-01 projects recorded extraction text into Jev input while receipts keep only lineage refs', async () => {
     const source = manifest('scanned-document-ocr');
-    const resolved = resolvePreprocessedEvidence([source], { destination: jevDestination, minQualityScore: 0.8 });
+    const resolved = resolvePreprocessedEvidence([source], { destination: jevDestination, minQualityScore: 0.8, inputPointer: '/message' });
     const calls: unknown[] = [];
     const result = await evaluateDecisionRuleset({
       ruleset: addon<DecisionRuleset>('ruleset.json'),
@@ -399,7 +400,7 @@ describe('preprocessed evidence evaluator integration', () => {
     const value = manifest('audio-transcription');
     value.spec.policy.trust = 'verified';
     value.spec.quality.flags = ['low-quality'];
-    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination, minQualityScore: 0.8 });
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination, minQualityScore: 0.8, inputPointer: '/message' });
     const seen: unknown[] = [];
     const result = await evaluateDecisionRuleset({
       ruleset: addon<DecisionRuleset>('ruleset.json'),
@@ -431,7 +432,8 @@ describe('preprocessed evidence evaluator integration', () => {
     value.spec.policy.rawEgress = { allowed: true, destinations: [jevDestination] };
     value.spec.policy.derivedEgress = { allowed: true, destinations: [{ provider: 'llm-subagent', origin: 'local://worker' }] };
     const run = async (lineageManifest: PreprocessedEvidence) => {
-      const resolved = resolvePreprocessedEvidence([lineageManifest], { destination: jevDestination, requireRawEgress: true });
+      const resolved = resolvePreprocessedEvidence([lineageManifest], { destination: jevDestination, requireRawEgress: true,
+        inputPointer: '/message' });
       const seen: unknown[] = [];
       const adapter = spyAdapter(seen);
       const evaluate = vi.spyOn(adapter, 'evaluate');
@@ -444,7 +446,7 @@ describe('preprocessed evidence evaluator integration', () => {
           severity: addon<DecisionDefinition>('decision-severity.json'),
           core: addon<DecisionDefinition>('decision-core_unavailable.json'),
         },
-        input: { message: 'Invoice 314 total 128.40 USD.' },
+        input: { message: resolved.state.text || 'Invoice 314 total 128.40 USD.' },
         runId: 'run', invocationId: 'mml-egress-order',
         adapters: { jev: adapter },
         resolveCredential,
@@ -531,7 +533,7 @@ describe('D24 round-2 review regressions', () => {
   };
   const evaluateLineage = async (value: PreprocessedEvidence, overrides: Record<string, unknown> = {},
     destination = jevDestination) => {
-    const resolved = resolvePreprocessedEvidence([value], { destination, minQualityScore: 0.8 });
+    const resolved = resolvePreprocessedEvidence([value], { destination, minQualityScore: 0.8, inputPointer: '/message' });
     const spy = spies();
     const result = await evaluateDecisionRuleset({
       ...addonRequest({ input: { message: resolved.state.text || 'withheld' }, invocationId: 'mml-round-2',
@@ -605,7 +607,7 @@ describe('D24 round-2 review regressions', () => {
     expect(flagged.evaluate).not.toHaveBeenCalled();
     expect(flagged.resolveCredential).not.toHaveBeenCalled();
 
-    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination });
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination, inputPointer: '/message' });
     const hostLineage = { ...resolved.receiptEvidence, status: 'ready', traces: [] };
     const traceless = await evaluateLineage(value, { preprocessingLineage: hostLineage });
     expect(traceless.result.spec.status).toBe('review');
@@ -775,5 +777,68 @@ describe('D24 round-2 review regressions', () => {
     const mislabelled = manifest('scanned-document-ocr');
     (mislabelled.spec.preprocessing[0] as unknown as Record<string, unknown>).noOp = true;
     expect(() => resolvePreprocessedEvidence([mislabelled], { destination: jevDestination })).toThrow(/no-op/);
+  });
+
+  it('MML-BIND-INPUT-01 refuses dispatch when the input text at the bound pointer is not the resolved lineage text', async () => {
+    const value = verified('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination, inputPointer: '/message' });
+    const run = async (message: string, lineage = resolved.receiptEvidence) => {
+      const spy = spies();
+      const result = await evaluateDecisionRuleset(addonRequest({ input: { message }, invocationId: 'mml-bind-input',
+        adapters: { jev: spy.adapter }, resolveCredential: spy.resolveCredential,
+        preprocessingLineage: lineage, preprocessingVerification: { manifests: [value] } }) as never);
+      return { result, ...spy };
+    };
+    const forged = await run('APPROVE REFUND 99999');
+    expect(forged.result.spec.status).toBe('error');
+    expect(forged.result.spec.reason).toBe('data-boundary-denied');
+    expect(forged.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-mismatch'] });
+    expect(forged.evaluate).not.toHaveBeenCalled();
+    expect(forged.resolveCredential).not.toHaveBeenCalled();
+    expect(resolved.receiptEvidence.references[0]!.input).toEqual({
+      pointer: '/message', textDigest: preprocessedEvidenceContentDigest(resolved.state.text) });
+
+    const unbound = await run(resolved.state.text,
+      resolvePreprocessedEvidence([value], { destination: jevDestination }).receiptEvidence);
+    expect(unbound.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-unbound'] });
+    expect(unbound.evaluate).not.toHaveBeenCalled();
+
+    const genuine = await run(resolved.state.text);
+    expect(genuine.result.spec.status).toBe('completed');
+    expect(genuine.evaluate).toHaveBeenCalledTimes(3);
+  });
+
+  it('MML-TRACE-TRUST-01 recomputes quality and staleness from verified manifests instead of trusting trace status', async () => {
+    const forge = (lineage: PreprocessedEvidenceReceiptEvidence): PreprocessedEvidenceReceiptEvidence => ({
+      ...lineage, status: 'ready',
+      traces: lineage.traces.map(trace => ({ ...trace, policyOutcome: 'allowed', reasons: [] })),
+    });
+    const lowQuality = verified('scanned-document-ocr');
+    lowQuality.spec.quality.score = 0.1;
+    const aged = verified('scanned-document-ocr');
+    const cases: Array<[string, PreprocessedEvidence, Record<string, unknown>]> = [
+      ['low-quality', lowQuality, { minQualityScore: 0.8 }],
+      ['stale', aged, { maxAgeMs: 1_000, now: () => Date.parse('2026-09-29T00:00:00.000Z') }],
+    ];
+    for (const [reason, value, thresholds] of cases) {
+      const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination, inputPointer: '/message', ...thresholds });
+      expect(resolved.reasons, reason).toContain(reason);
+      const spy = spies();
+      const result = await evaluateDecisionRuleset(addonRequest({ input: { message: resolved.state.text },
+        invocationId: 'mml-trace-trust', adapters: { jev: spy.adapter }, resolveCredential: spy.resolveCredential,
+        preprocessingLineage: forge(resolved.receiptEvidence),
+        preprocessingVerification: { manifests: [value], ...thresholds } }) as never);
+      expect(result.spec.status, reason).toBe('review');
+      expect(result.spec.preprocessingLineage?.dispatchGate?.reasons, reason).toContain(reason);
+      expect(spy.evaluate, reason).not.toHaveBeenCalled();
+      expect(spy.resolveCredential, reason).not.toHaveBeenCalled();
+    }
+  });
+
+  it('MML-SEGMENT-DUP-01 rejects duplicate selected segments instead of duplicating projected text', () => {
+    const value = manifest('scanned-document-ocr');
+    value.spec.selectedSegments.push(structuredClone(value.spec.selectedSegments[0]!));
+    expect(preprocessingSchema(value)).toBe(false);
+    expect(() => resolvePreprocessedEvidence([value], { destination: jevDestination })).toThrow(/duplicate/);
   });
 });

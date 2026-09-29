@@ -62,7 +62,8 @@ export async function runPreprocessingLineageExample(runtime, { invocationId = '
   // A no-egress local adapter with no projection policy is the local destination for this adapter.
   const destination = { provider: 'jev', origin: runtime.PREPROCESSING_LOCAL_ORIGIN };
   manifest.spec.policy.derivedEgress.destinations = [destination];
-  const resolved = runtime.resolvePreprocessedEvidence([manifest], { destination, minQualityScore: 0.8 });
+  // inputPointer binds the resolved text to the input field the evaluator will dispatch.
+  const resolved = runtime.resolvePreprocessedEvidence([manifest], { destination, minQualityScore: 0.8, inputPointer: '/message' });
   const seen = [];
   const result = await runtime.evaluateDecisionRuleset({
     ruleset: await json('agentic/code/addons/decision-engine/examples/ruleset.json'),
