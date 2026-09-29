@@ -5,6 +5,7 @@ import type {
   AdapterObservation,
   DecisionAcceptanceEvidence,
   DecisionDefinition,
+  ExecutionTarget,
   PrimitiveAcceptancePolicy,
 } from './types.js';
 import { DecisionValidationError } from './validate.js';
@@ -81,6 +82,24 @@ export function applyPrimitiveAcceptance(
     }
   }
   return routed(observation, policy, policy.defaultRoute, 'default', evidence);
+}
+
+export function applyTargetAcceptance(
+  definition: DecisionDefinition,
+  target: ExecutionTarget,
+  observation: AdapterObservation,
+): AdapterObservation {
+  if (observation.status !== 'success') return observation;
+  if (target.acceptance.mode === 'typed-value') return observation;
+  if (target.acceptance.mode === 'primitive-policy') return applyPrimitiveAcceptance(definition, target.acceptance, observation);
+  if (!observation.uncertainty || observation.uncertainty.confidence === null) {
+    return { ...observation, status: 'abstained', reason: 'missing-confidence' };
+  }
+  if (observation.uncertainty.profile !== target.acceptance.profile) {
+    return { ...observation, status: 'abstained', reason: 'confidence-profile-mismatch' };
+  }
+  return observation.uncertainty.confidence * 10_000 < target.acceptance.minimumBps
+    ? { ...observation, status: 'abstained', reason: 'low-confidence' } : observation;
 }
 
 function deriveEvidence(

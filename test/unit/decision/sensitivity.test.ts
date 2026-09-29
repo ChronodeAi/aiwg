@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { loadSchemaCatalog, SchemaResolver } from '../../../src/schema/index.js';
 import {
   DECISION_API_VERSION,
+  DECISION_API_VERSION_STRUCTURED,
   analyzeDecisionSensitivity,
   artifactPin,
   evaluateDecisionRuleset,
@@ -19,11 +20,16 @@ import {
   type DecisionRuleset,
   type RulesetResult,
   type SensitivityPlan,
+  type SensitivityProbeState,
 } from '../../../src/decision/index.js';
 import { scanQualificationPrivacy } from '../../../src/decision/qualification/index.js';
 import { ROOT, applyPatch, readSensitivityFixture, sensitivityRecords, type AntiFixtureCase } from './sensitivity-fixtures.js';
 
 const plans = sensitivityRecords<SensitivityPlan>('sensitivity-plan.v1.valid.json');
+
+function probeState(): SensitivityProbeState {
+  return { reportsByWindow: new Map(), pathCounts: new Map() };
+}
 
 function rejection(run: () => unknown): SensitivityContractError {
   try { run(); } catch (error) { if (error instanceof SensitivityContractError) return error; throw error; }
@@ -151,7 +157,7 @@ function artifacts() {
       evaluations: { risk: decisionResult },
     },
   };
-  return { definition, ruleset, binding, sourceInput: { riskSignal: 'low' }, sourceResult };
+  return { definition, ruleset, binding, sourceDefinitions: { [definition.metadata.id]: definition }, sourceInput: { riskSignal: 'low' }, sourceResult };
 }
 
 function pinnedPlan(id: string): SensitivityPlan {
@@ -227,10 +233,12 @@ describe('D23 sensitivity contracts (#2616)', () => {
       plan: pinnedPlan('triage-threshold-replay'),
       sourceRuleset: built.ruleset,
       sourceBinding: built.binding,
+      sourceDefinitions: built.sourceDefinitions,
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
       now: () => 1_000,
+      probeState: probeState(),
     });
     expect(validateSensitivityReport(report)).toBe(report);
     expect(report.status).toBe('completed');
@@ -243,11 +251,140 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect(JSON.stringify(report)).not.toContain('low-risk');
   });
 
+  it('CFX-REPLAY-02 replays acceptance from stored evidence so a loosened threshold can accept', async () => {
+    const built = artifacts();
+    const sourceResult = structuredClone(built.sourceResult);
+    const risk = sourceResult.spec.evaluations.risk!;
+    risk.spec.status = 'abstained';
+    risk.spec.reason = 'low-confidence';
+    delete risk.spec.value;
+    risk.spec.uncertainty = { ...risk.spec.uncertainty!, confidence: 0.65, distribution: { approve: 0.65, review: 0.35 } };
+    sourceResult.spec.status = 'review';
+    sourceResult.spec.reason = 'evaluation-failed';
+    sourceResult.spec.outcome = { route: 'review', label: 'needs-review' };
+    sourceResult.spec.matchedRules = [];
+
+    const plan = pinnedPlan('triage-threshold-replay');
+    plan.id = 'triage-threshold-loosen';
+    plan.source.result = artifactPin(sourceResult);
+    plan.pathDomains[0]!.values = [6000, 7000];
+    plan.variants = [{
+      id: 'threshold-loosen',
+      changes: [{ path: '/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps', value: 6000 }],
+    }];
+
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceDefinitions: built.sourceDefinitions,
+      sourceInput: built.sourceInput,
+      sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+
+    expect(report.status).toBe('completed');
+    expect(report.rows[0]?.deltas.acceptanceChanged).toBe(true);
+    expect(report.rows[0]?.deltas.outcomeChanged).toBe(true);
+    expect(report.rows[0]?.deltas.status).toBe('completed');
+  });
+
+  it('CFX-REPLAY-03 preserves ordinal semantics when a score has no distribution', async () => {
+    const built = artifacts();
+    built.definition.apiVersion = DECISION_API_VERSION_STRUCTURED;
+    built.definition.spec.answer = { kind: 'ordinal-score', levels: ['low', 'high'] };
+    const decisionPin = artifactPin(built.definition);
+    built.ruleset.spec.evaluations[0]!.decision = decisionPin;
+    built.ruleset.spec.rules[0]!.when = { op: 'gt', left: { source: 'decision', alias: 'risk', pointer: '/value' }, right: 0.5 };
+    const rulesetPin = artifactPin(built.ruleset);
+    built.binding.apiVersion = DECISION_API_VERSION_STRUCTURED;
+    built.binding.spec.ruleset = rulesetPin;
+    built.binding.spec.evaluations.risk!.targets[0]!.acceptance = {
+      mode: 'primitive-policy',
+      version: '1.0.0',
+      compatibleUncertaintyProfiles: ['fixture-score'],
+      precedence: 'first-match',
+      calibration: 'advisory',
+      rules: [{
+        id: 'accept-score',
+        primitive: 'ordinal-score',
+        all: [{ metric: 'expected-score', op: 'gte', thresholdBps: 5000 }],
+        route: { disposition: 'act' },
+      }],
+      defaultRoute: { disposition: 'act' },
+      missingEvidenceRoute: { disposition: 'review' },
+      invalidEvidenceRoute: { disposition: 'review' },
+      tieRoute: { disposition: 'review' },
+    };
+    const bindingPin = artifactPin(built.binding);
+    const sourceResult = structuredClone(built.sourceResult);
+    sourceResult.spec.ruleset = rulesetPin;
+    sourceResult.spec.binding = bindingPin;
+    const risk = sourceResult.spec.evaluations.risk!;
+    risk.spec.decision = decisionPin;
+    risk.spec.ruleset = rulesetPin;
+    risk.spec.binding = bindingPin;
+    risk.spec.value = 1;
+    risk.spec.uncertainty = {
+      source: 'provider',
+      profile: 'fixture-score',
+      calibration: 'uncalibrated',
+      confidence: null,
+      distribution: null,
+      calibrationRef: null,
+    };
+
+    const plan = pinnedPlan('triage-threshold-replay');
+    plan.id = 'triage-ordinal-no-distribution';
+    plan.source.ruleset = rulesetPin;
+    plan.source.binding = bindingPin;
+    plan.source.result = artifactPin(sourceResult);
+    plan.allowedPaths = ['/binding/spec/evaluations/risk/targets/0/acceptance/version'];
+    plan.pathDomains = [{ path: plan.allowedPaths[0]!, values: ['1.0.1'], sensitivity: 'internal' }];
+    plan.variants = [{ id: 'replay-ordinal-policy', changes: [{ path: plan.allowedPaths[0]!, value: '1.0.1' }] }];
+
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceDefinitions: { [built.definition.metadata.id]: built.definition },
+      sourceInput: built.sourceInput,
+      sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+
+    expect(report.rows[0]?.deltas.status).toBe('review');
+    expect(sourceResult.spec.evaluations.risk?.spec.uncertainty?.distribution).toBeNull();
+  });
+
+  it('CFX-REPLAY-04 is byte-deterministic for identical policy replay inputs', async () => {
+    const built = artifacts();
+    const request = {
+      plan: pinnedPlan('triage-threshold-replay'),
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceDefinitions: built.sourceDefinitions,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+    };
+    const first = await analyzeDecisionSensitivity(request);
+    const second = await analyzeDecisionSensitivity({ ...request, plan: structuredClone(request.plan), probeState: probeState() });
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+
   it('CFX-INPUT-01 uses fresh invocation IDs, separates stability controls, and redacts sensitive field values', async () => {
     const built = artifacts();
     const plan = pinnedPlan('triage-input-field');
     plan.variants.push({ id: 'restricted-canary', changes: [{ path: '/input/riskSignal', value: 'REDACTED-CANARY-2616' }] });
     plan.budgets.maxBackendCalls = 4;
+    const seen: Array<{ invocationId: string; receiptFingerprint: string }> = [];
     const report = await analyzeDecisionSensitivity({
       plan,
       sourceRuleset: built.ruleset,
@@ -256,11 +393,17 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
       now: () => 1_000,
-      reevaluate: async request => resultWith(request.input, request.invocationId),
+      probeState: probeState(),
+      reevaluate: async request => {
+        seen.push({ invocationId: request.invocationId, receiptFingerprint: request.receiptFingerprint });
+        return resultWith(request.input, request.invocationId);
+      },
     });
     expect(report.rows.map(row => row.kind)).toEqual(['baseline-stability', 'variant', 'unchanged-control', 'variant']);
     expect(report.rows.filter(row => row.inference === 'new-invocation').every(row => row.freshInvocationId && row.freshInvocationId !== 'invoke-source')).toBe(true);
     expect(report.rows.find(row => row.variantId === 'risk-high')?.deltas.distributionDistanceBps).toBe(6000);
+    expect(seen.every(item => /^sens-triage-input-field-[0-9a-f-]+-/.test(item.invocationId))).toBe(true);
+    expect(new Set(seen.map(item => item.receiptFingerprint)).size).toBe(seen.length);
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain('REDACTED-CANARY-2616');
     expect(scanQualificationPrivacy([{ surface: 'stdout', content: '' }, { surface: 'stderr', content: '' },
@@ -268,6 +411,102 @@ describe('D23 sensitivity contracts (#2616)', () => {
       { surface: 'receipt', content: serialized }, { surface: 'snapshot', content: serialized },
       { surface: 'export', content: serialized }, { surface: 'thrown-error', content: '' },
       { surface: 'activity-record', content: serialized }], ['REDACTED-CANARY-2616']).clean).toBe(true);
+  });
+
+  it('CFX-INPUT-02 gives repeat runs fresh invocation IDs without reusing receipt fingerprints', async () => {
+    const built = artifacts();
+    const invocations: string[][] = [];
+    const fingerprints: string[][] = [];
+    for (let index = 0; index < 2; index += 1) {
+      const runInvocations: string[] = [];
+      const runFingerprints: string[] = [];
+      const plan = pinnedPlan('triage-input-field');
+      plan.baselineStability.enabled = false;
+      plan.baselineStability.repeats = 0;
+      await analyzeDecisionSensitivity({
+        plan,
+        sourceRuleset: built.ruleset,
+        sourceBinding: built.binding,
+        sourceInput: built.sourceInput,
+        sourceResult: built.sourceResult,
+        generatedAt: '2026-09-29T12:00:00.000Z',
+        now: () => 1_000,
+        probeState: probeState(),
+        reevaluate: async request => {
+          runInvocations.push(request.invocationId);
+          runFingerprints.push(request.receiptFingerprint);
+          return resultWith(request.input, request.invocationId);
+        },
+      });
+      invocations.push(runInvocations);
+      fingerprints.push(runFingerprints);
+    }
+    expect(invocations[0]).not.toEqual(invocations[1]);
+    expect(fingerprints[0]).not.toEqual(fingerprints[1]);
+  });
+
+  it('CFX-INPUT-03 returns a partial report with completed rows and spend after a mid-run failure', async () => {
+    const built = artifacts();
+    const plan = pinnedPlan('triage-input-field');
+    plan.baselineStability.enabled = false;
+    plan.baselineStability.repeats = 0;
+    let calls = 0;
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+      reevaluate: async request => {
+        calls += 1;
+        if (calls === 2) throw new Error('fixture transport failed after dispatch');
+        return resultWith(request.input, request.invocationId);
+      },
+    });
+    expect(report.status).toBe('partial');
+    expect(report.rows).toHaveLength(1);
+    expect(report.budget.backendCalls).toBe(1);
+    expect(report.budget.costMicros).toBeGreaterThan(0);
+    expect(report.warnings).toContain('partial-failure');
+    expect(report.warnings).not.toContain('rejected-before-inference');
+  });
+
+  it('CFX-AUTH-01 rejects stale authorization before any input reevaluation', async () => {
+    const built = artifacts();
+    const plan = pinnedPlan('triage-input-field');
+    plan.authorization.expiresAt = '2026-09-29T12:30:00.000Z';
+    let calls = 0;
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:45:00.000Z',
+      now: () => Date.parse('2026-09-29T12:45:00.000Z'),
+      probeState: probeState(),
+      reevaluate: async request => {
+        calls += 1;
+        return resultWith(request.input, request.invocationId);
+      },
+    });
+    expect(report.status).toBe('rejected');
+    expect(report.budget.backendCalls).toBe(0);
+    expect(calls).toBe(0);
+    expect(report.warnings.join(' ')).toContain('authorization expired');
+  });
+
+  it('CFX-POINTER-01 rejects prototype pointer segments without polluting Object.prototype', () => {
+    const plan = pinnedPlan('triage-input-field');
+    plan.allowedPaths = ['/input/__proto__/polluted'];
+    plan.pathDomains = [{ path: '/input/__proto__/polluted', values: ['yes'], sensitivity: 'restricted' }];
+    plan.variants = [{ id: 'proto-pollution', changes: [{ path: '/input/__proto__/polluted', value: 'yes' }] }];
+    const error = rejection(() => validateSensitivityPlan(plan));
+    expect(error.details.join('\n')).toContain('prohibited pointer segment');
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it('CFX-BUDGET-01 stops variants at resource ceilings and marks the report partial/no-action', async () => {
@@ -284,6 +523,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
       now: () => 1_000,
+      probeState: probeState(),
       reevaluate: async request => resultWith(request.input, request.invocationId),
     });
     expect(report.status).toBe('partial');
@@ -315,6 +555,29 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect(denied.status).toBe('rejected');
     expect(denied.warnings.join(' ')).toContain('probe path limit');
     expect(denied.budget.backendCalls).toBe(0);
+  });
+
+  it('CFX-PROBE-02 does not charge disabled plans and applies default probe limits without caller state', async () => {
+    const built = artifacts();
+    const disabled = { ...pinnedPlan('triage-input-field'), id: 'triage-disabled-probe', mode: 'disabled' as const };
+    disabled.probeControl.windowId = 'window-disabled-probe';
+    disabled.probeControl.maxReportsPerWindow = 1;
+    disabled.sourceSubject.subjectRef = 'case-disabled-probe';
+    const enabled = { ...structuredClone(disabled), mode: 'shadow' as const };
+    const common = {
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
+    };
+    expect((await analyzeDecisionSensitivity({ ...common, plan: disabled })).status).toBe('rejected');
+    expect((await analyzeDecisionSensitivity({ ...common, plan: enabled })).status).toBe('completed');
+    const denied = await analyzeDecisionSensitivity({ ...common, plan: { ...structuredClone(enabled), id: 'triage-enabled-probe-second' } });
+    expect(denied.status).toBe('rejected');
+    expect(denied.warnings.join(' ')).toContain('probe report limit');
   });
 
   it('CFX-DISABLED-01 leaves ordinary decision evaluation byte-identical when sensitivity is not invoked', async () => {
@@ -358,6 +621,19 @@ describe('D23 sensitivity contracts (#2616)', () => {
     const before = await evaluateDecisionRuleset(request);
     const disabledPlan = { ...pinnedPlan('triage-input-field'), mode: 'disabled' as const };
     expect(disabledPlan.mode).toBe('disabled');
+    const disabledReport = await analyzeDecisionSensitivity({
+      plan: disabledPlan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+      reevaluate: async sensitivityRequest => resultWith(sensitivityRequest.input, sensitivityRequest.invocationId),
+    });
+    expect(disabledReport.status).toBe('rejected');
+    expect(disabledReport.budget.backendCalls).toBe(0);
     const after = await evaluateDecisionRuleset(request);
     expect(JSON.stringify(after)).toBe(JSON.stringify(before));
   });
@@ -373,6 +649,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
       now: () => 1_000,
+      probeState: probeState(),
       reevaluate: async request => resultWith(request.input, request.invocationId),
     });
     expect(report.status).toBe('rejected');
@@ -381,11 +658,33 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect(report.warnings.join(' ')).toContain('disabled');
   });
 
-  it('CFX-DOC-EXAMPLES-01 covers threshold replay, loss-matrix, field perturbation, and no-change controls', () => {
-    const text = readFileSync(resolve(ROOT, 'test/fixtures/decision/sensitivity/sensitivity-plan.v1.valid.json'), 'utf8');
-    expect(text).toContain('threshold-tighten');
-    expect(text).toContain('loss-review');
-    expect(text).toContain('risk-high');
-    expect(text).toContain('no-change');
+  it('CFX-DOC-EXAMPLES-01 runs the offline examples for threshold, loss-matrix, field perturbation and no-change controls', async () => {
+    expect(readFileSync(resolve(ROOT, 'test/fixtures/decision/sensitivity/sensitivity-plan.v1.valid.json'), 'utf8')).toContain('triage-input-field');
+    const built = artifacts();
+    const replay = await analyzeDecisionSensitivity({
+      plan: pinnedPlan('triage-threshold-replay'),
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceDefinitions: built.sourceDefinitions,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+    const input = await analyzeDecisionSensitivity({
+      plan: pinnedPlan('triage-input-field'),
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 1_000,
+      probeState: probeState(),
+      reevaluate: async request => resultWith(request.input, request.invocationId),
+    });
+    expect(replay.rows.map(row => row.variantId)).toEqual(['threshold-tighten', 'loss-review']);
+    expect(input.rows.map(row => row.variantId)).toContain('risk-high');
+    expect(input.rows.map(row => row.variantId)).toContain('no-change');
   });
 });

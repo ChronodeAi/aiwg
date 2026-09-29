@@ -1,10 +1,14 @@
-import { applyPrimitiveAcceptance } from '../acceptance.js';
+import { randomUUID } from 'node:crypto';
+import { applyTargetAcceptance } from '../acceptance.js';
 import { composeRuleset } from '../compose.js';
+import { decisionInvocationFingerprint } from '../receipts.js';
 import { artifactDigest, artifactPin, assertArtifactPin, validateBinding, validateRuleset } from '../validate.js';
 import type {
   AdapterObservation,
   ArtifactPin,
   DecisionBinding,
+  DecisionAnswer,
+  DecisionDefinition,
   DecisionResult,
   DecisionRuleset,
   ExecutionTarget,
@@ -19,32 +23,51 @@ import type {
   SensitivityRedactedChange,
   SensitivityReport,
   SensitivityReportRow,
+  SensitivityProbeState,
   SensitivityRuntimeRequest,
 } from './types.js';
 
 export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequest): Promise<SensitivityReport> {
   let plan: SensitivityPlan;
+  const runNonce = randomUUID();
+  const warnings = ['not-causal-explanation', 'not-correctness-proof', 'not-action-authority'];
   try {
     plan = validateSensitivityPlan(request.plan);
-    validateInputs(plan, request);
-    enforceProbeLimits(plan, request.probeState);
+    validateInputs(plan, request, request.now?.() ?? Date.now());
+    validateChangeTargets(plan, request);
   } catch (error) {
     if (error instanceof SensitivityContractError) return rejectedReport(request, error.details.length ? [...error.details] : [error.message]);
     throw error;
   }
   if (plan.mode === 'disabled') return rejectedReport(request, ['sensitivity plan is disabled']);
+  try {
+    enforceProbeLimits(plan, request.probeState ?? defaultProbeState);
+  } catch (error) {
+    if (error instanceof SensitivityContractError) return rejectedReport(request, error.details.length ? [...error.details] : [error.message]);
+    throw error;
+  }
   const rows: SensitivityReportRow[] = [];
-  const warnings = ['not-causal-explanation', 'not-correctness-proof', 'not-action-authority'];
   const budget = { maxVariants: plan.budgets.maxVariants, processedVariants: 0, backendCalls: 0, tokens: 0, costMicros: 0, exhausted: false };
   const deadline = (request.now?.() ?? Date.now()) + plan.budgets.deadlineMs;
+  const usedInvocations = new Set([request.sourceResult.spec.invocationId]);
 
   if (plan.analysisKind === 'input-reevaluation' && plan.baselineStability.enabled) {
     if (!request.reevaluate) return rejectedReport(request, ['input reevaluation requires a host-supplied evaluator']);
     for (let repeat = 0; repeat < plan.baselineStability.repeats; repeat += 1) {
-      if (!canSpendCall(plan, budget, deadline, request.now?.() ?? Date.now())) { budget.exhausted = true; break; }
-      const invocationId = freshInvocationId(plan, `baseline-${repeat + 1}`);
-      const result = await request.reevaluate({ variantId: `baseline-${repeat + 1}`, invocationId,
-        input: structuredClone(request.sourceInput), changes: [] });
+      if (!canSpendCall(plan, request.sourceBinding, request.sourceResult, budget, deadline, request.now?.() ?? Date.now())) { budget.exhausted = true; break; }
+      const variantId = `baseline-${repeat + 1}`;
+      const input = structuredClone(request.sourceInput);
+      const invocationId = freshInvocationId(plan, variantId, runNonce);
+      const receiptFingerprint = expectedReceiptFingerprint(request, invocationId, input);
+      ensureFreshBeforeDispatch(invocationId, receiptFingerprint, usedInvocations);
+      let result: RulesetResult;
+      try {
+        result = await request.reevaluate({ variantId, invocationId, receiptFingerprint, input, changes: [] });
+      } catch (error) {
+        return failedPartialReport(request, plan, rows, budget, warnings, `baseline ${variantId} failed: ${sanitizeReason(error)}`);
+      }
+      const failure = validateReevaluationResult(request, result, variantId, invocationId, receiptFingerprint, input);
+      if (failure) return failedPartialReport(request, plan, rows, budget, warnings, failure);
       rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: `baseline-${repeat + 1}`,
         kind: 'baseline-stability', inference: 'new-invocation', changes: [], invocationId }));
       spendResult(budget, result);
@@ -66,23 +89,26 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
     }
     if (plan.analysisKind === 'policy-replay') {
       const { ruleset, binding } = replayArtifacts(request.sourceRuleset, request.sourceBinding, variant.changes);
-      const result = replayPolicy(request.sourceResult, ruleset, binding, request.sourceInput, variant.id);
+      const result = replayPolicy(request.sourceResult, ruleset, binding, request.sourceDefinitions ?? {}, request.sourceInput, variant.id);
       rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: variant.id,
         kind: noChange ? 'unchanged-control' : 'variant', inference: 'reused-stored-evidence', changes: variant.changes, invocationId: null }));
       budget.processedVariants += 1;
       continue;
     }
     if (!request.reevaluate) return rejectedReport(request, ['input reevaluation requires a host-supplied evaluator']);
-    if (!canSpendCall(plan, budget, deadline, request.now?.() ?? Date.now())) { budget.exhausted = true; break; }
+    if (!canSpendCall(plan, request.sourceBinding, request.sourceResult, budget, deadline, request.now?.() ?? Date.now())) { budget.exhausted = true; break; }
     const input = applyChanges({ input: structuredClone(request.sourceInput) }, variant.changes).input;
-    const invocationId = freshInvocationId(plan, variant.id);
-    const result = await request.reevaluate({ variantId: variant.id, invocationId, input, changes: structuredClone(variant.changes) });
-    if (result.spec.invocationId === request.sourceResult.spec.invocationId) {
-      return rejectedReport(request, [`variant ${variant.id} reused the source invocation ID`]);
+    const invocationId = freshInvocationId(plan, variant.id, runNonce);
+    const receiptFingerprint = expectedReceiptFingerprint(request, invocationId, input);
+    ensureFreshBeforeDispatch(invocationId, receiptFingerprint, usedInvocations);
+    let result: RulesetResult;
+    try {
+      result = await request.reevaluate({ variantId: variant.id, invocationId, receiptFingerprint, input, changes: structuredClone(variant.changes) });
+    } catch (error) {
+      return failedPartialReport(request, plan, rows, budget, warnings, `variant ${variant.id} failed: ${sanitizeReason(error)}`);
     }
-    if (Object.values(result.spec.evaluations).some(evaluation => evaluation.spec.attempts.length === 0)) {
-      return rejectedReport(request, [`variant ${variant.id} did not return complete attempt lineage`]);
-    }
+    const failure = validateReevaluationResult(request, result, variant.id, invocationId, receiptFingerprint, input);
+    if (failure) return failedPartialReport(request, plan, rows, budget, warnings, failure);
     rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: variant.id,
       kind: noChange ? 'unchanged-control' : 'variant', inference: 'new-invocation', changes: variant.changes, invocationId }));
     spendResult(budget, result);
@@ -94,29 +120,48 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
   return report;
 }
 
-function validateInputs(plan: SensitivityPlan, request: SensitivityRuntimeRequest): void {
+const defaultProbeState: Required<SensitivityProbeState> = { reportsByWindow: new Map(), pathCounts: new Map() };
+
+function validateInputs(plan: SensitivityPlan, request: SensitivityRuntimeRequest, now: number): void {
   assertArtifactPin(request.sourceRuleset, plan.source.ruleset, 'sensitivity source ruleset');
   assertArtifactPin(request.sourceBinding, plan.source.binding, 'sensitivity source binding');
   assertArtifactPin(request.sourceResult, plan.source.result, 'sensitivity source result');
   validateRuleset(request.sourceRuleset);
   validateBinding(request.sourceBinding, request.sourceRuleset);
   if (request.sourceResult.spec.invocationId.length === 0) throw new SensitivityContractError('source result must have an invocation ID');
+  if (Date.parse(plan.authorization.expiresAt) <= now) {
+    throw new SensitivityContractError('sensitivity authorization is expired', 'semantic', ['authorization expired']);
+  }
 }
 
-function enforceProbeLimits(plan: SensitivityPlan, state?: SensitivityRuntimeRequest['probeState']): void {
-  if (!state) return;
+function validateChangeTargets(plan: SensitivityPlan, request: SensitivityRuntimeRequest): void {
+  const root = plan.analysisKind === 'policy-replay'
+    ? { ruleset: request.sourceRuleset, binding: request.sourceBinding } : { input: request.sourceInput };
+  for (const variant of plan.variants) for (const change of variant.changes) assertPointerTarget(root, change.path);
+}
+
+function enforceProbeLimits(plan: SensitivityPlan, state: SensitivityRuntimeRequest['probeState']): void {
+  const reportsByWindow = state?.reportsByWindow ?? new Map<string, number>();
+  const pathCounts = state?.pathCounts ?? new Map<string, number>();
+  if (state && !state.reportsByWindow) state.reportsByWindow = reportsByWindow;
+  if (state && !state.pathCounts) state.pathCounts = pathCounts;
   const reportKey = `${plan.probeControl.windowId}:${plan.actor.principalId}:${plan.sourceSubject.subjectRef}`;
-  const reports = state.reportsByWindow?.get(reportKey) ?? 0;
+  const reports = reportsByWindow.get(reportKey) ?? 0;
   if (reports >= plan.probeControl.maxReportsPerWindow) throw new SensitivityContractError('sensitivity probe report limit exceeded', 'semantic', ['probe report limit exceeded']);
-  state.reportsByWindow?.set(reportKey, reports + 1);
-  for (const path of plan.allowedPaths) {
+  reportsByWindow.set(reportKey, reports + 1);
+  for (const path of changedProbePaths(plan)) {
     const key = `${reportKey}:${path}`;
-    const count = state.pathCounts?.get(key) ?? 0;
-    if (count + plan.variants.length > plan.probeControl.maxPerPrincipalSubjectPath) {
+    const count = pathCounts.get(key) ?? 0;
+    const increments = plan.variants.reduce((sum, variant) => sum + (variant.changes.some(change => change.path === path) ? 1 : 0), 0);
+    if (count + increments > plan.probeControl.maxPerPrincipalSubjectPath) {
       throw new SensitivityContractError('sensitivity path probe limit exceeded', 'semantic', [`probe path limit exceeded: ${path}`]);
     }
-    state.pathCounts?.set(key, count + plan.variants.length);
+    pathCounts.set(key, count + increments);
   }
+}
+
+function changedProbePaths(plan: SensitivityPlan): string[] {
+  return [...new Set(plan.variants.flatMap(variant => variant.changes.map(change => change.path)))];
 }
 
 function replayArtifacts(sourceRuleset: DecisionRuleset, sourceBinding: DecisionBinding, changes: readonly SensitivityChange[]): {
@@ -136,12 +181,14 @@ function replayPolicy(
   source: RulesetResult,
   ruleset: DecisionRuleset,
   binding: DecisionBinding,
+  definitions: Readonly<Record<string, DecisionDefinition>>,
   input: unknown,
   variantId: string,
 ): RulesetResult {
   const evaluations = Object.fromEntries(Object.entries(source.spec.evaluations).map(([alias, result]) => {
     const target = binding.spec.evaluations[alias]?.targets[0];
-    return [alias, target ? replayAcceptance(result, target) : structuredClone(result)];
+    const definition = definitions[result.spec.decision.id];
+    return [alias, target ? replayAcceptance(result, target, definition) : structuredClone(result)];
   }));
   const composition = composeRuleset(ruleset, input, evaluations);
   const rulesetPin = artifactPin(ruleset);
@@ -162,60 +209,78 @@ function replayPolicy(
   };
 }
 
-function replayAcceptance(result: DecisionResult, target: ExecutionTarget): DecisionResult {
+function replayAcceptance(result: DecisionResult, target: ExecutionTarget, definition?: DecisionDefinition): DecisionResult {
+  const replayDefinition = definition ?? replayDefinitionFromEvidence(result, target);
+  const value = replayValue(result, replayDefinition);
   const observation: AdapterObservation = {
-    status: result.spec.status,
-    reason: result.spec.reason,
-    ...(result.spec.value !== undefined ? { value: result.spec.value } : {}),
+    status: value === undefined ? result.spec.status : 'success',
+    reason: value === undefined ? result.spec.reason : 'none',
+    ...(value !== undefined ? { value } : {}),
     uncertainty: structuredClone(result.spec.uncertainty),
-    acceptance: result.spec.acceptance ? structuredClone(result.spec.acceptance) : undefined,
     actualModel: result.spec.attempts.at(-1)?.actualModel ?? null,
     usage: { inputTokens: null, outputTokens: null, costUsd: null },
     requestId: null,
   };
-  let replayed = observation;
-  if (target.acceptance.mode === 'primitive-policy') {
-    replayed = applyPrimitiveAcceptance({
-      apiVersion: result.apiVersion,
-      kind: 'DecisionDefinition',
-      metadata: { id: result.spec.decision.id, version: result.spec.decision.version, description: result.spec.alias },
-      spec: { purpose: 'sensitivity replay placeholder', inputSchema: {}, question: 'sensitivity replay', answer: inferAnswer(result), requiredCapabilities: [] },
-    }, target.acceptance, observation);
-  } else if (target.acceptance.mode === 'confidence-threshold') {
-    replayed = applyLegacyThreshold(observation, target);
-  }
+  const replayed = applyTargetAcceptance(replayDefinition, target, observation);
+  const spec = {
+    ...result.spec,
+    status: replayed.status,
+    reason: replayed.reason,
+    uncertainty: replayed.uncertainty,
+    ...(replayed.acceptance ? { acceptance: replayed.acceptance } : {}),
+  };
+  if (replayed.status === 'success' && replayed.value !== undefined) spec.value = replayed.value;
+  else delete spec.value;
   return {
     ...result,
-    spec: {
-      ...result.spec,
-      status: replayed.status,
-      reason: replayed.reason,
-      ...(replayed.status === 'success' && replayed.value !== undefined ? { value: replayed.value } : {}),
-      uncertainty: replayed.uncertainty,
-      ...(replayed.acceptance ? { acceptance: replayed.acceptance } : {}),
-    },
+    spec,
   };
 }
 
-function inferAnswer(result: DecisionResult): any {
-  if (typeof result.spec.value === 'string') {
-    const keys = result.spec.uncertainty?.distribution ? Object.keys(result.spec.uncertainty.distribution) : [result.spec.value, 'other'];
-    return { kind: 'choice', options: [...new Set(keys)].map(id => ({ id, description: id })) };
+function replayDefinitionFromEvidence(result: DecisionResult, target: ExecutionTarget): DecisionDefinition {
+  let primitive: DecisionAnswer['kind'] | undefined;
+  if (target.acceptance.mode === 'primitive-policy') {
+    const primitives = [...new Set(target.acceptance.rules.map(rule => rule.primitive))];
+    primitive = primitives.length === 1 ? primitives[0] : target.acceptance.requiredOptions ? 'choice' : undefined;
+  } else {
+    primitive = typeof result.spec.value === 'string' ? 'choice'
+      : typeof result.spec.value === 'number' ? 'truth-probability' : undefined;
   }
-  if (result.spec.uncertainty?.distribution && Object.keys(result.spec.uncertainty.distribution).some(key => key !== 'true' && key !== 'false')) {
-    return { kind: 'ordinal-score', levels: Object.keys(result.spec.uncertainty.distribution).map(key => key) };
+  if (primitive === 'choice') {
+    const keys = [...new Set([...(result.spec.uncertainty?.distribution ? Object.keys(result.spec.uncertainty.distribution) : []),
+      ...(typeof result.spec.value === 'string' ? [result.spec.value] : []),
+      ...(target.acceptance.mode === 'primitive-policy' ? target.acceptance.requiredOptions ?? [] : [])])];
+    return replayDefinitionWithAnswer(result, { kind: 'choice', options: (keys.length ? keys : ['unknown']).map(id => ({ id, description: id })) });
   }
-  return { kind: 'truth-probability', trueDescription: 'true', falseDescription: 'false' };
+  if (primitive === 'ordinal-score') {
+    const levels = Object.keys(result.spec.uncertainty?.distribution ?? {}).sort((a, b) => Number(a) - Number(b));
+    return replayDefinitionWithAnswer(result, { kind: 'ordinal-score', levels: levels.length >= 2 ? levels : ['0', '1'] });
+  }
+  return replayDefinitionWithAnswer(result, { kind: 'truth-probability', trueDescription: 'true', falseDescription: 'false' });
 }
 
-function applyLegacyThreshold(observation: AdapterObservation, target: ExecutionTarget): AdapterObservation {
-  if (observation.status !== 'success' || target.acceptance.mode !== 'confidence-threshold') return observation;
-  if (!observation.uncertainty?.profile || observation.uncertainty.profile !== target.acceptance.profile) {
-    return { ...observation, status: 'abstained', reason: 'confidence-profile-mismatch' };
+function replayDefinitionWithAnswer(result: DecisionResult, answer: DecisionDefinition['spec']['answer']): DecisionDefinition {
+  return {
+    apiVersion: result.apiVersion,
+    kind: 'DecisionDefinition',
+    metadata: { id: result.spec.decision.id, version: result.spec.decision.version, description: result.spec.alias },
+    spec: { purpose: 'sensitivity replay', inputSchema: {}, question: 'sensitivity replay', answer, requiredCapabilities: [] },
+  };
+}
+
+function replayValue(result: DecisionResult, definition: DecisionDefinition): string | number | undefined {
+  if (result.spec.value !== undefined) return result.spec.value;
+  if (definition.spec.answer.kind === 'choice') {
+    const distribution = result.spec.uncertainty?.distribution;
+    if (!distribution) return undefined;
+    return Object.entries(distribution).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0];
   }
-  if (observation.uncertainty.confidence === null) return { ...observation, status: 'abstained', reason: 'missing-confidence' };
-  return observation.uncertainty.confidence * 10_000 < target.acceptance.minimumBps
-    ? { ...observation, status: 'abstained', reason: 'low-confidence' } : observation;
+  if (definition.spec.answer.kind === 'truth-probability') {
+    const yes = result.spec.acceptance?.values['yes-probability'];
+    if (yes?.provenance === 'provider-value') return yes.value;
+    return undefined;
+  }
+  return result.spec.acceptance?.values['expected-score']?.value;
 }
 
 function applyChanges<T>(target: T, changes: readonly SensitivityChange[]): T {
@@ -227,8 +292,37 @@ function setPointer(root: unknown, pointer: string, value: JsonValue): void {
   const parts = pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
   if (!parts.length) throw new SensitivityContractError('root replacement is not supported');
   let current: any = root;
-  for (const part of parts.slice(0, -1)) current = current[part];
+  for (const part of parts.slice(0, -1)) {
+    assertSafePointerSegment(part);
+    if (!current || typeof current !== 'object' || !Object.hasOwn(current, part)) {
+      throw new SensitivityContractError(`sensitivity path ${pointer} is not structurally present`);
+    }
+    current = current[part];
+  }
+  assertSafePointerSegment(parts[parts.length - 1]!);
+  if (!current || typeof current !== 'object') throw new SensitivityContractError(`sensitivity path ${pointer} is not structurally present`);
   current[parts[parts.length - 1]!] = value;
+}
+
+function assertPointerTarget(root: unknown, pointer: string): void {
+  const parts = pointer.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'));
+  if (!parts.length) throw new SensitivityContractError('root replacement is not supported');
+  let current: unknown = root;
+  for (const part of parts.slice(0, -1)) {
+    assertSafePointerSegment(part);
+    if (!current || typeof current !== 'object' || !Object.hasOwn(current, part)) {
+      throw new SensitivityContractError(`sensitivity path ${pointer} is not structurally present`);
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  assertSafePointerSegment(parts[parts.length - 1]!);
+  if (!current || typeof current !== 'object') throw new SensitivityContractError(`sensitivity path ${pointer} is not structurally present`);
+}
+
+function assertSafePointerSegment(segment: string): void {
+  if (segment === '__proto__' || segment === 'constructor' || segment === 'prototype') {
+    throw new SensitivityContractError(`sensitivity path segment ${segment} is prohibited`);
+  }
 }
 
 function isNoChange(root: unknown, changes: readonly SensitivityChange[]): boolean {
@@ -336,9 +430,21 @@ function spendResult(budget: SensitivityReport['budget'], result: RulesetResult)
   budget.costMicros += Math.round(attempts.reduce((sum, attempt) => sum + (attempt.usage.costUsd ?? 0), 0) * 1_000_000);
 }
 
-function canSpendCall(plan: SensitivityPlan, budget: SensitivityReport['budget'], deadline: number, now: number): boolean {
-  return now < deadline && budget.backendCalls < plan.budgets.maxBackendCalls
-    && budget.tokens <= plan.budgets.maxTokens && budget.costMicros <= plan.budgets.maxCostMicros;
+function canSpendCall(plan: SensitivityPlan, binding: DecisionBinding, source: RulesetResult,
+  budget: SensitivityReport['budget'], deadline: number, now: number): boolean {
+  const reserve = reevaluationReserve(binding, source);
+  return now < deadline && budget.backendCalls + reserve.backendCalls <= plan.budgets.maxBackendCalls
+    && budget.tokens + reserve.tokens <= plan.budgets.maxTokens && budget.costMicros + reserve.costMicros <= plan.budgets.maxCostMicros
+    && budget.backendCalls < plan.budgets.maxBackendCalls && budget.tokens < plan.budgets.maxTokens
+    && budget.costMicros < plan.budgets.maxCostMicros;
+}
+
+function reevaluationReserve(binding: DecisionBinding, source: RulesetResult): Pick<SensitivityReport['budget'], 'backendCalls' | 'tokens' | 'costMicros'> {
+  const attempts = Math.max(1, binding.spec.maxAttempts);
+  const sourceAttempts = Object.values(source.spec.evaluations).flatMap(evaluation => evaluation.spec.attempts);
+  const perAttemptTokens = Math.max(0, ...sourceAttempts.map(attempt => (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0)));
+  const perAttemptCostMicros = Math.max(0, ...sourceAttempts.map(attempt => Math.round((attempt.usage.costUsd ?? 0) * 1_000_000)));
+  return { backendCalls: attempts, tokens: attempts * perAttemptTokens, costMicros: attempts * perAttemptCostMicros };
 }
 
 function warningForResult(source: RulesetResult, result: RulesetResult): string[] {
@@ -392,6 +498,21 @@ function buildReport(
   return { ...withoutDigest, digest: sensitivityDigest(withoutDigest) };
 }
 
+function failedPartialReport(
+  request: SensitivityRuntimeRequest,
+  plan: SensitivityPlan,
+  rows: SensitivityReportRow[],
+  budget: SensitivityReport['budget'],
+  warnings: string[],
+  reason: string,
+): SensitivityReport {
+  budget.exhausted = true;
+  const report = buildReport(request, plan, rows, budget, [...warnings, 'partial-failure', reason]);
+  const { digest: _digest, ...payload } = report;
+  const status: SensitivityReport['status'] = rows.length ? 'partial' : 'rejected';
+  return { ...payload, status, digest: sensitivityDigest({ ...payload, status }) };
+}
+
 function minimumThresholdChange(plan: SensitivityPlan): number | null {
   const values = plan.variants.flatMap(variant => variant.changes.map(change => change.value))
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
@@ -402,8 +523,56 @@ function minimumThresholdChange(plan: SensitivityPlan): number | null {
   return Math.ceil(raw / plan.privacy.summaryPrecisionBps) * plan.privacy.summaryPrecisionBps;
 }
 
-function freshInvocationId(plan: SensitivityPlan, variantId: string): string {
-  return `sens-${plan.id}-${variantId}`;
+function freshInvocationId(plan: SensitivityPlan, variantId: string, runNonce: string): string {
+  return `sens-${plan.id}-${runNonce}-${variantId}`.slice(0, 160);
+}
+
+function expectedReceiptFingerprint(request: SensitivityRuntimeRequest, invocationId: string, input: unknown): SensitivityDigest {
+  return decisionInvocationFingerprint({
+    invocationId,
+    value: input,
+    definitions: request.sourceRuleset.spec.evaluations.map(evaluation => evaluation.decision),
+    ruleset: artifactPin(request.sourceRuleset),
+    binding: artifactPin(request.sourceBinding),
+  }) as SensitivityDigest;
+}
+
+function ensureFreshBeforeDispatch(invocationId: string, receiptFingerprint: string, usedInvocations: Set<string>): void {
+  if (usedInvocations.has(invocationId)) throw new SensitivityContractError(`invocation ${invocationId} was already used`);
+  usedInvocations.add(invocationId);
+  if (!/^sha256:[a-f0-9]{64}$/.test(receiptFingerprint)) throw new SensitivityContractError('invalid reevaluation receipt fingerprint');
+}
+
+function validateReevaluationResult(
+  request: SensitivityRuntimeRequest,
+  result: RulesetResult,
+  variantId: string,
+  invocationId: string,
+  receiptFingerprint: string,
+  input: unknown,
+): string | null {
+  if (result.spec.invocationId !== invocationId) return `variant ${variantId} returned invocation ID ${result.spec.invocationId} instead of ${invocationId}`;
+  if (result.spec.invocationId === request.sourceResult.spec.invocationId) return `variant ${variantId} reused the source invocation ID`;
+  const actualFingerprint = decisionInvocationFingerprint({
+    invocationId: result.spec.invocationId,
+    value: input,
+    definitions: request.sourceRuleset.spec.evaluations.map(evaluation => evaluation.decision),
+    ruleset: artifactPin(request.sourceRuleset),
+    binding: artifactPin(request.sourceBinding),
+  });
+  if (actualFingerprint !== receiptFingerprint) return `variant ${variantId} receipt fingerprint mismatch`;
+  if (Object.values(result.spec.evaluations).some(evaluation => evaluation.spec.invocationId !== invocationId)) {
+    return `variant ${variantId} returned an evaluation with the wrong invocation ID`;
+  }
+  if (Object.values(result.spec.evaluations).some(evaluation => evaluation.spec.attempts.length === 0)) {
+    return `variant ${variantId} did not return complete attempt lineage`;
+  }
+  return null;
+}
+
+function sanitizeReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/[^\w .:/-]/g, '').slice(0, 120) || 'reevaluation failed';
 }
 
 function rejectedReport(request: SensitivityRuntimeRequest, reasons: string[]): SensitivityReport {

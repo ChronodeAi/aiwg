@@ -77,6 +77,7 @@ export function validateSensitivityPlan(value: unknown): SensitivityPlan {
   const domains = new Map(plan.pathDomains.map(domain => [domain.path, domain]));
   for (const path of plan.allowedPaths) {
     if (!domains.has(path)) problems.push(`allowed path ${path} has no D10-approved value domain`);
+    if (hasForbiddenPointerSegment(path)) problems.push(`allowed path ${path} contains a prohibited pointer segment`);
     if (forbiddenAuthorityPath(path)) problems.push(`path ${path} can alter model, credential, executor, permission or legal authority`);
     if (plan.analysisKind === 'policy-replay' && !policyReplayPath(path)) problems.push(`policy replay path ${path} is not deterministic policy`);
     if (plan.analysisKind === 'input-reevaluation' && !path.startsWith('/input/')) problems.push(`input reevaluation path ${path} must be under /input`);
@@ -88,6 +89,7 @@ export function validateSensitivityPlan(value: unknown): SensitivityPlan {
     ids.add(variant.id);
     for (const change of variant.changes) {
       if (!allowed.has(change.path)) problems.push(`variant ${variant.id} changes undeclared path ${change.path}`);
+      if (hasForbiddenPointerSegment(change.path)) problems.push(`variant ${variant.id} uses prohibited pointer segment at ${change.path}`);
       if (looksExecutable(change.value)) problems.push(`variant ${variant.id} contains executable or locator-like value at ${change.path}`);
       const domain = domains.get(change.path);
       if (domain && !domain.values.some(value => canonicalJson(value) === canonicalJson(change.value))) {
@@ -147,6 +149,11 @@ function policyReplayPath(path: string): boolean {
 
 function forbiddenAuthorityPath(path: string): boolean {
   return /(?:^|\/)(model|credentialRef|credential|executor|permission|permissions|legalCandidates|subagent|adapter)(?:$|\/)/i.test(path);
+}
+
+function hasForbiddenPointerSegment(path: string): boolean {
+  return path.split('/').slice(1).map(part => part.replace(/~1/g, '/').replace(/~0/g, '~'))
+    .some(part => part === '__proto__' || part === 'constructor' || part === 'prototype');
 }
 
 function looksExecutable(value: JsonValue): boolean {

@@ -1,5 +1,6 @@
 import type {
   ArtifactPin,
+  DecisionDefinition,
   DecisionBinding,
   DecisionRuleset,
   JsonValue,
@@ -185,6 +186,7 @@ export interface SensitivityProbeState {
 export interface SensitivityReevaluationRequest {
   variantId: string;
   invocationId: string;
+  receiptFingerprint: SensitivityDigest;
   input: unknown;
   changes: SensitivityChange[];
 }
@@ -193,6 +195,7 @@ export interface SensitivityRuntimeRequest {
   plan: SensitivityPlan;
   sourceRuleset: DecisionRuleset;
   sourceBinding: DecisionBinding;
+  sourceDefinitions?: Record<string, DecisionDefinition>;
   sourceInput: unknown;
   sourceResult: RulesetResult;
   generatedAt: string;

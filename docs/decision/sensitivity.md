@@ -23,20 +23,25 @@ policy pins. It declares one analysis kind:
   zero adapter calls.
 - `input-reevaluation`: applies caller-authored values from D10-approved path
   domains to an input copy and calls a host-supplied offline evaluator. The
-  analyzer generates fresh invocation IDs and rejects a returned result that
-  reuses the source invocation.
+  analyzer generates fresh per-run invocation IDs, supplies the expected
+  receipt fingerprint before dispatch, and rejects a returned result that
+  changes that invocation lineage or omits attempt lineage.
 
 The validator rejects undeclared paths, values outside the path domain,
 executable strings, credential/secret-like values, authority-changing paths,
 unauthorized action or label values, cross-project source subjects, high
-precision threshold probing, membership-style paths, and stale or excessive
-probe windows before inference.
+precision threshold probing, membership-style paths, prototype-mutating JSON
+Pointer segments, missing structural targets, expired authorization, and stale
+or excessive probe windows before inference.
 
 Resource ceilings stop additional variants while keeping completed rows.
-Partial reports are explicit and still carry
+Mid-run evaluator failures return an explicit partial report that preserves
+completed rows and their recorded spend. Partial reports still carry
 `actionAuthorization: "not-authorized"`. Baseline-stability repeats are
 available only for input reevaluation and are labelled separately from
-perturbation rows.
+perturbation rows. Probe counters are enforced even when a caller does not
+provide process-local state, but production rollout still requires durable,
+non-resettable storage.
 
 Routine reports contain redacted value digests, receipt/result pins, bounded
 outcome, acceptance, matched-rule and distribution deltas, resource use, and
@@ -46,7 +51,8 @@ credentials, provider request IDs, or free-form model narration.
 The synthetic offline examples live in
 `test/fixtures/decision/sensitivity/sensitivity-plan.v1.valid.json` and cover
 threshold replay, deterministic outcome/loss-matrix sensitivity, one-field
-input perturbation, and an unchanged no-change control.
+input perturbation, and an unchanged no-change control. The unit suite runs
+those examples offline; it does not call Jev or any live provider.
 
 ## Pending live inputs
 
