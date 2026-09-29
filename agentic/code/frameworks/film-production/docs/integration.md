@@ -41,8 +41,10 @@ reference states; each invalid fixture has a documented expected failure in the 
 
 The public CLI was dry-run then deployed into an isolated test project using
 `aiwg use film-production --provider codex`. Its readiness check completed;
-quickref, six film agents and seven rules were read back. This includes normal
-AIWG utility deployment; it does not imply every provider has been tested.
+quickref, six film agents and the seven rules present at that time were read
+back; the framework now ships 14 operational skills, nine rules and nine
+templates. This includes normal AIWG utility deployment; it does not imply
+every provider has been tested.
 Codex integration tests also check dynamic discovery, public handler routing,
 portable manifest validity and the full kernel listing budget.
 

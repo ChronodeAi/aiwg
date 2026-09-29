@@ -30,8 +30,10 @@ Run `aiwg discover "<phrase>" --limit 3`, then `aiwg show skill <name>`.
 | prove film story | film-story-proof |
 | build film continuity pack | film-continuity-pack |
 | plan film shots | film-shot-plan |
+| storyboard the film | film-storyboard |
 | preflight film provider | film-provider-preflight |
 | edit film reference | film-reference-edit |
+| restyle reference footage | film-reference-footage |
 | generate film motion coverage | film-motion-coverage |
 | direct film performance and sound | film-performance-sound |
 | conform film edit | film-edit-conform |

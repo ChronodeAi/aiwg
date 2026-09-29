@@ -12,8 +12,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - **Film Production framework (`film-production`)** - A provider-neutral
   framework for reference-driven films, animated shorts, and episodes across
   develop → design → previs → generate → finish → deliver: one kernel
-  `film-production-quickref` plus 12 operational skills, 6 agents, 7 rules,
-  8 flows, and 8 templates. Editing routes to DaVinci Resolve (verified Resolve
+  `film-production-quickref` plus 14 operational skills, 6 agents, 9 rules,
+  8 flows, and 9 templates. Editing routes to DaVinci Resolve (verified Resolve
   MCP or scripting) and Mirage Tesseract (`tesseract-video` /
   `tesseract-motion` skills with the `tsrct` CLI). The framework installs no
   media software and grants no spend or publication authority. Docs:
@@ -29,6 +29,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   11 quickrefs.
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
+
+### Changed
+
+- **Film production gates from a production retrospective** - The film state
+  checker now binds a locked coverage lock to the current `storyboard` animatic
+  hash and, at picture lock, requires every on-timeline `dialogue_cues` entry to
+  be lip-synced when its mouth is visible, mouth-hidden otherwise, and never
+  lip-synced for internal, off-screen, or narration speech. New
+  `film-storyboard` and `film-reference-footage` skills, `film-reference-sourcing`
+  and `film-revision-rounds` rules, and a `film-storyboard` template; provider
+  preflight, delivery (loudness, true peak, black, stream list, frame count,
+  hashes, captions) and edit-conform gates name the failures that production found.
 
 ### Fixed
 

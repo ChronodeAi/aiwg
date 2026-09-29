@@ -2,7 +2,7 @@
 
 A provider-neutral AIWG framework for reference-driven films, animated shorts and episodic content: **develop → design → previs → generate → finish → deliver**. It turns story intent, immutable references and physical shot states into reviewable media and verified delivery. It does not generate media by itself.
 
-Start with [film-production-quickref](skills/film-production-quickref/SKILL.md). It routes to 12 operational skills, seven rules, six specialists, eight lifecycle/revision flows and eight templates. Read only the needed capability. Counts are a catalog, not a requirement to invoke every component.
+Start with [film-production-quickref](skills/film-production-quickref/SKILL.md). It routes to 14 operational skills, nine rules, six specialists, eight lifecycle/revision flows and nine templates. Read only the needed capability. Counts are a catalog, not a requirement to invoke every component.
 
 ## Use
 
@@ -29,7 +29,7 @@ Reload the provider session after deployment for new kernel/agent listings. Stan
 
 [Taxonomy](docs/taxonomy.md) · [Primary sources](docs/sources.md) · [Existing framework interfaces](docs/interfaces.md) · [Lifecycle](plan-act-film-production.md) · [Roles](actors-and-templates.md) · [Metrics](metrics/tracking-catalog.md)
 
-Rules are agent procedures. The [state checker](scripts/validate-film-state.mjs) checks recorded promotion constraints and, from schema v2, the lock gates in [the taxonomy](docs/taxonomy.md#acceptance-gates-and-locks): coverage lock before paid motion, a recorded event walk per accepted shot, a playback review (never stills) for every cut, picture lock before sound lock, measured audio clips, and escaped-defect checklist versions. It cannot inspect images, play media, authenticate a reviewer or prove creative quality. Run `node scripts/validate-film-state.mjs <state.json>` from this framework directory. The [synthetic example](examples/production-state.example.json) demonstrates format, not a live approval. v1 state files must be migrated to v2 (`events` on every shot) before the checker accepts them.
+Rules are agent procedures. The [state checker](scripts/validate-film-state.mjs) checks recorded promotion constraints and, from schema v2, the lock gates in [the taxonomy](docs/taxonomy.md#acceptance-gates-and-locks): coverage lock bound to the current storyboard animatic before paid motion, a recorded event walk per accepted shot, a playback review (never stills) for every cut, visible-speech sync for every on-timeline dialogue cue at picture lock, picture lock before sound lock, measured audio clips, and escaped-defect checklist versions. It cannot inspect images, play media, authenticate a reviewer or prove creative quality. Run `node scripts/validate-film-state.mjs <state.json>` from this framework directory. The [synthetic example](examples/production-state.example.json) demonstrates format, not a live approval. v1 state files must be migrated to v2 (`events` on every shot) before the checker accepts them.
 
 ## Integration and scope
 

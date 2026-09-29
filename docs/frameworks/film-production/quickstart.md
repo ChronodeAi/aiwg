@@ -26,7 +26,7 @@ aiwg list
 ```
 
 You should see `film-production` listed as an installed framework. Reload the provider session so it sees the new
-`film-production-quickref` kernel skill. The 12 operational skills are reached through discovery rather than the flat
+`film-production-quickref` kernel skill. The 14 operational skills are reached through discovery rather than the flat
 skill list:
 
 ```bash

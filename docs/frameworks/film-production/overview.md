@@ -22,8 +22,8 @@ revisited without restarting unaffected work.
 |-------|--------|--------|
 | Develop | `film-intake`, `film-story-proof`, `film-performance-sound` | Production brief, story proof, dialogue and selected takes |
 | Design | `film-continuity-pack`, `film-shot-plan`, `film-reference-edit` | Continuity bible, shot records, controlling references |
-| Previs | `film-reference-edit`, `film-performance-sound` | Animatic watched at real speed, voice cue sheet, coverage lock |
-| Generate | `film-provider-preflight`, `film-reference-edit`, `film-motion-coverage` | Generation receipts, accepted takes with recorded event walks |
+| Previs | `film-storyboard`, `film-reference-edit`, `film-performance-sound` | Storyboard and timed animatic watched at real speed, voice cue sheet, coverage lock |
+| Generate | `film-provider-preflight`, `film-reference-footage`, `film-reference-edit`, `film-motion-coverage` | Generation receipts, reference-footage provenance, accepted takes with recorded event walks |
 | Finish | `film-edit-conform`, `film-performance-sound` | Current timeline, picture lock, measured audio, sound lock |
 | Deliver | `film-delivery` | Checked exports, masters, derivatives, captions, editable sources, provenance |
 | All | `film-review-gate`, `film-retrospective` | Review records, escaped defects, measured outcomes |
@@ -40,8 +40,11 @@ Locks are recorded in the production state file (schema v2) and are the single s
 | FP-G06 | Delivery accepted | Calling a version final; publication stays separately authorized |
 
 Picture lock requires an accepted playback review of every cut at the current timeline hash — stills never pass.
-Coverage lock is the only lock that may be waived, and only with a recorded reason and authority. A defect the user
-finds that review missed is added to the review checklist, which re-checks already passed work for that class.
+Coverage lock is the only lock that may be waived, and only with a recorded reason and authority; a locked coverage lock
+must match the current storyboard animatic hash. Picture lock also requires every on-timeline dialogue cue to be
+lip-synced when its mouth is visible, mouth-hidden otherwise, and never lip-synced for internal, off-screen, or
+narration speech. A defect the user finds that review missed is added to the review checklist, which re-checks already
+passed work for that class.
 
 The state checker `scripts/validate-film-state.mjs` verifies these recorded constraints:
 
@@ -54,8 +57,8 @@ quality.
 
 ## Core Components
 
-The framework ships one kernel skill, `film-production-quickref`, which routes to 12 operational skills, 6 agents,
-7 rules, 8 lifecycle and revision flows, and 8 templates.
+The framework ships one kernel skill, `film-production-quickref`, which routes to 14 operational skills, 6 agents,
+9 rules, 8 lifecycle and revision flows, and 9 templates.
 
 ### Agents
 
@@ -79,6 +82,8 @@ The framework ships one kernel skill, `film-production-quickref`, which routes t
 | `film-regression-review` | Inspect the target change and scene invariants before promoting a candidate |
 | `film-generation-spend` | Bound generation by verified capability, existing authority, task reconciliation, and actual cost |
 | `film-delivery-boundary` | Deliver verified files and editable handoffs without implying publication |
+| `film-reference-sourcing` | Upload third-party footage only with recorded license provenance permitting modification, publication, and AI processing |
+| `film-revision-rounds` | Batch notes into budgeted rounds and present a ship-or-fix decision when only minor residuals remain |
 
 ### Flows
 
