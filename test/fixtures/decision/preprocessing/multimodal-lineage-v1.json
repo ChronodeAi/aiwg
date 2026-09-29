@@ -50,6 +50,7 @@
               "id": "page-1-total",
               "ordinal": 1,
               "sourceLocator": { "page": 1, "bbox": { "x": 80, "y": 320, "width": 220, "height": 42, "unit": "pixel" } },
+              "outputRange": { "start": 0, "end": 71 },
               "text": "Invoice 314 total 128.40 USD. Vendor: Northwind Clinic. Due 2026-10-15.",
               "textDigest": "sha256:793956c9a27bf0349a4491b80bdf0dc44158ee592cb303ab0e8490f3a220d7ea"
             }
@@ -133,6 +134,7 @@
               "id": "audio-0-6s",
               "ordinal": 1,
               "sourceLocator": { "startMs": 0, "endMs": 6000 },
+              "outputRange": { "start": 0, "end": 79 },
               "text": "Speaker says the cooling alarm is intermittent and asks for maintenance review.",
               "textDigest": "sha256:63e9208abfd0ac1476cba5c1194aab4c46a904612d20a82e6fca0291fc870c46"
             }
@@ -212,6 +214,7 @@
               "id": "video-0-8s",
               "ordinal": 1,
               "sourceLocator": { "startMs": 0, "endMs": 8000, "frame": 0 },
+              "outputRange": { "start": 0, "end": 81 },
               "text": "00:00 Safety guard visible. 00:08 Operator pauses the line and points to panel B.",
               "textDigest": "sha256:a8f3cbec523015ecfbd017b4283ec9773008c2e283736c438346fd4bb4f62892"
             }
@@ -292,6 +295,7 @@
               "id": "image-seal-bbox",
               "ordinal": 1,
               "sourceLocator": { "bbox": { "x": 0.62, "y": 0.72, "width": 0.18, "height": 0.12, "unit": "ratio" } },
+              "outputRange": { "start": 0, "end": 92 },
               "text": "Image description: cracked packaging seal on the lower right corner; label remains readable.",
               "textDigest": "sha256:2e7158dd549639c0701568580e6f616027553b6f05b74c862082b05af9cc6c89"
             }

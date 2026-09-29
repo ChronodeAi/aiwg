@@ -1,16 +1,33 @@
 import { canonicalJson, sha256 } from '../security/artifact-trust.js';
 import { admitEntry } from './entry.js';
-import { artifactDigest } from './validate.js';
+import type { DecisionLifecycleHold, DecisionLifecycleReference, DecisionLifecycleTombstone } from './lifecycle.js';
+import { artifactDigest, preprocessedEvidenceSchemaErrors, preprocessingLineageSchemaErrors } from './validate.js';
 import type { ArtifactPin } from './types.js';
 
 export const PREPROCESSED_EVIDENCE_KIND = 'PreprocessedEvidence' as const;
 
+/**
+ * Destination origin for an adapter that declares `egress: { mode: 'none' }` and runs with no
+ * D10 projection policy. Manifests authorize local derived-text use by listing
+ * `{ provider: <adapter id>, origin: PREPROCESSING_LOCAL_ORIGIN }`.
+ */
+export const PREPROCESSING_LOCAL_ORIGIN = 'local://no-egress' as const;
+
 export type PreprocessingLocatorClass = 'opaque-id' | 'artifact-ref' | 'local-redacted' | 'remote-url';
-export type PreprocessingKind =
-  | 'ocr' | 'asr' | 'caption' | 'image-description' | 'normalization'
-  | 'redaction' | 'translation' | 'truncation' | 'human-correction'
-  | 'summary' | 'concatenation';
+export type PreprocessingExtractionKind = 'ocr' | 'asr' | 'caption' | 'image-description';
+/** Kinds a recorded preprocessing step may have. Human correction is never a step. */
+export type PreprocessingStepKind = PreprocessingExtractionKind
+  | 'normalization' | 'redaction' | 'translation' | 'truncation' | 'summary' | 'concatenation';
+/** Human correction enters only as a validated, append-only transformation event. */
+export type PreprocessingTransformationKind = Exclude<PreprocessingStepKind, PreprocessingExtractionKind> | 'human-correction';
+export type PreprocessingKind = PreprocessingStepKind | 'human-correction';
 export type PreprocessingReviewFlag = 'low-quality' | 'truncated' | 'incomplete' | 'stale' | 'policy-limited' | 'human-corrected';
+
+const EXTRACTION_KINDS: readonly string[] = ['ocr', 'asr', 'caption', 'image-description'];
+const STEP_KINDS: readonly string[] = [...EXTRACTION_KINDS, 'normalization', 'redaction', 'translation', 'truncation', 'summary', 'concatenation'];
+const TRANSFORMATION_KINDS: readonly string[] = ['normalization', 'redaction', 'translation', 'truncation', 'human-correction', 'summary', 'concatenation'];
+/** Quality flags that block automatic use. `human-corrected` alone does not. */
+const REVIEW_FLAGS: ReadonlyArray<Exclude<PreprocessingReviewFlag, 'human-corrected'>> = ['low-quality', 'truncated', 'incomplete', 'stale', 'policy-limited'];
 
 export interface PreprocessedEvidence {
   apiVersion: 'decision.aiwg.io/v1alpha2';
@@ -49,6 +66,8 @@ export interface PreprocessedEvidence {
         wholeImage?: boolean;
         bbox?: { x: number; y: number; width: number; height: number; unit: 'pixel' | 'ratio' };
       };
+      /** UTF-8 byte range [start, end) of this segment within the digest-verified `output.value`. */
+      outputRange: { start: number; end: number };
       text: string;
       textDigest: `sha256:${string}`;
     }>;
@@ -56,7 +75,7 @@ export interface PreprocessedEvidence {
     quality: { source: 'preprocessor' | 'human-reviewer'; profile: string; label: string; score: number; flags: PreprocessingReviewFlag[] };
     transformations: Array<{
       id: string;
-      kind: Exclude<PreprocessingKind, 'ocr' | 'asr' | 'caption' | 'image-description'>;
+      kind: PreprocessingTransformationKind;
       inputDigest: `sha256:${string}`;
       outputDigest: `sha256:${string}`;
       at: string;
@@ -83,7 +102,7 @@ export interface PreprocessingEgressDestination {
 export interface PreprocessingStep {
   id: string;
   ordinal: number;
-  kind: PreprocessingKind;
+  kind: PreprocessingStepKind;
   tool: { id: string; version: string };
   model?: { id: string; version: string };
   configurationDigest: `sha256:${string}`;
@@ -92,6 +111,8 @@ export interface PreprocessingStep {
   endedAt: string;
   inputDigest: `sha256:${string}`;
   outputDigest: `sha256:${string}`;
+  /** Required exactly when the step is an identity transform (input digest equals output digest). */
+  noOp?: true;
   notesDigest?: `sha256:${string}`;
 }
 
@@ -102,6 +123,8 @@ export interface PreprocessedEvidenceReference {
   outputId: string;
   outputVersion: number;
   outputDigest: `sha256:${string}`;
+  /** The D10 provider/origin this lineage was resolved (and egress-authorized) for. */
+  destination: PreprocessingEgressDestination;
   selectedSegments: Array<{
     id: string;
     ordinal: number;
@@ -117,10 +140,11 @@ export interface PreprocessedEvidenceReference {
     flags: PreprocessingReviewFlag[];
   };
   policy: {
-    trust: string;
-    sensitivity: string;
-    retention: string;
-    residency: string;
+    trust: 'verified' | 'untrusted';
+    sensitivity: 'public' | 'internal' | 'confidential' | 'restricted';
+    /** Free-text retention/residency never enter receipts; only their digests do. */
+    retentionDigest: `sha256:${string}`;
+    residencyDigest: `sha256:${string}`;
     rawEgressAllowed: boolean;
     derivedEgressAllowed: boolean;
   };
@@ -135,6 +159,8 @@ export interface PreprocessedEvidenceTrace {
   evidence: ArtifactPin;
   stepIds: string[];
   stepCount: number;
+  /** Identity steps, declared `noOp: true` in the manifest, recorded explicitly. */
+  noOpStepIds: string[];
   sourceDigest: `sha256:${string}`;
   outputDigest: `sha256:${string}`;
   selectedSegmentCount: number;
@@ -144,15 +170,36 @@ export interface PreprocessedEvidenceTrace {
   reasons: PreprocessedEvidenceReviewReason[];
 }
 
+export type PreprocessingDispatchGateReason = PreprocessedEvidenceReviewReason
+  | 'unverified' | 'unavailable' | 'destination-mismatch' | 'destination-unbound' | 'malformed-lineage';
+
+/** Evaluator-written pre-dispatch verdict. Anything but `allowed` means no credential or transport call. */
+export interface PreprocessingDispatchGate {
+  outcome: 'allowed' | 'review' | 'refused';
+  reasons: PreprocessingDispatchGateReason[];
+}
+
 export interface PreprocessedEvidenceReceiptEvidence {
   schemaVersion: 'decision-preprocessing-lineage/v1';
+  status: 'ready' | 'review';
   references: PreprocessedEvidenceReference[];
   traces: PreprocessedEvidenceTrace[];
+  /** Present only in a RulesetResult: the evaluator's pre-dispatch gate verdict. */
+  dispatchGate?: PreprocessingDispatchGate;
 }
 
 export type PreprocessedEvidenceReviewReason =
-  | 'low-quality' | 'truncated' | 'incomplete' | 'stale'
-  | 'raw-egress-denied' | 'derived-egress-denied' | 'unsupported-locator';
+  | 'low-quality' | 'truncated' | 'incomplete' | 'stale' | 'policy-limited' | 'untrusted'
+  | 'raw-egress-denied' | 'derived-egress-denied' | 'unsupported-locator'
+  | 'lifecycle-unavailable' | 'legal-hold';
+
+/** Host-resolved D10 lifecycle state for the subject that owns the lineage records. */
+export interface PreprocessingLifecycleState {
+  subject: string;
+  now: number;
+  tombstones: ReadonlyArray<DecisionLifecycleTombstone>;
+  holds: ReadonlyArray<DecisionLifecycleHold>;
+}
 
 export interface ResolvePreprocessedEvidenceOptions {
   destination: PreprocessingEgressDestination;
@@ -162,8 +209,8 @@ export interface ResolvePreprocessedEvidenceOptions {
   allowedLocatorClasses?: PreprocessingLocatorClass[];
   sourceBytes?: Uint8Array;
   requireRawEgress?: boolean;
-  /** Explicit host policy. Default false means receipts/traces remain body-free. */
-  contentRetention?: { retainDerivedTextInReceipts: boolean };
+  /** Tombstoned lineage records withhold text; held records route to review. */
+  lifecycle?: PreprocessingLifecycleState;
 }
 
 export interface PreprocessedEvidenceResolution {
@@ -171,6 +218,12 @@ export interface PreprocessedEvidenceResolution {
   reasons: PreprocessedEvidenceReviewReason[];
   state: PreprocessedDecisionState;
   receiptEvidence: PreprocessedEvidenceReceiptEvidence;
+}
+
+/** Host-supplied current records the evaluator verifies stored lineage references against. */
+export interface PreprocessingVerification {
+  manifests: PreprocessedEvidence[];
+  lifecycle?: PreprocessingLifecycleState;
 }
 
 export class PreprocessedEvidenceError extends Error {
@@ -193,13 +246,31 @@ export function preprocessedEvidenceContentDigest(value: string | Uint8Array): `
   return `sha256:${sha256(typeof value === 'string' ? Buffer.from(value, 'utf8') : value)}`;
 }
 
+/** True when a lineage carries no references and no traces: it is treated exactly as absent. */
+export function isEmptyPreprocessingLineage(lineage: PreprocessedEvidenceReceiptEvidence | undefined): boolean {
+  if (lineage === undefined) return true;
+  const record = lineage as unknown;
+  return isRecord(record) && Array.isArray(record.references) && record.references.length === 0
+    && Array.isArray(record.traces) && record.traces.length === 0;
+}
+
+/**
+ * A host-supplied lineage the evaluator can gate: it matches the closed result schema, has at
+ * least one reference, and carries no pre-filled evaluator verdict.
+ */
+export function isWellFormedPreprocessingLineage(lineage: unknown): lineage is PreprocessedEvidenceReceiptEvidence {
+  return preprocessingLineageSchemaErrors(lineage) === null
+    && (lineage as PreprocessedEvidenceReceiptEvidence).dispatchGate === undefined
+    && (lineage as PreprocessedEvidenceReceiptEvidence).references.length > 0;
+}
+
 export function checkPreprocessedEvidenceReference(
   reference: PreprocessedEvidenceReference,
   manifest: PreprocessedEvidence,
 ): PreprocessedEvidenceReferenceCheck {
   assertPreprocessedEvidence(manifest);
-  const current = referenceFor(manifest, preprocessedEvidencePin(manifest),
-    selectedSegments(manifest), { destination: { provider: '__check__', origin: '__check__' } });
+  assertChain(manifest);
+  const current = referenceFor(manifest, preprocessedEvidencePin(manifest), selectedSegments(manifest), reference.destination);
   const reasons: PreprocessedEvidenceReferenceCheck['reasons'] = [];
   if (canonicalJson(reference.evidence) !== canonicalJson(current.evidence)) reasons.push('manifest-pin');
   if (reference.sourceAssetId !== current.sourceAssetId || reference.sourceDigest !== current.sourceDigest) reasons.push('source');
@@ -207,9 +278,7 @@ export function checkPreprocessedEvidenceReference(
     || reference.outputDigest !== current.outputDigest) reasons.push('output');
   if (canonicalJson(reference.selectedSegments) !== canonicalJson(current.selectedSegments)) reasons.push('segments');
   if (canonicalJson(reference.quality) !== canonicalJson(current.quality)) reasons.push('quality');
-  const policy = { ...current.policy, rawEgressAllowed: reference.policy.rawEgressAllowed,
-    derivedEgressAllowed: reference.policy.derivedEgressAllowed };
-  if (canonicalJson(reference.policy) !== canonicalJson(policy)) reasons.push('policy');
+  if (canonicalJson(reference.policy) !== canonicalJson(current.policy)) reasons.push('policy');
   return { status: reasons.length ? 'stale' : 'current', reasons };
 }
 
@@ -218,12 +287,14 @@ export function resolvePreprocessedEvidence(
   options: ResolvePreprocessedEvidenceOptions,
 ): PreprocessedEvidenceResolution {
   if (!manifests.length) {
-    return { status: 'ready', reasons: [], state: { text: '', lineage: [] }, receiptEvidence: { schemaVersion: 'decision-preprocessing-lineage/v1', references: [], traces: [] } };
+    return { status: 'ready', reasons: [], state: { text: '', lineage: [] },
+      receiptEvidence: { schemaVersion: 'decision-preprocessing-lineage/v1', status: 'ready', references: [], traces: [] } };
   }
   const resolved = manifests.map(manifest => resolveOne(manifest, options));
   const reasons = [...new Set(resolved.flatMap(item => item.reasons))];
+  const status = reasons.length ? 'review' : 'ready';
   return {
-    status: reasons.length ? 'review' : 'ready',
+    status,
     reasons,
     state: {
       text: resolved.map(item => item.text).join('\n\n'),
@@ -231,6 +302,7 @@ export function resolvePreprocessedEvidence(
     },
     receiptEvidence: {
       schemaVersion: 'decision-preprocessing-lineage/v1',
+      status,
       references: resolved.map(item => item.reference),
       traces: resolved.map(item => item.trace),
     },
@@ -247,14 +319,10 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
   const pin = preprocessedEvidencePin(manifest);
   const reasons: PreprocessedEvidenceReviewReason[] = [];
   const locatorClasses = new Set(options.allowedLocatorClasses ?? ['opaque-id', 'artifact-ref', 'local-redacted']);
-  if (!locatorClasses.has(manifest.spec.source.locator.class) || manifest.spec.source.locator.class === 'remote-url') {
-    throw new PreprocessedEvidenceError('policy-denied', 'source locator class is not authorized');
-  }
+  assertLocatorAuthorized(manifest.spec.source.locator, locatorClasses, 'source');
+  if (manifest.spec.output.reference) assertLocatorAuthorized(manifest.spec.output.reference, locatorClasses, 'output');
   if (options.sourceBytes && preprocessedEvidenceContentDigest(options.sourceBytes) !== manifest.spec.source.contentDigest) {
     throw new PreprocessedEvidenceError('digest-mismatch', 'source content digest mismatch');
-  }
-  if (preprocessedEvidenceContentDigest(manifest.spec.output.value) !== manifest.spec.output.contentDigest) {
-    throw new PreprocessedEvidenceError('digest-mismatch', 'output content digest mismatch');
   }
   assertChain(manifest);
   if (options.requireRawEgress
@@ -265,10 +333,9 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
     reasons.push('derived-egress-denied');
   }
   const minQuality = options.minQualityScore ?? 0;
-  if (manifest.spec.quality.score < minQuality || manifest.spec.quality.flags.includes('low-quality')) reasons.push('low-quality');
-  if (manifest.spec.quality.flags.includes('truncated')) reasons.push('truncated');
-  if (manifest.spec.quality.flags.includes('incomplete')) reasons.push('incomplete');
-  if (manifest.spec.quality.flags.includes('stale')) reasons.push('stale');
+  if (manifest.spec.quality.score < minQuality) reasons.push('low-quality');
+  reasons.push(...qualityFlagReasons(manifest.spec.quality.flags));
+  if (manifest.spec.policy.trust !== 'verified') reasons.push('untrusted');
   if (options.maxAgeMs !== undefined) {
     const acquired = Date.parse(manifest.spec.source.acquiredAt);
     const now = options.now?.() ?? Date.now();
@@ -279,15 +346,22 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
     || item.reference.outputDigest !== manifest.spec.output.contentDigest)) {
     reasons.push('stale');
   }
+  const lifecycle = options.lifecycle ? preprocessingLifecycleReasons(manifest, options.lifecycle) : [];
+  reasons.push(...lifecycle);
   const uniqueReasons = [...new Set(reasons)];
-  const reference = referenceFor(manifest, pin, selected, options);
+  const reference = referenceFor(manifest, pin, selected, options.destination);
+  // Text is always cut from the digest-verified output by locator range, never taken from segment fields.
+  const output = Buffer.from(manifest.spec.output.value, 'utf8');
+  const releasable = reference.policy.derivedEgressAllowed && !lifecycle.includes('lifecycle-unavailable');
   return {
-    text: reference.policy.derivedEgressAllowed ? selected.map(item => item.segment.text).join('\n') : '',
+    text: releasable ? selected.map(item => output.subarray(item.segment.outputRange.start, item.segment.outputRange.end)
+      .toString('utf8')).join('\n') : '',
     reference,
     trace: {
       evidence: pin,
       stepIds: manifest.spec.preprocessing.map(step => step.id),
       stepCount: manifest.spec.preprocessing.length,
+      noOpStepIds: manifest.spec.preprocessing.filter(step => step.noOp === true).map(step => step.id),
       sourceDigest: manifest.spec.source.contentDigest,
       outputDigest: manifest.spec.output.contentDigest,
       selectedSegmentCount: selected.length,
@@ -299,6 +373,117 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
     },
     reasons: uniqueReasons,
   };
+}
+
+function qualityFlagReasons(flags: readonly string[]): PreprocessedEvidenceReviewReason[] {
+  return REVIEW_FLAGS.filter(flag => flags.includes(flag)) as PreprocessedEvidenceReviewReason[];
+}
+
+/**
+ * D10 lifecycle records for one manifest. Hosts register these as `links()` of the owning subject,
+ * so cascading erasure tombstones the source, every transformation, the output and the manifest.
+ * Identical sources or transformations in other manifests map to the same opaque IDs, so one
+ * tombstone invalidates every dependent manifest and reference.
+ */
+export function preprocessingLifecycleReferences(manifest: PreprocessedEvidence): Array<{
+  role: 'manifest' | 'source' | 'transformation' | 'output';
+  reference: DecisionLifecycleReference;
+}> {
+  assertPreprocessedEvidence(manifest);
+  const opaque = (role: string, value: unknown): DecisionLifecycleReference => ({
+    surface: 'preprocessing-lineage', opaqueId: `preprocessing:${role}:${digestJson(value).slice('sha256:'.length)}`,
+  });
+  const pin = preprocessedEvidencePin(manifest);
+  return [
+    { role: 'manifest', reference: opaque('manifest', pin) },
+    { role: 'source', reference: opaque('source', { assetId: manifest.spec.source.assetId, digest: manifest.spec.source.contentDigest }) },
+    ...manifest.spec.preprocessing.map(step => ({ role: 'transformation' as const, reference: opaque('transformation', {
+      kind: step.kind, tool: step.tool, model: step.model ?? null, configurationDigest: step.configurationDigest,
+      inputDigest: step.inputDigest, outputDigest: step.outputDigest,
+    }) })),
+    ...manifest.spec.transformations.map(event => ({ role: 'transformation' as const, reference: opaque('transformation', {
+      kind: event.kind, inputDigest: event.inputDigest, outputDigest: event.outputDigest, previousOutput: event.previousOutput ?? null,
+    }) })),
+    { role: 'output', reference: opaque('output', { id: manifest.spec.output.id, version: manifest.spec.output.version,
+      digest: manifest.spec.output.contentDigest }) },
+  ];
+}
+
+/** Lifecycle reasons that stop automatic use of a manifest's derived text. */
+export function preprocessingLifecycleReasons(
+  manifest: PreprocessedEvidence, state: PreprocessingLifecycleState,
+): Array<'lifecycle-unavailable' | 'legal-hold'> {
+  const references = preprocessingLifecycleReferences(manifest).map(item => item.reference);
+  const reasons: Array<'lifecycle-unavailable' | 'legal-hold'> = [];
+  if (!isRecord(state) || !Array.isArray(state.tombstones) || !Array.isArray(state.holds) || !nonEmpty(state.subject)
+    || !Number.isSafeInteger(state.now)) {
+    return ['lifecycle-unavailable'];
+  }
+  if (state.tombstones.some(tombstone => references.some(reference =>
+    tombstone?.reference?.surface === reference.surface && tombstone.reference.opaqueId === reference.opaqueId))) {
+    reasons.push('lifecycle-unavailable');
+  }
+  if (state.holds.some(hold => hold?.subject === state.subject && hold.expiresAt > state.now
+    && Array.isArray(hold.scope) && hold.scope.includes('preprocessing-lineage'))) {
+    reasons.push('legal-hold');
+  }
+  return reasons;
+}
+
+/**
+ * Pre-dispatch gate for a stored lineage. Runs before credential resolution and transport.
+ * `destinations` are the D10 provider/origin of every target the evaluator could dispatch to;
+ * `null` marks a target whose destination cannot be bound.
+ */
+export function gatePreprocessedEvidenceDispatch(
+  lineage: PreprocessedEvidenceReceiptEvidence,
+  verification: PreprocessingVerification | undefined,
+  destinations: Array<PreprocessingEgressDestination | null>,
+): PreprocessingDispatchGate {
+  if (!isWellFormedPreprocessingLineage(lineage)) return { outcome: 'refused', reasons: ['malformed-lineage'] };
+  const refused = new Set<PreprocessingDispatchGateReason>();
+  for (const destination of destinations) {
+    if (!destination) { refused.add('destination-unbound'); continue; }
+    for (const reference of lineage.references) {
+      if (!sameDestination(reference.destination, destination)) refused.add('destination-mismatch');
+      else if (!reference.policy.derivedEgressAllowed) refused.add('derived-egress-denied');
+    }
+  }
+  if (refused.size) return { outcome: 'refused', reasons: [...refused] };
+
+  const review = new Set<PreprocessingDispatchGateReason>();
+  for (const trace of lineage.traces) {
+    trace.reasons.forEach(reason => review.add(reason));
+    qualityFlagReasons(trace.qualityFlags).forEach(reason => review.add(reason));
+  }
+  for (const reference of lineage.references) {
+    qualityFlagReasons(reference.quality.flags).forEach(reason => review.add(reason));
+    if (reference.policy.trust !== 'verified') review.add('untrusted');
+  }
+  // A non-ready status or review trace always blocks, even when it names no reason.
+  if (lineage.status !== 'ready' || lineage.traces.some(trace => trace.policyOutcome !== 'allowed')) {
+    if (!review.size) review.add('incomplete');
+  }
+  // Every reference needs its own aligned trace; a lineage without traces is incomplete evidence.
+  if (lineage.traces.length !== lineage.references.length || lineage.references.some((reference, index) =>
+    canonicalJson(lineage.traces[index]!.evidence) !== canonicalJson(reference.evidence))) review.add('incomplete');
+  if (!verification || !isRecord(verification) || !Array.isArray(verification.manifests)) {
+    review.add('unverified');
+  } else {
+    for (const reference of lineage.references) {
+      const current = verification.manifests.filter(manifest => manifest?.metadata?.id === reference.evidence.id);
+      if (current.length !== 1) { review.add('unavailable'); continue; }
+      try {
+        if (checkPreprocessedEvidenceReference(reference, current[0]!).status !== 'current') review.add('stale');
+        if (verification.lifecycle) {
+          preprocessingLifecycleReasons(current[0]!, verification.lifecycle).forEach(reason => review.add(reason));
+        }
+      } catch {
+        review.add('stale');
+      }
+    }
+  }
+  return review.size ? { outcome: 'review', reasons: [...review] } : { outcome: 'allowed', reasons: [] };
 }
 
 export function assertPreprocessedEvidence(value: unknown): asserts value is PreprocessedEvidence {
@@ -331,12 +516,24 @@ export function assertPreprocessedEvidence(value: unknown): asserts value is Pre
     || !Number.isSafeInteger(spec.output.version) || spec.output.version < 1 || !validDigest(spec.output.contentDigest)) {
     throw new PreprocessedEvidenceError('invalid-manifest', 'output identity is malformed');
   }
+  if (preprocessedEvidenceContentDigest(spec.output.value) !== spec.output.contentDigest) {
+    throw new PreprocessedEvidenceError('digest-mismatch', 'output content digest mismatch');
+  }
   validateSteps(spec.preprocessing);
   validateMediaCompatibility(spec);
   validateSegments(spec);
   validateQuality(spec.quality);
   validateTransformations(spec);
   validatePolicy(spec.policy);
+  // The closed schema is the final gate: the runtime never accepts what the schema rejects.
+  const schemaErrors = preprocessedEvidenceSchemaErrors(value);
+  if (schemaErrors !== null) throw new PreprocessedEvidenceError('invalid-manifest', `manifest violates the closed schema: ${schemaErrors}`);
+}
+
+function assertLocatorAuthorized(locator: { class: PreprocessingLocatorClass }, classes: Set<string>, label: string): void {
+  if (!classes.has(locator.class) || locator.class === 'remote-url') {
+    throw new PreprocessedEvidenceError('policy-denied', `${label} locator class is not authorized`);
+  }
 }
 
 function assertChain(manifest: PreprocessedEvidence): void {
@@ -349,12 +546,34 @@ function assertChain(manifest: PreprocessedEvidence): void {
     if (step.ordinal !== index + 1 || step.inputDigest !== previous) {
       throw new PreprocessedEvidenceError('broken-chain', 'preprocessing chain continuity is broken');
     }
-    if (step.outputDigest !== step.inputDigest && seenDigests.has(step.outputDigest)) {
+    const identity = step.outputDigest === step.inputDigest;
+    if (identity !== (step.noOp === true)) {
+      throw new PreprocessedEvidenceError('broken-chain', identity
+        ? 'identity step must be declared as an explicit no-op' : 'declared no-op step changes content');
+    }
+    if (!identity && seenDigests.has(step.outputDigest)) {
       throw new PreprocessedEvidenceError('broken-chain', 'preprocessing chain contains a digest cycle');
     }
     seenDigests.add(step.outputDigest);
     previous = step.outputDigest;
   });
+  // Human corrections are append-only: each takes the current output as input and bumps the version.
+  let correctedFrom: { version: number; at: number } | null = null;
+  for (const event of manifest.spec.transformations.filter(item => item.kind === 'human-correction')) {
+    const previousOutput = event.previousOutput!;
+    const at = Date.parse(event.at);
+    if (event.inputDigest !== previous || previousOutput.digest !== previous || previousOutput.id !== manifest.spec.output.id
+      || event.outputDigest === previous || seenDigests.has(event.outputDigest)
+      || (correctedFrom && (previousOutput.version <= correctedFrom.version || at < correctedFrom.at))) {
+      throw new PreprocessedEvidenceError('broken-chain', 'human correction must append a newer linked output version');
+    }
+    correctedFrom = { version: previousOutput.version, at };
+    seenDigests.add(event.outputDigest);
+    previous = event.outputDigest;
+  }
+  if (correctedFrom && manifest.spec.output.version <= correctedFrom.version) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'human correction must create a newer linked output version');
+  }
   if (previous !== manifest.spec.output.contentDigest) {
     throw new PreprocessedEvidenceError('digest-mismatch', 'final preprocessing output does not match output identity');
   }
@@ -378,9 +597,18 @@ function referenceFor(
   manifest: PreprocessedEvidence,
   pin: ArtifactPin,
   selected: ReturnType<typeof selectedSegments>,
-  options: Pick<ResolvePreprocessedEvidenceOptions, 'destination'>,
+  destination: PreprocessingEgressDestination,
 ): PreprocessedEvidenceReference {
-  const preprocessingDigest = stepIdentityDigest(manifest.spec.preprocessing);
+  const preprocessingDigest = digestJson({
+    steps: manifest.spec.preprocessing.map(step => ({
+      id: step.id, ordinal: step.ordinal, kind: step.kind, tool: step.tool, model: step.model ?? null,
+      configurationDigest: step.configurationDigest, noOp: step.noOp === true,
+    })),
+    transformations: manifest.spec.transformations.map(event => ({
+      id: event.id, kind: event.kind, inputDigest: event.inputDigest, outputDigest: event.outputDigest,
+      reviewer: event.reviewer ?? null, rationale: event.rationale ?? null, previousOutput: event.previousOutput ?? null,
+    })),
+  });
   return {
     evidence: pin,
     sourceAssetId: manifest.spec.source.assetId,
@@ -388,10 +616,11 @@ function referenceFor(
     outputId: manifest.spec.output.id,
     outputVersion: manifest.spec.output.version,
     outputDigest: manifest.spec.output.contentDigest,
+    destination: { provider: destination.provider, origin: destination.origin },
     selectedSegments: selected.map(item => ({
       id: item.segment.id,
       ordinal: item.segment.ordinal,
-      locatorDigest: digestJson(item.segment.sourceLocator),
+      locatorDigest: digestJson({ source: item.segment.sourceLocator, output: item.segment.outputRange }),
       textDigest: item.segment.textDigest,
       preprocessingDigest,
     })),
@@ -405,10 +634,10 @@ function referenceFor(
     policy: {
       trust: manifest.spec.policy.trust,
       sensitivity: manifest.spec.policy.sensitivity,
-      retention: manifest.spec.policy.retention,
-      residency: manifest.spec.policy.residency,
-      rawEgressAllowed: egressAllowed(manifest.spec.policy.rawEgress, options.destination),
-      derivedEgressAllowed: egressAllowed(manifest.spec.policy.derivedEgress, options.destination),
+      retentionDigest: preprocessedEvidenceContentDigest(manifest.spec.policy.retention),
+      residencyDigest: preprocessedEvidenceContentDigest(manifest.spec.policy.residency),
+      rawEgressAllowed: egressAllowed(manifest.spec.policy.rawEgress, destination),
+      derivedEgressAllowed: egressAllowed(manifest.spec.policy.derivedEgress, destination),
     },
   };
 }
@@ -417,14 +646,17 @@ function validateSteps(steps: PreprocessingStep[]): void {
   if (!steps.length) throw new PreprocessedEvidenceError('invalid-manifest', 'preprocessing chain is required');
   for (const step of steps) {
     if (!isRecord(step)) throw new PreprocessedEvidenceError('invalid-manifest', 'preprocessing step is malformed');
-    rejectUnknown(step, ['id', 'ordinal', 'kind', 'tool', 'model', 'configurationDigest', 'runtime', 'startedAt', 'endedAt', 'inputDigest', 'outputDigest', 'notesDigest'], 'preprocessing step');
+    rejectUnknown(step, ['id', 'ordinal', 'kind', 'tool', 'model', 'configurationDigest', 'runtime', 'startedAt', 'endedAt', 'inputDigest', 'outputDigest', 'noOp', 'notesDigest'], 'preprocessing step');
     if (!nonEmpty(step.id) || !Number.isSafeInteger(step.ordinal) || step.ordinal < 1
-      || !['ocr', 'asr', 'caption', 'image-description', 'normalization', 'redaction', 'translation', 'truncation', 'human-correction', 'summary', 'concatenation'].includes(step.kind)
+      || !STEP_KINDS.includes(step.kind)
       || !isRecord(step.tool) || !nonEmpty(step.tool.id) || !nonEmpty(step.tool.version)
       || !validDigest(step.configurationDigest) || !validDigest(step.inputDigest) || !validDigest(step.outputDigest)
       || !['recorded-fixture', 'offline', 'live-observed'].includes(step.runtime)
       || !Number.isFinite(Date.parse(step.startedAt)) || !Number.isFinite(Date.parse(step.endedAt))) {
       throw new PreprocessedEvidenceError('invalid-manifest', 'preprocessing step identity is malformed');
+    }
+    if (step.noOp !== undefined && (step.noOp !== true || EXTRACTION_KINDS.includes(step.kind))) {
+      throw new PreprocessedEvidenceError('invalid-manifest', 'only a non-extraction step can be declared no-op');
     }
   }
 }
@@ -433,9 +665,10 @@ function validateSegments(spec: PreprocessedEvidence['spec']): void {
   if (!spec.segments.length || !spec.selectedSegments.length) throw new PreprocessedEvidenceError('invalid-manifest', 'segments are required');
   const ids = new Set<string>();
   const ordinals = new Set<number>();
+  const output = Buffer.from(spec.output.value, 'utf8');
   for (const segment of spec.segments) {
     if (!isRecord(segment)) throw new PreprocessedEvidenceError('invalid-manifest', 'segment is malformed');
-    rejectUnknown(segment, ['id', 'ordinal', 'sourceLocator', 'text', 'textDigest'], 'segment');
+    rejectUnknown(segment, ['id', 'ordinal', 'sourceLocator', 'outputRange', 'text', 'textDigest'], 'segment');
     if (!nonEmpty(segment.id) || !Number.isSafeInteger(segment.ordinal) || segment.ordinal < 1
       || typeof segment.text !== 'string' || !validDigest(segment.textDigest) || !isRecord(segment.sourceLocator)) {
       throw new PreprocessedEvidenceError('invalid-manifest', 'segment locator is malformed');
@@ -447,6 +680,14 @@ function validateSegments(spec: PreprocessedEvidence['spec']): void {
     ordinals.add(segment.ordinal);
     if (preprocessedEvidenceContentDigest(segment.text) !== segment.textDigest) {
       throw new PreprocessedEvidenceError('digest-mismatch', 'segment text digest mismatch');
+    }
+    const range = segment.outputRange;
+    if (!isRecord(range) || !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)
+      || range.start < 0 || range.end < range.start || range.end > output.length) {
+      throw new PreprocessedEvidenceError('invalid-manifest', 'segment output range is outside the verified output');
+    }
+    if (!output.subarray(range.start, range.end).equals(Buffer.from(segment.text, 'utf8'))) {
+      throw new PreprocessedEvidenceError('digest-mismatch', 'segment text is not the verified output slice');
     }
     const locator = segment.sourceLocator;
     const hasPage = Number.isSafeInteger(locator.page);
@@ -461,6 +702,11 @@ function validateSegments(spec: PreprocessedEvidence['spec']): void {
       throw new PreprocessedEvidenceError('invalid-manifest', 'segment requires a page, time, frame, box or whole-image locator');
     }
     validateLocatorForMedia(spec.source.mediaType, locator, primaryExtractionKind(spec.preprocessing));
+  }
+  // Source order is preserved: ordinal order is also output order.
+  const ordered = [...spec.segments].sort((left, right) => left.ordinal - right.ordinal);
+  if (ordered.some((segment, index) => index > 0 && segment.outputRange.start < ordered[index - 1]!.outputRange.end)) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'segment output ranges must follow ordinal order without overlap');
   }
   for (const reference of spec.selectedSegments) {
     if (!isRecord(reference)) throw new PreprocessedEvidenceError('invalid-manifest', 'selected segment is malformed');
@@ -482,24 +728,17 @@ function validateQuality(quality: PreprocessedEvidence['spec']['quality']): void
 }
 
 function validateTransformations(spec: PreprocessedEvidence['spec']): void {
-  const events = spec.transformations;
-  for (const event of events) {
+  for (const event of spec.transformations) {
     if (!isRecord(event)) throw new PreprocessedEvidenceError('invalid-manifest', 'transformation event is malformed');
     rejectUnknown(event, ['id', 'kind', 'inputDigest', 'outputDigest', 'at', 'reviewer', 'rationale', 'previousOutput'], 'transformation event');
-    if (!nonEmpty(event.id) || !['normalization', 'redaction', 'translation', 'truncation', 'human-correction', 'summary', 'concatenation'].includes(event.kind)
+    if (!nonEmpty(event.id) || !TRANSFORMATION_KINDS.includes(event.kind)
       || !validDigest(event.inputDigest) || !validDigest(event.outputDigest) || !Number.isFinite(Date.parse(event.at))) {
       throw new PreprocessedEvidenceError('invalid-manifest', 'transformation event is malformed');
     }
-    if (event.kind === 'human-correction') {
-      if (!nonEmpty(event.reviewer) || !nonEmpty(event.rationale) || !isRecord(event.previousOutput)
-        || !nonEmpty(event.previousOutput.id) || !Number.isSafeInteger(event.previousOutput.version)
-        || event.previousOutput.version < 1 || !validDigest(event.previousOutput.digest)) {
-        throw new PreprocessedEvidenceError('invalid-manifest', 'human correction requires reviewer, rationale and previous output link');
-      }
-      if (event.previousOutput.version >= spec.output.version || event.outputDigest !== spec.output.contentDigest
-        || event.previousOutput.id !== spec.output.id || event.previousOutput.digest !== event.inputDigest) {
-        throw new PreprocessedEvidenceError('invalid-manifest', 'human correction must create a newer linked output version');
-      }
+    if (event.kind === 'human-correction' && (!nonEmpty(event.reviewer) || !nonEmpty(event.rationale) || !isRecord(event.previousOutput)
+      || !nonEmpty(event.previousOutput.id) || !Number.isSafeInteger(event.previousOutput.version)
+      || event.previousOutput.version < 1 || !validDigest(event.previousOutput.digest))) {
+      throw new PreprocessedEvidenceError('invalid-manifest', 'human correction requires reviewer, rationale and previous output link');
     }
   }
 }
@@ -519,8 +758,11 @@ function egress(value: unknown): value is { allowed: boolean; destinations: Prep
 
 function egressAllowed(value: { allowed: boolean; destinations: PreprocessingEgressDestination[] },
   destination: PreprocessingEgressDestination): boolean {
-  return value.allowed && value.destinations.some(item =>
-    item.provider === destination.provider && normalizeOrigin(item.origin) === normalizeOrigin(destination.origin));
+  return value.allowed && value.destinations.some(item => sameDestination(item, destination));
+}
+
+function sameDestination(left: PreprocessingEgressDestination, right: PreprocessingEgressDestination): boolean {
+  return left.provider === right.provider && normalizeOrigin(left.origin) === normalizeOrigin(right.origin);
 }
 
 function validateMediaCompatibility(spec: PreprocessedEvidence['spec']): void {
@@ -540,9 +782,9 @@ function validateMediaCompatibility(spec: PreprocessedEvidence['spec']): void {
   }
 }
 
-function primaryExtractionKind(steps: PreprocessingStep[]): Extract<PreprocessingKind, 'ocr' | 'asr' | 'caption' | 'image-description'> | null {
-  return steps.find((step): step is PreprocessingStep & { kind: 'ocr' | 'asr' | 'caption' | 'image-description' } =>
-    ['ocr', 'asr', 'caption', 'image-description'].includes(step.kind))?.kind ?? null;
+function primaryExtractionKind(steps: PreprocessingStep[]): PreprocessingExtractionKind | null {
+  return steps.find((step): step is PreprocessingStep & { kind: PreprocessingExtractionKind } =>
+    EXTRACTION_KINDS.includes(step.kind))?.kind ?? null;
 }
 
 function validateLocatorForMedia(
@@ -570,19 +812,12 @@ function validateLocatorForMedia(
   }
 }
 
-function stepIdentityDigest(steps: PreprocessingStep[]): `sha256:${string}` {
-  return digestJson(steps.map(step => ({
-    id: step.id,
-    ordinal: step.ordinal,
-    kind: step.kind,
-    tool: step.tool,
-    model: step.model ?? null,
-    configurationDigest: step.configurationDigest,
-  })));
-}
-
+/** HTTP(S) origins compare by URL origin; any other scheme (for example `local://`) compares exactly. */
 function normalizeOrigin(value: string): string {
-  try { return new URL(value).origin; } catch { return value; }
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : value;
+  } catch { return value; }
 }
 
 function invalid(message: string, _error: unknown): PreprocessedEvidenceError {

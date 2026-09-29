@@ -1572,7 +1572,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "source-module",
-      "digest": "sha256:d34230bc370369cd54ba216a9bbfbb50a998f65555d9a2d477bb1c8f3e7124fb",
+      "digest": "sha256:ad7299648680f32847d7df40cff808c92704e03c59117b2ddce6ea931630881c",
       "expectedOutcome": "Runnable offline D24 preprocessing lineage example producing a body-free decision receipt",
       "links": [
         "JEV-16",
@@ -1588,7 +1588,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:0e47164f509809ddf40246357cd8c2d93aefad86ddedaba0b5f9167cd8ee3ab9",
+      "digest": "sha256:100fa729659e567b30e649f12bd2d28b7dfcd1596a48810697d731511b82caab",
       "expectedOutcome": "D24 preprocessing lineage fixtures for OCR, transcription, video captions and image description producing text-only decision state",
       "links": [
         "JEV-16",

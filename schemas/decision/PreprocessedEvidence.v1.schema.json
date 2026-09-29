@@ -101,8 +101,7 @@
         "kind": {
           "enum": [
             "ocr", "asr", "caption", "image-description", "normalization",
-            "redaction", "translation", "truncation", "human-correction",
-            "summary", "concatenation"
+            "redaction", "translation", "truncation", "summary", "concatenation"
           ]
         },
         "tool": {
@@ -129,8 +128,14 @@
         "endedAt": { "$ref": "#/$defs/dateTime" },
         "inputDigest": { "$ref": "#/$defs/digest" },
         "outputDigest": { "$ref": "#/$defs/digest" },
+        "noOp": {
+          "description": "Required exactly when the step is an identity transform (inputDigest equals outputDigest). Not allowed on extraction steps.",
+          "const": true
+        },
         "notesDigest": { "$ref": "#/$defs/digest" }
-      }
+      },
+      "if": { "properties": { "kind": { "enum": ["ocr", "asr", "caption", "image-description"] } }, "required": ["kind"] },
+      "then": { "properties": { "noOp": false } }
     },
     "output": {
       "type": "object",
@@ -177,12 +182,22 @@
     },
     "segment": {
       "type": "object",
-      "required": ["id", "ordinal", "sourceLocator", "text", "textDigest"],
+      "required": ["id", "ordinal", "sourceLocator", "outputRange", "text", "textDigest"],
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/nonEmpty" },
         "ordinal": { "type": "integer", "minimum": 1 },
         "sourceLocator": { "$ref": "#/$defs/locatorRange" },
+        "outputRange": {
+          "description": "UTF-8 byte range [start, end) of the segment inside the digest-verified output value. The resolver requires text to equal this slice and projects the slice.",
+          "type": "object",
+          "required": ["start", "end"],
+          "additionalProperties": false,
+          "properties": {
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          }
+        },
         "text": { "type": "string" },
         "textDigest": { "$ref": "#/$defs/digest" }
       }

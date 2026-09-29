@@ -24,7 +24,7 @@ import type { ProviderPrefixReport } from './compile-cache/prefix.js';
 import type { DecisionTelemetryContext, DecisionTelemetryHook } from './telemetry/types.js';
 import type { DecisionTelemetryIdSource } from './telemetry/context.js';
 import type { DecisionProjectionEvidence, DecisionProjectionPolicy } from './projection.js';
-import type { PreprocessedEvidenceReceiptEvidence } from './preprocessed-evidence.js';
+import type { PreprocessedEvidenceReceiptEvidence, PreprocessingVerification } from './preprocessed-evidence.js';
 import type { DecisionResultCache, ResultCacheActor, ResultCacheCallerReceipt,
   ResultCachePolicy, ResultCacheSemanticIdentity } from './result-cache/index.js';
 
@@ -739,9 +739,17 @@ export interface DecisionEvaluationRequest {
   /**
    * Explicit, host-resolved preprocessing lineage for text-only decision input.
    * The evaluator records these pins/digests in the result but never reads raw
-   * media or derived text bodies from this evidence.
+   * media or derived text bodies from this evidence. An empty lineage (no
+   * references and no traces) is treated exactly as absent. Any other lineage is
+   * gated before credential resolution and transport: a destination mismatch is
+   * refused, and review lineage returns `review` without dispatch.
    */
   preprocessingLineage?: PreprocessedEvidenceReceiptEvidence;
+  /**
+   * Current host-stored manifests (and optional D10 lifecycle state) that stored
+   * lineage references are checked against. Omitting it routes lineage to review.
+   */
+  preprocessingVerification?: PreprocessingVerification;
   /**
    * Trusted host-side state projection boundary. Required for any adapter that
    * does not declare `egress: { mode: 'none' }`; omitting it denies dispatch as

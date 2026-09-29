@@ -6,7 +6,6 @@ import { resolveDecisionRuntime } from '../skills/decision-evaluate/scripts/runt
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../../../../..');
 const usage = { inputTokens: 4, outputTokens: 1, costUsd: null };
-const destination = { provider: 'jev', origin: 'local://offline-fixture' };
 
 async function json(relativePath) {
   return JSON.parse(await readFile(path.resolve(root, relativePath), 'utf8'));
@@ -60,6 +59,8 @@ function adapter(seen) {
 export async function runPreprocessingLineageExample(runtime, { invocationId = 'preprocessing-lineage-offline' } = {}) {
   const fixture = await json('test/fixtures/decision/preprocessing/multimodal-lineage-v1.json');
   const manifest = fixture.fixtures.find(item => item.id === 'scanned-document-ocr').manifest;
+  // A no-egress local adapter with no projection policy is the local destination for this adapter.
+  const destination = { provider: 'jev', origin: runtime.PREPROCESSING_LOCAL_ORIGIN };
   manifest.spec.policy.derivedEgress.destinations = [destination];
   const resolved = runtime.resolvePreprocessedEvidence([manifest], { destination, minQualityScore: 0.8 });
   const seen = [];
@@ -76,6 +77,8 @@ export async function runPreprocessingLineageExample(runtime, { invocationId = '
     invocationId,
     adapters: { jev: adapter(seen) },
     preprocessingLineage: resolved.receiptEvidence,
+    // The host's current manifest record: stored lineage references are re-checked against it.
+    preprocessingVerification: { manifests: [manifest] },
   });
   return {
     status: result.spec.status,
