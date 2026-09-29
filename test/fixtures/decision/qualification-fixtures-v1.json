@@ -1594,6 +1594,54 @@
         "JEV-16",
         "#2617"
       ]
+    },
+    {
+      "id": "DEC-PREPROC-02",
+      "path": "test/fixtures/decision/preprocessing/text-native-cases.ts",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:f5d073d3a5d6f3cebe3da77caec4e436d2d9238b4f380d88ca53f57735445f67",
+      "expectedOutcome": "Runtime-agnostic text-native decision requests without a preprocessing manifest, run against origin/main to capture the golden and against the branch runtime to compare it",
+      "links": [
+        "JEV-16",
+        "#2617"
+      ]
+    },
+    {
+      "id": "DEC-PREPROC-03",
+      "path": "test/fixtures/decision/preprocessing/text-native-golden-v1.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-text-native-golden/v1",
+      "digest": "sha256:9b818458528c1ce5a88cb67351649743e8dbbaabda62e60798dca9b135bcd86b",
+      "expectedOutcome": "Golden result, receipt and dispatch bytes for text-native requests captured from origin/main 254c32bdb5081d914329a3950a593e7af9efdac4; AC12 requires byte-identical behavior",
+      "links": [
+        "JEV-16",
+        "#2617"
+      ]
+    },
+    {
+      "id": "DEC-PREPROC-04",
+      "path": "test/fixtures/decision/preprocessing/generate-text-native-golden.ts",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:fd0174314865fe8c210e693bdecec5cc95c2df51a283c6b4d55d6a37881fc5d0",
+      "expectedOutcome": "Generator that captures text-native-golden-v1.json from a baseline checkout of the decision runtime",
+      "links": [
+        "JEV-16",
+        "#2617"
+      ]
     }
   ]
 }
