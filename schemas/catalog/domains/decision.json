@@ -671,6 +671,66 @@
       "publication": { "public": true }
     },
     {
+      "logicalName": "decision.issue-triage-pilot-pack",
+      "id": "https://aiwg.io/schemas/decision/DecisionIssueTriagePilotPack.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionIssueTriagePilotPack.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-issue-triage-pilot", "boundary": "Default-off Jev issue triage shadow pilot pack; no tracker mutation authority", "path": "src/decision/issue-triage/runtime.ts" }],
+      "fixtures": {
+        "valid": ["test/fixtures/decision/issue-triage/pilot-pack.v1.valid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/decision/issue-triage/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/issue-triage/runtime.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.issue-triage-evaluation-manifest",
+      "id": "https://aiwg.io/schemas/decision/DecisionIssueTriageEvaluationManifest.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionIssueTriageEvaluationManifest.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-issue-triage-pilot", "boundary": "Preregistered slices, thresholds and holdout rules before live issue holdout access", "path": "src/decision/issue-triage/runtime.ts" }],
+      "fixtures": {
+        "valid": ["test/fixtures/decision/issue-triage/evaluation-manifest.v1.valid.json"]
+      },
+      "projections": [
+        { "kind": "types", "path": "src/decision/issue-triage/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/issue-triage/runtime.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.issue-triage-evaluation-report",
+      "id": "https://aiwg.io/schemas/decision/DecisionIssueTriageEvaluationReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionIssueTriageEvaluationReport.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-issue-triage-pilot", "boundary": "Offline shadow report with quality, economics and eval-integrity gate preservation", "path": "src/decision/issue-triage/runtime.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/issue-triage/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/issue-triage/runtime.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
       "logicalName": "decision.projection-policy",
       "id": "https://aiwg.io/schemas/decision/DecisionProjectionPolicy.v1.schema.json",
       "version": "1.0.0",

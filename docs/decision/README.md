@@ -49,5 +49,10 @@ The [offline pattern playground](pattern-playground.md) provides discoverable,
 sanitized examples and a governed authoring checklist without requiring network
 access or a provider credential.
 
+The [issue triage shadow pilot](issue-triage-pilot.md) adds an experimental,
+default-off offline harness for Jev issue classification and deterministic
+duplicate reranking. It is shadow-only, writes no tracker mutations, and keeps
+live holdout, human-review, and promotion evidence pending.
+
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

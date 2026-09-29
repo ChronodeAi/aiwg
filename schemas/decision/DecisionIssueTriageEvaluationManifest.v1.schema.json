@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionIssueTriageEvaluationManifest.v1.schema.json",
+  "title": "DecisionIssueTriageEvaluationManifest.v1",
+  "description": "Preregistered offline/holdout manifest for the issue triage shadow pilot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "pilotPack",
+    "dataset",
+    "slices",
+    "thresholds",
+    "holdout",
+    "integrity"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "decision-issue-triage-evaluation-manifest/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "pilotPack": { "$ref": "#/$defs/pin" },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest", "splitMethod", "minimumTotal", "minimumPerSupportedSlice"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" },
+        "splitMethod": { "enum": ["time", "source"] },
+        "minimumTotal": { "type": "integer", "minimum": 1 },
+        "minimumPerSupportedSlice": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "dimension", "minimumSupport", "whenInsufficient", "aggregation"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "dimension": {
+            "enum": ["issue-type", "area", "state-completeness", "adversarial-authority", "new-or-unseen-category"]
+          },
+          "minimumSupport": { "type": "integer", "minimum": 1 },
+          "whenInsufficient": { "const": "label-insufficient" },
+          "aggregation": { "enum": ["report-supported", "suppress-small-n"] }
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maximumFalseDuplicateRate",
+        "maximumFalseAutoRate",
+        "qualityNonInferiorityMargin",
+        "minimumAcceptedCoverage",
+        "confidenceInterval",
+        "minimumTotalSamples",
+        "minimumPerSliceSamples",
+        "benefit"
+      ],
+      "properties": {
+        "maximumFalseDuplicateRate": { "$ref": "#/$defs/unit" },
+        "maximumFalseAutoRate": { "$ref": "#/$defs/unit" },
+        "qualityNonInferiorityMargin": { "type": "number", "minimum": -1, "maximum": 1 },
+        "minimumAcceptedCoverage": { "$ref": "#/$defs/unit" },
+        "confidenceInterval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "level"],
+          "properties": {
+            "method": { "enum": ["wilson", "bootstrap", "exact"] },
+            "level": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 }
+          }
+        },
+        "minimumTotalSamples": { "type": "integer", "minimum": 1 },
+        "minimumPerSliceSamples": { "type": "integer", "minimum": 1 },
+        "benefit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mustBePositive", "metric"],
+          "properties": {
+            "mustBePositive": { "const": true },
+            "metric": { "enum": ["total-task-token-cost", "reviewer-time"] }
+          }
+        }
+      }
+    },
+    "holdout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["thresholdsRegisteredAt", "holdoutAccessedAt"],
+      "properties": {
+        "thresholdsRegisteredAt": { "type": "string", "format": "date-time" },
+        "holdoutAccessedAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["extendsEvalIntegrity", "preserveGateDecision"],
+      "properties": {
+        "extendsEvalIntegrity": { "const": true },
+        "preserveGateDecision": { "const": true }
+      }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "pin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "unit": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}
