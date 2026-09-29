@@ -14,7 +14,10 @@ import {
   validateEnsemblePolicy,
   type EnsemblePolicyValidationOptions,
 } from './contract.js';
+import { canonicalJson } from '../../security/artifact-trust.js';
+import { assertDecisionResultWriterVersion } from '../validate.js';
 import { aggregateEnsembleResults } from './aggregate.js';
+import { buildEnsembleIntegrityReport } from './report.js';
 import { resolveDriftResponse } from './drift.js';
 import type {
   ChampionChallengerRolePin,
@@ -127,25 +130,42 @@ export async function executeDecisionEnsemble(
   let actualAttempts = 0;
   let actualTokens = 0;
   let actualCostMicros = 0;
-  let reservedAttempts = 0;
-  let reservedTokens = 0;
-  let reservedCostMicros = 0;
+  let inFlightAttempts = 0;
+  let inFlightTokens = 0;
+  let inFlightCostMicros = 0;
+  const dispatchedMembers = new Set<string>();
   let exhausted = false;
   const reservations = new Map(budget.reservations.map(item => [`${item.memberId}:${item.sampleIndex}`, item]));
   try {
     const memberResults = await runBounded(tasks, budget.effective.concurrency, async ({ member, sampleIndex }) => {
       if (signal.aborted || now() >= deadlineEpochMs) return syntheticMemberResult(policy, member, sampleIndex, 'timeout', retainedResults);
       if (exhausted) return syntheticMemberResult(policy, member, sampleIndex, 'budget-exhausted', retainedResults);
+      // Reserve before dispatch against what is already spent plus every in-flight reservation.
       const reservation = reservations.get(`${member.id}:${sampleIndex}`);
-      if (!reservation || reservedAttempts + reservation.attempts > budget.effective.attempts
-        || reservedTokens + reservation.tokens > budget.effective.tokens
-        || reservedCostMicros + reservation.costMicros > budget.effective.costMicros) {
+      if (!reservation
+        || (!dispatchedMembers.has(member.id) && dispatchedMembers.size + 1 > budget.effective.members)
+        || actualAttempts + inFlightAttempts + reservation.attempts > budget.effective.attempts
+        || actualTokens + inFlightTokens + reservation.tokens > budget.effective.tokens
+        || actualCostMicros + inFlightCostMicros + reservation.costMicros > budget.effective.costMicros) {
         exhausted = true;
         return syntheticMemberResult(policy, member, sampleIndex, 'budget-exhausted', retainedResults);
       }
-      reservedAttempts += reservation.attempts;
-      reservedTokens += reservation.tokens;
-      reservedCostMicros += reservation.costMicros;
+      dispatchedMembers.add(member.id);
+      inFlightAttempts += reservation.attempts;
+      inFlightTokens += reservation.tokens;
+      inFlightCostMicros += reservation.costMicros;
+      let settled = false;
+      /** Moves the reservation into actual spend. Without trusted usage the full reserved bound is charged. */
+      const settle = (usage: { attempts: number; tokens: number; costMicros: number } = reservation) => {
+        if (settled) return;
+        settled = true;
+        inFlightAttempts -= reservation.attempts;
+        inFlightTokens -= reservation.tokens;
+        inFlightCostMicros -= reservation.costMicros;
+        actualAttempts += usage.attempts;
+        actualTokens += usage.tokens;
+        actualCostMicros += usage.costMicros;
+      };
 
       let result: DecisionResult;
       try {
@@ -154,23 +174,31 @@ export async function executeDecisionEnsemble(
           invocationId: `${options.invocationId}:${member.id}:${sampleIndex}`, deadlineEpochMs, signal,
         }), signal);
       } catch (error) {
+        // A timed-out or rejected dispatch may still have spent its reservation; it is never refunded.
+        settle();
         const reason = signal.aborted || now() >= deadlineEpochMs || (error instanceof EnsembleRuntimeError && error.reason === 'timeout')
           ? 'timeout' : 'dispatch-error';
         if (reason === 'timeout') exhausted = true;
         return syntheticMemberResult(policy, member, sampleIndex, reason, retainedResults);
+      }
+      try {
+        assertDecisionResultWriterVersion(result);
+        if (result.kind !== 'DecisionResult') throw new EnsembleRuntimeError('ensemble member must return a DecisionResult', 'invalid-output');
+      } catch {
+        settle();
+        return syntheticMemberResult(policy, member, sampleIndex, 'invalid-output', retainedResults);
       }
 
       const attempts = result.spec.attempts.length;
       const tokens = result.spec.attempts.reduce((sum, attempt) =>
         sum + (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0), 0);
       const cost = resultCostMicros(policy, result);
-      actualAttempts += attempts;
-      actualTokens += tokens;
       if (cost === null) {
+        settle({ attempts: Math.max(attempts, reservation.attempts), tokens: Math.max(tokens, reservation.tokens), costMicros: reservation.costMicros });
         exhausted = true;
         return syntheticMemberResult(policy, member, sampleIndex, 'unknown-cost', retainedResults, result);
       }
-      actualCostMicros += cost;
+      settle({ attempts, tokens, costMicros: cost });
       if (attempts > member.fallbackDepth + 1) {
         return syntheticMemberResult(policy, member, sampleIndex, 'fallback-depth-exceeded', retainedResults, result);
       }
@@ -345,11 +373,23 @@ export function promoteChampionChallenger(input: {
   const aliasHistory = input.gateway.aliasHistory((input.record as DecisionChampionChallenger).alias);
   const { record, digest } = validateChampionChallenger(input.record, { eligibility: input.eligibility, aliasHistory });
   const report = validateEnsembleIntegrityReport(input.integrityReport);
+  // Never trust the supplied report's findings, flags or decision: rebuild it from the trusted
+  // record, D09 eligibility and alias history, and require the exact same canonical report.
+  const rebuilt = buildEnsembleIntegrityReport({
+    record, integrity: report.integrity, eligibility: input.eligibility, aliasHistory,
+    pairedDeltas: report.pairedDeltas.map(item => ({ metric: item.metric, delta: item.delta, pairs: item.pairs })),
+  });
+  if (canonicalJson(rebuilt) !== canonicalJson(report)) {
+    throw new EnsembleRuntimeError('integrity report does not match the report rebuilt from the trusted record', 'promotion-report-mismatch');
+  }
   const problems = championChallengerEligibilityProblems(record, input.eligibility);
   if (report.decision !== 'PROMOTE' || report.subject.id !== record.id
     || report.subject.digest !== digest || report.subject.eligibilityId !== record.eligibilityId
     || input.eligibility.eligible !== true || problems.length > 0) {
     throw new EnsembleRuntimeError('promotion requires eligible D09 state, verified eval-integrity and a pinned rollback target', 'promotion-gate');
+  }
+  if (ensembleContractDigest(report.integrity) !== record.evaluationIntegrityReport.digest) {
+    throw new EnsembleRuntimeError('integrity fields do not match the record\'s pinned evaluation-integrity report digest', 'promotion-integrity-binding');
   }
   const event = input.gateway.promoteAlias(record.eligibilityId, input.at);
   emitEnsembleSpan(input.telemetry, input.now, {
@@ -372,7 +412,15 @@ export function rollbackChampionForNewRuns(input: {
   if (!/^[A-Za-z0-9][A-Za-z0-9:._/@-]{2,127}$/.test(input.approvalReference)) {
     throw new EnsembleRuntimeError('rollback requires a non-empty valid approval reference', 'rollback-approval-reference');
   }
-  const { record } = validateChampionChallenger(input.record, { aliasHistory: input.gateway.aliasHistory((input.record as DecisionChampionChallenger).alias) });
+  const aliasHistory = input.gateway.aliasHistory((input.record as DecisionChampionChallenger).alias);
+  const { record } = validateChampionChallenger(input.record, { aliasHistory });
+  // Only undo this record's own promotion: the alias's current revision must be the promoted challenger.
+  const current = aliasHistory.reduce<AliasEvent | undefined>((latest, event) => !latest || event.revision > latest.revision ? event : latest, undefined);
+  if (!current || current.kind !== 'promoted' || current.alias !== record.alias || current.promotionEligibilityId !== record.eligibilityId
+    || current.actualIdentityDigest !== record.challenger.identityDigest || current.actualModel !== record.challenger.actualModel
+    || current.revision <= record.rollbackTarget.aliasRevision) {
+    throw new EnsembleRuntimeError('rollback requires the alias to currently hold this record\'s promoted challenger', 'rollback-not-promoted');
+  }
   const event = input.gateway.rollbackAlias(record.alias, record.rollbackTarget.aliasRevision, input.approvalReference, input.at);
   emitEnsembleSpan(input.telemetry, input.now, {
     'aiwg.ensemble.champion_challenger.id': record.id,
@@ -537,6 +585,7 @@ function syntheticAttempt(member: EnsembleMember, reason: DecisionFailureReason)
 
 function syntheticFailureReason(reason: string): DecisionFailureReason {
   if (reason === 'timeout') return 'timeout';
+  if (reason === 'invalid-output') return 'invalid-output';
   if (reason === 'dispatch-error') return 'service-error';
   return 'budget-exhausted';
 }
