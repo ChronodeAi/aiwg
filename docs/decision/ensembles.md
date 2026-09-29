@@ -1,10 +1,11 @@
 # Ensembles, champion/challenger, and drift response (D17 contract)
 
-Status: **contract stable, runtime experimental and disabled.** This page describes the versioned
-D17 schemas, pure validators and fixtures. There is no ensemble executor, shadow router, promotion
-or rollback orchestrator, or drift-response executor in this package. Nothing described here calls
-an adapter, opens a transport or resolves a credential. The runtime work stays tracked on #2611 and
-needs separate authorization.
+Status: **contract stable; runtime experimental, injected and default-off.** This page describes the
+versioned D17 schemas, pure validators, fixtures and offline runtime APIs added for #2611. The
+runtime does not select itself from normal decision evaluation, does not resolve credentials, and
+does not call a provider unless trusted host code passes an explicit dispatch callback and
+`enabled: true`. Live Jev calls, held-out evidence, human approvals and production rollout remain
+separate gates.
 
 ## Contracts
 
@@ -17,10 +18,10 @@ needs separate authorization.
 | [`DecisionEnsembleIntegrityReport.v1`](../../schemas/decision/DecisionEnsembleIntegrityReport.v1.schema.json) | `decision-ensemble-integrity-report/v1` | Extends the #2037/#2048 eval-integrity report and can never upgrade its decision |
 
 All five schemas are registered in `schemas/catalog/domains/decision.json` with `stability:
-experimental`. The TypeScript types and validators live in `src/decision/ensemble/` and are
-exported from `aiwg/decision`. Each validator runs entry admission and the JSON Schema before
-its semantic checks. `EnsembleContractError.layer` reports which of the three layers
-(`admission`, `schema`, `semantic`) rejected the input.
+experimental`. The TypeScript types, validators and experimental runtime helpers live in
+`src/decision/ensemble/` and are exported from `aiwg/decision`. Each validator runs entry admission
+and the JSON Schema before its semantic checks. `EnsembleContractError.layer` reports which of the
+three layers (`admission`, `schema`, `semantic`) rejected the input.
 
 ## Ensemble policy
 
@@ -60,6 +61,16 @@ admitted all or nothing: the policy is rejected when total members, attempts, to
 depth or the conservative deadline exceed a ceiling. The deadline is the slowest sample multiplied by
 the number of concurrency waves. `planEnsembleBudget` returns the effective limits, demand and
 reservations. This check happens at validation time; it is not a dispatcher.
+
+`executeDecisionEnsemble(policy, options)` is the experimental dispatcher wrapper over that plan.
+It returns `disabled` unless `options.enabled === true` and the policy mode is not `disabled`.
+Before member dispatch, host authorization can reject members for security, privacy, region,
+capability or budget reasons; a rejected member is never invoked. The wrapper runs planned samples
+under the effective concurrency and deadline, passes each member to an injected dispatch callback,
+retains each full `DecisionResult` by digest, converts results into `EnsembleMemberResult`, and then
+calls `aggregateEnsembleResults`. Runtime telemetry is metadata-only: ensemble IDs, member counts,
+budgets/actuals, disagreement and disposition are emitted without inputs, prompts or response
+bodies.
 
 ## Reference aggregation
 
@@ -145,6 +156,20 @@ rollback target that must be the exact champion alias revision, as `promoteAlias
 immutable alias history. D17 consumes that registry. It does not keep a parallel registry or alias
 state machine, and it does not move aliases.
 
+The experimental runtime exports:
+
+- `runChampionChallengerShadow(record, options)`: default-off paired shadow execution. Trusted host
+  code supplies the immutable input set and an evaluator callback. Champion and challenger receive
+  structured clones of the same item, their input digests must match the preregistered input-set
+  digest, and the result reports paired quality, calibration, risk-coverage, abstention, latency,
+  tokens, cost and slice deltas.
+- `promoteChampionChallenger(...)`: consumes the D09 `PromotionEligibility`, the D17 integrity report
+  and immutable alias history, then delegates alias movement to the D09 gateway only when the report
+  decision is `PROMOTE`.
+- `rollbackChampionForNewRuns(...)` and `pinChampionForRun(...)`: rollback delegates to D09
+  `rollbackAlias` for future alias resolution, while already pinned active runs keep their original
+  champion revision.
+
 ## Eval-integrity report extension
 
 `buildEnsembleIntegrityReport` carries the #2037/#2048 integrity fields unchanged (`sample_n`,
@@ -177,7 +202,11 @@ alias drift, its thresholds are pinned by version and digest, and it names the r
 with too few samples. `resolveDriftResponse` returns the configured response for a signal. It rejects
 a signal with no configured rule, a different alias, or a different threshold version, so old
 thresholds are never reused silently. Values equal to a threshold are within it. The resolver only
-reports the response; executing it is deferred runtime work.
+reports the response. `executeDriftResponse(policy, signal, handlers)` is the default-off execution
+seam: it first resolves the exact configured response, then invokes only the handler for that
+response (`alert`, `reduce-coverage`, `route-to-review`, `disable-challenger`, `restore-champion` or
+`require-recertification`). The handler remains host-owned; this package does not mutate routing,
+coverage or aliases by itself.
 
 ## Fixtures
 
@@ -192,11 +221,18 @@ threshold evidence and must not be used to select production thresholds.
   defer-on-conflict and shared-systematic-error vectors (`ENS-*`).
 - `drift-response-table.v1.json`: the signal-to-response table (`DRF-T*`).
 
-## Deferred to the runtime (#2611)
+## Offline runtime examples
 
-Ensemble and champion/challenger execution, shadow routing on identical inputs, promotion and
-rollback orchestration with active-run pinning, drift-response execution, security and privacy
-filtering ahead of cost or quality routing, and OpenTelemetry emission are not implemented. The
-reserved `decision.drift` metric still has no producer. Live qualification also stays deferred:
-paired shadow runs, drift thresholds from D11 frozen splits, the benefit-versus-spend benchmark, and
-the cross-provider egress matrix.
+The addon examples include `agentic/code/addons/decision-engine/examples/ensemble-runtime-offline.mjs`.
+After `npm run build:cli`, it runs the ensemble runtime against synthetic member `DecisionResult`
+objects and prints only aggregate metadata. It is executable offline and carries no live quality,
+calibration or Jev claim.
+
+## Still pending live rollout evidence
+
+The offline runtime now implements bounded ensemble dispatch, paired shadow plumbing, promotion and
+rollback gates, drift-response execution, security/privacy/capability pre-dispatch filtering, and
+metadata-only telemetry seams. These are not production rollout evidence. Still pending external
+inputs are: real paired shadow runs, D11 frozen-split drift thresholds, human review approvals,
+live Jev/provider calls, the benefit-versus-spend benchmark, cross-provider egress matrix, and any
+production OpenTelemetry wiring such as a `decision.drift` metric producer.
