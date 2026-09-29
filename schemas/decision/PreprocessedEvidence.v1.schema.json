@@ -153,6 +153,7 @@
         "startMs": { "type": "integer", "minimum": 0 },
         "endMs": { "type": "integer", "minimum": 0 },
         "frame": { "type": "integer", "minimum": 0 },
+        "wholeImage": { "type": "boolean", "const": true },
         "bbox": {
           "type": "object",
           "required": ["x", "y", "width", "height", "unit"],
@@ -170,17 +171,19 @@
         { "properties": { "page": true }, "required": ["page"] },
         { "properties": { "startMs": true, "endMs": true }, "required": ["startMs", "endMs"] },
         { "properties": { "frame": true }, "required": ["frame"] },
-        { "properties": { "bbox": true }, "required": ["bbox"] }
+        { "properties": { "bbox": true }, "required": ["bbox"] },
+        { "properties": { "wholeImage": true }, "required": ["wholeImage"] }
       ]
     },
     "segment": {
       "type": "object",
-      "required": ["id", "ordinal", "sourceLocator", "textDigest"],
+      "required": ["id", "ordinal", "sourceLocator", "text", "textDigest"],
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/nonEmpty" },
         "ordinal": { "type": "integer", "minimum": 1 },
         "sourceLocator": { "$ref": "#/$defs/locatorRange" },
+        "text": { "type": "string" },
         "textDigest": { "$ref": "#/$defs/digest" }
       }
     },
@@ -222,7 +225,39 @@
         "outputDigest": { "$ref": "#/$defs/digest" },
         "at": { "$ref": "#/$defs/dateTime" },
         "reviewer": { "$ref": "#/$defs/nonEmpty" },
-        "rationale": { "$ref": "#/$defs/nonEmpty" }
+        "rationale": { "$ref": "#/$defs/nonEmpty" },
+        "previousOutput": {
+          "type": "object",
+          "required": ["id", "version", "digest"],
+          "additionalProperties": false,
+          "properties": {
+            "id": { "$ref": "#/$defs/nonEmpty" },
+            "version": { "type": "integer", "minimum": 1 },
+            "digest": { "$ref": "#/$defs/digest" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "human-correction" } }, "required": ["kind"] },
+          "then": {
+            "properties": {
+              "reviewer": true,
+              "rationale": true,
+              "previousOutput": true
+            },
+            "required": ["reviewer", "rationale", "previousOutput"]
+          }
+        }
+      ]
+    },
+    "egressDestination": {
+      "type": "object",
+      "required": ["provider", "origin"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "$ref": "#/$defs/nonEmpty" },
+        "origin": { "$ref": "#/$defs/nonEmpty" }
       }
     },
     "egressRule": {
@@ -233,7 +268,7 @@
         "allowed": { "type": "boolean" },
         "destinations": {
           "type": "array",
-          "items": { "$ref": "#/$defs/nonEmpty" }
+          "items": { "$ref": "#/$defs/egressDestination" }
         }
       }
     },

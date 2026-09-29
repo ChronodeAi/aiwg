@@ -711,8 +711,9 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
     }
   }
 
-  // Either incomplete-context signal (context plan or projection evidence) prohibits automatic action.
-  if ((contextPlan && !contextPlan.automaticActionAllowed || projectionBlockedAutomaticAction.has(request))
+  // Either incomplete-context signal (context plan/projection) or review lineage prohibits automatic action.
+  if ((contextPlan && !contextPlan.automaticActionAllowed || projectionBlockedAutomaticAction.has(request)
+    || preprocessingLineageRequiresReview(request))
     && (result.spec.status === 'completed' || result.spec.status === 'defaulted')) {
     const { outcome: _outcome, ...withoutOutcome } = result.spec;
     result = { ...result, spec: { ...withoutOutcome, status: 'review', reason: 'insufficient-information' } };
@@ -964,6 +965,12 @@ async function invokeWithDeadline(
 
 /** Requests whose projection evidence prohibited automatic action (allowed incomplete context). */
 const projectionBlockedAutomaticAction = new WeakSet<DecisionEvaluationRequest>();
+
+function preprocessingLineageRequiresReview(request: DecisionEvaluationRequest): boolean {
+  const lineage = request.preprocessingLineage;
+  return !!lineage && (lineage.traces.some(trace => trace.policyOutcome === 'review' || trace.reasons.length > 0)
+    || lineage.references.some(reference => !reference.policy.derivedEgressAllowed));
+}
 
 function isUnprojectedLocalOptOut(
   projection: DecisionEvaluationRequest['projection'],

@@ -40,9 +40,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Experimental/default-off preprocessing lineage for text-only decision inputs
   derived from scanned documents, audio, video, or images. It adds the closed
   `PreprocessedEvidence.v1` schema, recorded OCR/ASR/caption/image-description
-  fixtures, resolver policy checks, body-free receipt links, docs, and an
-  offline Jev transport-spy example; it does not add live OCR/ASR/vision
-  dependencies or native media support to Jev (#2617).
+  fixtures, media-specific resolver policy checks, selected-segment projection,
+  stale-reference detection, sanitized body-free receipt links, D10 lifecycle
+  coverage, docs, and a runnable offline example; it does not add live
+  OCR/ASR/vision dependencies or native media support to Jev (#2617).
 
 ### Fixed
 

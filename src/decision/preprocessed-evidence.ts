@@ -1,5 +1,4 @@
-import { createHash } from 'node:crypto';
-import { canonicalJson } from '../security/artifact-trust.js';
+import { canonicalJson, sha256 } from '../security/artifact-trust.js';
 import { admitEntry } from './entry.js';
 import { artifactDigest } from './validate.js';
 import type { ArtifactPin } from './types.js';
@@ -47,8 +46,10 @@ export interface PreprocessedEvidence {
         startMs?: number;
         endMs?: number;
         frame?: number;
+        wholeImage?: boolean;
         bbox?: { x: number; y: number; width: number; height: number; unit: 'pixel' | 'ratio' };
       };
+      text: string;
       textDigest: `sha256:${string}`;
     }>;
     selectedSegments: Array<{ segmentId: string; outputVersion: number; outputDigest: `sha256:${string}` }>;
@@ -61,16 +62,22 @@ export interface PreprocessedEvidence {
       at: string;
       reviewer?: string;
       rationale?: string;
+      previousOutput?: { id: string; version: number; digest: `sha256:${string}` };
     }>;
     policy: {
       trust: 'verified' | 'untrusted';
       sensitivity: 'public' | 'internal' | 'confidential' | 'restricted';
       retention: string;
       residency: string;
-      rawEgress: { allowed: boolean; destinations: string[] };
-      derivedEgress: { allowed: boolean; destinations: string[] };
+      rawEgress: { allowed: boolean; destinations: PreprocessingEgressDestination[] };
+      derivedEgress: { allowed: boolean; destinations: PreprocessingEgressDestination[] };
     };
   };
+}
+
+export interface PreprocessingEgressDestination {
+  provider: string;
+  origin: string;
 }
 
 export interface PreprocessingStep {
@@ -95,8 +102,20 @@ export interface PreprocessedEvidenceReference {
   outputId: string;
   outputVersion: number;
   outputDigest: `sha256:${string}`;
-  selectedSegments: Array<{ id: string; ordinal: number; locatorDigest: `sha256:${string}` }>;
-  quality: { source: string; profile: string; label: string; score: number; flags: PreprocessingReviewFlag[] };
+  selectedSegments: Array<{
+    id: string;
+    ordinal: number;
+    locatorDigest: `sha256:${string}`;
+    textDigest: `sha256:${string}`;
+    preprocessingDigest: `sha256:${string}`;
+  }>;
+  quality: {
+    source: 'preprocessor' | 'human-reviewer';
+    profileDigest: `sha256:${string}`;
+    labelDigest: `sha256:${string}`;
+    score: number;
+    flags: PreprocessingReviewFlag[];
+  };
   policy: {
     trust: string;
     sensitivity: string;
@@ -136,13 +155,15 @@ export type PreprocessedEvidenceReviewReason =
   | 'raw-egress-denied' | 'derived-egress-denied' | 'unsupported-locator';
 
 export interface ResolvePreprocessedEvidenceOptions {
-  destination: string;
+  destination: PreprocessingEgressDestination;
   now?: () => number;
   maxAgeMs?: number;
   minQualityScore?: number;
   allowedLocatorClasses?: PreprocessingLocatorClass[];
   sourceBytes?: Uint8Array;
   requireRawEgress?: boolean;
+  /** Explicit host policy. Default false means receipts/traces remain body-free. */
+  contentRetention?: { retainDerivedTextInReceipts: boolean };
 }
 
 export interface PreprocessedEvidenceResolution {
@@ -159,14 +180,37 @@ export class PreprocessedEvidenceError extends Error {
   }
 }
 
+export interface PreprocessedEvidenceReferenceCheck {
+  status: 'current' | 'stale';
+  reasons: Array<'manifest-pin' | 'source' | 'output' | 'segments' | 'quality' | 'policy'>;
+}
+
 export function preprocessedEvidencePin(manifest: PreprocessedEvidence): ArtifactPin {
   return { id: manifest.metadata.id, version: manifest.metadata.version, digest: artifactDigest(manifest) };
 }
 
-export function contentDigest(value: string | Uint8Array): `sha256:${string}` {
-  const hash = createHash('sha256');
-  hash.update(typeof value === 'string' ? Buffer.from(value, 'utf8') : Buffer.from(value));
-  return `sha256:${hash.digest('hex')}`;
+export function preprocessedEvidenceContentDigest(value: string | Uint8Array): `sha256:${string}` {
+  return `sha256:${sha256(typeof value === 'string' ? Buffer.from(value, 'utf8') : value)}`;
+}
+
+export function checkPreprocessedEvidenceReference(
+  reference: PreprocessedEvidenceReference,
+  manifest: PreprocessedEvidence,
+): PreprocessedEvidenceReferenceCheck {
+  assertPreprocessedEvidence(manifest);
+  const current = referenceFor(manifest, preprocessedEvidencePin(manifest),
+    selectedSegments(manifest), { destination: { provider: '__check__', origin: '__check__' } });
+  const reasons: PreprocessedEvidenceReferenceCheck['reasons'] = [];
+  if (canonicalJson(reference.evidence) !== canonicalJson(current.evidence)) reasons.push('manifest-pin');
+  if (reference.sourceAssetId !== current.sourceAssetId || reference.sourceDigest !== current.sourceDigest) reasons.push('source');
+  if (reference.outputId !== current.outputId || reference.outputVersion !== current.outputVersion
+    || reference.outputDigest !== current.outputDigest) reasons.push('output');
+  if (canonicalJson(reference.selectedSegments) !== canonicalJson(current.selectedSegments)) reasons.push('segments');
+  if (canonicalJson(reference.quality) !== canonicalJson(current.quality)) reasons.push('quality');
+  const policy = { ...current.policy, rawEgressAllowed: reference.policy.rawEgressAllowed,
+    derivedEgressAllowed: reference.policy.derivedEgressAllowed };
+  if (canonicalJson(reference.policy) !== canonicalJson(policy)) reasons.push('policy');
+  return { status: reasons.length ? 'stale' : 'current', reasons };
 }
 
 export function resolvePreprocessedEvidence(
@@ -206,18 +250,18 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
   if (!locatorClasses.has(manifest.spec.source.locator.class) || manifest.spec.source.locator.class === 'remote-url') {
     throw new PreprocessedEvidenceError('policy-denied', 'source locator class is not authorized');
   }
-  if (options.sourceBytes && contentDigest(options.sourceBytes) !== manifest.spec.source.contentDigest) {
+  if (options.sourceBytes && preprocessedEvidenceContentDigest(options.sourceBytes) !== manifest.spec.source.contentDigest) {
     throw new PreprocessedEvidenceError('digest-mismatch', 'source content digest mismatch');
   }
-  if (contentDigest(manifest.spec.output.value) !== manifest.spec.output.contentDigest) {
+  if (preprocessedEvidenceContentDigest(manifest.spec.output.value) !== manifest.spec.output.contentDigest) {
     throw new PreprocessedEvidenceError('digest-mismatch', 'output content digest mismatch');
   }
   assertChain(manifest);
   if (options.requireRawEgress
-    && (!manifest.spec.policy.rawEgress.allowed || !manifest.spec.policy.rawEgress.destinations.includes(options.destination))) {
+    && !egressAllowed(manifest.spec.policy.rawEgress, options.destination)) {
     reasons.push('raw-egress-denied');
   }
-  if (!manifest.spec.policy.derivedEgress.allowed || !manifest.spec.policy.derivedEgress.destinations.includes(options.destination)) {
+  if (!egressAllowed(manifest.spec.policy.derivedEgress, options.destination)) {
     reasons.push('derived-egress-denied');
   }
   const minQuality = options.minQualityScore ?? 0;
@@ -236,30 +280,9 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
     reasons.push('stale');
   }
   const uniqueReasons = [...new Set(reasons)];
-  const reference: PreprocessedEvidenceReference = {
-    evidence: pin,
-    sourceAssetId: manifest.spec.source.assetId,
-    sourceDigest: manifest.spec.source.contentDigest,
-    outputId: manifest.spec.output.id,
-    outputVersion: manifest.spec.output.version,
-    outputDigest: manifest.spec.output.contentDigest,
-    selectedSegments: selected.map(item => ({
-      id: item.segment.id,
-      ordinal: item.segment.ordinal,
-      locatorDigest: digestJson(item.segment.sourceLocator),
-    })),
-    quality: structuredClone(manifest.spec.quality),
-    policy: {
-      trust: manifest.spec.policy.trust,
-      sensitivity: manifest.spec.policy.sensitivity,
-      retention: manifest.spec.policy.retention,
-      residency: manifest.spec.policy.residency,
-      rawEgressAllowed: manifest.spec.policy.rawEgress.allowed && manifest.spec.policy.rawEgress.destinations.includes(options.destination),
-      derivedEgressAllowed: manifest.spec.policy.derivedEgress.allowed && manifest.spec.policy.derivedEgress.destinations.includes(options.destination),
-    },
-  };
+  const reference = referenceFor(manifest, pin, selected, options);
   return {
-    text: reference.policy.derivedEgressAllowed ? manifest.spec.output.value : '',
+    text: reference.policy.derivedEgressAllowed ? selected.map(item => item.segment.text).join('\n') : '',
     reference,
     trace: {
       evidence: pin,
@@ -309,9 +332,10 @@ export function assertPreprocessedEvidence(value: unknown): asserts value is Pre
     throw new PreprocessedEvidenceError('invalid-manifest', 'output identity is malformed');
   }
   validateSteps(spec.preprocessing);
+  validateMediaCompatibility(spec);
   validateSegments(spec);
   validateQuality(spec.quality);
-  validateTransformations(spec.transformations);
+  validateTransformations(spec);
   validatePolicy(spec.policy);
 }
 
@@ -325,7 +349,9 @@ function assertChain(manifest: PreprocessedEvidence): void {
     if (step.ordinal !== index + 1 || step.inputDigest !== previous) {
       throw new PreprocessedEvidenceError('broken-chain', 'preprocessing chain continuity is broken');
     }
-    if (seenDigests.has(step.outputDigest)) throw new PreprocessedEvidenceError('broken-chain', 'preprocessing chain contains a digest cycle');
+    if (step.outputDigest !== step.inputDigest && seenDigests.has(step.outputDigest)) {
+      throw new PreprocessedEvidenceError('broken-chain', 'preprocessing chain contains a digest cycle');
+    }
     seenDigests.add(step.outputDigest);
     previous = step.outputDigest;
   });
@@ -348,6 +374,45 @@ function selectedSegments(manifest: PreprocessedEvidence) {
   }).sort((left, right) => left.segment.ordinal - right.segment.ordinal);
 }
 
+function referenceFor(
+  manifest: PreprocessedEvidence,
+  pin: ArtifactPin,
+  selected: ReturnType<typeof selectedSegments>,
+  options: Pick<ResolvePreprocessedEvidenceOptions, 'destination'>,
+): PreprocessedEvidenceReference {
+  const preprocessingDigest = stepIdentityDigest(manifest.spec.preprocessing);
+  return {
+    evidence: pin,
+    sourceAssetId: manifest.spec.source.assetId,
+    sourceDigest: manifest.spec.source.contentDigest,
+    outputId: manifest.spec.output.id,
+    outputVersion: manifest.spec.output.version,
+    outputDigest: manifest.spec.output.contentDigest,
+    selectedSegments: selected.map(item => ({
+      id: item.segment.id,
+      ordinal: item.segment.ordinal,
+      locatorDigest: digestJson(item.segment.sourceLocator),
+      textDigest: item.segment.textDigest,
+      preprocessingDigest,
+    })),
+    quality: {
+      source: manifest.spec.quality.source,
+      profileDigest: preprocessedEvidenceContentDigest(manifest.spec.quality.profile),
+      labelDigest: preprocessedEvidenceContentDigest(manifest.spec.quality.label),
+      score: manifest.spec.quality.score,
+      flags: [...manifest.spec.quality.flags],
+    },
+    policy: {
+      trust: manifest.spec.policy.trust,
+      sensitivity: manifest.spec.policy.sensitivity,
+      retention: manifest.spec.policy.retention,
+      residency: manifest.spec.policy.residency,
+      rawEgressAllowed: egressAllowed(manifest.spec.policy.rawEgress, options.destination),
+      derivedEgressAllowed: egressAllowed(manifest.spec.policy.derivedEgress, options.destination),
+    },
+  };
+}
+
 function validateSteps(steps: PreprocessingStep[]): void {
   if (!steps.length) throw new PreprocessedEvidenceError('invalid-manifest', 'preprocessing chain is required');
   for (const step of steps) {
@@ -366,22 +431,36 @@ function validateSteps(steps: PreprocessingStep[]): void {
 
 function validateSegments(spec: PreprocessedEvidence['spec']): void {
   if (!spec.segments.length || !spec.selectedSegments.length) throw new PreprocessedEvidenceError('invalid-manifest', 'segments are required');
+  const ids = new Set<string>();
+  const ordinals = new Set<number>();
   for (const segment of spec.segments) {
     if (!isRecord(segment)) throw new PreprocessedEvidenceError('invalid-manifest', 'segment is malformed');
-    rejectUnknown(segment, ['id', 'ordinal', 'sourceLocator', 'textDigest'], 'segment');
+    rejectUnknown(segment, ['id', 'ordinal', 'sourceLocator', 'text', 'textDigest'], 'segment');
     if (!nonEmpty(segment.id) || !Number.isSafeInteger(segment.ordinal) || segment.ordinal < 1
-      || !validDigest(segment.textDigest) || !isRecord(segment.sourceLocator)) {
+      || typeof segment.text !== 'string' || !validDigest(segment.textDigest) || !isRecord(segment.sourceLocator)) {
       throw new PreprocessedEvidenceError('invalid-manifest', 'segment locator is malformed');
+    }
+    if (ids.has(segment.id) || ordinals.has(segment.ordinal)) {
+      throw new PreprocessedEvidenceError('invalid-manifest', 'segments contain duplicate IDs or ordinals');
+    }
+    ids.add(segment.id);
+    ordinals.add(segment.ordinal);
+    if (preprocessedEvidenceContentDigest(segment.text) !== segment.textDigest) {
+      throw new PreprocessedEvidenceError('digest-mismatch', 'segment text digest mismatch');
     }
     const locator = segment.sourceLocator;
     const hasPage = Number.isSafeInteger(locator.page);
     const hasTime = Number.isSafeInteger(locator.startMs) && Number.isSafeInteger(locator.endMs)
       && typeof locator.endMs === 'number' && typeof locator.startMs === 'number' && locator.endMs >= locator.startMs;
     const hasFrame = Number.isSafeInteger(locator.frame);
+    const hasWholeImage = locator.wholeImage === true;
     const hasBox = isRecord(locator.bbox) && typeof locator.bbox.x === 'number' && typeof locator.bbox.y === 'number'
       && typeof locator.bbox.width === 'number' && typeof locator.bbox.height === 'number'
       && ['pixel', 'ratio'].includes(String(locator.bbox.unit));
-    if (!hasPage && !hasTime && !hasFrame && !hasBox) throw new PreprocessedEvidenceError('invalid-manifest', 'segment requires a page, time, frame or box locator');
+    if (!hasPage && !hasTime && !hasFrame && !hasBox && !hasWholeImage) {
+      throw new PreprocessedEvidenceError('invalid-manifest', 'segment requires a page, time, frame, box or whole-image locator');
+    }
+    validateLocatorForMedia(spec.source.mediaType, locator, primaryExtractionKind(spec.preprocessing));
   }
   for (const reference of spec.selectedSegments) {
     if (!isRecord(reference)) throw new PreprocessedEvidenceError('invalid-manifest', 'selected segment is malformed');
@@ -402,13 +481,25 @@ function validateQuality(quality: PreprocessedEvidence['spec']['quality']): void
   }
 }
 
-function validateTransformations(events: PreprocessedEvidence['spec']['transformations']): void {
+function validateTransformations(spec: PreprocessedEvidence['spec']): void {
+  const events = spec.transformations;
   for (const event of events) {
     if (!isRecord(event)) throw new PreprocessedEvidenceError('invalid-manifest', 'transformation event is malformed');
-    rejectUnknown(event, ['id', 'kind', 'inputDigest', 'outputDigest', 'at', 'reviewer', 'rationale'], 'transformation event');
+    rejectUnknown(event, ['id', 'kind', 'inputDigest', 'outputDigest', 'at', 'reviewer', 'rationale', 'previousOutput'], 'transformation event');
     if (!nonEmpty(event.id) || !['normalization', 'redaction', 'translation', 'truncation', 'human-correction', 'summary', 'concatenation'].includes(event.kind)
       || !validDigest(event.inputDigest) || !validDigest(event.outputDigest) || !Number.isFinite(Date.parse(event.at))) {
       throw new PreprocessedEvidenceError('invalid-manifest', 'transformation event is malformed');
+    }
+    if (event.kind === 'human-correction') {
+      if (!nonEmpty(event.reviewer) || !nonEmpty(event.rationale) || !isRecord(event.previousOutput)
+        || !nonEmpty(event.previousOutput.id) || !Number.isSafeInteger(event.previousOutput.version)
+        || event.previousOutput.version < 1 || !validDigest(event.previousOutput.digest)) {
+        throw new PreprocessedEvidenceError('invalid-manifest', 'human correction requires reviewer, rationale and previous output link');
+      }
+      if (event.previousOutput.version >= spec.output.version || event.outputDigest !== spec.output.contentDigest
+        || event.previousOutput.id !== spec.output.id || event.previousOutput.digest !== event.inputDigest) {
+        throw new PreprocessedEvidenceError('invalid-manifest', 'human correction must create a newer linked output version');
+      }
     }
   }
 }
@@ -421,9 +512,77 @@ function validatePolicy(policy: PreprocessedEvidence['spec']['policy']): void {
   }
 }
 
-function egress(value: unknown): value is { allowed: boolean; destinations: string[] } {
+function egress(value: unknown): value is { allowed: boolean; destinations: PreprocessingEgressDestination[] } {
   return isRecord(value) && typeof value.allowed === 'boolean' && Array.isArray(value.destinations)
-    && value.destinations.every(nonEmpty);
+    && value.destinations.every(destination => isRecord(destination) && nonEmpty(destination.provider) && nonEmpty(destination.origin));
+}
+
+function egressAllowed(value: { allowed: boolean; destinations: PreprocessingEgressDestination[] },
+  destination: PreprocessingEgressDestination): boolean {
+  return value.allowed && value.destinations.some(item =>
+    item.provider === destination.provider && normalizeOrigin(item.origin) === normalizeOrigin(destination.origin));
+}
+
+function validateMediaCompatibility(spec: PreprocessedEvidence['spec']): void {
+  const kind = primaryExtractionKind(spec.preprocessing);
+  if (!kind) throw new PreprocessedEvidenceError('invalid-manifest', 'preprocessing chain requires an extraction step');
+  if (kind === 'ocr' && !(spec.source.mediaType.startsWith('image/') || spec.source.mediaType === 'application/pdf')) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'OCR source media type must be image or PDF');
+  }
+  if (kind === 'asr' && !(spec.source.mediaType.startsWith('audio/') || spec.source.mediaType.startsWith('video/'))) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'transcription source media type must be audio or video');
+  }
+  if (kind === 'caption' && !spec.source.mediaType.startsWith('video/')) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'caption source media type must be video');
+  }
+  if (kind === 'image-description' && !spec.source.mediaType.startsWith('image/')) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'image description source media type must be image');
+  }
+}
+
+function primaryExtractionKind(steps: PreprocessingStep[]): Extract<PreprocessingKind, 'ocr' | 'asr' | 'caption' | 'image-description'> | null {
+  return steps.find((step): step is PreprocessingStep & { kind: 'ocr' | 'asr' | 'caption' | 'image-description' } =>
+    ['ocr', 'asr', 'caption', 'image-description'].includes(step.kind))?.kind ?? null;
+}
+
+function validateLocatorForMedia(
+  mediaType: string,
+  locator: PreprocessedEvidence['spec']['segments'][number]['sourceLocator'],
+  kind: ReturnType<typeof primaryExtractionKind>,
+): void {
+  const hasPage = Number.isSafeInteger(locator.page);
+  const hasTime = Number.isSafeInteger(locator.startMs) && Number.isSafeInteger(locator.endMs)
+    && typeof locator.endMs === 'number' && typeof locator.startMs === 'number' && locator.endMs >= locator.startMs;
+  const hasFrame = Number.isSafeInteger(locator.frame);
+  const hasBox = isRecord(locator.bbox);
+  const hasWholeImage = locator.wholeImage === true;
+  if (mediaType.startsWith('audio/') && (!hasTime || hasPage || hasFrame || hasBox || hasWholeImage)) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'audio segments require a time range locator');
+  }
+  if (mediaType.startsWith('video/') && !hasTime && !hasFrame) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'video segments require time or frame locators');
+  }
+  if (kind === 'ocr' && (mediaType === 'application/pdf' || mediaType.startsWith('image/')) && !hasPage) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'scanned document OCR segments require a page locator');
+  }
+  if (kind === 'image-description' && mediaType.startsWith('image/') && !hasBox && !hasWholeImage) {
+    throw new PreprocessedEvidenceError('invalid-manifest', 'image description segments require a box or whole-image locator');
+  }
+}
+
+function stepIdentityDigest(steps: PreprocessingStep[]): `sha256:${string}` {
+  return digestJson(steps.map(step => ({
+    id: step.id,
+    ordinal: step.ordinal,
+    kind: step.kind,
+    tool: step.tool,
+    model: step.model ?? null,
+    configurationDigest: step.configurationDigest,
+  })));
+}
+
+function normalizeOrigin(value: string): string {
+  try { return new URL(value).origin; } catch { return value; }
 }
 
 function invalid(message: string, _error: unknown): PreprocessedEvidenceError {
@@ -448,5 +607,5 @@ function rejectUnknown(value: Record<string, unknown>, allowed: readonly string[
 }
 
 function digestJson(value: unknown): `sha256:${string}` {
-  return `sha256:${createHash('sha256').update(canonicalJson(value)).digest('hex')}`;
+  return `sha256:${sha256(Buffer.from(canonicalJson(value), 'utf8'))}`;
 }

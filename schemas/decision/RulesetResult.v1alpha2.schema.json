@@ -107,25 +107,27 @@
             "properties": {
               "id": { "type": "string", "minLength": 1 },
               "ordinal": { "type": "integer", "minimum": 1 },
-              "locatorDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+              "locatorDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+              "textDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+              "preprocessingDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
             },
-            "required": ["id", "ordinal", "locatorDigest"],
+            "required": ["id", "ordinal", "locatorDigest", "textDigest", "preprocessingDigest"],
             "additionalProperties": false
           }
         },
         "quality": {
           "type": "object",
           "properties": {
-            "source": { "type": "string", "minLength": 1 },
-            "profile": { "type": "string", "minLength": 1 },
-            "label": { "type": "string", "minLength": 1 },
+            "source": { "enum": ["preprocessor", "human-reviewer"] },
+            "profileDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "labelDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
             "score": { "type": "number", "minimum": 0, "maximum": 1 },
             "flags": {
               "type": "array",
               "items": { "enum": ["low-quality", "truncated", "incomplete", "stale", "policy-limited", "human-corrected"] }
             }
           },
-          "required": ["source", "profile", "label", "score", "flags"],
+          "required": ["source", "profileDigest", "labelDigest", "score", "flags"],
           "additionalProperties": false
         },
         "policy": {
