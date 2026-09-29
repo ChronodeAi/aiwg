@@ -82,6 +82,7 @@
       "required": ["schemaVersion", "support", "contradiction", "unclear", "calibrationRiskCoverage", "falseSupportRateBps", "falseReadyRateBps", "reviewerAgreementRateBps", "reviewerOverrideRateBps", "slices", "latencyMs", "tokens", "costUsd", "reviewLoad", "gateBlockingSliceSupport", "totalSupport", "positiveTotalEconomicsUsd"],
       "properties": {
         "schemaVersion": { "const": "decision-sdlc-screening-heldout-report/v1" },
+        "evaluatedAt": { "type": "string", "format": "date-time" },
         "support": { "$ref": "#/$defs/classMetric" },
         "contradiction": { "$ref": "#/$defs/classMetric" },
         "unclear": { "$ref": "#/$defs/classMetric" },

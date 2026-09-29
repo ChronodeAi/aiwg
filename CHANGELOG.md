@@ -11,8 +11,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 - Experimental/default-off SDLC evidence readiness screening for citation
   support and phase-gate criteria, with closed schemas, deterministic preflight
-  precedence, shadow-mode receipts, D13 durable-review bridge, held-out
-  preregistration scaffolding, docs and offline tests (#2622).
+  precedence from pinned gate policy, D08/D09/D10 review routing,
+  shadow-mode receipts, D13 durable-review bridge, held-out preregistration
+  scaffolding, docs and offline tests (#2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.

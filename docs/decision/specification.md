@@ -193,12 +193,21 @@ output.
 The pack's closed schemas enumerate citation support, contradiction, unclear,
 phase-criterion relevance, completeness, contradiction, ambiguity and reviewer
 attention. Unknown claim, source, locator, criterion, evidence, approval or
-requirement IDs fail validation. Review-required receipts may be bridged into
-D13 durable review, but the caller still owns review creation, authorization and
-idempotent resume.
+requirement IDs produce non-pass receipts in screening modes. Phase-criterion
+required evidence comes only from the trusted pinned gate policy's
+criterion-to-evidence map; caller bundle `required` flags are not authority.
+Evidence owned by another criterion or claim/source pair cannot satisfy the
+subject. D10 projection gates trust, sensitivity and content digests before
+source content is model-visible, and D08 primitive acceptance plus D09
+calibration compatibility route low-margin or incompatible observations to
+review. Review-required receipts always create D13 durable-review input when
+screening is enabled; presentation is metadata-only/redacted and the caller
+still owns review authorization and idempotent resume.
 
 Promotion remains held-out gated. `decision-sdlc-screening-preregistration/v1`
 pins false-support/false-ready bounds, slice support, confidence intervals,
 quality non-inferiority and economics. Missing held-out or slice support is
-`INSUFFICIENT_EVIDENCE`; the release report carries eval-integrity without
-upgrading upstream `HOLD` or `ROLLBACK`.
+`INSUFFICIENT_EVIDENCE`; NaN, negative metrics, zero-support classes/slices,
+frozen-plan/evaluation-time violations and unverified eval integrity fail
+closed. The release report carries eval-integrity without upgrading upstream
+`HOLD` or `ROLLBACK`.

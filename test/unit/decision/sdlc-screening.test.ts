@@ -2,6 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { evaluateQualification } from '../../../src/decision/qualification/gates.js';
+import type { QualificationRunManifest } from '../../../src/decision/qualification/types.js';
 import {
   DecisionReviewService, FileDecisionReviewStore, type ReviewScope,
   SDLC_SCREENING_PREREGISTRATION_VERSION,
@@ -14,6 +16,8 @@ import {
   sdlcScreeningReviewInputFromReceipt,
   type SdlcCitationObservation,
   type SdlcCitationSubject,
+  type SdlcGateEvidencePolicy,
+  type JsonValue,
   type SdlcPhaseCriterionObservation,
   type SdlcPhaseCriterionSubject,
   type SdlcScreeningHeldoutReport,
@@ -31,9 +35,26 @@ const inventory: SdlcScreeningInventory = {
   requirementIds: ['FR-022'],
   sourceIds: ['source:atlas'],
   locators: ['doc:atlas#port'],
-  criterionIds: ['G2.security-evidence'],
-  evidenceIds: ['artifact:threat-model', 'test:security', 'approval:release', 'sig:artifact', 'schema:gate'],
+  criterionIds: ['G2.security-evidence', 'G3.release-evidence'],
+  evidenceIds: ['artifact:threat-model', 'test:security', 'approval:release', 'sig:artifact', 'schema:gate', 'artifact:g3'],
 };
+const gatePolicy = (overrides: Partial<SdlcGateEvidencePolicy> = {}): SdlcGateEvidencePolicy => ({
+  id: 'policy:sdlc-gates', version: '1.0.0', digest: digest('9'),
+  requiredEvidenceByCriterion: {
+    'G2.security-evidence': ['artifact:threat-model', 'test:security', 'approval:release', 'sig:artifact', 'schema:gate'],
+    'G3.release-evidence': ['artifact:g3'],
+  },
+  evidenceSubjects: {
+    'artifact:threat-model': { kind: 'phase-criterion', criterionId: 'G2.security-evidence' },
+    'test:security': { kind: 'phase-criterion', criterionId: 'G2.security-evidence' },
+    'approval:release': { kind: 'phase-criterion', criterionId: 'G2.security-evidence' },
+    'sig:artifact': { kind: 'phase-criterion', criterionId: 'G2.security-evidence' },
+    'schema:gate': { kind: 'phase-criterion', criterionId: 'G2.security-evidence' },
+    'artifact:g3': { kind: 'phase-criterion', criterionId: 'G3.release-evidence' },
+    'source:atlas': { kind: 'citation', claimId: 'claim:port', sourceId: 'source:atlas', locator: 'doc:atlas#port' },
+  },
+  ...overrides,
+});
 
 const citationSubject = (overrides: Partial<SdlcCitationSubject['evidence'][number]> = {}): SdlcCitationSubject => ({
   kind: 'citation',
@@ -104,13 +125,14 @@ describe('SDLC evidence screening (#2622)', () => {
     expect(choices['sdlc-screening.criterion.relevance']).toEqual(['relevant', 'irrelevant', 'unclear']);
     expect(choices['sdlc-screening.criterion.completeness']).toEqual(['complete', 'incomplete', 'unclear']);
     expect(choices['sdlc-screening.criterion.contradiction']).toEqual(['none', 'present', 'unclear']);
+    expect(choices['sdlc-screening.criterion.ambiguity']).toEqual(['low', 'high', 'unclear']);
     expect(choices['sdlc-screening.criterion.reviewer-attention']).toEqual(['needed', 'not-needed']);
     expect(artifacts.definitions.find(item => item.metadata.id === 'sdlc-screening.citation.injection')?.spec.answer.kind).toBe('truth-probability');
   });
 
   it('screens a citation only after deterministic locator and provenance checks pass', () => {
     const ready = evaluateSdlcEvidenceScreening({
-      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory,
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory, gatePolicy: gatePolicy(),
       subject: citationSubject(), observation: citationObservation(), nowEpochMs: 1_000,
     });
     expect(ready).toMatchObject({
@@ -122,7 +144,7 @@ describe('SDLC evidence screening (#2622)', () => {
     });
 
     const unverified = evaluateSdlcEvidenceScreening({
-      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory,
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory, gatePolicy: gatePolicy(),
       subject: citationSubject({ provenanceVerified: false, publicationAuthorized: false }),
       observation: citationObservation(), nowEpochMs: 1_000,
     });
@@ -130,22 +152,27 @@ describe('SDLC evidence screening (#2622)', () => {
     expect(unverified?.reviewReasons).toEqual(expect.arrayContaining(['source-provenance-unverified', 'publication-not-authorized']));
   });
 
-  it('rejects unknown IDs and prevents observations from moving to a different subject', () => {
-    expect(() => evaluateSdlcEvidenceScreening({
-      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory,
+  it('routes unknown IDs and subject mismatches to review/fail receipts without throwing', () => {
+    expect(evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory, gatePolicy: gatePolicy(),
       subject: { ...citationSubject(), sourceId: 'source:invented' }, observation: citationObservation(),
       nowEpochMs: 1_000,
-    })).toThrow('unknown-id');
-    expect(() => evaluateSdlcEvidenceScreening({
-      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory,
+    })).toMatchObject({ route: 'REVIEW', deterministic: { findings: [{ reason: 'unknown-id' }] } });
+    expect(evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory, gatePolicy: gatePolicy(),
       subject: citationSubject(), observation: citationObservation({ claimId: 'claim:other' }),
       nowEpochMs: 1_000,
-    })).toThrow('Observation subject mismatch');
+    })).toMatchObject({ route: 'REVIEW', deterministic: { findings: [{ reason: 'subject-isolation-violated' }] } });
+    expect(evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy(),
+      subject: citationSubject(), observation: { ...citationObservation(), confidenceBps: Number.NaN },
+      nowEpochMs: 1_000,
+    })).toMatchObject({ route: 'FAIL', deterministic: { findings: [{ reason: 'invalid-observation' }] } });
   });
 
   it('keeps prompt-injection or authority text advisory and review-routed', () => {
     const receipt = evaluateSdlcEvidenceScreening({
-      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory,
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory, gatePolicy: gatePolicy(),
       subject: citationSubject(),
       observation: citationObservation({ injection: 'yes', support: 'supports', confidenceBps: 10_000 }),
       nowEpochMs: 1_000,
@@ -157,6 +184,17 @@ describe('SDLC evidence screening (#2622)', () => {
     });
   });
 
+  it('keeps untrusted, restricted or digest-mismatched evidence out of advisory-ready routing', () => {
+    const content = 'verified text';
+    const untrusted = evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy(),
+      subject: citationSubject({ trust: 'untrusted', sensitivity: 'restricted', content, contentDigest: digest('2') }),
+      observation: citationObservation(), nowEpochMs: 1_000,
+    });
+    expect(untrusted?.route).toBe('REVIEW');
+    expect(untrusted?.reviewReasons).toEqual(expect.arrayContaining(['evidence-untrusted', 'evidence-restricted', 'content-digest-mismatch']));
+  });
+
   it('property-checks that failed required evidence cannot become ready for any bounded model output', () => {
     const relevance = ['relevant', 'irrelevant', 'unclear'] as const;
     const completeness = ['complete', 'incomplete', 'unclear'] as const;
@@ -166,7 +204,7 @@ describe('SDLC evidence screening (#2622)', () => {
     for (const rel of relevance) for (const comp of completeness) for (const con of contradiction) {
       for (const amb of ambiguity) for (const attention of reviewerAttention) for (const confidenceBps of [0, 7_999, 8_000, 10_000]) {
         const receipt = evaluateSdlcEvidenceScreening({
-          schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory,
+          schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy(),
           subject: criterionSubject(true),
           observation: criterionObservation({ relevance: rel, completeness: comp, contradiction: con, ambiguity: amb, reviewerAttention: attention, confidenceBps }),
           nowEpochMs: 1_000,
@@ -177,8 +215,65 @@ describe('SDLC evidence screening (#2622)', () => {
     }
   });
 
+  it('uses policy-defined required evidence instead of caller required flags or bundle omissions', () => {
+    const spoofed = criterionSubject(false);
+    spoofed.evidence = spoofed.evidence.map(item => item.id === 'test:security'
+      ? { ...item, required: false, present: true, passed: false } : item);
+    const spoofedReceipt = evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy(),
+      subject: spoofed, observation: criterionObservation(), nowEpochMs: 1_000,
+    });
+    expect(spoofedReceipt).toMatchObject({ route: 'FAIL', deterministic: { status: 'fail' } });
+
+    const omitted = criterionSubject(false);
+    omitted.evidence = omitted.evidence.filter(item => item.id !== 'approval:release');
+    const omittedReceipt = evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy(),
+      subject: omitted, observation: { ...criterionObservation(), evidenceIds: omitted.evidence.map(item => item.id) },
+      nowEpochMs: 1_000,
+    });
+    expect(omittedReceipt?.route).toBe('REVIEW');
+    expect(omittedReceipt?.reviewReasons).toContain('required-evidence-missing');
+  });
+
+  it('rejects evidence owned by another criterion and treats expiry at now as expired', () => {
+    const mixed = criterionSubject(false);
+    mixed.evidence[0] = { id: 'artifact:g3', version: '1', digest: digest('2'), type: 'artifact', required: true, present: true, passed: true };
+    const receipt = evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy({
+        requiredEvidenceByCriterion: { ...gatePolicy().requiredEvidenceByCriterion,
+          'G2.security-evidence': ['artifact:g3', 'test:security', 'approval:release', 'sig:artifact', 'schema:gate'] },
+      }),
+      subject: mixed, observation: { ...criterionObservation(), evidenceIds: mixed.evidence.map(item => item.id) },
+      nowEpochMs: 2_000,
+    });
+    expect(receipt?.route).toBe('REVIEW');
+    expect(receipt?.reviewReasons).toEqual(expect.arrayContaining(['subject-isolation-violated', 'evidence-expired']));
+  });
+
+  it('routes low-margin or calibration-incompatible semantic observations to review through the published ruleset', () => {
+    const low = evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy(),
+      subject: criterionSubject(false), observation: criterionObservation({ confidenceBps: 7_999 }), nowEpochMs: 1_000,
+    });
+    expect(low).toMatchObject({ route: 'REVIEW', semantic: { accepted: false, reason: 'evidence-not-accepted' } });
+    const incompatible = evaluateSdlcEvidenceScreening({
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'advisory', inventory, gatePolicy: gatePolicy(),
+      subject: criterionSubject(false), observation: criterionObservation(), nowEpochMs: 1_000,
+      calibrationCompatibility: { action: 'defer', reasons: ['calibration-missing'] },
+    });
+    expect(incompatible).toMatchObject({ route: 'REVIEW', semantic: { accepted: false, reason: 'calibration-defer' } });
+  });
+
   it('preserves the current gate and publication path in disabled and shadow modes', () => {
-    const current = { gate: 'G2', status: 'fail', reason: 'test-failed' } as const;
+    const manifest: QualificationRunManifest = {
+      schemaVersion: 'decision-qualification-run/v1', mode: 'offline', runId: 'sdlc-screening-byte-identity',
+      generatedAt: '2026-09-29T00:00:00.000Z', sourceCommit: 'abc', dirty: false,
+      cases: [{ id: 'C01', kind: 'baseline', mandatory: true, candidateTests: [] }],
+      evidence: [{ caseId: 'C01', executable: true, outcome: 'fail', artifact: 'C01.json', digest: digest('3') }],
+      evidenceFlags: {},
+    };
+    const current = evaluateQualification(manifest) as unknown as JsonValue;
     const audit = [{ id: 'existing-gate-receipt', version: '1', digest: digest('1') }];
     const disabled = applySdlcScreeningToGateOutcome(current, 'disabled', audit, null);
     expect(JSON.stringify(disabled.outcome)).toBe(JSON.stringify(current));
@@ -186,7 +281,7 @@ describe('SDLC evidence screening (#2622)', () => {
     expect(disabled.auditReceipts).toEqual(audit);
 
     const receipt = evaluateSdlcEvidenceScreening({
-      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory,
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory, gatePolicy: gatePolicy(),
       subject: criterionSubject(false), observation: criterionObservation(), nowEpochMs: 1_000,
     });
     const shadow = applySdlcScreeningToGateOutcome(current, 'shadow', audit, receipt);
@@ -213,6 +308,7 @@ describe('SDLC evidence screening (#2622)', () => {
     });
     const thinReport: SdlcScreeningHeldoutReport = {
       schemaVersion: 'decision-sdlc-screening-heldout-report/v1',
+      evaluatedAt: '2026-09-30T00:00:00.000Z',
       support: { n: 10, value: 0.9, precisionBps: 9_000, recallBps: 9_000 },
       contradiction: { n: 10, value: 0.9, precisionBps: 9_000, recallBps: 9_000 },
       unclear: { n: 10, value: 0.9, precisionBps: 9_000, recallBps: 9_000 },
@@ -242,23 +338,39 @@ describe('SDLC evidence screening (#2622)', () => {
     expect(release.reasons).toEqual(expect.arrayContaining(['gate-blocking-slice-support-missing', 'positive-total-economics-missing', 'upstream-integrity-hold']));
     expect(buildSdlcScreeningReleaseReport({ preregistration, heldout: thinReport,
       integrity: { ...integrity, release_gate: { decision: 'ROLLBACK', reasons: [] } } }).decision).toBe('ROLLBACK');
+    expect(() => evaluateSdlcScreeningPreregistration({ ...preregistration, minimumTotalSupport: -1 }, thinReport))
+      .toThrow('minimums');
+    const nanReport = { ...thinReport, falseReadyRateBps: Number.NaN };
+    expect(evaluateSdlcScreeningPreregistration(preregistration, nanReport)).toMatchObject({
+      decision: 'insufficient-evidence', reasons: expect.arrayContaining(['heldout-report-invalid']),
+    });
+    const zeroSlice = { ...thinReport, totalSupport: 100, gateBlockingSliceSupport: 20,
+      positiveTotalEconomicsUsd: 2, slices: { artifact: { n: 0, value: 0.9 } } };
+    expect(buildSdlcScreeningReleaseReport({ preregistration, heldout: zeroSlice,
+      integrity: { ...integrity, release_gate: { decision: 'PROMOTE', reasons: [] }, sample_n: 0,
+        integrity_mode: 'standard', trusted_score_source: 'local-unverified', uncertainty: null,
+        fresh_workspace_required: true, fresh_workspace_verified: false, weak_signal_reason: 'weak' } }).decision)
+      .toBe('HOLD');
   });
 
   it('creates D13 durable review input that survives restart and cannot execute twice', async () => {
     const root = await mkdtemp(join(tmpdir(), 'sdlc-screening-review-'));
     roots.push(root);
     const receipt = evaluateSdlcEvidenceScreening({
-      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory,
+      schemaVersion: SDLC_SCREENING_SCHEMA_VERSION, mode: 'shadow', inventory, gatePolicy: gatePolicy(),
       subject: citationSubject({ retrieved: false }), observation: citationObservation(),
       nowEpochMs: 1_000,
     });
     expect(receipt?.reviewRequired).toBe(true);
     const input = sdlcScreeningReviewInputFromReceipt(receipt!, {
-      enabled: true, reviewId: 'sdlc-screening-review', continuationId: 'continue-gate',
+      enabled: false, reviewId: 'sdlc-screening-review', continuationId: 'continue-gate',
       resumeToken: 'resume-token', expiresAtEpochMs: 10_000, riskTier: 'medium',
       rationale: 'Review missing source retrieval before gate transition',
+      requesterPresentation: { raw: 'do not copy this confidential text into D13' },
     });
     expect(input).not.toBeNull();
+    expect(input?.presentation).toMatchObject({ redaction: 'metadata-only', requesterPresentationDigest: expect.stringMatching(/^sha256:/) });
+    expect(JSON.stringify(input?.presentation)).not.toContain('confidential text');
     const key = new Uint8Array(32).fill(5);
     const store = () => new FileDecisionReviewStore(root, key);
     const requester: ReviewScope = { tenantId: 'tenant', projectId: 'project',
