@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/ConformalOpenDataReport.v2.schema.json",
+  "title": "Conformal open-data report v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "issue",
+    "outcome",
+    "status",
+    "preregistrationHash",
+    "frozenSampleDigest",
+    "splitHashes",
+    "sourceFiles",
+    "actuals",
+    "compatibility",
+    "tasks",
+    "gaps",
+    "integrity",
+    "perExampleHash",
+    "latency"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "conformal-open-data-report/v2" },
+    "issue": { "const": 2613 },
+    "outcome": { "enum": ["GO", "CONDITIONAL", "NO-GO", "INSUFFICIENT EVIDENCE"] },
+    "status": { "const": "experimental-default-off" },
+    "preregistrationHash": { "$ref": "#/$defs/sha" },
+    "frozenSampleDigest": { "$ref": "#/$defs/sha" },
+    "splitHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["train", "calibration", "finalTest", "shift"],
+      "properties": {
+        "train": { "$ref": "#/$defs/sha" },
+        "calibration": { "$ref": "#/$defs/sha" },
+        "finalTest": { "$ref": "#/$defs/sha" },
+        "shift": { "$ref": "#/$defs/sha" }
+      }
+    },
+    "sourceFiles": { "type": "array" },
+    "actuals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerCalls", "inputTokens", "outputTokens", "costUsd"],
+      "properties": {
+        "providerCalls": { "const": 0 },
+        "inputTokens": { "const": 0 },
+        "outputTokens": { "const": 0 },
+        "costUsd": { "const": 0 }
+      }
+    },
+    "compatibility": { "type": "object" },
+    "tasks": { "type": "object", "minProperties": 1 },
+    "gaps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "integrity": { "type": "object" },
+    "perExampleHash": { "$ref": "#/$defs/sha" },
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "elapsedMs"],
+      "properties": {
+        "scope": { "type": "string", "minLength": 1 },
+        "elapsedMs": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  }
+}

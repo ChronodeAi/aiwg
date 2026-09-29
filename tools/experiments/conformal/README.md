@@ -1,5 +1,46 @@
 # Conformal decision spike (#2613)
 
+## Open-data v2
+
+`preregister.v2.json`, `frozen.v2.json`, `open-data.mjs`, `fetch-open-data.mjs`,
+`run.v2.mjs`, and `collect-jev.v2.mjs` are the second experiment version. They
+replace the missing internal D11 data with public CLINC150 and Banking77 samples.
+The raw files are not committed; `fetch-open-data.mjs` deterministically downloads
+the canonical public files, verifies their SHA-256 values, records URL, license,
+retrieval date and byte count, and writes a bounded stratified sample.
+
+```bash
+node tools/experiments/conformal/fetch-open-data.mjs \
+  --raw-dir /tmp/aiwg-2613-open-data \
+  --output tools/experiments/conformal/frozen.v2.json \
+  --retrieval-date 2026-09-29
+node --import tsx tools/experiments/conformal/run.v2.mjs ARTIFACT_ROOT/research/reports/conformal-2613-v2
+node --import tsx tools/experiments/conformal/collect-jev.v2.mjs --limit 25
+```
+
+The v2 frozen sample contains labels and text only. It hashes train,
+calibration, final-test and shift splits before any score exists. The offline
+runner proves the full analysis path with a deterministic synthetic-score
+stand-in and produces `INSUFFICIENT EVIDENCE`; no live Jev scores, D09
+calibration approval, or D14 provider-backed lineage are claimed. The live
+collector is dry-run by default, estimates calls and cost, refuses more than the
+manifest item cap, refuses any estimate above USD 8.00, and requires
+`AIWG_DECISION_JEV_LIVE_SMOKE=1`, `AIWG_DECISION_JEV_API_KEY`, and
+`AIWG_DECISION_JEV_REGION` before using the normalized Jev decision runtime.
+
+Source files frozen on 2026-09-29:
+
+| Dataset | Raw file | SHA-256 | License |
+|---|---|---|---|
+| CLINC150 | `https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json` | `36923c3705a59e08fe9c3883d8bc2dd966ef93e22cb78ac41171782a698d56e0` | CC-BY-4.0 |
+| Banking77 | `https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/train.csv` | `b06e26ac675513959a63135f11b94ea7786ed02da65db93a5650d8838cbc664b` | CC-BY-4.0 |
+| Banking77 | `https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/test.csv` | `d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d` | CC-BY-4.0 |
+
+Closed schemas for the v2 preregistration, frozen sample and report live under
+`schemas/decision/Conformal*.v2.schema.json`.
+
+## Synthetic v1
+
 **Outcome: INSUFFICIENT EVIDENCE.** This offline experiment establishes a reproducible
 arithmetic and compatibility prototype. It does not establish representative Choice
 or Noul workload performance, nor production support. There is no action executor,

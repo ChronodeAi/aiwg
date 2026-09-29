@@ -1,0 +1,115 @@
+{
+  "schemaVersion": "conformal-preregistration/v2",
+  "issue": 2613,
+  "mode": "offline-open-data-with-opt-in-live-collection",
+  "status": "experimental-default-off",
+  "methods": [
+    {
+      "id": "lac-v1",
+      "source": "Sadinle-Lei-Wasserman-2019",
+      "nonconformity": "1 - p(true label)",
+      "quantile": "ceil((n + 1) * (1 - alpha)); infinity if rank exceeds n",
+      "tiePolicy": "include all boundary ties; no randomization"
+    }
+  ],
+  "alpha": 0.1,
+  "tasks": [
+    {
+      "id": "clinc150-intent-choice",
+      "primitive": "choice",
+      "dataset": "CLINC150",
+      "datasetUrl": "https://github.com/clinc/oos-eval",
+      "license": "CC-BY-4.0",
+      "definition": "Classify a user utterance into one CLINC150 intent or the explicit oos class.",
+      "shift": "The oos_test split is frozen as a controlled OOD slice and is not used for train or calibration."
+    },
+    {
+      "id": "banking77-intent-choice",
+      "primitive": "choice",
+      "dataset": "Banking77",
+      "datasetUrl": "https://github.com/PolyAI-LDN/task-specific-datasets/tree/master/banking_data",
+      "license": "CC-BY-4.0",
+      "definition": "Classify a banking support utterance into one Banking77 intent.",
+      "shift": "The canonical test CSV is source-separated from the training CSV; a disjoint portion is held as a shift slice."
+    }
+  ],
+  "pins": {
+    "offlineServedModel": "synthetic-score-stand-in/v2",
+    "liveServedModel": "jev-selected-by-operator",
+    "adapter": "jev decision runtime binding for live collection; synthetic-open-data/v2 for offline proof",
+    "definition": "open-data-choice-definitions/v2",
+    "seed": "issue-2613-v2-open-data"
+  },
+  "splits": {
+    "train": "Frozen labels/text only. Used for synthetic calibrated-risk baseline bins; no conformal quantile fitting.",
+    "calibration": "Frozen labels/text only. Used to fit conformal thresholds before final-test scoring.",
+    "finalTest": "Frozen labels/text only. Evaluated after calibration profile and gates are fixed.",
+    "shift": "Frozen labels/text only. CLINC OOS plus Banking77 source-separated rows; demonstrates assumption degradation."
+  },
+  "coverageTarget": 0.9,
+  "usefulnessGates": {
+    "minimumFinalRowsPerTask": 200,
+    "minimumSliceRows": 50,
+    "minimumCoverageWilsonLower": 0.85,
+    "maximumMeanSetSizeFractionOfLabels": 0.08,
+    "maximumReviewRate": 0.45,
+    "maximumSelectiveRisk": 0.12,
+    "mustNotUpgradeIntegrityHoldOrRollback": true
+  },
+  "sampleSizeRationale": "The bounded sample keeps git small while preserving at least 200 final-test rows per task and at least 50 rows on reported shift slices. It is adequate to prove deterministic mechanics, not production representativeness.",
+  "baselines": [
+    "raw primitive threshold: selected Choice probability >= 0.75",
+    "synthetic calibrated-risk threshold: train-only top-score decile Wilson upper error <= 0.12; not an approved D09 calibration profile",
+    "always-review",
+    "always-predict"
+  ],
+  "metrics": [
+    "marginal coverage with Wilson interval",
+    "class and slice coverage when n >= 50",
+    "mean, p50, p90 and p95 set size",
+    "abstention/review load",
+    "selective risk",
+    "false-auto rate",
+    "latency",
+    "calls, tokens and cost or approved bound"
+  ],
+  "compatibilityKey": [
+    "served model",
+    "primitive",
+    "definition digest",
+    "adapter",
+    "dataset population",
+    "method",
+    "calibration split digest",
+    "code version",
+    "alpha"
+  ],
+  "resourceBudget": {
+    "offlineProviderCalls": 0,
+    "offlineTokens": 0,
+    "offlineUsd": 0,
+    "liveHardCeilingUsd": 8,
+    "estimatedUsdPerItem": 0.01,
+    "liveMaxItems": 600,
+    "sampleMaxItems": 3000
+  },
+  "liveCollection": {
+    "enabledByDefault": false,
+    "requiredEnv": "AIWG_DECISION_JEV_LIVE_SMOKE=1",
+    "credentialEnv": "AIWG_DECISION_JEV_API_KEY",
+    "dryRunDefault": true,
+    "networkRule": "No live provider call occurs unless the env gate is set, a credential is present, and the estimated cost is <= liveHardCeilingUsd and liveMaxItems."
+  },
+  "outcomeRule": "Offline synthetic-score execution can prove the pipeline and produce INSUFFICIENT EVIDENCE only. GO or CONDITIONAL requires separately approved live Jev scores or other representative held-out scores, D10 projection authorization, D14 lineage/retention evidence, and approved D09/D11 calibration evidence.",
+  "nonGoals": [
+    "No production routing integration.",
+    "No acceptance-policy mutation.",
+    "No Noul probability relabeling as confidence.",
+    "No Score study without a validated ordinal loss."
+  ],
+  "sources": [
+    "https://arxiv.org/abs/1609.00451v2",
+    "https://arxiv.org/abs/2006.02544v1",
+    "https://arxiv.org/abs/2306.10193v2"
+  ]
+}

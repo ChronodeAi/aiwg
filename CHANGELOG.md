@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental default-off conformal open-data v2 artifacts use public CLINC150
+  and Banking77 samples with deterministic fetch/verify, frozen split hashes,
+  closed schemas, synthetic-score analysis, and a dry-run-first bounded Jev
+  collection harness; live scores and production use remain pending (#2613)
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.

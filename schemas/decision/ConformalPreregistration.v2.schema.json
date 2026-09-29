@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/ConformalPreregistration.v2.schema.json",
+  "title": "Conformal open-data preregistration v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "issue",
+    "mode",
+    "status",
+    "methods",
+    "alpha",
+    "tasks",
+    "pins",
+    "splits",
+    "coverageTarget",
+    "usefulnessGates",
+    "sampleSizeRationale",
+    "baselines",
+    "metrics",
+    "compatibilityKey",
+    "resourceBudget",
+    "liveCollection",
+    "outcomeRule",
+    "nonGoals",
+    "sources"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "conformal-preregistration/v2" },
+    "issue": { "const": 2613 },
+    "mode": { "type": "string", "minLength": 1 },
+    "status": { "const": "experimental-default-off" },
+    "methods": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "source", "nonconformity", "quantile", "tiePolicy"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1 },
+          "nonconformity": { "type": "string", "minLength": 1 },
+          "quantile": { "type": "string", "minLength": 1 },
+          "tiePolicy": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "alpha": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "primitive", "dataset", "datasetUrl", "license", "definition", "shift"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "primitive": { "const": "choice" },
+          "dataset": { "type": "string", "minLength": 1 },
+          "datasetUrl": { "type": "string", "format": "uri" },
+          "license": { "const": "CC-BY-4.0" },
+          "definition": { "type": "string", "minLength": 1 },
+          "shift": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "pins": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+    "splits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["train", "calibration", "finalTest", "shift"],
+      "properties": {
+        "train": { "type": "string", "minLength": 1 },
+        "calibration": { "type": "string", "minLength": 1 },
+        "finalTest": { "type": "string", "minLength": 1 },
+        "shift": { "type": "string", "minLength": 1 }
+      }
+    },
+    "coverageTarget": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+    "usefulnessGates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimumFinalRowsPerTask",
+        "minimumSliceRows",
+        "minimumCoverageWilsonLower",
+        "maximumMeanSetSizeFractionOfLabels",
+        "maximumReviewRate",
+        "maximumSelectiveRisk",
+        "mustNotUpgradeIntegrityHoldOrRollback"
+      ],
+      "properties": {
+        "minimumFinalRowsPerTask": { "type": "integer", "minimum": 1 },
+        "minimumSliceRows": { "type": "integer", "minimum": 1 },
+        "minimumCoverageWilsonLower": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maximumMeanSetSizeFractionOfLabels": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "maximumReviewRate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maximumSelectiveRisk": { "type": "number", "minimum": 0, "maximum": 1 },
+        "mustNotUpgradeIntegrityHoldOrRollback": { "const": true }
+      }
+    },
+    "sampleSizeRationale": { "type": "string", "minLength": 1 },
+    "baselines": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "metrics": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "compatibilityKey": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "resourceBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offlineProviderCalls",
+        "offlineTokens",
+        "offlineUsd",
+        "liveHardCeilingUsd",
+        "estimatedUsdPerItem",
+        "liveMaxItems",
+        "sampleMaxItems"
+      ],
+      "properties": {
+        "offlineProviderCalls": { "const": 0 },
+        "offlineTokens": { "const": 0 },
+        "offlineUsd": { "const": 0 },
+        "liveHardCeilingUsd": { "type": "number", "maximum": 8 },
+        "estimatedUsdPerItem": { "type": "number", "exclusiveMinimum": 0 },
+        "liveMaxItems": { "type": "integer", "minimum": 1 },
+        "sampleMaxItems": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "liveCollection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabledByDefault", "requiredEnv", "credentialEnv", "dryRunDefault", "networkRule"],
+      "properties": {
+        "enabledByDefault": { "const": false },
+        "requiredEnv": { "const": "AIWG_DECISION_JEV_LIVE_SMOKE=1" },
+        "credentialEnv": { "const": "AIWG_DECISION_JEV_API_KEY" },
+        "dryRunDefault": { "const": true },
+        "networkRule": { "type": "string", "minLength": 1 }
+      }
+    },
+    "outcomeRule": { "type": "string", "minLength": 1 },
+    "nonGoals": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "sources": { "type": "array", "items": { "type": "string", "format": "uri" } }
+  }
+}
