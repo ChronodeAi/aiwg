@@ -17,8 +17,9 @@ The TypeScript entry point is `resolvePreprocessedEvidence()` from
    that declares `egress: { mode: "none" }` and runs without a projection policy,
    it is `{ "provider": <adapter id>, "origin": PREPROCESSING_LOCAL_ORIGIN }`
    (`local://no-egress`).
-3. If the resolution is `ready`, pass only `resolution.state.text` as ordinary
-   decision input.
+3. Resolve with `inputPointer` set to the JSON pointer of the input field that
+   will carry the text (for example `/message`). If the resolution is `ready`,
+   put exactly `resolution.state.text` at that pointer.
 4. Pass `resolution.receiptEvidence` as
    `DecisionEvaluationRequest.preprocessingLineage`, and the host's current
    manifest records (plus optional D10 lifecycle state) as
@@ -82,25 +83,30 @@ and before receipt acquisition, credential resolution and adapter dispatch:
 - **Refused** (`error` / `data-boundary-denied`, no evaluations): the lineage is
   malformed; a reference's recorded destination differs from the D10 projection
   provider/origin of any target that could be dispatched (including fallback
-  targets); derived egress is not authorized for that destination; or the
+  targets); derived egress is not authorized for that destination; the
   destination cannot be bound (`unprojected-local` opt-out or a projection
-  resolver that fails).
+  resolver that fails); a reference has no input binding (`input-unbound`); or
+  the value at the bound input pointer is not a string whose digest equals the
+  resolved text digest (`input-mismatch`).
 - **Review** (`review` / `insufficient-information`, no evaluations, no
-  outcome): the lineage status is not `ready`; any trace is under review or
-  names a reason; any reference carries a blocking quality flag or untrusted
-  trust; traces are missing or misaligned; no `preprocessingVerification` was
-  supplied; the current manifest is unavailable (deleted or missing); a stored
-  reference is stale against the current manifest
-  (`checkPreprocessedEvidenceReference`); or the D10 lifecycle state tombstones
-  or holds a dependent record.
+  outcome): no `preprocessingVerification` was supplied; the current manifest
+  is unavailable (deleted or missing); a stored reference is stale against the
+  current manifest (`checkPreprocessedEvidenceReference`); or re-resolving the
+  current manifest under the host's `preprocessingVerification` thresholds
+  (`minQualityScore`, `maxAgeMs`, `now`) and lifecycle state yields any review
+  reason (quality, flags, trust, age, egress, tombstone or hold). Stored trace
+  status and reasons are never trusted to allow dispatch; they can only add
+  review reasons, as can a non-`ready` status, blocking reference flags, or
+  missing or misaligned traces.
 - **Allowed**: the request continues on the normal projection and dispatch
   path.
 
 The verdict is recorded as `preprocessingLineage.dispatchGate`. A result cache
 is refused for requests that carry lineage, because a cache hit would bypass the
-gate. The evaluator cannot prove that the text in `input` is the text the
-lineage was resolved from; host code must pass `resolution.state.text`
-unchanged.
+gate. The input binding covers the text at the bound pointer in the decision
+input the evaluator projects and dispatches. D10 projection can drop or redact
+that field but cannot substitute it. The binding does not cover other input
+fields, which remain ordinary text-native input.
 
 ## Offline fixtures
 
