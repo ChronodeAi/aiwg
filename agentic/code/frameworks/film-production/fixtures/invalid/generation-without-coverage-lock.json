@@ -32,6 +32,13 @@
       "evidence": "Synthetic fixture only; not an actual animatic review."
     }
   },
+  "storyboard": {
+    "path": "storyboard.md",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "panel_count": 1,
+    "animatic_path": "animatic.mp4",
+    "animatic_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
   "assets": [
     {
       "id": "FP-ASSET-MASTER",

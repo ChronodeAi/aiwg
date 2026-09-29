@@ -33,6 +33,11 @@
       "phase": "previs"
     },
     {
+      "id": "film-storyboard",
+      "path": "templates/previs/film-storyboard.md",
+      "phase": "previs"
+    },
+    {
       "id": "film-review-record",
       "path": "templates/finish/film-review-record.md",
       "phase": "finish"

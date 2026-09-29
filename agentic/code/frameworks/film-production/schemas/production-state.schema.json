@@ -1349,6 +1349,37 @@
           }
         }
       }
+    },
+    "storyboard": {
+      "type": "object",
+      "description": "Timed storyboard and its animatic. A locked coverage lock's subject_sha256 must equal animatic_sha256.",
+      "required": [
+        "path",
+        "sha256",
+        "panel_count",
+        "animatic_path",
+        "animatic_sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "panel_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "animatic_path": {
+          "type": "string"
+        },
+        "animatic_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
     }
   }
 }

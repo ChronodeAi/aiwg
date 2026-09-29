@@ -46,6 +46,13 @@
       "evidence": "recorded sign-off reference"
     }
   },
+  "storyboard": {
+    "path": "storyboard.md",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "panel_count": 1,
+    "animatic_path": "animatic.mp4",
+    "animatic_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
   "assets": [
     {
       "id": "FP-ASSET-MASTER",

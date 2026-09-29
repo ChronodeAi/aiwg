@@ -267,6 +267,10 @@ export function validateFilmState(state) {
     if (lock.status !== 'locked') continue;
     require(text(lock.reviewer) && text(lock.evidence) && ['agent', 'user', 'automated'].includes(lock.reviewer_type), `${prefix}: reviewer, reviewer_type and evidence required`);
     require(sha256(lock.subject_sha256), `${prefix}: subject_sha256 required`);
+    if (name === 'coverage') {
+      require(record(state.storyboard) && sha256(state.storyboard.sha256), `${prefix} requires a storyboard record`);
+      require(state.storyboard?.animatic_sha256 === lock.subject_sha256, `${prefix}: stale against current storyboard animatic; relock`);
+    }
     if (requiredUserLocks.includes(name)) require(lock.reviewer_type === 'user', `${prefix}: user sign-off required`);
     const before = errors.length;
     if (name === 'picture' || name === 'sound') {
