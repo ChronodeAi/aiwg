@@ -46,6 +46,12 @@ define versioned D17 schemas, pure validators, and an experimental default-off
 offline runtime with injected dispatch, registry and telemetry seams. Live
 qualification and production rollout evidence remain pending.
 
+The [routing pilot](routing-pilot.md) defines D28 default-off/shadow-only
+capability-constrained route selection among already-eligible model/subagent
+bindings. It distinguishes bounded Jev task-fit evidence from calibrated
+success probability, and keeps hard constraints and ordinary authorization
+dominant over every routing result.
+
 The [offline pattern playground](pattern-playground.md) provides discoverable,
 sanitized examples and a governed authoring checklist without requiring network
 access or a provider credential.

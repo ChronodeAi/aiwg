@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental default-off/shadow D28 routing pilot APIs for
+  capability-constrained model/subagent selection after hard-constraint
+  filtering, with schemas, receipts, fallback bounds, shadow/economics report
+  scaffolding, D17 rollback drill wiring, docs, tests and an offline synthetic
+  example (#2620).
 - Experimental default-off D17 decision ensemble runtime APIs for bounded
   member dispatch, paired champion/challenger shadow evaluation, drift-response
   execution, promotion gating on D09 plus eval-integrity, rollback for new runs,

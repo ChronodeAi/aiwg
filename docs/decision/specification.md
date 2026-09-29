@@ -180,3 +180,27 @@ Portable defaults for initial implementation: feature disabled; explicit binding
 Schemas validate structure; the semantic validator proves references, input projections, answer domains, rule predicates, acceptance profiles, distribution invariants and binding coverage. `fixtures/conformance.json` defines runtime acceptance cases to implement. `validate.py` checks design fixtures and selected semantic examples today; it is not the production runtime or complete transport conformance suite.
 
 Qualification must separately measure task accuracy, abstention, calibration, latency and cost on a representative held-out set. No model-quality or performance equivalence follows from the one synthetic live request. Source observation date: 2026-09-20; all vendor limits/model aliases are revalidated when implementing.
+
+## 8. Capability-constrained routing pilot
+
+`decision-routing-policy/v1` is a default-off/shadow-only D28 pilot contract.
+It may select only from a trusted inventory of route candidates that have
+already passed deterministic privacy, authorization, region, tool, context,
+allowlist, budget, deadline, health and executable checks. Ineligible routes do
+not enter Jev criteria and are recorded only by sanitized reason codes.
+
+The Jev input is limited to D10-projected task state and sanitized summaries of
+eligible candidates. Jev may provide bounded task-fit, complexity and ambiguity
+evidence, but it cannot add route IDs, grant permissions, change prices,
+override health, authorize execution or optimize cost directly. Unknown cost,
+unknown calibration, incompatible evidence profiles and malformed output fail
+closed to review/no-route.
+
+The routing receipt preserves route pins, eligibility/exclusion reasons, Jev
+provenance and distributions, selected route, policy version, actual
+worker/model, attempts/fallbacks, usage/cost and verified outcome. Fallbacks
+reuse only still-eligible candidates with bounded attempts and no retry storm.
+The shadow report extends eval-integrity fields and cannot upgrade
+`HOLD`/`ROLLBACK`; promotion requires preregistered sample, slice, CI,
+non-inferiority, failure/rework/fallback, budget and positive net-economics
+thresholds. See [routing pilot](routing-pilot.md).

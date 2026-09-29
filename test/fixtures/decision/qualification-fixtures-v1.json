@@ -1578,6 +1578,22 @@
         "JEV-16",
         "#2611"
       ]
+    },
+    {
+      "id": "DEC-ROUTING-01",
+      "path": "agentic/code/addons/decision-engine/examples/routing-pilot-offline.mjs",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:3d6cf8779630e39ce485b5feaffd5c1183e14d5f40ed8f979df712fb70235370",
+      "expectedOutcome": "D28 offline routing pilot example with hard-constraint filtering, fake Jev evidence and fake dispatch",
+      "links": [
+        "JEV-16",
+        "#2620"
+      ]
     }
   ]
 }

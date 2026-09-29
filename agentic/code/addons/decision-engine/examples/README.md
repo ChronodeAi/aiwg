@@ -42,3 +42,16 @@ node agentic/code/addons/decision-engine/examples/ensemble-runtime-offline.mjs
 It demonstrates the default-off runtime API, bounded member orchestration,
 aggregate evidence and retained member-result references. It is not quality,
 calibration, drift-threshold or live Jev evidence.
+
+`routing-pilot-offline.mjs` exercises the experimental D28 routing pilot with
+synthetic route candidates, fake Jev task-fit evidence and a fake worker
+dispatch:
+
+```bash
+npm run build:cli
+node agentic/code/addons/decision-engine/examples/routing-pilot-offline.mjs
+```
+
+It demonstrates hard-constraint filtering, D10 projection, deterministic utility
+selection, retained attempts and default shadow-only semantics. It is not live
+Jev, held-out quality, security/privacy approval or production rollout evidence.
