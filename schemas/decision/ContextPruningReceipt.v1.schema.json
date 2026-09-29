@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/ContextPruningReceipt.v1.schema.json",
+  "title": "Context Pruning Receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "itemId", "locator", "originalDigest", "originalTokenEstimate", "classification", "proposedAction", "appliedAction", "mode", "reason", "decisionReceiptDigest", "reversibleReference", "createdAt", "receiptDigest"],
+  "properties": {
+    "schemaVersion": { "const": "decision-context-pruning-receipt/v1" },
+    "itemId": { "type": "string", "minLength": 1 },
+    "locator": { "type": "string", "minLength": 1 },
+    "originalDigest": { "$ref": "#/$defs/digest" },
+    "originalTokenEstimate": { "type": "integer", "minimum": 0 },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "itemId", "protected", "reasons", "policyDigest"],
+      "properties": {
+        "schemaVersion": { "const": "decision-context-protected/v1" },
+        "itemId": { "type": "string", "minLength": 1 },
+        "protected": { "type": "boolean" },
+        "reasons": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/protectedReason" } },
+        "policyDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "proposedAction": { "$ref": "#/$defs/action" },
+    "appliedAction": { "$ref": "#/$defs/action" },
+    "mode": { "enum": ["disabled", "shadow", "advisory", "deterministic-fallback"] },
+    "reason": {
+      "enum": ["protected-item", "disabled", "shadow-only", "accepted-evidence", "prior-deterministic-fallback", "invalid-evidence", "uncertain-evidence", "uncalibrated", "incomplete-state", "cancelled", "evaluation-failed", "drift-or-monitoring-regression", "unsupported-transformation", "policy-denied-action"]
+    },
+    "decisionReceiptDigest": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+    "reversibleReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locator", "originalDigest", "restorationPath", "transformation"],
+      "properties": {
+        "locator": { "type": "string", "minLength": 1 },
+        "originalDigest": { "$ref": "#/$defs/digest" },
+        "restorationPath": { "type": "string", "minLength": 1 },
+        "transformation": {
+          "anyOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["action", "locator", "digest", "sourceDigest", "qualityCheck"],
+              "properties": {
+                "action": { "enum": ["truncate", "summarize"] },
+                "locator": { "type": "string", "minLength": 1 },
+                "digest": { "$ref": "#/$defs/digest" },
+                "sourceDigest": { "$ref": "#/$defs/digest" },
+                "qualityCheck": { "enum": ["passed", "failed", "missing"] }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "receiptDigest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "action": { "enum": ["keep", "drop", "truncate", "summarize"] },
+    "protectedReason": {
+      "enum": ["system-rule", "developer-rule", "project-rule", "security-policy", "current-user-requirement", "explicit-mention", "unresolved-blocker", "action-approval", "artifact-pin", "version-pin", "digest-pin", "provenance-required", "citation-required", "test-gate-evidence", "open-decision-evidence", "external-evaluation-denied", "local-only", "restricted-data", "legal-policy"]
+    }
+  }
+}

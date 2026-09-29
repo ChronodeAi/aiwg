@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off decision-assisted context pruning pilot with
+  deterministic protected-item retention, shadow byte-identity checks,
+  immutable reversible receipts, closed schemas, preregistration/report
+  scaffolding and docs; live held-out quality/economics evidence remains
+  pending (#2619).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
   and schemas/docs/tests for #2614.

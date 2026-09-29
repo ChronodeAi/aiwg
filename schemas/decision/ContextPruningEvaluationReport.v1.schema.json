@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/ContextPruningEvaluationReport.v1.schema.json",
+  "title": "Context Pruning Evaluation Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "preregistration", "integrity", "metrics", "missingInputs", "findings", "upstreamDecision", "decision", "advisory", "digest"],
+  "properties": {
+    "schemaVersion": { "const": "decision-context-pruning-evaluation-report/v1" },
+    "preregistration": { "$ref": "#/$defs/preregistration" },
+    "integrity": { "$ref": "#/$defs/integrity" },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleN", "sliceCounts", "downstreamTaskSuccessDeltaBps", "requirementCoverageDeltaBps", "factualCoverageDeltaBps", "citationAccuracyDeltaBps", "humanPreferenceDeltaBps", "protectedRetentionBps", "providerUsage", "estimatorUsage", "totalCalls", "latencyMs", "promptCache", "sharedStateAccounting"],
+      "properties": {
+        "sampleN": { "type": "integer", "minimum": 0 },
+        "sliceCounts": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "downstreamTaskSuccessDeltaBps": { "type": ["number", "null"] },
+        "requirementCoverageDeltaBps": { "type": ["number", "null"] },
+        "factualCoverageDeltaBps": { "type": ["number", "null"] },
+        "citationAccuracyDeltaBps": { "type": ["number", "null"] },
+        "humanPreferenceDeltaBps": { "type": ["number", "null"] },
+        "protectedRetentionBps": { "type": "integer", "minimum": 0, "maximum": 10000 },
+        "providerUsage": { "$ref": "#/$defs/usage" },
+        "estimatorUsage": { "$ref": "#/$defs/usage" },
+        "totalCalls": { "type": "integer", "minimum": 0 },
+        "latencyMs": {
+          "type": "object", "additionalProperties": false, "required": ["p50", "p95", "p99"],
+          "properties": { "p50": { "type": ["number", "null"] }, "p95": { "type": ["number", "null"] }, "p99": { "type": ["number", "null"] } }
+        },
+        "promptCache": {
+          "type": "object", "additionalProperties": false, "required": ["hits", "misses", "avoidedPromptTokens"],
+          "properties": { "hits": { "type": "integer", "minimum": 0 }, "misses": { "type": "integer", "minimum": 0 }, "avoidedPromptTokens": { "type": "integer", "minimum": 0 } }
+        },
+        "sharedStateAccounting": { "enum": ["request-owned-once", "not-applicable"] }
+      }
+    },
+    "missingInputs": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "findings": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "upstreamDecision": { "$ref": "#/$defs/gateDecision" },
+    "decision": { "$ref": "#/$defs/gateDecision" },
+    "advisory": { "enum": ["INSUFFICIENT EVIDENCE", null] },
+    "digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "gateDecision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sample_n", "uncertainty", "paired_baseline", "integrity_mode", "fresh_workspace_required", "fresh_workspace_verified", "integrity_state", "trusted_score_source", "compromise_labels", "weak_signal_reason", "release_gate"],
+      "properties": {
+        "sample_n": { "type": "integer", "minimum": 0 },
+        "uncertainty": {},
+        "paired_baseline": {},
+        "integrity_mode": { "type": "string", "minLength": 1 },
+        "fresh_workspace_required": { "type": "boolean" },
+        "fresh_workspace_verified": { "type": "boolean" },
+        "integrity_state": { "type": "string", "minLength": 1 },
+        "trusted_score_source": { "type": "string", "minLength": 1 },
+        "compromise_labels": { "type": "array", "items": { "type": "string" } },
+        "weak_signal_reason": { "type": ["string", "null"] },
+        "release_gate": {
+          "type": "object", "additionalProperties": false, "required": ["decision", "reasons"],
+          "properties": { "decision": { "$ref": "#/$defs/gateDecision" }, "reasons": { "type": "array", "items": { "type": "string" } } }
+        }
+      }
+    },
+    "usage": {
+      "type": "object", "additionalProperties": false, "required": ["inputTokens", "outputTokens", "costUsd"],
+      "properties": { "inputTokens": { "type": "integer", "minimum": 0 }, "outputTokens": { "type": "integer", "minimum": 0 }, "costUsd": { "type": ["number", "null"], "minimum": 0 } }
+    },
+    "preregistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "id", "registeredAt", "holdoutAccessedAt", "thresholds", "digest"],
+      "properties": {
+        "schemaVersion": { "const": "decision-context-pruning-preregistration/v1" },
+        "id": { "type": "string", "minLength": 1 },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "holdoutAccessedAt": { "type": ["string", "null"], "format": "date-time" },
+        "thresholds": {
+          "type": "object", "additionalProperties": false,
+          "required": ["protectedRetentionBps", "confidenceInterval", "minimumOverallN", "minimumSliceN", "powerRule", "qualityNonInferiorityMarginBps", "positiveTotalTokenTarget", "positiveTotalCostTargetUsd"],
+          "properties": {
+            "protectedRetentionBps": { "const": 10000 },
+            "confidenceInterval": {
+              "type": "object", "additionalProperties": false, "required": ["method", "levelBps"],
+              "properties": { "method": { "enum": ["wilson", "bootstrap"] }, "levelBps": { "type": "integer", "minimum": 5000, "maximum": 9999 } }
+            },
+            "minimumOverallN": { "type": "integer", "minimum": 1 },
+            "minimumSliceN": { "type": "integer", "minimum": 1 },
+            "powerRule": { "type": ["string", "null"] },
+            "qualityNonInferiorityMarginBps": { "type": "number", "maximum": 0 },
+            "positiveTotalTokenTarget": { "type": "integer", "minimum": 1 },
+            "positiveTotalCostTargetUsd": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  }
+}

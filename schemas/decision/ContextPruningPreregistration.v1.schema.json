@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/ContextPruningPreregistration.v1.schema.json",
+  "title": "Context Pruning Preregistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "registeredAt", "holdoutAccessedAt", "thresholds", "digest"],
+  "properties": {
+    "schemaVersion": { "const": "decision-context-pruning-preregistration/v1" },
+    "id": { "type": "string", "minLength": 1 },
+    "registeredAt": { "type": "string", "format": "date-time" },
+    "holdoutAccessedAt": { "type": ["string", "null"], "format": "date-time" },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protectedRetentionBps", "confidenceInterval", "minimumOverallN", "minimumSliceN", "powerRule", "qualityNonInferiorityMarginBps", "positiveTotalTokenTarget", "positiveTotalCostTargetUsd"],
+      "properties": {
+        "protectedRetentionBps": { "const": 10000 },
+        "confidenceInterval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "levelBps"],
+          "properties": {
+            "method": { "enum": ["wilson", "bootstrap"] },
+            "levelBps": { "type": "integer", "minimum": 5000, "maximum": 9999 }
+          }
+        },
+        "minimumOverallN": { "type": "integer", "minimum": 1 },
+        "minimumSliceN": { "type": "integer", "minimum": 1 },
+        "powerRule": { "type": ["string", "null"] },
+        "qualityNonInferiorityMarginBps": { "type": "number", "maximum": 0 },
+        "positiveTotalTokenTarget": { "type": "integer", "minimum": 1 },
+        "positiveTotalCostTargetUsd": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  }
+}

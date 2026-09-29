@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/ContextPruningCandidate.v1.schema.json",
+  "title": "Context Pruning Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "itemId", "locator", "contentDigest", "source", "tokenEstimate", "priority", "trust", "sensitivity", "dependencies", "protectedHints", "taskSubject", "dataPolicy"],
+  "properties": {
+    "schemaVersion": { "const": "decision-context-candidate/v1" },
+    "itemId": { "type": "string", "minLength": 1 },
+    "locator": { "type": "string", "minLength": 1 },
+    "contentDigest": { "$ref": "#/$defs/digest" },
+    "content": { "type": "string" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "addedAt"],
+      "properties": {
+        "kind": { "enum": ["system", "developer", "project", "security-policy", "user", "approval", "blocker", "provenance", "citation", "artifact", "test-evidence", "open-decision", "retrieved", "memory", "tool-output", "ordinary"] },
+        "addedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "tokenEstimate": { "type": "integer", "minimum": 0 },
+    "priority": { "type": "number", "minimum": 0, "maximum": 1 },
+    "trust": { "enum": ["verified", "untrusted"] },
+    "sensitivity": { "enum": ["public", "internal", "confidential", "restricted"] },
+    "dependencies": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "protectedHints": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/protectedReason" } },
+    "taskSubject": { "type": "string", "minLength": 1 },
+    "dataPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["externalEvaluation", "localOnly", "legalAction"],
+      "properties": {
+        "externalEvaluation": { "enum": ["allowed", "denied"] },
+        "localOnly": { "type": "boolean" },
+        "legalAction": { "enum": ["none", "requires-review"] }
+      }
+    },
+    "deterministicFallbackAction": { "enum": ["keep", "drop", "truncate", "summarize"] }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "protectedReason": {
+      "enum": ["system-rule", "developer-rule", "project-rule", "security-policy", "current-user-requirement", "explicit-mention", "unresolved-blocker", "action-approval", "artifact-pin", "version-pin", "digest-pin", "provenance-required", "citation-required", "test-gate-evidence", "open-decision-evidence", "external-evaluation-denied", "local-only", "restricted-data", "legal-policy"]
+    }
+  }
+}

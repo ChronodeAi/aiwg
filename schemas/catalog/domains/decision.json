@@ -725,6 +725,62 @@
       "compatibility": { "mode": "backward" },
       "consumers": [{ "id": "decision-feature-export", "boundary": "Governed feature rows with lineage, missingness, batch accounting and lifecycle references", "path": "src/decision/feature-export.ts" }],
       "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-candidate",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningCandidate.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningCandidate.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "D26 deterministic protected-item envelope; model evidence cannot alter this classification", "path": "src/decision/context-pruning.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-receipt",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningReceipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningReceipt.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "Immutable reversible shadow/advisory pruning receipts", "path": "src/decision/context-pruning.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-preregistration",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningPreregistration.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningPreregistration.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "Holdout-before-access promotion thresholds for D26", "path": "src/decision/context-pruning.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-evaluation-report",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningEvaluationReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningEvaluationReport.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "Paired context-pruning quality/economics report that preserves PROMOTE/HOLD/ROLLBACK", "path": "src/decision/context-pruning.ts" }],
+      "publication": { "public": true }
     }
   ]
 }
