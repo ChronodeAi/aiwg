@@ -25,7 +25,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   after picture lock with measured audio, and delivery acceptance (FP-G06). It
   checks recorded evidence only; v1 state files must be migrated to v2.
 - **`aiwg use film-production`** - The framework is registered with the CLI,
-  help output, and setup wizard, and the kernel inventory is now 28 skills with
+  help output, and setup wizard, and the kernel inventory is now 27 skills with
   11 quickrefs.
 
 ### Changed
