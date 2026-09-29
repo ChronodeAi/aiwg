@@ -24,7 +24,12 @@ Read current state, the representative shot record, approved source versions, re
 3. Verify that inputs are current and have no relevant quality hold. Check hand/prop states, useful causal coverage, speech mode, and acceptance criteria before turning them into a concise operational prompt.
 4. Record a bounded estimate, currency/units, maximum attempts, and remaining authorized budget. Price is not proof of quality; start with a representative test when capability is unverified. Do not require a premium tier by default.
 5. Establish task identity and reconciliation before submission. Retain provider task IDs and sanitized request/response references. After an uncertain submission or failed poll, query the known handle before any retry that could create another charge.
-6. Submit only within existing authority. Inspect the returned artifact and record observed behavior, actual charge when available, and any unknown cost or capability claims.
+6. Never trust provider dry-run headers for async jobs; persist task identity before submission.
+7. Match source resolution to the delivery floor before paying.
+8. For lip sync on a stylized face, test the adapter first (≤2 s).
+9. If images are generated through ChatGPT Codex `codex exec`, record model and cost as unknown unless the event stream reports them.
+10. Build the exact request (task type, array inputs, output type) from the model schema and inspect it before the single submission.
+11. Submit only within existing authority. Inspect the returned artifact and record observed behavior, actual charge when available, and any unknown cost or capability claims.
 
 ## Outputs
 
