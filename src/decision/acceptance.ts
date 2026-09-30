@@ -94,7 +94,9 @@ export function applyTargetAcceptance(
   if (target.acceptance.mode === 'primitive-policy') return applyPrimitiveAcceptance(definition, target.acceptance, observation);
   if (!observation.uncertainty || observation.uncertainty.confidence === null) return abstained('missing-confidence', observation);
   if (observation.uncertainty.profile !== target.acceptance.profile) return abstained('confidence-profile-mismatch', observation);
-  return observation.uncertainty.confidence * 10_000 < target.acceptance.minimumBps
+  // Compare on the probability scale: minimumBps / 10_000 is the exact double for the decimal threshold,
+  // whereas confidence * 10_000 can round below it (0.7 * 10_000 === 6999.999999999999).
+  return observation.uncertainty.confidence < target.acceptance.minimumBps / 10_000
     ? abstained('low-confidence', observation) : observation;
 }
 
