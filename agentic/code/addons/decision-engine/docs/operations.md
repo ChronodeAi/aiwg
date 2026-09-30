@@ -123,3 +123,10 @@ Source-checkout operators can use the experimental, default-off
 for synthetic D17/D29 study modules. Preparation and dry-run use source directly;
 collection needs a separate priced, digest-bound approval and explicit env gate.
 The collector does not promote models or establish study quality.
+
+Jev collection requires attested free output and reserves request bytes plus a
+preregistered provider overhead allowance (default 512 tokens). Preserve the
+separate spend counter, head and baseline files under the canonical artifact
+root; deleting run directories does not restore spend allowance. A damaged
+counter requires operator reconciliation before further collection. See the
+collector guide for the input-overrun assumption and repair requirements.

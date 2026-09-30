@@ -138,8 +138,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Close paid-output and deleted-history cap overruns in the experimental,
+  default-off held-out collector: require attested free Jev output, reserve
+  serialized input bytes plus preregistered provider overhead, retain monotonic
+  spend outside run directories, and verify corpus generator/seed provenance.
+  Live qualification remains pending (#2778)
+
 - Experimental, default-off held-out collector rejects incomplete offline
-  transports, reserves serialized input and attested paid output before dispatch,
+  transports, reserves serialized input before dispatch,
   persists spend baselines across reruns, and reproduces synthetic rows from
   registered generators. Live qualification remains pending (#2611)
 
