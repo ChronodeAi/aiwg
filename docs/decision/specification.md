@@ -180,3 +180,53 @@ Portable defaults for initial implementation: feature disabled; explicit binding
 Schemas validate structure; the semantic validator proves references, input projections, answer domains, rule predicates, acceptance profiles, distribution invariants and binding coverage. `fixtures/conformance.json` defines runtime acceptance cases to implement. `validate.py` checks design fixtures and selected semantic examples today; it is not the production runtime or complete transport conformance suite.
 
 Qualification must separately measure task accuracy, abstention, calibration, latency and cost on a representative held-out set. No model-quality or performance equivalence follows from the one synthetic live request. Source observation date: 2026-09-20; all vendor limits/model aliases are revalidated when implementing.
+
+## 8. SDLC evidence screening pack
+
+`decision-sdlc-evidence-screening/v1` is an experimental, default-off pack over
+the runtime contract above. Its subject is either one citation claim/source pair
+or one phase-gate criterion/evidence bundle. It is not a new authority path:
+deterministic locator, provenance, artifact, test, approval, signature, schema
+and expiry checks run before semantic evidence and cannot be upgraded by model
+output.
+
+The pack's closed schemas enumerate citation support, contradiction, unclear,
+phase-criterion relevance, completeness, contradiction, ambiguity and reviewer
+attention. Unknown claim, source, locator, criterion, evidence, approval or
+requirement IDs produce non-pass receipts in screening modes, and malformed
+inputs produce receipts rather than exceptions (an invalid `mode` throws).
+Evidence facts such as `present`, `passed` and `retrieved` are caller-asserted;
+the pack fails closed on what it is told and hosts must source those facts from
+the deterministic validators.
+
+The criterion-to-required-evidence map and evidence ownership (including each
+citation source's trust and sensitivity) come only from an
+`SdlcGateEvidencePolicy` artifact that the host supplies in a separate trust
+context and that is verified against a host pin with `assertArtifactPin`. The
+request can only reference that pin; a mismatched pin or an inline policy is
+non-ready. Every bundle item is inspected: duplicate IDs are rejected, and
+missing, failed, expired, foreign or unowned evidence is non-ready. Omitted
+source content is unverified. D10 projection uses the policy's trust and
+sensitivity, D08 primitive acceptance requires native provider distributions,
+and D09 compatibility is resolved through the calibration registry; a missing
+calibration, a missing distribution or any injection answer other than a
+confident `no` routes to review. Review-required receipts always create D13
+durable-review input when screening is enabled; presentation is
+metadata-only/redacted and the caller still owns review authorization and
+idempotent resume. AIWG has no programmatic SDLC phase-gate evaluator, so the
+pack makes no byte-identity claim about one; its outcome adapter only passes a
+host-supplied outcome through unchanged.
+
+Promotion remains held-out gated. `decision-sdlc-screening-preregistration/v1`
+pins the held-out split digest, preregistered slices, false-support/false-ready
+bounds, total/slice/gate-blocking support, the confidence-interval method/level,
+the paired non-inferiority margin and economics, and is anchored by a separately
+trusted digest. Held-out metrics are computed from per-sample records with the
+qualification quality helpers, never caller-asserted. Missing records or support
+is `INSUFFICIENT_EVIDENCE`; digest, time-order, split, bound and economics
+violations fail. Quality is a paired non-inferiority test of per-item
+correctness against the baseline, using the shared Newcombe paired interval at the
+preregistered level; a candidate that is not non-inferior fails and the release
+holds. Integrity is checked against an allowlist of verified
+mode/state/score-source combinations, and upstream `HOLD` or `ROLLBACK` is never
+upgraded.
