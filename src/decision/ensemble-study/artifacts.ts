@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { admitEntry, DEFAULT_ENTRY_LIMITS } from '../entry.js';
 import { heldoutDigest } from '../heldout/contract.js';
@@ -19,7 +21,11 @@ export type D17Review = Omit<Prepared['reviewTemplate'], 'reviewer' | 'preregist
 type Artifacts = { analysis: Prepared['analysis']; splits: Prepared['splitManifest']; gold: Prepared['gold'];
   review: D17Review; guide: Prepared['guide']; report: Record<string, unknown>;
   nativeTemplates: Prepared['nativeTemplates']; dryRun: Prepared['dryRun'] };
-const readSchema = (name: string) => JSON.parse(readFileSync(new URL(`../../../schemas/decision/${name}.v1.schema.json`, import.meta.url), 'utf8'));
+const here = dirname(fileURLToPath(import.meta.url));
+const schemaDir = [resolve(here, '../../../schemas/decision'), resolve(here, '../../../../schemas/decision')]
+  .find(directory => existsSync(resolve(directory, 'D17StudyProtocol.v1.schema.json')));
+if (!schemaDir) throw new Error('D17 artifact schema directory is unavailable');
+const readSchema = (name: string) => JSON.parse(readFileSync(resolve(schemaDir, `${name}.v1.schema.json`), 'utf8'));
 const ajv = new Ajv2020({ strict: true });
 ajv.addSchema(readSchema('D17StudyProtocol'));
 ajv.addSchema(readSchema('DecisionEnsembleAggregate'));

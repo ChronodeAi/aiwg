@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D17 schema loading now resolves source and compiled
+  layouts, so building the CLI no longer breaks the mandatory SQLite session
+  regression suite. Refreshed uncollected source pins; live evidence remains
+  pending (#2611)
+
 - Experimental, default-off D17 held-out study now permits only the explicit
   uncalibrated-diagnostic calibration scope. Scoring consumes the approved mode,
   rejects calibrated approvals and forbids D09 qualification, calibrated gates

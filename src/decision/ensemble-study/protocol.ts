@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { admitEntry } from '../entry.js';
 import type { PairedMetricThreshold } from '../ensemble/types.js';
@@ -29,8 +31,11 @@ export const D17_ANALYSIS = {
   ] satisfies PairedMetricThreshold[],
 } as const;
 
-const validator = new Ajv2020({ strict: true }).compile(JSON.parse(readFileSync(
-  new URL('../../../schemas/decision/D17StudyProtocol.v1.schema.json', import.meta.url), 'utf8')));
+const here = dirname(fileURLToPath(import.meta.url));
+const schema = [resolve(here, '../../../schemas/decision'), resolve(here, '../../../../schemas/decision')]
+  .map(directory => resolve(directory, 'D17StudyProtocol.v1.schema.json')).find(existsSync);
+if (!schema) throw new Error('D17 protocol schema is unavailable');
+const validator = new Ajv2020({ strict: true }).compile(JSON.parse(readFileSync(schema, 'utf8')));
 export function validateD17Analysis(value: unknown): asserts value is typeof D17_ANALYSIS {
   admitEntry(value);
   if (!validator(value)) throw new Error('D17 protocol differs from the frozen v1 design');
