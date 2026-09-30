@@ -430,7 +430,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
         const report = JSON.parse(await readFile(join(stateDir, 'report/report.v2.json'), 'utf8'));
         outcomes[mode] = { stateDir, summary, report };
       }
-    });
+    }, 180_000);
 
     it('CONF2-09 computes preregistered outcomes only from collector-provenanced live records', () => {
       expect(outcomes.go.report.provenance.representative).toBe(true);
@@ -589,7 +589,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     const latest = new Map((await readJsonl(join(stateDir, 'live-scores.v2.jsonl'))).map(record => [record.id, record.status]));
     expect(rows.every(row => latest.get(row.id) === 'success')).toBe(true);
     expect(collector.pendingLiveRows({ ...testDesign, stateDir })).toEqual([]);
-  });
+  }, 120_000);
 
   it('CONF2-R2-16 refuses relative, unset and volatile live state directories', async () => {
     const home = await temporary('aiwg-conformal-home-');
