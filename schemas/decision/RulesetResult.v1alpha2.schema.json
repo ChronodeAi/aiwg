@@ -102,7 +102,7 @@
     "preprocessingGateReason": {
       "anyOf": [
         { "$ref": "#/$defs/preprocessingReviewReason" },
-        { "enum": ["unverified", "unavailable", "destination-mismatch", "destination-unbound", "malformed-lineage", "input-unbound", "input-mismatch", "input-undeclared"] }
+        { "enum": ["unverified", "unavailable", "destination-mismatch", "destination-unbound", "malformed-lineage", "input-unbound", "input-mismatch", "input-undeclared", "lineage-missing"] }
       ]
     },
     "pin": {

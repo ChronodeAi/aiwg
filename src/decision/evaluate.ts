@@ -87,7 +87,7 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
 async function evaluateWithResultCache(request: DecisionEvaluationRequest): Promise<RulesetResult> {
   const config = request.resultCache!;
   // A cache hit would bypass the D24 pre-dispatch lineage gate, so lineage is never cached.
-  if (!isEmptyPreprocessingLineage(request.preprocessingLineage)) {
+  if (preprocessingGateApplies(request)) {
     throw new Error('Result cache does not support preprocessing lineage');
   }
   if (!config.policy.sideEffectFree || !request.receiptStore || !request.calibrationPin || !request.policyPin
@@ -249,8 +249,8 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
   if (contextPlan) base = withRulesetContext(base, contextPlan, []);
   runtimeTraceOf(request)?.validated(false);
   // D24: stored preprocessing lineage is gated before receipts, credentials and transport.
-  if (!isEmptyPreprocessingLineage(request.preprocessingLineage)) {
-    const gate = gatePreprocessedEvidenceDispatch(request.preprocessingLineage!, request.preprocessingVerification,
+  if (preprocessingGateApplies(request)) {
+    const gate = gatePreprocessedEvidenceDispatch(request.preprocessingLineage, request.preprocessingVerification,
       resolved.flatMap(item => request.binding.spec.evaluations[item.alias]!.targets
         .map(target => preprocessingDestination(request, item.alias, target))), request.input,
       request.ruleset.spec.evaluations.map(evaluation => evaluation.inputPointer));
@@ -988,6 +988,14 @@ async function invokeWithDeadline(
 const projectionBlockedAutomaticAction = new WeakSet<DecisionEvaluationRequest>();
 
 /**
+ * D24 applies when lineage is supplied or the host supplied verification expecting lineage.
+ * Requests with neither keep the text-native path unchanged.
+ */
+function preprocessingGateApplies(request: DecisionEvaluationRequest): boolean {
+  return !isEmptyPreprocessingLineage(request.preprocessingLineage) || request.preprocessingVerification !== undefined;
+}
+
+/**
  * The D10 destination a target would send derived text to: the projection policy's provider and
  * origin, or the local no-egress destination when no projection is configured (projection then
  * denies any network adapter before credentials). `null` means the destination cannot be bound.
@@ -1272,7 +1280,7 @@ function resultVersion(request: DecisionEvaluationRequest): typeof DECISION_API_
     || request.ruleset.apiVersion === DECISION_API_VERSION_STRUCTURED || request.binding.apiVersion === DECISION_API_VERSION_STRUCTURED
     || Object.values(request.definitions).some(definition => definition.apiVersion === DECISION_API_VERSION_STRUCTURED)
     || request.batching || request.batchReceipts || request.scheduler?.enabled || request.providerPrefix || request.context
-    || request.resultCache?.policy.enabled || !isEmptyPreprocessingLineage(request.preprocessingLineage)) {
+    || request.resultCache?.policy.enabled || preprocessingGateApplies(request)) {
     return DECISION_API_VERSION_STRUCTURED;
   }
   return DECISION_API_VERSION;

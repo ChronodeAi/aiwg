@@ -174,7 +174,7 @@ export interface PreprocessedEvidenceTrace {
 
 export type PreprocessingDispatchGateReason = PreprocessedEvidenceReviewReason
   | 'unverified' | 'unavailable' | 'destination-mismatch' | 'destination-unbound' | 'malformed-lineage'
-  | 'input-unbound' | 'input-mismatch' | 'input-undeclared';
+  | 'input-unbound' | 'input-mismatch' | 'input-undeclared' | 'lineage-missing';
 
 /** Evaluator-written pre-dispatch verdict. Anything but `allowed` means no credential or transport call. */
 export interface PreprocessingDispatchGate {
@@ -464,12 +464,14 @@ export function preprocessingLifecycleReasons(
  * Stored trace status, reasons and digests are never trusted to allow dispatch.
  */
 export function gatePreprocessedEvidenceDispatch(
-  lineage: PreprocessedEvidenceReceiptEvidence,
+  lineage: PreprocessedEvidenceReceiptEvidence | undefined,
   verification: PreprocessingVerification | undefined,
   destinations: Array<PreprocessingEgressDestination | null>,
   input: unknown,
   dispatchPointers: readonly string[],
 ): PreprocessingDispatchGate {
+  // The host expects lineage (it supplied verification) but none arrived: never fall back to text-native.
+  if (isEmptyPreprocessingLineage(lineage)) return { outcome: 'review', reasons: ['lineage-missing'] };
   if (!isWellFormedPreprocessingLineage(lineage)) return { outcome: 'refused', reasons: ['malformed-lineage'] };
   const refused = new Set<PreprocessingDispatchGateReason>();
   for (const destination of destinations) {
@@ -581,8 +583,11 @@ function inputBindingReasons(verification: PreprocessingVerification, current: M
     const actual = resolveJsonPointer(input, binding.pointer);
     if (!actual.found || actual.value !== expected) reasons.add('input-mismatch');
   }
-  const allowed = new Set([...typed.map(binding => binding.pointer), ...declared]);
-  if (stringLeafPointers(input).some(pointer => !allowed.has(pointer))) reasons.add('input-undeclared');
+  // A bound pointer covers exactly its string; a non-lineage declaration covers its whole subtree.
+  const bound = new Set(typed.map(binding => binding.pointer));
+  const covered = (pointer: string) => bound.has(pointer)
+    || declared.some(prefix => prefix === '' || pointer === prefix || pointer.startsWith(`${prefix}/`));
+  if (textLeafPointers(input).some(pointer => !covered(pointer))) reasons.add('input-undeclared');
   return [...reasons];
 }
 
@@ -590,13 +595,18 @@ function isJsonPointer(value: unknown): value is string {
   return typeof value === 'string' && (value === '' || value.startsWith('/'));
 }
 
-/** JSON pointers of every string value in the input (object keys are structure, not dispatched text). */
-function stringLeafPointers(value: unknown, pointer = ''): string[] {
+/**
+ * JSON pointers of every text-bearing position in the input: each string value and each object key.
+ * A key is reported at its member's pointer, so it is text that must be bound or declared too.
+ */
+function textLeafPointers(value: unknown, pointer = ''): string[] {
   if (typeof value === 'string') return [pointer];
-  if (Array.isArray(value)) return value.flatMap((item, index) => stringLeafPointers(item, `${pointer}/${index}`));
+  if (Array.isArray(value)) return value.flatMap((item, index) => textLeafPointers(item, `${pointer}/${index}`));
   if (isRecord(value)) {
-    return Object.entries(value).flatMap(([key, item]) =>
-      stringLeafPointers(item, `${pointer}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`));
+    return Object.entries(value).flatMap(([key, item]) => {
+      const member = `${pointer}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`;
+      return [member, ...textLeafPointers(item, member)];
+    });
   }
   return [];
 }
