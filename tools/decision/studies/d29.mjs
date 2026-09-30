@@ -143,7 +143,7 @@ export async function prepare(seed) {
       for (let index = 0; index < count; index++) {
         const familyId = `${seedId}-${split}-${sliceIndex}-${String(index).padStart(3, '0')}`;
         const id = `d29-${familyId}`, random = drawStream(split, familyId);
-        const name = `F${random(1000000)}-${id}`, port = 1000 + random(50000);
+        const name = `F${random(1000000)}Q${random(1000000)}R${random(1000000)}`, port = 1000 + random(50000);
         const world = { kind: sliceIndex < 4 ? 'citation' : 'phase-criterion', sourceAttribute: sliceIndex === 3 ? 'color' : 'port',
           claimAttribute: 'port', sourceValue: sliceIndex === 1 ? port + 1 : port, claimValue: port,
           uncertain: sliceIndex === 2, injected: sliceIndex === 2 && index % 5 === 0,
@@ -468,8 +468,9 @@ export function buildReport({ analysis, trustedAnalysisDigest, heldout, integrit
     || qualificationIntegrityAllowlistProblems(integrity).includes('integrity-invalid')) refuse('report-anchor');
   const native = buildSdlcScreeningReleaseReport({ preregistration: analysis.native, trustedPreregistrationDigest: heldoutDigest(analysis.native),
     heldout, integrity, nowEpochMs });
-  const external = externalReport(analysis, heldout?.samples ?? []);
-  const sampleMatches = heldout !== null && integrity.sample_n === heldout.samples.length;
+  const samples = native.heldout && Array.isArray(heldout?.samples) ? heldout.samples : [];
+  const external = externalReport(analysis, samples);
+  const sampleMatches = native.heldout !== null && integrity.sample_n === samples.length;
   return { native, external, decision: native.decision === 'ROLLBACK' ? 'ROLLBACK' : 'HOLD',
     proposedStatisticalDisposition: sampleMatches && native.decision === 'PROMOTE' && external.decision === 'pass' ? 'pass' : 'HOLD' };
 }

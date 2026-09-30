@@ -58,6 +58,11 @@ describe('D29 frozen synthetic population', () => {
     expect(other.preregistration.corpusDigest).not.toBe(prepared.preregistration.corpusDigest);
     expect(heldoutDigest((await prepare('offline-d29-conformance')).corpus)).toBe(prepared.preregistration.corpusDigest);
     expect(JSON.stringify(prepared.corpus.rows.map(row => row.input))).not.toContain('gold');
+    for (const row of prepared.corpus.rows) {
+      const visible = JSON.stringify(row.input.payload);
+      expect(visible).not.toContain(row.id); expect(visible).not.toContain(row.familyId);
+      expect(visible).not.toContain(row.split); expect(visible).not.toContain(row.slice);
+    }
   });
   it('AC4 implements the prescribed counter stream and an independent latent-world oracle', () => {
     const draw = drawStream('tuning', 'independent-known-family');
@@ -116,6 +121,12 @@ describe('D29 report thresholds', () => {
     expect(result.external.conditional.falseReadyAmongNonReady.n).toBe(900);
     expect(result.external.conditional.falseReadyAmongAcceptedReady.n).toBe(300);
     expect(result.external.blocking['failed-test'].upperBps).toBe(370);
+  });
+  it('AC8/13 withholds malformed native records without dereferencing absent candidate fields', () => {
+    const f = reportFixture(); delete f.heldout.samples[0].candidate;
+    const report = f.build();
+    expect(report.native.reasons).toContain('heldout-records-invalid');
+    expect(report.native.heldout).toBeNull(); expect(report.proposedStatisticalDisposition).toBe('HOLD');
   });
   it('AC9 prevents all-review success and applies stricter coverage and per-blocker thresholds', () => {
     const f = reportFixture(); f.heldout.samples.forEach(row => { row.candidate.route = 'REVIEW'; });
