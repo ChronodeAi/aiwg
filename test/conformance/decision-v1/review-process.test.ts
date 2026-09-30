@@ -33,11 +33,17 @@ function child(args: string[]) {
   proc.stderr.on('data', chunk => { stderr += String(chunk); });
   const lines: unknown[] = [];
   const waiters: Array<() => void> = [];
-  createInterface({ input: proc.stdout }).on('line', line => { lines.push(JSON.parse(line)); waiters.splice(0).forEach(fn => fn()); });
+  // A child can exit before readline delivers its last stdout line, so end-of-output is the stdout
+  // close, not the process exit.
+  let closed = false;
+  const wake = () => waiters.splice(0).forEach(fn => fn());
+  createInterface({ input: proc.stdout })
+    .on('line', line => { lines.push(JSON.parse(line)); wake(); })
+    .on('close', () => { closed = true; wake(); });
   const next = async (index: number) => {
     while (lines.length <= index) {
-      if (proc.exitCode !== null) throw new Error(`child exited early: ${stderr.slice(0, 500)}`);
-      await new Promise<void>(resolve => { waiters.push(resolve); proc.once('exit', () => resolve()); });
+      if (closed) throw new Error(`child exited early: ${stderr.slice(0, 500)}`);
+      await new Promise<void>(resolve => { waiters.push(resolve); });
     }
     return lines[index] as Record<string, unknown>;
   };
