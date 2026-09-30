@@ -1,0 +1,207 @@
+{
+  "schemaVersion": "conformal-preregistration/v2",
+  "issue": 2613,
+  "mode": "offline-open-data-with-opt-in-live-collection",
+  "status": "experimental-default-off",
+  "methods": [
+    {
+      "id": "lac-v1",
+      "source": "Sadinle-Lei-Wasserman-2019",
+      "nonconformity": "1 - p(true label)",
+      "quantile": "ceil((n + 1) * (1 - alpha)); infinity if rank exceeds n",
+      "tiePolicy": "include all boundary ties; no randomization"
+    }
+  ],
+  "alpha": 0.1,
+  "tasks": [
+    {
+      "id": "clinc150-intent-choice",
+      "primitive": "choice",
+      "dataset": "CLINC150",
+      "datasetUrl": "https://github.com/clinc/oos-eval",
+      "license": "CC-BY-3.0",
+      "definition": "Classify a user utterance into one CLINC150 intent or the explicit oos class.",
+      "shift": "The oos_test split is frozen as a controlled OOD slice (label oos, never in calibration) and is the only controlled distribution shift (AC5)."
+    },
+    {
+      "id": "banking77-intent-choice",
+      "primitive": "choice",
+      "dataset": "Banking77",
+      "datasetUrl": "https://github.com/PolyAI-LDN/task-specific-datasets/tree/master/banking_data",
+      "license": "CC-BY-4.0",
+      "definition": "Classify a banking support utterance into one Banking77 intent.",
+      "shift": "Not a distribution shift. Banking77 train.csv and test.csv are a standard random split of one collection, so test.csv rows are an exchangeable nominal held-out slice. The controlled distribution-shift evidence for AC5 rests on CLINC150 OOS only."
+    }
+  ],
+  "pins": {
+    "offlineServedModel": "synthetic-score-stand-in/v2",
+    "liveServedModel": "jev-1.13.0",
+    "liveAdapter": "jev-decision-runtime/v2",
+    "liveAdapterVersion": "1.0.0",
+    "definition": "open-data-choice-definitions/v2",
+    "seed": "issue-2613-v2-open-data",
+    "collectorCodeDigest": "sha256:c50b4e1ccccfaee52a46a244944c1e3ca7d2c2e9461ecff9f208825d11a0626f",
+    "livePromptDigest": "sha256:879df1ecb055ec1f2df160f20f93164940bb82195b04c12bad1a185e8e481eef"
+  },
+  "splits": {
+    "train": "Frozen labels/text only. Kept for pipeline tests; not used by the live analysis.",
+    "calibration": "Frozen labels/text only. The live calibration split of each task fits both the conformal threshold and the calibrated-risk baseline bins before final-test scoring.",
+    "finalTest": "Frozen labels/text only. Evaluated live after the calibration profile and gates are fixed.",
+    "shift": "Frozen labels/text only. CLINC150 oos_test rows form the controlled OOD shift; the live shift subset is drawn only from them. Banking77 test.csv rows in this split are an exchangeable nominal held-out slice, not a shift."
+  },
+  "coverageTarget": 0.9,
+  "usefulnessGates": {
+    "minimumFinalRowsPerTask": 200,
+    "minimumSliceRows": 50,
+    "minimumCoverageWilsonLower": 0.83,
+    "maximumMeanSetSizeFractionOfLabels": 0.08,
+    "maximumReviewRate": 0.45,
+    "maximumSelectiveRisk": 0.12,
+    "mustNotUpgradeIntegrityHoldOrRollback": true
+  },
+  "sampleSizeRationale": "The live sample is every frozen calibration, final-test and shift row of both tasks (liveDesign). Split sizes come from the bounded stratified freeze: CLINC150 3 rows per intent per split plus 300 OOS rows, Banking77 3 rows per intent per split plus 2 test.csv rows per intent. Class-conditional coverage is unsupported (3 rows per class). A split has enough rows when its scored count is at least max(the preregistered floor, ceil((1 - 0.05) x its size)); terminal errors or missing distributions above 5% of any live split make the outcome INSUFFICIENT EVIDENCE.",
+  "baselines": [
+    "raw primitive threshold: selected Choice probability >= 0.75",
+    "calibrated-risk threshold: top-probability decile Wilson upper error <= 0.12, fitted on the live calibration split scores (synthetic calibration scores in pipeline mode); not an approved D09 calibration profile",
+    "always-review",
+    "always-predict"
+  ],
+  "metrics": [
+    "marginal coverage with Wilson interval",
+    "slice coverage when n >= 50; class-conditional coverage is unsupported for v2 classes with n < 50",
+    "mean, p50, p90 and p95 set size",
+    "abstention/review load",
+    "selective risk",
+    "false-auto rate",
+    "latency",
+    "calls, tokens and cost or approved bound"
+  ],
+  "compatibilityKey": [
+    "served model (pinned)",
+    "primitive",
+    "definition digest",
+    "adapter (pinned)",
+    "dataset population",
+    "method",
+    "calibration split digest (live subset)",
+    "collector code digest (pinned)",
+    "live prompt digest (pinned)",
+    "alpha"
+  ],
+  "resourceBudget": {
+    "offlineProviderCalls": 0,
+    "offlineTokens": 0,
+    "offlineUsd": 0,
+    "liveHardCeilingUsd": 8,
+    "inputUsdPerMillionTokensCeiling": 0.1,
+    "outputUsdPerMillionTokensCeiling": 0.1,
+    "measuredMaxRequestBodyBytes": 4796,
+    "serverOverheadTokensAllowance": 512,
+    "maxInputTokensPerCall": 5400,
+    "maxOutputTokensPerCall": 256,
+    "maxRetriesPerItem": 1,
+    "maxAttemptsPerItemTotal": 3,
+    "maxConsecutiveErrors": 3,
+    "maxTerminalFailureFraction": 0.05,
+    "liveMaxItems": 2000,
+    "liveSubsetItems": 1816,
+    "sampleMaxItems": 3000
+  },
+  "liveCollection": {
+    "enabledByDefault": false,
+    "requiredEnv": "AIWG_DECISION_JEV_LIVE_SMOKE=1",
+    "credentialEnv": "AIWG_DECISION_JEV_API_KEY",
+    "dryRunDefault": true,
+    "networkRule": "No provider call occurs unless the env gate, a credential, a region and AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=0.10/0.10 are present. Before every call or retry the collector durably reserves maxInputTokensPerCall and maxOutputTokensPerCall at the price ceilings and refuses when the global spend ledger plus that reservation would exceed liveHardCeilingUsd. Charges use reported tokens at the ceiling (or a higher reported provider cost) and the full reservation when usage is unknown; a charge above its reservation halts the ledger. Every run and resume in the experiment state directory shares one hash-chained ledger.",
+    "amendment": "Re-preregistered on 2026-09-30 before any live v2 score existed; no v2 scores existed at re-pin time. Changes: the per-call token bound now covers the measured 151-option CLINC150 request (the earlier 2000-token bound did not); the price ceiling is pinned at USD 0.10 per million input and output tokens (published Jev pricing is USD 0.042 per million input tokens with output free, so about 2.4x margin; an operator smoke call returned 369 input / 38 output tokens, served model jev-1.13.0, costUsd null); the live design covers all 1,816 frozen calibration/final-test/shift rows of both tasks under a 2,000-item cap; Banking77 test.csv is relabelled nominal held-out; the compatibility key gained pinned model, adapter, prompt and collector digests; the coverage gate uses a Wilson lower bound of 0.83 on the realized scored n."
+  },
+  "outcomeRule": "Synthetic-score execution yields INSUFFICIENT EVIDENCE only. Live evidence counts only when every record carries collector provenance whose attempts match the reservations and settlements chained into the spend ledger under this preregistration. GO requires passing final-test and shift gates for both live tasks (the CLINC150 shift is the controlled OOS slice; the Banking77 shift split is a nominal held-out slice). GO or CONDITIONAL still requires D10 projection authorization, D14 lineage/retention evidence and approved D09/D11 calibration evidence before any follow-up.",
+  "nonGoals": [
+    "No production routing integration.",
+    "No acceptance-policy mutation.",
+    "No Noul probability relabeling as confidence.",
+    "No Score study without a validated ordinal loss."
+  ],
+  "sources": [
+    "https://arxiv.org/abs/1609.00451v2",
+    "https://arxiv.org/abs/2006.02544v1",
+    "https://arxiv.org/abs/2306.10193v2"
+  ],
+  "liveDesign": {
+    "tasks": [
+      "clinc150-intent-choice",
+      "banking77-intent-choice"
+    ],
+    "calibration": 681,
+    "finalTest": 681,
+    "shift": 454,
+    "selection": "Every frozen calibration, final-test and shift row of both tasks (CLINC150 450/450/300 including 300 controlled OOS rows; Banking77 231/231/154 where the 154 test.csv rows are a nominal held-out slice), 1,816 items in total. The frozen train split (1,135 rows) is not collected live.",
+    "rationale": "Every call reserves the worst case: 5400 input + 256 output tokens at the USD 0.10 per million ceiling = USD 0.0005656, rounded up to 566 micro-USD. The 1,816-item design therefore costs at most 1,816 x 566 = 1027856 micro-USD = USD 1.027856 (USD 1.0271296 before per-call rounding), leaving USD 6.972144 of the USD 8.00 cap for retries, which the per-call guard still enforces. Split conformal with n_cal = 450 (CLINC150) and 231 (Banking77) gives marginal coverage between 0.900 and 0.902 / 0.904. The coverage gate is a 95% Wilson lower bound >= 0.83 computed on the realized scored n of each split, so the covered count it requires depends on n; gateTable lists it at the full size and at the 5% failure-tolerance floor with binomial pass probabilities (ignoring calibration-draw variance). A valid method is least likely to pass on the smallest slice (Banking77 held-out, n = 147-154: 0.70-0.72), while a method at true coverage 0.85 passes with probability at most 0.183 on any split.",
+    "gateTable": [
+      {
+        "task": "clinc150-intent-choice",
+        "split": "finalTest",
+        "scoredN": 450,
+        "minCovered": 390,
+        "passProbabilityAtTrueCoverage090": 0.991,
+        "passProbabilityAtTrueCoverage085": 0.178
+      },
+      {
+        "task": "clinc150-intent-choice",
+        "split": "finalTest",
+        "scoredN": 428,
+        "minCovered": 371,
+        "passProbabilityAtTrueCoverage090": 0.989,
+        "passProbabilityAtTrueCoverage085": 0.183
+      },
+      {
+        "task": "clinc150-intent-choice",
+        "split": "shift",
+        "scoredN": 300,
+        "minCovered": 262,
+        "passProbabilityAtTrueCoverage090": 0.945,
+        "passProbabilityAtTrueCoverage085": 0.146
+      },
+      {
+        "task": "clinc150-intent-choice",
+        "split": "shift",
+        "scoredN": 285,
+        "minCovered": 249,
+        "passProbabilityAtTrueCoverage090": 0.939,
+        "passProbabilityAtTrueCoverage085": 0.149
+      },
+      {
+        "task": "banking77-intent-choice",
+        "split": "finalTest",
+        "scoredN": 231,
+        "minCovered": 203,
+        "passProbabilityAtTrueCoverage090": 0.88,
+        "passProbabilityAtTrueCoverage085": 0.127
+      },
+      {
+        "task": "banking77-intent-choice",
+        "split": "finalTest",
+        "scoredN": 220,
+        "minCovered": 194,
+        "passProbabilityAtTrueCoverage090": 0.844,
+        "passProbabilityAtTrueCoverage085": 0.107
+      },
+      {
+        "task": "banking77-intent-choice",
+        "split": "shift",
+        "scoredN": 154,
+        "minCovered": 137,
+        "passProbabilityAtTrueCoverage090": 0.722,
+        "passProbabilityAtTrueCoverage085": 0.1
+      },
+      {
+        "task": "banking77-intent-choice",
+        "split": "shift",
+        "scoredN": 147,
+        "minCovered": 131,
+        "passProbabilityAtTrueCoverage090": 0.699,
+        "passProbabilityAtTrueCoverage085": 0.096
+      }
+    ]
+  }
+}
