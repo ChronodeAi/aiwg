@@ -230,3 +230,40 @@ preregistered level; a candidate that is not non-inferior fails and the release
 holds. Integrity is checked against an allowlist of verified
 mode/state/score-source combinations, and upstream `HOLD` or `ROLLBACK` is never
 upgraded.
+
+## 9. Capability-constrained routing pilot
+
+`decision-routing-policy/v1` is a default-off D28 pilot contract. Its only
+enabled mode, `shadow`, executes the existing deterministic route
+(`defaultRouteId`, then `deterministicFallbackRouteId`) and records the
+Jev-assisted choice as a counterfactual that is never dispatched. Tasks
+(`decision-routing-task/v1` schema) are closed. Eligibility checks privacy,
+authorization, region, tools, context, the allowlist, budget, deadline,
+health, executable status, capabilities, the provider allowlist and an ordinary
+authorization ceiling that a binding may not exceed. These checks run before
+any Jev call. Ineligible routes do not enter Jev criteria and are recorded
+only as sanitized reason codes.
+
+Jev receives only D10-projected, redacted task state and sanitized summaries
+of eligible routes; the task description is never model-visible. Evidence must
+be schema-valid, finite, calibrated, from the projected model and a compatible
+profile, and complete and unique over the eligible set. Otherwise the
+counterfactual is review. Ambiguity above the policy threshold falls back to
+the deterministic route.
+
+Execution requires reservation and release hooks. It enforces a cumulative
+budget and a `min(task, policy)` deadline before each dispatch, races each
+dispatch against its deadline and aborts it on timeout, honours per-route and
+policy attempt ceilings, opens provider circuits on outage or rate limit,
+applies bounded backoff, and validates each dispatch result for shape, model
+substitution and actual cost. The receipt preserves route pins,
+eligibility/exclusion reasons, Jev provenance and distributions, the
+counterfactual, the selected route, policy version, actual worker/model,
+attempts, skips, fallbacks, budget, usage/cost and verified outcome.
+
+The shadow report requires a trusted preregistration digest with a paired task
+set and slices, the shared paired non-inferiority interval, preregistered rate,
+latency, provider-call, budget and risk-adjusted economics gates, and the
+shared eval-integrity findings. It cannot upgrade `HOLD`/`ROLLBACK`, and it is
+verified by rebuilding it from its carried inputs. See [routing
+pilot](routing-pilot.md).
