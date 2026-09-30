@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayGoldAsset.v1.schema.json",
+  "title": "DecisionComparativeReplayGoldAsset.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "comparatorVersion",
+    "generatorDigest",
+    "roots"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-gold/v1"
+    },
+    "comparatorVersion": {
+      "const": "policy-replay-reference-v1"
+    },
+    "generatorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "roots": {
+      "allOf": [
+        {
+          "$ref": "https://aiwg.io/schemas/decision/DecisionComparativeReplayGold.v1.schema.json"
+        },
+        {
+          "type": "array",
+          "minItems": 600,
+          "maxItems": 600
+        }
+      ]
+    }
+  }
+}
