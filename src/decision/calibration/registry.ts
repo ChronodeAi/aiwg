@@ -79,6 +79,9 @@ export class CalibrationRegistry {
     const history = this.aliases.get(eligibility.alias) ?? [];
     const rollback = history.find(event => event.revision === eligibility.rollbackTarget.aliasRevision);
     if (!rollback || rollback.actualIdentityDigest !== eligibility.rollbackTarget.identityDigest) throw new CalibrationRegistryError('rollback target no longer matches immutable alias history');
+    const current = history.at(-1);
+    if (current !== rollback || current.kind === 'retired') throw new CalibrationRegistryError('alias no longer holds the champion this promotion was approved to replace');
+    if (history.some(event => event.promotionEligibilityId === eligibility.id)) throw new CalibrationRegistryError(`promotion eligibility '${eligibility.id}' was already used`);
     const event: AliasEvent = immutable({ revision: history.length + 1, alias: eligibility.alias,
       actualIdentityDigest: eligibility.candidateIdentityDigest, actualModel: eligibility.candidateActualModel, recordedAt: new Date(validDate(at)).toISOString(),
       kind: 'promoted', promotionEligibilityId: eligibility.id });
@@ -144,6 +147,7 @@ export class CalibrationRegistry {
   aliasHistory(alias: string): AliasEvent[] { return structuredClone(this.aliases.get(alias) ?? []); }
   driftEvents(alias?: string): AliasDriftEvent[] { return structuredClone(alias ? this.drift.filter(event => event.alias === alias) : this.drift); }
   promotionHistory(): PromotionEligibility[] { return structuredClone([...this.eligibility.values()]); }
+  promotionEligibility(id: string): PromotionEligibility | null { const record = this.eligibility.get(id); return record ? structuredClone(record) : null; }
   artifactHistory(): CalibrationArtifact[] { return structuredClone([...this.artifacts.values()]); }
   compatibilityHistory(): CompatibilityRelation[] { return structuredClone(this.relations); }
 }
