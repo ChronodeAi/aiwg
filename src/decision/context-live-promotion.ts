@@ -11,7 +11,7 @@ import { CanonicalJsonByteEstimator, ContextPlanError, planDecisionContext, type
 import { assertContextQualified, compareContextUsage, type ContextComparison, type ContextQualification } from './context-qualification.js';
 import {
   assertContextArtifactRoot, assertContextLiveSource, compileContextLiveCase, contextLiveBinding, contextLiveDigest, contextLiveRequestCapacity,
-  contextLiveRuleset, contextLiveTarget, ContextLiveBudget, validateContextLiveApproval,
+  contextLiveRuleset, contextLiveTarget, ContextLiveBudget, validateContextLiveApproval, withContextLiveSpendLedger, TV12_ISSUE_USD_CAP,
   type ContextLiveApproval, type ContextLiveCorpus, type ContextLiveHost, type ContextLiveRecord,
 } from './context-live-qualification.js';
 import { JevDecisionAdapter } from './adapters/jev.js';
@@ -148,6 +148,11 @@ export interface ContextCanaryCase {
   oversizedDispatches: number; nativeDispatches: number; pass: boolean;
 }
 
+/**
+ * Canary cases stay small: a context-planned invocation with many aliases (the 24-question `many-short`
+ * case) produces a result document above the default entry limits, and that error surfaces after dispatch.
+ */
+export const CONTEXT_CANARY_MAX_QUESTIONS = 8;
 export function validateContextCanaryApproval(approval: ContextCanaryApproval, corpus: ContextLiveCorpus, record: ContextQualificationRecord): void {
   admitEntry(approval);
   const plan = approval?.plan;
@@ -162,7 +167,8 @@ export function validateContextCanaryApproval(approval: ContextCanaryApproval, c
     || approval.canaryPlanDigest !== contextLiveDigest(plan) || approval.corpusDigest !== contextLiveDigest(corpus) || approval.corpusDigest !== record.corpusDigest
     || approval.qualificationRecordDigest !== contextLiveDigest(record) || approval.model !== record.model || approval.region !== record.region
     || !Array.isArray(plan.caseIds) || !plan.caseIds.length || new Set(plan.caseIds).size !== plan.caseIds.length
-    || plan.caseIds.some(id => !corpus.cases.some(c => c.id === id))
+    || plan.caseIds.some(id => !corpus.cases.some(c => c.id === id && c.definitions.length <= CONTEXT_CANARY_MAX_QUESTIONS))
+    || plan.budget.usd > TV12_ISSUE_USD_CAP
     || [plan.budget.requests, plan.budget.tokens, plan.budget.wallClockMs, plan.perRequestBound.totalTokens].some(n => !Number.isSafeInteger(n) || n < 1)
     || [plan.budget.usd, plan.perRequestBound.usd].some(n => !Number.isFinite(n) || n <= 0 || n > Number.MAX_SAFE_INTEGER / 1_000_000)) {
     throw new Error('Incomplete or mismatched TV-12 canary approval');
@@ -225,13 +231,20 @@ export async function runContextEnforceCanary(options: { approval: ContextCanary
   validateContextCanaryApproval(approval, corpus, record);
   await assertContextLiveSource(sourceRoot, approval.sourceCommit);
   await assertContextArtifactRoot(sourceRoot, artifactRoot);
-  const directory = resolve(artifactRoot, approval.runId);
+  try {
+    return await withContextLiveSpendLedger(artifactRoot, approval.plan.budget.usd, (runsRoot, issueSpend) =>
+      canaryWithinLedger(approval, corpus, record, sourceRoot, runsRoot, issueSpend, host, offlineTransport));
+  } finally { host.dispose?.(); }
+}
+async function canaryWithinLedger(approval: ContextCanaryApproval, corpus: ContextLiveCorpus, record: ContextQualificationRecord, sourceRoot: string,
+  runsRoot: string, issueSpend: { capUsd: number; priorUsd: number; runUsdCeiling: number }, host: ContextLiveHost, offlineTransport?: typeof fetch) {
+  const directory = resolve(runsRoot, approval.runId);
   await mkdir(directory, { recursive: false, mode: 0o700 });
   await writeFile(join(directory, 'canary-approval.json'), canonicalJson(approval), { flag: 'wx', mode: 0o600 });
   await writeFile(join(directory, 'qualification-record.json'), canonicalJson(record), { flag: 'wx', mode: 0o600 });
   const { plan } = approval;
   const started = Date.now();
-  const budget = new ContextLiveBudget(plan, started);
+  const budget = new ContextLiveBudget({ ...plan, budget: { ...plan.budget, usd: issueSpend.runUsdCeiling } }, started);
   const controller = new AbortController();
   const deadlineTimer = setTimeout(() => controller.abort(), Math.min(2_147_483_647, Math.floor(plan.budget.wallClockMs * 0.8)));
   const results: ContextCanaryCase[] = [];
@@ -283,8 +296,8 @@ export async function runContextEnforceCanary(options: { approval: ContextCanary
     enforceDispatches: results.filter(r => r.phase === 'enforce').reduce((n, r) => n + r.dispatches, 0),
     rollbackExercised: complete && results.filter(r => r.phase === 'rollback').every(r => r.pass),
     rollbackNativeDispatches: results.filter(r => r.phase === 'rollback').reduce((n, r) => n + r.nativeDispatches, 0),
-    cases: results.length, reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd },
-    requestCapacityAtStop: contextLiveRequestCapacity(plan), elapsedMs: Date.now() - started };
+    cases: results.length, reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd }, issueSpend,
+    requestCapacityAtStop: contextLiveRequestCapacity({ ...plan, budget: { ...plan.budget, usd: issueSpend.runUsdCeiling } }), elapsedMs: Date.now() - started };
   await writeFile(join(directory, 'summary.json'), canonicalJson(summary), { flag: 'wx', mode: 0o600 });
   await assertContextLiveSource(sourceRoot, approval.sourceCommit);
   return summary;

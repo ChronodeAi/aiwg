@@ -1,12 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
-import { generateContextLiveCorpus, contextLiveDigest, contextLivePreregistration, ContextLiveBudget, collectContextLiveCase,
+import { generateContextLiveCorpus, contextLiveDigest, contextLivePreregistration, ContextLiveBudget, collectContextLiveCase, contextLiveRunsRoot,
   type ContextLiveApproval, type ContextLiveCorpus, type ContextLiveRecord } from '../../../src/decision/context-live-qualification.js';
 import { recordContextQualification, verifyContextQualificationRecord, contextLiveRecordsDigest, runContextEnforceCanary, contextCanaryDispatches,
-  type ContextMarginReview, type ContextCanaryApproval, type ContextCanaryPlan } from '../../../src/decision/context-live-promotion.js';
+  validateContextCanaryApproval, type ContextMarginReview, type ContextCanaryApproval, type ContextCanaryPlan } from '../../../src/decision/context-live-promotion.js';
 import { assertContextQualified } from '../../../src/decision/context-qualification.js';
 import { CanonicalJsonByteEstimator } from '../../../src/decision/context-plan.js';
 const route = vi.hoisted(() => ({ root: '' }));
@@ -46,7 +46,7 @@ async function setup(caseIds: string[], factor = 1.1) {
   const approval: ContextLiveApproval = { schemaVersion: 'context-live-approval/v1', approved: true, reviewer: 'offline-reviewer', stagingWorkspace: 'offline-only',
     runId: 'offline-collection', sourceCommit: 'a'.repeat(40), exactHeadCi: 'offline-fixture', model: MODEL, apiRevision: 'v1', region: 'fixture-region',
     secretServiceReference: 'fixture-secret-ref', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(corpus), preregistrationDigest: '',
-    budget: { requests: 200, tokens: 100_000_000, usd: 100, wallClockMs: 600_000 },
+    budget: { requests: 200, tokens: 100_000_000, usd: 2, wallClockMs: 600_000 },
     perRequestBound: { totalTokens: 72_000, usd: 0.0072, approvalReference: 'offline-fixture-bound' }, marginRule };
   approval.preregistrationDigest = contextLiveDigest(contextLivePreregistration(corpus, marginRule));
   const fetch = transport(factor);
@@ -130,7 +130,7 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     const s = await setup(caseIds);
     const record = await recordContextQualification({ approval: s.approval, corpus: s.corpus, records: s.declared, review: s.review });
     const plan: ContextCanaryPlan = { schemaVersion: 'context-canary-plan/v1', caseIds, rollback: 'observe-only',
-      budget: { requests: 200, tokens: 100_000_000, usd: 100, wallClockMs: 600_000 }, perRequestBound: { totalTokens: 72_000, usd: 0.0072, approvalReference: 'offline-bound' } };
+      budget: { requests: 200, tokens: 100_000_000, usd: 2, wallClockMs: 600_000 }, perRequestBound: { totalTokens: 72_000, usd: 0.0072, approvalReference: 'offline-bound' } };
     adjust(plan);
     const approval: ContextCanaryApproval = { schemaVersion: 'context-canary-approval/v1', approved: true, reviewer: 'offline-reviewer', stagingWorkspace: 'offline-only',
       runId: 'offline-canary', sourceCommit: '', exactHeadCi: 'offline-fixture', model: MODEL, apiRevision: 'v1', region: 'fixture-region',
@@ -142,11 +142,13 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     git('init'); git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'fixture');
     approval.sourceCommit = git('rev-parse', 'HEAD');
     const fetch = transport(1.1);
+    const dispose = vi.fn();
     const resolver = vi.fn(async () => new TextEncoder().encode('offline-credential-bytes'));
     const cleanup = async () => { route.root = ''; await rm(root, { recursive: true, force: true }); await rm(output, { recursive: true, force: true }); };
-    return { s, record, approval, root, output, fetch, resolver, cleanup,
+    const runs = contextLiveRunsRoot(output);
+    return { s, record, approval, root, output, runs, fetch, resolver, dispose, cleanup,
       run: (overrides: Partial<Parameters<typeof runContextEnforceCanary>[0]> = {}) => runContextEnforceCanary({ approval, corpus: s.corpus, record, sourceRoot: root,
-        artifactRoot: output, host: { resolveCredential: resolver }, offlineTransport: fetch as typeof globalThis.fetch, ...overrides }) };
+        artifactRoot: output, host: { resolveCredential: resolver, dispose }, offlineTransport: fetch as typeof globalThis.fetch, ...overrides }) };
   }
 
   it('enforces the qualified plan with zero oversized dispatches, then rolls back to single calls', async () => {
@@ -160,19 +162,20 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
       expect(summary.enforceDispatches).toBe(expected[0]!.enforce + 1);
       expect(c.fetch).toHaveBeenCalledTimes(expected.reduce((n, row) => n + row.enforce + row.rollback, 0));
       expect(summary.reserved.requests).toBe(c.fetch.mock.calls.length);
-      expect(c.resolver).toHaveBeenCalled();
+      expect(c.resolver).toHaveBeenCalled(); expect(c.dispose).toHaveBeenCalledTimes(1);
+      expect(summary.issueSpend).toEqual({ capUsd: 2, priorUsd: 0, runUsdCeiling: 2 });
       const bodies = c.fetch.mock.calls.map(([, init]) => Object.keys(JSON.parse((init as RequestInit).body as string).questions).length);
       // Enforce splits the four questions across partitions and batches at least one natively; rollback sends singles.
       const enforced = bodies.slice(0, expected[0]!.enforce);
       expect(enforced.reduce((n, q) => n + q, 0)).toBe(4); expect(Math.max(...enforced)).toBeGreaterThan(1);
       expect(bodies.slice(expected[0]!.enforce, expected[0]!.enforce + 4)).toEqual([1, 1, 1, 1]);
-      const oversized = JSON.parse(await readFile(join(c.output, 'offline-canary', 'longest-raw-2-enforce.json'), 'utf8'));
+      const oversized = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'longest-raw-2-enforce.json'), 'utf8'));
       expect(oversized).toMatchObject({ rejectedBeforeDispatch: true, dispatches: 0, pass: true });
-      const rollback = JSON.parse(await readFile(join(c.output, 'offline-canary', 'aggregate-raw-2-rollback.json'), 'utf8'));
+      const rollback = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'aggregate-raw-2-rollback.json'), 'utf8'));
       expect(rollback).toMatchObject({ dispatches: 4, nativeDispatches: 0, pass: true });
       expect(rollback.partitions.every((p: any) => p.questions === 1 && p.withinEffectiveLimits)).toBe(true);
-      for (const name of await readdir(join(c.output, 'offline-canary'))) {
-        const text = await readFile(join(c.output, 'offline-canary', name), 'utf8');
+      for (const name of await readdir(join(c.runs, 'offline-canary'))) {
+        const text = await readFile(join(c.runs, 'offline-canary', name), 'utf8');
         expect(text).not.toContain('offline-credential-bytes'); expect(text).not.toContain('Assess');
       }
     } finally { await c.cleanup(); }
@@ -196,6 +199,32 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
       // Enforce fits the 4-request stop; rollback's four single calls would cross it, so none are sent.
       expect(summary).toMatchObject({ canaryPassed: false, stopped: 'budget-exhausted', cases: 1, requestCapacityAtStop: 4 });
       expect(c.fetch).toHaveBeenCalledTimes(expected.enforce);
+    } finally { await c.cleanup(); }
+  });
+
+  it('charges prior #2681 runs against the USD 2.00 cap before the first canary reservation', async () => {
+    const c = await canary(['dominant']);
+    try {
+      await mkdir(join(c.runs, 'crashed-collection'), { recursive: true });
+      await writeFile(join(c.runs, 'crashed-collection', 'approval.json'), JSON.stringify({ schemaVersion: 'context-live-approval/v1', budget: { usd: 1.99 } }));
+      const summary = await c.run();
+      // 0.01 remains; its 80% stop (0.008) admits the single enforce request but not the two rollback calls.
+      expect(summary).toMatchObject({ canaryPassed: false, stopped: 'budget-exhausted', issueSpend: { capUsd: 2, priorUsd: 1.99, runUsdCeiling: 0.01 } });
+      expect(c.fetch).toHaveBeenCalledTimes(1); expect(c.dispose).toHaveBeenCalledTimes(1);
+    } finally { await c.cleanup(); }
+  });
+
+  it.each([
+    ['a many-question case whose result exceeds entry limits', (a: ContextCanaryApproval) => { a.plan.caseIds = ['dominant', 'many-short']; }],
+    ['a plan budget above the issue cap', (a: ContextCanaryApproval) => { a.plan.budget.usd = 2.5; }],
+  ])('rejects %s in the canary approval', async (_label, mutate) => {
+    const c = await canary(['dominant', 'many-short']);
+    try {
+      const sign = (a: ContextCanaryApproval) => { a.canaryPlanDigest = contextLiveDigest(a.plan); return a; };
+      const valid = structuredClone(c.approval); valid.plan.caseIds = ['dominant'];
+      expect(() => validateContextCanaryApproval(sign(valid), c.s.corpus, c.record)).not.toThrow();
+      const changed = structuredClone(valid); mutate(changed);
+      expect(() => validateContextCanaryApproval(sign(changed), c.s.corpus, c.record)).toThrow('canary approval');
     } finally { await c.cleanup(); }
   });
 

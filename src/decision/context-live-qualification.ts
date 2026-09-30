@@ -1,7 +1,7 @@
 /** TV-12 collection-only composition. Never changes production rollout or promotes qualification. */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, writeFile, realpath } from 'node:fs/promises';
+import { mkdir, writeFile, realpath, readdir, readFile, rm } from 'node:fs/promises';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { admitEntry, DEFAULT_ENTRY_LIMITS } from './entry.js';
@@ -34,6 +34,57 @@ export interface ContextLiveHost {
   resolveCredential(reference: string): Promise<Uint8Array>;
   /** Metadata-only durable sink called before the next partition. */
   record?(record: ContextLiveRecord): Promise<void>;
+  /** Zeroes host-held credential material; called once when a run ends, however it ends. */
+  dispose?(): void;
+}
+/** #2681 hard cap on all TV-12 provider spend: every collection and canary run, reserved amounts. */
+export const TV12_ISSUE_USD_CAP = 2;
+/** Fixed ledger location beneath the canonical artifact root; every run directory lives here. */
+export const contextLiveRunsRoot = (artifactRoot: string): string => join(artifactRoot, 'research', 'qualification', '2681', 'runs');
+const SPEND_LOCK = '.tv12-spend.lock';
+const micros = (usd: number): number => Math.ceil(usd * 1_000_000);
+/**
+ * Sums earlier #2681 spend in the ledger: a run's charged reservation when its summary exists, otherwise
+ * (a crash or an unfinished run) its full approved budget. Unrecognized or unreadable entries fail closed.
+ */
+export async function contextLivePriorSpendUsd(runsRoot: string): Promise<number> {
+  let entries;
+  try { entries = await readdir(runsRoot, { withFileTypes: true }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw error; }
+  let total = 0;
+  const json = async (path: string) => JSON.parse(await readFile(path, 'utf8'));
+  for (const entry of entries) {
+    if (entry.name === SPEND_LOCK) continue;
+    if (!entry.isDirectory()) throw new Error('TV-12 ledger contains an unrecognized entry');
+    const dir = join(runsRoot, entry.name);
+    const names = await readdir(dir);
+    let spend: unknown;
+    if (names.includes('summary.json')) spend = (await json(join(dir, 'summary.json')))?.reserved?.usd;
+    else if (names.includes('approval.json')) spend = (await json(join(dir, 'approval.json')))?.budget?.usd;
+    else if (names.includes('canary-approval.json')) spend = (await json(join(dir, 'canary-approval.json')))?.plan?.budget?.usd;
+    if (!names.includes('approval.json') && !names.includes('canary-approval.json')) throw new Error('TV-12 ledger contains an unrecognized run');
+    if (typeof spend !== 'number' || !Number.isFinite(spend) || spend < 0) throw new Error('TV-12 ledger spend is unreadable');
+    total += micros(spend);
+  }
+  return total / 1_000_000;
+}
+/**
+ * Holds the ledger lock while `run` executes. The run's USD ceiling is the smaller of its approval and
+ * the issue cap minus all prior spend; no remaining budget refuses before any write or credential use.
+ */
+export async function withContextLiveSpendLedger<T>(artifactRoot: string, approvedUsd: number,
+  run: (runsRoot: string, issueSpend: { capUsd: number; priorUsd: number; runUsdCeiling: number }) => Promise<T>): Promise<T> {
+  const runsRoot = contextLiveRunsRoot(artifactRoot);
+  await mkdir(runsRoot, { recursive: true, mode: 0o700 });
+  const lock = join(runsRoot, SPEND_LOCK);
+  try { await writeFile(lock, `${process.pid}\n`, { flag: 'wx', mode: 0o600 }); }
+  catch { throw new Error('TV-12 spend ledger lock is held; inspect and remove a stale lock manually'); }
+  try {
+    const priorUsd = await contextLivePriorSpendUsd(runsRoot);
+    const remaining = micros(TV12_ISSUE_USD_CAP) - micros(priorUsd);
+    if (remaining <= 0) throw new Error('TV-12 issue spend cap exhausted');
+    return await run(runsRoot, { capUsd: TV12_ISSUE_USD_CAP, priorUsd, runUsdCeiling: Math.min(micros(approvedUsd), remaining) / 1_000_000 });
+  } finally { await rm(lock, { force: true }); }
 }
 const schema = { type: 'object' as const, properties: { payload: {} }, required: ['payload'], additionalProperties: false };
 function definition(id: string, kind: 'choice' | 'ordinal-score' = 'choice', count = 2): DecisionDefinition {
@@ -130,6 +181,7 @@ export function validateContextLiveApproval(approval: ContextLiveApproval, corpu
     || !/^sha256:[a-f0-9]{64}$/.test(approval.credentialResolverDigest) || !/^[a-f0-9]{40}$/.test(approval.sourceCommit) || !/^[a-zA-Z0-9_-]+$/.test(approval.runId)
     || /latest|unknown/i.test(approval.model) || approval.region === 'unknown'
     || !approval.budget || Object.keys(approval.budget).sort().join(',') !== 'requests,tokens,usd,wallClockMs' || Object.values(approval.budget).some(n => !Number.isFinite(n) || n <= 0)
+    || approval.budget.usd > TV12_ISSUE_USD_CAP
     || approval.budget.usd > Number.MAX_SAFE_INTEGER / 1_000_000 || approval.perRequestBound.usd > Number.MAX_SAFE_INTEGER / 1_000_000
     || !Number.isSafeInteger(approval.budget.requests) || !Number.isSafeInteger(approval.budget.tokens) || !Number.isSafeInteger(approval.budget.wallClockMs)
     || !Number.isSafeInteger(approval.perRequestBound.totalTokens) || approval.perRequestBound.totalTokens < 1
@@ -143,6 +195,8 @@ export function validateContextLiveApproval(approval: ContextLiveApproval, corpu
   if (corpus.profile.limits.aggregateTokens !== 64_000 || corpus.profile.limits.stateAndLongestQuestionTokens !== 32_000
     || corpus.profile.estimator.id !== estimator.id || corpus.profile.estimator.version !== estimator.version
     || !corpus.cases.length || new Set(corpus.cases.map(c => c.id)).size !== corpus.cases.length) throw new Error('Invalid TV-12 corpus');
+  // Checked before any spend: a selectable margin above the collection margin could split a collected request.
+  if (corpus.profile.safetyMarginBps < approval.marginRule.maximumMarginBps) throw new Error('TV-12 collection margin is below the preregistered maximum');
 }
 export async function assertContextLiveSource(root: string, expected: string): Promise<void> {
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
@@ -298,11 +352,12 @@ export async function collectContextLiveCase(item: ContextLiveCase, corpus: Cont
   }
   return { rejected: false, records, synthetic: !!offlineFetch };
 }
-export async function assertContextArtifactRoot(sourceRoot: string, artifactRoot: string): Promise<void> {
+/** `exact` (run evidence) requires the canonical root itself; `within` (prepared inputs) allows a descendant. */
+export async function assertContextArtifactRoot(sourceRoot: string, artifactRoot: string, mode: 'exact' | 'within' = 'exact'): Promise<void> {
   const route = JSON.parse(execFileSync('aiwg', ['artifacts', 'path', '--json', '--check-write'], { cwd: sourceRoot, encoding: 'utf8' }));
   if (typeof route.artifact_root !== 'string') throw new Error('Canonical artifact root unavailable');
   const delta = relative(await realpath(route.artifact_root), await realpath(artifactRoot));
-  if (delta === '..' || delta.startsWith('../') || isAbsolute(delta)) throw new Error('TV-12 evidence must use canonical artifact root');
+  if (mode === 'exact' ? delta !== '' : delta === '..' || delta.startsWith('../') || isAbsolute(delta)) throw new Error('TV-12 evidence must use the canonical artifact root');
 }
 /** Writes only sanitized evidence. The caller must resolve the canonical artifact root first. */
 export async function runContextLiveCollection(options: { approval: ContextLiveApproval; corpus: ContextLiveCorpus; sourceRoot: string;
@@ -313,19 +368,27 @@ export async function runContextLiveCollection(options: { approval: ContextLiveA
   validateContextLiveApproval(approval, corpus);
   await assertContextLiveSource(sourceRoot, approval.sourceCommit);
   if (contextLiveDigest(await generateContextLiveCorpus(corpus.profile)) !== approval.corpusDigest) throw new Error('TV-12 requires complete generated synthetic corpus');
-  // Immutable approval and corpus snapshots must exist before any credential or provider operation.
   await assertContextArtifactRoot(sourceRoot, artifactRoot);
-  const directory = resolve(artifactRoot, approval.runId);
+  try {
+    return await withContextLiveSpendLedger(artifactRoot, approval.budget.usd, (runsRoot, issueSpend) =>
+      collectWithinLedger(approval, corpus, sourceRoot, runsRoot, issueSpend, host, offlineTransport));
+  } finally { host.dispose?.(); }
+}
+async function collectWithinLedger(approval: ContextLiveApproval, corpus: ContextLiveCorpus, sourceRoot: string, runsRoot: string,
+  issueSpend: { capUsd: number; priorUsd: number; runUsdCeiling: number }, host: ContextLiveHost, offlineTransport?: typeof fetch): Promise<unknown> {
+  // Immutable snapshots exist before any credential or provider operation; the approval is written first
+  // so an interrupted run is always charged its full approved budget by later ledger scans.
+  const directory = resolve(runsRoot, approval.runId);
   await mkdir(directory, { recursive: false, mode: 0o700 });
+  await writeFile(join(directory, 'approval.json'), canonicalJson(approval), { flag: 'wx', mode: 0o600 });
   await writeFile(join(directory, 'preregistration.json'), canonicalJson(contextLivePreregistration(corpus, approval.marginRule)), { flag: 'wx', mode: 0o600 });
   await writeFile(join(directory, 'corpus.json'), canonicalJson(corpus), { flag: 'wx', mode: 0o600 });
-  await writeFile(join(directory, 'approval.json'), canonicalJson(approval), { flag: 'wx', mode: 0o600 });
   const started = Date.now();
   const controller = new AbortController();
   const deadlineTimer = setTimeout(() => controller.abort(), Math.min(2_147_483_647, Math.floor(approval.budget.wallClockMs * 0.8)));
   const signal = controller.signal;
   try {
-    const budget = new ContextLiveBudget(approval, started);
+    const budget = new ContextLiveBudget({ ...approval, budget: { ...approval.budget, usd: issueSpend.runUsdCeiling } }, started);
     const expected = new Map<string, number>();
     for (const item of corpus.cases) {
       try { expected.set(item.id, planDecisionContext((await compiled(item, approval.model, approval.region)).input, corpus.profile, estimator).partitions.length); }
@@ -337,7 +400,7 @@ export async function runContextLiveCollection(options: { approval: ContextLiveA
     const frozenInputs = { corpus: { path: 'corpus.json', digest: approval.corpusDigest },
       preregistration: { path: 'preregistration.json', digest: approval.preregistrationDigest },
       approval: { path: 'approval.json', digest: contextLiveDigest(approval) } };
-    const run = await executeQualificationPlan({ artifactRoot, timeoutMs: Math.min(600_000, Math.floor(approval.budget.wallClockMs)), concurrency: 1,
+    const run = await executeQualificationPlan({ artifactRoot: runsRoot, timeoutMs: Math.min(600_000, Math.floor(approval.budget.wallClockMs)), concurrency: 1,
       manifest: { schemaVersion: 'decision-qualification-run/v1', mode: offlineTransport ? 'offline' : 'live', runId: approval.runId, generatedAt: new Date().toISOString(),
         sourceCommit: approval.sourceCommit, dirty: false, cases: corpus.cases.map(item => ({ id: item.id, kind: 'baseline', mandatory: true, candidateTests: [], evidenceIds: ['CTX-TV12'] })) },
       executors: Object.fromEntries(corpus.cases.map(item => [item.id, async ({ signal: caseSignal }) => {
@@ -366,10 +429,10 @@ export async function runContextLiveCollection(options: { approval: ContextLiveA
       preregistrationDigest: approval.preregistrationDigest, frozenInputs, source: offlineTransport ? 'synthetic' : 'provider', collectionSuccess, collected: records.length, rejected, stopped,
       candidateMarginBps: worst + approval.marginRule.extraReserveBps, withinApprovedMaximum: worst + approval.marginRule.extraReserveBps <= approval.marginRule.maximumMarginBps,
       qualifiedForEnforcement: false, pending: ['reviewer-margin-approval', 'versioned-profile-qualification', 'enforce-canary', 'rollback-evidence'],
-      reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd }, elapsedMs: Date.now() - started };
+      reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd }, issueSpend, elapsedMs: Date.now() - started };
     await writeFile(join(directory, 'summary.json'), canonicalJson(summary), { flag: 'wx', mode: 0o600 });
     await writeFile(join(directory, 'run-manifest.json'), canonicalJson(run), { flag: 'wx', mode: 0o600 });
-    const manifest = await writeQualificationEvidenceManifest(run, artifactRoot, sourceRoot,
+    const manifest = await writeQualificationEvidenceManifest(run, runsRoot, sourceRoot,
       Object.fromEntries(corpus.cases.map(item => [item.id, ['src/decision/context-live-qualification.ts', 'src/decision/context-plan.ts', 'src/decision/adapters/jev.ts']])));
     return { ...summary, evidenceManifest: manifest.artifact, evidenceDigest: manifest.digest };
   } finally { clearTimeout(deadlineTimer); }
