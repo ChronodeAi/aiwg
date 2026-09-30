@@ -57,6 +57,11 @@ The [offline pattern playground](pattern-playground.md) provides discoverable,
 sanitized examples and a governed authoring checklist without requiring network
 access or a provider credential.
 
+The [counterfactual sensitivity analyzer](sensitivity.md) defines default-off
+experimental plans and reports for bounded policy replay and offline input
+reevaluation. Reports are associative diagnostics only: they are not causal
+explanations, correctness evidence, or action authorization.
+
 The [issue triage shadow pilot](issue-triage-pilot.md) adds an experimental,
 default-off offline harness for Jev issue classification and deterministic
 duplicate reranking. It is shadow-only, writes no tracker mutations, and keeps

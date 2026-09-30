@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { composeRuleset } from './compose.js';
-import { applyPrimitiveAcceptance, validatePrimitiveAcceptancePolicy } from './acceptance.js';
+import { applyTargetAcceptance, validatePrimitiveAcceptancePolicy } from './acceptance.js';
 import { DecisionPreDispatchError, decisionInvocationFingerprint, nextReceipt } from './receipts.js';
 import { admitEntry, EntryAdmissionError } from './entry.js';
 import { correlateAtomicBatch, decisionBatchQuestionId, planNativeDecisionBatches } from './batch.js';
@@ -1167,12 +1167,7 @@ function normalizeObservation(definition: DecisionDefinition, target: ExecutionT
   if (observation.status !== 'success') return observation;
   validateDecisionValue(definition, observation.value);
   if (observation.uncertainty?.distribution) validateDistribution(definition, observation.uncertainty.distribution);
-  if (target.acceptance.mode === 'typed-value') return observation;
-  if (target.acceptance.mode === 'primitive-policy') return applyPrimitiveAcceptance(definition, target.acceptance, observation);
-  if (!observation.uncertainty || observation.uncertainty.confidence === null) return observationFailure('missing-confidence', 'abstained', observation);
-  if (observation.uncertainty.profile !== target.acceptance.profile) return observationFailure('confidence-profile-mismatch', 'abstained', observation);
-  if (observation.uncertainty.confidence * 10_000 < target.acceptance.minimumBps) return observationFailure('low-confidence', 'abstained', observation);
-  return observation;
+  return applyTargetAcceptance(definition, target, observation);
 }
 
 function normalizeObservationForRuntime(input: {

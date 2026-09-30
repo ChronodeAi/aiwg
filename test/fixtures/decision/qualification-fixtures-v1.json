@@ -1706,6 +1706,38 @@
         "JEV-16",
         "#2618"
       ]
+    },
+    {
+      "id": "DEC-SENS-01",
+      "path": "test/fixtures/decision/sensitivity/sensitivity-plan.v1.valid.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:d634295b0f58ba671efccb425fac2a08966e24a126da58c47a83df70727131ac",
+      "expectedOutcome": "D23 sensitivity positive fixtures for threshold replay, loss-matrix sensitivity, one-field perturbation and no-change control",
+      "links": [
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-SENS-02",
+      "path": "test/fixtures/decision/sensitivity/sensitivity-plan.v1.invalid.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:6a11cee786a5ccc559a19f3f6d14b6d2833937d2d80490d5848180504ba2f2e4",
+      "expectedOutcome": "D23 sensitivity anti-fixtures for schema, privacy, authorization and anti-probing rejection",
+      "links": [
+        "JEV-16",
+        "#2616"
+      ]
     }
   ]
 }
