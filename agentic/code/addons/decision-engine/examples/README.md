@@ -71,3 +71,8 @@ seed/digest provenance, a 512-token provider overhead allowance and separate gol
 [held-out collector guide](../../../../../docs/decision/heldout-collector.md).
 The collector is experimental and default-off; its approval template cannot
 authorize collection, and this example supplies no live qualification evidence.
+
+The source-only `heldout-collector-offline.mjs` exports `prepare(seed)` for
+uncalibrated diagnostics and `prepareStaged(seed)` for a three-row fictional
+calibration/test example. Both keep gold separate and create no approval or D09
+artifact. See the [staged runbook](../../../../../docs/decision/heldout-collector.md).
