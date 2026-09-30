@@ -39,7 +39,7 @@ export function validateD17Artifact<K extends keyof Artifacts>(name: K, value: u
     for (const [split, group] of Object.entries(manifest.splits)) {
       if (heldoutDigest(group.members) !== group.digest) throw new Error('D17 split digest mismatch');
       for (const row of group.members) {
-        if (ids.has(row.id) || inputs.has(row.inputDigest) || !row.id.startsWith(`d17-${split}-${row.slice}-`)
+        if (ids.has(row.id) || inputs.has(row.inputDigest) || !/^[0-9a-f]{64}$/.test(row.id)
           || families.has(row.familyId) && families.get(row.familyId) !== split) throw new Error('D17 split isolation');
         ids.add(row.id); inputs.add(row.inputDigest); families.set(row.familyId, split);
       }
@@ -51,17 +51,18 @@ export function validateD17Artifact<K extends keyof Artifacts>(name: K, value: u
   if (name === 'gold') {
     const gold = value as Artifacts['gold'];
     if (Object.keys(gold.labels).some(id => !Object.hasOwn(gold.worlds, id))) throw new Error('D17 gold membership');
-    for (const [id, world] of Object.entries(gold.worlds)) {
-      if (!id.includes(`-${world.slice}-`)) throw new Error('D17 gold slice');
-    }
+    if (Object.keys(gold.worlds).some(id => !Object.hasOwn(gold.labels, id))) throw new Error('D17 gold membership');
   }
   if (name === 'review') {
     const review = value as Artifacts['review'];
     if (new Set(review.assessments.map(row => row.assessmentId)).size !== 88) throw new Error('D17 review IDs');
     for (const [stage, count] of [['development', 40], ['blind-test', 40], ['delayed-repeat', 8]] as const) {
       const rows = review.assessments.filter(row => row.stage === stage);
+      const framing = stage === 'development' ? 'A fictional archive records this world.'
+        : 'The following is an imaginary station log.';
       if (rows.length !== count || new Set(rows.map(row => row.rowId)).size !== count
-        || rows.some(row => !row.rowId.startsWith(`d17-${stage === 'development' ? 'tuning' : 'test'}-${row.slice}-`))) {
+        || rows.some(row => !/^[0-9a-f]{64}$/.test(row.rowId) || typeof row.payload !== 'string' || !row.payload.startsWith(framing)
+          || heldoutDigest({ payload: row.payload }) !== row.inputDigest)) {
         throw new Error('D17 review sample');
       }
       for (const slice of ['direct-facts', 'multi-fact', 'negation', 'authority']) {

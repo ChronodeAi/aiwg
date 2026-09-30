@@ -26,7 +26,7 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
     },
     "allocation": {
-      "const": "id-ordered-balanced-label-and-slice-quota"
+      "const": "separately-keyed-balanced-label-shuffle-and-slice-quota"
     },
     "familyIsolation": {
       "const": true
@@ -75,7 +75,7 @@
                 "properties": {
                   "id": {
                     "type": "string",
-                    "pattern": "^d17-(tuning|calibration|test)-(direct-facts|multi-fact|negation|authority)-[0-9]{4}$"
+                    "pattern": "^[0-9a-f]{64}$"
                   },
                   "familyId": {
                     "type": "string",
@@ -131,7 +131,7 @@
                 "properties": {
                   "id": {
                     "type": "string",
-                    "pattern": "^d17-(tuning|calibration|test)-(direct-facts|multi-fact|negation|authority)-[0-9]{4}$"
+                    "pattern": "^[0-9a-f]{64}$"
                   },
                   "familyId": {
                     "type": "string",
@@ -187,7 +187,7 @@
                 "properties": {
                   "id": {
                     "type": "string",
-                    "pattern": "^d17-(tuning|calibration|test)-(direct-facts|multi-fact|negation|authority)-[0-9]{4}$"
+                    "pattern": "^[0-9a-f]{64}$"
                   },
                   "familyId": {
                     "type": "string",

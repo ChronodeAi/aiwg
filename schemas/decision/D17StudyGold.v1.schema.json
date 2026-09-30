@@ -19,7 +19,7 @@
       "maxProperties": 1800,
       "additionalProperties": false,
       "patternProperties": {
-        "^d17-(tuning|calibration|test)-(direct-facts|multi-fact|negation|authority)-[0-9]{4}$": {
+        "^[0-9a-f]{64}$": {
           "enum": [
             "yes",
             "no"
@@ -33,7 +33,7 @@
       "maxProperties": 1800,
       "additionalProperties": false,
       "patternProperties": {
-        "^d17-(tuning|calibration|test)-(direct-facts|multi-fact|negation|authority)-[0-9]{4}$": {
+        "^[0-9a-f]{64}$": {
           "type": "object",
           "additionalProperties": false,
           "required": [

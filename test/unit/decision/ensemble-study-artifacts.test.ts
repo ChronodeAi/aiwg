@@ -77,7 +77,7 @@ describe('D17 preparation artifact validation', () => {
     delete missing.labels[id];
     expect(() => validateD17Artifact('gold', missing)).toThrow();
     const foreign = structuredClone(prepared.gold);
-    foreign.labels['d17-test-direct-facts-9999'] = foreign.labels[id]!;
+    foreign.labels['0'.repeat(64)] = foreign.labels[id]!;
     delete foreign.labels[id];
     expect(() => validateD17Artifact('gold', foreign)).toThrow('membership');
     const extra = structuredClone(prepared.gold);
@@ -113,8 +113,11 @@ describe('D17 preparation artifact validation', () => {
     const stage = structuredClone(prepared.reviewTemplate);
     stage.assessments[0]!.stage = 'blind-test';
     expect(() => validateD17Artifact('review', stage)).toThrow('review sample');
+    const mismatched = structuredClone(prepared.reviewTemplate);
+    mismatched.assessments[0]!.inputDigest = heldoutDigest('different input');
+    expect(() => validateD17Artifact('review', mismatched)).toThrow('review sample');
     const repeat = structuredClone(prepared.reviewTemplate);
-    repeat.assessments[80]!.rowId = 'd17-test-direct-facts-0299';
+    repeat.assessments[80]!.rowId = 'f'.repeat(64);
     expect(() => validateD17Artifact('review', repeat)).toThrow('review repeat');
   });
 

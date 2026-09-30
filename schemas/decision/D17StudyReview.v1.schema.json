@@ -79,7 +79,7 @@
           },
           "rowId": {
             "type": "string",
-            "pattern": "^d17-(tuning|calibration|test)-(direct-facts|multi-fact|negation|authority)-[0-9]{4}$"
+            "pattern": "^[0-9a-f]{64}$"
           },
           "slice": {
             "enum": [

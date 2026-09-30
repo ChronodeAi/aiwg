@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { prepare } from '../../../tools/decision/d17-study.mjs';
 import { evaluateDecisionRuleset } from '../../../src/decision/evaluate.js';
 import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
-import { heldoutDigest, heldoutExecution, heldoutExecutionDigest } from '../../../src/decision/heldout/contract.js';
+import { heldoutDigest, heldoutExecution, heldoutExecutionDigest, heldoutRequest,
+  heldoutReservationMicros, heldoutReservationTokens } from '../../../src/decision/heldout/contract.js';
 import { heldoutRunsRoot, readHeldoutJournal, scanHeldoutSpend } from '../../../src/decision/heldout/journal.js';
 import type { HeldoutBundle } from '../../../src/decision/heldout/types.js';
 import { buildD17NativeReport, scoreD17Study } from '../../../src/decision/ensemble-study/score.js';
@@ -32,8 +33,10 @@ async function setup(scoring = false) {
   const prepared = await prepare('d17-offline-diagnostic');
   const { corpus, preregistration } = prepared;
   // Only two development subjects exercise collection mechanics. This is not a frozen study analysis.
+  const testRows = corpus.rows.filter(row => row.split === 'test');
   corpus.rows = scoring ? [corpus.rows.find(row => row.split === 'tuning')!, corpus.rows.find(row => row.split === 'calibration')!,
-    ...corpus.rows.filter(row => row.split === 'test').slice(0, 2)] : corpus.rows.filter(row => row.split === 'tuning').slice(0, 2);
+    testRows.find(row => prepared.gold.labels[row.id] === 'yes')!, testRows.find(row => prepared.gold.labels[row.id] === 'no')!]
+    : corpus.rows.filter(row => row.split === 'tuning').slice(0, 2);
   const bundle: HeldoutBundle = { corpus, preregistration, approval: { schemaVersion: 'decision-heldout-approval/v1', approved: true,
     study: 'D17', runId: 'd17-offline-01', reviewer: 'fixture-reviewer', approvalReference: 'fixture-only', sourceCommit: 'a'.repeat(40),
     exactHeadCi: 'fixture-ci', stagingHost: 'titan', stagingWorkspace: 'fixture-workspace', model: 'jev-1.13.0', servedModel: 'jev-1.13.0',
@@ -52,11 +55,16 @@ async function setup(scoring = false) {
     bundle.approval.executionDigest = heldoutExecutionDigest(bundle.corpus, bundle.preregistration, bundle.approval);
   };
   refresh();
+  const reservations = await Promise.all(bundle.corpus.rows.map(async row => {
+    const request = await heldoutRequest(bundle.corpus, bundle.preregistration, bundle.approval, row, row.requests[0]);
+    return { cost: heldoutReservationMicros(bundle.approval, request.estimatedTokens),
+      tokens: heldoutReservationTokens(bundle.preregistration, request.estimatedTokens) };
+  }));
   const run = async (transport: typeof fetch, extra = {}) => {
     refresh(); return collectHeldoutStudy({ enabled: true, bundle, trustedApprovalDigest: heldoutDigest(bundle.approval),
       artifactRoot: root, sourceRoot: process.cwd(), offline: { transport, host }, ...clock, ...extra });
   };
-  return { root, bundle, host, clock, run, prepared, runDir: join(heldoutRunsRoot(root), bundle.approval.runId) };
+  return { root, bundle, host, clock, run, prepared, reservations, runDir: join(heldoutRunsRoot(root), bundle.approval.runId) };
 }
 function reply(init?: RequestInit, changes: Record<string, unknown> = {}) {
   const body = JSON.parse(String(init?.body));
@@ -71,7 +79,8 @@ describe('D17 diagnostic collection through the shared collector', () => {
     expect(c.bundle.corpus.rows[0].requests.map(request => request.arm)).toEqual(['baseline', 'candidate', 'candidate', 'candidate']);
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const events = await readHeldoutJournal(c.runDir);
-      expect(events.at(-1)?.attempt).toMatchObject({ result: null, reservedUsdMicros: 114 });
+      expect(events.at(-1)?.attempt).toMatchObject({ result: null,
+        reservedUsdMicros: c.reservations[Math.floor((transport.mock.calls.length - 1) / 4)].cost });
       expect(events.at(-1)?.attempt.reservedTokens).toBeGreaterThan(768);
       expect(events.at(-1)?.attempt.reservedTokens).toBeLessThanOrEqual(4000);
       expect(events.filter(event => event.attempt.result === null)).toHaveLength(transport.mock.calls.length);
@@ -81,7 +90,8 @@ describe('D17 diagnostic collection through the shared collector', () => {
       expect(body).not.toHaveProperty('gold'); expect(body.state).not.toHaveProperty('labels');
       return reply(init);
     });
-    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2, reservedUsdMicros: 912,
+    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2,
+      reservedUsdMicros: 4 * (c.reservations[0].cost + c.reservations[1].cost),
       missingRows: [], source: 'injected-transport', decision: 'HOLD' });
     expect(transport).toHaveBeenCalledTimes(8);
     expect(bodies.slice(0, 4)).toEqual(Array(4).fill(bodies[0]));
@@ -92,11 +102,11 @@ describe('D17 diagnostic collection through the shared collector', () => {
     expect(new Set(attempts.map(attempt => attempt.result?.receipt?.spec.invocationId)).size).toBe(8);
     for (const attempt of attempts) {
       expect(attempt.result).toMatchObject({ disposition: 'success', servedModel: 'jev-1.13.0', inputTokens: 20, outputTokens: 4,
-        providerCostUsd: null, accountedUsdMicros: 114 });
+        providerCostUsd: null, accountedUsdMicros: c.reservations[Number(attempt.rowId === c.bundle.corpus.rows[1].id)].cost });
       expect(attempt.result?.receiptDigest).toBe(heldoutDigest(attempt.result?.receipt));
       expect(attempt.result?.receipt?.spec.evaluations.q0.spec.uncertainty?.distribution).toEqual({ yes: 0.9, no: 0.1 });
     }
-    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(912);
+    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(4 * (c.reservations[0].cost + c.reservations[1].cost));
     const manifest = JSON.parse(await readFile(join(c.runDir, 'qualification.json'), 'utf8'));
     expect(manifest.mode).toBe('recorded'); expect(manifest.evidence[0].outcome).toBe('pass');
     expect(c.host.dispose).toHaveBeenCalledOnce();
@@ -118,23 +128,24 @@ describe('D17 diagnostic collection through the shared collector', () => {
       });
     });
     expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ status: 'stopped', completedRows: 1,
-      missingRows: [c.bundle.corpus.rows[1].id], reservedUsdMicros: 570, decision: 'HOLD' });
+      missingRows: [c.bundle.corpus.rows[1].id],
+      reservedUsdMicros: 4 * c.reservations[0].cost + c.reservations[1].cost, decision: 'HOLD' });
     expect(transport).toHaveBeenCalledTimes(5);
     const attempts = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
     expect(attempts.map(attempt => attempt.result?.disposition)).toEqual(['success', 'success', 'success', 'success', 'stop']);
     expect(attempts.slice(0, 4).every(attempt => attempt.result?.receiptDigest)).toBe(true);
     expect(JSON.stringify(attempts)).not.toContain('private dispatch failure');
-    expect(attempts[4].result?.accountedUsdMicros).toBe(114);
+    expect(attempts[4].result?.accountedUsdMicros).toBe(c.reservations[1].cost);
   });
   it('AC5 checks call, token and USD limits before dispatch and retains the completed subject', async () => {
     for (const ceiling of ['calls', 'tokens', 'usd']) {
       const c = await setup();
       if (ceiling === 'calls') c.bundle.approval.budget.calls = 5;
-      if (ceiling === 'tokens') c.bundle.approval.budget.tokens = 8500;
-      if (ceiling === 'usd') c.bundle.approval.budget.usd = 0.0007;
+      if (ceiling === 'tokens') c.bundle.approval.budget.tokens = Math.ceil(4 * c.reservations[0].tokens / 0.8);
+      if (ceiling === 'usd') c.bundle.approval.budget.usd = Math.ceil(4 * c.reservations[0].cost / 0.8) / 1_000_000;
       const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init));
       expect(await c.run(transport)).toMatchObject({ status: 'stopped', reason: 'budget-exhausted', completedRows: 1,
-        reservedUsdMicros: 456, missingRows: [c.bundle.corpus.rows[1].id] });
+        reservedUsdMicros: 4 * c.reservations[0].cost, missingRows: [c.bundle.corpus.rows[1].id] });
       expect(transport).toHaveBeenCalledTimes(4);
       expect((await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result === null)).toHaveLength(4);
     }
@@ -142,13 +153,14 @@ describe('D17 diagnostic collection through the shared collector', () => {
   it('AC3/5 retains the paid failed attempt when a terminal retry completes a member', async () => {
     const c = await setup(); let calls = 0;
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => ++calls === 2 ? new Response('{}', { status: 503 }) : reply(init));
-    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2, reservedUsdMicros: 1026 });
+    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2,
+      reservedUsdMicros: 5 * c.reservations[0].cost + 4 * c.reservations[1].cost });
     const attempts = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
     expect(transport).toHaveBeenCalledTimes(9);
     expect(attempts[1]).toMatchObject({ ordinal: 1, result: { disposition: 'retryable', inputTokens: null, providerCostUsd: null } });
     expect(attempts[2]).toMatchObject({ requestId: attempts[1].requestId, rowId: attempts[1].rowId,
       ordinal: 2, result: { disposition: 'success' } });
-    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(1026);
+    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(5 * c.reservations[0].cost + 4 * c.reservations[1].cost);
   });
   it('AC11 rejects credential-bearing synthetic input before credential resolution or dispatch', async () => {
     const c = await setup();
@@ -192,8 +204,9 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     expect(report.observations[1].aggregate?.warnings).toContain('shared-systematic-error-risk');
     expect(report.observations[1].aggregate?.warnings).toContain('uncalibrated-members');
     expect(report.observations[1].champion?.quality).toBe(0); expect(report.observations[1].challenger?.quality).toBe(0);
-    expect(report.statistics.netSavingsMicros).toBe(-456);
-    expect(report.pairs.map(pair => [pair.champion.reservedCostMicros, pair.challenger.reservedCostMicros])).toEqual([[114, 342], [114, 342]]);
+    expect(report.statistics.netSavingsMicros).toBe(-2 * (c.reservations[2].cost + c.reservations[3].cost));
+    expect(report.pairs.map(pair => [pair.champion.reservedCostMicros, pair.challenger.reservedCostMicros]))
+      .toEqual(c.reservations.slice(2).map(({ cost }) => [cost, 3 * cost]));
     expect(report.statistics).toMatchObject({ statisticalGate: 'HOLD', benefitSupported: false,
       worstCaseFailureAsError: { n: 2, championCorrect: 1, challengerCorrect: 1, missingPairsCountedAsErrors: 0 } });
     expect(report.calibrationDiagnostics.calibrated).toBe(false); expect(report.decision).toBe('HOLD');
@@ -218,12 +231,14 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => ++calls >= 10 ? new Response('{}', { status: 503 }) : reply(init)));
     const report = await scoreD17Study(await input(c), c.prepared);
     expect(report.pairs).toEqual([]);
-    expect(report.observations[0].champion).toMatchObject({ quality: 1, tokens: 24, costMicros: 114 });
+    expect(report.observations[0].champion).toMatchObject({ quality: 1, tokens: 24, costMicros: c.reservations[2].cost });
     expect(report.observations[0].challenger).toBeNull();
     expect(report.observations[0].aggregate?.warnings).toContain('member-failures-present');
     expect(report.statistics.worstCaseFailureAsError).toEqual({ n: 2, championCorrect: 1, challengerCorrect: 0, missingPairsCountedAsErrors: 2 });
-    expect(report.accounting).toEqual({ allSplits: { attempts: 11, reservedCostMicros: 1258 },
-      test: { championReservedCostMicros: 114, challengerReservedCostMicros: 228, netSavingsMicros: -114, complete: false } });
+    expect(report.accounting).toEqual({ allSplits: { attempts: 11,
+      reservedCostMicros: 4 * c.reservations[0].cost + 4 * c.reservations[1].cost + 3 * c.reservations[2].cost },
+    test: { championReservedCostMicros: c.reservations[2].cost, challengerReservedCostMicros: 2 * c.reservations[2].cost,
+      netSavingsMicros: -c.reservations[2].cost, complete: false } });
     expect(report.statistics.missingIds).toEqual(c.bundle.corpus.rows.filter(row => row.split === 'test').map(row => row.id));
     expect(report.calibrationDiagnostics.challenger).toBeNull(); expect(report.decision).toBe('HOLD');
   });
@@ -234,8 +249,8 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     expect(report.pairs).toHaveLength(2);
     expect(report.pairs[0].challenger.tokens).toBeNull();
     expect(report.observations[0].challenger?.tokens).toBeNull();
-    expect(report.pairs[0].challenger.reservedCostMicros).toBe(456);
-    expect(report.statistics.netSavingsMicros).toBe(-570);
+    expect(report.pairs[0].challenger.reservedCostMicros).toBe(4 * c.reservations[2].cost);
+    expect(report.statistics.netSavingsMicros).toBe(-3 * c.reservations[2].cost - 2 * c.reservations[3].cost);
     expect(report.statistics.pairedDeltas.find(delta => delta.metric === 'tokens')?.pairs).toBe(1);
     expect(report.statistics.findings).toContain('paired-delta-insufficient:tokens');
     expect(report.decision).toBe('HOLD');
@@ -304,7 +319,8 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     expect(native.findings).toContain('d09-eligibility-missing');
     expect(native.pairedDeltas.map(delta => delta.metric)).toEqual(['abstention', 'calibration', 'cost', 'latency', 'quality', 'risk-coverage', 'slice', 'tokens']);
     expect(native.pairedDeltas.every(delta => delta.pairs === 1200)).toBe(true);
-    expect(native.pairedDeltas.find(delta => delta.metric === 'cost')?.delta).toBe(228);
+    expect(native.pairedDeltas.find(delta => delta.metric === 'cost')?.delta)
+      .toBe(c.reservations[2].cost + c.reservations[3].cost);
     for (const role of ['champion', 'challenger'] as const) {
       const wrongModel = structuredClone(record); wrongModel[role].actualModel = 'unobserved-model';
       await expect(buildD17NativeReport({ ...nativeInput, record: wrongModel })).rejects.toThrow('native execution pins');

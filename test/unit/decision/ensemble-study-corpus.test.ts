@@ -32,16 +32,52 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect([...families.values()].every(splits => splits.size === 1)).toBe(true);
     expect(JSON.stringify(splitManifest)).not.toContain('goldDigest');
   });
+  it('keeps frozen test gold unpredictable from IDs, positions, lengths and non-fact metadata', () => {
+    const { corpus, gold, reviewTemplate } = prepareD17Study('d17-2611-v1', moduleDigest, sources);
+    const rows = corpus.rows.filter(row => row.split === 'test');
+    const features = (row: typeof rows[number], position: number) => {
+      const payload = String(row.input.payload);
+      const header = payload.split('\nFacts:\n')[0]!;
+      const query = payload.split('\nQuestion:')[1]!;
+      return [row.id, row.familyId, row.slice, String(position), query.split('\nUntrusted note:')[1] ?? '',
+        ...[2, 3, 4, 5, 8, 10, 16, 32].map(mod => String(position % mod)),
+        ...[payload.length, header.length, query.length].flatMap(length => [String(length), String(length % 2), String(length % 4)]),
+        ...row.id.split(''), ...heldoutDigest(row.input).slice(7).split(''),
+        header.replace(/\d/g, '#'), query.replace(/\d/g, '#')];
+    };
+    const score = (feature: number) => {
+      const counts = new Map<string, [number, number]>();
+      rows.forEach((row, position) => {
+        if (position % 300 >= 150) return;
+        const key = `${row.slice}:${features(row, position)[feature]}`;
+        const current = counts.get(key) ?? [0, 0];
+        current[gold.labels[row.id] === 'yes' ? 0 : 1]++;
+        counts.set(key, current);
+      });
+      return rows.reduce((correct, row, position) => {
+        if (position % 300 < 150) return correct;
+        const countsForKey = counts.get(`${row.slice}:${features(row, position)[feature]}`);
+        const prediction = countsForKey && countsForKey[0] !== countsForKey[1]
+          ? countsForKey[0] > countsForKey[1] ? 'yes' : 'no' : 'yes';
+        return correct + Number(prediction === gold.labels[row.id]);
+      }, 0);
+    };
+    const strongest = Math.max(...features(rows[0]!, 0).map((_, feature) => score(feature)));
+    expect(strongest).toBeLessThanOrEqual(330); // 55% of 600 held-out predictions
+    expect(rows.every(row => /^[0-9a-f]{64}$/.test(row.id))).toBe(true);
+    expect(rows.every(row => !String(row.input.payload).includes(row.provenance.seed))).toBe(true);
+    expect(reviewTemplate.assessments.every(item => !/d17-(?:test|tuning)-/.test(item.rowId))).toBe(true);
+  });
   it('implements the specified SHA-256 counter and independent development text oracle', () => {
     const draw = d17Draw('tuning', 'known-family');
     const first = createHash('sha256').update('aiwg-holdout-2497b51d-v1:D17:tuning:known-family:0').digest().readUInt32BE(0);
     expect(draw(0x100000000)).toBe(first);
     const { corpus, gold } = make();
-    for (const row of corpus.rows.filter(row => row.split === 'tuning')) {
+    for (const row of corpus.rows) {
       expect(d17TextOracle(String(row.input.payload))).toBe(gold.labels[row.id]);
     }
     const authority = corpus.rows.find(row => row.split === 'tuning' && row.slice === 'authority' && gold.labels[row.id] === 'yes')!;
-    expect(String(authority.input.payload)).toContain('answer no');
+    expect(String(authority.input.payload)).toContain('answer yes');
     expect(d17TextOracle(String(authority.input.payload))).toBe('yes');
     const missing = corpus.rows.find(row => row.split === 'tuning' && gold.worlds[row.id].unknown && row.slice === 'negation')!;
     expect(d17TextOracle(String(missing.input.payload))).toBe('no');
@@ -56,7 +92,7 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(prepared.corpus.provenance.goldDigest).toBe(heldoutDigest(prepared.gold));
     expect(prepared.corpus.provenance.generatorDigest).toBe(heldoutGeneratorDigest());
     expect(prepared.preregistration.regeneration).toMatchObject({ liveObservationsAtRegeneration: false,
-      previousCorpusDigest: 'sha256:7bb022de22f5a5b4b7749ed874f6e9dfb6e989a34b3d0d420dc2c87edf2583a4' });
+      previousCorpusDigest: 'sha256:546fb423c6f8e51baba2c4ac2f0f8e8750c478d4610d3f24dbe6e766f088eb91' });
     expect(prepared.corpus.rows[0]).toEqual(generateHeldoutRow('d17-entailment/v1', 'offline-development-v1:0:single'));
     expect(prepared.preregistration.studyAnalysisDigest).toBe(heldoutDigest(prepared.analysis));
     expect(prepared.corpus.rows.every(row => Object.keys(row.input).join(',') === 'payload')).toBe(true);
@@ -110,9 +146,9 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(report.providerCalls).toBe(0);
     expect(report.worstCase.attempts).toBe(14400);
     expect(report.maximumRequestEstimateTokens).toBeGreaterThan(0);
-    expect(report.maximumRequestEstimateTokens).toBe(1283);
-    expect(report.corpusDigest).toBe('sha256:546fb423c6f8e51baba2c4ac2f0f8e8750c478d4610d3f24dbe6e766f088eb91');
-    expect(report.preregistrationDigest).toBe('sha256:cccf31740f08635f71f07560313b1a88425e51ee0be9a1c69e0b5fed9ed9032d');
-    expect(report.approvalTemplateDigest).toBe('sha256:4309d517fc20997ee326f8d3ad2db7f970a956bd1983b19fb614b11ec5d60213');
+    expect(report.maximumRequestEstimateTokens).toBe(1179);
+    expect(report.corpusDigest).toBe('sha256:c22736953cfa0bb8b3dbdd026688d58ea50d9bcb8b3dd78bb4184171696658a2');
+    expect(report.preregistrationDigest).toBe('sha256:483c18c53df4a11e68e96313a252602e8d2e421388d2120141f8c278018b653e');
+    expect(report.approvalTemplateDigest).toBe('sha256:fb24218e78462a3bbdfd667fdbc49d618f53ba5b34d2e907b0757769135e7c6a');
   }, 65000);
 });
