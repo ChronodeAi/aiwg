@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import { generateContextLiveCorpus, contextLiveDigest, contextLivePreregistration, validateContextLiveApproval,
-  ContextLiveBudget, collectContextLiveCase, runContextLiveCollection, assertContextLiveSource, type ContextLiveApproval, type ContextLiveCorpus } from '../../../src/decision/context-live-qualification.js';
+  ContextLiveBudget, collectContextLiveCase, runContextLiveCollection, assertContextLiveSource, estimateContextLiveCollection, contextLiveRequestCapacity, type ContextLiveApproval, type ContextLiveCorpus } from '../../../src/decision/context-live-qualification.js';
 import { CanonicalJsonByteEstimator } from '../../../src/decision/context-plan.js';
 const route = vi.hoisted(() => ({ root: '' }));
 vi.mock('node:child_process', async original => {
@@ -149,6 +149,32 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
     expect(() => budget.reserve()).toThrow('budget'); expect(budget.requests).toBe(0);
   });
 
+  it('dry-run estimate matches the partitions collection dispatches, without credentials or transport', async () => {
+    const s = await setup(); s.corpus = await generateContextLiveCorpus(profile);
+    s.approval.corpusDigest = contextLiveDigest(s.corpus);
+    s.approval.preregistrationDigest = contextLiveDigest(contextLivePreregistration(s.corpus, s.approval.marginRule));
+    const estimate = await estimateContextLiveCollection(s.approval, s.corpus);
+    expect(s.resolver).not.toHaveBeenCalled(); expect(s.fetch).not.toHaveBeenCalled();
+    for (const item of s.corpus.cases) {
+      const collected = await collectContextLiveCase(item, s.corpus, s.approval, { resolveCredential: s.resolver }, s.budget, new AbortController().signal, s.fetch as typeof fetch);
+      const planned = estimate.cases.find(c => c.id === item.id)!;
+      expect(planned.rejectedBeforeDispatch).toBe(collected.rejected);
+      expect(collected.records.map(r => [r.partitionId, r.estimatedInputTokens])).toEqual(planned.partitions.map(p => [p.id, p.estimatedInputTokens]));
+    }
+    expect(s.fetch).toHaveBeenCalledTimes(estimate.requests);
+    expect(estimate.reserved).toMatchObject({ requests: estimate.requests, tokens: estimate.requests * 100_000 });
+    expect(estimate.reserved.usd).toBeCloseTo(estimate.requests * 0.1, 9);
+    expect(estimate.fitsBeforeStop).toBe(true);
+    s.approval.budget.requests = Math.ceil(estimate.requests / 0.8) - 1;
+    expect((await estimateContextLiveCollection(s.approval, s.corpus)).fitsBeforeStop).toBe(false);
+  });
+  it.each([7, 10, 35, 125])('request capacity equals what the 80%% budget guard admits (requests=%i)', requests => {
+    const approval = { budget: { requests, tokens: 10_000_000, usd: 3, wallClockMs: 60_000 }, perRequestBound: { totalTokens: 100_000, usd: 0.03, approvalReference: 'x' } };
+    const budget = new ContextLiveBudget(approval, 0, () => 0);
+    let admitted = 0;
+    try { for (;;) { budget.reserve(); admitted++; } } catch { /* stop reached */ }
+    expect(contextLiveRequestCapacity(approval)).toBe(admitted);
+  });
   it.each([false, true])('runs complete D11 orchestration with explicitly synthetic transport (fail=%s)', async fail => {
     const s = await setup(); s.corpus = await generateContextLiveCorpus(profile);
     s.approval.corpusDigest = contextLiveDigest(s.corpus);

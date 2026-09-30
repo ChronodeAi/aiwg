@@ -57,6 +57,29 @@ async function compiled(item: ContextLiveCase, model: string, region: string) {
     questions: item.definitions.map((d, i) => ({ id: `q${i}`, subject, entry: JSON.parse(compileJevQuestion(d).question) })) };
   return { input, projected, policy };
 }
+/** Collection-only ruleset: one alias per compiled question, review outcome, no action execution. */
+export function contextLiveRuleset(itemId: string, aliases: string[], definitions: DecisionDefinition[]): DecisionRuleset {
+  return { apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'DecisionRuleset', metadata: { id: `tv12-${itemId}`, version: '1.0.0', description: 'TV-12 synthetic collection' },
+    spec: { purpose: 'TV-12 collection without action execution.', inputSchema: schema,
+      evaluations: aliases.map((alias, i) => ({ alias, decision: artifactPin(definitions[i]!), inputPointer: '' })),
+      rules: [{ id: 'review', priority: 1, when: { op: 'eq', left: { source: 'decision', alias: aliases[0]!, pointer: '/status' }, right: 'success' }, outcome: 'review' }],
+      composition: 'first-match', conflict: 'review', defaultOutcome: 'review', failureOutcome: 'review', outputSchema: { enum: ['review'] } } };
+}
+/** Pinned Jev target: approved model and logical credential reference, no retries or fallbacks. */
+export function contextLiveTarget(approval: Pick<ContextLiveApproval, 'model' | 'secretServiceReference'>, adapterVersion: string, timeoutMs: number) {
+  return { adapter: 'jev' as const, adapterVersion, model: approval.model, credentialRef: approval.secretServiceReference,
+    requiredCapabilities: [] as string[], acceptance: { mode: 'typed-value' as const }, timeoutMs,
+    retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0 } };
+}
+export function contextLiveBinding(ruleset: DecisionRuleset, aliases: string[], target: ReturnType<typeof contextLiveTarget>, timeoutMs: number): DecisionBinding {
+  return { apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'DecisionBinding', metadata: { id: 'tv12-binding', version: '1.0.0', description: 'TV-12 synthetic collection' },
+    spec: { ruleset: artifactPin(ruleset), totalTimeoutMs: timeoutMs, maxAttempts: aliases.length, concurrency: 1,
+      evaluations: Object.fromEntries(aliases.map(alias => [alias, { targets: [target], fallbackOn: [] }])) } };
+}
+/** Exposes the exact D10-projected planning input used by collection, for record binding and the canary. */
+export async function compileContextLiveCase(item: ContextLiveCase, model: string, region: string) {
+  return compiled(item, model, region);
+}
 /** Builds targets from actual compiled question and trust-partitioned provider state shapes. */
 export async function generateContextLiveCorpus(profile: ContextProviderProfile): Promise<ContextLiveCorpus> {
   admitEntry(profile);
@@ -135,13 +158,52 @@ export interface ContextLiveRecord {
 export class ContextLiveBudget {
   requests = 0; tokens = 0; usd = 0;
   private usdMicros = 0;
-  constructor(private readonly approval: ContextLiveApproval, readonly started: number, private readonly now: () => number = Date.now) {}
+  constructor(private readonly approval: Pick<ContextLiveApproval, 'budget' | 'perRequestBound'>, readonly started: number, private readonly now: () => number = Date.now) {}
   reserve(): void {
     const { budget, perRequestBound: bound } = this.approval;
     if (this.requests + 1 > budget.requests * 0.8 || this.tokens + bound.totalTokens > budget.tokens * 0.8
       || this.usdMicros + Math.ceil(bound.usd * 1_000_000) > Math.floor(budget.usd * 800_000) || this.now() - this.started >= budget.wallClockMs * 0.8) throw new Error('TV-12 budget exhausted');
     this.requests++; this.tokens += bound.totalTokens; this.usdMicros += Math.ceil(bound.usd * 1_000_000); this.usd = this.usdMicros / 1_000_000;
   }
+}
+/** Most requests the 80% stop admits, derived from the same arithmetic as `ContextLiveBudget.reserve`. */
+export function contextLiveRequestCapacity(approval: Pick<ContextLiveApproval, 'budget' | 'perRequestBound'>): number {
+  const { budget, perRequestBound: bound } = approval;
+  return Math.min(Math.floor(budget.requests * 0.8),
+    Math.floor(budget.tokens * 0.8 / bound.totalTokens), Math.floor(Math.floor(budget.usd * 800_000) / Math.ceil(bound.usd * 1_000_000)));
+}
+export interface ContextLiveEstimate {
+  schemaVersion: 'context-live-estimate/v1'; providerCalls: 0; credentialResolved: false;
+  cases: Array<{ id: string; dimension: string; rejectedBeforeDispatch: boolean; partitions: Array<{ id: string; questions: number; estimatedInputTokens: number }> }>;
+  requests: number; estimatedInputTokens: number; maxPartitionEstimate: number;
+  reserved: { requests: number; tokens: number; usd: number }; requestCapacityAtStop: number; fitsBeforeStop: boolean;
+}
+/** Dry run: the exact partitions collection would dispatch, without credentials, transport or writes. */
+export async function estimateContextLiveCollection(approval: ContextLiveApproval, corpus: ContextLiveCorpus): Promise<ContextLiveEstimate> {
+  validateContextLiveApproval(approval, corpus);
+  const cases: ContextLiveEstimate['cases'] = [];
+  for (const item of corpus.cases) {
+    const { input } = await compiled(item, approval.model, approval.region);
+    let plan;
+    try { plan = planDecisionContext(input, corpus.profile, estimator); }
+    catch (error) {
+      if (error instanceof ContextPlanError && ['oversized-state', 'oversized-question'].includes(error.reason)) { cases.push({ id: item.id, dimension: item.dimension, rejectedBeforeDispatch: true, partitions: [] }); continue; }
+      throw error;
+    }
+    cases.push({ id: item.id, dimension: item.dimension, rejectedBeforeDispatch: false, partitions: plan.partitions.map(partition => {
+      const checked = planDecisionContext({ ...input, questions: input.questions.filter(q => partition.questionIds.includes(q.id)) }, corpus.profile, estimator);
+      if (checked.partitions.length !== 1) throw new Error('TV-12 partition is not one complete request');
+      return { id: partition.id, questions: partition.questionIds.length, estimatedInputTokens: checked.partitions[0]!.estimate.aggregateTokens };
+    }) });
+  }
+  const partitions = cases.flatMap(c => c.partitions);
+  const requests = partitions.length;
+  const capacity = contextLiveRequestCapacity(approval);
+  const maxPartitionEstimate = Math.max(0, ...partitions.map(p => p.estimatedInputTokens));
+  return { schemaVersion: 'context-live-estimate/v1', providerCalls: 0, credentialResolved: false, cases, requests,
+    estimatedInputTokens: partitions.reduce((sum, p) => sum + p.estimatedInputTokens, 0), maxPartitionEstimate,
+    reserved: { requests, tokens: requests * approval.perRequestBound.totalTokens, usd: requests * Math.ceil(approval.perRequestBound.usd * 1_000_000) / 1_000_000 },
+    requestCapacityAtStop: capacity, fitsBeforeStop: requests <= capacity && maxPartitionEstimate <= approval.perRequestBound.totalTokens };
 }
 class CollectionStop extends Error {
   constructor(message: string, readonly evidence: { httpStatus: number | null; requestId: string | null; servedModel: string | null; inputTokens: number | null; outputTokens: number | null; costUsd: number | null }) { super(message); }
@@ -173,18 +235,10 @@ export async function collectContextLiveCase(item: ContextLiveCase, corpus: Cont
     if (checked.partitions.length !== 1 || checked.partitions[0]!.questionIds.length !== selected.length) throw new Error('TV-12 partition is not one complete request');
     if (checked.partitions[0]!.estimate.aggregateTokens > approval.perRequestBound.totalTokens) throw new Error('TV-12 approved token bound below estimate');
     const definitions = selected.map(q => item.definitions[Number(q.id.slice(1))]!);
-    const ruleset: DecisionRuleset = { apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'DecisionRuleset', metadata: { id: `tv12-${item.id}`, version: '1.0.0', description: 'TV-12 synthetic collection' },
-      spec: { purpose: 'TV-12 collection without action execution.', inputSchema: schema,
-        evaluations: selected.map((q, i) => ({ alias: q.id, decision: artifactPin(definitions[i]!), inputPointer: '' })),
-        rules: [{ id: 'review', priority: 1, when: { op: 'eq', left: { source: 'decision', alias: selected[0]!.id, pointer: '/status' }, right: 'success' }, outcome: 'review' }],
-        composition: 'first-match', conflict: 'review', defaultOutcome: 'review', failureOutcome: 'review', outputSchema: { enum: ['review'] } } };
+    const ruleset = contextLiveRuleset(item.id, selected.map(q => q.id), definitions);
     const timeoutMs = Math.max(1, Math.min(30_000, Math.floor(approval.budget.wallClockMs * 0.8 - (Date.now() - budget.started))));
-    const target = { adapter: 'jev' as const, adapterVersion: adapter.version, model: approval.model, credentialRef: approval.secretServiceReference,
-      requiredCapabilities: [] as string[], acceptance: { mode: 'typed-value' as const }, timeoutMs,
-      retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0 } };
-    const binding: DecisionBinding = { apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'DecisionBinding', metadata: { id: 'tv12-binding', version: '1.0.0', description: 'TV-12 synthetic collection' },
-      spec: { ruleset: artifactPin(ruleset), totalTimeoutMs: timeoutMs, maxAttempts: selected.length, concurrency: 1,
-        evaluations: Object.fromEntries(selected.map(q => [q.id, { targets: [target], fallbackOn: [] }])) } };
+    const target = contextLiveTarget(approval, adapter.version, timeoutMs);
+    const binding = contextLiveBinding(ruleset, selected.map(q => q.id), target, timeoutMs);
     definitions.forEach(d => {
       if (!capabilities.answerKinds.includes(d.spec.answer.kind) || d.spec.answer.kind === 'choice' && d.spec.answer.options.length > capabilities.maxOptions!
         || d.spec.answer.kind === 'ordinal-score' && d.spec.answer.levels.length > capabilities.maxLevels!) throw new Error('TV-12 unsupported answer shape');
