@@ -30,36 +30,39 @@
       "datasetUrl": "https://github.com/PolyAI-LDN/task-specific-datasets/tree/master/banking_data",
       "license": "CC-BY-4.0",
       "definition": "Classify a banking support utterance into one Banking77 intent.",
-      "shift": "Nominal train/calibration/final-test rows are sampled from train.csv; the canonical test.csv is reserved as a source-separated shift slice."
+      "shift": "Not a distribution shift. Banking77 train.csv and test.csv are a standard random split of one collection, so test.csv rows are an exchangeable nominal held-out slice. The controlled distribution-shift evidence for AC5 rests on CLINC150 OOS only."
     }
   ],
   "pins": {
     "offlineServedModel": "synthetic-score-stand-in/v2",
-    "liveServedModel": "jev-selected-by-operator",
-    "adapter": "jev decision runtime binding for live collection; synthetic-open-data/v2 for offline proof",
+    "liveServedModel": "jev-1.13.0",
+    "liveAdapter": "jev-decision-runtime/v2",
+    "liveAdapterVersion": "1.0.0",
     "definition": "open-data-choice-definitions/v2",
-    "seed": "issue-2613-v2-open-data"
+    "seed": "issue-2613-v2-open-data",
+    "collectorCodeDigest": "sha256:aaf0e423fa55266dd6990c539a57bd1b852efb99ab09ad72b6adf2bdc7eccf94",
+    "livePromptDigest": "sha256:879df1ecb055ec1f2df160f20f93164940bb82195b04c12bad1a185e8e481eef"
   },
   "splits": {
-    "train": "Frozen labels/text only. Used for synthetic calibrated-risk baseline bins; no conformal quantile fitting.",
-    "calibration": "Frozen labels/text only. Used to fit conformal thresholds before final-test scoring.",
-    "finalTest": "Frozen labels/text only. Evaluated after calibration profile and gates are fixed.",
-    "shift": "Frozen labels/text only. CLINC OOS plus Banking77 test.csv rows source-separated from Banking77 train.csv; demonstrates where exchangeability assumptions are out of scope."
+    "train": "Frozen labels/text only. Kept for pipeline tests; not used by the live analysis.",
+    "calibration": "Frozen labels/text only. The live calibration subset fits both the conformal threshold and the calibrated-risk baseline bins before final-test scoring.",
+    "finalTest": "Frozen labels/text only. The live final-test subset is evaluated after the calibration profile and gates are fixed.",
+    "shift": "Frozen labels/text only. CLINC150 oos_test rows form the controlled OOD shift; the live shift subset is drawn only from them. Banking77 test.csv rows in this split are an exchangeable nominal held-out slice, not a shift."
   },
   "coverageTarget": 0.9,
   "usefulnessGates": {
-    "minimumFinalRowsPerTask": 200,
-    "minimumSliceRows": 50,
-    "minimumCoverageWilsonLower": 0.85,
+    "minimumFinalRowsPerTask": 95,
+    "minimumSliceRows": 48,
+    "minimumCoverageWilsonLower": 0.8,
     "maximumMeanSetSizeFractionOfLabels": 0.08,
     "maximumReviewRate": 0.45,
     "maximumSelectiveRisk": 0.12,
     "mustNotUpgradeIntegrityHoldOrRollback": true
   },
-  "sampleSizeRationale": "The bounded sample keeps git small while preserving at least 200 final-test rows per task and at least 50 rows on reported shift slices. Per-class support is intentionally sparse for high-cardinality intent labels; class-conditional coverage is reported as unsupported unless n >= 50 for the class. The sample is adequate to prove deterministic mechanics, not production representativeness.",
+  "sampleSizeRationale": "The frozen synthetic sample (train 1135, calibration 681, final test 681, shift 454 rows) exists for pipeline tests only. The live sample is the preregistered 250-row CLINC150 subset described in liveDesign; its size is set by the worst-case USD 8.00 reservation bound, not by the frozen split sizes. Class-conditional coverage is unsupported (one row per intent). Gates: at least 95 of 100 final-test rows and 48 of 50 shift rows must be scored, and terminal errors or missing distributions above 5% of any live split make the outcome INSUFFICIENT EVIDENCE.",
   "baselines": [
     "raw primitive threshold: selected Choice probability >= 0.75",
-    "synthetic calibrated-risk threshold: train-only top-score decile Wilson upper error <= 0.12; not an approved D09 calibration profile",
+    "calibrated-risk threshold: top-probability decile Wilson upper error <= 0.12, fitted on the live calibration subset scores (synthetic calibration scores in pipeline mode); not an approved D09 calibration profile",
     "always-review",
     "always-predict"
   ],
@@ -74,14 +77,15 @@
     "calls, tokens and cost or approved bound"
   ],
   "compatibilityKey": [
-    "served model",
+    "served model (pinned)",
     "primitive",
     "definition digest",
-    "adapter",
+    "adapter (pinned)",
     "dataset population",
     "method",
-    "calibration split digest",
-    "code version",
+    "calibration split digest (live subset)",
+    "collector code digest (pinned)",
+    "live prompt digest (pinned)",
     "alpha"
   ],
   "resourceBudget": {
@@ -89,12 +93,18 @@
     "offlineTokens": 0,
     "offlineUsd": 0,
     "liveHardCeilingUsd": 8,
-    "conservativeMaxTokensPerCall": 2000,
-    "conservativeUsdPerMillionTokens": 5,
-    "estimatedUsdPerItem": 0.01,
+    "inputUsdPerMillionTokensCeiling": 5,
+    "outputUsdPerMillionTokensCeiling": 5,
+    "measuredMaxRequestBodyBytes": 4779,
+    "serverOverheadTokensAllowance": 512,
+    "maxInputTokensPerCall": 5400,
+    "maxOutputTokensPerCall": 256,
     "maxRetriesPerItem": 1,
+    "maxAttemptsPerItemTotal": 3,
     "maxConsecutiveErrors": 3,
+    "maxTerminalFailureFraction": 0.05,
     "liveMaxItems": 600,
+    "liveSubsetItems": 250,
     "sampleMaxItems": 3000
   },
   "liveCollection": {
@@ -102,9 +112,10 @@
     "requiredEnv": "AIWG_DECISION_JEV_LIVE_SMOKE=1",
     "credentialEnv": "AIWG_DECISION_JEV_API_KEY",
     "dryRunDefault": true,
-    "networkRule": "No live provider call occurs unless the env gate is set, a credential and region are present, and the collector can reserve conservativeMaxTokensPerCall * conservativeUsdPerMillionTokens / 1,000,000 USD before each call or retry without exceeding liveHardCeilingUsd and liveMaxItems. Provider-reported usage replaces the conservative charge when present."
+    "networkRule": "No provider call occurs unless the env gate, a credential, a region and AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=5/5 are present. Before every call or retry the collector durably reserves maxInputTokensPerCall and maxOutputTokensPerCall at the price ceilings and refuses when the global spend ledger plus that reservation would exceed liveHardCeilingUsd. Charges use reported tokens at the ceiling (or a higher reported provider cost) and the full reservation when usage is unknown; a charge above its reservation halts the ledger. Every run and resume in the experiment state directory shares one hash-chained ledger.",
+    "amendment": "Re-preregistered on 2026-09-30 before any live score existed (no Jev call has been made for v2). The earlier 2000-token bound under-covered the measured 151-option CLINC150 request body; the live sample shrank from 1816 frozen rows to a 250-row subset; Banking77 test.csv was relabelled nominal held-out; the compatibility key gained pinned model, adapter, prompt and collector digests."
   },
-  "outcomeRule": "Offline synthetic-score execution can prove the pipeline and produce INSUFFICIENT EVIDENCE only. GO or CONDITIONAL requires separately approved live Jev scores or other representative held-out scores, D10 projection authorization, D14 lineage/retention evidence, and approved D09/D11 calibration evidence.",
+  "outcomeRule": "Synthetic-score execution yields INSUFFICIENT EVIDENCE only. Live evidence counts only when every record carries collector provenance chained into the spend ledger. With only CLINC150 collected live, a passing result is capped at CONDITIONAL; GO would additionally need passing live evidence for every preregistered task. GO or CONDITIONAL still requires D10 projection authorization, D14 lineage/retention evidence and approved D09/D11 calibration evidence before any follow-up.",
   "nonGoals": [
     "No production routing integration.",
     "No acceptance-policy mutation.",
@@ -115,5 +126,13 @@
     "https://arxiv.org/abs/1609.00451v2",
     "https://arxiv.org/abs/2006.02544v1",
     "https://arxiv.org/abs/2306.10193v2"
-  ]
+  ],
+  "liveDesign": {
+    "task": "clinc150-intent-choice",
+    "calibration": 100,
+    "finalTest": 100,
+    "shift": 50,
+    "selection": "Drawn from the frozen splits before any score exists: calibration and final test take one row from each of 100 intents chosen by independently seeded intent orders; shift takes 50 seeded CLINC150 oos_test rows. Banking77 has no live subset.",
+    "rationale": "Every call reserves the worst case (5400 input + 256 output tokens at the USD 5 per million ceiling = USD 0.02828), so the 250-item subset costs at most USD 7.07, leaving USD 0.93 (32 reservations) for retries under the USD 8.00 cap and far below the 600-item cap. With n_cal = 100 split conformal gives marginal coverage between 0.900 and 0.910. With n_final = 100 a 95% Wilson lower bound >= 0.80 requires at least 88/100 covered: a method with true coverage 0.90 passes with probability 0.80, 0.85 with 0.25 and 0.80 with 0.025 (binomial, ignoring calibration-draw variance). The OOS shift slice (n = 50) only has to show degradation. A second live task would halve both subsets and was not affordable under the worst-case bound; the live outcome is therefore capped at CONDITIONAL."
+  }
 }

@@ -8,12 +8,17 @@
     "schemaVersion",
     "issue",
     "outcome",
+    "outcomeCaps",
     "status",
     "scoreMode",
+    "analysisCodeVersion",
     "preregistrationHash",
     "frozenSampleDigest",
     "splitHashes",
+    "liveSubsetHashes",
     "sourceFiles",
+    "provenance",
+    "budget",
     "actuals",
     "compatibility",
     "tasks",
@@ -23,79 +28,394 @@
     "latency"
   ],
   "properties": {
-    "schemaVersion": { "const": "conformal-open-data-report/v2" },
-    "issue": { "const": 2613 },
-    "outcome": { "enum": ["GO", "CONDITIONAL", "NO-GO", "INSUFFICIENT EVIDENCE"] },
-    "status": { "const": "experimental-default-off" },
-    "scoreMode": { "enum": ["synthetic", "live"] },
-    "preregistrationHash": { "$ref": "#/$defs/sha" },
-    "frozenSampleDigest": { "$ref": "#/$defs/sha" },
+    "schemaVersion": {
+      "const": "conformal-open-data-report/v2"
+    },
+    "issue": {
+      "const": 2613
+    },
+    "outcome": {
+      "enum": [
+        "GO",
+        "CONDITIONAL",
+        "NO-GO",
+        "INSUFFICIENT EVIDENCE"
+      ]
+    },
+    "outcomeCaps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "status": {
+      "const": "experimental-default-off"
+    },
+    "scoreMode": {
+      "enum": [
+        "synthetic",
+        "live"
+      ]
+    },
+    "analysisCodeVersion": {
+      "$ref": "#/$defs/sha"
+    },
+    "preregistrationHash": {
+      "$ref": "#/$defs/sha"
+    },
+    "frozenSampleDigest": {
+      "$ref": "#/$defs/sha"
+    },
     "splitHashes": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["train", "calibration", "finalTest", "shift"],
+      "required": [
+        "train",
+        "calibration",
+        "finalTest",
+        "shift"
+      ],
       "properties": {
-        "train": { "$ref": "#/$defs/sha" },
-        "calibration": { "$ref": "#/$defs/sha" },
-        "finalTest": { "$ref": "#/$defs/sha" },
-        "shift": { "$ref": "#/$defs/sha" }
+        "train": {
+          "$ref": "#/$defs/sha"
+        },
+        "calibration": {
+          "$ref": "#/$defs/sha"
+        },
+        "finalTest": {
+          "$ref": "#/$defs/sha"
+        },
+        "shift": {
+          "$ref": "#/$defs/sha"
+        }
       }
     },
-    "sourceFiles": { "type": "array" },
-    "actuals": {
+    "liveSubsetHashes": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["providerCalls", "inputTokens", "outputTokens", "costUsd"],
+      "required": [
+        "calibration",
+        "finalTest",
+        "shift"
+      ],
       "properties": {
-        "providerCalls": { "type": "integer", "minimum": 0 },
-        "inputTokens": { "type": "integer", "minimum": 0 },
-        "outputTokens": { "type": "integer", "minimum": 0 },
-        "costUsd": { "type": "number", "minimum": 0 }
+        "calibration": {
+          "$ref": "#/$defs/sha"
+        },
+        "finalTest": {
+          "$ref": "#/$defs/sha"
+        },
+        "shift": {
+          "$ref": "#/$defs/sha"
+        }
       }
     },
-    "compatibility": { "type": "object" },
-    "tasks": { "type": "object", "minProperties": 1 },
-    "gaps": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-    "integrity": {
+    "sourceFiles": {
+      "type": "array"
+    },
+    "provenance": {
       "type": "object",
-      "additionalProperties": true,
-      "required": ["release_gate", "conformal"],
+      "additionalProperties": false,
+      "required": [
+        "representative",
+        "ledgerVerified",
+        "reasons"
+      ],
       "properties": {
-        "release_gate": {
-          "type": "object",
-          "additionalProperties": true,
-          "required": ["decision"],
-          "properties": {
-            "decision": { "enum": ["HOLD", "ROLLBACK"] }
-          }
+        "representative": {
+          "type": "boolean"
         },
-        "conformal": {
-          "type": "object",
-          "additionalProperties": true,
-          "required": ["schemaVersion", "outcome", "preregistrationHash", "frozenSampleDigest", "perExampleHash", "scoreMeaning"],
-          "properties": {
-            "schemaVersion": { "const": "conformal-evidence/v2" },
-            "outcome": { "enum": ["GO", "CONDITIONAL", "NO-GO", "INSUFFICIENT EVIDENCE"] },
-            "preregistrationHash": { "$ref": "#/$defs/sha" },
-            "frozenSampleDigest": { "$ref": "#/$defs/sha" },
-            "perExampleHash": { "$ref": "#/$defs/sha" },
-            "scoreMeaning": { "type": "string", "minLength": 1 }
+        "ledgerVerified": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
     },
-    "perExampleHash": { "$ref": "#/$defs/sha" },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hardCeilingUsd",
+        "reservationUsdPerCall",
+        "liveSubsetItems",
+        "worstCaseLiveSubsetUsd"
+      ],
+      "properties": {
+        "hardCeilingUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 8
+        },
+        "reservationUsdPerCall": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "liveSubsetItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        },
+        "worstCaseLiveSubsetUsd": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 8
+        }
+      }
+    },
+    "actuals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "providerCalls",
+        "inputTokens",
+        "outputTokens",
+        "costUsd"
+      ],
+      "properties": {
+        "providerCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costUsd": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object"
+    },
+    "tasks": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "#2037/#2048 eval-integrity fields carried unchanged plus the conformal extension; the release gate may only be HOLD or ROLLBACK.",
+      "required": [
+        "sample_n",
+        "uncertainty",
+        "paired_baseline",
+        "integrity_mode",
+        "fresh_workspace_required",
+        "fresh_workspace_verified",
+        "integrity_state",
+        "trusted_score_source",
+        "compromise_labels",
+        "weak_signal_reason",
+        "release_gate",
+        "conformal"
+      ],
+      "properties": {
+        "sample_n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uncertainty": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "method",
+                "confidence",
+                "estimate",
+                "lower_bound",
+                "upper_bound"
+              ],
+              "properties": {
+                "method": {
+                  "const": "wilson-95"
+                },
+                "confidence": {
+                  "const": 0.95
+                },
+                "estimate": {
+                  "type": "number"
+                },
+                "lower_bound": {
+                  "type": "number"
+                },
+                "upper_bound": {
+                  "type": "number"
+                }
+              }
+            }
+          ]
+        },
+        "paired_baseline": {
+          "type": "null"
+        },
+        "integrity_mode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fresh_workspace_required": {
+          "type": "boolean"
+        },
+        "fresh_workspace_verified": {
+          "type": "boolean"
+        },
+        "integrity_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trusted_score_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "compromise_labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "weak_signal_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release_gate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "decision",
+            "reasons",
+            "thresholds"
+          ],
+          "properties": {
+            "decision": {
+              "enum": [
+                "HOLD",
+                "ROLLBACK"
+              ]
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "thresholds": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "promote_score",
+                "rollback_score",
+                "minimum_sample_n",
+                "minimum_interval_lower_bound"
+              ],
+              "properties": {
+                "promote_score": {
+                  "type": "number"
+                },
+                "rollback_score": {
+                  "type": "number"
+                },
+                "minimum_sample_n": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "minimum_interval_lower_bound": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "conformal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "schemaVersion",
+            "outcome",
+            "preregistrationHash",
+            "frozenSampleDigest",
+            "perExampleHash",
+            "scoreMeaning"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "conformal-evidence/v2"
+            },
+            "outcome": {
+              "enum": [
+                "GO",
+                "CONDITIONAL",
+                "NO-GO",
+                "INSUFFICIENT EVIDENCE"
+              ]
+            },
+            "preregistrationHash": {
+              "$ref": "#/$defs/sha"
+            },
+            "frozenSampleDigest": {
+              "$ref": "#/$defs/sha"
+            },
+            "perExampleHash": {
+              "$ref": "#/$defs/sha"
+            },
+            "scoreMeaning": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "perExampleHash": {
+      "$ref": "#/$defs/sha"
+    },
     "latency": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scope", "elapsedMs"],
+      "required": [
+        "scope",
+        "elapsedMs"
+      ],
       "properties": {
-        "scope": { "type": "string", "minLength": 1 },
-        "elapsedMs": { "type": "number", "minimum": 0 }
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "elapsedMs": {
+          "type": "number",
+          "minimum": 0
+        }
       }
     }
   },
   "$defs": {
-    "sha": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+    "sha": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
   }
 }

@@ -20,6 +20,7 @@ export const RAW_FILES = [
     localPath: 'clinc/data_full.json',
     license: 'CC-BY-3.0',
     licenseUrl: 'https://raw.githubusercontent.com/clinc/oos-eval/master/LICENSE',
+    licenseLocalPath: 'licenses/clinc-LICENSE',
     licenseSha256: 'e6bc9e9c474700b708f568bac9e5a8a9bcb2b1dad53442f5ba449fcb848b8e76',
     sha256: '36923c3705a59e08fe9c3883d8bc2dd966ef93e22cb78ac41171782a698d56e0',
   },
@@ -29,7 +30,9 @@ export const RAW_FILES = [
     url: 'https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/train.csv',
     localPath: 'banking/train.csv',
     license: 'CC-BY-4.0',
-    licenseUrl: 'https://github.com/PolyAI-LDN/task-specific-datasets/blob/master/LICENSE',
+    licenseUrl: 'https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/LICENSE',
+    licenseLocalPath: 'licenses/banking-LICENSE',
+    licenseSha256: '7e7170e3cebf88a9f60c7b8421418323c09304da1af4d5e90f4da1dc1c8a2661',
     sha256: 'b06e26ac675513959a63135f11b94ea7786ed02da65db93a5650d8838cbc664b',
   },
   {
@@ -38,7 +41,9 @@ export const RAW_FILES = [
     url: 'https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/test.csv',
     localPath: 'banking/test.csv',
     license: 'CC-BY-4.0',
-    licenseUrl: 'https://github.com/PolyAI-LDN/task-specific-datasets/blob/master/LICENSE',
+    licenseUrl: 'https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/LICENSE',
+    licenseLocalPath: 'licenses/banking-LICENSE',
+    licenseSha256: '7e7170e3cebf88a9f60c7b8421418323c09304da1af4d5e90f4da1dc1c8a2661',
     sha256: 'd12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d',
   },
 ];
@@ -47,13 +52,24 @@ export const SAMPLE_POLICY = {
   seed: 'issue-2613-v2-open-data',
   maxItems: 3000,
   clinc: { trainPerIntent: 5, calibrationPerIntent: 3, finalPerIntent: 3, oosShift: 300 },
-  banking: { trainPerIntent: 5, calibrationPerIntent: 3, finalPerIntent: 3, sourceShiftPerIntent: 2 },
+  banking: { trainPerIntent: 5, calibrationPerIntent: 3, finalPerIntent: 3, heldoutPerIntent: 2 },
+  // Live Jev subsets are drawn from the frozen splits above. CLINC150 only: one row per intent for
+  // calibration and final test (independently seeded intent orders) plus a controlled OOS slice.
+  live: {
+    task: 'clinc150-intent-choice',
+    calibration: { count: 100, seed: 'issue-2613-v2-live-calibration' },
+    finalTest: { count: 100, seed: 'issue-2613-v2-live-final' },
+    shift: { count: 50, seed: 'issue-2613-v2-live-oos-shift' },
+  },
 };
+
+export const LIVE_SPLITS = ['calibration', 'finalTest', 'shift'];
 
 export function fileSha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+/** Digest of the offline analysis code; the live collector is pinned separately in the preregistration. */
 export function experimentCodeVersion(root = new URL('./', import.meta.url)) {
   return digest([
     readFileSync(new URL('open-data.mjs', root), 'utf8'),
@@ -168,8 +184,10 @@ function sampleRows(rows, split, seed, count, offset = 0) {
     text: row.text,
     label: row.label,
     labelIndex: row.labelIndex,
+    // Banking77 train.csv and test.csv are a random split of one collection, so test.csv rows are an
+    // exchangeable nominal held-out slice, not a distribution shift. Only CLINC150 OOS is a shift.
     slice: row.sourceDataset === 'CLINC150' && row.label === 'oos' ? 'controlled-oos'
-      : split === 'shift' ? 'source-separated' : 'nominal',
+      : split === 'shift' ? 'nominal-heldout' : 'nominal',
   })));
 }
 
@@ -208,7 +226,7 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
     ],
     shift: [
       ...fixedCount(clinc.oosShift, 'shift', 'clinc-oos-shift', SAMPLE_POLICY.clinc.oosShift),
-      ...sampleRows(banking.test, 'shift', 'banking-test-source-shift', SAMPLE_POLICY.banking.sourceShiftPerIntent),
+      ...sampleRows(banking.test, 'shift', 'banking-test-source-shift', SAMPLE_POLICY.banking.heldoutPerIntent),
     ],
   };
   const allRows = Object.values(splits).flat();
@@ -229,10 +247,11 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
     'banking77-intent-choice': {
       primitive: 'choice',
       labels: banking.labels,
-      datasetPopulation: 'Banking77 train.csv nominal splits with canonical test.csv reserved for source-separated shift',
+      datasetPopulation: 'Banking77 train.csv nominal splits with canonical test.csv as an exchangeable nominal held-out slice',
       definitionVersion: 'banking77-intent-choice/v2',
     },
   };
+  const liveSubsets = selectLiveSubsets(splits, SAMPLE_POLICY.live);
   const frozen = {
     schemaVersion: 'conformal-open-data-frozen/v2',
     issue: 2613,
@@ -244,6 +263,7 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
     tasks,
     splitHashes: Object.fromEntries(Object.entries(splits).map(([name, rows]) => [name, rowHash(rows)])),
     splits: Object.fromEntries(Object.entries(splits).map(([name, rows]) => [name, orderedRows(rows)])),
+    liveSubsets,
   };
   return {
     ...frozen,
@@ -254,8 +274,47 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
       tasks,
       splitHashes: frozen.splitHashes,
       splits: frozen.splits,
+      liveSubsets,
     }),
   };
+}
+
+function selectLiveSubsets(splits, policy) {
+  const pickOnePerLabel = (split, { count, seed }) => {
+    const groups = groupByLabel(splits[split].filter(row => row.task === policy.task && row.slice === 'nominal'));
+    const labels = [...groups.keys()].sort((a, b) => stableHex(seed, a).localeCompare(stableHex(seed, b)) || a.localeCompare(b));
+    if (labels.length < count) throw new Error(`live ${split} needs ${count} labels, found ${labels.length}`);
+    return labels.slice(0, count).map(label => stableOrder(`${seed}:${label}`, groups.get(label))[0]);
+  };
+  const shiftPool = splits.shift.filter(row => row.task === policy.task && row.slice === 'controlled-oos');
+  if (shiftPool.length < policy.shift.count) throw new Error('not enough controlled-OOS rows for the live shift subset');
+  const rows = {
+    calibration: orderedRows(pickOnePerLabel('calibration', policy.calibration)),
+    finalTest: orderedRows(pickOnePerLabel('finalTest', policy.finalTest)),
+    shift: orderedRows(stableOrder(policy.shift.seed, shiftPool).slice(0, policy.shift.count)),
+  };
+  return {
+    policy,
+    ids: Object.fromEntries(LIVE_SPLITS.map(split => [split, rows[split].map(row => row.id)])),
+    hashes: Object.fromEntries(LIVE_SPLITS.map(split => [split, rowHash(rows[split])])),
+  };
+}
+
+/** The preregistered live subset rows, ordered by split then ID. */
+export function liveSubsetRows(frozen, split = null) {
+  const bySplit = split ? [split] : LIVE_SPLITS;
+  return bySplit.flatMap(name => {
+    const index = new Map(frozen.splits[name].map(row => [row.id, row]));
+    return frozen.liveSubsets.ids[name].map(id => {
+      const row = index.get(id);
+      if (!row) throw new Error(`live subset row is not in frozen ${name}: ${id}`);
+      return row;
+    });
+  });
+}
+
+export function liveTaskIds(frozen) {
+  return [frozen.liveSubsets.policy.task];
 }
 
 export function verifyFrozenOpenData(frozen, preregistration) {
@@ -275,8 +334,22 @@ export function verifyFrozenOpenData(frozen, preregistration) {
     }
   }
   if (Object.values(frozen.splits).flat().length > frozen.samplePolicy.maxItems) throw new Error('sample exceeds manifest max');
-  const { license, retrievalDate, sourceFiles, tasks, splitHashes, splits } = frozen;
-  if (digest({ license, retrievalDate, sourceFiles, tasks, splitHashes, splits }) !== frozen.sampleDigest) {
+  if (Math.abs(1 - preregistration.coverageTarget - preregistration.alpha) > 1e-12) throw new Error('alpha and coverage target disagree');
+  const live = frozen.liveSubsets;
+  if (!live || digest(live.policy) !== digest(frozen.samplePolicy.live)) throw new Error('live subset policy mismatch');
+  let liveItems = 0;
+  for (const split of LIVE_SPLITS) {
+    const rows = liveSubsetRows(frozen, split);
+    if (new Set(live.ids[split]).size !== rows.length || rows.length !== live.policy[split].count) throw new Error(`live subset size mismatch: ${split}`);
+    if (rows.some(row => row.task !== live.policy.task)) throw new Error(`live subset task mismatch: ${split}`);
+    if (rowHash(rows) !== live.hashes[split]) throw new Error(`live subset hash mismatch: ${split}`);
+    liveItems += rows.length;
+  }
+  if (liveItems !== preregistration.resourceBudget.liveSubsetItems || liveItems > preregistration.resourceBudget.liveMaxItems) {
+    throw new Error('live subset size disagrees with the preregistered live budget');
+  }
+  const { license, retrievalDate, sourceFiles, tasks, splitHashes, splits, liveSubsets } = frozen;
+  if (digest({ license, retrievalDate, sourceFiles, tasks, splitHashes, splits, liveSubsets }) !== frozen.sampleDigest) {
     throw new Error('sample digest mismatch');
   }
 }
@@ -289,7 +362,6 @@ export function syntheticChoiceDistribution(row, task) {
   const wrong = (truth + 1 + Math.floor(stableUnit('synthetic-wrong-v2', row.id) * (n - 1))) % n;
   let trueP;
   if (row.slice === 'controlled-oos') trueP = 0.04;
-  else if (row.slice === 'source-separated') trueP = u < 0.55 ? 0.62 : u < 0.85 ? 0.42 : 0.18;
   else trueP = u < 0.72 ? 0.84 : u < 0.92 ? 0.48 : 0.24;
   values[truth] = trueP;
   if (row.slice === 'controlled-oos') values[wrong] = 0.78;
@@ -313,13 +385,38 @@ export function compatibilityForTask(frozen, taskId, alpha, codeVersion, overrid
     method: overrides.method ?? 'lac-v1',
     calibrationSplit: overrides.calibrationSplit,
     codeVersion,
+    prompt: overrides.prompt ?? 'synthetic-score-stand-in/no-prompt',
     alpha,
   };
 }
 
+/**
+ * The live compatibility key comes only from the preregistration and the frozen live subset,
+ * never from a score record, so a record can not vouch for its own model, adapter or code.
+ */
+export function expectedLiveCompatibility(frozen, preregistration, taskId) {
+  const pins = preregistration.pins;
+  if (!liveTaskIds(frozen).includes(taskId)) throw new Error(`task ${taskId} has no preregistered live subset`);
+  return compatibilityForTask(frozen, taskId, preregistration.alpha, pins.collectorCodeDigest, {
+    servedModel: pins.liveServedModel,
+    adapter: pins.liveAdapter,
+    method: preregistration.methods[0].id,
+    calibrationSplit: frozen.liveSubsets.hashes.calibration,
+    prompt: pins.livePromptDigest,
+  });
+}
+
+export const COMPATIBILITY_FIELDS = [
+  'servedModel', 'primitive', 'definition', 'adapter', 'datasetPopulation', 'method', 'calibrationSplit', 'codeVersion', 'prompt', 'alpha',
+];
+
 export function assertCompatibleProfile(actual, expected) {
-  for (const field of ['servedModel', 'primitive', 'definition', 'adapter', 'datasetPopulation', 'method', 'calibrationSplit']) {
-    if (actual?.[field] !== expected?.[field]) throw new Error(`incompatible conformal profile: ${field}`);
+  if (!actual || typeof actual !== 'object') throw new Error('incompatible conformal profile: missing compatibility');
+  const unexpected = Object.keys(actual).filter(field => !COMPATIBILITY_FIELDS.includes(field));
+  if (unexpected.length) throw new Error(`incompatible conformal profile: unexpected ${unexpected.join(', ')}`);
+  for (const field of COMPATIBILITY_FIELDS) {
+    if (expected?.[field] === undefined || expected?.[field] === null) throw new Error(`incompatible conformal profile: expected ${field} is unknown`);
+    if (actual[field] !== expected[field]) throw new Error(`incompatible conformal profile: ${field}`);
   }
 }
 
@@ -330,7 +427,7 @@ export function fitConformalProfile(rows, frozen, taskId, alpha, codeVersion, op
     const probabilities = getProbabilities(row);
     return 1 - probabilities[row.labelIndex];
   });
-  const compatibility = compatibilityForTask(frozen, taskId, alpha, codeVersion, {
+  const compatibility = options.compatibility ?? compatibilityForTask(frozen, taskId, alpha, codeVersion, {
     servedModel: options.servedModel,
     adapter: options.adapter,
     method: options.method,

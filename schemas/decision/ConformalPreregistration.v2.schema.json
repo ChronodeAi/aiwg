@@ -14,6 +14,7 @@
     "tasks",
     "pins",
     "splits",
+    "liveDesign",
     "coverageTarget",
     "usefulnessGates",
     "sampleSizeRationale",
@@ -27,58 +28,228 @@
     "sources"
   ],
   "properties": {
-    "schemaVersion": { "const": "conformal-preregistration/v2" },
-    "issue": { "const": 2613 },
-    "mode": { "type": "string", "minLength": 1 },
-    "status": { "const": "experimental-default-off" },
+    "schemaVersion": {
+      "const": "conformal-preregistration/v2"
+    },
+    "issue": {
+      "const": 2613
+    },
+    "mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "const": "experimental-default-off"
+    },
     "methods": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "source", "nonconformity", "quantile", "tiePolicy"],
+        "required": [
+          "id",
+          "source",
+          "nonconformity",
+          "quantile",
+          "tiePolicy"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "source": { "type": "string", "minLength": 1 },
-          "nonconformity": { "type": "string", "minLength": 1 },
-          "quantile": { "type": "string", "minLength": 1 },
-          "tiePolicy": { "type": "string", "minLength": 1 }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nonconformity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "quantile": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tiePolicy": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
-    "alpha": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+    "alpha": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1
+    },
     "tasks": {
       "type": "array",
       "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "primitive", "dataset", "datasetUrl", "license", "definition", "shift"],
+        "required": [
+          "id",
+          "primitive",
+          "dataset",
+          "datasetUrl",
+          "license",
+          "definition",
+          "shift"
+        ],
         "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "primitive": { "const": "choice" },
-          "dataset": { "type": "string", "minLength": 1 },
-          "datasetUrl": { "type": "string", "format": "uri" },
-          "license": { "enum": ["CC-BY-3.0", "CC-BY-4.0"] },
-          "definition": { "type": "string", "minLength": 1 },
-          "shift": { "type": "string", "minLength": 1 }
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "primitive": {
+            "const": "choice"
+          },
+          "dataset": {
+            "type": "string",
+            "minLength": 1
+          },
+          "datasetUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "license": {
+            "enum": [
+              "CC-BY-3.0",
+              "CC-BY-4.0"
+            ]
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "shift": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
-    "pins": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+    "pins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offlineServedModel",
+        "liveServedModel",
+        "liveAdapter",
+        "liveAdapterVersion",
+        "definition",
+        "seed",
+        "collectorCodeDigest",
+        "livePromptDigest"
+      ],
+      "properties": {
+        "offlineServedModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "liveServedModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "liveAdapter": {
+          "type": "string",
+          "minLength": 1
+        },
+        "liveAdapterVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "definition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "string",
+          "minLength": 1
+        },
+        "collectorCodeDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "livePromptDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
     "splits": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["train", "calibration", "finalTest", "shift"],
+      "required": [
+        "train",
+        "calibration",
+        "finalTest",
+        "shift"
+      ],
       "properties": {
-        "train": { "type": "string", "minLength": 1 },
-        "calibration": { "type": "string", "minLength": 1 },
-        "finalTest": { "type": "string", "minLength": 1 },
-        "shift": { "type": "string", "minLength": 1 }
+        "train": {
+          "type": "string",
+          "minLength": 1
+        },
+        "calibration": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finalTest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shift": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
-    "coverageTarget": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+    "liveDesign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task",
+        "calibration",
+        "finalTest",
+        "shift",
+        "selection",
+        "rationale"
+      ],
+      "properties": {
+        "task": {
+          "type": "string",
+          "minLength": 1
+        },
+        "calibration": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "finalTest": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "shift": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "selection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "coverageTarget": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "exclusiveMaximum": 1
+    },
     "usefulnessGates": {
       "type": "object",
       "additionalProperties": false,
@@ -92,19 +263,67 @@
         "mustNotUpgradeIntegrityHoldOrRollback"
       ],
       "properties": {
-        "minimumFinalRowsPerTask": { "type": "integer", "minimum": 1 },
-        "minimumSliceRows": { "type": "integer", "minimum": 1 },
-        "minimumCoverageWilsonLower": { "type": "number", "minimum": 0, "maximum": 1 },
-        "maximumMeanSetSizeFractionOfLabels": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-        "maximumReviewRate": { "type": "number", "minimum": 0, "maximum": 1 },
-        "maximumSelectiveRisk": { "type": "number", "minimum": 0, "maximum": 1 },
-        "mustNotUpgradeIntegrityHoldOrRollback": { "const": true }
+        "minimumFinalRowsPerTask": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimumSliceRows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimumCoverageWilsonLower": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "maximumMeanSetSizeFractionOfLabels": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "maximumReviewRate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "maximumSelectiveRisk": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "mustNotUpgradeIntegrityHoldOrRollback": {
+          "const": true
+        }
       }
     },
-    "sampleSizeRationale": { "type": "string", "minLength": 1 },
-    "baselines": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
-    "metrics": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
-    "compatibilityKey": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "sampleSizeRationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "baselines": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "compatibilityKey": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "resourceBudget": {
       "type": "object",
       "additionalProperties": false,
@@ -113,42 +332,146 @@
         "offlineTokens",
         "offlineUsd",
         "liveHardCeilingUsd",
-        "conservativeMaxTokensPerCall",
-        "conservativeUsdPerMillionTokens",
-        "estimatedUsdPerItem",
+        "inputUsdPerMillionTokensCeiling",
+        "outputUsdPerMillionTokensCeiling",
+        "measuredMaxRequestBodyBytes",
+        "serverOverheadTokensAllowance",
+        "maxInputTokensPerCall",
+        "maxOutputTokensPerCall",
         "maxRetriesPerItem",
+        "maxAttemptsPerItemTotal",
         "maxConsecutiveErrors",
+        "maxTerminalFailureFraction",
         "liveMaxItems",
+        "liveSubsetItems",
         "sampleMaxItems"
       ],
       "properties": {
-        "offlineProviderCalls": { "const": 0 },
-        "offlineTokens": { "const": 0 },
-        "offlineUsd": { "const": 0 },
-        "liveHardCeilingUsd": { "type": "number", "maximum": 8 },
-        "conservativeMaxTokensPerCall": { "type": "integer", "minimum": 1 },
-        "conservativeUsdPerMillionTokens": { "type": "number", "exclusiveMinimum": 0 },
-        "estimatedUsdPerItem": { "type": "number", "exclusiveMinimum": 0 },
-        "maxRetriesPerItem": { "type": "integer", "minimum": 0, "maximum": 3 },
-        "maxConsecutiveErrors": { "type": "integer", "minimum": 1, "maximum": 10 },
-        "liveMaxItems": { "type": "integer", "minimum": 1 },
-        "sampleMaxItems": { "type": "integer", "minimum": 1 }
+        "offlineProviderCalls": {
+          "const": 0
+        },
+        "offlineTokens": {
+          "const": 0
+        },
+        "offlineUsd": {
+          "const": 0
+        },
+        "liveHardCeilingUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 8
+        },
+        "inputUsdPerMillionTokensCeiling": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "outputUsdPerMillionTokensCeiling": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "measuredMaxRequestBodyBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "serverOverheadTokensAllowance": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxInputTokensPerCall": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxOutputTokensPerCall": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxRetriesPerItem": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "maxAttemptsPerItemTotal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+        },
+        "maxConsecutiveErrors": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "maxTerminalFailureFraction": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.2
+        },
+        "liveMaxItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        },
+        "liveSubsetItems": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        },
+        "sampleMaxItems": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "liveCollection": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["enabledByDefault", "requiredEnv", "credentialEnv", "dryRunDefault", "networkRule"],
+      "required": [
+        "enabledByDefault",
+        "requiredEnv",
+        "credentialEnv",
+        "dryRunDefault",
+        "networkRule",
+        "amendment"
+      ],
       "properties": {
-        "enabledByDefault": { "const": false },
-        "requiredEnv": { "const": "AIWG_DECISION_JEV_LIVE_SMOKE=1" },
-        "credentialEnv": { "const": "AIWG_DECISION_JEV_API_KEY" },
-        "dryRunDefault": { "const": true },
-        "networkRule": { "type": "string", "minLength": 1 }
+        "enabledByDefault": {
+          "const": false
+        },
+        "requiredEnv": {
+          "const": "AIWG_DECISION_JEV_LIVE_SMOKE=1"
+        },
+        "credentialEnv": {
+          "const": "AIWG_DECISION_JEV_API_KEY"
+        },
+        "dryRunDefault": {
+          "const": true
+        },
+        "networkRule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "amendment": {
+          "type": "string",
+          "minLength": 1
+        }
       }
     },
-    "outcomeRule": { "type": "string", "minLength": 1 },
-    "nonGoals": { "type": "array", "items": { "type": "string", "minLength": 1 } },
-    "sources": { "type": "array", "items": { "type": "string", "format": "uri" } }
+    "outcomeRule": {
+      "type": "string",
+      "minLength": 1
+    },
+    "nonGoals": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      }
+    }
   }
 }
