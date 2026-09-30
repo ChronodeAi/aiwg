@@ -17,6 +17,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   preregistered shadow report verified by rebuild, a D17 rollback drill that
   restores the prior routing policy, docs, tests and an offline synthetic
   example (#2620).
+- Experimental/default-off SDLC evidence readiness screening for citation
+  support and phase-gate criteria, with closed schemas, deterministic preflight
+  against a host-pinned gate policy artifact, D08 native-distribution
+  acceptance, D09 registry calibration and D10 review routing, shadow-mode
+  receipts, a D13 durable-review bridge, record-computed held-out
+  preregistration with paired non-inferiority against the baseline, docs and
+  offline tests (#2622).
 - Experimental default-off D17 decision ensemble runtime APIs for bounded
   member dispatch, paired champion/challenger shadow evaluation, drift-response
   execution, promotion gating on D09 plus eval-integrity, rollback for new runs,
