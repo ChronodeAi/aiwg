@@ -442,8 +442,9 @@ export function patternCallRatioExceeded(pairs: readonly DagLivePair[], pattern:
 
 /** Operator-facing defaults for the dry run and approval template (USD 0.10/1M ceiling, USD 2.00 cap). */
 export const DAG_LIVE_DEFAULT_LIMITS: Pick<DagLiveApproval, 'budget' | 'priceBound' | 'priorSpendUsd' | 'taskDeadlineMs'> = {
-  budget: { usd: 2, calls: 1_400, tokens: 6_000_000, wallClockMs: 14_400_000,
-    perPattern: { usd: 0.25, calls: 500, tokens: 2_000_000, wallClockMs: 5_400_000 } },
+  // Room for the worst case including one retry per call (2200 calls, 8.8M tokens, USD 0.88 reserved) under the 80% stop.
+  budget: { usd: 2, calls: 3_000, tokens: 12_000_000, wallClockMs: 14_400_000,
+    perPattern: { usd: 0.5, calls: 1_000, tokens: 4_000_000, wallClockMs: 5_400_000 } },
   priceBound: { inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, evidenceReferences: [
     'https://www.eesel.ai/blog/typesafe-jev-pricing', 'https://www.mindstudio.ai/blog/jev-pricing-cost-per-token',
     'roctinam/aiwg#2613 comment 153093: live smoke jev-1.13.0, 369 input / 38 output tokens'],
@@ -684,19 +685,23 @@ export function planDagLiveQualification(workload: DagLiveWorkload, preregistrat
       }
     }
     const baselineCalls = tasks.length, candidateCalls = tasks.length * DAG_LIVE_MAX_CANDIDATE_CALLS[pattern];
-    const calls = baselineCalls + candidateCalls;
-    return { pattern, tasks: tasks.length, worstCase: { baselineCalls, candidateCalls, calls, tokens: calls * bound,
+    const firstAttemptCalls = baselineCalls + candidateCalls;
+    // Every call may take the preregistered retry, and each retry is reserved like a call.
+    const retryCalls = firstAttemptCalls * preregistration.analysis.providerFailurePolicy.retriesPerCall;
+    const calls = firstAttemptCalls + retryCalls;
+    return { pattern, tasks: tasks.length, worstCase: { baselineCalls, candidateCalls, firstAttemptCalls, retryCalls, calls, tokens: calls * bound,
       reservedUsd: calls * perCallMicros / 1_000_000 },
     estimatedVisibleTokens: expectedTokens, largestEstimatedCallTokens: largestCall,
     withinPatternStop: calls <= Math.floor(limits.budget.perPattern.calls * fraction) && calls * bound <= Math.floor(limits.budget.perPattern.tokens * fraction)
       && calls * perCallMicros <= Math.floor(limits.budget.perPattern.usd * 1_000_000 * fraction) };
   });
   const calls = patterns.reduce((sum, p) => sum + p.worstCase.calls, 0);
+  const firstAttempts = patterns.reduce((sum, p) => sum + p.worstCase.firstAttemptCalls, 0);
   const reservedUsd = patterns.reduce((sum, p) => sum + p.worstCase.reservedUsd, 0);
   const visible = patterns.reduce((sum, p) => sum + p.estimatedVisibleTokens, 0);
   return { schemaVersion: 'dag-live-plan/v1', providerCalls: 0, workloadDigest: dagLiveDigest(workload), preregistrationDigest: dagLiveDigest(preregistration),
     perCallTokenBound: bound, stopFraction: fraction, patterns,
-    totals: { worstCaseCalls: calls, worstCaseTokens: calls * bound, worstCaseReservedUsd: Math.round(reservedUsd * 1e6) / 1e6,
+    totals: { worstCaseFirstAttemptCalls: firstAttempts, worstCaseCalls: calls, worstCaseTokens: calls * bound, worstCaseReservedUsd: Math.round(reservedUsd * 1e6) / 1e6,
       estimatedVisibleTokens: visible, estimatedBillableUsdAtAttestedInputPrice: Math.round(visible * limits.priceBound.inputUsdPerMTok) / 1e6,
       reservationUsdPerCall: perCallMicros / 1e6,
       hardCapUsd: DAG_LIVE_HARD_CAP_USD },

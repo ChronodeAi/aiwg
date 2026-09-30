@@ -211,7 +211,13 @@ describe('D12 budget, plan and stop rules', () => {
     const preregistration = dagLivePreregistration(workload);
     const plan = planDagLiveQualification(workload, preregistration, { ...limits, priceBound: PRICE });
     expect(plan.providerCalls).toBe(0);
-    expect(plan.totals).toMatchObject({ worstCaseCalls: 1100, worstCaseTokens: 4_400_000, worstCaseReservedUsd: 0.44, hardCapUsd: 2 });
+    // Worst case includes the preregistered retry on every call: 1100 first attempts plus 1100 retries.
+    expect(plan.totals).toMatchObject({ worstCaseFirstAttemptCalls: 1100, worstCaseCalls: 2200, worstCaseTokens: 8_800_000, worstCaseReservedUsd: 0.88, hardCapUsd: 2 });
+    expect(plan.patterns.find(p => p.pattern === 'taxonomy-beam')!.worstCase).toMatchObject({ firstAttemptCalls: 400, retryCalls: 400, calls: 800 });
+    // The earlier ceilings had no room for retries: taxonomy alone used the whole per-pattern call stop.
+    const noRetryRoom = { ...limits, priceBound: PRICE, budget: { ...limits.budget, calls: 1_400, tokens: 6_000_000,
+      perPattern: { ...limits.budget.perPattern, calls: 500, tokens: 2_000_000 } } };
+    expect(planDagLiveQualification(workload, preregistration, noRetryRoom).withinBudget).toBe(false);
     expect(plan.withinBudget).toBe(true);
     expect(plan.boundCoversLargestEstimate).toBe(true);
     expect(planDagLiveQualification(workload, preregistration, { ...limits, priceBound: PRICE, budget: { ...limits.budget, calls: 1_000 } }).withinBudget).toBe(false);
@@ -613,7 +619,7 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
         env: { ...process.env, AIWG_DECISION_DAG_LIVE: '' } });
       expect(dry.status).toBe(0);
       const plan = JSON.parse(dry.stdout);
-      expect(plan).toMatchObject({ providerCalls: 0, withinBudget: true, totals: { worstCaseCalls: 1100, worstCaseReservedUsd: 0.44 } });
+      expect(plan).toMatchObject({ providerCalls: 0, withinBudget: true, totals: { worstCaseCalls: 2200, worstCaseReservedUsd: 0.88 } });
       expect(plan.approvalTemplate.priceBound).toMatchObject({ inputUsdPerMTok: 0.042, outputUsdPerMTok: 0 });
       const freeze = spawnSync(process.execPath, ['tools/decision/dag-live-qualification.mjs', '--freeze', out], { encoding: 'utf8', timeout: 120_000 });
       expect(freeze.status).toBe(0);

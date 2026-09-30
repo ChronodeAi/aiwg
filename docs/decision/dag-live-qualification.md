@@ -152,8 +152,17 @@ source through the `tsx` dev dependency, so they are safe on the titan host, whi
 does not allow heavy builds. Only `--collect-approved` runs `npm run build:cli`.
 
 The dry run reports worst-case calls, tokens and reserved USD for the frozen
-workload against the default or approved limits. On the defaults, the worst case is
-1100 calls, 4.4M reserved tokens and USD 0.44 reserved, well inside the USD 2.00 cap.
+workload against the default or approved limits. The worst case assumes the
+preregistered retry on every call: 1100 first attempts plus 1100 retries, so 2200
+calls, 8.8M reserved tokens and USD 0.88 reserved, well inside the USD 2.00 cap.
+
+The default ceilings leave room for that under the 80% stop:
+
+- Whole run: 3000 calls, 12M tokens and USD 2.00.
+- Per pattern: 1000 calls, 4M tokens and USD 0.50.
+
+The earlier ceilings of 1400 and 500 calls had no room for retries: taxonomy alone
+used the whole per-pattern call stop.
 The visible-payload estimate is about 0.32M tokens. Jev's own prompt overhead is not
 included. The assessment estimated about 1.7M billed tokens, roughly USD 0.07 at the
 input price.
