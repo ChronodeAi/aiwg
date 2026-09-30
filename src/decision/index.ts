@@ -53,3 +53,6 @@ export * from './sensitivity/index.js';
 export * from './issue-triage/index.js';
 export * from './routing/index.js';
 export * from './interop.js';
+export { collectHeldoutStudy, scoreHeldoutStudy } from './heldout/collector.js';
+export { heldoutDigest, heldoutExecutionDigest, planHeldoutCollection, validateHeldoutBundle } from './heldout/contract.js';
+export type { HeldoutApproval, HeldoutBundle, HeldoutCorpus, HeldoutPreregistration, HeldoutStudyModule } from './heldout/types.js';

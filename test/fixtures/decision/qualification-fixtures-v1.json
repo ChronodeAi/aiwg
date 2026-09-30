@@ -1804,6 +1804,23 @@
         "#2686",
         "#2608"
       ]
+    },
+    {
+      "id": "DEC-HELDOUT-01",
+      "path": "agentic/code/addons/decision-engine/examples/heldout-collector-offline.mjs",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:0b78851bb322f3b1513c506ac2be97572ffa6850f0a4a81c1f741c6c45b35403",
+      "expectedOutcome": "Two-subject offline generator/scorer interface example; no live qualification or promotion",
+      "links": [
+        "JEV-16",
+        "#2611",
+        "#2622"
+      ]
     }
   ]
 }
