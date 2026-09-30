@@ -12,9 +12,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Experimental, default-off D29 synthetic evidence/citation study with 1,600
   seeded subjects, frozen splits and preregistration, receipt-based scoring,
   calibration-only readiness mapping, native and external report gates,
-  source-only dry-run and approval forms, and a 132-assessment operator review
-  template. Live observations, calibration qualification and human review remain
-  pending (#2622)
+  registered row/corpus regeneration, source-only byte-priced dry-run and
+  free-output approval form, and a 132-assessment operator review template.
+  Live observations, calibration qualification and human review remain pending
+  (#2622)
 
 - Experimental, default-off shared D17/D29 held-out collector with source-only
   preparation and dry-run CLI, synthetic provenance checks, priced pre-dispatch

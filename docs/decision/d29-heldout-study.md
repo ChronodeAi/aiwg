@@ -24,11 +24,13 @@ provider state. Do not manually inspect final-test gold or predictions before
 anchoring the preregistration and completing development review. A machine may
 generate/hash gold; that does not constitute operator review.
 
-The manifest pins all 1,600 memberships, source/scorer byte digests, seed,
+The manifest pins all 1,600 memberships, registered generator/scorer byte digests, seed,
 synthetic provenance, gold digest and the separate analysis digest. Split
 membership digests use `freezeQualificationSplit`. Each family has one newly
 authored fictional world, allocated to one split before its hash-counter draws.
-The seed is part of the family ID. Integer draws use rejection sampling over
+The seed is part of the family ID. Each row is re-derived by the collector's
+`d29-synthetic/v1` registry entry, including its local outcome and request list.
+Integer draws use rejection sampling over
 SHA-256 of the common protocol string, with no model-dependent selection.
 Source content uses canonical JSON digests, rather than file-format hashes.
 Local locators identify the generated corpus inventory; they do not assert
@@ -50,14 +52,27 @@ request fee. The supplied evidence references are
 [MindStudio](https://www.mindstudio.ai/blog/jev-pricing-cost-per-token), and
 `roctinam/aiwg#2613 comment 153093`. These references were supplied by the
 assignment; this offline implementation does not independently verify pricing.
-The operator must attest them. Reservations use the collector's USD 0.10 per
-million total-token floor, or a higher approved rate. Study cap: USD 6;
-80% stop: USD 4.80, further reduced by prior spend.
+The operator must attest them. Input reservations use projected request UTF-8
+bytes plus the preregistered 512-token provider overhead allowance, at no less
+than USD 0.10 per million input tokens. The Jev approval must attest output
+price exactly zero. Study cap: USD 6; 80% stop: USD 4.80, further reduced by
+prior spend. The operator must reconcile actual prior study/portfolio spend with
+the collector's baseline genesis, hash-chained counter and spend head before
+approving a run; an incomplete or changed counter refuses collection.
+
+The preregistration records that these source-only manifests were regenerated
+for collector commit `0cbde8721` before any live observations existed. Its
+`regeneration.priorLiveObservations` is zero; it is not an observation or an
+operator attestation. The current source dry-run reports corpus
+`sha256:8ae169c7d333e24a9e0b46f2832f724667bebc95a9c9678cc76fbae2ca9fca3b`,
+preregistration `sha256:f99530e1c31503f6d272a9e93a9a15769f0655baf75f32fc7aa747d991d25b65`,
+and incomplete approval template
+`sha256:18f4ea8a5d3c562e7dfb8a97357a1e62bf8512f9e84261faa7760e4a460b76ec`.
 
 One-line approval text, with the actual emitted values substituted:
 
 ```text
-I, roctinam, approve D29 synthetic-only collection for preregistration <PREREGISTRATION_DIGEST>, analysis <ANALYSIS_DIGEST>, corpus <CORPUS_DIGEST> and completed approval <APPROVAL_DIGEST>, at USD 0.042/M input and free output, reserving at least USD 0.10/M total tokens within the USD 6 study cap; no gate, publication, efficiency or production promotion is authorized.
+I, roctinam, approve D29 synthetic-only collection for preregistration <PREREGISTRATION_DIGEST>, analysis <ANALYSIS_DIGEST>, corpus <CORPUS_DIGEST> and completed approval <APPROVAL_DIGEST>, at USD 0.042/M input and free output, reserving projected UTF-8 bytes plus 512 provider overhead tokens at no less than USD 0.10/M input within the USD 6 study cap and reconciled spend counter; no gate, publication, efficiency or production promotion is authorized.
 ```
 
 Assemble `bundle.json` with exactly `corpus`, `preregistration`, and the
@@ -204,17 +219,19 @@ one reviewer, modest agreement precision and no inter-rater claim. Review the
 preregistration and final disposition as two additional artifact reviews.
 The JSON template supports this two-phase local review; no web review UI ships.
 
-| Planning case | Initial requests | Attempts | Tokens | USD |
+| Source-only planning case | Initial requests | Attempts | Tokens | USD |
 | --- | ---: | ---: | ---: | ---: |
-| Executable individual questions, 2.5% retry assumption | 4,500 | 4,612.5 expected | 9,225,000 expected input | 0.38745 estimated |
-| Native batching assumption from design, not implemented in collector | 1,300 | 1,332.5 expected | 2,665,000 expected input | 0.11193 estimated |
-| All individual questions retried once | 4,500 | 9,000 maximum | 36,000,000 total reserved | 3.60 reserved |
+| Individual questions, 2.5% retry assumption | 4,500 | 4,612.5 expected | 4,563,248.75 input reserved; 5,744,048.75 total reserved | 0.1916564475 input at attested tariff; 0.458356425 reserved |
+| Every individual question retried once | 4,500 | 9,000 maximum | 8,903,900 input reserved; 11,207,900 total reserved | 0.894354 reserved |
 
-Expected attempts are fractional expectations, not observed calls. Expected
-input is 2,000 tokens per attempt; output is free under the proposed tariff.
-Worst-case per-request bound is 4,000 total tokens. Approved ceilings must be
-at least 11,250 calls and 45,000,000 tokens to accommodate the 80% stop rule.
-The permitted unbatched path fits the USD 6 cap. Concurrency remains one,
+Expected attempts are fractional expectations, not observed calls. These
+figures use the source dry-run's `fixture-region` projection identity; a real
+approved region can change serialized bytes. Run the shared collector
+`--dry-run` against the completed approval for authoritative preflight numbers.
+The 256 output/hidden token allowance counts toward reserved tokens, while
+free output adds no reserved dollars. The preregistered per-request bound is
+4,000 total tokens. The template ceilings are 11,250 calls and 45,000,000
+tokens so the 80% stop rule leaves room for this path. Concurrency remains one,
 dispatch intervals at least one second; this is resumable collection, not a
 soak or load qualification. No generative judge or executor is needed.
 
