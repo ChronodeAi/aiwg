@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off shared D17/D29 held-out collector with source-only
+  preparation and dry-run CLI, synthetic provenance checks, priced pre-dispatch
+  reservations, durable cross-run caps, scoped Jev resolution and D11 recorded
+  evidence. Study-specific live data, calibration, statistical reports and human
+  review remain pending (#2611)
+
 - Source-checkout TV-12 tooling for D06 live qualification: a digest-pinned OpenBao AppRole
   credential resolver for Jev, a no-call `--dry-run` estimate, reviewer-approved profile and
   margin recording from the preregistered rule, a stored-record enforcement check, and an

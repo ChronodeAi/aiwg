@@ -115,3 +115,11 @@ Messages name the logical reference and the variable name only. The key value
 never appears in results, receipts, or diagnostics. The receipt key's logical
 reference is reserved: a binding that names it as a backend `credentialRef` is
 refused, so the key cannot be sent to a remote backend.
+
+## Held-out study collection
+
+Source-checkout operators can use the experimental, default-off
+[shared held-out collector](../../../../../docs/decision/heldout-collector.md)
+for synthetic D17/D29 study modules. Preparation and dry-run use source directly;
+collection needs a separate priced, digest-bound approval and explicit env gate.
+The collector does not promote models or establish study quality.
