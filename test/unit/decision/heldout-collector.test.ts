@@ -580,3 +580,158 @@ describe('collector re-verification cap probes', () => {
     await expect(prepare(seed)).rejects.toThrow();
   });
 });
+
+// #2778 calibration scopes and staged approvals; all observations remain offline fixtures.
+describe('held-out calibration scope and two-phase approval', () => {
+  async function scoped(mode: 'staged' | 'uncalibrated-diagnostic' | 'artifact' = 'staged') {
+    const c = await setup(3);
+    delete (c.bundle.approval as any).calibrationDigest;
+    Object.assign(c.bundle.preregistration, { calibration: mode === 'uncalibrated-diagnostic'
+      ? { scope: mode, allowedModes: [mode] }
+      : { scope: 'calibrated', allowedModes: [mode], ...(mode === 'staged' ? { calibrationPhaseSplits: ['tuning', 'calibration'] } : {}) } });
+    Object.assign(c.bundle.approval, { calibration: mode === 'staged' ? { mode, phase: 'calibration' }
+      : mode === 'artifact' ? { mode, calibrationArtifactDigest: pin } : { mode } });
+    if (mode === 'staged') c.bundle.corpus.rows = ['tuning', 'calibration', 'test'].map((split, i) =>
+      generateHeldoutRow('heldout-lamp-splits/v1', `fresh-example:${i}:single:${split}`));
+    c.refresh(); return c;
+  }
+  const metadata = () => ({ sample_n: 3, uncertainty: {}, paired_baseline: {}, integrity_mode: 'locked', fresh_workspace_required: false,
+    fresh_workspace_verified: false, integrity_state: 'verified', trusted_score_source: 'locked-artifact-snapshot', compromise_labels: [],
+    weak_signal_reason: null, release_gate: { decision: 'HOLD' as const, reasons: ['fixture'] } });
+  async function scoreRun(c: Awaited<ReturnType<typeof setup>>, summary: any, score = vi.fn(async () => ({ calibrated: false }))) {
+    const integrity = metadata();
+    return scoreHeldoutStudy({ run: join(heldoutRunsRoot(c.root), c.bundle.approval.runId), trustedEvidenceDigest: summary.evidenceDigest,
+      trustedApprovalDigest: heldoutDigest(c.bundle.approval), module: { prepare, score } as HeldoutStudyModule,
+      moduleDigest: c.bundle.preregistration.scorerDigest, gold: c.gold, integrity, trustedIntegrityDigest: heldoutDigest(integrity) });
+  }
+  async function testApproval(c: Awaited<ReturnType<typeof setup>>, summary: any) {
+    const priorApprovalDigest = heldoutDigest(c.bundle.approval);
+    c.bundle.approval.runId = 'test-phase';
+    Object.assign(c.bundle.approval, { calibration: { mode: 'staged', phase: 'test', calibrationArtifactDigest: pin,
+      calibrationPhaseRecordDigest: summary.calibrationPhaseRecordDigest, priorApprovalDigest } });
+    await c.clock.sleep(1); c.refresh();
+  }
+  it('AC1/3 explicitly binds diagnostic scoring and refuses calibrated claims or an unregistered scope', async () => {
+    const c = await scoped('uncalibrated-diagnostic'); const summary = await c.run(fake());
+    const score = vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE' }));
+    expect(await scoreRun(c, summary, score)).toMatchObject({ calibrated: false, d09Qualified: false, calibratedGate: false,
+      approvedCalibration: { mode: 'uncalibrated-diagnostic' }, decision: 'HOLD' });
+    expect(score.mock.calls[0][0]).toMatchObject({ calibrated: false, approvedCalibration: { mode: 'uncalibrated-diagnostic' } });
+    for (const diagnostic of [{}, { calibrated: true }, { calibrated: false, d09Qualified: true }, { calibrated: false, calibratedGate: true }]) {
+      await expect(scoreRun(c, summary, vi.fn(async () => diagnostic) as any)).rejects.toThrow('uncalibrated-report');
+    }
+    Object.assign(c.bundle.preregistration, { calibration: { scope: 'calibrated', allowedModes: ['artifact'] } }); c.refresh();
+    await expect(c.run(fake())).rejects.toThrow('calibration-scope');
+  });
+  it('AC1 closes each calibration variant and refuses bare, null and mixed bindings', async () => {
+    const c = await scoped('artifact');
+    expect(() => validateHeldoutBundle(c.bundle, heldoutDigest(c.bundle.approval))).not.toThrow();
+    for (const calibration of [null, {}, { mode: 'artifact', calibrationArtifactDigest: null },
+      { mode: 'artifact', calibrationArtifactDigest: pin, phase: 'test' }, { mode: 'staged', phase: 'test' },
+      { mode: 'uncalibrated-diagnostic', calibrationArtifactDigest: pin }]) {
+      const bad = structuredClone(c.bundle); Object.assign(bad.approval, { calibration });
+      expect(() => validateHeldoutBundle(bad, heldoutDigest(bad.approval))).toThrow();
+    }
+    const bad = structuredClone(c.bundle); delete (bad.approval as any).calibration; Object.assign(bad.approval, { calibrationDigest: pin });
+    expect(() => validateHeldoutBundle(bad, heldoutDigest(bad.approval))).toThrow();
+  });
+  it('AC1/3/5 a known fixture artifact digest remains an unvalidated binding, including at the scorer', async () => {
+    const c = await scoped('artifact');
+    const fixture = JSON.parse(await readFile(resolve('docs/decision/evidence/calibration-qualification-v1/calibration-artifact.json'), 'utf8'));
+    Object.assign(c.bundle.approval, { calibration: { mode: 'artifact', calibrationArtifactDigest: heldoutDigest(fixture) } });
+    const summary = await c.run(fake()), score = vi.fn(async () => ({ calibrated: false }));
+    const report = await scoreRun(c, summary, score);
+    expect(score.mock.calls[0][0].approvedCalibration).toEqual((c.bundle.approval as any).calibration);
+    expect(report).toMatchObject({ calibrated: null, d09Qualified: false, calibratedGate: false, calibrationArtifactValidation: 'not-performed' });
+  });
+  it('AC1/2 dry-run estimates only declared phase rows and forbids test requests in calibration', async () => {
+    const c = await scoped();
+    const estimate = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));
+    expect(estimate).toMatchObject({ calibration: { mode: 'staged', phase: 'calibration' }, rowsInScope: ['row_0', 'row_1'],
+      maximumAttempts: 4, reservedUsdMicros: 304, fitsBeforeStop: true, providerCalls: 0 });
+    const { heldoutRequest } = await import('../../../src/decision/heldout/contract.js');
+    const row = c.bundle.corpus.rows[2];
+    await expect(heldoutRequest(c.bundle.corpus, c.bundle.preregistration, c.bundle.approval, row, row.requests[0])).rejects.toThrow('calibration-phase-row');
+    (c.bundle.preregistration as any).calibration.calibrationPhaseSplits = ['test']; c.refresh();
+    await expect(c.run(fake())).rejects.toThrow('schema');
+  });
+  it('AC1/3 seals calibration lineage and accesses only test rows after a matching approval and seal', async () => {
+    const c = await scoped(), transport = fake();
+    const first: any = await c.run(transport);
+    expect(first).toMatchObject({ status: 'complete', completedRows: 2, missingRows: [] });
+    expect(transport).toHaveBeenCalledTimes(2);
+    const seal = JSON.parse(await readFile(join(c.runDir, 'calibration-phase.json'), 'utf8'));
+    expect(first.calibrationPhaseRecordDigest).toBe(heldoutDigest(seal));
+    expect(seal).toMatchObject({ schemaVersion: 'decision-heldout-calibration-phase/v1', approvalDigest: heldoutDigest(c.bundle.approval),
+      rowIds: ['row_0', 'row_1'], corpusDigest: c.bundle.approval.corpusDigest, preregistrationDigest: c.bundle.approval.preregistrationDigest });
+    expect(seal.lineageDigest).toBe(heldoutDigest([{ runId: 'offline-01', events: await readHeldoutJournal(c.runDir) }]));
+    const calibrationScore = vi.fn(async () => ({ calibrated: false }));
+    await scoreRun(c, first, calibrationScore);
+    expect(calibrationScore.mock.calls[0][0].corpus.rows.map((r: any) => r.split)).toEqual(['tuning', 'calibration']);
+    await testApproval(c, first);
+    expect(await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).toMatchObject({ rowsInScope: ['row_2'], maximumAttempts: 2, reservedUsdMicros: 152 });
+    const second: any = await c.run(transport); expect(second).toMatchObject({ completedRows: 1, reservedUsdMicros: 76 });
+    expect(transport).toHaveBeenCalledTimes(3);
+    const run = join(heldoutRunsRoot(c.root), 'test-phase'), frozen = JSON.parse(await readFile(join(run, 'frozen.json'), 'utf8'));
+    expect(Date.parse(frozen.testPhaseAccessAt)).toBeGreaterThan(Date.parse(seal.sealedAt));
+    expect((await readHeldoutJournal(run)).map(e => e.attempt.rowId)).toEqual(['row_2', 'row_2']);
+    const score = vi.fn(async () => ({ calibrated: false }));
+    expect(await scoreRun(c, second, score)).toMatchObject({ complete: true, decision: 'HOLD' });
+    expect(score.mock.calls[0][0].approvedCalibration).toEqual((c.bundle.approval as any).calibration);
+    expect(score.mock.calls[0][0].attempts.map((a: any) => a.rowId)).toEqual(['row_2']);
+    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(228);
+  });
+  it.each(['missing-seal', 'seal-pin', 'prior-approval', 'changed-seal', 'same-time', 'budget-change'])('AC1/5 refuses test access for %s before credentials', async change => {
+    const c = await scoped(); const summary: any = await c.run(fake());
+    const sealedAt = JSON.parse(await readFile(join(c.runDir, 'calibration-phase.json'), 'utf8')).sealedAt;
+    await testApproval(c, summary);
+    if (change === 'missing-seal') await rm(join(c.runDir, 'calibration-phase.json'));
+    if (change === 'seal-pin') (c.bundle.approval as any).calibration.calibrationPhaseRecordDigest = pin;
+    if (change === 'prior-approval') (c.bundle.approval as any).calibration.priorApprovalDigest = pin;
+    if (change === 'budget-change') c.bundle.approval.budget.usd = 2;
+    if (change === 'changed-seal') {
+      const path = join(c.runDir, 'calibration-phase.json'), seal = JSON.parse(await readFile(path, 'utf8'));
+      seal.lineageDigest = pin; await writeFile(path, JSON.stringify(seal));
+      (c.bundle.approval as any).calibration.calibrationPhaseRecordDigest = heldoutDigest(seal);
+    }
+    c.host.resolveCredential.mockClear(); const transport = fake();
+    await expect(c.run(transport, change === 'same-time' ? { now: () => Date.parse(sealedAt) } : {})).rejects.toThrow('calibration-phase');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
+  it('AC1/5 does not seal a checkpoint or a skipped slice and seals terminal measurement failures on resume', async () => {
+    const c = await scoped(); c.bundle.preregistration.sessionLimitMs = 5000;
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => { await c.clock.sleep(1); return reply(init); });
+    expect(await c.run(transport)).toMatchObject({ status: 'checkpoint', calibrationPhaseRecordDigest: null });
+    expect(await readdir(c.runDir)).not.toContain('calibration-phase.json');
+    c.bundle.approval.runId = 'calibration-resume';
+    const summary: any = await c.run(vi.fn(async () => new Response('{}', { status: 503 })));
+    expect(summary).toMatchObject({ status: 'complete', measurementFailures: ['row_1'] });
+    expect(summary.calibrationPhaseRecordDigest).toMatch(/^sha256:/);
+    const seal = JSON.parse(await readFile(join(heldoutRunsRoot(c.root), 'calibration-resume/calibration-phase.json'), 'utf8'));
+    expect(seal.lineage.map((r: any) => r.runId)).toEqual(['offline-01', 'calibration-resume']);
+    await testApproval(c, summary); expect(await c.run(fake())).toMatchObject({ completedRows: 1 });
+    const blocked = await scoped();
+    blocked.bundle.corpus.rows[1] = generateHeldoutRow('heldout-lamp-splits/v1', 'fresh-example:1:single:tuning');
+    const incomplete: any = await blocked.run(vi.fn(async () => new Response('{}', { status: 503 })));
+    expect(incomplete).toMatchObject({ calibrationPhaseRecordDigest: null, missingRows: ['row_0', 'row_1'] });
+  });
+  it.each(['usd', 'calls', 'tokens'])('AC2 retains the global %s stop threshold across phase approvals', async budget => {
+    const c = await scoped(); c.bundle.preregistration.providerFailurePolicy.maxRetries = 0;
+    if (budget === 'usd') { c.bundle.approval.budget.usd = 1; c.bundle.approval.priceBound.perRequestUsd = 0.3; }
+    if (budget === 'calls') c.bundle.approval.budget.calls = 3;
+    if (budget === 'tokens') c.bundle.approval.budget.tokens = 3000;
+    const first: any = await c.run(fake()); expect(first.completedRows).toBe(2);
+    const spent = (await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros;
+    await testApproval(c, first); const transport = fake();
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0, completedRows: 0 });
+    expect(transport).not.toHaveBeenCalled(); expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(spent);
+  });
+  it('AC3 scoring rechecks the phase seal and access time before calling the study', async () => {
+    const c = await scoped(); const first: any = await c.run(fake()); await testApproval(c, first);
+    const second: any = await c.run(fake()), score = vi.fn(async () => ({ calibrated: false }));
+    await scoreRun(c, second, score); expect(score).toHaveBeenCalledOnce();
+    await rm(join(c.runDir, 'calibration-phase.json'));
+    await expect(scoreRun(c, second, score)).rejects.toThrow('calibration-phase');
+    expect(score).toHaveBeenCalledOnce();
+  });
+});
