@@ -5,6 +5,7 @@ import type {
   AdapterObservation,
   DecisionAcceptanceEvidence,
   DecisionDefinition,
+  ExecutionTarget,
   PrimitiveAcceptancePolicy,
 } from './types.js';
 import { DecisionValidationError } from './validate.js';
@@ -81,6 +82,30 @@ export function applyPrimitiveAcceptance(
     }
   }
   return routed(observation, policy, policy.defaultRoute, 'default', evidence);
+}
+
+export function applyTargetAcceptance(
+  definition: DecisionDefinition,
+  target: ExecutionTarget,
+  observation: AdapterObservation,
+): AdapterObservation {
+  if (observation.status !== 'success') return observation;
+  if (target.acceptance.mode === 'typed-value') return observation;
+  if (target.acceptance.mode === 'primitive-policy') return applyPrimitiveAcceptance(definition, target.acceptance, observation);
+  if (!observation.uncertainty || observation.uncertainty.confidence === null) return abstained('missing-confidence', observation);
+  if (observation.uncertainty.profile !== target.acceptance.profile) return abstained('confidence-profile-mismatch', observation);
+  return observation.uncertainty.confidence * 10_000 < target.acceptance.minimumBps
+    ? abstained('low-confidence', observation) : observation;
+}
+
+// Mirrors the evaluator's failure observation: an abstention keeps provenance but drops the value.
+function abstained(reason: AdapterObservation['reason'], observation: AdapterObservation): AdapterObservation {
+  return {
+    status: 'abstained', reason, uncertainty: observation.uncertainty ?? null,
+    actualModel: observation.actualModel ?? null,
+    usage: observation.usage ?? { inputTokens: null, outputTokens: null, costUsd: null },
+    requestId: observation.requestId ?? null,
+  };
 }
 
 function deriveEvidence(

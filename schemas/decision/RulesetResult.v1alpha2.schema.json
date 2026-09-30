@@ -63,6 +63,152 @@
           "then": { "properties": { "providerAttempted": { "const": true }, "cacheEntryId": { "type": "null" } } }
         }
       ]
+    },
+    "preprocessingLineage": {
+      "description": "D24 body-free preprocessing lineage evidence. It links a decision receipt to non-text source preprocessing by pins, digests, counts, locators digests and policy outcomes only.",
+      "type": "object",
+      "properties": {
+        "schemaVersion": { "const": "decision-preprocessing-lineage/v1" },
+        "status": { "enum": ["ready", "review"] },
+        "dispatchGate": {
+          "description": "Evaluator-written pre-dispatch verdict. review and refused results made no credential or transport call.",
+          "type": "object",
+          "properties": {
+            "outcome": { "enum": ["allowed", "review", "refused"] },
+            "reasons": { "type": "array", "items": { "$ref": "#/$defs/preprocessingGateReason" } }
+          },
+          "required": ["outcome", "reasons"],
+          "additionalProperties": false
+        },
+        "references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/preprocessingReference" }
+        },
+        "traces": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/preprocessingTrace" }
+        }
+      },
+      "required": ["schemaVersion", "status", "references", "traces"],
+      "additionalProperties": false
+    },
+    "preprocessingReviewReason": {
+      "enum": [
+        "low-quality", "truncated", "incomplete", "stale", "policy-limited", "untrusted",
+        "raw-egress-denied", "derived-egress-denied", "unsupported-locator",
+        "lifecycle-unavailable", "legal-hold"
+      ]
+    },
+    "preprocessingGateReason": {
+      "anyOf": [
+        { "$ref": "#/$defs/preprocessingReviewReason" },
+        { "enum": ["unverified", "unavailable", "destination-mismatch", "destination-unbound", "malformed-lineage", "input-unbound", "input-mismatch", "input-undeclared", "lineage-missing"] }
+      ]
+    },
+    "pin": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "required": ["id", "version", "digest"],
+      "additionalProperties": false
+    },
+    "preprocessingReference": {
+      "type": "object",
+      "properties": {
+        "evidence": { "$ref": "#/$defs/pin" },
+        "sourceAssetId": { "type": "string", "minLength": 1 },
+        "sourceDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "outputId": { "type": "string", "minLength": 1 },
+        "outputVersion": { "type": "integer", "minimum": 1 },
+        "outputDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "destination": {
+          "type": "object",
+          "properties": {
+            "provider": { "type": "string", "minLength": 1 },
+            "origin": { "type": "string", "minLength": 1 }
+          },
+          "required": ["provider", "origin"],
+          "additionalProperties": false
+        },
+        "selectedSegments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "ordinal": { "type": "integer", "minimum": 1 },
+              "locatorDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+              "textDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+              "preprocessingDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+            },
+            "required": ["id", "ordinal", "locatorDigest", "textDigest", "preprocessingDigest"],
+            "additionalProperties": false
+          }
+        },
+        "quality": {
+          "type": "object",
+          "properties": {
+            "source": { "enum": ["preprocessor", "human-reviewer"] },
+            "profileDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "labelDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "score": { "type": "number", "minimum": 0, "maximum": 1 },
+            "flags": {
+              "type": "array",
+              "items": { "enum": ["low-quality", "truncated", "incomplete", "stale", "policy-limited", "human-corrected"] }
+            }
+          },
+          "required": ["source", "profileDigest", "labelDigest", "score", "flags"],
+          "additionalProperties": false
+        },
+        "policy": {
+          "type": "object",
+          "properties": {
+            "trust": { "enum": ["verified", "untrusted"] },
+            "sensitivity": { "enum": ["public", "internal", "confidential", "restricted"] },
+            "retentionDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "residencyDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+            "rawEgressAllowed": { "type": "boolean" },
+            "derivedEgressAllowed": { "type": "boolean" }
+          },
+          "required": ["trust", "sensitivity", "retentionDigest", "residencyDigest", "rawEgressAllowed", "derivedEgressAllowed"],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "evidence", "sourceAssetId", "sourceDigest", "outputId", "outputVersion",
+        "outputDigest", "destination", "selectedSegments", "quality", "policy"
+      ],
+      "additionalProperties": false
+    },
+    "preprocessingTrace": {
+      "type": "object",
+      "properties": {
+        "evidence": { "$ref": "#/$defs/pin" },
+        "stepIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "stepCount": { "type": "integer", "minimum": 0 },
+        "noOpStepIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "sourceDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "outputDigest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "selectedSegmentCount": { "type": "integer", "minimum": 0 },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "qualityFlags": {
+          "type": "array",
+          "items": { "enum": ["low-quality", "truncated", "incomplete", "stale", "policy-limited", "human-corrected"] }
+        },
+        "policyOutcome": { "enum": ["allowed", "review"] },
+        "reasons": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/preprocessingReviewReason" }
+        }
+      },
+      "required": [
+        "evidence", "stepIds", "stepCount", "noOpStepIds", "sourceDigest", "outputDigest",
+        "selectedSegmentCount", "durationMs", "qualityFlags", "policyOutcome", "reasons"
+      ],
+      "additionalProperties": false
     }
   },
   "type": "object",
@@ -211,6 +357,9 @@
         },
         "cache": {
           "$ref": "#/$defs/resultCacheCallerReceipt"
+        },
+        "preprocessingLineage": {
+          "$ref": "#/$defs/preprocessingLineage"
         },
         "projection": {
           "description": "Present only when the host explicitly dispatched unprojected input (D10 opt-out).",
