@@ -1,9 +1,11 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:https';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 // @ts-ignore - untyped trusted host module (pinned by digest, not compiled)
-import { acquireAppRoleToken, createJevCredentialResolver, JevResolverError } from '../../../tools/decision/jev-credential-resolver.mjs';
+import { acquireAppRoleToken, createJevCredentialResolver, JevResolverError, verifiedHttpsFetch } from '../../../tools/decision/jev-credential-resolver.mjs';
 
 const SECRET = 'fixture-jev-key-0123456789';
 const CLIENT = 's.fixture-approle-client-token';
@@ -83,11 +85,56 @@ describe('TV-12 trusted Jev credential resolver (offline)', () => {
     expect(fetch.mock.calls.at(-1)![0]).toMatch(/revoke-self$/);
   });
 
-  it('rejects a malformed client token without calling the secret service', async () => {
-    const fetch = vi.fn();
-    const resolver = createJevCredentialResolver({ env, fetch, acquireToken: async () => 'bad token\nwith text' });
+  it('rejects a malformed client token without reading, but still revokes any token it carried', async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 204 }));
+    const resolver = createJevCredentialResolver({ env, fetch, acquireToken: async () => `helper warning on stdout\n${CLIENT}` });
     expect((await failure(resolver.resolveCredential(REFERENCE))).category).toBe('login');
-    expect(fetch).not.toHaveBeenCalled();
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual(['https://bao.fixture.invalid:8200/v1/auth/token/revoke-self']);
+    expect(fetch.mock.calls[0]![1]).toMatchObject({ method: 'POST', headers: { 'x-vault-token': CLIENT } });
+  });
+
+  it.each(['0', 'false', ''])('refuses NODE_TLS_REJECT_UNAUTHORIZED=%j before any login', async value => {
+    const acquireToken = vi.fn(async () => CLIENT); const fetch = vi.fn();
+    const resolver = createJevCredentialResolver({ env: { ...env, NODE_TLS_REJECT_UNAUTHORIZED: value }, acquireToken, fetch });
+    expect((await failure(resolver.resolveCredential(REFERENCE))).category).toBe('tls');
+    expect(acquireToken).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('zeroes the in-memory key on dispose', async () => {
+    const { resolver } = fixture();
+    await resolver.resolveCredential(REFERENCE);
+    const zeroed: string[] = [];
+    // `fill` is inherited from %TypedArray%.prototype.
+    const typedArray = Object.getPrototypeOf(Uint8Array.prototype);
+    const original = typedArray.fill;
+    const fill = vi.spyOn(typedArray, 'fill').mockImplementation(function (this: Uint8Array, ...args: any[]) {
+      zeroed.push(text(this)); return original.apply(this, args as [number]);
+    });
+    let args: unknown[][] = [];
+    try { resolver.dispose(); args = fill.mock.calls.map(call => [...call]); } finally { fill.mockRestore(); }
+    expect(args).toContainEqual([0]);
+    expect(zeroed).toContain(SECRET);
+  });
+
+  it('verifies TLS explicitly even when the process disables verification', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'tv12-tls-'));
+    const previous = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    const server = createServer();
+    try {
+      execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+        '-addext', 'subjectAltName=DNS:localhost', '-keyout', join(directory, 'key.pem'), '-out', join(directory, 'cert.pem')], { stdio: 'ignore', timeout: 20_000 });
+      server.setSecureContext({ key: await readFile(join(directory, 'key.pem')), cert: await readFile(join(directory, 'cert.pem')) });
+      server.on('request', (_request, response) => { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"ok":true}'); });
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const url = `https://localhost:${(server.address() as { port: number }).port}/v1/sys/health`;
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+      await expect(verifiedHttpsFetch({})(url, { method: 'GET', headers: {} })).rejects.toThrow();
+      const trusted = await verifiedHttpsFetch({ BAO_CACERT: join(directory, 'cert.pem') })(url, { method: 'GET', headers: {} });
+      expect(await trusted.json()).toEqual({ ok: true });
+    } finally {
+      if (previous === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = previous;
+      server.close(); await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('runs the host helper without argv secrets and discards its stderr', async () => {
