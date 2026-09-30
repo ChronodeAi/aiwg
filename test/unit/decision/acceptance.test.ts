@@ -7,6 +7,7 @@ import {
   createAcceptancePromotionRecord,
   replayAcceptancePolicyShadow,
   applyPrimitiveAcceptance,
+  applyTargetAcceptance,
   artifactPin,
   evaluateDecisionRuleset,
   validateDecisionDocument,
@@ -273,5 +274,20 @@ describe('primitive-aware acceptance', () => {
     const binding = JSON.parse(readFileSync('agentic/code/addons/decision-engine/examples/binding-jev.json', 'utf8')) as DecisionBinding;
     binding.spec.evaluations.category!.targets[0]!.acceptance = policy();
     expect(() => validateDecisionDocument(binding)).toThrow(DecisionValidationError);
+  });
+});
+
+describe('confidence-threshold target acceptance', () => {
+  it('ACC-TARGET-01 abstains with provenance but without the rejected value or transport fields', () => {
+    const observation = {
+      status: 'success', reason: 'none', value: 'yes', uncertainty: { confidence: 0.1, profile: 'p' }, actualModel: 'm',
+      usage: { inputTokens: 1, outputTokens: 1, costUsd: null }, requestId: 'r', httpStatus: 200,
+      dispatchCertainty: 'terminal-response',
+    } as unknown as Parameters<typeof applyTargetAcceptance>[2];
+    const target = { acceptance: { mode: 'confidence-threshold', profile: 'p', minimumBps: 8000 } } as unknown as Parameters<typeof applyTargetAcceptance>[1];
+    expect(applyTargetAcceptance({} as Parameters<typeof applyTargetAcceptance>[0], target, observation)).toEqual({
+      status: 'abstained', reason: 'low-confidence', uncertainty: observation.uncertainty, actualModel: 'm',
+      usage: observation.usage, requestId: 'r',
+    });
   });
 });

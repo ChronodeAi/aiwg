@@ -169,3 +169,21 @@ items:
     }).allowed).toBe(false);
   });
 });
+
+describe('private key and payment key coverage (#2618)', () => {
+  it('redacts every PEM private key header variant and Stripe secret keys', () => {
+    const body = 'cmVkYWN0aW9uLWNhbmFyeS1wZW0tdmFyaWFudA';
+    const variants = ['', 'RSA ', 'EC ', 'DSA ', 'OPENSSH ', 'PGP ', 'ENCRYPTED '];
+    for (const variant of variants) {
+      const pem = `-----BEGIN ${variant}PRIVATE KEY-----\n${body}\n-----END ${variant}PRIVATE KEY-----`;
+      const result = redactText(`key:\n${pem}\ndone`);
+      expect(result.text, variant || 'plain').not.toContain(body);
+      expect(result.findings.map(finding => finding.class), variant || 'plain').toContain('private-key');
+    }
+    for (const key of ['sk_live_51Hcanary0123456789abcdef', 'sk_test_51Hcanary0123456789abcdef', 'rk_live_51Hcanary0123456789abcdef']) {
+      const result = redactText(`stripe ${key} configured`);
+      expect(result.text).not.toContain(key);
+      expect(result.findings.map(finding => finding.class)).toContain('provider-token');
+    }
+  });
+});

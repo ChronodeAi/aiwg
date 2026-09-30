@@ -1,5 +1,57 @@
 # Conformal decision spike (#2613)
 
+## Open-data v2
+
+`preregister.v2.json`, `frozen.v2.json`, `open-data.mjs`, `fetch-open-data.mjs`,
+`run.v2.mjs`, and `collect-jev.v2.mjs` are the second experiment version. They
+replace the missing internal D11 data with public CLINC150 and Banking77 samples.
+The raw files are not committed; `fetch-open-data.mjs` deterministically downloads
+the canonical public data and licence files (or re-verifies them with
+`--offline`), verifies their SHA-256 values, records URL, license, licence hash,
+retrieval date and byte count, and writes a bounded stratified sample plus the
+preregistered live subsets.
+
+```bash
+node tools/experiments/conformal/fetch-open-data.mjs \
+  --raw-dir /tmp/aiwg-2613-open-data \
+  --output tools/experiments/conformal/frozen.v2.json \
+  --retrieval-date 2026-09-29
+node --import tsx tools/experiments/conformal/run.v2.mjs ARTIFACT_ROOT/research/reports/conformal-2613-v2
+node --import tsx tools/experiments/conformal/collect-jev.v2.mjs --limit 25
+```
+
+The live design, re-preregistered on 2026-09-30 before any v2 score existed,
+scores every frozen calibration, final-test and shift row of both tasks: 1,816
+items (CLINC150 450/450/300, Banking77 231/231/154) under a 2,000-item cap. The
+1,135 train rows are pipeline-only. At the pinned USD 0.10 per million token
+ceiling, each call reserves 566 micro-USD, so the design costs at most
+USD 1.027856 of the USD 8.00 cap. Banking77 `test.csv` rows are an exchangeable
+nominal held-out slice, not a shift; the controlled shift is CLINC150 OOS. See
+`docs/decision/conformal-spike.md` for pricing sources, gates and the realized-n
+coverage table.
+
+The collector is dry-run by default. Live mode requires
+`AIWG_DECISION_JEV_LIVE_SMOKE=1`, `AIWG_DECISION_JEV_API_KEY`,
+`AIWG_DECISION_JEV_REGION`, `AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=0.10/0.10`,
+and only the pinned model `jev-1.13.0`. It also requires a durable absolute
+state directory: `$XDG_STATE_HOME/aiwg/conformal-2613/`,
+`$HOME/.local/state/aiwg/conformal-2613/` or `--state-dir`. Empty variables
+count as unset, and `/tmp`-like volatile paths are refused. Before every call
+the collector reserves the worst-case cost in a hash-chained spend ledger
+shared by every run in that directory. It refuses any call that could take
+global spend past USD 8.00 and halts on the first charge above its reservation.
+Planning and `--limit` cover only pending rows, so a resume continues where the
+last run stopped. Jev has no output-token cap, so the 256-token output bound is
+assumed and enforced after the fact by the halt. The analysis accepts only
+records whose compatibility key matches the preregistered pins, and only
+records whose attempts match the ledger's reservations and settlements can
+leave `INSUFFICIENT EVIDENCE`.
+
+Closed schemas for the v2 preregistration, frozen sample and report live under
+`schemas/decision/Conformal*.v2.schema.json`.
+
+## Synthetic v1
+
 **Outcome: INSUFFICIENT EVIDENCE.** This offline experiment establishes a reproducible
 arithmetic and compatibility prototype. It does not establish representative Choice
 or Noul workload performance, nor production support. There is no action executor,

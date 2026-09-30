@@ -1,0 +1,330 @@
+{
+  "fixtures": [
+    {
+      "id": "scanned-document-ocr",
+      "manifest": {
+        "apiVersion": "decision.aiwg.io/v1alpha2",
+        "kind": "PreprocessedEvidence",
+        "metadata": {
+          "id": "lineage-scanned-invoice",
+          "version": "1.0.0",
+          "description": "Recorded OCR extraction for a scanned invoice fixture"
+        },
+        "spec": {
+          "source": {
+            "assetId": "asset-invoice-scan-314",
+            "contentDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "mediaType": "application/pdf",
+            "sizeBytes": 45120,
+            "acquiredAt": "2026-09-20T10:00:00.000Z",
+            "locator": { "class": "opaque-id", "value": "fixture:invoice-scan-314" },
+            "owner": "fixtures",
+            "license": "synthetic",
+            "consent": "synthetic-test",
+            "classification": "confidential"
+          },
+          "preprocessing": [
+            {
+              "id": "ocr-1",
+              "ordinal": 1,
+              "kind": "ocr",
+              "tool": { "id": "fixture-ocr", "version": "2026.09" },
+              "model": { "id": "fixture-ocr-model", "version": "1" },
+              "configurationDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "runtime": "recorded-fixture",
+              "startedAt": "2026-09-20T10:01:00.000Z",
+              "endedAt": "2026-09-20T10:01:01.000Z",
+              "inputDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+              "outputDigest": "sha256:793956c9a27bf0349a4491b80bdf0dc44158ee592cb303ab0e8490f3a220d7ea"
+            }
+          ],
+          "output": {
+            "id": "invoice-314-ocr-text",
+            "version": 1,
+            "contentDigest": "sha256:793956c9a27bf0349a4491b80bdf0dc44158ee592cb303ab0e8490f3a220d7ea",
+            "language": "en",
+            "value": "Invoice 314 total 128.40 USD. Vendor: Northwind Clinic. Due 2026-10-15."
+          },
+          "segments": [
+            {
+              "id": "page-1-total",
+              "ordinal": 1,
+              "sourceLocator": { "page": 1, "bbox": { "x": 80, "y": 320, "width": 220, "height": 42, "unit": "pixel" } },
+              "outputRange": { "start": 0, "end": 71 },
+              "text": "Invoice 314 total 128.40 USD. Vendor: Northwind Clinic. Due 2026-10-15.",
+              "textDigest": "sha256:793956c9a27bf0349a4491b80bdf0dc44158ee592cb303ab0e8490f3a220d7ea"
+            }
+          ],
+          "selectedSegments": [
+            {
+              "segmentId": "page-1-total",
+              "outputVersion": 1,
+              "outputDigest": "sha256:793956c9a27bf0349a4491b80bdf0dc44158ee592cb303ab0e8490f3a220d7ea"
+            }
+          ],
+          "quality": {
+            "source": "preprocessor",
+            "profile": "fixture-ocr-quality-v1",
+            "label": "ocr-character-confidence",
+            "score": 0.94,
+            "flags": []
+          },
+          "transformations": [],
+          "policy": {
+            "trust": "verified",
+            "sensitivity": "confidential",
+            "retention": "ephemeral",
+            "residency": "us",
+            "rawEgress": { "allowed": false, "destinations": [] },
+            "derivedEgress": { "allowed": true, "destinations": [
+              { "provider": "jev", "origin": "https://api.typesafe.ai" },
+              { "provider": "llm-subagent", "origin": "local://worker" }
+            ] }
+          }
+        }
+      }
+    },
+    {
+      "id": "audio-transcription",
+      "manifest": {
+        "apiVersion": "decision.aiwg.io/v1alpha2",
+        "kind": "PreprocessedEvidence",
+        "metadata": {
+          "id": "lineage-audio-maintenance",
+          "version": "1.0.0",
+          "description": "Recorded ASR transcript fixture"
+        },
+        "spec": {
+          "source": {
+            "assetId": "asset-maintenance-audio-7",
+            "contentDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "mediaType": "audio/wav",
+            "sizeBytes": 93012,
+            "acquiredAt": "2026-09-20T11:00:00.000Z",
+            "locator": { "class": "artifact-ref", "value": "fixture:maintenance-audio-7" },
+            "owner": "fixtures",
+            "license": "synthetic",
+            "consent": "synthetic-test",
+            "classification": "internal"
+          },
+          "preprocessing": [
+            {
+              "id": "asr-1",
+              "ordinal": 1,
+              "kind": "asr",
+              "tool": { "id": "fixture-asr", "version": "2026.09" },
+              "model": { "id": "fixture-asr-model", "version": "1" },
+              "configurationDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "runtime": "recorded-fixture",
+              "startedAt": "2026-09-20T11:00:01.000Z",
+              "endedAt": "2026-09-20T11:00:02.000Z",
+              "inputDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+              "outputDigest": "sha256:63e9208abfd0ac1476cba5c1194aab4c46a904612d20a82e6fca0291fc870c46"
+            }
+          ],
+          "output": {
+            "id": "maintenance-audio-transcript",
+            "version": 1,
+            "contentDigest": "sha256:63e9208abfd0ac1476cba5c1194aab4c46a904612d20a82e6fca0291fc870c46",
+            "language": "en",
+            "value": "Speaker says the cooling alarm is intermittent and asks for maintenance review."
+          },
+          "segments": [
+            {
+              "id": "audio-0-6s",
+              "ordinal": 1,
+              "sourceLocator": { "startMs": 0, "endMs": 6000 },
+              "outputRange": { "start": 0, "end": 79 },
+              "text": "Speaker says the cooling alarm is intermittent and asks for maintenance review.",
+              "textDigest": "sha256:63e9208abfd0ac1476cba5c1194aab4c46a904612d20a82e6fca0291fc870c46"
+            }
+          ],
+          "selectedSegments": [
+            {
+              "segmentId": "audio-0-6s",
+              "outputVersion": 1,
+              "outputDigest": "sha256:63e9208abfd0ac1476cba5c1194aab4c46a904612d20a82e6fca0291fc870c46"
+            }
+          ],
+          "quality": {
+            "source": "preprocessor",
+            "profile": "fixture-asr-quality-v1",
+            "label": "word-confidence",
+            "score": 0.88,
+            "flags": []
+          },
+          "transformations": [],
+          "policy": {
+            "trust": "untrusted",
+            "sensitivity": "internal",
+            "retention": "ephemeral",
+            "residency": "us",
+            "rawEgress": { "allowed": false, "destinations": [] },
+            "derivedEgress": { "allowed": true, "destinations": [{ "provider": "jev", "origin": "https://api.typesafe.ai" }] }
+          }
+        }
+      }
+    },
+    {
+      "id": "video-caption-segments",
+      "manifest": {
+        "apiVersion": "decision.aiwg.io/v1alpha2",
+        "kind": "PreprocessedEvidence",
+        "metadata": {
+          "id": "lineage-video-captions",
+          "version": "1.0.0",
+          "description": "Recorded video caption fixture"
+        },
+        "spec": {
+          "source": {
+            "assetId": "asset-line-video-22",
+            "contentDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "mediaType": "video/mp4",
+            "sizeBytes": 204800,
+            "acquiredAt": "2026-09-20T12:00:00.000Z",
+            "locator": { "class": "local-redacted", "value": "fixture:line-video-22" },
+            "owner": "fixtures",
+            "license": "synthetic",
+            "consent": "synthetic-test",
+            "classification": "internal"
+          },
+          "preprocessing": [
+            {
+              "id": "caption-1",
+              "ordinal": 1,
+              "kind": "caption",
+              "tool": { "id": "fixture-captioner", "version": "2026.09" },
+              "configurationDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "runtime": "recorded-fixture",
+              "startedAt": "2026-09-20T12:00:01.000Z",
+              "endedAt": "2026-09-20T12:00:03.000Z",
+              "inputDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+              "outputDigest": "sha256:a8f3cbec523015ecfbd017b4283ec9773008c2e283736c438346fd4bb4f62892"
+            }
+          ],
+          "output": {
+            "id": "line-video-caption-text",
+            "version": 1,
+            "contentDigest": "sha256:a8f3cbec523015ecfbd017b4283ec9773008c2e283736c438346fd4bb4f62892",
+            "language": "en",
+            "value": "00:00 Safety guard visible. 00:08 Operator pauses the line and points to panel B."
+          },
+          "segments": [
+            {
+              "id": "video-0-8s",
+              "ordinal": 1,
+              "sourceLocator": { "startMs": 0, "endMs": 8000, "frame": 0 },
+              "outputRange": { "start": 0, "end": 81 },
+              "text": "00:00 Safety guard visible. 00:08 Operator pauses the line and points to panel B.",
+              "textDigest": "sha256:a8f3cbec523015ecfbd017b4283ec9773008c2e283736c438346fd4bb4f62892"
+            }
+          ],
+          "selectedSegments": [
+            {
+              "segmentId": "video-0-8s",
+              "outputVersion": 1,
+              "outputDigest": "sha256:a8f3cbec523015ecfbd017b4283ec9773008c2e283736c438346fd4bb4f62892"
+            }
+          ],
+          "quality": {
+            "source": "preprocessor",
+            "profile": "fixture-caption-quality-v1",
+            "label": "caption-alignment",
+            "score": 0.91,
+            "flags": []
+          },
+          "transformations": [],
+          "policy": {
+            "trust": "untrusted",
+            "sensitivity": "internal",
+            "retention": "ephemeral",
+            "residency": "us",
+            "rawEgress": { "allowed": false, "destinations": [] },
+            "derivedEgress": { "allowed": true, "destinations": [{ "provider": "jev", "origin": "https://api.typesafe.ai" }] }
+          }
+        }
+      }
+    },
+    {
+      "id": "image-description",
+      "manifest": {
+        "apiVersion": "decision.aiwg.io/v1alpha2",
+        "kind": "PreprocessedEvidence",
+        "metadata": {
+          "id": "lineage-image-description",
+          "version": "1.0.0",
+          "description": "Recorded image description fixture"
+        },
+        "spec": {
+          "source": {
+            "assetId": "asset-package-image-9",
+            "contentDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+            "mediaType": "image/png",
+            "sizeBytes": 65432,
+            "acquiredAt": "2026-09-20T13:00:00.000Z",
+            "locator": { "class": "opaque-id", "value": "fixture:package-image-9" },
+            "owner": "fixtures",
+            "license": "synthetic",
+            "consent": "synthetic-test",
+            "classification": "internal"
+          },
+          "preprocessing": [
+            {
+              "id": "describe-1",
+              "ordinal": 1,
+              "kind": "image-description",
+              "tool": { "id": "fixture-describer", "version": "2026.09" },
+              "model": { "id": "fixture-vision-caption", "version": "1" },
+              "configurationDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+              "runtime": "recorded-fixture",
+              "startedAt": "2026-09-20T13:00:01.000Z",
+              "endedAt": "2026-09-20T13:00:02.000Z",
+              "inputDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+              "outputDigest": "sha256:2e7158dd549639c0701568580e6f616027553b6f05b74c862082b05af9cc6c89"
+            }
+          ],
+          "output": {
+            "id": "package-image-description",
+            "version": 1,
+            "contentDigest": "sha256:2e7158dd549639c0701568580e6f616027553b6f05b74c862082b05af9cc6c89",
+            "language": "en",
+            "value": "Image description: cracked packaging seal on the lower right corner; label remains readable."
+          },
+          "segments": [
+            {
+              "id": "image-seal-bbox",
+              "ordinal": 1,
+              "sourceLocator": { "bbox": { "x": 0.62, "y": 0.72, "width": 0.18, "height": 0.12, "unit": "ratio" } },
+              "outputRange": { "start": 0, "end": 92 },
+              "text": "Image description: cracked packaging seal on the lower right corner; label remains readable.",
+              "textDigest": "sha256:2e7158dd549639c0701568580e6f616027553b6f05b74c862082b05af9cc6c89"
+            }
+          ],
+          "selectedSegments": [
+            {
+              "segmentId": "image-seal-bbox",
+              "outputVersion": 1,
+              "outputDigest": "sha256:2e7158dd549639c0701568580e6f616027553b6f05b74c862082b05af9cc6c89"
+            }
+          ],
+          "quality": {
+            "source": "preprocessor",
+            "profile": "fixture-description-quality-v1",
+            "label": "description-completeness",
+            "score": 0.86,
+            "flags": []
+          },
+          "transformations": [],
+          "policy": {
+            "trust": "untrusted",
+            "sensitivity": "internal",
+            "retention": "ephemeral",
+            "residency": "us",
+            "rawEgress": { "allowed": false, "destinations": [] },
+            "derivedEgress": { "allowed": true, "destinations": [{ "provider": "jev", "origin": "https://api.typesafe.ai" }] }
+          }
+        }
+      }
+    }
+  ]
+}

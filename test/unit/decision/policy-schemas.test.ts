@@ -5,12 +5,15 @@ import { describe, expect, it } from 'vitest';
 import { DECISION_LIFECYCLE_SURFACES, DECISION_LIFECYCLE_VERSION, validateDecisionLifecyclePolicy,
   type DecisionLifecyclePolicy } from '../../../src/decision/lifecycle.js';
 import { validateProjectionPolicy, type DecisionProjectionPolicy } from '../../../src/decision/projection.js';
+import { buildRoutingShadowReport, freezeRoutingPreregistration, validateRoutingPolicy, type RoutingPolicy } from '../../../src/decision/index.js';
 
 const load = (name: string) => JSON.parse(readFileSync(new URL(`../../../schemas/decision/${name}`, import.meta.url), 'utf8')) as object;
 const ajv = new Ajv2020({ strict: true, allErrors: true });
 (addFormats as unknown as (value: Ajv2020) => void)(ajv);
 const projectionSchema = ajv.compile(load('DecisionProjectionPolicy.v1.schema.json'));
 const lifecycleSchema = ajv.compile(load('DecisionLifecyclePolicy.v1.schema.json'));
+const routingPolicySchema = ajv.compile(load('DecisionRoutingPolicy.v1.schema.json'));
+const routingShadowSchema = ajv.compile(load('DecisionRoutingShadowReport.v1.schema.json'));
 
 // Fixture shapes mirror test/unit/decision/projection.test.ts and lifecycle.test.ts.
 const projection = (): DecisionProjectionPolicy => ({
@@ -38,6 +41,30 @@ const lifecycle = (): DecisionLifecyclePolicy => ({
 
 const LIFECYCLE_FIELDS = ['source', 'subject', 'trust', 'sensitivity', 'purpose', 'retentionClass', 'accessScopes',
   'exportPolicy', 'deletionPolicy', 'backupPolicy', 'allowedProviders', 'allowedModels', 'allowedOrigins', 'allowedRegions'] as const;
+
+const hash = (char: string) => `sha256:${char.repeat(64)}` as const;
+const routingPolicy = (): RoutingPolicy => ({
+  schemaVersion: 'decision-routing-policy/v1',
+  id: 'routing-pilot',
+  version: '1.0.0',
+  mode: 'shadow',
+  policyVersion: 'routing-shadow-2026-09',
+  candidates: [{
+    id: 'economy',
+    binding: { id: 'economy-binding', version: '1.0.0', digest: hash('1') },
+    model: { provider: 'openai', backend: 'chat', requested: 'economy-alias', pinnedVersion: 'economy-2026-09' },
+    subagent: null,
+    capabilities: ['code'],
+    permissions: { tools: ['read'], network: false, filesystem: 'read', secrets: [], actions: ['advise'] },
+    policy: { privacy: ['internal'], authorizationScopes: ['issue-worker'], regions: ['us'], contextBytes: 4096, allowlisted: true, executable: true },
+    operations: { health: 'healthy', latencyMsP95: 100, priceCatalogVersion: 'prices-2026-09', costMicrosPerAttempt: 100, maxAttempts: 1, deadlineMs: 500 },
+  }],
+  defaultRouteId: 'economy',
+  deterministicFallbackRouteId: 'economy',
+  utility: { taskFit: 1, complexityFit: 1, ambiguityPenalty: 1, latencyPenalty: 0, costPenalty: 0, healthPenalty: 1 },
+  ceilings: { maxAttempts: 2, maxFallbacks: 1, maxCostMicros: 1000, deadlineMs: 2000, retryDelayMs: 1, unknownCost: 'reject' },
+  jevEvidence: { enabled: true, calibrationRequired: true, compatibleProfiles: ['typesafe-route-fit-v1'], uncertaintyThresholdBps: 500 },
+});
 
 describe('decision projection policy schema', () => {
   it('SCHEMA-PROJ-01 accepts the runtime-valid projection fixture', () => {
@@ -114,5 +141,52 @@ describe('decision lifecycle policy schema', () => {
       expect(lifecycleSchema(value)).toBe(false);
       expect(() => validateDecisionLifecyclePolicy(value)).toThrow(/incomplete/);
     }
+  });
+});
+
+describe('decision routing schemas', () => {
+  it('SCHEMA-ROUTE-01 accepts runtime-valid routing policy and rejects unknown fields', () => {
+    const value = routingPolicy();
+    expect(() => validateRoutingPolicy(value)).not.toThrow();
+    expect(routingPolicySchema(value)).toBe(true);
+    expect(routingPolicySchema({ ...value, credentialRef: 'not-portable' })).toBe(false);
+  });
+
+  it('SCHEMA-ROUTE-02 accepts the generated shadow report shape', () => {
+    const tasks = Array.from({ length: 30 }, (_, index) => ({ id: `task-${String(index).padStart(2, '0')}`, slice: index % 3 ? 'code' : 'docs' }));
+    const preregistration = freezeRoutingPreregistration({
+      policy: { id: 'routing-pilot', version: '1.0.0', digest: hash('2') },
+      baselineArm: 'fixed',
+      registeredAt: '2026-09-01T00:00:00.000Z',
+      tasks,
+      thresholds: {
+        minimumOverallN: 30, minimumSliceN: 10, ciMethod: 'newcombe-10', ciLevelBps: 9500,
+        qualityNonInferiorityMarginBps: 1500, maxFailureRate: 0.1, maxReworkRate: 0.1, maxFallbackRate: 0.1,
+        maxHumanOverrideRate: 0.1, maxLatencyP95IncreaseMs: 10, maxProviderCallsPerTask: 2,
+        failurePenaltyMicros: 1000, humanOverridePenaltyMicros: 500,
+        budgetComplianceRequired: true, positiveNetEconomicsRequired: true,
+      },
+    });
+    const report = buildRoutingShadowReport({
+      id: 'routing-shadow',
+      preregistration,
+      trustedPreregistrationDigest: preregistration.digest,
+      holdoutAccessedAt: '2026-09-02T00:00:00.000Z',
+      evaluatedAt: '2026-09-03T00:00:00.000Z',
+      observations: tasks.flatMap(item => (['fixed', 'heuristic', 'jev-assisted'] as const).map(arm => ({
+        arm, taskId: item.id, slice: item.slice, success: true, rework: false, fallback: false, humanOverride: false,
+        providerCalls: 1, inputTokens: 1, outputTokens: 1, attemptCostMicros: arm === 'jev-assisted' ? 50 : 100,
+        reworkCostMicros: 0, budgetMicros: 1000, latencyMs: 1, accepted: true, policyViolation: false,
+      }))),
+      integrity: {
+        sample_n: 30, uncertainty: { method: 'newcombe-10' }, paired_baseline: { arm: 'fixed' }, integrity_mode: 'isolated',
+        fresh_workspace_required: true, fresh_workspace_verified: true, integrity_state: 'verified',
+        trusted_score_source: 'signed-runner', compromise_labels: [], weak_signal_reason: null,
+        release_gate: { decision: 'PROMOTE', reasons: [] },
+      },
+    });
+    expect(routingShadowSchema(report)).toBe(true);
+    expect(report.decision).toBe('PROMOTE');
+    expect(routingShadowSchema({ ...report, extra: true })).toBe(false);
   });
 });

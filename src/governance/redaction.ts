@@ -75,7 +75,7 @@ interface CompiledPattern {
 const BUILTIN_PATTERNS: readonly CompiledPattern[] = [
   {
     id: 'private-key',
-    pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/g,
+    pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/g,
   },
   {
     id: 'authorization-header',
@@ -116,7 +116,7 @@ const BUILTIN_PATTERNS: readonly CompiledPattern[] = [
   },
   {
     id: 'provider-token',
-    pattern: /\b(?:sk-(?:proj-)?|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9._~+/=-]{6,}\b/g,
+    pattern: /\b(?:sk-(?:proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9._~+/=-]{6,}\b/g,
   },
   {
     id: 'bearer-token',
@@ -224,9 +224,9 @@ function decodedSecretClass(value: string): string | null {
   try {
     const decoded = Buffer.from(value, 'base64').toString('utf8');
     if (!decoded || decoded.includes('\uFFFD')) return null;
-    if (/-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----/.test(decoded)) return 'encoded-private-key';
+    if (/-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/.test(decoded)) return 'encoded-private-key';
     if (/(?:api[_-]?key|token|password|passwd|secret|authorization)\s*[:=]/i.test(decoded)) return 'encoded-secret';
-    if (/(?:sk-(?:proj-)?|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9._~+/=-]{6,}/.test(decoded)) return 'encoded-secret';
+    if (/(?:sk-(?:proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9._~+/=-]{6,}/.test(decoded)) return 'encoded-secret';
     return null;
   } catch {
     return null;

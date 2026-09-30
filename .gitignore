@@ -106,6 +106,7 @@ opencode.json
 # Agent temporary files
 _agent-temp/
 docs/references/pdfs/*.pdf
+tools/experiments/conformal/live-scores*.jsonl
 
 # Test temp directories (created by file watcher tests)
 test-temp-watch-*/

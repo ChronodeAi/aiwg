@@ -424,6 +424,66 @@
       ]
     },
     {
+      "logicalName": "schemas.decision.conformalfrozenopendata.v2",
+      "id": "https://aiwg.io/schemas/decision/ConformalFrozenOpenData.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/ConformalFrozenOpenData.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.conformalopendatareport.v2",
+      "id": "https://aiwg.io/schemas/decision/ConformalOpenDataReport.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/ConformalOpenDataReport.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.conformalpreregistration.v2",
+      "id": "https://aiwg.io/schemas/decision/ConformalPreregistration.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/ConformalPreregistration.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.decision.decisioninteropmapping.v1",
       "id": "https://aiwg.io/schemas/decision/DecisionInteropMapping.v1.schema.json",
       "version": "1.0.0",
@@ -457,6 +517,66 @@
       "authority": {
         "kind": "canonical",
         "path": "schemas/decision/OpaDecisionLogExport.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.sdlcevidencescreening.v1",
+      "id": "https://aiwg.io/schemas/decision/SdlcEvidenceScreening.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/SdlcEvidenceScreening.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.sdlcscreeningpreregistration.v1",
+      "id": "https://aiwg.io/schemas/decision/SdlcScreeningPreregistration.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/SdlcScreeningPreregistration.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.sdlcscreeningrelease.v1",
+      "id": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/SdlcScreeningRelease.v1.schema.json"
       },
       "compatibility": {
         "mode": "unknown"

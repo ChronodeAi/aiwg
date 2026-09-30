@@ -42,3 +42,25 @@ node agentic/code/addons/decision-engine/examples/ensemble-runtime-offline.mjs
 It demonstrates the default-off runtime API, bounded member orchestration,
 aggregate evidence and retained member-result references. It is not quality,
 calibration, drift-threshold or live Jev evidence.
+
+`routing-pilot-offline.mjs` exercises the experimental D28 routing pilot with
+synthetic route candidates, fake Jev task-fit evidence and a fake worker
+dispatch:
+
+```bash
+npm run build:cli
+node agentic/code/addons/decision-engine/examples/routing-pilot-offline.mjs
+```
+
+It demonstrates hard-constraint filtering, D10 projection with redaction,
+shadow semantics (the deterministic route executes; the Jev-assisted utility
+choice is recorded only as `counterfactual`), mandatory reservation hooks and
+retained attempts. It is not live Jev, held-out quality, security/privacy
+approval or production rollout evidence.
+
+Recorded multimodal preprocessing lineage examples live under
+`test/fixtures/decision/preprocessing/` and are exercised by
+`test/unit/decision/preprocessed-evidence.test.ts`. They resolve OCR, ASR,
+caption, and image-description fixtures into ordinary text state before the
+existing projection/evaluation path. Jev still receives text only, never raw
+media, and the lineage feature is experimental and default-off.

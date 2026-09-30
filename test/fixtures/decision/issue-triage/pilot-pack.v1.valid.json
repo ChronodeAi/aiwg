@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "decision-issue-triage-pilot-pack/v1",
+  "id": "aiwg-issue-triage-jev-shadow",
+  "version": "2026.9.29",
+  "mode": "disabled",
+  "taxonomies": {
+    "issueTypes": ["bug", "feature", "documentation", "operations", "security", "question", "other"],
+    "areas": ["decision-engine", "composition-engine", "aiwg-cli", "provider-adapters", "docs", "release", "unknown"],
+    "stateCompleteness": ["complete", "partial", "missing"],
+    "clarificationNeed": ["needed", "not-needed"]
+  },
+  "urgencyRubric": [
+    { "id": "low", "ordinal": 0, "description": "Cosmetic, documentation-only, or low operational impact." },
+    { "id": "normal", "ordinal": 1, "description": "User-visible issue with workaround or bounded impact." },
+    { "id": "high", "ordinal": 2, "description": "Important workflow failure, no easy workaround, or time-sensitive release risk." },
+    { "id": "critical", "ordinal": 3, "description": "Security, data loss, production outage, or release-blocking failure." }
+  ],
+  "candidatePolicy": { "generator": "deterministic-token-overlap-v1", "maxCandidates": 5, "includeNone": true },
+  "acceptance": {
+    "uncertaintyProfiles": ["typesafe-distribution-v1", "typesafe-truth-v1"],
+    "calibration": "advisory",
+    "acceptedScoring": "disabled-on-incompatibility"
+  },
+  "trackerMutationPolicy": {
+    "create": "forbidden",
+    "edit": "forbidden",
+    "label": "forbidden",
+    "assign": "forbidden",
+    "comment": "forbidden",
+    "close": "forbidden",
+    "merge": "forbidden"
+  },
+  "rollback": { "disableRestoresPriorWorkflow": true, "preserveReceiptsAndLabels": true }
+}
