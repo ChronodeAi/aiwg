@@ -100,8 +100,10 @@ scorer identity separate from D09 qualification. Live studies, calibration, huma
 review and study-specific statistical reports remain pending.
 
 The [D29 synthetic held-out study](d29-heldout-study.md) supplies a seeded
-2,000-subject v2 corpus with balanced paraphrases and injection/near-miss traps, preregistration, receipt scorer, additional error/coverage
+2,000-subject v2 public development demo with balanced paraphrases and
+injection/near-miss traps, preregistration, receipt scorer, additional error/coverage
 gates and the 165-assessment operator template. Its staged runbook collects and
 seals calibration first, fits/registers the reviewed D09 artifact offline, and
 requires a second artifact-bound approval for test access. It remains experimental and
-default-off; live observations, D09 qualification and operator review are pending.
+default-off; paid collection rejects public demo seeds/corpus digests and requires
+a fresh private operator seed. Live observations, D09 qualification and operator review are pending.

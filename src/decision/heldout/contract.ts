@@ -19,6 +19,12 @@ export { sha256 as heldoutDigest };
 export const HELDOUT_CAP_USD: Readonly<Record<Study, number>> = Object.freeze({ D17: 8, D29: 6 });
 export const HELDOUT_PORTFOLIO_CAP_USD = 48;
 export const HELDOUT_ENV_GATE = 'AIWG_DECISION_HELDOUT_LIVE';
+const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3']);
+// Canonical corpus digests, including the public version before the wording correction.
+const D29_PUBLIC_DEMO_CORPORA = new Set([
+  'sha256:35ecc8936b7a251d1c34cf630e9b09ed82eff0d05f96c901c01edfa0f9849934',
+  'sha256:372cb180f129938280751bf3db76e4f9bc142ef85e68f38370b88aeec5602963',
+]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };
 const validators = new Map<string, ValidateFunction>();
@@ -89,6 +95,10 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
   admitEntry(bundle, limits);
   if (Object.keys(bundle).sort().join(',') !== 'approval,corpus,preregistration') throw new HeldoutError('bundle-fields');
   const { corpus, preregistration: plan, approval: a } = bundle;
+  if (corpus?.study === 'D29') {
+    if (D29_PUBLIC_DEMO_CORPORA.has(sha256(corpus))) throw new HeldoutError('public-demo-corpus');
+    if (D29_PUBLIC_DEMO_SEEDS.has(corpus.provenance?.seed)) throw new HeldoutError('public-demo-seed');
+  }
   validateHeldoutInputs(corpus, plan);
   if (a?.priceBound?.outputUsdPerMTok !== 0) throw new HeldoutError('free-output-required');
   checkHeldoutSchema('Approval', a);

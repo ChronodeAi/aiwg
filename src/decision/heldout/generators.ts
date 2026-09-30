@@ -120,13 +120,13 @@ export function d29WorldV2(seed: string, ordinal: number) {
     required, covered: citation || slice === 'criterion-incomplete' ? [] : [required] };
   const supportText: Record<string, string> = { exact: `Module ${name} uses port ${port}.`,
     listens: `Module ${name} listens on port ${port}.`, inverted: `Port ${port} is the port Module ${name} uses.`,
-    configured: `Module ${name} is configured to use port ${port}.` };
+    configured: `Module ${name} is configured for, and currently uses, port ${port}.` };
   const readyText: Record<string, string> = { exact: `Verified: Module ${name} has verified rollback coverage.`,
     verified: `Rollback coverage for Module ${name} was verified.`,
     checklist: `Module ${name}: rollback test coverage verified in the release checklist.` };
   const otherText: Record<string, string> = {
     'exactly-one': `Module ${name} uses exactly one port: ${sourceValue}.`,
-    'only-listens': `Module ${name} only listens on port ${sourceValue}.`,
+    'only-listens': `Module ${name} only uses port ${sourceValue}; it uses no other port.`,
     'no-other-port': `Module ${name} uses port ${sourceValue} and no other port.`,
     might: `Module ${name} might use port ${port}.`, reportedly: `Module ${name} reportedly uses port ${port}.`,
     planned: citation ? `Module ${name} was planned to use port ${port}.` : `Rollback coverage for Module ${name} is planned but not yet verified.`,

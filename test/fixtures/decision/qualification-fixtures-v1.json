@@ -1832,8 +1832,8 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-corpus/v1",
-      "digest": "sha256:5f6b277a0be2b70326c97911c44cde5f98f8ef704d2b9c0f97beccbe2c2cd2d0",
-      "expectedOutcome": "Complete D29 synthetic v2 source preparation for d29-study-v3; zero provider calls, unapproved templates, no live quality or calibration claim",
+      "digest": "sha256:76915016f198a63a697e4865ae14e1a9a84b38c25b85a82e68235d8ae8a17c62",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
       "links": [
         "JEV-16",
         "#2622"
@@ -1848,8 +1848,8 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-preregistration/v1",
-      "digest": "sha256:0d22245a49166552d33a0d98e6caaaf6e1797036843da2fac958a66a867d6529",
-      "expectedOutcome": "Complete D29 synthetic v2 source preparation for d29-study-v3; zero provider calls, unapproved templates, no live quality or calibration claim",
+      "digest": "sha256:6f1e26471e7f521778fd0dd0fca35a131ad63209c9e4e12f6f9eb47d33d369b2",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
       "links": [
         "JEV-16",
         "#2622"
@@ -1865,7 +1865,7 @@
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-d29-gold/v2",
       "digest": "sha256:fd528667e12510063ade449157f1ffac2d3256375af93c81a1768ea9cd41b90a",
-      "expectedOutcome": "Complete D29 synthetic v2 source preparation for d29-study-v3; zero provider calls, unapproved templates, no live quality or calibration claim",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
       "links": [
         "JEV-16",
         "#2622"
@@ -1881,7 +1881,7 @@
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-d29-analysis/v2",
       "digest": "sha256:f4e4e1a34125bd5d0bcb76ff4688d4c669f342028bb441ee5035115c43cffe13",
-      "expectedOutcome": "Complete D29 synthetic v2 source preparation for d29-study-v3; zero provider calls, unapproved templates, no live quality or calibration claim",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
       "links": [
         "JEV-16",
         "#2622"
@@ -1896,8 +1896,8 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-d29-review/v2",
-      "digest": "sha256:2f6a0a18cf04cfc336517c4d87a32f7c20d42e8d1f5f6381372a5d74d81a8b5f",
-      "expectedOutcome": "Complete D29 synthetic v2 source preparation for d29-study-v3; zero provider calls, unapproved templates, no live quality or calibration claim",
+      "digest": "sha256:c6b4966884a3566385efe75cdbdff22c7de1d09a13f9e77da8d9a3ae3f44f3de",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
       "links": [
         "JEV-16",
         "#2622"
@@ -1912,8 +1912,8 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-approval/v1",
-      "digest": "sha256:cc34e389dbd437105da67333a119b141ea603f00331cf8797af55ae396111ed7",
-      "expectedOutcome": "Complete D29 synthetic v2 source preparation for d29-study-v3; zero provider calls, unapproved templates, no live quality or calibration claim",
+      "digest": "sha256:1d5b60dabfac80f483e258744af49d645664e6d3d7842130590489a53f7e69e7",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
       "links": [
         "JEV-16",
         "#2622"
@@ -1928,8 +1928,24 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:9e8ae596f052dc22eb10790af07110e030716844636a69ab851bbe8ed0f78ae4",
-      "expectedOutcome": "Complete D29 synthetic v2 source preparation for d29-study-v3; zero provider calls, unapproved templates, no live quality or calibration claim",
+      "digest": "sha256:8c0b2e5f71c3cb408c8a9bb3b16c6eafe90c320792688b0beb47e9db3a8bfc6e",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTH-08",
+      "path": "test/fixtures/decision/d29-synthetic-v2/README.md",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:3a53a492ae25e234da67fc04cf7ae6fbaa5d3cc16409c0c9121d3de1d75c6e0f",
+      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
       "links": [
         "JEV-16",
         "#2622"

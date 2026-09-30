@@ -49,6 +49,8 @@ paraphrases and injection/near-miss traps, per-variant reports and offline
 receipt-scoring tests. It uses the
 shared held-out collector, preserves deterministic gate authority, and requires
 separate live-spend approval and human review.
+The committed corpus and gold are public development demos; paid collection
+rejects their seeds and corpus digests and requires a fresh private operator seed.
 
 D29 uses two staged approvals: tuning/calibration collection and sealing first,
 then offline fitting and operator-reviewed D09 registration before a separately

@@ -12,8 +12,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Experimental, default-off D29 synthetic dataset v2 with 2,000 subjects,
   balanced paraphrases, exclusive/non-exclusive port and near-miss traps,
   independent injection blockers, per-variant candidate/baseline metrics and
-  a 165-assessment review template. Seed `d29-study-v3` supersedes earlier
-  preparations before any live observations; the v1 generator and frozen
+  a 165-assessment review template. Public development seed `d29-study-v3`
+  supersedes earlier demos; the v1 generator and frozen
   baseline remain unchanged. Live calibration and operator review remain pending (#2622)
 
 - Experimental, default-off D29 staged calibration flow: collect and seal
@@ -165,10 +165,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D29 collection now rejects public development demo
+  seeds and corpus digests; paid-run instructions require a fresh private seed.
+  Demo port wording explicitly states current use and excludes all other ports,
+  with regenerated fixtures and pins; live qualification remains pending (#2622)
+
 - Experimental, default-off D29 gold now uses an explicit single-port
   constraint for contradiction and an explicit lack of verified rollback
   coverage for the incomplete criterion. A possible-world regression covers
-  every rendered template; the new `d29-study-v2` holdout and manifest pins
+  every rendered template; the public `d29-study-v2` demo and manifest pins
   supersede the ambiguous v1 corpus before any live collection (#2622)
 
 - Bind experimental, default-off held-out collector baselines to the independent
