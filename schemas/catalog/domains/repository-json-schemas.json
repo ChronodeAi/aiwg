@@ -544,6 +544,26 @@
       "consumers": []
     },
     {
+      "logicalName": "schemas.decision.d29study.v4",
+      "id": "https://aiwg.io/schemas/decision/D29Study.v4.schema.json",
+      "version": "4.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/D29Study.v4.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.decision.decisioninteropmapping.v1",
       "id": "https://aiwg.io/schemas/decision/DecisionInteropMapping.v1.schema.json",
       "version": "1.0.0",
