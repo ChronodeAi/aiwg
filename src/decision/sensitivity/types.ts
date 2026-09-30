@@ -11,7 +11,7 @@ export type SensitivityDigest = `sha256:${string}`;
 export type SensitivityAnalysisKind = 'policy-replay' | 'input-reevaluation';
 export type SensitivityMode = 'disabled' | 'shadow';
 export type SensitivityReportStatus = 'completed' | 'partial' | 'budget-exhausted' | 'rejected' | 'failed';
-export type SensitivityInference = 'reused-stored-evidence' | 'new-invocation' | 'deduplicated-control';
+export type SensitivityInference = 'reused-stored-evidence' | 'new-invocation' | 'deduplicated-control' | 'unreplayable';
 export type SensitivityRowKind = 'variant' | 'unchanged-control' | 'baseline-stability';
 export type SensitivityDataClass = 'public' | 'internal' | 'confidential' | 'restricted';
 
@@ -188,6 +188,14 @@ export interface SensitivityProbeState {
   windowMs?: number;
 }
 
+/** Host-authenticated caller identity; probe counters are keyed on it, never on plan-authored fields. */
+export interface SensitivityProbeIdentity {
+  tenantId: string;
+  workspaceId: string;
+  projectId: string;
+  principalId: string;
+}
+
 export interface SensitivityReevaluationRequest {
   variantId: string;
   invocationId: string;
@@ -204,6 +212,8 @@ export interface SensitivityRuntimeRequest {
   sourceInput: unknown;
   sourceResult: RulesetResult;
   generatedAt: string;
+  /** Required. Supplied by the host from its authentication context; must match the plan scope and actor. */
+  probeIdentity: SensitivityProbeIdentity;
   now?: () => number;
   probeState?: SensitivityProbeState;
   reevaluate?: (request: SensitivityReevaluationRequest) => Promise<RulesetResult>;

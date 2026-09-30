@@ -24,8 +24,14 @@ policy pins. It declares one analysis kind:
   the stored result, selected by the adapter, adapter version and requested
   model of the final (successful, when accepted) attempt; an unmatched or
   ambiguous attempt keeps the stored result. Replay cannot recover the value
-  an earlier target would have produced, so loosening a target that was never
-  the final attempt does not change the row.
+  an earlier target would have produced. A row whose answer depends on such an
+  unobserved outcome is reported with `inference: "unreplayable"` and the
+  `unreplayable-unobserved-outcome` warning (and the report carries
+  `unreplayable-rows-present`) instead of as a no-change row. This covers
+  changing a target that was attempted and abstained before the producing
+  target, changing `fallbackOn` routing, an unmatched producing target, and a
+  replay that newly fails acceptance with a reason the binding would route to a
+  later, unobserved target. Unreplayable rows make no sensitivity claim.
 - `input-reevaluation`: applies caller-authored values from D10-approved path
   domains to an input copy and calls a host-supplied offline evaluator. The
   analyzer generates fresh per-run invocation IDs, supplies the expected
@@ -51,23 +57,35 @@ if acceptance produced it.
 Resource ceilings stop additional variants while keeping completed rows.
 Evaluator failures after completed rows return `partial`; failures before any
 row return `failed` and include host-supplied spend evidence when available.
-When a failure carries no spend evidence the backend may still have been
-called, so the pre-dispatch reservation is charged and the report carries the
+When a failure carries no usable spend evidence (including a malformed
+`result` attached to a thrown error, or a malformed returned result) the
+backend may still have been called, so the pre-dispatch reservation is charged and the report carries the
 `spend-unknown-reserved` warning; those figures are a conservative reservation,
 not measured spend.
 Both statuses still carry `actionAuthorization: "not-authorized"`.
 Baseline-stability repeats are available only for input reevaluation and are
 labelled separately from perturbation rows. Variants equal to the source are
 retained as deduplicated controls without backend calls or path-probe charges.
-Probe counters are keyed by tenant, workspace, project, principal, source
-subject and (for path counters) path, within a window derived from the injected
-clock: `floor(now / windowMs)`, where `windowMs` is host-owned probe-state
+Callers must pass a host-authenticated `probeIdentity` (tenant, workspace,
+project, principal) taken from the host's authentication context. A missing
+identity, or a plan whose tenant, workspace, project or actor differs from it,
+is rejected before inference. Probe counters are keyed by that identity, the
+digest of the pinned source result and (for path counters) path; the
+plan-authored `sourceSubject.subjectRef` is not part of the key, so rotating it
+or other plan fields cannot mint a new budget. Counters use a window derived
+from the injected clock: `floor(now / windowMs)`, where `windowMs` is host-owned probe-state
 configuration (default one hour). The plan's `probeControl.windowId` is a
 descriptive label only and cannot reset a budget. Probe counters are enforced
 even when a caller does not provide state; the implicit process-local state
-holds at most 512 entries per counter map, evicts only counters from earlier
-windows, and when full refuses new probes with `probe state capacity exhausted`
-rather than evicting live limit state. That implicit state resets on process
+holds at most 512 entries per counter map and 64 per principal, evicts only
+counters from earlier windows, and when a principal's quota or the store is
+full refuses new probes (`probe principal quota exhausted` or
+`probe state capacity exhausted`) rather than evicting live limit state.
+Budgets are charged only after a plan passes every pre-inference check
+(identity, authorization, path limits, capacity, evaluator presence). The M08
+amendment requires probes to fail before inference and disclose nothing and
+budget exhaustion not to be evadable; it does not require charging rejected
+probes, and a rejected plan performs no inference. That implicit state resets on process
 restart, so production hosts must supply durable, non-resettable probe state.
 
 Routine reports contain redacted value digests, receipt/result pins, bounded

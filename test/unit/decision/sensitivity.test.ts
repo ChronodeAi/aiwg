@@ -27,6 +27,8 @@ import { ROOT, applyPatch, readSensitivityFixture, sensitivityRecords, type Anti
 
 const plans = sensitivityRecords<SensitivityPlan>('sensitivity-plan.v1.valid.json');
 
+const PROBE_IDENTITY = { tenantId: 'tenant-a', workspaceId: 'workspace-a', projectId: 'project-a', principalId: 'reviewer-a' };
+
 function probeState(): SensitivityProbeState {
   return { reportsByWindow: new Map(), pathCounts: new Map() };
 }
@@ -215,6 +217,12 @@ function adapterAbstainedSource(built: ReturnType<typeof artifacts>): RulesetRes
   return sourceResult;
 }
 
+function distinctSource(built: ReturnType<typeof artifacts>, tag: string): RulesetResult {
+  const sourceResult = structuredClone(built.sourceResult);
+  sourceResult.metadata.description = `Source ruleset result ${tag}`;
+  return sourceResult;
+}
+
 function multiEvaluationArtifacts() {
   const built = artifacts();
   built.ruleset.spec.evaluations.push({ alias: 'compliance', decision: artifactPin(built.definition), inputPointer: '' });
@@ -274,6 +282,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     });
@@ -318,6 +327,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     });
@@ -390,6 +400,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     });
@@ -408,6 +419,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     };
@@ -451,6 +463,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
         sourceInput: built.sourceInput,
         sourceResult,
         generatedAt: '2026-09-29T12:00:00.000Z',
+        probeIdentity: PROBE_IDENTITY,
         now: () => 1_000,
         probeState: probeState(),
       });
@@ -504,6 +517,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     });
@@ -539,6 +553,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: threshold.sourceInput,
       sourceResult: thresholdSource,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     });
@@ -587,12 +602,104 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: primitive.sourceInput,
       sourceResult: primitiveSource,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     });
     expect(primitiveReport.rows[0]?.deltas.status).toBe('review');
     expect(primitiveReport.rows[0]?.deltas.outcomeChanged).toBe(false);
     expect(primitiveReport.rows[0]?.deltas.acceptanceChanged).toBe(false);
+  });
+
+  it('CFX-REPLAY-09 flags rows that depend on an unobserved primary outcome as unreplayable', async () => {
+    const built = artifacts();
+    built.binding.spec.maxAttempts = 2;
+    const primary = built.binding.spec.evaluations.risk!.targets[0]!;
+    built.binding.spec.evaluations.risk!.targets.push({
+      ...structuredClone(primary),
+      model: 'fixture-fallback-model',
+      acceptance: { mode: 'confidence-threshold', profile: 'fixture-confidence', minimumBps: 5000 },
+    });
+    built.binding.spec.evaluations.risk!.fallbackOn = ['low-confidence'];
+    const bindingPin = artifactPin(built.binding);
+    const sourceResult = structuredClone(built.sourceResult);
+    sourceResult.spec.binding = bindingPin;
+    const risk = sourceResult.spec.evaluations.risk!;
+    risk.spec.binding = bindingPin;
+    risk.spec.uncertainty = { ...risk.spec.uncertainty!, confidence: 0.6, distribution: { approve: 0.6, review: 0.4 } };
+    risk.spec.attempts = [
+      { ...structuredClone(risk.spec.attempts[0]!), status: 'abstained', reason: 'low-confidence' },
+      { ...structuredClone(risk.spec.attempts[0]!), ordinal: 2, requestedModel: 'fixture-fallback-model', actualModel: 'fixture-fallback-model-v1' },
+    ];
+
+    const primaryPath = '/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps';
+    const fallbackPath = '/binding/spec/evaluations/risk/targets/1/acceptance/minimumBps';
+    const plan = pinnedPlan('triage-threshold-replay');
+    plan.id = 'triage-unobserved-primary';
+    plan.source.binding = bindingPin;
+    plan.source.result = artifactPin(sourceResult);
+    plan.allowedPaths = [primaryPath, fallbackPath];
+    plan.pathDomains = [
+      { path: primaryPath, values: [5000], sensitivity: 'internal' },
+      { path: fallbackPath, values: [7000], sensitivity: 'internal' },
+    ];
+    plan.variants = [
+      { id: 'primary-loosen', changes: [{ path: primaryPath, value: 5000 }] },
+      { id: 'fallback-tighten', changes: [{ path: fallbackPath, value: 7000 }] },
+    ];
+
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceDefinitions: built.sourceDefinitions,
+      sourceInput: built.sourceInput,
+      sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+
+    expect(validateSensitivityReport(report)).toBe(report);
+    const primaryRow = report.rows.find(row => row.variantId === 'primary-loosen')!;
+    expect(primaryRow.inference).toBe('unreplayable');
+    expect(primaryRow.warnings).toContain('unreplayable-unobserved-outcome');
+    expect(report.warnings).toContain('unreplayable-rows-present');
+    const fallbackRow = report.rows.find(row => row.variantId === 'fallback-tighten')!;
+    expect(fallbackRow.inference).toBe('reused-stored-evidence');
+    expect(fallbackRow.deltas.outcomeChanged).toBe(true);
+  });
+
+  it('CFX-REPLAY-10 flags a replay that would route to an unobserved fallback target as unreplayable', async () => {
+    const built = artifacts();
+    built.binding.spec.maxAttempts = 2;
+    const primary = built.binding.spec.evaluations.risk!.targets[0]!;
+    built.binding.spec.evaluations.risk!.targets.push({ ...structuredClone(primary), model: 'fixture-fallback-model' });
+    built.binding.spec.evaluations.risk!.fallbackOn = ['low-confidence'];
+    const bindingPin = artifactPin(built.binding);
+    const sourceResult = structuredClone(built.sourceResult);
+    sourceResult.spec.binding = bindingPin;
+    sourceResult.spec.evaluations.risk!.spec.binding = bindingPin;
+    const plan = pinnedPlan('triage-threshold-replay');
+    plan.id = 'triage-unobserved-fallback';
+    plan.source.binding = bindingPin;
+    plan.source.result = artifactPin(sourceResult);
+    plan.variants = [{ id: 'threshold-tighten', changes: [{ path: '/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps', value: 9000 }] }];
+    const report = await analyzeDecisionSensitivity({
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceDefinitions: built.sourceDefinitions,
+      sourceInput: built.sourceInput,
+      sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
+      now: () => 1_000,
+      probeState: probeState(),
+    });
+    expect(report.rows[0]?.inference).toBe('unreplayable');
+    expect(report.rows[0]?.warnings).toContain('unreplayable-unobserved-outcome');
   });
 
   it('CFX-INPUT-01 uses fresh invocation IDs, separates stability controls, and redacts sensitive field values', async () => {
@@ -608,6 +715,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => {
@@ -646,6 +754,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
         sourceInput: built.sourceInput,
         sourceResult: built.sourceResult,
         generatedAt: '2026-09-29T12:00:00.000Z',
+        probeIdentity: PROBE_IDENTITY,
         now: () => 1_000,
         probeState: probeState(),
         reevaluate: async request => {
@@ -678,6 +787,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => {
@@ -724,6 +834,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => {
@@ -751,6 +862,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => resultWith(request.input, `${request.invocationId}-wrong`),
@@ -775,6 +887,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async () => {
@@ -803,6 +916,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async () => { throw new Error('transport failed after dispatch'); },
@@ -813,6 +927,34 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect(report.budget.tokens).toBe(12);
     expect(report.budget.costMicros).toBe(10);
     expect(report.warnings).toContain('spend-unknown-reserved');
+  });
+
+  it('CFX-INPUT-09 reserves spend instead of crashing on a malformed thrown or returned result', async () => {
+    const built = artifacts();
+    const plan = pinnedPlan('triage-input-field');
+    plan.baselineStability.enabled = false;
+    plan.baselineStability.repeats = 0;
+    plan.variants = [{ id: 'risk-high', changes: [{ path: '/input/riskSignal', value: 'high' }] }];
+    const common = {
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
+      now: () => 1_000,
+    };
+    const thrown = await analyzeDecisionSensitivity({ ...common, probeState: probeState(),
+      reevaluate: async () => { throw Object.assign(new Error('upstream 500'), { result: { status: 500 } }); } });
+    const returned = await analyzeDecisionSensitivity({ ...common, probeState: probeState(),
+      reevaluate: async () => ({ status: 500 }) as unknown as RulesetResult });
+    for (const report of [thrown, returned]) {
+      expect(report.status).toBe('failed');
+      expect(report.budget.backendCalls).toBe(1);
+      expect(report.budget.tokens).toBe(12);
+      expect(report.warnings).toContain('spend-unknown-reserved');
+    }
   });
 
   it('CFX-AUTH-01 rejects stale authorization before any input reevaluation', async () => {
@@ -827,6 +969,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:45:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => Date.parse('2026-09-29T12:45:00.000Z'),
       probeState: probeState(),
       reevaluate: async request => {
@@ -867,6 +1010,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => resultWith(request.input, request.invocationId),
@@ -894,6 +1038,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => {
@@ -920,6 +1065,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: state,
       reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
@@ -944,6 +1090,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
     };
@@ -962,6 +1109,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
     };
@@ -990,36 +1138,35 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceRuleset: built.ruleset,
       sourceBinding: built.binding,
       sourceInput: built.sourceInput,
-      sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
       now: () => clock,
       reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
     };
-    const makePlan = (index: number) => {
+    // Eight principals each fill their per-principal quota (64) with distinct source results: 8 x 64 = 512 slots.
+    const run = (principal: number, subject: number) => {
+      const sourceResult = distinctSource(built, `capacity-${principal}-${subject}`);
       const plan = pinnedPlan('triage-input-field');
-      plan.id = `triage-capacity-${index}`;
-      plan.probeControl.windowId = 'window-capacity-probe';
+      plan.id = `triage-capacity-${principal}-${subject}`;
+      plan.actor.principalId = `reviewer-capacity-${principal}`;
+      plan.source.result = artifactPin(sourceResult);
       plan.probeControl.maxReportsPerWindow = 1;
-      plan.sourceSubject.subjectRef = `case-capacity-${index}`;
       plan.baselineStability.enabled = false;
       plan.baselineStability.repeats = 0;
-      plan.variants = [{ id: `no-change-${index}`, changes: [{ path: '/input/riskSignal', value: 'low' }] }];
-      return plan;
+      plan.variants = [{ id: 'no-change', changes: [{ path: '/input/riskSignal', value: 'low' }] }];
+      return analyzeDecisionSensitivity({ ...common, plan, sourceResult,
+        probeIdentity: { ...PROBE_IDENTITY, principalId: plan.actor.principalId } });
     };
-    const statuses: string[] = [];
-    for (let index = 0; index < 520; index += 1) {
-      const report = await analyzeDecisionSensitivity({ ...common, plan: makePlan(index) });
-      statuses.push(report.status);
-      if (report.status === 'rejected') expect(report.warnings.join(' ')).toContain('probe state capacity exhausted');
+    for (let principal = 0; principal < 8; principal += 1) {
+      for (let subject = 0; subject < 64; subject += 1) expect((await run(principal, subject)).status).toBe('completed');
     }
-    expect(statuses.filter(status => status === 'completed')).toHaveLength(512);
-    expect(statuses.slice(512).every(status => status === 'rejected')).toBe(true);
-    const repeatedFirst = await analyzeDecisionSensitivity({ ...common, plan: makePlan(0) });
+    const full = await run(8, 0);
+    expect(full.status).toBe('rejected');
+    expect(full.warnings.join(' ')).toContain('probe state capacity exhausted');
+    const repeatedFirst = await run(0, 0);
     expect(repeatedFirst.status).toBe('rejected');
     expect(repeatedFirst.warnings.join(' ')).toContain('probe report limit');
     clock += windowMs;
-    const nextWindow = await analyzeDecisionSensitivity({ ...common, plan: makePlan(600) });
-    expect(nextWindow.status).toBe('completed');
+    expect((await run(8, 0)).status).toBe('completed');
   });
 
   it('CFX-PROBE-05 derives probe windows from the injected clock so a new plan windowId cannot reset the budget', async () => {
@@ -1032,6 +1179,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => clock,
       probeState: state,
       reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
@@ -1054,7 +1202,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-window-three', 'w1') })).status).toBe('completed');
   });
 
-  it('CFX-PROBE-06 scopes probe limits by tenant, workspace and project', async () => {
+  it('CFX-PROBE-06 keys probe limits on host-authenticated identity and the source result, not plan-authored fields', async () => {
     const built = artifacts();
     const state = probeState();
     const common = {
@@ -1067,23 +1215,114 @@ describe('D23 sensitivity contracts (#2616)', () => {
       probeState: state,
       reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
     };
-    const makePlan = (id: string, tenantId: string, workspaceId = 'workspace-a', projectId = 'project-a') => {
+    const makePlan = (id: string, scope: Partial<typeof PROBE_IDENTITY> = {}, subjectRef = 'case-002') => {
+      const identity = { ...PROBE_IDENTITY, ...scope };
       const plan = pinnedPlan('triage-input-field');
       plan.id = id;
-      plan.tenantId = tenantId;
-      plan.workspaceId = workspaceId;
-      plan.projectId = projectId;
-      plan.sourceSubject = { ...plan.sourceSubject, tenantId, workspaceId, projectId };
+      plan.tenantId = identity.tenantId;
+      plan.workspaceId = identity.workspaceId;
+      plan.projectId = identity.projectId;
+      plan.actor.principalId = identity.principalId;
+      plan.sourceSubject = { tenantId: identity.tenantId, workspaceId: identity.workspaceId, projectId: identity.projectId, subjectRef };
       plan.probeControl.maxReportsPerWindow = 1;
       plan.baselineStability.enabled = false;
       plan.baselineStability.repeats = 0;
       return plan;
     };
-    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-tenant-t2', 't2') })).status).toBe('completed');
-    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-tenant-t2-again', 't2') })).status).toBe('rejected');
-    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-tenant-t3', 't3') })).status).toBe('completed');
-    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-t2-workspace-b', 't2', 'workspace-b') })).status).toBe('completed');
-    expect((await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-t2-project-b', 't2', 'workspace-a', 'project-b') })).status).toBe('completed');
+    const t2 = { ...PROBE_IDENTITY, tenantId: 't2' };
+    expect((await analyzeDecisionSensitivity({ ...common, probeIdentity: t2, plan: makePlan('triage-t2', { tenantId: 't2' }) })).status).toBe('completed');
+    // Rotating the plan-authored subjectRef, principal or tenant cannot mint a fresh budget for the same caller and result.
+    const rotatedSubject = await analyzeDecisionSensitivity({ ...common, probeIdentity: t2, plan: makePlan('triage-t2-subject', { tenantId: 't2' }, 'case-rotated') });
+    expect(rotatedSubject.status).toBe('rejected');
+    expect(rotatedSubject.warnings.join(' ')).toContain('probe report limit');
+    const claimedPrincipal = await analyzeDecisionSensitivity({ ...common, probeIdentity: t2,
+      plan: makePlan('triage-t2-principal', { tenantId: 't2', principalId: 'reviewer-other' }) });
+    expect(claimedPrincipal.status).toBe('rejected');
+    expect(claimedPrincipal.warnings.join(' ')).toContain('probe identity does not match');
+    const claimedTenant = await analyzeDecisionSensitivity({ ...common, probeIdentity: t2, plan: makePlan('triage-t2-tenant', { tenantId: 't9' }) });
+    expect(claimedTenant.status).toBe('rejected');
+    expect(claimedTenant.warnings.join(' ')).toContain('probe identity does not match');
+    const missing = await analyzeDecisionSensitivity({ ...common, plan: makePlan('triage-no-identity') } as never);
+    expect(missing.status).toBe('rejected');
+    expect(missing.warnings.join(' ')).toContain('probe identity');
+    // Host-authenticated tenants, workspaces and projects do not share budgets.
+    for (const scope of [{ tenantId: 't3' }, { tenantId: 't2', workspaceId: 'workspace-b' }, { tenantId: 't2', projectId: 'project-b' }]) {
+      const report = await analyzeDecisionSensitivity({ ...common, probeIdentity: { ...PROBE_IDENTITY, ...scope },
+        plan: makePlan(`triage-${Object.values(scope).join('-')}`, scope) });
+      expect(report.status, JSON.stringify(scope)).toBe('completed');
+    }
+  });
+
+  it('CFX-PROBE-07 caps implicit probe slots per principal so one principal cannot exhaust the store', async () => {
+    const built = artifacts();
+    const windowMs = 3_600_000;
+    const common = {
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      now: () => 200 * windowMs + 1_000,
+      reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
+    };
+    const run = (principal: string, subject: number) => {
+      const sourceResult = distinctSource(built, `quota-${principal}-${subject}`);
+      const plan = pinnedPlan('triage-input-field');
+      plan.id = `triage-quota-${principal}-${subject}`;
+      plan.actor.principalId = principal;
+      plan.source.result = artifactPin(sourceResult);
+      plan.baselineStability.enabled = false;
+      plan.baselineStability.repeats = 0;
+      plan.variants = [{ id: 'no-change', changes: [{ path: '/input/riskSignal', value: 'low' }] }];
+      return analyzeDecisionSensitivity({ ...common, plan, sourceResult, probeIdentity: { ...PROBE_IDENTITY, principalId: principal } });
+    };
+    const statuses: string[] = [];
+    for (let subject = 0; subject < 70; subject += 1) {
+      const report = await run('reviewer-rotating', subject);
+      statuses.push(report.status);
+      if (report.status === 'rejected') expect(report.warnings.join(' ')).toContain('probe principal quota exhausted');
+    }
+    expect(statuses.filter(status => status === 'completed')).toHaveLength(64);
+    expect((await run('reviewer-other', 0)).status).toBe('completed');
+  });
+
+  it('CFX-PROBE-08 does not charge the probe budget for plans rejected before inference', async () => {
+    const built = artifacts();
+    const common = {
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
+      now: () => 1_000,
+    };
+    const reevaluate = async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId);
+    const makePlan = (id: string, variants: SensitivityPlan['variants']) => {
+      const plan = pinnedPlan('triage-input-field');
+      plan.id = id;
+      plan.probeControl.maxReportsPerWindow = 1;
+      plan.probeControl.maxPerPrincipalSubjectPath = 1;
+      plan.baselineStability.enabled = false;
+      plan.baselineStability.repeats = 0;
+      plan.variants = variants;
+      return plan;
+    };
+    const one = [{ id: 'risk-high', changes: [{ path: '/input/riskSignal', value: 'high' }] }];
+
+    const pathState = probeState();
+    const overPath = await analyzeDecisionSensitivity({ ...common, probeState: pathState, reevaluate,
+      plan: makePlan('triage-over-path', [...one, { id: 'risk-high-again', changes: [{ path: '/input/riskSignal', value: 'high' }] }]) });
+    expect(overPath.status).toBe('rejected');
+    expect(overPath.warnings.join(' ')).toContain('probe path limit');
+    expect((await analyzeDecisionSensitivity({ ...common, probeState: pathState, reevaluate, plan: makePlan('triage-after-path', one) })).status)
+      .toBe('completed');
+
+    const evaluatorState = probeState();
+    const noEvaluator = await analyzeDecisionSensitivity({ ...common, probeState: evaluatorState, plan: makePlan('triage-no-evaluator', one) });
+    expect(noEvaluator.status).toBe('rejected');
+    expect(noEvaluator.warnings.join(' ')).toContain('host-supplied evaluator');
+    expect((await analyzeDecisionSensitivity({ ...common, probeState: evaluatorState, reevaluate, plan: makePlan('triage-after-evaluator', one) })).status)
+      .toBe('completed');
   });
 
   it('CFX-DISABLED-01 leaves ordinary decision evaluation byte-identical when sensitivity is not invoked', async () => {
@@ -1134,6 +1373,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async sensitivityRequest => resultWith(sensitivityRequest.input, sensitivityRequest.invocationId),
@@ -1154,6 +1394,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => resultWith(request.input, request.invocationId),
@@ -1175,6 +1416,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
     });
@@ -1185,6 +1427,7 @@ describe('D23 sensitivity contracts (#2616)', () => {
       sourceInput: built.sourceInput,
       sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
       now: () => 1_000,
       probeState: probeState(),
       reevaluate: async request => resultWith(request.input, request.invocationId),

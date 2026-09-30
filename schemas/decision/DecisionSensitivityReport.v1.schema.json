@@ -127,7 +127,7 @@
         "variantId": { "$ref": "#/$defs/name" },
         "kind": { "enum": ["variant", "unchanged-control", "baseline-stability"] },
         "changes": { "type": "array", "items": { "$ref": "#/$defs/redactedChange" } },
-        "inference": { "enum": ["reused-stored-evidence", "new-invocation", "deduplicated-control"] },
+        "inference": { "enum": ["reused-stored-evidence", "new-invocation", "deduplicated-control", "unreplayable"] },
         "sourceReceipt": { "$ref": "#/$defs/pin" },
         "counterfactualReceipt": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/pin" }] },
         "resultDigest": { "$ref": "#/$defs/digest" },
