@@ -261,9 +261,258 @@ export function measurePairedMovement(pairs: readonly PairedQualificationSample[
   return { sampleN: pairs.length, changedN, changedRate: changedN / pairs.length, changedWilson95: [low, high] };
 }
 
+export class PairedDifferenceError extends Error {
+  constructor(message: string) { super(message); this.name = 'PairedDifferenceError'; }
+}
+
+/**
+ * Paired binary outcomes. `candidateOnly` pairs succeed for the candidate and fail for the baseline;
+ * `baselineOnly` is the reverse. The discordant form `{ b, c, n }` uses b = candidateOnly and
+ * c = baselineOnly; it carries no marginals, so only the Tango interval accepts it.
+ */
+export type PairedBinaryCounts =
+  | { both: number; candidateOnly: number; baselineOnly: number; neither: number }
+  | { b: number; c: number; n: number };
+
+/** Two-sided interval for candidate minus baseline, in basis points (1 bps = 0.0001). */
+export interface PairedDifferenceInterval {
+  lowerBps: number;
+  upperBps: number;
+  estimateBps: number;
+  n: number;
+  method: 'newcombe-hybrid-score' | 'tango-score' | 'percentile-bootstrap';
+}
+
+/**
+ * Acklam's rational approximation to the standard normal quantile (relative error < 1.15e-9).
+ * Throws for p outside the open interval (0, 1).
+ */
+export function normalQuantile(p: number): number {
+  if (!Number.isFinite(p) || p <= 0 || p >= 1) throw new PairedDifferenceError('normal quantile requires 0 < p < 1');
+  const a = [-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+    1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00];
+  const b = [-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+    6.680131188771972e+01, -1.328068155288572e+01];
+  const c = [-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+    -2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00];
+  const d = [7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00];
+  const tail = (q: number): number => (((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!)
+    / ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1);
+  if (p < 0.02425) return tail(Math.sqrt(-2 * Math.log(p)));
+  if (p > 1 - 0.02425) return -tail(Math.sqrt(-2 * Math.log(1 - p)));
+  const q = p - 0.5;
+  const r = q * q;
+  return (((((a[0]! * r + a[1]!) * r + a[2]!) * r + a[3]!) * r + a[4]!) * r + a[5]!) * q
+    / (((((b[0]! * r + b[1]!) * r + b[2]!) * r + b[3]!) * r + b[4]!) * r + 1);
+}
+
+/** Two-sided level in bps; only 5001..9998 are accepted so neither tail is empty or trivial. */
+function twoSidedZ(levelBps: number): number {
+  if (!Number.isSafeInteger(levelBps) || levelBps <= 5000 || levelBps >= 9999) {
+    throw new PairedDifferenceError('levelBps must be an integer strictly between 5000 and 9999');
+  }
+  return normalQuantile((10000 + levelBps) / 20000);
+}
+
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+function pairedCells(counts: PairedBinaryCounts): { e: number | null; f: number; g: number; h: number | null; n: number } {
+  if (!counts || typeof counts !== 'object') throw new PairedDifferenceError('paired counts are required');
+  const full = ['both', 'candidateOnly', 'baselineOnly', 'neither'].some(key => Object.hasOwn(counts, key));
+  const discordant = ['b', 'c', 'n'].some(key => Object.hasOwn(counts, key));
+  if (full === discordant) throw new PairedDifferenceError('provide either the full paired table or discordant b, c and n');
+  if ('both' in counts) {
+    const { both, candidateOnly, baselineOnly, neither } = counts;
+    if (![both, candidateOnly, baselineOnly, neither].every(isCount)) {
+      throw new PairedDifferenceError('paired cell counts must be non-negative safe integers');
+    }
+    const n = both + candidateOnly + baselineOnly + neither;
+    if (n === 0 || !Number.isSafeInteger(n)) throw new PairedDifferenceError('paired table requires n > 0');
+    return { e: both, f: candidateOnly, g: baselineOnly, h: neither, n };
+  }
+  const { b, c, n } = counts;
+  if (![b, c, n].every(isCount) || n === 0 || b + c > n) {
+    throw new PairedDifferenceError('discordant counts require non-negative integers with b + c <= n and n > 0');
+  }
+  return { e: null, f: b, g: c, h: null, n };
+}
+
+// Outward rounding: a reported bound is never tighter than the computed one.
+const toBpsInterval = (low: number, high: number, estimate: number, n: number,
+  method: PairedDifferenceInterval['method']): PairedDifferenceInterval => {
+  if (![low, high, estimate].every(Number.isFinite) || low > estimate || estimate > high) {
+    throw new PairedDifferenceError('paired interval computation was not finite and ordered');
+  }
+  return {
+    lowerBps: Math.max(-10000, Math.floor(low * 10000)), upperBps: Math.min(10000, Math.ceil(high * 10000)),
+    estimateBps: Math.round(estimate * 10000), n, method,
+  };
+};
+
+/**
+ * Two-sided score interval for p_candidate - p_baseline from paired binary outcomes.
+ * `newcombe-10` (default): Newcombe (1998) method 10, square-and-add of continuity-free Wilson
+ * intervals for both marginals with phi numerator replaced by max(eh - fg - n/2, 0) when eh > fg.
+ * `tango`: Tango (1998) asymptotic score interval, inverted by bisection; needs only b, c and n.
+ */
+export function pairedBinaryDifferenceInterval(input: {
+  counts: PairedBinaryCounts; levelBps: number; method?: 'newcombe-10' | 'tango';
+}): PairedDifferenceInterval {
+  const z = twoSidedZ(input?.levelBps);
+  const { e, f, g, h, n } = pairedCells(input.counts);
+  const estimate = (f - g) / n;
+  const method = input.method ?? 'newcombe-10';
+  if (method === 'tango') {
+    const [low, high] = tangoInterval(f, g, n, z);
+    return toBpsInterval(low, high, estimate, n, 'tango-score');
+  }
+  if (method !== 'newcombe-10') throw new PairedDifferenceError('unknown paired interval method');
+  if (e === null || h === null) throw new PairedDifferenceError('newcombe method 10 requires the full paired table');
+  const p1 = (e + f) / n;
+  const p2 = (e + g) / n;
+  const [l1, u1] = wilsonScore(e + f, n, z);
+  const [l2, u2] = wilsonScore(e + g, n, z);
+  const denominator = Math.sqrt((e + f) * (g + h) * (e + g) * (f + h));
+  const cross = e * h - f * g;
+  const phi = denominator === 0 ? 0 : (cross > 0 ? Math.max(cross - n / 2, 0) : cross) / denominator;
+  const delta = Math.sqrt(Math.max(0, (p1 - l1) ** 2 - 2 * phi * (p1 - l1) * (u2 - p2) + (u2 - p2) ** 2));
+  const epsilon = Math.sqrt(Math.max(0, (u1 - p1) ** 2 - 2 * phi * (u1 - p1) * (p2 - l2) + (p2 - l2) ** 2));
+  return toBpsInterval(Math.max(-1, estimate - delta), Math.min(1, estimate + epsilon), estimate, n, 'newcombe-hybrid-score');
+}
+
+function tangoInterval(b: number, c: number, n: number, z: number): readonly [number, number] {
+  // Tango's statistic decreases in delta; the restricted MLE of the baseline-only cell is closed form.
+  const statistic = (delta: number): number => {
+    const B = -b - c + (2 * n - b + c) * delta;
+    const q21 = (Math.sqrt(Math.max(0, B * B + 8 * n * c * delta * (1 - delta))) - B) / (4 * n);
+    const numerator = b - c - n * delta;
+    const variance = n * (2 * q21 + delta * (1 - delta));
+    if (numerator === 0) return 0;
+    return variance > 0 ? numerator / Math.sqrt(variance) : numerator * Infinity;
+  };
+  const estimate = (b - c) / n;
+  // Each search keeps `outer` outside the acceptance region and returns it, so rounding widens.
+  const search = (outer: number, inner: number, rejects: (t: number) => boolean): number => {
+    for (let i = 0; i < 200; i++) {
+      const mid = (outer + inner) / 2;
+      if (mid === outer || mid === inner) break;
+      if (rejects(statistic(mid))) outer = mid; else inner = mid;
+    }
+    return outer;
+  };
+  return [
+    estimate === -1 ? -1 : search(-1, estimate, t => t > z),
+    estimate === 1 ? 1 : search(1, estimate, t => t < -z),
+  ];
+}
+
+/** Deterministic 32-bit mulberry32 stream. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return (t ^ (t >>> 14)) >>> 0;
+  };
+}
+
+/** Unbiased index in [0, n): reject draws in the incomplete top block of the 2^32 range. */
+function uniformIndex(next: () => number, n: number): number {
+  const limit = Math.floor(0x100000000 / n) * n;
+  for (;;) {
+    const draw = next();
+    if (draw < limit) return draw % n;
+  }
+}
+
+/**
+ * Seeded percentile bootstrap for the mean of bounded per-pair differences (candidate minus
+ * baseline) on the proportion scale, so 1.0 = 10000 bps. Bounds must lie within [-1, 1].
+ * Order statistics are chosen outward and each tail must hold at least 5 resamples.
+ */
+export function pairedMeanDifferenceBootstrap(input: {
+  differences: readonly number[]; levelBps: number; seed: number; resamples: number;
+  bounds: readonly [number, number];
+}): PairedDifferenceInterval {
+  twoSidedZ(input?.levelBps);
+  const { differences, levelBps, seed, resamples, bounds } = input;
+  if (!Array.isArray(bounds) || bounds.length !== 2 || !bounds.every(Number.isFinite)
+    || bounds[0] < -1 || bounds[1] > 1 || bounds[0] >= bounds[1]) {
+    throw new PairedDifferenceError('bounds must be finite with -1 <= min < max <= 1');
+  }
+  if (!Array.isArray(differences) || differences.length < 2) {
+    throw new PairedDifferenceError('bootstrap requires at least two paired differences');
+  }
+  if (differences.some(value => typeof value !== 'number' || !Number.isFinite(value) || value < bounds[0] || value > bounds[1])) {
+    throw new PairedDifferenceError('paired differences must be finite and within bounds');
+  }
+  if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffffffff) {
+    throw new PairedDifferenceError('seed must be an unsigned 32-bit integer');
+  }
+  const tail = Number.isSafeInteger(resamples) ? Math.floor(resamples * (10000 - levelBps) / 20000) : 0;
+  if (!Number.isSafeInteger(resamples) || resamples > 1_000_000 || tail < 5) {
+    throw new PairedDifferenceError('resamples must be an integer <= 1000000 leaving at least 5 per tail');
+  }
+  const n = differences.length;
+  const next = mulberry32(seed);
+  const means = new Float64Array(resamples);
+  for (let r = 0; r < resamples; r++) {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += differences[uniformIndex(next, n)]!;
+    means[r] = sum / n;
+  }
+  means.sort();
+  const estimate = differences.reduce((sum, value) => sum + value, 0) / n;
+  return toBpsInterval(Math.min(means[tail - 1]!, estimate), Math.max(means[resamples - tail]!, estimate), estimate, n,
+    'percentile-bootstrap');
+}
+
+/**
+ * One-sided non-inferiority read of a two-sided interval. `marginBps` is a non-positive integer:
+ * -250 lets the candidate be at most 2.5 points worse than the baseline. Non-inferior only when
+ * lowerBps >= marginBps; malformed intervals are 'insufficient', never a pass.
+ */
+export function pairedNonInferiority(input: { interval: PairedDifferenceInterval; marginBps: number }): {
+  decision: 'non-inferior' | 'not-non-inferior' | 'insufficient'; reason: string;
+} {
+  const marginBps = input?.marginBps;
+  if (!Number.isSafeInteger(marginBps) || marginBps > 0 || marginBps < -10000) {
+    throw new PairedDifferenceError('marginBps must be an integer in [-10000, 0]');
+  }
+  const interval = input.interval;
+  const valid = !!interval && typeof interval === 'object'
+    && [interval.lowerBps, interval.upperBps, interval.estimateBps].every(value => Number.isSafeInteger(value)
+      && value >= -10000 && value <= 10000)
+    && Number.isSafeInteger(interval.n) && interval.n > 0
+    && interval.lowerBps <= interval.estimateBps && interval.estimateBps <= interval.upperBps
+    && ['newcombe-hybrid-score', 'tango-score', 'percentile-bootstrap'].includes(interval.method);
+  if (!valid) return { decision: 'insufficient', reason: 'invalid-interval' };
+  return interval.lowerBps >= marginBps
+    ? { decision: 'non-inferior', reason: 'lower-bound-at-or-above-margin' }
+    : { decision: 'not-non-inferior', reason: 'lower-bound-below-margin' };
+}
+
+/**
+ * Two-sided Wilson score interval for a binomial proportion at `levelBps` (5001..9998), so each bound
+ * is a one-sided (10000 - levelBps) / 20000 bound. Counts must satisfy 0 <= events <= n and n > 0.
+ */
+export function wilsonScoreInterval(input: { events: number; n: number; levelBps: number }): readonly [number, number] {
+  const z = twoSidedZ(input?.levelBps);
+  const { events, n } = input;
+  if (!isCount(events) || !isCount(n) || n === 0 || events > n) {
+    throw new PairedDifferenceError('wilson interval requires integer counts with 0 <= events <= n and n > 0');
+  }
+  return wilsonScore(events, n, z);
+}
+
 function wilson95(errors: number, n: number): readonly [number, number] {
   // 95% normal quantile; finite-sample Wilson interval for binomial events.
-  const z = 1.959963984540054;
+  return wilsonScore(errors, n, 1.959963984540054);
+}
+
+function wilsonScore(errors: number, n: number, z: number): readonly [number, number] {
   const rate = errors / n;
   const denominator = 1 + z * z / n;
   const center = (rate + z * z / (2 * n)) / denominator;
