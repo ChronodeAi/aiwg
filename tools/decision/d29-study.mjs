@@ -17,7 +17,7 @@ try {
     await mkdir(output, { mode: 0o700 });
     for (const [name, value] of Object.entries(prepared)) await writeHeldoutFile(join(output, `${name === 'approval' ? 'approval-template' : name}.json`), value);
   }
-  process.stdout.write(`${JSON.stringify(dryRun(prepared))}\n`);
+  process.stdout.write(`${JSON.stringify(await dryRun(prepared))}\n`);
 } catch {
   process.stderr.write('D29 refused: use --dry-run SEED or --prepare SEED NEW_CANONICAL_ARTIFACT_DIRECTORY.\n');
   process.exitCode = 1;

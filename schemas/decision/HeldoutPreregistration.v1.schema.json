@@ -44,6 +44,16 @@
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$"
     },
+    "regeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "collectorCommit", "priorLiveObservations"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "collectorCommit": { "type": "string", "pattern": "^[a-f0-9]{9,40}$" },
+        "priorLiveObservations": { "const": 0 }
+      }
+    },
     "providerFailurePolicy": {
       "type": "object",
       "additionalProperties": false,

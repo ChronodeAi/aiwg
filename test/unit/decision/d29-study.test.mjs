@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prepare, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
   externalReport, validateStudyArtifact, fitReadinessMapping, SLICES, LABELS, score } from '../../../tools/decision/studies/d29.mjs';
-import { heldoutDigest, heldoutExecutionDigest, validateHeldoutBundle, planHeldoutCollection } from '../../../src/decision/heldout/contract.js';
+import { heldoutDigest, heldoutExecutionDigest, validateHeldoutInputs, validateHeldoutBundle, planHeldoutCollection } from '../../../src/decision/heldout/contract.js';
+import { generateHeldoutRow } from '../../../src/decision/heldout/generators.js';
 import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
 import { heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
@@ -74,6 +75,20 @@ describe('D29 frozen synthetic population', () => {
     expect(baseline({ kind: 'citation', claim: 'Module A uses port 12.', source: 'Module A uses port 12.' }, true)).toEqual({ route: 'ADVISORY_READY', support: 'supports' });
     expect(baseline({ kind: 'citation', claim: 'Module A uses port 12.', source: 'Module A might use port 12.' }, true)).toEqual({ route: 'REVIEW', support: 'unclear' });
   });
+  it('AC4 re-derives registered rows and corpus provenance from a closed seed', async () => {
+    await expect(prepare('Bad_Seed')).rejects.toThrow('seed');
+    const corpus = structuredClone(prepared.corpus), plan = structuredClone(prepared.preregistration);
+    corpus.rows[0].input.payload.claim = 'Forged claim';
+    const { provenance, ...output } = corpus.rows[0];
+    provenance.outputDigest = heldoutDigest(output);
+    plan.corpusDigest = heldoutDigest(corpus);
+    expect(() => validateHeldoutInputs(corpus, plan)).toThrow('generator-output');
+    const copied = structuredClone(prepared.corpus);
+    copied.provenance.generatorDigest = heldoutDigest('forged-generator');
+    expect(() => validateHeldoutInputs(copied, { ...prepared.preregistration, corpusDigest: heldoutDigest(copied) })).toThrow('corpus-provenance');
+    expect(() => generateHeldoutRow('d29-synthetic/v1', 'd29-study-v1:1600:single')).toThrow('generator-seed');
+    expect(() => generateHeldoutRow('d29-synthetic/v1', 'd29-study-v1:0:local')).toThrow('generator-layout');
+  });
   it('AC9 retains every preregistered field and rejects extra/null artifact controls', () => {
     for (const artifact of [prepared.gold, prepared.analysis, prepared.reviews]) {
       expect(() => validateStudyArtifact(artifact)).not.toThrow();
@@ -90,20 +105,27 @@ describe('D29 frozen synthetic population', () => {
     expect(prepared.reviews.assessments.every(item => item.goldCorrect === null && item.agreed === null)).toBe(true);
   });
   it('AC9 budgets the executable unbatched path, including every retry, without attesting approval', async () => {
-    expect(dryRun(prepared)).toMatchObject({ providerCalls: 0, subjects: 1600, deterministicNoCallSubjects: 300,
-      expected: { initialCalls: 4500, attempts: 4612.5, inputTokens: 9225000, usd: 0.38745 },
-      worst: { attempts: 9000, tokens: 36000000, reservedUsd: 3.6 }, hardCapUsd: 6 });
+    const frozen = await prepare('d29-study-v1');
+    expect(await dryRun(frozen)).toMatchObject({ providerCalls: 0, subjects: 1600, deterministicNoCallSubjects: 300,
+      providerOverheadTokens: 512, maximumRequestEstimateTokens: 1095,
+      expected: { initialCalls: 4500, attempts: 4612.5, inputTokens: 4563248.75, reservedUsd: 0.458356425 },
+      worst: { attempts: 9000, tokens: 11207900, reservedUsd: 0.894354 }, hardCapUsd: 6 });
     const c = await setup();
     c.bundle.corpus = prepared.corpus; c.bundle.preregistration = prepared.preregistration;
     c.bundle.approval.corpusDigest = heldoutDigest(prepared.corpus);
     c.bundle.approval.preregistrationDigest = heldoutDigest(prepared.preregistration);
     c.bundle.approval.executionDigest = heldoutExecutionDigest(prepared.corpus, prepared.preregistration, c.bundle.approval);
     const fullPlan = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));
-    expect(fullPlan).toMatchObject({ maximumAttempts: 9000, reservedTokens: 36000000, reservedUsdMicros: 3600000, fitsBeforeStop: true });
+    expect(fullPlan).toMatchObject({ maximumAttempts: 9000, reservedTokens: 11208452, reservedUsdMicros: 894428, fitsBeforeStop: true });
     expect(fullPlan.maximumRequestEstimateTokens).toBeLessThanOrEqual(3744);
     expect(c.host.resolveCredential).not.toHaveBeenCalled();
     expect(prepared.approval.budget).toEqual({ calls: 11250, tokens: 45000000, usd: 6 });
     expect(prepared.approval.priceBound).toMatchObject({ inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, perRequestUsd: 0, approvalReference: null });
+    const paidOutput = structuredClone(c.bundle);
+    paidOutput.approval.priceBound.outputUsdPerMTok = 0.001;
+    expect(() => validateHeldoutBundle(paidOutput, heldoutDigest(paidOutput.approval))).toThrow('free-output-required');
+    expect(prepared.preregistration.regeneration).toEqual({ reason: 'collector-provenance-and-reservation-contract',
+      collectorCommit: '0cbde8721', priorLiveObservations: 0 });
     expect(() => validateHeldoutBundle({ corpus: prepared.corpus, preregistration: prepared.preregistration, approval: prepared.approval }, heldoutDigest(prepared.approval))).toThrow();
   });
 });
@@ -241,9 +263,9 @@ function response(init) {
 describe('D29 collector integration', () => {
   it('AC1/2/3/5/7 projects actual semantic payloads and maps native receipts; hard blockers make zero requests', async () => {
     const c = await setup(), transport = vi.fn(async (_url, init) => response(init));
-    expect(await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).toMatchObject({ maximumAttempts: 44, reservedUsdMicros: 17600 });
+    expect(await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).toMatchObject({ maximumAttempts: 44, reservedUsdMicros: 4390 });
     const result = await c.run(transport);
-    expect(result).toMatchObject({ status: 'complete', completedRows: 8, reservedUsdMicros: 8800, source: 'injected-transport' });
+    expect(result).toMatchObject({ status: 'complete', completedRows: 8, reservedUsdMicros: 2195, source: 'injected-transport' });
     expect(transport).toHaveBeenCalledTimes(22);
     const attempts = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
     const citation = observationFromAttempts(c.bundle.corpus, c.bundle.corpus.rows[0], attempts);
@@ -295,7 +317,11 @@ describe('D29 collector integration', () => {
     expect(result.status).toBe('stopped'); expect(result.completedRows).toBeGreaterThanOrEqual(1);
     const attempts = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
     expect(attempts.slice(0, 3).every(attempt => attempt.result.disposition === 'success')).toBe(true);
-    expect(attempts.every(attempt => attempt.reservedUsdMicros === 400)).toBe(true);
+    for (const [index, attempt] of attempts.entries()) {
+      const bytes = Buffer.byteLength(transport.mock.calls[index][1].body, 'utf8');
+      expect(attempt.reservedTokens).toBe(bytes + 512 + 256);
+      expect(attempt.reservedUsdMicros).toBe(Math.ceil((bytes + 512) * 0.1));
+    }
     expect(observationFromAttempts(c.bundle.corpus, c.bundle.corpus.rows[0], attempts).missing).toBe(false);
     expect(observationFromAttempts(c.bundle.corpus, c.bundle.corpus.rows[1], attempts).missing).toBe(true);
     expect(transport).toHaveBeenCalledTimes(4);
