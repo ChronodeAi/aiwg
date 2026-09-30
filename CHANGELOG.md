@@ -9,6 +9,25 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental default-off D28 routing pilot APIs for capability-constrained
+  model/subagent selection after hard-constraint filtering. Shadow mode executes
+  only the existing deterministic route and records the Jev-assisted choice as a
+  never-executed counterfactual. Includes closed task/evidence validation,
+  cumulative budget and deadline enforcement, provider circuits, a paired and
+  preregistered shadow report verified by rebuild, a D17 rollback drill that
+  restores the prior routing policy, docs, tests and an offline synthetic
+  example (#2620).
+- Experimental/default-off SDLC evidence readiness screening for citation
+  support and phase-gate criteria, with closed schemas, deterministic preflight
+  against a host-pinned gate policy artifact, D08 native-distribution
+  acceptance, D09 registry calibration and D10 review routing, shadow-mode
+  receipts, a D13 durable-review bridge, record-computed held-out
+  preregistration with paired non-inferiority against the baseline, docs and
+  offline tests (#2622).
+- Experimental default-off D17 decision ensemble runtime APIs for bounded
+  member dispatch, paired champion/challenger shadow evaluation, drift-response
+  execution, promotion gating on D09 plus eval-integrity, rollback for new runs,
+  metadata-only telemetry, docs, tests and an offline synthetic example (#2611).
 - Experimental, default-off decision-assisted context pruning pilot with
   deterministic protected-item retention, a ContextBudgetManager fallback and
   byte-identical shadow selection, immutable reversible receipts, closed
