@@ -48,11 +48,13 @@ pin checks. The live environment and TLS gates are checked again at dispatch.
 
 ## Approval and accounting
 
-The closed v1 corpus, preregistration, approval, baseline, spend-event, spend-head,
+The closed v1 corpus, preregistration, approval, baseline, spend-event,
 frozen-input, calibration-phase, attempt, event and summary schemas are under
-`schemas/decision/Heldout*.v1.schema.json`. Definitions and receipts also pass the existing decision validators. Unknown fields, null price
-rates/fees, malformed calibration bindings, changed approval pins, duplicate payloads,
-cross-split families and non-synthetic provenance fail before dispatch.
+`schemas/decision/Heldout*.v1.schema.json`; the current spend-head schema is
+`HeldoutSpendHead.v2.schema.json`. Definitions and receipts also pass the existing
+decision validators. Unknown fields, null price rates/fees, malformed calibration
+bindings, changed approval pins, duplicate payloads, cross-split families and
+non-synthetic provenance fail before dispatch.
 
 Approval binds the corpus and preregistration, requested/served `jev-1.13.0`,
 all execution definition/ruleset/binding/projection pins, adapter version,
@@ -169,19 +171,26 @@ Accounted dollars are conservative charges, never net savings.
 
 D17 admission has a USD 8 study ceiling; D29 has USD 6. The portfolio ceiling
 is USD 48. Before each dispatch, accounted run spend plus the next worst-case
-reservation must fit 80% of the minimum of the approved budget, remaining study
-cap and remaining portfolio cap in artifact/diagnostic mode. Staged collection
-fixes the 80% thresholds against the approved budget and original baseline
+reservation must fit the remaining allowance. Every mode fixes its 80%
+thresholds against the first approved study budget and original baseline
 remainders, then subtracts accumulated charges. Both phases and every resume
-share that allowance; switching phase never applies 80% anew to a remainder. The collector rejects an approval whose budget
+share that allowance; switching mode, phase, corpus or run ID never applies 80%
+anew to a remainder. The collector rejects an approval whose budget
 cannot cover even one of its planned calls (including a USD 0.0005 approval
-with a larger reservation). Calls and reserved tokens also stop at 80% of approval, cumulatively across staged phases and resumes.
+with a larger reservation). Calls and reserved tokens also stop at 80% of the
+first approval, cumulatively across all modes, phases and resumes.
 
 The collector records each operator floor once, with its approval digest and
 the counter's genesis digest, in
 `research/qualification/heldout/baselines/{D17,D29,portfolio}.json` beneath the
 canonical artifact root. The initial floors must include spending outside this
-collector; subsequent approvals repeat the original floors.
+collector; subsequent approvals repeat the original floors. Each study baseline
+also pins the first approval's closed USD/call/token `budget`; the portfolio
+baseline has `budget: null` because it has no separate study allowance. Admission
+and dry-run compare every subsequent approval to the stored study budget,
+independently of corpus identity or surviving run directories. Any changed
+budget is refused before credential access; existing thresholds are never
+rewritten by an approval.
 
 A separate `research/qualification/heldout/spend-counter.jsonl` records every
 reservation and settlement across both studies. Each append is hash-chained and
@@ -193,8 +202,15 @@ directory, or its events and summary together, therefore cannot restore allowanc
 The counter also preserves call/token allowance and unresolved/stopped-attempt status after such deletion.
 Lost run receipts cannot be reconstructed from this compact counter.
 
-`spend-head.json` independently anchors the latest sequence/digest. It is
-replaced atomically and its directory fsynced after every counter append.
+`spend-head.json` independently anchors the latest sequence/digest and the
+complete set of baseline content digests. Its v2 record is replaced atomically
+and its directory fsynced after every counter append and first approval for a
+study, including an approval that dispatches no calls. Baselines are synced
+before publishing their head pins. Replacing, adding or deleting a baseline
+fails verification even after every run directory is deleted; a matching new
+approval cannot authorize changed baseline contents. Both dry-run and collection
+verify these pins before credential access.
+
 A surviving baseline with a missing, truncated or broken counter, a mismatched
 head, or an interrupted head update refuses further collection with
 `spend-counter-operator-repair-required`. This includes truncation to a valid
@@ -202,7 +218,10 @@ chain prefix after deleting all run directories. Preserve the counter, head,
 baselines and remaining run evidence; an operator must reconcile them against
 protected backups and provider billing. Never delete these files to restart.
 There is no automatic repair, migration or baseline reset. Old baselines without
-a genesis pin also require reconciliation. Dry-run uses the same accounting
+a genesis pin or the required budget field also require reconciliation; missing,
+null or malformed study budgets fail closed. Legacy v1 heads without baseline
+pins also require operator reconciliation; they are never automatically upgraded
+from unverified baseline files. Dry-run uses the same accounting
 without creating baseline/counter records.
 
 Under the attested free-output tariff, the only residual per-call cost overrun
@@ -309,8 +328,8 @@ requires a reviewed generator addition and fresh corpus pins.
 This proves reproducibility, not held-out quality or correctness of the gold.
 These experimental v1 contracts are tightened in place: earlier unproven rows
 must be regenerated, and approvals/attempt token reservations must be refreshed.
-The calibration block, frozen access time, summary seal pin and spend-counter
-reserved tokens are required by the tightened v1 schemas. Existing ledgers need
+The calibration block, frozen access time, summary seal pin, spend-counter
+reserved tokens and baseline budget are required by the tightened v1 schemas. Existing ledgers need
 operator reconciliation; there is no silent conversion or spend reset.
 Generator changes require fresh corpus pins; existing ledgers are not migrated
 automatically across these experimental contract changes.
@@ -328,14 +347,15 @@ not a model-visible input or a mechanism for isolating trusted host code.
 Diagnostic mode and pre-fit calibration-phase collection pass `false`; their
 scorers must return `calibrated: false`; `d09Qualified` and `calibratedGate`
 must also be false when present. Conflicting or missing calibration declarations
-are refused.
+and a structured `decision: 'PROMOTE'` are refused.
 Artifact/test mode passes `null` (unknown), because the collector has not
 validated D09. The wrapper reports the binding,
 `calibrationArtifactValidation: 'not-performed'`, `d09Qualified: false` and `calibratedGate: false`. These are
 collector claims; native study diagnostics require their own trusted artifact
 validation. A scorer is trusted host code; arbitrary diagnostic prose is not
 validated as a qualification claim. The library wrapper always returns HOLD or preserves ROLLBACK,
-including when diagnostics contain a proposed PROMOTE. A scorer callback is
+including when artifact/test diagnostics contain a proposed PROMOTE. Diagnostic
+and pre-fit calibration scorers cannot return that structured decision. A scorer callback is
 trusted host code, not a model-supplied executable. Its actual module digest
 must be independently checked by the caller, as CLI preparation does.
 

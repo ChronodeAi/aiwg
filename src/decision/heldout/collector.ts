@@ -298,6 +298,7 @@ export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDig
     integrity: structuredClone(input.integrity), approvedCalibration: structuredClone(approvedCalibration), calibrated });
   if (calibrated === false && (!diagnostics || typeof diagnostics !== 'object'
     || (diagnostics as Record<string, unknown>).calibrated !== false
+    || 'decision' in diagnostics && diagnostics.decision === 'PROMOTE'
     || 'd09Qualified' in diagnostics && diagnostics.d09Qualified !== false
     || 'calibratedGate' in diagnostics && diagnostics.calibratedGate !== false)) throw new HeldoutError('uncalibrated-report');
   return { schemaVersion: 'decision-heldout-score/v1', source: frozen.priorRuns.some(run => run.source === 'injected-transport') ? 'injected-transport' : frozen.source, evidenceDigest: input.trustedEvidenceDigest, integrityDigest: input.trustedIntegrityDigest,

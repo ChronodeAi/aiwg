@@ -164,6 +164,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   every rendered template; the new `d29-study-v2` holdout and manifest pins
   supersede the ambiguous v1 corpus before any live collection (#2622)
 
+- Bind experimental, default-off held-out collector baselines to the independent
+  durable spend head. Changed or missing baselines fail before credential access
+  even after run deletion; legacy heads require operator reconciliation (#2778)
+
+- Experimental, default-off held-out collection pins each study's first approved
+  budget beside its durable spend baseline, enforces cumulative USD/call/token
+  thresholds in every mode after resumes or run deletion, and rejects structured
+  PROMOTE claims from diagnostic and pre-fit calibration scorers. Live
+  qualification remains pending (#2778)
+
 - Close paid-output and deleted-history cap overruns in the experimental,
   default-off held-out collector: require attested free Jev output, reserve
   serialized input bytes plus preregistered provider overhead, retain monotonic

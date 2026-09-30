@@ -5,7 +5,10 @@ import type { Digest, HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutEve
 
 export const heldoutRunsRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'runs');
 const baselineRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'baselines');
-interface HeldoutBaseline { schemaVersion: 'decision-heldout-baseline/v1'; scope: string; usdMicros: number; approvalDigest: Digest; counterGenesisDigest: Digest }
+interface HeldoutBaseline {
+  schemaVersion: 'decision-heldout-baseline/v1'; scope: string; usdMicros: number; approvalDigest: Digest; counterGenesisDigest: Digest;
+  budget: HeldoutApproval['budget'] | null;
+}
 const counterRoot = (root: string): string => dirname(heldoutRunsRoot(root));
 interface SpendCharge {
   study: string; runId: string; rowId: string; requestId: string; ordinal: number;
@@ -19,14 +22,19 @@ interface SpendEvent {
 interface SpendCounter { events: SpendEvent[]; studies: Map<string, number>; blocked: boolean }
 const chargeKey = (charge: SpendCharge) => `${charge.study}/${charge.runId}/${charge.rowId}/${charge.requestId}/${charge.ordinal}`;
 const repair = () => new HeldoutError('spend-counter-operator-repair-required');
-async function counterHead(root: string, event: SpendEvent): Promise<void> {
+const baselineDigests = (baselines: Map<string, HeldoutBaseline>): Record<string, Digest> =>
+  Object.fromEntries([...baselines].map(([scope, baseline]) => [scope, heldoutDigest(baseline)]));
+async function counterHead(root: string, event: SpendEvent, baselines: Map<string, HeldoutBaseline>): Promise<void> {
   const dir = counterRoot(root), temporary = join(dir, 'spend-head.next.json');
-  await writeHeldoutFile(temporary, { schemaVersion: 'decision-heldout-spend-head/v1', sequence: event.sequence, digest: event.digest });
+  const head = { schemaVersion: 'decision-heldout-spend-head/v2', sequence: event.sequence, digest: event.digest,
+    baselineDigests: baselineDigests(baselines) };
+  checkHeldoutSchema('SpendHead', head);
+  await writeHeldoutFile(temporary, head);
   await rename(temporary, join(dir, 'spend-head.json'));
   const directory = await open(dir, 'r');
   try { await directory.sync(); } finally { await directory.close(); }
 }
-/** The independent head detects even a valid-prefix truncation after all run files disappear. */
+/** The independent head binds baselines and detects valid-prefix truncation after all run files disappear. */
 async function readCounter(root: string, baselines: Map<string, HeldoutBaseline>): Promise<SpendCounter> {
   const dir = counterRoot(root), path = join(dir, 'spend-counter.jsonl');
   const names = await readdir(dir);
@@ -58,9 +66,10 @@ async function readCounter(root: string, baselines: Map<string, HeldoutBaseline>
       if (event.totalUsdMicros !== total || !Number.isSafeInteger(total)) throw repair();
       events.push(event);
     }
-    const head = await readHeldoutFile(join(dir, 'spend-head.json')) as { sequence: number; digest: Digest };
+    const head = await readHeldoutFile(join(dir, 'spend-head.json')) as { sequence: number; digest: Digest; baselineDigests: Record<string, Digest> };
     checkHeldoutSchema('SpendHead', head);
     if (head.sequence !== events.length || head.digest !== events.at(-1)?.digest
+      || heldoutDigest(head.baselineDigests) !== heldoutDigest(baselineDigests(baselines))
       || [...baselines.values()].some(b => b.counterGenesisDigest !== events[0].digest)) throw repair();
     if (!baselines.has('portfolio') || [...studies.keys()].some(study => !baselines.has(study))) throw repair();
     return { events, studies, blocked: [...latest.values()].some(c => c.disposition === null || c.disposition === 'stop') };
@@ -68,7 +77,7 @@ async function readCounter(root: string, baselines: Map<string, HeldoutBaseline>
 }
 /** Caller holds the global dispatch lock. Never rewrite or refund a counter entry. */
 export async function appendHeldoutSpend(root: string, attempt: HeldoutAttempt): Promise<void> {
-  const counter = await readCounter(root, await readBaselines(root));
+  const baselines = await readBaselines(root), counter = await readCounter(root, baselines);
   const charge: SpendCharge = { study: attempt.study, runId: attempt.runId, rowId: attempt.rowId, requestId: attempt.requestId,
     ordinal: attempt.ordinal, reservedUsdMicros: attempt.reservedUsdMicros, reservedTokens: attempt.reservedTokens,
     accountedUsdMicros: attempt.result?.accountedUsdMicros ?? null, disposition: attempt.result?.disposition ?? null };
@@ -83,7 +92,7 @@ export async function appendHeldoutSpend(root: string, attempt: HeldoutAttempt):
   checkHeldoutSchema('SpendEvent', event);
   const file = await open(join(counterRoot(root), 'spend-counter.jsonl'), 'a');
   try { await file.writeFile(JSON.stringify(event) + '\n'); await file.sync(); } finally { await file.close(); }
-  await counterHead(root, event);
+  await counterHead(root, event, baselines);
 }
 async function readBaselines(root: string): Promise<Map<string, HeldoutBaseline>> {
   await heldoutDirectory(baselineRoot(root));
@@ -96,23 +105,37 @@ async function readBaselines(root: string): Promise<Map<string, HeldoutBaseline>
   }
   return baselines;
 }
-/** Called under the global dispatch lock, after checking existing journals. Floors are recorded once. */
+function checkBaselineApproval(baselines: Map<string, HeldoutBaseline>, approval: HeldoutApproval): void {
+  for (const [scope, usd] of [[approval.study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
+    if (baselines.has(scope) && baselines.get(scope)!.usdMicros !== Math.ceil(usd * 1_000_000)) throw new HeldoutError('baseline-changed');
+  }
+  const study = baselines.get(approval.study);
+  if (study && heldoutDigest(study.budget) !== heldoutDigest(approval.budget)) throw new HeldoutError('budget-changed');
+}
+/** Called under the global dispatch lock, after checking existing journals. Floors and study budgets are recorded once. */
 export async function reconcileHeldoutBaseline(root: string, approval: HeldoutApproval): Promise<{ study: Digest; portfolio: Digest }> {
   const baselines = await readBaselines(root);
-  let genesis: Digest;
-  if (!baselines.size) {
+  const counter = await readCounter(root, baselines);
+  checkBaselineApproval(baselines, approval);
+  let head = counter.events.at(-1);
+  if (!head) {
     const payload = { schemaVersion: 'decision-heldout-spend-event/v1' as const, sequence: 1, previous: null, charge: null, totalUsdMicros: 0 };
-    const event: SpendEvent = { ...payload, digest: heldoutDigest(payload) }; genesis = event.digest;
-    await writeHeldoutFile(join(counterRoot(root), 'spend-counter.jsonl'), event);
-    await counterHead(root, event);
-  } else genesis = (await readCounter(root, baselines)).events[0].digest;
+    head = { ...payload, digest: heldoutDigest(payload) };
+    await writeHeldoutFile(join(counterRoot(root), 'spend-counter.jsonl'), head);
+  }
+  const genesis = counter.events[0]?.digest ?? head.digest;
+  let changed = false;
   for (const [scope, usd] of [[approval.study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
     const usdMicros = Math.ceil(usd * 1_000_000), baseline = baselines.get(scope);
-    if (baseline && baseline.usdMicros !== usdMicros) throw new HeldoutError('baseline-changed');
-    if (!baseline) await writeHeldoutFile(join(baselineRoot(root), `${scope}.json`), {
-      schemaVersion: 'decision-heldout-baseline/v1', scope, usdMicros, approvalDigest: heldoutDigest(approval), counterGenesisDigest: genesis,
-    });
+    if (!baseline) {
+      const recorded: HeldoutBaseline = { schemaVersion: 'decision-heldout-baseline/v1', scope, usdMicros,
+        approvalDigest: heldoutDigest(approval), counterGenesisDigest: genesis, budget: scope === 'portfolio' ? null : approval.budget };
+      await writeHeldoutFile(join(baselineRoot(root), `${scope}.json`), recorded);
+      baselines.set(scope, recorded); changed = true;
+    }
   }
+  // Publish only after every baseline is durable. A partial update fails closed on the next read.
+  if (changed) await counterHead(root, head, baselines);
   const recorded = await readBaselines(root);
   return { study: heldoutDigest(recorded.get(approval.study)!), portfolio: heldoutDigest(recorded.get('portfolio')!) };
 }
@@ -184,9 +207,7 @@ export async function scanHeldoutSpend(root: string, study: string, approval?: H
   const baselines = await readBaselines(root);
   if (approval) {
     if (approval.study !== study) throw new HeldoutError('baseline-study');
-    for (const [scope, usd] of [[study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
-      if (baselines.has(scope) && baselines.get(scope)!.usdMicros !== Math.ceil(usd * 1_000_000)) throw new HeldoutError('baseline-changed');
-    }
+    checkBaselineApproval(baselines, approval);
   }
   const counter = await readCounter(root, baselines);
   const result: HeldoutScan = { studyUsdMicros: baselines.get(study)?.usdMicros ?? 0,
@@ -263,14 +284,10 @@ export async function validateHeldoutJournal(bundle: HeldoutBundle, events: read
       || attempt.reservedTokens !== heldoutReservationTokens(bundle.preregistration, planned.estimatedTokens)) throw new HeldoutError('journal-pins');
   }
 }
-/** Staged sessions share one allowance; a new phase or run ID cannot move the stop threshold. */
+/** Every mode shares fixed thresholds; admission checks the approval against its durable study baseline. */
 export function heldoutCollectionAllowance(approval: HeldoutApproval, prior: HeldoutScan) {
   const studyRemaining = HELDOUT_CAP_USD[approval.study] * 1_000_000 - prior.studyUsdMicros;
   const portfolioRemaining = HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - prior.portfolioUsdMicros;
-  if (approval.calibration.mode !== 'staged') return {
-    calls: Math.floor(approval.budget.calls * 0.8), tokens: Math.floor(approval.budget.tokens * 0.8),
-    usdMicros: Math.floor(Math.min(approval.budget.usd * 1_000_000, studyRemaining, portfolioRemaining) * 0.8),
-  };
   const studySpent = prior.studyUsdMicros - Math.ceil(approval.priorStudySpendUsd * 1_000_000);
   const portfolioSpent = prior.portfolioUsdMicros - Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000);
   return { calls: Math.floor(approval.budget.calls * 0.8) - prior.studyCalls,

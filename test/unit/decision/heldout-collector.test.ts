@@ -250,7 +250,10 @@ describe('held-out recorded evidence and study interface', () => {
     trusted_score_source: 'locked-artifact-snapshot', compromise_labels: [], weak_signal_reason: null,
     release_gate: { decision: 'HOLD' as const, reasons: ['fixture-only'] } });
   it('AC6/7 rereads evidence before the scorer, rejects forged integrity and never upgrades HOLD or ROLLBACK', async () => {
-    const c = await setup(); const summary: any = await c.run(fake());
+    const c = await setup();
+    c.bundle.preregistration.calibration = { scope: 'calibrated', allowedModes: ['artifact'] };
+    c.bundle.approval.calibration = { mode: 'artifact', calibrationArtifactDigest: pin };
+    const summary: any = await c.run(fake());
     const score = vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE', candidateQuality: 0.1, baselineQuality: 1, netSavingsUsd: -1 }));
     const module = { prepare, score } as HeldoutStudyModule;
     const metadata = integrity();
@@ -383,7 +386,7 @@ describe('held-out raw transport controls', () => {
         if (change === 'approval') value.approvalDigest = pin; else value.usdMicros = 1;
         await writeFile(path, JSON.stringify(value));
       }
-      const transport = fake(); await expect(c.run(transport)).rejects.toThrow(change === 'missing' ? 'operator-repair' : 'baseline-mismatch');
+      const transport = fake(); await expect(c.run(transport)).rejects.toThrow('operator-repair');
       expect(transport).not.toHaveBeenCalled();
     }
   });
@@ -397,7 +400,7 @@ describe('held-out raw transport controls', () => {
     expect(transport).toHaveBeenCalledOnce();
     expect(await scanHeldoutSpend(c.root, 'D29')).toMatchObject({ studyUsdMicros: 0, portfolioUsdMicros: 47700076 });
   });
-  it('HIGH3 adds three runs to the durable $7 study / $47 portfolio baseline without reusing the remainder', async () => {
+  it('HIGH3 retains the durable $7 study / $47 portfolio baseline across three runs without renewing allowance', async () => {
     const c = await setup(3); c.bundle.approval.priorStudySpendUsd = 7; c.bundle.approval.priorPortfolioSpendUsd = 47;
     c.bundle.approval.budget.calls = 2; c.bundle.approval.priceBound.perRequestUsd = 0.4;
     const transport = fake();
@@ -405,12 +408,12 @@ describe('held-out raw transport controls', () => {
     expect(await readdir(join(c.root, 'research/qualification/heldout/baselines'))).toEqual([]);
     expect(await c.run(transport)).toMatchObject({ completedRows: 1, reservedUsdMicros: 400076 });
     c.bundle.approval.runId = 'floor-02';
-    expect(await c.run(transport)).toMatchObject({ completedRows: 2, reservedUsdMicros: 400076 });
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 1, reservedUsdMicros: 0 });
     c.bundle.approval.runId = 'floor-03';
-    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 2, reservedUsdMicros: 0 });
-    expect(transport).toHaveBeenCalledTimes(2);
-    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 7800152, portfolioUsdMicros: 47800152 });
-    expect(await scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).toMatchObject({ studyUsdMicros: 7800152, portfolioUsdMicros: 47800152 });
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 1, reservedUsdMicros: 0 });
+    expect(transport).toHaveBeenCalledOnce();
+    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 7400076, portfolioUsdMicros: 47400076 });
+    expect(await scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).toMatchObject({ studyUsdMicros: 7400076, portfolioUsdMicros: 47400076 });
     c.bundle.approval.priorPortfolioSpendUsd = 46;
     await expect(scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).rejects.toThrow('baseline-changed');
   });
@@ -505,6 +508,63 @@ describe('collector re-verification cap probes', () => {
       expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
     }
     expect(transport).toHaveBeenCalledOnce();
+  });
+  it.each(['budget', 'approval', 'floor', 'study-delete', 'study-add', 'baselines-delete', 'counter-reset', 'head-unbound', 'head-legacy', 'head-null', 'head-scope'])('P1 refuses baseline %s after run deletion before credentials', async change => {
+    const c = await setup(3); c.bundle.approval.budget = { calls: 2, tokens: 1600, usd: 1 };
+    expect(await c.run(fake())).toMatchObject({ reason: 'budget-exhausted', completedRows: 1 });
+    await rm(c.runDir, { recursive: true });
+    const root = join(c.root, 'research/qualification/heldout');
+    const path = join(root, 'baselines/D17.json');
+    const baseline = JSON.parse(await readFile(path, 'utf8'));
+    const counter = await readFile(join(root, 'spend-counter.jsonl'), 'utf8');
+    const head = await readFile(join(root, 'spend-head.json'), 'utf8');
+    if (change === 'budget') {
+      baseline.budget = { calls: 4, tokens: 3200, usd: 2 };
+      c.bundle.approval.budget = baseline.budget;
+    }
+    if (change === 'approval') baseline.approvalDigest = pin;
+    if (change === 'floor') { baseline.usdMicros = 1; c.bundle.approval.priorStudySpendUsd = 0.000001; }
+    await writeFile(path, JSON.stringify(baseline));
+    if (change === 'study-delete') await rm(path);
+    if (change === 'study-add') await writeFile(join(root, 'baselines/D29.json'), JSON.stringify({ ...baseline, scope: 'D29' }));
+    if (change === 'baselines-delete') await rm(join(root, 'baselines'), { recursive: true });
+    if (change === 'counter-reset') await writeFile(join(root, 'spend-counter.jsonl'), counter.split('\n')[0] + '\n');
+    if (change.startsWith('head-')) {
+      const value = JSON.parse(head);
+      if (change === 'head-unbound') delete value.baselineDigests;
+      if (change === 'head-legacy') { value.schemaVersion = 'decision-heldout-spend-head/v1'; delete value.baselineDigests; }
+      if (change === 'head-null') value.baselineDigests.D17 = null;
+      if (change === 'head-scope') value.baselineDigests.D99 = pin;
+      await writeFile(join(root, 'spend-head.json'), JSON.stringify(value));
+    }
+    c.bundle.approval.runId = 'replaced-baseline'; c.host.resolveCredential.mockClear(); const transport = fake();
+    await expect(scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).rejects.toThrow('operator-repair');
+    await expect(c.run(transport)).rejects.toThrow('operator-repair');
+    expect(c.host.resolveCredential).not.toHaveBeenCalled(); expect(transport).not.toHaveBeenCalled();
+    if (change !== 'counter-reset') expect(await readFile(join(root, 'spend-counter.jsonl'), 'utf8')).toBe(counter);
+    if (!change.startsWith('head-')) expect(await readFile(join(root, 'spend-head.json'), 'utf8')).toBe(head);
+  });
+  it('P1 binds the first approval and a later study even before either dispatches', async () => {
+    const c = await setup(1); const transport = fake();
+    const controller = new AbortController(); controller.abort();
+    expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ reason: 'cancelled', reservedUsdMicros: 0 });
+    const root = join(c.root, 'research/qualification/heldout');
+    const study = JSON.parse(await readFile(join(root, 'baselines/D17.json'), 'utf8'));
+    const portfolio = JSON.parse(await readFile(join(root, 'baselines/portfolio.json'), 'utf8'));
+    expect(study).toMatchObject({ approvalDigest: heldoutDigest(c.bundle.approval), budget: c.bundle.approval.budget });
+    expect(JSON.parse(await readFile(join(root, 'spend-head.json'), 'utf8'))).toMatchObject({ schemaVersion: 'decision-heldout-spend-head/v2', sequence: 1,
+      baselineDigests: { D17: heldoutDigest(study), portfolio: heldoutDigest(portfolio) } });
+    c.bundle.corpus.study = 'D29'; c.bundle.preregistration.study = 'D29'; c.bundle.approval.study = 'D29';
+    c.bundle.approval.runId = 'second-study';
+    expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ reason: 'cancelled', reservedUsdMicros: 0 });
+    const second = JSON.parse(await readFile(join(root, 'baselines/D29.json'), 'utf8'));
+    expect(JSON.parse(await readFile(join(root, 'spend-head.json'), 'utf8'))).toMatchObject({ sequence: 1,
+      baselineDigests: { D17: heldoutDigest(study), D29: heldoutDigest(second), portfolio: heldoutDigest(portfolio) } });
+    await rm(heldoutRunsRoot(c.root), { recursive: true });
+    await rm(join(root, 'baselines/D29.json'));
+    c.bundle.approval.runId = 'recreated-study';
+    await expect(c.run(transport)).rejects.toThrow('operator-repair');
+    expect(c.host.resolveCredential).not.toHaveBeenCalled(); expect(transport).not.toHaveBeenCalled();
   });
   it.each(['delete', 'truncate', 'prefix', 'chain', 'head-delete', 'head-stale', 'interrupted-head'])('fails closed with operator repair on counter %s after deleting run evidence', async change => {
     const c = await setup(1); await c.run(fake()); await rm(c.runDir, { recursive: true });
@@ -611,13 +671,55 @@ describe('held-out calibration scope and two-phase approval', () => {
       calibrationPhaseRecordDigest: summary.calibrationPhaseRecordDigest, priorApprovalDigest } });
     await c.clock.sleep(1); c.refresh();
   }
+  it.each(['staged', 'artifact', 'uncalibrated-diagnostic'] as const)('review P1 %s retains each exhausted threshold through resumes and run deletion', async mode => {
+    for (const budget of ['usd', 'calls', 'tokens'] as const) for (const removeRuns of [true, false]) {
+      const c = await scoped(mode); c.bundle.preregistration.providerFailurePolicy.maxRetries = 0;
+      if (budget === 'usd') c.bundle.approval.priceBound.perRequestUsd = 0.6;
+      if (budget === 'calls') c.bundle.approval.budget.calls = 2;
+      if (budget === 'tokens') c.bundle.approval.budget.tokens = 1600;
+      const originalBudget = structuredClone(c.bundle.approval.budget);
+      expect(await c.run(fake())).toMatchObject({ reason: 'budget-exhausted', completedRows: 1 });
+      const before = await scanHeldoutSpend(c.root, 'D17');
+      expect(before.studyCalls).toBe(1);
+      if (removeRuns) await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'unchanged-resume'; c.host.resolveCredential.mockClear(); const transport = fake();
+      expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+      if (removeRuns) await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'larger-approval'; c.bundle.approval.budget[budget] *= 2;
+      if (removeRuns) c.bundle.corpus.definitions[0].spec.question = 'Is this lamp on?';
+      await expect(c.run(transport)).rejects.toThrow('budget-changed');
+      await expect(scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).rejects.toThrow('budget-changed');
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+      expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyCalls: before.studyCalls,
+        studyReservedTokens: before.studyReservedTokens, studyUsdMicros: before.studyUsdMicros });
+      const baseline = JSON.parse(await readFile(join(c.root, 'research/qualification/heldout/baselines/D17.json'), 'utf8'));
+      expect(baseline.budget).toEqual(originalBudget);
+    }
+  });
+  it('review P1 refuses missing or malformed durable thresholds after deleting run evidence', async () => {
+    for (const budget of [undefined, null, { calls: 2, tokens: 1600, usd: null }, { calls: 2, tokens: 1600, usd: 1, extra: true }]) {
+      const c = await scoped(); await c.run(fake());
+      const path = join(c.root, 'research/qualification/heldout/baselines/D17.json');
+      const baseline = JSON.parse(await readFile(path, 'utf8'));
+      baseline.budget = budget; await writeFile(path, JSON.stringify(baseline));
+      await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'missing-thresholds'; c.host.resolveCredential.mockClear(); const transport = fake();
+      await expect(c.run(transport)).rejects.toThrow('schema');
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+    }
+  });
+  it.each(['uncalibrated-diagnostic', 'staged'] as const)('review P2 rejects a structured PROMOTE from a %s scorer', async mode => {
+    const c = await scoped(mode), summary = await c.run(fake());
+    await expect(scoreRun(c, summary, vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE' })))).rejects.toThrow('uncalibrated-report');
+  });
   it('AC1/3 explicitly binds diagnostic scoring and refuses calibrated claims or an unregistered scope', async () => {
     const c = await scoped('uncalibrated-diagnostic'); const summary = await c.run(fake());
-    const score = vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE' }));
+    const score = vi.fn(async () => ({ calibrated: false, decision: 'HOLD' }));
     expect(await scoreRun(c, summary, score)).toMatchObject({ calibrated: false, d09Qualified: false, calibratedGate: false,
       approvedCalibration: { mode: 'uncalibrated-diagnostic' }, decision: 'HOLD' });
     expect(score.mock.calls[0][0]).toMatchObject({ calibrated: false, approvedCalibration: { mode: 'uncalibrated-diagnostic' } });
-    for (const diagnostic of [{}, { calibrated: true }, { calibrated: false, d09Qualified: true }, { calibrated: false, calibratedGate: true },
+    for (const diagnostic of [{}, { calibrated: false, decision: 'PROMOTE' }, { calibrated: true }, { calibrated: false, d09Qualified: true }, { calibrated: false, calibratedGate: true },
       { calibrated: false, d09Qualified: 'qualified' }, { calibrated: false, calibratedGate: null }]) {
       await expect(scoreRun(c, summary, vi.fn(async () => diagnostic) as any)).rejects.toThrow('uncalibrated-report');
     }
@@ -714,7 +816,8 @@ describe('held-out calibration scope and two-phase approval', () => {
       (c.bundle.approval as any).calibration.calibrationPhaseRecordDigest = heldoutDigest(seal);
     }
     c.host.resolveCredential.mockClear(); const transport = fake();
-    await expect(c.run(transport, change === 'same-time' ? { now: () => Date.parse(sealedAt) } : {})).rejects.toThrow(change === 'preregistration-change' ? 'changed-preregistration' : 'calibration-phase');
+    await expect(c.run(transport, change === 'same-time' ? { now: () => Date.parse(sealedAt) } : {})).rejects.toThrow(change === 'preregistration-change'
+      ? 'changed-preregistration' : change === 'budget-change' ? 'budget-changed' : 'calibration-phase');
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
   it('AC1/5 does not seal a checkpoint or a skipped slice and seals terminal measurement failures on resume', async () => {
