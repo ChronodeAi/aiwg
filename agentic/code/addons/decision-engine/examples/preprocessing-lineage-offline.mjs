@@ -61,9 +61,10 @@ export async function runPreprocessingLineageExample(runtime, { invocationId = '
   const manifest = fixture.fixtures.find(item => item.id === 'scanned-document-ocr').manifest;
   // A no-egress local adapter with no projection policy is the local destination for this adapter.
   const destination = { provider: 'jev', origin: runtime.PREPROCESSING_LOCAL_ORIGIN };
+  // Evaluation time for the recorded fixture, so the age check does not depend on the wall clock.
+  const recordedAt = Date.parse('2026-09-21T00:00:00.000Z');
   manifest.spec.policy.derivedEgress.destinations = [destination];
-  // inputPointer binds the resolved text to the input field the evaluator will dispatch.
-  const resolved = runtime.resolvePreprocessedEvidence([manifest], { destination, minQualityScore: 0.8, inputPointer: '/message' });
+  const resolved = runtime.resolvePreprocessedEvidence([manifest], { destination, minQualityScore: 0.8 });
   const seen = [];
   const result = await runtime.evaluateDecisionRuleset({
     ruleset: await json('agentic/code/addons/decision-engine/examples/ruleset.json'),
@@ -78,8 +79,16 @@ export async function runPreprocessingLineageExample(runtime, { invocationId = '
     invocationId,
     adapters: { jev: adapter(seen) },
     preprocessingLineage: resolved.receiptEvidence,
-    // The host's current manifest record: stored lineage references are re-checked against it.
-    preprocessingVerification: { manifests: [manifest] },
+    // Host-controlled verification: the current manifest record, acceptance thresholds, lifecycle
+    // state, and which input field carries the verified text. Nothing here is read from the lineage.
+    preprocessingVerification: {
+      manifests: [manifest],
+      minQualityScore: 0.8,
+      maxAgeMs: 30 * 86_400_000,
+      now: () => recordedAt,
+      lifecycle: { subject: 'preprocessing-lineage-offline', now: recordedAt, tombstones: [], holds: [] },
+      inputBindings: [{ pointer: '/message', manifestIds: [manifest.metadata.id] }],
+    },
   });
   return {
     status: result.spec.status,

@@ -127,11 +127,6 @@ export interface PreprocessedEvidenceReference {
   outputDigest: `sha256:${string}`;
   /** The D10 provider/origin this lineage was resolved (and egress-authorized) for. */
   destination: PreprocessingEgressDestination;
-  /**
-   * Where the resolved text sits in the decision input and the digest of that exact text. The
-   * evaluator refuses dispatch unless the input value at `pointer` has this digest.
-   */
-  input?: { pointer: string; textDigest: `sha256:${string}` };
   selectedSegments: Array<{
     id: string;
     ordinal: number;
@@ -179,7 +174,7 @@ export interface PreprocessedEvidenceTrace {
 
 export type PreprocessingDispatchGateReason = PreprocessedEvidenceReviewReason
   | 'unverified' | 'unavailable' | 'destination-mismatch' | 'destination-unbound' | 'malformed-lineage'
-  | 'input-unbound' | 'input-mismatch';
+  | 'input-unbound' | 'input-mismatch' | 'input-undeclared';
 
 /** Evaluator-written pre-dispatch verdict. Anything but `allowed` means no credential or transport call. */
 export interface PreprocessingDispatchGate {
@@ -219,8 +214,6 @@ export interface ResolvePreprocessedEvidenceOptions {
   requireRawEgress?: boolean;
   /** Tombstoned lineage records withhold text; held records route to review. */
   lifecycle?: PreprocessingLifecycleState;
-  /** JSON pointer of the decision input field that will carry `state.text` (required for evaluation). */
-  inputPointer?: string;
 }
 
 export interface PreprocessedEvidenceResolution {
@@ -230,14 +223,26 @@ export interface PreprocessedEvidenceResolution {
   receiptEvidence: PreprocessedEvidenceReceiptEvidence;
 }
 
-/** Host-supplied current records the evaluator verifies stored lineage references against. */
+/**
+ * Host-controlled verification for a stored lineage. Nothing here comes from the lineage itself:
+ * the evaluator re-derives every review reason and the expected input text from these records.
+ */
 export interface PreprocessingVerification {
+  /** Current host-stored manifests, looked up by the lineage reference IDs. */
   manifests: PreprocessedEvidence[];
-  lifecycle?: PreprocessingLifecycleState;
-  /** Host acceptance thresholds, re-applied to the current manifests; stored trace status is never trusted. */
-  minQualityScore?: number;
-  maxAgeMs?: number;
+  /** Required D10 lifecycle state; omitting it routes lineage to review (`lifecycle-unavailable`). */
+  lifecycle: PreprocessingLifecycleState;
+  /** Required finite acceptance thresholds re-applied to the current manifests. */
+  minQualityScore: number;
+  maxAgeMs: number;
   now?: () => number;
+  /**
+   * Which decision input field carries which manifests' verified text, in order. The expected
+   * value is recomputed from the verified manifests' selected output slices and compared exactly.
+   */
+  inputBindings: Array<{ pointer: string; manifestIds: string[] }>;
+  /** Every other string field in the decision input must be declared here as non-lineage text. */
+  nonLineagePointers?: string[];
 }
 
 export class PreprocessedEvidenceError extends Error {
@@ -304,18 +309,10 @@ export function resolvePreprocessedEvidence(
     return { status: 'ready', reasons: [], state: { text: '', lineage: [] },
       receiptEvidence: { schemaVersion: 'decision-preprocessing-lineage/v1', status: 'ready', references: [], traces: [] } };
   }
-  if (options.inputPointer !== undefined
-    && (typeof options.inputPointer !== 'string' || !/^(?:\/[^/]*)+$/.test(options.inputPointer))) {
-    throw new PreprocessedEvidenceError('invalid-manifest', 'input pointer must be a non-root JSON pointer');
-  }
   const resolved = manifests.map(manifest => resolveOne(manifest, options));
   const reasons = [...new Set(resolved.flatMap(item => item.reasons))];
   const status = reasons.length ? 'review' : 'ready';
-  const text = resolved.map(item => item.text).join('\n\n');
-  if (options.inputPointer !== undefined) {
-    const input = { pointer: options.inputPointer, textDigest: preprocessedEvidenceContentDigest(text) };
-    resolved.forEach(item => { item.reference.input = { ...input }; });
-  }
+  const text = resolved.map(item => item.text).join(MANIFEST_TEXT_SEPARATOR);
   return {
     status,
     reasons,
@@ -373,12 +370,9 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
   reasons.push(...lifecycle);
   const uniqueReasons = [...new Set(reasons)];
   const reference = referenceFor(manifest, pin, selected, options.destination);
-  // Text is always cut from the digest-verified output by locator range, never taken from segment fields.
-  const output = Buffer.from(manifest.spec.output.value, 'utf8');
   const releasable = reference.policy.derivedEgressAllowed && !lifecycle.includes('lifecycle-unavailable');
   return {
-    text: releasable ? selected.map(item => output.subarray(item.segment.outputRange.start, item.segment.outputRange.end)
-      .toString('utf8')).join('\n') : '',
+    text: releasable ? verifiedSelectedText(manifest) : '',
     reference,
     trace: {
       evidence: pin,
@@ -396,6 +390,15 @@ function resolveOne(manifest: PreprocessedEvidence, options: ResolvePreprocessed
     },
     reasons: uniqueReasons,
   };
+}
+
+const MANIFEST_TEXT_SEPARATOR = '\n\n';
+
+/** Selected segment text cut from the digest-verified output by byte range, in source order. */
+function verifiedSelectedText(manifest: PreprocessedEvidence): string {
+  const output = Buffer.from(manifest.spec.output.value, 'utf8');
+  return selectedSegments(manifest).map(item => output.subarray(item.segment.outputRange.start, item.segment.outputRange.end)
+    .toString('utf8')).join('\n');
 }
 
 function qualityFlagReasons(flags: readonly string[]): PreprocessedEvidenceReviewReason[] {
@@ -455,14 +458,17 @@ export function preprocessingLifecycleReasons(
 
 /**
  * Pre-dispatch gate for a stored lineage. Runs before credential resolution and transport.
- * `destinations` are the D10 provider/origin of every target the evaluator could dispatch to;
- * `null` marks a target whose destination cannot be bound.
+ * `destinations` are the D10 provider/origin of every target the evaluator could dispatch to
+ * (`null` when a destination cannot be bound); `input` is the decision input the evaluator
+ * projects and dispatches; `dispatchPointers` are the ruleset evaluation input pointers.
+ * Stored trace status, reasons and digests are never trusted to allow dispatch.
  */
 export function gatePreprocessedEvidenceDispatch(
   lineage: PreprocessedEvidenceReceiptEvidence,
   verification: PreprocessingVerification | undefined,
   destinations: Array<PreprocessingEgressDestination | null>,
   input: unknown,
+  dispatchPointers: readonly string[],
 ): PreprocessingDispatchGate {
   if (!isWellFormedPreprocessingLineage(lineage)) return { outcome: 'refused', reasons: ['malformed-lineage'] };
   const refused = new Set<PreprocessingDispatchGateReason>();
@@ -474,15 +480,8 @@ export function gatePreprocessedEvidenceDispatch(
     }
   }
   if (refused.size) return { outcome: 'refused', reasons: [...refused] };
-  // The text actually in the decision input must be the resolved lineage text.
-  for (const reference of lineage.references) {
-    if (!reference.input) { refused.add('input-unbound'); continue; }
-    const value = resolveJsonPointer(input, reference.input.pointer);
-    if (!value.found || typeof value.value !== 'string'
-      || preprocessedEvidenceContentDigest(value.value) !== reference.input.textDigest) refused.add('input-mismatch');
-  }
-  if (refused.size) return { outcome: 'refused', reasons: [...refused] };
 
+  // Stored evidence can only add review reasons.
   const review = new Set<PreprocessingDispatchGateReason>();
   for (const trace of lineage.traces) {
     trace.reasons.forEach(reason => review.add(reason));
@@ -492,34 +491,114 @@ export function gatePreprocessedEvidenceDispatch(
     qualityFlagReasons(reference.quality.flags).forEach(reason => review.add(reason));
     if (reference.policy.trust !== 'verified') review.add('untrusted');
   }
-  // A non-ready status or review trace always blocks, even when it names no reason.
   if (lineage.status !== 'ready' || lineage.traces.some(trace => trace.policyOutcome !== 'allowed')) {
     if (!review.size) review.add('incomplete');
   }
-  // Every reference needs its own aligned trace; a lineage without traces is incomplete evidence.
   if (lineage.traces.length !== lineage.references.length || lineage.references.some((reference, index) =>
     canonicalJson(lineage.traces[index]!.evidence) !== canonicalJson(reference.evidence))) review.add('incomplete');
-  if (!verification || !isRecord(verification) || !Array.isArray(verification.manifests)) {
+
+  if (!isRecord(verification) || !Array.isArray(verification.manifests)) {
     review.add('unverified');
-  } else {
-    for (const reference of lineage.references) {
-      const current = verification.manifests.filter(manifest => manifest?.metadata?.id === reference.evidence.id);
-      if (current.length !== 1) { review.add('unavailable'); continue; }
-      try {
-        if (checkPreprocessedEvidenceReference(reference, current[0]!).status !== 'current') review.add('stale');
-        // Re-derive quality, trust, age, egress and lifecycle from the current manifest under host thresholds.
-        resolveOne(current[0]!, { destination: reference.destination,
-          ...(verification.minQualityScore !== undefined ? { minQualityScore: verification.minQualityScore } : {}),
-          ...(verification.maxAgeMs !== undefined ? { maxAgeMs: verification.maxAgeMs } : {}),
-          ...(verification.now ? { now: verification.now } : {}),
-          ...(verification.lifecycle ? { lifecycle: verification.lifecycle } : {}),
-        }).reasons.forEach(reason => review.add(reason));
-      } catch {
+    return { outcome: 'review', reasons: [...review] };
+  }
+  const thresholds = validThresholds(verification);
+  if (!thresholds) review.add('unverified');
+  const lifecycle = validLifecycle(verification.lifecycle) ? verification.lifecycle : null;
+  if (!lifecycle) review.add('lifecycle-unavailable');
+
+  // Re-derive every reason from the current, host-stored manifests.
+  const current = new Map<string, PreprocessedEvidence>();
+  let allCurrent = true;
+  for (const reference of lineage.references) {
+    const matches = verification.manifests.filter(manifest => manifest?.metadata?.id === reference.evidence.id);
+    if (matches.length !== 1) { review.add('unavailable'); allCurrent = false; continue; }
+    try {
+      if (checkPreprocessedEvidenceReference(reference, matches[0]!).status !== 'current') {
         review.add('stale');
+        allCurrent = false;
+        continue;
       }
+      resolveOne(matches[0]!, { destination: reference.destination,
+        ...(thresholds ?? {}), ...(lifecycle ? { lifecycle } : {}) }).reasons.forEach(reason => review.add(reason));
+      current.set(reference.evidence.id, matches[0]!);
+    } catch {
+      review.add('stale');
+      allCurrent = false;
     }
   }
+  // The dispatched text must be exactly the verified text at host-bound pointers.
+  if (allCurrent) {
+    const binding = inputBindingReasons(verification, current, input, dispatchPointers);
+    if (binding === null) review.add('unverified');
+    else if (binding.length) return { outcome: 'refused', reasons: binding };
+  }
   return review.size ? { outcome: 'review', reasons: [...review] } : { outcome: 'allowed', reasons: [] };
+}
+
+function validThresholds(verification: PreprocessingVerification): Pick<ResolvePreprocessedEvidenceOptions,
+  'minQualityScore' | 'maxAgeMs' | 'now'> | null {
+  const { minQualityScore, maxAgeMs, now } = verification;
+  if (typeof minQualityScore !== 'number' || !Number.isFinite(minQualityScore) || minQualityScore < 0 || minQualityScore > 1
+    || typeof maxAgeMs !== 'number' || !Number.isFinite(maxAgeMs) || maxAgeMs < 0
+    || (now !== undefined && typeof now !== 'function')) return null;
+  const clock = now ?? Date.now;
+  const at = clock();
+  if (!Number.isFinite(at)) return null;
+  return { minQualityScore, maxAgeMs, now: () => at };
+}
+
+function validLifecycle(value: unknown): value is PreprocessingLifecycleState {
+  return isRecord(value) && nonEmpty(value.subject) && Number.isSafeInteger(value.now)
+    && Array.isArray(value.tombstones) && Array.isArray(value.holds);
+}
+
+/**
+ * Binding reasons (empty when every check passes), or null when the host bindings are malformed.
+ * Every lineage reference must be bound; every bound pointer must be inside a dispatched evaluation
+ * input and hold exactly the recomputed verified text; every other string field must be declared
+ * non-lineage by the host.
+ */
+function inputBindingReasons(verification: PreprocessingVerification, current: Map<string, PreprocessedEvidence>,
+  input: unknown, dispatchPointers: readonly string[]): PreprocessingDispatchGateReason[] | null {
+  const bindings = verification.inputBindings as unknown;
+  const declared = verification.nonLineagePointers ?? [];
+  if (!Array.isArray(bindings) || !Array.isArray(declared) || !declared.every(isJsonPointer)
+    || bindings.some(binding => !isRecord(binding) || !isJsonPointer(binding.pointer) || binding.pointer === ''
+      || !Array.isArray(binding.manifestIds) || !binding.manifestIds.length
+      || new Set(binding.manifestIds).size !== binding.manifestIds.length
+      || binding.manifestIds.some(id => typeof id !== 'string'))
+    || new Set(bindings.map(binding => (binding as { pointer: string }).pointer)).size !== bindings.length) return null;
+  const typed = bindings as PreprocessingVerification['inputBindings'];
+  const reasons = new Set<PreprocessingDispatchGateReason>();
+  const boundIds = new Set(typed.flatMap(binding => binding.manifestIds));
+  if ([...current.keys()].some(id => !boundIds.has(id)) || [...boundIds].some(id => !current.has(id))) reasons.add('input-unbound');
+  for (const binding of typed) {
+    const dispatched = dispatchPointers.some(pointer => pointer === '' || binding.pointer === pointer
+      || binding.pointer.startsWith(`${pointer}/`));
+    if (!dispatched) { reasons.add('input-unbound'); continue; }
+    if (binding.manifestIds.some(id => !current.has(id))) continue;
+    const expected = binding.manifestIds.map(id => verifiedSelectedText(current.get(id)!)).join(MANIFEST_TEXT_SEPARATOR);
+    const actual = resolveJsonPointer(input, binding.pointer);
+    if (!actual.found || actual.value !== expected) reasons.add('input-mismatch');
+  }
+  const allowed = new Set([...typed.map(binding => binding.pointer), ...declared]);
+  if (stringLeafPointers(input).some(pointer => !allowed.has(pointer))) reasons.add('input-undeclared');
+  return [...reasons];
+}
+
+function isJsonPointer(value: unknown): value is string {
+  return typeof value === 'string' && (value === '' || value.startsWith('/'));
+}
+
+/** JSON pointers of every string value in the input (object keys are structure, not dispatched text). */
+function stringLeafPointers(value: unknown, pointer = ''): string[] {
+  if (typeof value === 'string') return [pointer];
+  if (Array.isArray(value)) return value.flatMap((item, index) => stringLeafPointers(item, `${pointer}/${index}`));
+  if (isRecord(value)) {
+    return Object.entries(value).flatMap(([key, item]) =>
+      stringLeafPointers(item, `${pointer}/${key.replace(/~/g, '~0').replace(/\//g, '~1')}`));
+  }
+  return [];
 }
 
 export function assertPreprocessedEvidence(value: unknown): asserts value is PreprocessedEvidence {

@@ -1572,7 +1572,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "source-module",
-      "digest": "sha256:ca28f8ccce398d3bf3c5b43c0205dc7459da474cd8466b840ad71fa55eb7acd4",
+      "digest": "sha256:8bd8067d92592862caf59c38cabf9ce93f14e960d1e0f4e0b8370100cb6be72f",
       "expectedOutcome": "Runnable offline D24 preprocessing lineage example producing a body-free decision receipt",
       "links": [
         "JEV-16",
