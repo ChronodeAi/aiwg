@@ -125,6 +125,10 @@ export interface ContextPruningPolicy {
 
 export interface ContextPruningReceipt {
   schemaVersion: typeof CONTEXT_PRUNING_RECEIPT_SCHEMA;
+  /** Binds the receipt to one pilot run: contextPruningRunId(pairId, candidates). */
+  runId: `sha256:${string}`;
+  /** The frozen evaluation pair this run belongs to; null outside paired evaluation. */
+  pairId: string | null;
   itemId: string;
   locator: string;
   originalDigest: `sha256:${string}`;
@@ -161,6 +165,8 @@ export interface ContextPruningReceipt {
 
 export interface ContextPruningRun {
   schemaVersion: 'decision-context-pruning-run/v1';
+  runId: `sha256:${string}`;
+  pairId: string | null;
   mode: ContextPruningMode | 'deterministic-fallback';
   baselineItemIds: string[];
   downstreamItemIds: string[];
@@ -221,6 +227,8 @@ export interface ContextPruningPreregistration {
   schemaVersion: typeof CONTEXT_PRUNING_PREREGISTRATION_SCHEMA;
   id: string;
   registeredAt: string;
+  /** contextPruningPairSetDigest of the frozen evaluation pairs (IDs and slice membership), fixed before holdout access. */
+  pairSetDigest: `sha256:${string}`;
   thresholds: {
     protectedRetentionBps: 10_000;
     confidenceInterval: {
@@ -302,6 +310,8 @@ export interface ContextBudgetManagerBaseline {
   /** Items ContextBudgetManager would drop that the protected-item classifier keeps; never in droppedItemIds. */
   protectedRetainedItemIds: string[];
   tokensFreed: number;
+  /** False when protected items alone keep the selection above the manager's degradation target. */
+  withinBudget: boolean;
 }
 
 export interface ContextPruningQualityResult {
@@ -310,6 +320,11 @@ export interface ContextPruningQualityResult {
   n: number;
   /** Recorded pairs with no outcome for this metric; any missing pair makes a passing metric insufficient. */
   missingPairs: number;
+  /**
+   * Demonstrated harm: the metric is not non-inferior and either the upper bound is below 0 or the point
+   * estimate is below the margin. Not-non-inferior without harm is inconclusive (HOLD), not ROLLBACK.
+   */
+  harm: boolean;
   /** Per-slice support counted from this metric's own outcomes. */
   sliceSupport: Record<string, number>;
   interval: PairedDifferenceInterval | null;
@@ -385,6 +400,30 @@ const VALID_PROTECTED_REASONS = new Set<ContextProtectedReason>([
 
 export function contextPruningDigest(value: unknown): `sha256:${string}` {
   return sha256(value);
+}
+
+/** Order-independent digest of the frozen evaluation pairs: sorted (pairId, slice) tuples. */
+export function contextPruningPairSetDigest(pairs: readonly ContextPruningPairRecord[]): `sha256:${string}` {
+  const tuples = pairs.map(pair => [pair.pairId, pair.slice] as const)
+    .sort(([a, sa], [b, sb]) => a < b ? -1 : a > b ? 1 : sa < sb ? -1 : sa > sb ? 1 : 0);
+  return contextPruningDigest({ schemaVersion: 'decision-context-pruning-pair-set/v1', pairs: tuples });
+}
+
+/** Identity of one pilot run over an ordered candidate set, optionally tied to an evaluation pair. */
+export function contextPruningRunId(pairId: string | null, candidates: readonly ContextPruningCandidate[]): `sha256:${string}` {
+  return contextPruningDigest({
+    schemaVersion: 'decision-context-pruning-run-id/v1',
+    pairId,
+    candidates: candidates.map(candidate => contextPruningDigest(candidate)),
+  });
+}
+
+/** Order-independent digest of a receipt set, for anchoring the evaluated receipts separately from the report. */
+export function contextPruningReceiptSetDigest(receipts: readonly ContextPruningReceipt[]): `sha256:${string}` {
+  return contextPruningDigest({
+    schemaVersion: 'decision-context-pruning-receipt-set/v1',
+    receipts: receipts.map(receipt => receipt.receiptDigest).sort(),
+  });
 }
 
 export function classifyContextPruningCandidate(candidate: ContextPruningCandidate): ContextProtectedClassification {
@@ -506,10 +545,16 @@ export interface ApplyContextPruningInput {
    * behavior is "no pruning", so the fallback proposal is keep.
    */
   budget?: Partial<BudgetConfig>;
+  /** The frozen evaluation pair this run serves; recorded on the run and every receipt. */
+  pairId?: string;
 }
 
 export function applyContextPruningPilot(input: ApplyContextPruningInput): ContextPruningRun {
   validatePolicy(input.policy);
+  if (input.pairId !== undefined && (typeof input.pairId !== 'string' || !input.pairId)) {
+    throw new ContextPruningError('pairId must be a non-empty string', 'invalid-input');
+  }
+  const pairId = input.pairId ?? null;
   const now = input.now ?? (() => new Date().toISOString());
   const baseline = input.candidates.map(candidate => candidate.itemId);
   const evidence = new Map((input.evidence ?? []).map(item => [item.itemId, item]));
@@ -517,6 +562,7 @@ export function applyContextPruningPilot(input: ApplyContextPruningInput): Conte
     : input.policy.mode === 'disabled' ? 'configured-disabled' : null;
   const mode: ContextPruningRun['mode'] = disabledReason ? 'deterministic-fallback' : input.policy.mode;
   const classifications = classifyContextPruningCandidates(input.candidates);
+  const runId = contextPruningRunId(pairId, input.candidates);
   const deterministicBaseline = input.budget === undefined ? null
     : computeContextBudgetManagerBaseline(input.candidates, input.budget);
   const deterministicDrops = new Set(deterministicBaseline?.droppedItemIds ?? []);
@@ -526,10 +572,12 @@ export function applyContextPruningPilot(input: ApplyContextPruningInput): Conte
     const itemEvidence = evidence.get(candidate.itemId);
     const fallbackAction: ContextPruningAction = deterministicDrops.has(candidate.itemId) ? 'drop' : 'keep';
     const decision = decideContextAction(candidate, classification, input.policy, itemEvidence, disabledReason, fallbackAction);
-    return buildContextPruningReceipt(candidate, classification, decision, now());
+    return buildContextPruningReceipt(candidate, classification, decision, now(), runId, pairId);
   });
   return {
     schemaVersion: 'decision-context-pruning-run/v1',
+    runId,
+    pairId,
     mode,
     baselineItemIds: baseline,
     // A distinct array: callers that mutate one list cannot silently alter the other.
@@ -540,9 +588,19 @@ export function applyContextPruningPilot(input: ApplyContextPruningInput): Conte
   };
 }
 
-export function validateContextPruningReceipt(receipt: ContextPruningReceipt): ContextPruningReceipt {
+/**
+ * Validates a receipt's shape and self-digest. When the run's candidate envelopes are supplied, it also
+ * re-derives the run identity and the protected-item classification and refuses any mismatch, so a
+ * relabelled receipt with a recomputed digest, or a receipt from another run, is rejected.
+ */
+export function validateContextPruningReceipt(
+  receipt: ContextPruningReceipt,
+  candidates?: readonly ContextPruningCandidate[],
+): ContextPruningReceipt {
   requirePlain(receipt, 'receipt');
   if (receipt.schemaVersion !== CONTEXT_PRUNING_RECEIPT_SCHEMA || !receipt.itemId || !receipt.locator
+    || typeof receipt.runId !== 'string' || !SHA.test(receipt.runId)
+    || !(receipt.pairId === null || (typeof receipt.pairId === 'string' && receipt.pairId))
     || !SHA.test(receipt.originalDigest) || !Number.isSafeInteger(receipt.originalTokenEstimate) || receipt.originalTokenEstimate < 0
     || !['keep', 'drop', 'truncate', 'summarize'].includes(receipt.proposedAction)
     || !['keep', 'drop', 'truncate', 'summarize'].includes(receipt.appliedAction)
@@ -562,6 +620,22 @@ export function validateContextPruningReceipt(receipt: ContextPruningReceipt): C
   }
   const { receiptDigest, ...payload } = receipt;
   if (receiptDigest !== contextPruningDigest(payload)) throw new ContextPruningError('pruning receipt digest mismatch', 'semantic');
+  if (candidates !== undefined) {
+    const candidate = candidates.find(item => item.itemId === receipt.itemId);
+    if (!candidate || receipt.runId !== contextPruningRunId(receipt.pairId, candidates)
+      || receipt.originalDigest !== candidate.contentDigest || receipt.locator !== candidate.locator
+      || receipt.originalTokenEstimate !== candidate.tokenEstimate) {
+      throw new ContextPruningError('pruning receipt is not bound to the evaluated run', 'semantic');
+    }
+    const derived = classifyContextPruningCandidates(candidates).get(candidate.itemId)!;
+    if (contextPruningDigest(derived) !== contextPruningDigest(receipt.classification)) {
+      throw new ContextPruningError('pruning receipt classification does not match the candidate envelope', 'semantic');
+    }
+    // A protected item is never proposed for, or subjected to, a destructive action by this pilot.
+    if (derived.protected && (receipt.proposedAction !== 'keep' || receipt.appliedAction !== 'keep')) {
+      throw new ContextPruningError('pruning receipt classification does not match its protected action', 'semantic');
+    }
+  }
   return receipt;
 }
 
@@ -582,6 +656,7 @@ export function validateContextPruningPreregistration(value: ContextPruningPrere
     ? Math.floor(ci.bootstrapResamples * (10_000 - ci.levelBps) / 20_000) : 0;
   if (value.schemaVersion !== CONTEXT_PRUNING_PREREGISTRATION_SCHEMA || !value.id
     || !Number.isFinite(Date.parse(value.registeredAt))
+    || typeof value.pairSetDigest !== 'string' || !SHA.test(value.pairSetDigest)
     || !t || t.protectedRetentionBps !== 10_000 || !ci
     // pairedBinaryDifferenceInterval accepts only levels strictly between 5000 and 9999.
     || !Number.isSafeInteger(ci.levelBps) || ci.levelBps <= 5_000 || ci.levelBps >= 9_999
@@ -618,8 +693,10 @@ export function buildContextPruningEvaluationReport(input: {
   holdoutAccessedAt: string | null;
   integrity: QualificationIntegrityMetadata;
   metrics: ContextPruningPairedMetrics;
-  /** Pruning receipts from the evaluated pruned arm; protected retention is derived from them. */
-  receipts: readonly ContextPruningReceipt[];
+  /** One pilot run per evaluated pair: its candidate envelopes and receipts. Protected retention is derived from them. */
+  pruningRuns: readonly { pairId: string; candidates: readonly ContextPruningCandidate[]; receipts: readonly ContextPruningReceipt[] }[];
+  /** contextPruningReceiptSetDigest of every evaluated receipt, anchored separately from the report input. */
+  trustedReceiptSetDigest: `sha256:${string}`;
   missingInputs?: readonly string[];
 }): ContextPruningEvaluationReport {
   const preregistration = validateContextPruningPreregistration(input.preregistration);
@@ -636,6 +713,9 @@ export function buildContextPruningEvaluationReport(input: {
   const thresholds = preregistration.thresholds;
   validateMetrics(input.metrics, preregistration);
   const metrics = input.metrics;
+  if (contextPruningPairSetDigest(metrics.pairs) !== preregistration.pairSetDigest) {
+    throw new ContextPruningError('evaluated pair set does not match the preregistered pair set', 'semantic');
+  }
   const findings = new Set<string>();
   const missing = new Set(input.missingInputs ?? []);
   if (holdoutAccessedAt === null) findings.add('holdout-access-unrecorded');
@@ -646,7 +726,7 @@ export function buildContextPruningEvaluationReport(input: {
   for (const slice of thresholds.slices) {
     if (sliceSupport[slice]! < thresholds.minimumSliceN) findings.add(`insufficient-slice:${slice}`);
   }
-  const protectedRetention = deriveProtectedRetention(input.receipts);
+  const protectedRetention = deriveProtectedRetention(input.pruningRuns, metrics.pairs, input.trustedReceiptSetDigest);
   if (protectedRetention.bps === null) findings.add('insufficient-protected-receipts');
   else if (protectedRetention.bps !== metrics.protectedRetentionBps) {
     throw new ContextPruningError('protected retention does not reconcile with the pruning receipts', 'semantic');
@@ -665,6 +745,12 @@ export function buildContextPruningEvaluationReport(input: {
     if (result.decision === 'not-non-inferior') {
       findings.add('quality-non-inferiority-failed');
       findings.add(`quality-non-inferiority-failed:${result.metric}`);
+      if (result.harm) {
+        findings.add('quality-harm');
+        findings.add(`quality-harm:${result.metric}`);
+      } else {
+        findings.add(`quality-non-inferiority-inconclusive:${result.metric}`);
+      }
     } else if (result.decision === 'insufficient' && result.n === 0) {
       findings.add(`quality-metric-missing:${result.metric}`);
     } else if (result.decision === 'insufficient' && result.n < thresholds.minimumOverallN) {
@@ -689,12 +775,14 @@ export function buildContextPruningEvaluationReport(input: {
   if (upstreamDecision === 'ROLLBACK') findings.add('upstream-rollback');
   if (upstreamDecision === 'HOLD') findings.add('upstream-hold');
   for (const name of missing) findings.add(`missing-input:${name}`);
-  // Automatic rollback triggers from the D26 rollout plan: protected miss, quality regression, negative economics.
+  // Automatic rollback triggers from the D26 rollout plan: protected miss, demonstrated quality harm, negative
+  // economics. An inconclusive non-inferiority result (no evidence of harm) holds instead.
   const rollback = upstreamDecision === 'ROLLBACK' || findings.has('protected-retention-breach')
-    || findings.has('quality-non-inferiority-failed') || findings.has('negative-net-economics');
+    || findings.has('quality-harm') || findings.has('negative-net-economics');
   const decision = rollback ? 'ROLLBACK' : upstreamDecision === 'HOLD' || findings.size > 0 ? 'HOLD' : 'PROMOTE';
   const advisory = [...findings].some(item => item.startsWith('insufficient-') || item.startsWith('quality-metric-missing:')
     || item.startsWith('missing-input:') || item.startsWith('quality-outcomes-incomplete:')
+    || item.startsWith('quality-non-inferiority-inconclusive:')
     || item === 'holdout-access-unrecorded' || item === 'provider-cost-unknown')
     ? 'INSUFFICIENT EVIDENCE' : null;
   const payload: Omit<ContextPruningEvaluationReport, 'digest'> = {
@@ -727,8 +815,12 @@ function evaluateQualityMetric(
   for (const pair of pairs) sliceSupport[sliceOf.get(pair.pairId)!]! += 1;
   // validateMetrics guarantees outcome pair IDs are a unique subset of the recorded pairs.
   const missingPairs = recordedPairs.length - pairs.length;
-  const result = (interval: PairedDifferenceInterval | null, decision: ContextPruningQualityResult['decision']) =>
-    ({ metric, scale, n: pairs.length, missingPairs, sliceSupport, interval, decision });
+  const result = (interval: PairedDifferenceInterval | null, decision: ContextPruningQualityResult['decision']) => ({
+    metric, scale, n: pairs.length, missingPairs,
+    harm: decision === 'not-non-inferior' && interval !== null
+      && (interval.upperBps < 0 || interval.estimateBps < qualityNonInferiorityMarginBps),
+    sliceSupport, interval, decision,
+  });
   if (pairs.length < minimumOverallN) return result(null, 'insufficient');
   let interval: PairedDifferenceInterval;
   try {
@@ -757,20 +849,36 @@ function evaluateQualityMetric(
   return result(interval, verdict.decision);
 }
 
-function deriveProtectedRetention(receipts: readonly ContextPruningReceipt[]): ContextPruningDerivedEvidence['protectedRetention'] {
-  if (!Array.isArray(receipts) || receipts.length === 0) {
-    throw new ContextPruningError('pruning receipts are required to derive protected retention', 'invalid-input');
+function deriveProtectedRetention(
+  runs: readonly { pairId: string; candidates: readonly ContextPruningCandidate[]; receipts: readonly ContextPruningReceipt[] }[],
+  pairs: readonly ContextPruningPairRecord[],
+  trustedReceiptSetDigest: `sha256:${string}`,
+): ContextPruningDerivedEvidence['protectedRetention'] {
+  const pairIds = new Set(pairs.map(pair => pair.pairId));
+  if (!Array.isArray(runs) || runs.length !== pairIds.size || new Set(runs.map(run => run?.pairId)).size !== runs.length
+    || runs.some(run => !run || !pairIds.has(run.pairId) || !Array.isArray(run.candidates) || !Array.isArray(run.receipts))) {
+    throw new ContextPruningError('pruning runs must cover every evaluated pair exactly once', 'invalid-input');
   }
-  const ids = new Set<string>();
+  const allReceipts = runs.flatMap(run => run.receipts);
+  if (typeof trustedReceiptSetDigest !== 'string' || !SHA.test(trustedReceiptSetDigest)
+    || contextPruningReceiptSetDigest(allReceipts) !== trustedReceiptSetDigest) {
+    throw new ContextPruningError('evaluated receipt set does not match the trusted receipt-set digest', 'semantic');
+  }
   let protectedItems = 0;
   let retained = 0;
-  for (const receipt of receipts) {
-    validateContextPruningReceipt(receipt);
-    if (ids.has(receipt.itemId)) throw new ContextPruningError('pruning receipts must have unique item IDs', 'semantic');
-    ids.add(receipt.itemId);
-    if (!receipt.classification.protected) continue;
-    protectedItems++;
-    if (receipt.proposedAction === 'keep' && receipt.appliedAction === 'keep') retained++;
+  for (const run of runs) {
+    uniqueCandidates(run.candidates);
+    const itemIds = run.receipts.map((receipt: ContextPruningReceipt) => receipt?.itemId);
+    if (new Set(itemIds).size !== itemIds.length || itemIds.length !== run.candidates.length) {
+      throw new ContextPruningError('pruning receipts are not bound to the evaluated run candidates', 'semantic');
+    }
+    for (const receipt of run.receipts) {
+      if (receipt?.pairId !== run.pairId) throw new ContextPruningError('pruning receipt is not bound to the evaluated run', 'semantic');
+      validateContextPruningReceipt(receipt, run.candidates);
+      if (!receipt.classification.protected) continue;
+      protectedItems++;
+      if (receipt.proposedAction === 'keep' && receipt.appliedAction === 'keep') retained++;
+    }
   }
   return { protectedItems, retained, bps: protectedItems === 0 ? null : Math.floor(retained * 10_000 / protectedItems) };
 }
@@ -847,10 +955,14 @@ function buildContextPruningReceipt(
   classification: ContextProtectedClassification,
   decision: ContextPruningActionDecision,
   createdAt: string,
+  runId: `sha256:${string}`,
+  pairId: string | null,
 ): ContextPruningReceipt {
   const transformation = decision.transformation ?? null;
   const payload = {
     schemaVersion: CONTEXT_PRUNING_RECEIPT_SCHEMA,
+    runId,
+    pairId,
     itemId: candidate.itemId,
     locator: candidate.locator,
     originalDigest: candidate.contentDigest,
@@ -896,8 +1008,22 @@ export function computeContextBudgetManagerBaseline(
   // retained here so the drop list can be applied as the fallback without removing protected context.
   const classifications = classifyContextPruningCandidates(candidates);
   const isProtected = (id: string) => classifications.get(id)!.protected;
-  const kept = [...result.kept, ...result.dropped.filter(item => isProtected(item.id))];
-  const dropped = result.dropped.filter(item => !isProtected(item.id));
+  const byId = new Map([...result.kept, ...result.dropped].map(item => [item.id, item]));
+  const droppedIds = new Set(result.dropped.filter(item => !isProtected(item.id)).map(item => item.id));
+  // Re-adding protected items can exceed the manager's target, so continue its own rule (ascending priority,
+  // never system items) over the remaining unprotected items until the target is met or none remain.
+  const target = Math.floor(manager.contextBudget * manager.getConfig().warningThreshold);
+  let current = candidates.reduce((sum, candidate) => sum + (droppedIds.has(candidate.itemId) ? 0 : byId.get(candidate.itemId)!.tokens), 0);
+  const remaining = candidates.map(candidate => byId.get(candidate.itemId)!)
+    .filter(item => !droppedIds.has(item.id) && !isProtected(item.id) && item.source.type !== 'system')
+    .sort((a, b) => a.priority - b.priority);
+  for (const item of remaining) {
+    if (current <= target) break;
+    droppedIds.add(item.id);
+    current -= item.tokens;
+  }
+  const kept = candidates.map(candidate => byId.get(candidate.itemId)!).filter(item => !droppedIds.has(item.id));
+  const dropped = candidates.map(candidate => byId.get(candidate.itemId)!).filter(item => droppedIds.has(item.id));
   return {
     source: 'ContextBudgetManager',
     usage: {
@@ -910,6 +1036,7 @@ export function computeContextBudgetManagerBaseline(
     droppedItemIds: dropped.map(item => item.id).sort(),
     protectedRetainedItemIds: result.dropped.filter(item => isProtected(item.id)).map(item => item.id).sort(),
     tokensFreed: dropped.reduce((sum, item) => sum + item.tokens, 0),
+    withinBudget: current <= target,
   };
 }
 

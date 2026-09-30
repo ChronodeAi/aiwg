@@ -376,6 +376,7 @@
         "schemaVersion",
         "id",
         "registeredAt",
+        "pairSetDigest",
         "thresholds",
         "digest"
       ],
@@ -390,6 +391,9 @@
         "registeredAt": {
           "type": "string",
           "format": "date-time"
+        },
+        "pairSetDigest": {
+          "$ref": "#/$defs/digest"
         },
         "thresholds": {
           "type": "object",
@@ -577,6 +581,7 @@
               "scale",
               "n",
               "missingPairs",
+              "harm",
               "sliceSupport",
               "interval",
               "decision"
@@ -604,6 +609,9 @@
               "missingPairs": {
                 "type": "integer",
                 "minimum": 0
+              },
+              "harm": {
+                "type": "boolean"
               },
               "sliceSupport": {
                 "type": "object",

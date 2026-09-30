@@ -42,8 +42,13 @@ budgeted run requires every candidate's host-owned `content`; it refuses rather
 than size the digest string. `ContextBudgetManager` itself spares only
 system-source items, so protected and dependency-protected items it would drop
 are moved to `protectedRetainedItemIds` and never appear in `droppedItemIds`;
-the fallback drop list is therefore safe to apply. Without a `budget` the prior behavior is "no
-pruning" and the fallback proposal is `keep`. The candidate envelope `priority`
+the fallback drop list is therefore safe to apply. Because re-adding them can
+exceed the manager's target (`floor(contextBudget * warningThreshold)`), the
+baseline continues the manager's own rule (ascending priority, never system
+items) over the remaining unprotected items until the target is met;
+`tokensFreed` counts only the items finally dropped, and `withinBudget` is
+false when protected items alone exceed the target. Without a `budget` the
+prior behavior is "no pruning" and the fallback proposal is `keep`. The candidate envelope `priority`
 is passed to the manager as its similarity input; the manager derives its own
 priority from source type and similarity.
 
@@ -93,7 +98,12 @@ access:
 `trustedPreregistrationDigest` (the same rule as
 `evaluatePreregisteredBinaryBenchmark`): a preregistration that does not match
 it, or whose `registeredAt` is not before `holdoutAccessedAt`, is rejected. A
-report with `holdoutAccessedAt: null` cannot `PROMOTE`.
+report with `holdoutAccessedAt: null` cannot `PROMOTE`. The preregistration
+also freezes the evaluation pair set: `pairSetDigest` is
+`contextPruningPairSetDigest()` of the sorted pair IDs with their slice
+membership, covered by the trusted preregistration digest (as #2618 pins split
+digests). The report's `pairs` must match it exactly, so removing, adding or
+re-slicing pairs after holdout access is refused.
 
 The report takes raw per-pair evidence, not aggregate deltas:
 
@@ -111,18 +121,25 @@ The report takes raw per-pair evidence, not aggregate deltas:
   `INSUFFICIENT EVIDENCE`.
 - Every metric's outcomes must cover every recorded pair. A metric that omits
   any recorded pair (`quality-outcomes-incomplete:<metric>`) can never pass:
-  it is insufficient, unless the outcomes it does report already fail
-  non-inferiority, which still triggers `ROLLBACK`. Slice support is also
+  it is insufficient, unless the outcomes it does report already show
+  demonstrated harm, which still triggers `ROLLBACK`. Slice support is also
   counted per metric from that metric's own outcomes, so a slice missing from
   a metric is reported as `insufficient-quality-slice:<metric>:<slice>` even
   when the pair records contain it.
-- Protected retention is derived from the pruned arm's validated receipts:
+- Protected retention is derived from receipts bound to the evaluated runs.
+  `pruningRuns` supplies exactly one pilot run per evaluated pair: its
+  candidate envelopes and receipts. Each receipt carries `runId`
+  (`contextPruningRunId(pairId, candidates)`) and `pairId`, and
+  `validateContextPruningReceipt(receipt, candidates)` re-derives the run
+  identity and the protected-item classification from the envelopes and
+  refuses any mismatch, including a protected item with a destructive
+  proposal. The combined receipt set must match a separately anchored
+  `trustedReceiptSetDigest` (`contextPruningReceiptSetDigest()`). Retention is
   the share of protected receipts whose proposed and applied actions are both
-  `keep`. The caller's `protectedRetentionBps` must equal it or the report is
-  refused; with no protected receipts the report is `INSUFFICIENT EVIDENCE`.
-  Receipts are only self-digested, so a caller that re-digests a forged
-  receipt can still misstate them; binding receipts to a durable store is
-  pending.
+  `keep`; the caller's `protectedRetentionBps` must equal it or the report is
+  refused, and with no protected receipts the report is
+  `INSUFFICIENT EVIDENCE`. The anchors are only as trustworthy as the record
+  that holds them; persisting receipts in a durable store is pending.
 
 Economics use provider-reported usage per arm, reported separately from
 estimator usage. Every provider arm (baseline downstream, pruned downstream,
@@ -139,10 +156,16 @@ Jev state accounting is not implemented; reports must use `not-applicable`.
 Gate outcomes preserve the #2037/#2048 and #1585 vocabulary: `PROMOTE`,
 `HOLD`, and `ROLLBACK`. The report never upgrades an upstream `HOLD` or
 `ROLLBACK`. Automatic `ROLLBACK` follows the rollout plan's triggers: an
-upstream `ROLLBACK`, any protected-item miss, any quality metric failing
-non-inferiority, or negative net economics (total tokens, uncached tokens or
-cost). Positive economics below the preregistered target, unknown cost,
-unverified integrity or insufficient support yield `HOLD`; missing held-out
+upstream `ROLLBACK`, any protected-item miss, demonstrated quality harm, or
+negative net economics (total tokens, uncached tokens or cost). The quality
+rule is documented and fixed: a metric whose lower bound is below the margin
+fails non-inferiority (`quality-non-inferiority-failed:<metric>`); it is
+**harm** (`quality-harm:<metric>`, `ROLLBACK`) only when the interval's upper
+bound is below 0 or its point estimate is below the margin. Otherwise the
+result is inconclusive (`quality-non-inferiority-inconclusive:<metric>`), for
+example identical arms at a small n, and yields `HOLD` with
+`INSUFFICIENT EVIDENCE`. Positive economics below the preregistered target,
+unknown cost, unverified integrity or insufficient support yield `HOLD`; missing held-out
 data, human review, holdout access, live provider evidence or sample support
 also sets advisory-only `INSUFFICIENT EVIDENCE`.
 

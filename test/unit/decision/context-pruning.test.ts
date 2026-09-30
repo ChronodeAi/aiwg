@@ -10,6 +10,8 @@ import {
   classifyContextPruningCandidate,
   computeContextBudgetManagerBaseline,
   contextPruningDigest,
+  contextPruningPairSetDigest,
+  contextPruningReceiptSetDigest,
   createContextPruningPreregistration,
   planContextPruningEvaluationRun,
   planContextPruningEvaluations,
@@ -17,8 +19,10 @@ import {
   type ContextPruningCandidate,
   type ContextPruningDecisionEvidence,
   type ContextPruningPairedMetrics,
+  type ContextPruningPairRecord,
   type ContextPruningPolicy,
   type ContextPruningPreregistration,
+  type ContextPruningReceipt,
   type ContextPruningUsageAccounting,
   type ContextPruningUsageTotal,
 } from '../../../src/decision/context-pruning.js';
@@ -107,10 +111,14 @@ function estimatorAccounting(): ContextPruningUsageAccounting {
   };
 }
 
-function preregister(overrides: Partial<ContextPruningPreregistration['thresholds']> = {}, registeredAt = now()): ContextPruningPreregistration {
+function preregister(
+  overrides: Partial<ContextPruningPreregistration['thresholds']> = {}, registeredAt = now(),
+  pairs: readonly ContextPruningPairRecord[] = goodMetrics().pairs,
+): ContextPruningPreregistration {
   return createContextPruningPreregistration({
     id: 'd26-fixture',
     registeredAt,
+    pairSetDigest: contextPruningPairSetDigest(pairs),
     thresholds: {
       protectedRetentionBps: 10_000,
       confidenceInterval: { levelBps: 9_500, binaryMethod: 'newcombe-10', boundedMethod: 'percentile-bootstrap',
@@ -162,29 +170,50 @@ function goodMetrics(overrides: Partial<ContextPruningPairedMetrics> = {}): Cont
   };
 }
 
+type PruningRunEvidence = { pairId: string; candidates: ContextPruningCandidate[]; receipts: ContextPruningReceipt[] };
+
 function report(
   metrics: ContextPruningPairedMetrics,
   options: { gate?: 'PROMOTE' | 'HOLD' | 'ROLLBACK'; preregistration?: ContextPruningPreregistration;
-    holdoutAccessedAt?: string | null; trustedDigest?: `sha256:${string}`; missingInputs?: string[] } = {},
+    holdoutAccessedAt?: string | null; trustedDigest?: `sha256:${string}`; missingInputs?: string[];
+    runs?: PruningRunEvidence[]; trustedReceiptSetDigest?: `sha256:${string}` } = {},
 ) {
-  const preregistration = options.preregistration ?? preregister();
+  // By default the preregistration froze exactly the pair set being reported.
+  const preregistration = options.preregistration ?? preregister({}, now(), metrics.pairs);
+  const runs = options.runs ?? fixtureRuns(metrics.pairs);
   return buildContextPruningEvaluationReport({
     preregistration,
     trustedPreregistrationDigest: options.trustedDigest ?? preregistration.digest,
     holdoutAccessedAt: options.holdoutAccessedAt === undefined ? HOLDOUT_AT : options.holdoutAccessedAt,
     integrity: integrity(options.gate ?? 'PROMOTE'),
     metrics,
-    receipts: fixtureReceipts(),
+    pruningRuns: runs,
+    trustedReceiptSetDigest: options.trustedReceiptSetDigest ?? contextPruningReceiptSetDigest(runs.flatMap(run => run.receipts)),
     missingInputs: options.missingInputs,
   });
 }
 
-/** Receipts from a shadow run with one protected and one ordinary item; protected retention is 100%. */
-function fixtureReceipts() {
-  return applyContextPruningPilot({
-    candidates: [candidate('receipt-rules', { source: { kind: 'system', addedAt: now() } }), candidate('receipt-note')],
-    policy, now, evidence: [success('receipt-rules', 'drop'), success('receipt-note', 'drop')],
-  }).receipts;
+/** One shadow pruning run per evaluated pair, each with a protected rule and an ordinary note. */
+const fixtureRunCache = new Map<string, PruningRunEvidence[]>();
+function fixtureRuns(pairs: readonly ContextPruningPairRecord[] = goodMetrics().pairs): PruningRunEvidence[] {
+  const key = contextPruningPairSetDigest(pairs);
+  if (!fixtureRunCache.has(key)) fixtureRunCache.set(key, buildFixtureRuns(pairs));
+  return fixtureRunCache.get(key)!;
+}
+
+function buildFixtureRuns(pairs: readonly ContextPruningPairRecord[]): PruningRunEvidence[] {
+  const candidates = [candidate('rules', { source: { kind: 'system', addedAt: now() } }), candidate('note')];
+  return [...new Set(pairs.map(pair => pair.pairId))].map(pairId => ({
+    pairId,
+    candidates,
+    receipts: applyContextPruningPilot({ candidates, policy, now, pairId,
+      evidence: [success('rules', 'drop'), success('note', 'drop')] }).receipts,
+  }));
+}
+
+function redigest(receipt: ContextPruningReceipt, change: Partial<ContextPruningReceipt>): ContextPruningReceipt {
+  const { receiptDigest: _old, ...payload } = { ...receipt, ...change };
+  return { ...payload, receiptDigest: digest(payload) };
 }
 
 const withQuality = (metric: string, pairs: { pairId: string; baseline: number; candidate: number }[]) => {
@@ -588,31 +617,95 @@ describe('D26 context pruning pilot', () => {
     expect(report(goodMetrics()).derived.quality.every(result => result.sliceSupport.code === 50 && result.sliceSupport.docs === 50)).toBe(true);
   });
 
-  it('protected retention is reconciled against validated receipts and refused on mismatch', () => {
-    const items = [candidate('rules', { source: { kind: 'system', addedAt: now() } }), candidate('note')];
-    const receipts = applyContextPruningPilot({ candidates: items, policy, now, evidence: [success('rules', 'drop'), success('note', 'drop')] }).receipts;
-    const withReceipts = (metrics: ContextPruningPairedMetrics, input: typeof receipts) => {
-      const preregistration = preregister();
-      return buildContextPruningEvaluationReport({ preregistration, trustedPreregistrationDigest: preregistration.digest,
-        holdoutAccessedAt: HOLDOUT_AT, integrity: integrity('PROMOTE'), metrics, receipts: input });
-    };
-    const ok = withReceipts(goodMetrics(), receipts);
+  it('R3-2: protected retention is derived from receipts bound to the evaluated runs and re-derived classification', () => {
+    const runs = fixtureRuns();
+    const ok = report(goodMetrics(), { runs });
     expect(ok.decision).toBe('PROMOTE');
-    expect(ok.derived.protectedRetention).toEqual({ protectedItems: 1, retained: 1, bps: 10_000 });
+    expect(ok.derived.protectedRetention).toEqual({ protectedItems: 100, retained: 100, bps: 10_000 });
+    for (const run of runs) expect(new Set(run.receipts.map(receipt => [receipt.pairId, receipt.runId].join()))).toEqual(
+      new Set([[run.pairId, run.receipts[0]!.runId].join()]));
     // A caller-asserted value that disagrees with the receipts is refused.
-    expect(() => withReceipts(goodMetrics({ protectedRetentionBps: 9_000 }), receipts)).toThrow('protected retention');
-    // A forged receipt that drops a protected item is detected (digest), and a re-digested one yields a breach.
-    const protectedReceipt = receipts[0]!;
-    expect(() => withReceipts(goodMetrics(), [{ ...protectedReceipt, proposedAction: 'drop' }, receipts[1]!])).toThrow('digest');
-    const { receiptDigest: _ignored, ...payload } = { ...protectedReceipt, proposedAction: 'drop' as const };
-    const redigested = { ...payload, receiptDigest: digest(payload) };
-    expect(() => withReceipts(goodMetrics(), [redigested, receipts[1]!])).toThrow('protected retention');
-    expect(withReceipts(goodMetrics({ protectedRetentionBps: 0 }), [redigested, receipts[1]!]).decision).toBe('ROLLBACK');
-    // No protected receipts at all is not evidence of retention.
-    expect(() => withReceipts(goodMetrics(), [])).toThrow('receipts');
-    const noProtected = withReceipts(goodMetrics(), [receipts[1]!]);
-    expect(noProtected).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
-    expect(noProtected.findings).toContain('insufficient-protected-receipts');
+    expect(() => report(goodMetrics({ protectedRetentionBps: 9_000 }), { runs })).toThrow('protected retention');
+    // Probe: receipts from an unrelated run (another pair's run, or a run over other candidates) are refused.
+    const swapped = runs.map((run, index) => index === 0 ? { ...run, receipts: runs[1]!.receipts } : run);
+    expect(() => report(goodMetrics(), { runs: swapped })).toThrow('not bound to the evaluated run');
+    const unrelatedCandidates = [candidate('rules', { content: 'different rules', source: { kind: 'system', addedAt: now() } }), candidate('note')];
+    const unrelated = applyContextPruningPilot({ candidates: unrelatedCandidates, policy, now, pairId: 'pair-000' }).receipts;
+    expect(() => report(goodMetrics(), { runs: runs.map((run, index) => index === 0 ? { ...run, receipts: unrelated } : run) }))
+      .toThrow('not bound to the evaluated run');
+    // Probe: a dropped protected receipt relabelled protected:false with a recomputed digest is refused.
+    const relabelled = redigest(runs[0]!.receipts[0]!, { proposedAction: 'drop',
+      classification: { ...runs[0]!.receipts[0]!.classification, protected: false, reasons: [] } });
+    const forgedRuns = runs.map((run, index) => index === 0 ? { ...run, receipts: [relabelled, run.receipts[1]!] } : run);
+    expect(() => report(goodMetrics(), { runs: forgedRuns })).toThrow('classification');
+    expect(() => validateContextPruningReceipt(relabelled, runs[0]!.candidates)).toThrow('classification');
+    expect(() => validateContextPruningReceipt(runs[0]!.receipts[0]!, runs[0]!.candidates)).not.toThrow();
+    // The receipt set must match the separately anchored digest, and every evaluated pair needs its run.
+    expect(() => report(goodMetrics(), { runs, trustedReceiptSetDigest: contextPruningReceiptSetDigest(runs[1]!.receipts) }))
+      .toThrow('receipt set');
+    expect(() => report(goodMetrics(), { runs: runs.slice(1) })).toThrow('every evaluated pair');
+    expect(() => report(goodMetrics(), { runs: [...runs, { ...runs[0]!, pairId: 'pair-999' }] })).toThrow('every evaluated pair');
+  });
+
+  it('R3-1: the pair set is frozen by the preregistration, so dropping regressed pairs everywhere is refused', () => {
+    const anchored = preregister();
+    const regressed = PAIR_IDS.map((pairId, index) => {
+      const outcome = index % 10 === 0 ? 0 : 1;
+      return { pairId, baseline: outcome, candidate: index < 30 ? 0 : outcome };
+    });
+    expect(report(withQuality('downstream-task-success', regressed), { preregistration: anchored }).decision).toBe('ROLLBACK');
+    // Probe: remove the 30 regressed pairs from metrics.pairs and from every metric's outcomes.
+    const base = withQuality('downstream-task-success', regressed);
+    const kept = new Set(PAIR_IDS.slice(30));
+    const trimmed = { ...base, pairs: base.pairs.filter(pair => kept.has(pair.pairId)),
+      quality: base.quality.map(item => ({ ...item, pairs: item.pairs.filter(pair => kept.has(pair.pairId)) })) };
+    expect(() => report(trimmed, { preregistration: anchored })).toThrow('pair set');
+    // Moving a pair to another slice also changes the frozen set.
+    const moved = { ...goodMetrics(), pairs: goodMetrics().pairs.map((pair, index) => index === 0 ? { ...pair, slice: 'docs' } : pair) };
+    expect(() => report(moved, { preregistration: anchored })).toThrow('pair set');
+    // The pair-set digest is part of the trusted preregistration digest.
+    expect(() => report(trimmed, { preregistration: preregister({}, now(), trimmed.pairs), trustedDigest: anchored.digest }))
+      .toThrow('trusted digest');
+    expect(contextPruningPairSetDigest([...goodMetrics().pairs].reverse())).toBe(anchored.pairSetDigest);
+  });
+
+  it('R3-3: an inconclusive non-inferiority result HOLDs; only demonstrated harm rolls back', () => {
+    // Identical success rates with balanced discordance: estimate 0, but the lower bound is below -500 bps.
+    const balanced = PAIR_IDS.map((pairId, index) => ({ pairId,
+      baseline: index < 20 ? 1 : index < 40 ? 0 : 1, candidate: index < 20 ? 0 : index < 40 ? 1 : 1 }));
+    const inconclusive = report(withQuality('downstream-task-success', balanced));
+    expect(inconclusive.derived.quality[0]).toMatchObject({ decision: 'not-non-inferior', harm: false, interval: { estimateBps: 0 } });
+    expect(inconclusive.derived.quality[0]!.interval!.lowerBps).toBeLessThan(-500);
+    expect(inconclusive).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+    expect(inconclusive.findings).toEqual(expect.arrayContaining(['quality-non-inferiority-inconclusive:downstream-task-success']));
+    expect(inconclusive.findings).not.toContain('quality-harm');
+    // Point estimate below the margin is demonstrated harm.
+    const harmed = report(withQuality('downstream-task-success', PAIR_IDS.map((pairId, index) =>
+      ({ pairId, baseline: index % 10 === 0 ? 0 : 1, candidate: index < 30 ? 0 : index % 10 === 0 ? 0 : 1 }))));
+    expect(harmed.derived.quality[0]).toMatchObject({ decision: 'not-non-inferior', harm: true });
+    expect(harmed.findings).toEqual(expect.arrayContaining(['quality-harm', 'quality-harm:downstream-task-success']));
+    expect(harmed.decision).toBe('ROLLBACK');
+  });
+
+  it('R3-4: the protected-aware fallback keeps degrading unprotected items to meet the budget target', () => {
+    const items = [
+      candidate('rules', { content: 'system '.repeat(10), source: { kind: 'system', addedAt: now() } }),
+      candidate('blocker', { content: 'blocker '.repeat(40), priority: 0.01, source: { kind: 'blocker', addedAt: now() } }),
+      candidate('noise', { content: 'noise '.repeat(40), priority: 0.01 }),
+      candidate('keeper', { content: 'keeper '.repeat(11) + 'kee', priority: 0.99 }),
+    ];
+    // Context budget 200, target floor(200 * 0.5) = 100; items are 18 + 80 + 60 + 20 = 178 tokens.
+    const budget = { totalTokens: 400, contextFraction: 0.5, generationFraction: 0.5, warningThreshold: 0.5, hardLimitThreshold: 0.9 };
+    const baseline = computeContextBudgetManagerBaseline(items, budget);
+    expect(baseline.protectedRetainedItemIds).toEqual(['blocker']);
+    expect(baseline.droppedItemIds).toEqual(['keeper', 'noise']);
+    expect(baseline.keptItemIds).toEqual(['blocker', 'rules']);
+    expect(baseline.usage.inputTokens).toBe(98);
+    expect(baseline.tokensFreed).toBe(80);
+    expect(baseline.withinBudget).toBe(true);
+    // When protected items alone exceed the target, nothing protected is dropped and the result says so.
+    const tight = computeContextBudgetManagerBaseline(items, { ...budget, totalTokens: 100 });
+    expect(tight).toMatchObject({ keptItemIds: ['blocker', 'rules'], withinBudget: false });
   });
 
   it('D2: the ContextBudgetManager fallback never lists protected or dependency-protected items as drops', () => {
@@ -646,7 +739,8 @@ describe('D26 context pruning pilot', () => {
     expect(report(goodMetrics(), { gate: 'ROLLBACK' }).decision).toBe('ROLLBACK');
     const unverified = buildContextPruningEvaluationReport({
       preregistration: preregister(), trustedPreregistrationDigest: preregister().digest, holdoutAccessedAt: HOLDOUT_AT,
-      integrity: { ...integrity('PROMOTE'), integrity_state: 'compromised' }, metrics: goodMetrics(), receipts: fixtureReceipts(),
+      integrity: { ...integrity('PROMOTE'), integrity_state: 'compromised' }, metrics: goodMetrics(), pruningRuns: fixtureRuns(),
+      trustedReceiptSetDigest: contextPruningReceiptSetDigest(fixtureRuns().flatMap(run => run.receipts)),
     });
     expect(unverified.decision).toBe('HOLD');
     expect(unverified.findings).toContain('integrity-not-verified');

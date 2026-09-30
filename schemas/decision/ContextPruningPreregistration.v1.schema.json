@@ -8,6 +8,7 @@
     "schemaVersion",
     "id",
     "registeredAt",
+    "pairSetDigest",
     "thresholds",
     "digest"
   ],
@@ -22,6 +23,9 @@
     "registeredAt": {
       "type": "string",
       "format": "date-time"
+    },
+    "pairSetDigest": {
+      "$ref": "#/$defs/digest"
     },
     "thresholds": {
       "type": "object",

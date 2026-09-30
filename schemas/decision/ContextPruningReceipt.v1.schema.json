@@ -4,9 +4,11 @@
   "title": "Context Pruning Receipt",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "itemId", "locator", "originalDigest", "originalTokenEstimate", "classification", "proposedAction", "appliedAction", "mode", "reason", "decisionReceiptDigest", "reversibleReference", "createdAt", "receiptDigest"],
+  "required": ["schemaVersion", "runId", "pairId", "itemId", "locator", "originalDigest", "originalTokenEstimate", "classification", "proposedAction", "appliedAction", "mode", "reason", "decisionReceiptDigest", "reversibleReference", "createdAt", "receiptDigest"],
   "properties": {
     "schemaVersion": { "const": "decision-context-pruning-receipt/v1" },
+    "runId": { "$ref": "#/$defs/digest" },
+    "pairId": { "type": ["string", "null"], "minLength": 1 },
     "itemId": { "type": "string", "minLength": 1 },
     "locator": { "type": "string", "minLength": 1 },
     "originalDigest": { "$ref": "#/$defs/digest" },
