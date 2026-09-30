@@ -5,7 +5,7 @@ import { projectDecisionState } from '../projection.js';
 import { executeDriftResponse, rollbackChampionForNewRuns } from '../ensemble/runtime.js';
 import type { AliasEvent } from '../calibration/types.js';
 import type { JevRoutingEvidence, RouteCandidate, RouteCandidateSummary, RouteAttemptReceipt, RoutingControlDrillInput,
-  RoutingControlDrillResult, RoutingCounterfactual, RoutingDispatchResult, RoutingEligibleCandidate, RoutingExclusionReason,
+  RoutingControlDrillResult, RoutingControlDrillState, RoutingCounterfactual, RoutingDispatchResult, RoutingEligibleCandidate, RoutingExclusionReason,
   RoutingPin, RoutingPolicy, RoutingReceipt, RoutingRuntimeOptions, RoutingSkipReason, RoutingTask } from './types.js';
 import {
   compareRoutingKeys, frozenRoutingClone, RoutingContractError, routingDigest, validateJevRoutingEvidence, validateRoutingPolicy,
@@ -137,10 +137,17 @@ async function runShadow(policy: RoutingPolicy, taskInput: unknown, options: Rou
     await executeDeterministicChain(policy, chain, options, clock, { limitMicros, deadlineEpochMs }, body);
   }
 
-  const shadow = await counterfactual(policy, task, eligible, chain[0]?.id ?? null, options);
-  body.counterfactual = shadow.counterfactual;
-  body.jev = shadow.jev;
-  body.task = { id: task.id, projection: shadow.projection };
+  // The authoritative outcome is already recorded; the shadow evaluation is bounded by the remaining
+  // task deadline and the caller's signal, and its failure can only mark the counterfactual.
+  body.task = { id: task.id, projection: null };
+  try {
+    const shadow = await counterfactual(policy, task, eligible, chain[0]?.id ?? null, options, deadlineEpochMs, clock);
+    body.counterfactual = shadow.counterfactual;
+    body.jev = shadow.jev;
+    body.task = { id: task.id, projection: shadow.projection };
+  } catch {
+    body.counterfactual = { status: 'review', reason: 'runtime-error', routeId: null, ranking: [] };
+  }
 }
 
 async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCandidate[], options: RoutingRuntimeOptions,
@@ -151,6 +158,7 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
   const delay = options.delay ?? realTimer;
   const timer = options.timer ?? realTimer;
   const openProviders = new Set<string>();
+  const observedCost = new Map<string, number>();
   let spent: number | null = 0;
   let ordinal = 0;
   let fallbacksUsed = 0;
@@ -173,7 +181,9 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
       if (index > 0 && triesOnRoute === 0 && fallbacksUsed >= policy.ceilings.maxFallbacks) break routes;
       // Every attempt, including a fallback, re-checks the constraints that change during the run.
       if (openProviders.has(route.model.provider)) { skip(route.id, 'circuit-open'); continue routes; }
-      const cost = route.operations.costMicrosPerAttempt!;
+      // Price the attempt at the worst cost already seen for this route or provider, never below the pinned estimate.
+      const cost = Math.max(route.operations.costMicrosPerAttempt!, observedCost.get(`route:${route.id}`) ?? 0,
+        observedCost.get(`provider:${route.model.provider}`) ?? 0);
       if (spent! + cost > limits.limitMicros) { skip(route.id, 'budget-exhausted'); continue routes; }
       const backoff = ordinal === 0 ? 0 : Math.min(policy.ceilings.retryDelayMs * 2 ** (ordinal - 1), MAX_BACKOFF_MS);
       if (clock() + backoff + route.operations.deadlineMs > limits.deadlineEpochMs) { skip(route.id, 'deadline-exhausted'); continue routes; }
@@ -202,6 +212,9 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
       // A failing release hook must not discard the attempt record; the receipt keeps the charge.
       try { await release(route, ordinal, charged); } catch { /* recorded below */ }
       spent = spent === null || charged === null ? null : spent + charged;
+      if (charged !== null) {
+        for (const key of [`route:${route.id}`, `provider:${route.model.provider}`]) observedCost.set(key, Math.max(observedCost.get(key) ?? 0, charged));
+      }
       body.budget = { limitMicros: limits.limitMicros, spentMicros: spent };
 
       if (!result) {
@@ -277,7 +290,7 @@ Promise<{ result: RoutingDispatchResult | null; forced: 'timeout' | 'cancelled' 
 }
 
 async function counterfactual(policy: RoutingPolicy, task: RoutingTask, eligible: RoutingEligibleCandidate[], deterministicRouteId: string | null,
-  options: RoutingRuntimeOptions): Promise<{ counterfactual: RoutingCounterfactual; jev: JevRoutingEvidence | null; projection: RoutingReceipt['task']['projection'] }> {
+  options: RoutingRuntimeOptions, deadlineEpochMs: number, clock: () => number): Promise<{ counterfactual: RoutingCounterfactual; jev: JevRoutingEvidence | null; projection: RoutingReceipt['task']['projection'] }> {
   const review = (reason: string, projection: RoutingReceipt['task']['projection'] = null, jev: JevRoutingEvidence | null = null) =>
     ({ counterfactual: { status: 'review' as const, reason, routeId: null, ranking: [] }, jev, projection });
   if (!policy.jevEvidence.enabled) return { counterfactual: notEvaluated('jev-evidence-disabled'), jev: null, projection: null };
@@ -298,24 +311,38 @@ async function counterfactual(policy: RoutingPolicy, task: RoutingTask, eligible
     return review('projection-denied');
   }
 
-  let raw: unknown;
+  // Never start or wait past the task deadline, and stop at once on the caller's abort.
+  const remainingMs = Math.min(deadlineEpochMs - clock(), policy.ceilings.deadlineMs);
+  if (remainingMs <= 0) return { counterfactual: notEvaluated('deadline-exhausted'), jev: null, projection };
+  if (options.signal?.aborted) return { counterfactual: notEvaluated('cancelled'), jev: null, projection };
+  const request = new AbortController();
   const timerControl = new AbortController();
+  const onParent = () => request.abort();
+  options.signal?.addEventListener('abort', onParent, { once: true });
+  type Outcome = { kind: 'evidence'; value: unknown } | { kind: 'failed' } | { kind: 'timeout' } | { kind: 'cancelled' };
+  let outcome: Outcome;
   try {
-    raw = await Promise.race([
+    outcome = await Promise.race<Outcome>([
       Promise.resolve().then(() => options.evidence!({
         task: { id: task.id },
         projectedState,
         projection: frozenRoutingClone(projection),
         candidates: frozenRoutingClone(eligible.map(item => item.summary)),
-      })),
-      Promise.resolve().then(() => (options.timer ?? realTimer)(policy.ceilings.deadlineMs, timerControl.signal))
-        .then(() => { throw new RoutingContractError('Jev evidence timed out'); }, () => { throw new RoutingContractError('Jev evidence timer failed'); }),
+        signal: request.signal,
+      })).then(value => ({ kind: 'evidence' as const, value }), () => ({ kind: 'failed' as const })),
+      Promise.resolve().then(() => (options.timer ?? realTimer)(remainingMs, timerControl.signal))
+        .then(() => ({ kind: 'timeout' as const }), () => ({ kind: 'timeout' as const })),
+      new Promise<Outcome>(resolve => request.signal.addEventListener('abort', () => resolve({ kind: 'cancelled' }), { once: true })),
     ]);
-  } catch {
-    return review('jev-evidence-unavailable', projection);
   } finally {
     timerControl.abort();
+    options.signal?.removeEventListener('abort', onParent);
   }
+  if (outcome.kind !== 'evidence') request.abort();
+  if (outcome.kind === 'cancelled') return { counterfactual: notEvaluated('cancelled'), jev: null, projection };
+  if (outcome.kind === 'timeout') return review('jev-evidence-timeout', projection);
+  if (outcome.kind === 'failed') return review('jev-evidence-unavailable', projection);
+  const raw = outcome.value;
 
   let evidence: JevRoutingEvidence;
   try {
@@ -344,9 +371,18 @@ async function counterfactual(policy: RoutingPolicy, task: RoutingTask, eligible
   return { counterfactual: { status: 'selected', reason: 'deterministic-utility', routeId: ranking[0]!, ranking }, jev: normalized, projection };
 }
 
+export class RoutingControlDrillError extends RoutingContractError {
+  constructor(message: string, readonly state: RoutingControlDrillState) {
+    super(message);
+    this.name = 'RoutingControlDrillError';
+  }
+}
+
 /**
- * AC9 drill. Every drift response opens the Jev route circuit except a plain alert; `restore-champion`
- * also restores the prior pinned routing policy for new runs and rolls the D17 alias back. Active-run
+ * AC9 drill. Every drift response opens the Jev route circuit except a plain alert. For
+ * `restore-champion` the reversible step runs first: the prior pinned routing policy is restored and
+ * verified, then D17 rolls the alias back. If the alias rollback is refused the policy restore is
+ * compensated; any failure throws `RoutingControlDrillError` carrying the resulting state. Active-run
  * pins are re-read after the response and must equal the pins read before it.
  */
 export async function runRoutingControlDrill(input: RoutingControlDrillInput): Promise<RoutingControlDrillResult> {
@@ -360,20 +396,39 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
   let jevCircuitOpen = false;
   const openCircuit = (reason: string) => { control.openJevCircuit(reason, input.at); jevCircuitOpen = true; };
   const contain = (action: string) => async () => { openCircuit(action); };
+  const installed = (target: RoutingPin, returned: RoutingPin): boolean =>
+    canonicalJson(returned) === canonicalJson(target) && canonicalJson(control.policyHistory().at(-1)) === canonicalJson(target);
+  const fail = (message: string, state: Omit<RoutingControlDrillState, 'jevCircuitOpen'>): never => {
+    throw new RoutingControlDrillError(message, { jevCircuitOpen, ...state });
+  };
   const drift = await executeDriftResponse(input.driftPolicy, input.driftSignal, {
     'restore-champion': async () => {
       const prior = [...history].reverse().find(pin => pin.version !== previousPolicy.version || pin.digest !== previousPolicy.digest);
       if (!prior) throw new RoutingContractError('rollback requires a prior pinned routing policy');
       openCircuit('restore-champion');
-      // D17 checks its own preconditions before acting, so a refused alias rollback leaves the routing policy untouched.
-      rollbackEvent = rollbackChampionForNewRuns({
-        record: input.championChallenger, gateway: input.gateway, approvalReference: input.approvalReference, at: input.at,
-      });
-      restoredPolicy = control.restorePolicy(prior, input.approvalReference, input.at);
-      const current = control.policyHistory().at(-1);
-      if (canonicalJson(restoredPolicy) !== canonicalJson(prior) || canonicalJson(current) !== canonicalJson(prior)) {
-        throw new RoutingContractError('routing policy restore did not install the prior pinned policy');
+      const unchanged = { policyRestored: false, aliasRolledBack: false, compensated: false, consistent: true, currentPolicy: previousPolicy };
+      let restored: RoutingPin;
+      try {
+        restored = control.restorePolicy(prior, input.approvalReference, input.at);
+      } catch (error) {
+        return fail(`routing policy restore failed: ${messageOf(error)}`, unchanged);
       }
+      if (!installed(prior, restored)) {
+        return fail('routing policy restore did not install the prior pinned policy', { ...unchanged, consistent: false, currentPolicy: control.policyHistory().at(-1) ?? previousPolicy });
+      }
+      try {
+        rollbackEvent = rollbackChampionForNewRuns({
+          record: input.championChallenger, gateway: input.gateway, approvalReference: input.approvalReference, at: input.at,
+        });
+      } catch (error) {
+        // The alias did not move, so put the routing policy back where it was.
+        let compensated = false;
+        try { compensated = installed(previousPolicy, control.restorePolicy(previousPolicy, input.approvalReference, input.at)); } catch { compensated = false; }
+        return fail(`D17 alias rollback refused: ${messageOf(error)}`, compensated
+          ? { ...unchanged, compensated: true }
+          : { policyRestored: true, aliasRolledBack: false, compensated: false, consistent: false, currentPolicy: prior });
+      }
+      restoredPolicy = restored;
     },
     alert: async () => undefined,
     'route-to-review': contain('route-to-review'),
@@ -385,6 +440,8 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
   if (canonicalJson(after) !== canonicalJson(before)) throw new RoutingContractError('active run pins changed during the drift response');
   return { driftResponse: drift.executed, previousPolicy, restoredPolicy, rollbackEvent, jevCircuitOpen, activeRunPins: structuredClone([...after]) };
 }
+
+function messageOf(error: unknown): string { return error instanceof Error ? error.message : 'unknown error'; }
 
 function notEvaluated(reason: string): RoutingCounterfactual {
   return { status: 'not-evaluated', reason, routeId: null, ranking: [] };

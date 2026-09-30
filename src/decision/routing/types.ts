@@ -238,6 +238,8 @@ export interface RoutingRuntimeOptions {
     projectedState: Readonly<Record<string, unknown>>;
     projection: DecisionProjectionEvidence;
     candidates: RouteCandidateSummary[];
+    /** Aborted when the task deadline passes or the caller cancels. */
+    signal: AbortSignal;
   }) => Promise<JevRoutingEvidence>;
   dispatch?: (request: {
     candidate: RouteCandidate;
@@ -383,6 +385,17 @@ export interface RoutingControlDrillInput {
   gateway: ChampionAliasGateway;
   control: RoutingPolicyControl;
   at: string;
+}
+
+/** Reported by `RoutingControlDrillError`: what the drill left in place when it failed. */
+export interface RoutingControlDrillState {
+  jevCircuitOpen: boolean;
+  policyRestored: boolean;
+  aliasRolledBack: boolean;
+  compensated: boolean;
+  /** False only when the routing policy and the D17 alias disagree. */
+  consistent: boolean;
+  currentPolicy: RoutingPin;
 }
 
 export interface RoutingControlDrillResult {

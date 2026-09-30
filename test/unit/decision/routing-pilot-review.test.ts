@@ -6,6 +6,7 @@ import {
   routingDigest,
   runRoutingControlDrill,
   runRoutingPilot,
+  RoutingControlDrillError,
   validateRoutingPolicy,
   validateRoutingShadowReport,
   type AliasEvent,
@@ -219,6 +220,32 @@ describe('D28 routing pilot review regressions (#2620)', () => {
       expect(hooks.calls).toEqual(['reserve:primary:1', 'release:primary:1:900']);
     });
 
+    it('ROUTE-F08 prices a retry at the highest observed cost, not the stale estimate', async () => {
+      const p = policy({ candidates: [withOps('cheap', { costMicrosPerAttempt: 100, maxAttempts: 3 })],
+        defaultRouteId: 'cheap', deterministicFallbackRouteId: null });
+      const dispatched: string[] = [];
+      const { receipt } = await shadowRun(p, task({ allowlist: ['cheap'] }), {
+        dispatched,
+        dispatch: async ({ candidate: selected }) => { dispatched.push(selected.id); return failure('timeout', 800); },
+      });
+      expect(dispatched).toEqual(['cheap']);
+      expect(receipt.budget).toEqual({ limitMicros: 1_000, spentMicros: 800 });
+      expect(receipt.skipped).toEqual([{ routeId: 'cheap', reason: 'budget-exhausted' }]);
+      expect(receipt.reason).toBe('budget-exhausted');
+    });
+
+    it('ROUTE-F08 a same-provider fallback is priced at the provider\'s highest observed cost', async () => {
+      const p = policy({ candidates: [withOps('first', { costMicrosPerAttempt: 100 }), withOps('second', { costMicrosPerAttempt: 100 })],
+        defaultRouteId: 'first', deterministicFallbackRouteId: 'second' });
+      const dispatched: string[] = [];
+      const { receipt } = await shadowRun(p, task({ allowlist: ['first', 'second'] }), {
+        dispatched,
+        dispatch: async ({ candidate: selected }) => { dispatched.push(selected.id); return failure('timeout', 700); },
+      });
+      expect(dispatched).toEqual(['first']);
+      expect(receipt.skipped).toEqual([{ routeId: 'second', reason: 'budget-exhausted' }]);
+    });
+
     it('ROUTE-F08 deadline is min(task, policy) on the injected clock and aborts a hung dispatch', async () => {
       let clock = 1_000;
       const seen: Array<{ deadline: number; aborted: () => boolean }> = [];
@@ -376,6 +403,53 @@ describe('D28 routing pilot review regressions (#2620)', () => {
     });
   });
 
+  describe('shadow Jev never delays the authoritative result', () => {
+    const fast = policy({ candidates: [withOps('cheap', { deadlineMs: 100 }), withOps('reasoning', { deadlineMs: 100 })] });
+    const hung = () => new Promise<JevRoutingEvidence>(() => undefined);
+
+    it('ROUTE-JEV-01 a hung Jev call is cut off at the remaining task deadline, not the policy deadline', async () => {
+      const started = Date.now();
+      const receipt = await runRoutingPilot(fast, task({ deadlineMs: 200 }), {
+        enabled: true, ...ledger(), delay: async () => undefined,
+        dispatch: async ({ candidate: selected }) => success(selected),
+        evidence: hung,
+      });
+      const elapsed = Date.now() - started;
+      expect(receipt.status).toBe('selected');
+      expect(receipt.counterfactual).toMatchObject({ status: 'review', reason: 'jev-evidence-timeout' });
+      expect(elapsed).toBeLessThan(600);
+    });
+
+    it('ROUTE-JEV-02 a caller abort ends the Jev call immediately and the evidence request carries the signal', async () => {
+      const controller = new AbortController();
+      let seen: AbortSignal | undefined;
+      const started = Date.now();
+      const pending = runRoutingPilot(fast, task(), {
+        enabled: true, ...ledger(), delay: async () => undefined, signal: controller.signal,
+        dispatch: async ({ candidate: selected }) => success(selected),
+        evidence: request => { seen = (request as { signal?: AbortSignal }).signal; setTimeout(() => controller.abort(), 20); return hung(); },
+      });
+      const receipt = await pending;
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(receipt.status).toBe('selected');
+      expect(receipt.counterfactual).toMatchObject({ status: 'not-evaluated', reason: 'cancelled' });
+      expect(seen?.aborted).toBe(true);
+    });
+
+    it('ROUTE-JEV-03 no Jev call starts once the task deadline has passed', async () => {
+      let clock = 1_000;
+      const evidenceSpy = vi.fn(hung);
+      const { receipt } = await shadowRun(fast, task({ deadlineMs: 150 }), {
+        now: () => clock,
+        dispatch: async ({ candidate: selected }) => { clock += 200; return success(selected); },
+        evidence: evidenceSpy,
+      });
+      expect(receipt.status).toBe('selected');
+      expect(receipt.counterfactual).toMatchObject({ status: 'not-evaluated', reason: 'deadline-exhausted' });
+      expect(evidenceSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it('ROUTE-F11 projects and redacts every model-visible field; description never crosses', async () => {
     const secretDescription = 'deploy with sk-proj-abcdefghijklmnop1234';
     let request: unknown;
@@ -386,7 +460,7 @@ describe('D28 routing pilot review regressions (#2620)', () => {
     expect(serialized).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123456789');
     expect(serialized).not.toContain('must-not-cross');
     expect(serialized).not.toContain('deploy with');
-    expect(Object.keys(request as object).sort()).toEqual(['candidates', 'projectedState', 'projection', 'task']);
+    expect(Object.keys(request as object).sort()).toEqual(['candidates', 'projectedState', 'projection', 'signal', 'task']);
     expect((request as { task: unknown }).task).toEqual({ id: 'task-1' });
     expect(JSON.stringify(receipt)).not.toContain('sk-proj');
   });
@@ -514,16 +588,19 @@ describe('D28 routing pilot review regressions (#2620)', () => {
     const v1: RoutingPin = { id: 'routing-pilot', version: '1.0.0', digest: hash('1') };
     const v2: RoutingPin = { id: 'routing-pilot', version: '1.1.0', digest: hash('2') };
 
-    function control(options: { mutateRunsOnRestore?: boolean } = {}) {
+    function control(options: { mutateRunsOnRestore?: boolean; failRestoreCall?: number } = {}) {
       const policies = [v1, v2];
       let runs: RoutingActiveRunPin[] = [
         { runId: 'run-a', policy: v2, aliasRevision: 2, identityDigest: record.challenger.identityDigest },
       ];
       const opened: string[] = [];
+      let restoreCalls = 0;
       return {
         opened, policies,
         policyHistory: () => [...policies],
         restorePolicy: vi.fn((target: RoutingPin) => {
+          restoreCalls += 1;
+          if (restoreCalls === options.failRestoreCall) throw new Error('policy store unavailable');
           policies.push(target);
           if (options.mutateRunsOnRestore) runs = runs.map(run => ({ ...run, policy: target }));
           return target;
@@ -565,16 +642,44 @@ describe('D28 routing pilot review regressions (#2620)', () => {
       })).rejects.toThrow(/active run pins changed/);
     });
 
-    it('ROUTE-F19 a D17-refused rollback leaves the routing policy untouched but the Jev circuit open', async () => {
-      const routing = control();
-      const observedOnly = { ...gateway(), aliasHistory: () => history.slice(0, 1) };
-      await expect(runRoutingControlDrill({
-        championChallenger: record, driftPolicy, driftSignal: signal, approvalReference: 'review-2620',
-        gateway: observedOnly, control: routing, at: '2026-09-29T00:00:00.000Z',
-      })).rejects.toThrow(/promoted challenger/);
-      expect(routing.restorePolicy).not.toHaveBeenCalled();
+    const drill = (aliases: ReturnType<typeof gateway>, routing: ReturnType<typeof control>) => runRoutingControlDrill({
+      championChallenger: record, driftPolicy, driftSignal: signal, approvalReference: 'review-2620',
+      gateway: aliases, control: routing, at: '2026-09-29T00:00:00.000Z',
+    });
+    async function drillError(aliases: ReturnType<typeof gateway>, routing: ReturnType<typeof control>): Promise<RoutingControlDrillError> {
+      const error = await drill(aliases, routing).then(() => null, (caught: unknown) => caught);
+      expect(error).toBeInstanceOf(RoutingControlDrillError);
+      return error as RoutingControlDrillError;
+    }
+
+    it('ROUTE-F19 a failing policy restore leaves the alias untouched and reports a consistent state', async () => {
+      const routing = control({ failRestoreCall: 1 });
+      const aliases = gateway();
+      const error = await drillError(aliases, routing);
+      expect(aliases.rollbackAlias).not.toHaveBeenCalled();
       expect(routing.policies).toEqual([v1, v2]);
+      expect(error.state).toEqual({ jevCircuitOpen: true, policyRestored: false, aliasRolledBack: false, compensated: false,
+        consistent: true, currentPolicy: v2 });
+    });
+
+    it('ROUTE-F19 a D17-refused rollback compensates the policy restore and reports it', async () => {
+      const routing = control();
+      const aliases = { ...gateway(), aliasHistory: () => history.slice(0, 1) };
+      const error = await drillError(aliases, routing);
+      expect(error.message).toMatch(/promoted challenger/);
+      expect(routing.restorePolicy.mock.calls.map(call => call[0])).toEqual([v1, v2]);
+      expect(routing.policies.at(-1)).toEqual(v2);
       expect(routing.opened).toEqual(['restore-champion']);
+      expect(error.state).toEqual({ jevCircuitOpen: true, policyRestored: false, aliasRolledBack: false, compensated: true,
+        consistent: true, currentPolicy: v2 });
+    });
+
+    it('ROUTE-F19 a failed compensation is reported as an inconsistent state', async () => {
+      const routing = control({ failRestoreCall: 2 });
+      const aliases = { ...gateway(), aliasHistory: () => history.slice(0, 1) };
+      const error = await drillError(aliases, routing);
+      expect(error.state).toEqual({ jevCircuitOpen: true, policyRestored: true, aliasRolledBack: false, compensated: false,
+        consistent: false, currentPolicy: v1 });
     });
 
     it('ROUTE-F19 has no prior policy to restore to and refuses to invent one', async () => {
