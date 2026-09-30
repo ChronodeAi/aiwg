@@ -202,6 +202,9 @@ differences are **candidate minus baseline** and all outputs are integer basis p
   `marginBps` is a **non-positive** integer: `-250` means the candidate may be at most
   2.5 points worse. The result is `non-inferior` only when `lowerBps >= marginBps`.
   A 95% two-sided interval therefore gives a one-sided 2.5% test.
+- `wilsonScoreInterval({ events, n, levelBps })` is the two-sided Wilson score interval
+  for one proportion at the same level parameter. Use its upper bound for a maximum
+  error-rate cap and its lower bound for a minimum coverage.
 
 The level is always a parameter (`levelBps` strictly between 5000 and 9999); z comes
 from `normalQuantile` (Acklam's approximation). Limits are rounded outward to whole
