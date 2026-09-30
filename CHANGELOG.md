@@ -42,6 +42,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   evidence. Study-specific live data, calibration, statistical reports and human
   review remain pending (#2611)
 
+- Speed up the experimental, default-off conformal open-data v2 offline tests
+  with a schema-valid 180-row injected design, while retaining a dry-run check
+  of the frozen 1,816-row plan; live Jev evidence remains pending (#2613)
 - Source-checkout TV-12 tooling for D06 live qualification: a digest-pinned OpenBao AppRole
   credential resolver for Jev, a no-call `--dry-run` estimate, reviewer-approved profile and
   margin recording from the preregistered rule, a stored-record enforcement check, and an
