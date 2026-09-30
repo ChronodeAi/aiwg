@@ -1738,6 +1738,38 @@
         "JEV-16",
         "#2616"
       ]
+    },
+    {
+      "id": "DEC-EGRESSLIVE-01",
+      "path": "docs/decision/evidence/egress-live-v1/preregistration.json",
+      "origin": "repository-authored",
+      "author": "Joseph Magly",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "egress-live-preregistration/v1",
+      "digest": "sha256:018ba347e1dbbd0b48f531c6d4bbbb9d36db44d7ecbb95373d69835c4bd535fb",
+      "expectedOutcome": "frozen #2680 egress preregistration; EGRESS-PREREG-01 requires it to equal the generated preregistration",
+      "links": [
+        "JEV-16",
+        "#2680"
+      ]
+    },
+    {
+      "id": "DEC-EGRESSLIVE-02",
+      "path": "docs/decision/evidence/egress-live-v1/approval-template.json",
+      "origin": "repository-authored",
+      "author": "Joseph Magly",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "egress-live-approval/v1",
+      "digest": "sha256:214ac8a40fdc869cea92b985cf34d8674f480d448b0e6285682d77675b75c273",
+      "expectedOutcome": "unapproved #2680 approval template bound to the frozen preregistration digest; never valid until an operator fills and approves it",
+      "links": [
+        "JEV-16",
+        "#2680"
+      ]
     }
   ]
 }

@@ -9,6 +9,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, source-checkout-only D10 egress live qualification runner
+  (`tools/decision/egress-live-qualification.mjs`) with a frozen, digest-pinned
+  preregistration, a never-logging OpenBao KV resolver, an operator-attested
+  price bound, worst-case budget reservation under a USD 2.00 issue cap with
+  scanned prior-run spend, a preregistered provider-failure policy (one retry per
+  arm, per-class measurement-failure tolerance), stop conditions, and digest-bound D11
+  recorded evidence. It is dry-run by default and needs
+  `AIWG_DECISION_EGRESS_LIVE=1` for live collection; no live run has been
+  performed and nothing is promoted (#2680).
 - Experimental default-off conformal open-data v2 artifacts use public CLINC150
   and Banking77 samples with deterministic fetch/verify, frozen split and
   licence hashes, closed schemas, synthetic-score pipeline analysis, a
