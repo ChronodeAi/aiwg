@@ -7,6 +7,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Fixed
+
+- Experimental, default-off D17 synthetic study no longer leaks gold through
+  ordinal record IDs, label parity, authority notes or payload lengths.
+  Regenerated uncollected corpus, preregistration and approval-template pins;
+  live evidence and operator approval remain pending (#2611)
+
 ### Added
 
 - Experimental, default-off D17 study regeneration for the shared collector's

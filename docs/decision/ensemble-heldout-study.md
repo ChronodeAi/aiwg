@@ -19,9 +19,14 @@ state/relation vocabulary. Complete families stay in one split. Worlds and
 parameter draws are independent within these shared templates; shared latent
 operations and template effects limit transfer to real work.
 
-The hash-counter prefix is
+The world-draw hash-counter prefix is
 `aiwg-holdout-2497b51d-v1:D17:<split>:<familyId>:<row-index>:<k>`, with the seed digest in
-the family ID and rejection sampling for bounded draws. Each row uses the closed
+the family ID and rejection sampling for bounded draws. A separately keyed
+Fisher–Yates shuffle assigns balanced labels within each split and slice;
+SHA-256 digests of a different seed/item domain form opaque record IDs.
+Neither the ordinal seed nor the label is rendered in provider payloads or blind
+review IDs. State words, relation verbs and names have fixed lengths within
+each split so payload length does not reveal gold. Each row uses the closed
 `<corpus-seed>:<index>:single` seed and the registered `d17-entailment/v1`
 generator. The shared collector re-derives every row, its output digest, the
 corpus seed and the generator source digest before dispatch. Labels follow an
@@ -47,24 +52,28 @@ No build or credential is needed:
 ```bash
 nice -n 19 node tools/decision/d17-study.mjs --dry-run d17-2611-v1
 aiwg artifacts path --json --check-write
-nice -n 19 node tools/decision/d17-study.mjs --prepare d17-2611-v1 OUTPUT_DIR
+nice -n 19 node tools/decision/d17-study.mjs --prepare FRESH_OPERATOR_SEED OUTPUT_DIR
 ```
 
 Choose `OUTPUT_DIR` immediately below the routed artifact root reported by the
 second command. Preparation exclusively creates the directory and its files;
 it will not overwrite an existing freeze. The first command writes nothing,
 projects all inputs through the existing D10 helper and prints budget estimates
-and canonical digests without exposing test labels. Use a fresh seed for an
-independent holdout after revising or inspecting a prior study. Development
+and canonical digests without exposing test labels. The documented
+`d17-2611-v1` seed is an offline demonstration and must not be approved for a
+paid held-out run: the source and seed are public enough to regenerate gold.
+Use a fresh uninspected operator seed for any paid study and approve its newly
+computed pins. Development
 review must precede the external preregistration approval and test access.
 
 The files include `corpus.json`, `preregistration.json`, `gold.json`,
 `analysis.json`, `splitManifest.json`, `nativeTemplates.json`,
 `reviewTemplate.json`, `guide.json`, `approval-template.json` and `dryRun.json`.
 The preregistration binds the analysis digest, source-module byte digest and
-corpus. It also records that the earlier uncollected proposal was regenerated
-for the merged collector contract, with the three superseded pins and an
-explicit no-live-observations declaration. Analysis binds every runtime source/schema file, dependency lock,
+corpus. It records the pre-collection gold-label leak correction, the three
+superseded pins and an explicit no-live-observations declaration. The previous
+corpus assigned labels by index parity and rendered that index in a record ID;
+its pins are invalid for collection. Analysis binds every runtime source/schema file, dependency lock,
 source runner and split/template digest. Source changes invalidate these pins.
 The fixed protocol timestamp is a version marker; the separate immutable
 operator record establishes the actual review/approval time.
@@ -179,9 +188,10 @@ AIWG_DECISION_HELDOUT_LIVE=1 nice -n 19 node tools/decision/heldout-study.mjs \
 ```
 
 The second command is an operator handoff, not authorization from this document.
-Approval must precede any spend. The one-line approval form is:
+Approval must precede any spend. The public-seed dry-run emits this placeholder
+approval text; a paid run needs the form generated from its fresh pins:
 
-> I, roctinam, approve D17 synthetic-only preregistration sha256:cccf31740f08635f71f07560313b1a88425e51ee0be9a1c69e0b5fed9ed9032d and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no promotion is authorized.
+> I, roctinam, approve D17 synthetic-only preregistration sha256:483c18c53df4a11e68e96313a252602e8d2e421388d2120141f8c278018b653e and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no promotion is authorized.
 
 ## Operator review and remaining evidence
 
@@ -215,14 +225,16 @@ operator approval, durable freeze or collected evaluation:
 
 | Artifact | Digest |
 | --- | --- |
-| Corpus | `sha256:546fb423c6f8e51baba2c4ac2f0f8e8750c478d4610d3f24dbe6e766f088eb91` |
-| Preregistration | `sha256:cccf31740f08635f71f07560313b1a88425e51ee0be9a1c69e0b5fed9ed9032d` |
-| Unapproved priced template | `sha256:4309d517fc20997ee326f8d3ad2db7f970a956bd1983b19fb614b11ec5d60213` |
-| Split manifest | `sha256:ed3f74a1ad4f58e34ec65bc0c62439999ef6201cf7bfc1622153a23dd9d17ce8` |
+| Corpus | `sha256:c22736953cfa0bb8b3dbdd026688d58ea50d9bcb8b3dd78bb4184171696658a2` |
+| Preregistration | `sha256:483c18c53df4a11e68e96313a252602e8d2e421388d2120141f8c278018b653e` |
+| Unapproved priced template | `sha256:fb24218e78462a3bbdfd667fdbc49d618f53ba5b34d2e907b0757769135e7c6a` |
+| Split manifest | `sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f` |
+| Analysis | `sha256:e73e8b091000d742e35ce5036d86fe84992754fc0116df375b380ea902053340` |
+| Private gold | `sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db` |
 
 Recompute after any source/schema change. Complete and attest the approval
 separately; its digest will differ from the unapproved template. The projected
-maximum was 1,283 reserved input tokens, including the 512-token provider overhead;
+maximum was 1,179 reserved input tokens, including the 512-token provider overhead;
 a further 256-token output/hidden allowance fits under the 4,000-token bound.
 This is not observed provider usage.
 
