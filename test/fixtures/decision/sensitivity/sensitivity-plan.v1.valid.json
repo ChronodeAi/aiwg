@@ -1,0 +1,249 @@
+{
+  "provenance": {
+    "origin": "repository-authored",
+    "sanitization": "synthetic; no personal inputs"
+  },
+  "records": [
+    {
+      "schemaVersion": "decision-sensitivity-plan/v1",
+      "id": "triage-threshold-replay",
+      "version": "1.0.0",
+      "mode": "shadow",
+      "tenantId": "tenant-a",
+      "workspaceId": "workspace-a",
+      "projectId": "project-a",
+      "actor": {
+        "principalId": "reviewer-a",
+        "authenticatedAt": "2026-09-29T12:00:00.000Z"
+      },
+      "purpose": "offline reviewer threshold replay",
+      "sourceSubject": {
+        "tenantId": "tenant-a",
+        "workspaceId": "workspace-a",
+        "projectId": "project-a",
+        "subjectRef": "case-001"
+      },
+      "source": {
+        "ruleset": {
+          "id": "triage-rules",
+          "version": "1.0.0",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "binding": {
+          "id": "triage-binding",
+          "version": "1.0.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "result": {
+          "id": "run-source",
+          "version": "1.0.0",
+          "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "evidencePins": [
+          {
+            "id": "evidence-choice",
+            "version": "1.0.0",
+            "digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }
+        ],
+        "policyPins": [
+          {
+            "id": "acceptance-v1",
+            "version": "1.0.0",
+            "digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ]
+      },
+      "analysisKind": "policy-replay",
+      "allowedPaths": [
+        "/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps",
+        "/ruleset/spec/rules/0/priority",
+        "/ruleset/spec/rules/0/outcome"
+      ],
+      "pathDomains": [
+        {
+          "path": "/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps",
+          "values": [7000, 9000],
+          "sensitivity": "internal"
+        },
+        {
+          "path": "/ruleset/spec/rules/0/priority",
+          "values": [10, 20],
+          "sensitivity": "internal"
+        },
+        {
+          "path": "/ruleset/spec/rules/0/outcome",
+          "values": [
+            { "route": "approve", "label": "low-risk" },
+            { "route": "review", "label": "needs-review" }
+          ],
+          "sensitivity": "internal"
+        }
+      ],
+      "variants": [
+        {
+          "id": "threshold-tighten",
+          "changes": [
+            {
+              "path": "/binding/spec/evaluations/risk/targets/0/acceptance/minimumBps",
+              "value": 9000
+            }
+          ]
+        },
+        {
+          "id": "loss-review",
+          "changes": [
+            {
+              "path": "/ruleset/spec/rules/0/outcome",
+              "value": { "route": "review", "label": "needs-review" }
+            }
+          ]
+        }
+      ],
+      "budgets": {
+        "maxVariants": 4,
+        "maxBackendCalls": 0,
+        "maxTokens": 0,
+        "maxCostMicros": 0,
+        "concurrency": 1,
+        "deadlineMs": 1000
+      },
+      "privacy": {
+        "egress": "metadata-only",
+        "redaction": "hash-values",
+        "summaryPrecisionBps": 1000,
+        "differencing": "coarsen"
+      },
+      "retention": {
+        "class": "review-evidence",
+        "deleteAfterEpochMs": 1790702400000,
+        "legalHold": false
+      },
+      "baselineStability": {
+        "enabled": false,
+        "repeats": 0
+      },
+      "unchangedVariant": "deduplicate",
+      "authorization": {
+        "authorizedLabels": ["low-risk", "needs-review"],
+        "authorizedActions": ["approve", "review"],
+        "approvedAt": "2026-09-29T12:00:00.000Z",
+        "expiresAt": "2026-09-29T13:00:00.000Z"
+      },
+      "probeControl": {
+        "windowId": "window-2026-09-29",
+        "maxPerPrincipalSubjectPath": 8,
+        "maxReportsPerWindow": 4,
+        "prohibitMembershipQueries": true
+      },
+      "requestedMetrics": ["outcome-change", "acceptance-change", "rule-change", "minimum-threshold-change"],
+      "comparisonBaseline": "source-result"
+    },
+    {
+      "schemaVersion": "decision-sensitivity-plan/v1",
+      "id": "triage-input-field",
+      "version": "1.0.0",
+      "mode": "shadow",
+      "tenantId": "tenant-a",
+      "workspaceId": "workspace-a",
+      "projectId": "project-a",
+      "actor": {
+        "principalId": "reviewer-a",
+        "authenticatedAt": "2026-09-29T12:00:00.000Z"
+      },
+      "purpose": "offline reviewer input perturbation",
+      "sourceSubject": {
+        "tenantId": "tenant-a",
+        "workspaceId": "workspace-a",
+        "projectId": "project-a",
+        "subjectRef": "case-001"
+      },
+      "source": {
+        "ruleset": {
+          "id": "triage-rules",
+          "version": "1.0.0",
+          "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "binding": {
+          "id": "triage-binding",
+          "version": "1.0.0",
+          "digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "result": {
+          "id": "run-source",
+          "version": "1.0.0",
+          "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "evidencePins": [],
+        "policyPins": []
+      },
+      "analysisKind": "input-reevaluation",
+      "allowedPaths": ["/input/riskSignal"],
+      "pathDomains": [
+        {
+          "path": "/input/riskSignal",
+          "values": ["low", "high", "REDACTED-CANARY-2616"],
+          "sensitivity": "restricted"
+        }
+      ],
+      "variants": [
+        {
+          "id": "risk-high",
+          "changes": [
+            {
+              "path": "/input/riskSignal",
+              "value": "high"
+            }
+          ]
+        },
+        {
+          "id": "no-change",
+          "changes": [
+            {
+              "path": "/input/riskSignal",
+              "value": "low"
+            }
+          ]
+        }
+      ],
+      "budgets": {
+        "maxVariants": 4,
+        "maxBackendCalls": 3,
+        "maxTokens": 1000,
+        "maxCostMicros": 1000,
+        "concurrency": 1,
+        "deadlineMs": 1000
+      },
+      "privacy": {
+        "egress": "no-external-egress",
+        "redaction": "hash-values",
+        "summaryPrecisionBps": 1000,
+        "differencing": "deny"
+      },
+      "retention": {
+        "class": "ephemeral",
+        "deleteAfterEpochMs": 1790702400000,
+        "legalHold": false
+      },
+      "baselineStability": {
+        "enabled": true,
+        "repeats": 1
+      },
+      "unchangedVariant": "retain-control",
+      "authorization": {
+        "authorizedLabels": ["low-risk", "needs-review"],
+        "authorizedActions": ["approve", "review"],
+        "approvedAt": "2026-09-29T12:00:00.000Z",
+        "expiresAt": "2026-09-29T13:00:00.000Z"
+      },
+      "probeControl": {
+        "windowId": "window-2026-09-29",
+        "maxPerPrincipalSubjectPath": 8,
+        "maxReportsPerWindow": 4,
+        "prohibitMembershipQueries": true
+      },
+      "requestedMetrics": ["outcome-change", "distribution-distance", "stability-repeat"],
+      "comparisonBaseline": "stability-control"
+    }
+  ]
+}

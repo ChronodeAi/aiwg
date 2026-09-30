@@ -22,10 +22,62 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   The dry run and freeze run from source without a build. Live collection needs
   `AIWG_DECISION_DAG_LIVE=1` plus an approval bound to both digests. The graph runtime stays experimental, and no live run is recorded
   (#2686).
+- Experimental, source-checkout-only D10 egress live qualification runner
+  (`tools/decision/egress-live-qualification.mjs`) with a frozen, digest-pinned
+  preregistration, a never-logging OpenBao KV resolver, an operator-attested
+  price bound, worst-case budget reservation under a USD 2.00 issue cap with
+  scanned prior-run spend, a preregistered provider-failure policy (one retry per
+  arm, per-class measurement-failure tolerance), stop conditions, and digest-bound D11
+  recorded evidence. It is dry-run by default and needs
+  `AIWG_DECISION_EGRESS_LIVE=1` for live collection; no live run has been
+  performed and nothing is promoted (#2680).
+- Experimental default-off conformal open-data v2 artifacts use public CLINC150
+  and Banking77 samples with deterministic fetch/verify, frozen split and
+  licence hashes, closed schemas, synthetic-score pipeline analysis, a
+  preregistered 1,816-item two-dataset live design (worst case USD 1.03 at a
+  USD 0.10 per million token ceiling), and a dry-run-first Jev collector that
+  reserves worst-case cost before every call against one global USD 8.00 spend
+  ledger in a durable state directory; live scores and production use remain
+  pending (#2613)
+- Experimental default-off decision sensitivity analysis defines closed
+  `SensitivityPlan`/`SensitivityReport` schemas, a library-only offline analyzer
+  for policy replay and host-supplied input reevaluation, privacy-safe redacted
+  reports, anti-probing checks, synthetic examples, docs, and tests. Reports are
+  associative diagnostics only and cannot authorize actions (#2616).
+
+- Experimental, default-off issue triage shadow pilot contracts and runtime for
+  Jev classification, completeness/clarification scoring, and deterministic
+  duplicate reranking. The offline harness adds closed schemas, point-in-time
+  candidate replay, shared credential redaction, a tracker-free runtime,
+  preregistered split and threshold manifests, and report gates that use paired
+  non-inferiority, Wilson bounds and receipt-reconciled economics. It does not
+  claim live Jev, held-out, or human-review qualification (#2618).
+- Experimental default-off D28 routing pilot APIs for capability-constrained
+  model/subagent selection after hard-constraint filtering. Shadow mode executes
+  only the existing deterministic route and records the Jev-assisted choice as a
+  never-executed counterfactual. Includes closed task/evidence validation,
+  cumulative budget and deadline enforcement, provider circuits, a paired and
+  preregistered shadow report verified by rebuild, a D17 rollback drill that
+  restores the prior routing policy, docs, tests and an offline synthetic
+  example (#2620).
+- Experimental/default-off SDLC evidence readiness screening for citation
+  support and phase-gate criteria, with closed schemas, deterministic preflight
+  against a host-pinned gate policy artifact, D08 native-distribution
+  acceptance, D09 registry calibration and D10 review routing, shadow-mode
+  receipts, a D13 durable-review bridge, record-computed held-out
+  preregistration with paired non-inferiority against the baseline, docs and
+  offline tests (#2622).
 - Experimental default-off D17 decision ensemble runtime APIs for bounded
   member dispatch, paired champion/challenger shadow evaluation, drift-response
   execution, promotion gating on D09 plus eval-integrity, rollback for new runs,
   metadata-only telemetry, docs, tests and an offline synthetic example (#2611).
+- Experimental, default-off decision-assisted context pruning pilot with
+  deterministic protected-item retention, a ContextBudgetManager fallback and
+  byte-identical shadow selection, immutable reversible receipts, closed
+  schemas, and anchored preregistration/report scaffolding that applies the
+  shared paired non-inferiority intervals to raw per-pair outcomes, per-slice
+  support and provider-reconciled cache economics; live held-out
+   quality/economics evidence remains pending (#2619).
 - Shared paired non-inferiority intervals and a fail-closed margin check for decision pilots (#2618, #2619, #2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
@@ -55,6 +107,21 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   services come only from an injected host registry or trusted
   `--host-policy-module`. Inline or misspelled advanced options are rejected,
   and Jev compile caching remains disabled unless the host opts in (#2739).
+- Experimental/default-off preprocessing lineage for text-only decision inputs
+  derived from scanned documents, audio, video, or images. It adds the closed
+  `PreprocessedEvidence.v1` schema, recorded OCR/ASR/caption/image-description
+  fixtures, media-specific resolver policy checks, segment text bound to byte
+  ranges of the digest-verified output, append-only human-correction events,
+  an evaluator gate that refuses destination or derived-egress mismatches and
+  any input text that differs from the text recomputed from verified manifests
+  at host-declared bindings, requires host thresholds and lifecycle state,
+  re-derives quality and staleness from current manifests, and
+  routes flagged, untrusted, stale, unverified, tombstoned or held lineage to
+  review before credential resolution or dispatch, sanitized body-free receipt
+  links, D10 lifecycle cascade helpers, docs, and a runnable offline example.
+  Requests without a manifest are unchanged (checked against an origin/main
+  golden). It does not add live OCR/ASR/vision dependencies or native media
+  support to Jev (#2617).
 
 ### Fixed
 

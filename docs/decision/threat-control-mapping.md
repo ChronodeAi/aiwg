@@ -4,7 +4,9 @@ This document maps the D10 state projection and egress threats (#2597) to the
 controls that implement them and the offline tests that exercise them. It is the
 input to the security reviewer sign-off tracked in #2680. The sign-off, live
 least-privilege checks, attack-movement measurement and provider
-retention/residency evidence are **not** claimed here.
+retention/residency evidence are **not** claimed here. The runner that will collect
+the live evidence for T-01, T-02, T-08, T-10 and T-14 is described in
+[egress-live-qualification.md](./egress-live-qualification.md); it has not been run live.
 
 ## Source and status
 
