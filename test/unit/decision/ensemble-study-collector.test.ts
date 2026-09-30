@@ -71,7 +71,9 @@ describe('D17 diagnostic collection through the shared collector', () => {
     expect(c.bundle.corpus.rows[0].requests.map(request => request.arm)).toEqual(['baseline', 'candidate', 'candidate', 'candidate']);
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const events = await readHeldoutJournal(c.runDir);
-      expect(events.at(-1)?.attempt).toMatchObject({ result: null, reservedUsdMicros: 400, reservedTokens: 4000 });
+      expect(events.at(-1)?.attempt).toMatchObject({ result: null, reservedUsdMicros: 114 });
+      expect(events.at(-1)?.attempt.reservedTokens).toBeGreaterThan(768);
+      expect(events.at(-1)?.attempt.reservedTokens).toBeLessThanOrEqual(4000);
       expect(events.filter(event => event.attempt.result === null)).toHaveLength(transport.mock.calls.length);
       const body = JSON.parse(String(init?.body)); bodies.push(body);
       expect(body.state).toEqual({ verified: {}, untrusted: { payload: c.bundle.corpus.rows[Math.floor((transport.mock.calls.length - 1) / 4)].input.payload } });
@@ -79,7 +81,7 @@ describe('D17 diagnostic collection through the shared collector', () => {
       expect(body).not.toHaveProperty('gold'); expect(body.state).not.toHaveProperty('labels');
       return reply(init);
     });
-    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2, reservedUsdMicros: 3200,
+    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2, reservedUsdMicros: 912,
       missingRows: [], source: 'injected-transport', decision: 'HOLD' });
     expect(transport).toHaveBeenCalledTimes(8);
     expect(bodies.slice(0, 4)).toEqual(Array(4).fill(bodies[0]));
@@ -90,11 +92,11 @@ describe('D17 diagnostic collection through the shared collector', () => {
     expect(new Set(attempts.map(attempt => attempt.result?.receipt?.spec.invocationId)).size).toBe(8);
     for (const attempt of attempts) {
       expect(attempt.result).toMatchObject({ disposition: 'success', servedModel: 'jev-1.13.0', inputTokens: 20, outputTokens: 4,
-        providerCostUsd: null, accountedUsdMicros: 400 });
+        providerCostUsd: null, accountedUsdMicros: 114 });
       expect(attempt.result?.receiptDigest).toBe(heldoutDigest(attempt.result?.receipt));
       expect(attempt.result?.receipt?.spec.evaluations.q0.spec.uncertainty?.distribution).toEqual({ yes: 0.9, no: 0.1 });
     }
-    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(3200);
+    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(912);
     const manifest = JSON.parse(await readFile(join(c.runDir, 'qualification.json'), 'utf8'));
     expect(manifest.mode).toBe('recorded'); expect(manifest.evidence[0].outcome).toBe('pass');
     expect(c.host.dispose).toHaveBeenCalledOnce();
@@ -116,23 +118,23 @@ describe('D17 diagnostic collection through the shared collector', () => {
       });
     });
     expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ status: 'stopped', completedRows: 1,
-      missingRows: [c.bundle.corpus.rows[1].id], reservedUsdMicros: 2000, decision: 'HOLD' });
+      missingRows: [c.bundle.corpus.rows[1].id], reservedUsdMicros: 570, decision: 'HOLD' });
     expect(transport).toHaveBeenCalledTimes(5);
     const attempts = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
     expect(attempts.map(attempt => attempt.result?.disposition)).toEqual(['success', 'success', 'success', 'success', 'stop']);
     expect(attempts.slice(0, 4).every(attempt => attempt.result?.receiptDigest)).toBe(true);
     expect(JSON.stringify(attempts)).not.toContain('private dispatch failure');
-    expect(attempts[4].result?.accountedUsdMicros).toBe(400);
+    expect(attempts[4].result?.accountedUsdMicros).toBe(114);
   });
   it('AC5 checks call, token and USD limits before dispatch and retains the completed subject', async () => {
     for (const ceiling of ['calls', 'tokens', 'usd']) {
       const c = await setup();
       if (ceiling === 'calls') c.bundle.approval.budget.calls = 5;
-      if (ceiling === 'tokens') c.bundle.approval.budget.tokens = 20000;
-      if (ceiling === 'usd') c.bundle.approval.budget.usd = 0.002;
+      if (ceiling === 'tokens') c.bundle.approval.budget.tokens = 8500;
+      if (ceiling === 'usd') c.bundle.approval.budget.usd = 0.0007;
       const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init));
       expect(await c.run(transport)).toMatchObject({ status: 'stopped', reason: 'budget-exhausted', completedRows: 1,
-        reservedUsdMicros: 1600, missingRows: [c.bundle.corpus.rows[1].id] });
+        reservedUsdMicros: 456, missingRows: [c.bundle.corpus.rows[1].id] });
       expect(transport).toHaveBeenCalledTimes(4);
       expect((await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result === null)).toHaveLength(4);
     }
@@ -140,19 +142,19 @@ describe('D17 diagnostic collection through the shared collector', () => {
   it('AC3/5 retains the paid failed attempt when a terminal retry completes a member', async () => {
     const c = await setup(); let calls = 0;
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => ++calls === 2 ? new Response('{}', { status: 503 }) : reply(init));
-    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2, reservedUsdMicros: 3600 });
+    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 2, reservedUsdMicros: 1026 });
     const attempts = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
     expect(transport).toHaveBeenCalledTimes(9);
     expect(attempts[1]).toMatchObject({ ordinal: 1, result: { disposition: 'retryable', inputTokens: null, providerCostUsd: null } });
     expect(attempts[2]).toMatchObject({ requestId: attempts[1].requestId, rowId: attempts[1].rowId,
       ordinal: 2, result: { disposition: 'success' } });
-    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(3600);
+    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(1026);
   });
   it('AC11 rejects credential-bearing synthetic input before credential resolution or dispatch', async () => {
     const c = await setup();
     c.bundle.corpus.rows[0].input.payload = { api_key: 'not-synthetic-secret' };
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init));
-    await expect(c.run(transport)).rejects.toThrow('credential-material');
+    await expect(c.run(transport)).rejects.toThrow('generator-output');
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
   it('AC13 default-off collection leaves existing decision output byte-identical without reading study inputs', async () => {
@@ -190,8 +192,8 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     expect(report.observations[1].aggregate?.warnings).toContain('shared-systematic-error-risk');
     expect(report.observations[1].aggregate?.warnings).toContain('uncalibrated-members');
     expect(report.observations[1].champion?.quality).toBe(0); expect(report.observations[1].challenger?.quality).toBe(0);
-    expect(report.statistics.netSavingsMicros).toBe(-1600);
-    expect(report.pairs.map(pair => [pair.champion.reservedCostMicros, pair.challenger.reservedCostMicros])).toEqual([[400, 1200], [400, 1200]]);
+    expect(report.statistics.netSavingsMicros).toBe(-456);
+    expect(report.pairs.map(pair => [pair.champion.reservedCostMicros, pair.challenger.reservedCostMicros])).toEqual([[114, 342], [114, 342]]);
     expect(report.statistics).toMatchObject({ statisticalGate: 'HOLD', benefitSupported: false,
       worstCaseFailureAsError: { n: 2, championCorrect: 1, challengerCorrect: 1, missingPairsCountedAsErrors: 0 } });
     expect(report.calibrationDiagnostics.calibrated).toBe(false); expect(report.decision).toBe('HOLD');
@@ -216,12 +218,12 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => ++calls >= 10 ? new Response('{}', { status: 503 }) : reply(init)));
     const report = await scoreD17Study(await input(c), c.prepared);
     expect(report.pairs).toEqual([]);
-    expect(report.observations[0].champion).toMatchObject({ quality: 1, tokens: 24, costMicros: 400 });
+    expect(report.observations[0].champion).toMatchObject({ quality: 1, tokens: 24, costMicros: 114 });
     expect(report.observations[0].challenger).toBeNull();
     expect(report.observations[0].aggregate?.warnings).toContain('member-failures-present');
     expect(report.statistics.worstCaseFailureAsError).toEqual({ n: 2, championCorrect: 1, challengerCorrect: 0, missingPairsCountedAsErrors: 2 });
-    expect(report.accounting).toEqual({ allSplits: { attempts: 11, reservedCostMicros: 4400 },
-      test: { championReservedCostMicros: 400, challengerReservedCostMicros: 800, netSavingsMicros: -400, complete: false } });
+    expect(report.accounting).toEqual({ allSplits: { attempts: 11, reservedCostMicros: 1258 },
+      test: { championReservedCostMicros: 114, challengerReservedCostMicros: 228, netSavingsMicros: -114, complete: false } });
     expect(report.statistics.missingIds).toEqual(c.bundle.corpus.rows.filter(row => row.split === 'test').map(row => row.id));
     expect(report.calibrationDiagnostics.challenger).toBeNull(); expect(report.decision).toBe('HOLD');
   });
@@ -232,8 +234,8 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     expect(report.pairs).toHaveLength(2);
     expect(report.pairs[0].challenger.tokens).toBeNull();
     expect(report.observations[0].challenger?.tokens).toBeNull();
-    expect(report.pairs[0].challenger.reservedCostMicros).toBe(1600);
-    expect(report.statistics.netSavingsMicros).toBe(-2000);
+    expect(report.pairs[0].challenger.reservedCostMicros).toBe(456);
+    expect(report.statistics.netSavingsMicros).toBe(-570);
     expect(report.statistics.pairedDeltas.find(delta => delta.metric === 'tokens')?.pairs).toBe(1);
     expect(report.statistics.findings).toContain('paired-delta-insufficient:tokens');
     expect(report.decision).toBe('HOLD');
@@ -302,7 +304,7 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     expect(native.findings).toContain('d09-eligibility-missing');
     expect(native.pairedDeltas.map(delta => delta.metric)).toEqual(['abstention', 'calibration', 'cost', 'latency', 'quality', 'risk-coverage', 'slice', 'tokens']);
     expect(native.pairedDeltas.every(delta => delta.pairs === 1200)).toBe(true);
-    expect(native.pairedDeltas.find(delta => delta.metric === 'cost')?.delta).toBe(800);
+    expect(native.pairedDeltas.find(delta => delta.metric === 'cost')?.delta).toBe(228);
     for (const role of ['champion', 'challenger'] as const) {
       const wrongModel = structuredClone(record); wrongModel[role].actualModel = 'unobserved-model';
       await expect(buildD17NativeReport({ ...nativeInput, record: wrongModel })).rejects.toThrow('native execution pins');

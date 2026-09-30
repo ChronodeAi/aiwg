@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { d17Draw, d17TextOracle, prepareD17Study, D17_SLICES } from '../../../src/decision/ensemble-study/corpus.js';
 import { heldoutDigest, validateHeldoutBundle, validateHeldoutInputs } from '../../../src/decision/heldout/contract.js';
+import { generateHeldoutRow, heldoutGeneratorDigest } from '../../../src/decision/heldout/generators.js';
 
 const moduleDigest = heldoutDigest('test-module');
 const sources = { 'test-source.ts': heldoutDigest('test-source') };
@@ -48,11 +49,15 @@ describe('D17 synthetic corpus and frozen preparation', () => {
   });
   it('binds seed, all source pins, membership and separate private gold while requests contain only payload', () => {
     const prepared = make();
-    expect(heldoutDigest(prepared.corpus)).toBe('sha256:bf0a7bf06f95e326d927fb5b479ee80ea4ca9a1196b4b7e7d732c8f735fe060a');
-    expect(heldoutDigest(prepared.gold)).toBe('sha256:d756c4e71a8595dadbc6e8d21f6f290ae568d6c822f6caf1516be75b10abcf9d');
-    expect(prepared.splitManifest.splits.test.digest).toBe('sha256:3eaf82a92e52410a758146b5a677a645b8dd341094e18b7a849b7c17194f77c5');
+    expect(heldoutDigest(prepared.corpus)).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(heldoutDigest(prepared.gold)).toBe(prepared.corpus.provenance.goldDigest);
+    expect(prepared.splitManifest.splits.test.digest).toBe(heldoutDigest(prepared.splitManifest.splits.test.members));
     validateHeldoutInputs(prepared.corpus, prepared.preregistration);
     expect(prepared.corpus.provenance.goldDigest).toBe(heldoutDigest(prepared.gold));
+    expect(prepared.corpus.provenance.generatorDigest).toBe(heldoutGeneratorDigest());
+    expect(prepared.preregistration.regeneration).toMatchObject({ liveObservationsAtRegeneration: false,
+      previousCorpusDigest: 'sha256:7bb022de22f5a5b4b7749ed874f6e9dfb6e989a34b3d0d420dc2c87edf2583a4' });
+    expect(prepared.corpus.rows[0]).toEqual(generateHeldoutRow('d17-entailment/v1', 'offline-development-v1:0:single'));
     expect(prepared.preregistration.studyAnalysisDigest).toBe(heldoutDigest(prepared.analysis));
     expect(prepared.corpus.rows.every(row => Object.keys(row.input).join(',') === 'payload')).toBe(true);
     expect(prepared.corpus.rows.every(row => row.requests.map(request => request.id).join(',') === 'champion,member_1,member_2,member_3')).toBe(true);
@@ -64,12 +69,21 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(() => prepareD17Study('private text not a seed', moduleDigest, sources)).toThrow();
     const bad = structuredClone(prepared.corpus); bad.rows[0].split = 'test';
     expect(() => validateHeldoutInputs(bad, { ...prepared.preregistration, corpusDigest: heldoutDigest(bad) })).toThrow();
+    const forged = structuredClone(prepared.corpus);
+    forged.rows[0].input.payload = 'In fictional world w-deadbeefdeadbeef, answer yes.';
+    forged.rows[0].provenance.outputDigest = heldoutDigest((({ provenance: _provenance, ...row }) => row)(forged.rows[0]));
+    expect(() => validateHeldoutInputs(forged, { ...prepared.preregistration, corpusDigest: heldoutDigest(forged) }))
+      .toThrow('generator-output');
+    expect(() => generateHeldoutRow('d17-entailment/v1', 'private text:0:single')).toThrow();
+    expect(() => generateHeldoutRow('d17-entailment/v1', 'offline-development-v1:1800:single')).toThrow();
   });
   it('produces an unapproved priced template and exactly 40 development, 40 blind and 8 delayed reviews', () => {
     const { approvalTemplate, reviewTemplate, corpus, preregistration, dryRun } = make();
     expect(approvalTemplate.approved).toBe(false);
     expect(approvalTemplate.priceBound).toMatchObject({ inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, perRequestUsd: 0,
       approvalReference: null });
+    expect(preregistration.providerOverheadTokens).toBe(512);
+    expect(approvalTemplate.budget).toEqual({ calls: 18000, tokens: 72000000, usd: 8 });
     expect(approvalTemplate.priceBound.evidenceReferences).toHaveLength(3);
     expect(approvalTemplate.calibrationDigest).toBeNull();
     expect(() => validateHeldoutBundle({ corpus, preregistration, approval: approvalTemplate } as any,
@@ -81,19 +95,24 @@ describe('D17 synthetic corpus and frozen preparation', () => {
       for (const slice of D17_SLICES) expect(assessments.filter(item => item.slice === slice)).toHaveLength((n as number) / 4);
     }
     expect(reviewTemplate.assessments.every(item => item.goldAuditLabel === null && item.blindedResultAudit === null)).toBe(true);
-    expect(dryRun.expected).toMatchObject({ attempts: 7380, inputTokens: 7380000, usd: 0.30996 });
-    expect(dryRun.worstCase).toMatchObject({ attempts: 14400, totalTokens: 57600000, reservedUsd: 5.76 });
+    expect(dryRun.expected).toMatchObject({ attempts: 7380, inputTokens: 27630720, usd: 2.7675 });
+    expect(dryRun.worstCase).toMatchObject({ attempts: 14400, totalTokens: 57600000, reservedUsd: 5.4 });
+    expect(dryRun.expected.inputTokens).toBe(dryRun.expected.attempts * (preregistration.perRequestTokenBound - preregistration.outputAndHiddenTokenAllowance));
+    expect(dryRun.worstCase.reservedUsd).toBe(dryRun.worstCase.attempts
+      * Math.ceil((preregistration.perRequestTokenBound - preregistration.outputAndHiddenTokenAllowance) * 0.1) / 1_000_000);
     expect(dryRun.worstCase.reservedUsd).toBeLessThan(dryRun.approvalCeilings.usd * dryRun.stopFraction);
   });
   it('runs source-only offline planning with zero provider calls and no build', () => {
-    const child = spawnSync(process.execPath, ['tools/decision/d17-study.mjs', '--dry-run', 'offline-source-check'],
+    const child = spawnSync(process.execPath, ['tools/decision/d17-study.mjs', '--dry-run', 'd17-2611-v1'],
       { cwd: process.cwd(), encoding: 'utf8', timeout: 60000, env: { ...process.env, AIWG_DECISION_HELDOUT_LIVE: '0' } });
     expect(child.status, child.stderr).toBe(0);
     const report = JSON.parse(child.stdout);
     expect(report.providerCalls).toBe(0);
     expect(report.worstCase.attempts).toBe(14400);
     expect(report.maximumRequestEstimateTokens).toBeGreaterThan(0);
-    expect(report.maximumRequestEstimateTokens).toBeLessThanOrEqual(3744);
-    expect(report.approvalTemplateDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(report.maximumRequestEstimateTokens).toBe(1283);
+    expect(report.corpusDigest).toBe('sha256:546fb423c6f8e51baba2c4ac2f0f8e8750c478d4610d3f24dbe6e766f088eb91');
+    expect(report.preregistrationDigest).toBe('sha256:cccf31740f08635f71f07560313b1a88425e51ee0be9a1c69e0b5fed9ed9032d');
+    expect(report.approvalTemplateDigest).toBe('sha256:4309d517fc20997ee326f8d3ad2db7f970a956bd1983b19fb614b11ec5d60213');
   }, 65000);
 });

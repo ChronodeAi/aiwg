@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { heldoutApprovalTemplate, heldoutDigest, validateHeldoutInputs } from '../heldout/contract.js';
+import { heldoutGeneratorDigest } from '../heldout/generators.js';
 import type { Digest, HeldoutCorpus, HeldoutPreregistration, HeldoutRow } from '../heldout/types.js';
 import { artifactPin } from '../validate.js';
 import type { DecisionDefinition } from '../types.js';
@@ -80,29 +81,44 @@ const definition: DecisionDefinition = { apiVersion: 'decision.aiwg.io/v1alpha1'
     answer: { kind: 'choice', options: [{ id: 'yes', description: 'Established by facts and stated rule' },
       { id: 'no', description: 'Contradicted or not established' }] }, requiredCapabilities: ['choice'] } };
 
+export function d17GenerateCase(rowSeed: string): { row: Omit<HeldoutRow, 'provenance'>; world: D17World; label: D17Label } {
+  const match = /^([a-z0-9][a-z0-9-]{0,31}):([0-9]{1,5}):single$/.exec(rowSeed);
+  if (!match) throw new Error('D17 row seed');
+  const seed = match[1], index = Number(match[2]);
+  if (index >= 1800 || String(index) !== match[2]) throw new Error('D17 row index');
+  const split: Split = index < 200 ? 'tuning' : index < 600 ? 'calibration' : 'test';
+  const offset = index - (split === 'tuning' ? 0 : split === 'calibration' ? 200 : 600);
+  const perSlice = SPLITS[split] / D17_SLICES.length;
+  const slice = D17_SLICES[Math.floor(offset / perSlice)];
+  const i = offset % perSlice;
+  const seedId = heldoutDigest(seed).slice(7, 23);
+  const familyId = `${seedId}-${split}-${slice}-grammar-v1`, draw = d17Draw(split, `${familyId}:${i}`);
+  const id = `d17-${split}-${slice}-${String(i).padStart(4, '0')}`;
+  const yes = i % 2 === 0;
+  const name = (prefix: string) => `${prefix}${draw(1000000).toString(36)}`;
+  const unknown = !yes && i % 4 === 3;
+  const world: D17World = { slice, subject: name('A'), object: name('B'), destination: name('C'), decoy: name('Z'),
+    enabled: slice === 'multi-fact' ? yes || i % 4 === 1 : yes,
+    hasLink: yes || i % 4 === 3, explicitNegative: !yes && !unknown, unknown,
+    quantity: draw(99) + 1, day: draw(365) + 1 };
+  return { world, label: worldLabel(world), row: { id, familyId, split, slice,
+    input: { payload: render(world, split, `${familyId}-${id}`) }, requests: [
+      { id: 'champion', arm: 'baseline', definitionId: definition.metadata.id },
+      ...[1, 2, 3].map(n => ({ id: `member_${n}`, arm: 'candidate', definitionId: definition.metadata.id }))], localOutcome: null } };
+}
+
 export function prepareD17Study(seed: string, moduleDigest: Digest, sourceDigests: Record<string, Digest>) {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(seed) || !/^sha256:[a-f0-9]{64}$/.test(moduleDigest)
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed) || !/^sha256:[a-f0-9]{64}$/.test(moduleDigest)
     || !Object.keys(sourceDigests).length || Object.values(sourceDigests).some(value => !/^sha256:[a-f0-9]{64}$/.test(value))) {
     throw new Error('D17 source or seed pins');
   }
-  const seedId = heldoutDigest(seed).slice(7, 23), rows: HeldoutRow[] = [];
+  const rows: HeldoutRow[] = [];
   const gold: D17Gold = { schemaVersion: 'decision-d17-gold/v1', labels: {}, worlds: {} };
-  for (const split of Object.keys(SPLITS) as Split[]) for (const slice of D17_SLICES) {
-    const familyId = `${seedId}-${split}-${slice}-grammar-v1`, draw = d17Draw(split, familyId);
-    for (let i = 0; i < SPLITS[split] / D17_SLICES.length; i++) {
-      const id = `d17-${split}-${slice}-${String(i).padStart(4, '0')}`;
-      const yes = i % 2 === 0;
-      const name = (prefix: string) => `${prefix}${draw(1000000).toString(36)}`;
-      const unknown = !yes && i % 4 === 3;
-      const world: D17World = { slice, subject: name('A'), object: name('B'), destination: name('C'), decoy: name('Z'),
-        enabled: slice === 'multi-fact' ? yes || i % 4 === 1 : yes,
-        hasLink: yes || i % 4 === 3, explicitNegative: !yes && !unknown, unknown,
-        quantity: draw(99) + 1, day: draw(365) + 1 };
-      gold.labels[id] = worldLabel(world); gold.worlds[id] = world;
-      rows.push({ id, familyId, split, slice, input: { payload: render(world, split, `${familyId}-${id}`) }, requests: [
-        { id: 'champion', arm: 'baseline', definitionId: definition.metadata.id },
-        ...[1, 2, 3].map(n => ({ id: `member_${n}`, arm: 'candidate', definitionId: definition.metadata.id }))], localOutcome: null });
-    }
+  for (let index = 0; index < 1800; index++) {
+    const rowSeed = `${seed}:${index}:single`;
+    const { row, world, label } = d17GenerateCase(rowSeed);
+    gold.labels[row.id] = label; gold.worlds[row.id] = world;
+    rows.push({ ...row, provenance: { generatorId: 'd17-entailment/v1', seed: rowSeed, outputDigest: heldoutDigest(row) } });
   }
   const splitManifest = { schemaVersion: 'decision-d17-splits/v1', frozenAt: FROZEN_AT, seed,
     allocation: 'id-ordered-balanced-label-and-slice-quota', familyIsolation: true, duplicatePayloads: 0,
@@ -115,14 +131,22 @@ export function prepareD17Study(seed: string, moduleDigest: Digest, sourceDigest
   const analysis = { schemaVersion: 'decision-d17-analysis/v1', protocol: D17_ANALYSIS, sourceDigests,
     splitManifestDigest: heldoutDigest(splitManifest), nativeTemplatesDigest: heldoutDigest(nativeTemplates) };
   const corpus: HeldoutCorpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D17', syntheticOnly: true,
-    provenance: { kind: 'authored-synthetic', generatorDigest: moduleDigest, seed, goldDigest: heldoutDigest(gold) },
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(), seed, goldDigest: heldoutDigest(gold) },
     definitions: [structuredClone(definition)], rows };
   const preregistration: HeldoutPreregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D17',
     frozenAt: FROZEN_AT, corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
     providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true }, perRequestTokenBound: 4000,
-    outputAndHiddenTokenAllowance: 256, requestTimeoutMs: 60000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000 };
+    outputAndHiddenTokenAllowance: 256, providerOverheadTokens: 512,
+    requestTimeoutMs: 60000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000,
+    regeneration: { reason: 'Collector generator, seed, free-output and input-byte reservation contracts replaced the uncollected D17 proposal.',
+      previousCorpusDigest: 'sha256:7bb022de22f5a5b4b7749ed874f6e9dfb6e989a34b3d0d420dc2c87edf2583a4',
+      previousPreregistrationDigest: 'sha256:9092336d908f55d6c1a87d60abb1b44f5121b2e830d74930e4b7db054c602ae1',
+      previousApprovalTemplateDigest: 'sha256:810e5b18bf495da4439f70084165dde8a5ca84355b11d404c50cb499166e8ce4',
+      liveObservationsAtRegeneration: false } };
   validateHeldoutInputs(corpus, preregistration);
-  const approvalTemplate = { ...heldoutApprovalTemplate(corpus, preregistration), priceBound: { inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, perRequestUsd: 0,
+  const baseApproval = heldoutApprovalTemplate(corpus, preregistration);
+  const approvalTemplate = { ...baseApproval, budget: { ...baseApproval.budget, tokens: 72000000 },
+    priceBound: { inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, perRequestUsd: 0,
     evidenceReferences: ['https://www.eesel.ai/blog/typesafe-jev-pricing', 'https://www.mindstudio.ai/blog/jev-pricing-cost-per-token',
       'roctinam/aiwg#2613 comment 153093'], approvalReference: null } };
   const reviewTemplate = d17ReviewTemplate(rows);
@@ -154,9 +178,9 @@ function d17ReviewTemplate(rows: readonly HeldoutRow[]) {
 }
 export function d17DryRun() {
   return { schemaVersion: 'decision-d17-dry-run/v1', providerCalls: 0, syntheticOnly: true, subjects: 1800, splits: SPLITS,
-    expected: { firstAttempts: 7200, retryRateBps: 250, attempts: 7380, inputTokens: 7380000,
-      outputTokens: null, usd: 0.30996, costSource: 'planning-rate-derived-not-provider-reported' },
-    worstCase: { attempts: 14400, totalTokens: 57600000, reservedUsd: 5.76, priceFloorUsdPerMTok: 0.10 },
+    expected: { firstAttempts: 7200, retryRateBps: 250, attempts: 7380, inputTokens: 27630720,
+      outputTokens: null, usd: 2.7675, costSource: 'planning-bound-derived-not-provider-reported' },
+    worstCase: { attempts: 14400, totalTokens: 57600000, reservedUsd: 5.4, priceFloorUsdPerMTok: 0.10 },
     approvalCeilings: { calls: 18000, tokens: 72000000, usd: 8 }, portfolioUsd: 48, stopFraction: 0.8,
     fitsStudyCapBeforeStop: true, sessionLimitMs: 1800000, requiresResumableSessions: true,
     reviewAssessments: 88, missingInputs: ['operator approval', 'compatible D09 calibration', 'exact-source CI evidence',

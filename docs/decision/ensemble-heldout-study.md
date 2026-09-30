@@ -20,8 +20,11 @@ parameter draws are independent within these shared templates; shared latent
 operations and template effects limit transfer to real work.
 
 The hash-counter prefix is
-`aiwg-holdout-2497b51d-v1:D17:<split>:<familyId>:<k>`, with the seed digest in
-the family ID and rejection sampling for bounded draws. Labels follow an
+`aiwg-holdout-2497b51d-v1:D17:<split>:<familyId>:<row-index>:<k>`, with the seed digest in
+the family ID and rejection sampling for bounded draws. Each row uses the closed
+`<corpus-seed>:<index>:single` seed and the registered `d17-entailment/v1`
+generator. The shared collector re-derives every row, its output digest, the
+corpus seed and the generator source digest before dispatch. Labels follow an
 executable latent-world oracle. A separately implemented text oracle checks
 development rendering. Gold and latent worlds live in `gold.json`, separate
 from provider payloads. Split manifests bind IDs, family memberships, slices,
@@ -59,7 +62,9 @@ The files include `corpus.json`, `preregistration.json`, `gold.json`,
 `analysis.json`, `splitManifest.json`, `nativeTemplates.json`,
 `reviewTemplate.json`, `guide.json`, `approval-template.json` and `dryRun.json`.
 The preregistration binds the analysis digest, source-module byte digest and
-corpus. Analysis binds every runtime source/schema file, dependency lock,
+corpus. It also records that the earlier uncollected proposal was regenerated
+for the merged collector contract, with the three superseded pins and an
+explicit no-live-observations declaration. Analysis binds every runtime source/schema file, dependency lock,
 source runner and split/template digest. Source changes invalidate these pins.
 The fixed protocol timestamp is a version marker; the separate immutable
 operator record establishes the actual review/approval time.
@@ -137,14 +142,18 @@ free output and a zero request fee, with these evidence references:
 
 These are supplied attestation references, not fetched or verified live here.
 The operator must sign the price approval reference and confirm the fee/rates.
-Reservations use at least USD 0.10 per million bounded total tokens. Expected
-numbers are planning assumptions, never provider-reported charges:
+Reservations charge projected serialized UTF-8 request bytes plus the
+preregistered 512-token provider overhead at the greater of the attested input
+rate and USD 0.10 per million. The approval attests zero output price and a
+zero request fee. The expected retry scenario below conservatively reserves
+the full 3,744-token input allowance for each call. These are planning bounds,
+never provider-reported charges:
 
 | Quantity | Expected | Worst-case reservation |
 | --- | --- | --- |
 | Attempts, all three splits | 7,380 (7,200 initial plus 2.5% retries) | 14,400 |
-| Tokens | 7.38 million input; output unknown | 57.6 million total |
-| USD | 0.30996 | 5.76 |
+| Tokens | 27,630,720 reserved input; output usage unknown | 57.6 million total, including output allowance |
+| USD | 2.7675 | 5.4 |
 
 Approval ceilings are 18,000 calls, 72 million tokens and USD 8 study spend.
 The USD 48 portfolio cap and scanned/attested earlier spend also apply. The
@@ -172,7 +181,7 @@ AIWG_DECISION_HELDOUT_LIVE=1 nice -n 19 node tools/decision/heldout-study.mjs \
 The second command is an operator handoff, not authorization from this document.
 Approval must precede any spend. The one-line approval form is:
 
-> I, roctinam, approve D17 synthetic-only preregistration PREREGISTRATION_DIGEST and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no promotion is authorized.
+> I, roctinam, approve D17 synthetic-only preregistration sha256:cccf31740f08635f71f07560313b1a88425e51ee0be9a1c69e0b5fed9ed9032d and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no promotion is authorized.
 
 ## Operator review and remaining evidence
 
@@ -206,17 +215,21 @@ operator approval, durable freeze or collected evaluation:
 
 | Artifact | Digest |
 | --- | --- |
-| Corpus | `sha256:7bb022de22f5a5b4b7749ed874f6e9dfb6e989a34b3d0d420dc2c87edf2583a4` |
-| Preregistration | `sha256:9092336d908f55d6c1a87d60abb1b44f5121b2e830d74930e4b7db054c602ae1` |
-| Unapproved priced template | `sha256:810e5b18bf495da4439f70084165dde8a5ca84355b11d404c50cb499166e8ce4` |
-| Split manifest | `sha256:5497070efc4142e71b3c4731347a3377df34b07a4516536449361db61dc31f51` |
+| Corpus | `sha256:546fb423c6f8e51baba2c4ac2f0f8e8750c478d4610d3f24dbe6e766f088eb91` |
+| Preregistration | `sha256:cccf31740f08635f71f07560313b1a88425e51ee0be9a1c69e0b5fed9ed9032d` |
+| Unapproved priced template | `sha256:4309d517fc20997ee326f8d3ad2db7f970a956bd1983b19fb614b11ec5d60213` |
+| Split manifest | `sha256:ed3f74a1ad4f58e34ec65bc0c62439999ef6201cf7bfc1622153a23dd9d17ce8` |
 
 Recompute after any source/schema change. Complete and attest the approval
 separately; its digest will differ from the unapproved template. The projected
-maximum was 771 conservatively estimated tokens, plus a 256-token output/hidden
-allowance, under the 4,000-token reservation. This is not observed provider usage.
+maximum was 1,283 reserved input tokens, including the 512-token provider overhead;
+a further 256-token output/hidden allowance fits under the 4,000-token bound.
+This is not observed provider usage.
 
-The workspace artifact router currently reports the worktree's absent `.aiwg`
+The workspace artifact router currently resolves to the worktree's `.aiwg`
 directory. No durable study was written there. Configure/verify the intended
 protected artifact store before preparation and preserve the external approval
-record, source CI evidence and actual remaining budget before collection.
+record, source CI evidence and actual remaining budget before collection. The
+shared collector now anchors study and portfolio baselines to a durable
+hash-chained spend counter and independent head. A missing or altered counter
+requires operator reconciliation; this source-only dry run creates no ledger.

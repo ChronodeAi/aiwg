@@ -217,8 +217,9 @@ are rejected. The dispatched world name is `w-` followed by 16 hex digits
 derived from the seed digest, so even permitted seed text stays out of model-visible
 state. A bounded identifier still needs synthetic provenance review;
 this constraint does not prove that an identifier has no external meaning.
-Only the fictional `heldout-lamp/v1` example generator currently ships; actual
-D17/D29 generators require reviewed registry additions and fresh corpus pins.
+The fictional `heldout-lamp/v1` example and source-controlled
+`d17-entailment/v1` synthetic generator are registered. D29 still requires a
+reviewed registry addition and fresh corpus pins.
 This proves reproducibility, not held-out quality or correctness of the gold.
 These experimental v1 contracts are tightened in place: earlier unproven rows
 must be regenerated, and approvals/attempt token reservations must be refreshed.

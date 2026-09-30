@@ -77,16 +77,16 @@
           "const": 7380
         },
         "inputTokens": {
-          "const": 7380000
+          "const": 27630720
         },
         "outputTokens": {
           "type": "null"
         },
         "usd": {
-          "const": 0.30996
+          "const": 2.7675
         },
         "costSource": {
-          "const": "planning-rate-derived-not-provider-reported"
+          "const": "planning-bound-derived-not-provider-reported"
         }
       }
     },
@@ -107,7 +107,7 @@
           "const": 57600000
         },
         "reservedUsd": {
-          "const": 5.76
+          "const": 5.4
         },
         "priceFloorUsdPerMTok": {
           "const": 0.1

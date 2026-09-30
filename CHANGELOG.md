@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D17 study regeneration for the shared collector's
+  registered generator, closed seeds, free-output approval, byte-based input
+  reservations and durable spend baseline. The uncollected corpus,
+  preregistration and approval-template pins were refreshed; live evidence
+  and promotion remain pending (#2611)
+
 - Experimental, default-off D17 synthetic ensemble held-out study with seeded
   1,800-subject corpus, frozen splits, preregistered paired gates, source-only
   dry run, priced approval and 88-assessment review templates. Reuses the
