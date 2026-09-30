@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutFrozen.v1.schema.json",
+  "title": "HeldoutFrozen",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "approval",
+    "bundle",
+    "digest",
+    "priorRuns",
+    "source"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-frozen/v1"
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "study",
+        "runId"
+      ],
+      "properties": {
+        "study": {
+          "enum": [
+            "D17",
+            "D29"
+          ]
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpus",
+        "preregistration",
+        "approval"
+      ],
+      "properties": {
+        "corpus": {
+          "$ref": "HeldoutCorpus.v1.schema.json"
+        },
+        "preregistration": {
+          "$ref": "HeldoutPreregistration.v1.schema.json"
+        },
+        "approval": {
+          "$ref": "HeldoutApproval.v1.schema.json"
+        }
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "priorRuns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "runId",
+          "evidenceDigest",
+          "corpusDigest",
+          "study",
+          "source"
+        ],
+        "properties": {
+          "runId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidenceDigest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "corpusDigest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "study": {
+            "enum": [
+              "D17",
+              "D29"
+            ]
+          },
+          "source": {
+            "enum": [
+              "injected-transport",
+              "provider"
+            ]
+          }
+        }
+      }
+    },
+    "source": {
+      "enum": [
+        "injected-transport",
+        "provider"
+      ]
+    }
+  }
+}

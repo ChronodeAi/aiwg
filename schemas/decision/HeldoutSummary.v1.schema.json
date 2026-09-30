@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutSummary.v1.schema.json",
+  "title": "HeldoutSummary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "reason",
+    "source",
+    "study",
+    "runId",
+    "reservedUsdMicros",
+    "completedRows",
+    "measurementFailures",
+    "missingRows",
+    "evidenceDigest",
+    "decision"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-summary/v1"
+    },
+    "status": {
+      "enum": [
+        "complete",
+        "checkpoint",
+        "stopped"
+      ]
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "enum": [
+        "injected-transport",
+        "provider"
+      ]
+    },
+    "study": {
+      "enum": [
+        "D17",
+        "D29"
+      ]
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reservedUsdMicros": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "completedRows": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "measurementFailures": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "missingRows": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "evidenceDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "decision": {
+      "const": "HOLD"
+    }
+  }
+}

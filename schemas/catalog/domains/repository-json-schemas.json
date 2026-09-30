@@ -504,6 +504,146 @@
       "consumers": []
     },
     {
+      "logicalName": "schemas.decision.heldoutapproval.v1",
+      "id": "https://aiwg.io/schemas/decision/HeldoutApproval.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutApproval.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.heldoutattempt.v1",
+      "id": "https://aiwg.io/schemas/decision/HeldoutAttempt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutAttempt.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.heldoutcorpus.v1",
+      "id": "https://aiwg.io/schemas/decision/HeldoutCorpus.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutCorpus.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.heldoutevent.v1",
+      "id": "https://aiwg.io/schemas/decision/HeldoutEvent.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutEvent.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.heldoutfrozen.v1",
+      "id": "https://aiwg.io/schemas/decision/HeldoutFrozen.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutFrozen.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.heldoutpreregistration.v1",
+      "id": "https://aiwg.io/schemas/decision/HeldoutPreregistration.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutPreregistration.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.heldoutsummary.v1",
+      "id": "https://aiwg.io/schemas/decision/HeldoutSummary.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutSummary.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.decision.opadecisionlogexport.v1",
       "id": "https://aiwg.io/schemas/decision/OpaDecisionLogExport.v1.schema.json",
       "version": "1.0.0",
