@@ -344,10 +344,11 @@ export function decideOutcome(report) {
   return { outcome, caps };
 }
 
-export function runAnalysis({ output, scoresPath = null, ledgerPath, reverse = false } = {}) {
+export function runAnalysis({ output, scoresPath = null, ledgerPath, reverse = false, testDesign } = {}) {
   if (!output) throw new Error('explicit report output directory required');
-  const preregistration = JSON.parse(readFileSync(new URL('preregister.v2.json', root), 'utf8'));
-  const frozen = JSON.parse(readFileSync(new URL('frozen.v2.json', root), 'utf8'));
+  if (testDesign && (!testDesign.preregistration || !testDesign.frozen)) throw new Error('test design requires preregistration and frozen data');
+  const preregistration = testDesign?.preregistration ?? JSON.parse(readFileSync(new URL('preregister.v2.json', root), 'utf8'));
+  const frozen = testDesign?.frozen ?? JSON.parse(readFileSync(new URL('frozen.v2.json', root), 'utf8'));
   verifyFrozenOpenData(frozen, preregistration);
   if (reverse) for (const rows of Object.values(frozen.splits)) rows.reverse();
   const codeVersion = experimentCodeVersion(root);
