@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D17 synthetic ensemble held-out study with seeded
+  1,800-subject corpus, frozen splits, preregistered paired gates, source-only
+  dry run, priced approval and 88-assessment review templates. Reuses the
+  shared collector and native ensemble reports; live observations, compatible
+  calibration, human review and promotion remain pending (#2611)
+
 - Experimental, default-off shared D17/D29 held-out collector with source-only
   preparation and dry-run CLI, synthetic provenance checks, priced pre-dispatch
   reservations, durable cross-run caps, scoped Jev resolution and D11 recorded

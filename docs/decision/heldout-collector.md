@@ -149,12 +149,15 @@ ensemble members), or zero requests with an observed local outcome (D29 failed
 hard prerequisites). Model output cannot select IDs, ranks or protected status.
 Study modules must implement their own native observation mappings and gold
 oracle; the collector does not fabricate distributions, calibration or reviews.
+The experimental [D17 module](ensemble-heldout-study.md) supplies its synthetic
+generator, source-only preparation, native mapping and statistical report
+scaffolding. Use its preparation command to retain all study-specific artifacts.
 
 The following remain open, with no live acceptance claim:
 
 | Study work | Exact missing input |
 | --- | --- |
-| D17 measured ensemble report, AC7/AC14 | Fresh frozen 1,800-subject generator/oracle, D09 calibration, Jev observations, native eight-metric mapping, preregistered Newcombe/bootstrap/coverage gates, approved extra-cost tradeoff and blind review |
+| D17 measured ensemble report, AC7/AC14 | D09 calibration, actual Jev observations, externally anchored integrity, approved extra-cost tradeoff and blind review; generator, split/threshold freeze, mapper and statistical scaffolding now exist in the [D17 module](ensemble-heldout-study.md) |
 | D29 measured screening report, AC8/AC9/AC13 | Fresh 1,600-subject corpus/oracle, projected question mapping, calibrated readiness, real observations, native false-rate/NI and external coverage gates, blind gold/reviewer audit and integrity snapshot |
 | Any live collection | Priced approval with real evidence references, clean source/CI attestation, canonical root, actual prior spend, resolver pin, synthetic privacy approval and provider terms record |
 | Promotion or production rollout | All native and external thresholds evaluated against complete data, compatible calibration, protected eval-integrity evidence and separate operator approval |
