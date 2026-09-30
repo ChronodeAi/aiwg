@@ -30,7 +30,7 @@ function errorText(error: unknown): string {
  * captured too; run the qualification alone. Writes from child processes are
  * not captured and must be collected by the caller.
  */
-export async function captureQualificationLifetime<T>(operation: () => Promise<T>): Promise<QualificationLifetimeCapture<T>> {
+export async function captureQualificationLifetime<T>(operation: () => Promise<T>, options: { suppressOutput?: boolean } = {}): Promise<QualificationLifetimeCapture<T>> {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const originalStdout = process.stdout.write;
@@ -38,6 +38,11 @@ export async function captureQualificationLifetime<T>(operation: () => Promise<T
   const originalConsole = Object.fromEntries(CONSOLE_METHODS.map(name => [name, console[name]])) as Record<string, (...args: unknown[]) => void>;
   const tap = (sink: string[], original: Writer): Writer => function (this: unknown, chunk: unknown, ...rest: unknown[]) {
     sink.push(typeof chunk === 'string' ? chunk : chunk instanceof Uint8Array ? new TextDecoder().decode(chunk) : String(chunk));
+    if (options.suppressOutput) {
+      const callback = rest.find(value => typeof value === 'function') as (() => void) | undefined;
+      callback?.();
+      return true;
+    }
     return (original as (...args: unknown[]) => boolean).call(this, chunk, ...rest);
   } as Writer;
   process.stdout.write = tap(stdout, originalStdout);
@@ -45,7 +50,7 @@ export async function captureQualificationLifetime<T>(operation: () => Promise<T
   for (const name of CONSOLE_METHODS) {
     console[name] = (...args: unknown[]) => {
       (STDERR_METHODS.has(name) ? stderr : stdout).push(`${format(...args)}\n`);
-      originalConsole[name]!.apply(console, args);
+      if (!options.suppressOutput) originalConsole[name]!.apply(console, args);
     };
   }
   let result: T | undefined;

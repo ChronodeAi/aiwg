@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutPreregistration.v1.schema.json",
+  "title": "HeldoutPreregistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "study",
+    "frozenAt",
+    "corpusDigest",
+    "studyAnalysisDigest",
+    "scorerDigest",
+    "providerFailurePolicy",
+    "perRequestTokenBound",
+    "outputAndHiddenTokenAllowance",
+    "requestTimeoutMs",
+    "minDispatchIntervalMs",
+    "sessionLimitMs",
+    "calibration"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-preregistration/v1"
+    },
+    "study": {
+      "enum": [
+        "D17",
+        "D29"
+      ]
+    },
+    "frozenAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "corpusDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "studyAnalysisDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "scorerDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "providerFailurePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "maxRetries",
+        "maximumSliceFailureBps",
+        "retryOnlyTerminal"
+      ],
+      "properties": {
+        "maxRetries": {
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "maximumSliceFailureBps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500
+        },
+        "retryOnlyTerminal": {
+          "const": true
+        }
+      }
+    },
+    "perRequestTokenBound": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64000
+    },
+    "outputAndHiddenTokenAllowance": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 32000
+    },
+    "requestTimeoutMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60000
+    },
+    "minDispatchIntervalMs": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 60000
+    },
+    "sessionLimitMs": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1800000
+    },
+    "providerOverheadTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64000,
+      "default": 512
+    },
+    "calibration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "allowedModes"
+          ],
+          "properties": {
+            "scope": {
+              "const": "uncalibrated-diagnostic"
+            },
+            "allowedModes": {
+              "const": [
+                "uncalibrated-diagnostic"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "allowedModes"
+          ],
+          "properties": {
+            "scope": {
+              "const": "calibrated"
+            },
+            "allowedModes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "staged",
+                  "artifact"
+                ]
+              }
+            },
+            "calibrationPhaseSplits": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "tuning",
+                  "calibration"
+                ]
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "allowedModes": {
+                    "contains": {
+                      "const": "staged"
+                    },
+                    "type": "array"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "calibrationPhaseSplits"
+                ],
+                "properties": {
+                  "calibrationPhaseSplits": {}
+                }
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "calibrationPhaseSplits"
+                  ],
+                  "properties": {
+                    "calibrationPhaseSplits": {}
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

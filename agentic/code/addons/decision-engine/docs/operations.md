@@ -115,3 +115,21 @@ Messages name the logical reference and the variable name only. The key value
 never appears in results, receipts, or diagnostics. The receipt key's logical
 reference is reserved: a binding that names it as a backend `credentialRef` is
 refused, so the key cannot be sent to a remote backend.
+
+## Held-out study collection
+
+Source-checkout operators can use the experimental, default-off
+[shared held-out collector](../../../../../docs/decision/heldout-collector.md)
+for synthetic D17/D29 study modules. Preparation and dry-run use source directly;
+collection needs a separate priced, digest-bound approval and explicit env gate.
+The collector does not promote models or establish study quality.
+
+Jev collection requires attested free output and reserves request bytes plus a
+preregistered provider overhead allowance (default 512 tokens). Preserve the
+separate spend counter, head and baseline files under the canonical artifact
+root; deleting run directories does not restore spend allowance. The first
+approval pins each study's budget in its baseline. Every mode and resume keeps
+that budget and subtracts cumulative USD, calls and reserved tokens; changed
+budgets are refused before credentials. Baselines missing this required budget
+and damaged counters require operator reconciliation before further collection. See the
+collector guide for the input-overrun assumption and repair requirements.

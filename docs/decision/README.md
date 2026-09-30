@@ -91,3 +91,10 @@ does not add native media support to Jev, and stores receipt/trace references
 
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.
+
+The experimental, default-off [shared held-out collector](heldout-collector.md)
+provides source-only preparation, bounded synthetic collection and D11 recorded
+ledger verification for D17/D29 study modules. Explicit diagnostic, staged
+calibration/test, and pre-existing artifact bindings keep collection scope and
+scorer identity separate from D09 qualification. Live studies, calibration, human
+review and study-specific statistical reports remain pending.

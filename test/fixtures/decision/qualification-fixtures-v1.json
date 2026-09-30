@@ -1804,6 +1804,24 @@
         "#2686",
         "#2608"
       ]
+    },
+    {
+      "id": "DEC-HELDOUT-01",
+      "path": "agentic/code/addons/decision-engine/examples/heldout-collector-offline.mjs",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:fcf17202a4b4be5df50180fa4ec4d74df250ed10fcd0143b8ee9f1a2ebd7ed08",
+      "expectedOutcome": "Offline diagnostic and staged calibration/test generator/scorer interface examples; no D09 validity, live qualification or promotion",
+      "links": [
+        "JEV-16",
+        "#2611",
+        "#2622",
+        "#2778"
+      ]
     }
   ]
 }
