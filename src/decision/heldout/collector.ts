@@ -40,6 +40,14 @@ async function liveHost(options: HeldoutOptions): Promise<HeldoutHost> {
 /** Default-off, sequential collection. No runtime alias, calibration record, gate or workflow is changed. */
 export async function collectHeldoutStudy(options: HeldoutOptions): Promise<HeldoutSummary | { status: 'disabled' }> {
   if (options.enabled !== true) return { status: 'disabled' };
+  const offline = options.offline;
+  if (offline !== undefined && (!offline || typeof offline.transport !== 'function'
+    || typeof offline.host?.resolveCredential !== 'function' || typeof offline.host?.dispose !== 'function')) {
+    throw new HeldoutError('offline-options');
+  }
+  // Capture the validated seam so caller mutation cannot re-enable the adapter's fetch fallback.
+  const transport = offline?.transport;
+  const offlineHost = offline?.host;
   if (!options.offline && process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
   if (!options.offline && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') {
     throw new HeldoutError('tls');
@@ -89,7 +97,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
         && redactText(text).sensitivity === 'none';
     };
     // The scoped resolver starts only after every input and durable accounting check.
-    const obtainHost = async () => host ??= options.offline?.host ?? await liveHost({ ...options, bundle });
+    const obtainHost = async () => host ??= offlineHost ?? await liveHost({ ...options, bundle });
     for (const row of corpus.rows) {
       if (reason || checkpoint) break;
       if (options.signal?.aborted) { reason = 'cancelled'; break; }
@@ -129,7 +137,11 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           const timer = setTimeout(() => controller.abort(), plan.requestTimeoutMs);
           const captured = await captureQualificationLifetime(async () => {
             const resolver = await obtainHost();
-            const inner = new JevDecisionAdapter({ region: a.region, now, ...(options.offline ? { fetch: options.offline.transport } : {}),
+            const inner = new JevDecisionAdapter({ region: a.region, now, fetch: transport ?? ((url, init) => {
+              if (process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
+              if (process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') throw new HeldoutError('tls');
+              return fetch(url, init);
+            }),
               observeResponseBody: (body, metadata) => {
                 responseDigest = byteDigest(new TextEncoder().encode(body)); wireMetadata = metadata;
                 if (!safe(body)) wireProblem = 'credential-anomaly';

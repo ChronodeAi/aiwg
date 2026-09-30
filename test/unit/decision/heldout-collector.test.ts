@@ -349,6 +349,19 @@ describe('held-out recorded evidence and study interface', () => {
 
 
 describe('held-out raw transport controls', () => {
+  it('HIGH1 refuses incomplete offline options before credentials or global fetch with live and TLS gates unset', async () => {
+    const c = await setup(1); const transport = fake();
+    vi.stubGlobal('fetch', transport);
+    vi.stubEnv('AIWG_DECISION_HELDOUT_LIVE', '');
+    vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0');
+    try {
+      for (const offline of [{ host: c.host }, { transport }, null, {}, { transport: null, host: c.host }]) {
+        await expect(c.run(transport, { offline })).rejects.toThrow('offline-options');
+      }
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+      expect(await readdir(c.root)).toEqual([]);
+    } finally { vi.unstubAllGlobals(); vi.unstubAllEnvs(); }
+  });
   it.each(['model', 'usage', 'credential'])('AC3 stops on %s even when the answer is invalid', async kind => {
     const c = await setup(2);
     const transport = vi.fn(async () => new Response(JSON.stringify({ model: kind === 'model' ? 'changed-model' : 'jev-1.13.0',
