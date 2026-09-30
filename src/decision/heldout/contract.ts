@@ -9,7 +9,6 @@ import { artifactPin, validateDefinition, validateDecisionDocument } from '../va
 import { contextLiveBinding, contextLiveRuleset, contextLiveTarget } from '../context-live-qualification.js';
 import { JEV_ENDPOINT, compileJevQuestion } from '../adapters/jev.js';
 import { projectDecisionState, partitionProjectedState } from '../projection.js';
-import { CanonicalJsonByteEstimator } from '../context-plan.js';
 import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
@@ -86,6 +85,7 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
   if (Object.keys(bundle).sort().join(',') !== 'approval,corpus,preregistration') throw new HeldoutError('bundle-fields');
   const { corpus, preregistration: plan, approval: a } = bundle;
   validateHeldoutInputs(corpus, plan); checkHeldoutSchema('Approval', a);
+  if (a.priceBound.outputUsdPerMTok !== 0 && a.priceBound.outputTokenBound === undefined) throw new HeldoutError('output-bound-required');
   if (redactText(JSON.stringify([plan, a])).sensitivity !== 'none') throw new HeldoutError('credential-material');
   if (sha256(a) !== trustedApprovalDigest || a.study !== corpus.study || a.corpusDigest !== sha256(corpus)
     || a.preregistrationDigest !== sha256(plan) || a.executionDigest !== heldoutExecutionDigest(corpus, plan, a)
@@ -94,8 +94,13 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
 }
 /** Token reservation uses the existing price-floor helper; a flat fee is additive, not a minimum. */
 export function heldoutReservationMicros(a: HeldoutApproval, plan: HeldoutPreregistration): number {
-  return dagLiveReservationMicros({ ...a.priceBound, perRequestUsd: undefined }, plan.perRequestTokenBound)
+  if (a.priceBound.outputUsdPerMTok !== 0 && a.priceBound.outputTokenBound === undefined) throw new HeldoutError('output-bound-required');
+  return dagLiveReservationMicros({ ...a.priceBound, outputUsdPerMTok: 0, perRequestUsd: undefined }, plan.perRequestTokenBound)
+    + Math.ceil((a.priceBound.outputTokenBound ?? 0) * a.priceBound.outputUsdPerMTok)
     + Math.ceil(a.priceBound.perRequestUsd * 1_000_000);
+}
+export function heldoutReservationTokens(a: HeldoutApproval, plan: HeldoutPreregistration): number {
+  return plan.perRequestTokenBound + (a.priceBound.outputTokenBound ?? plan.outputAndHiddenTokenAllowance);
 }
 export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregistration, approval: HeldoutApproval,
   row: HeldoutRow, request: HeldoutRequest) {
@@ -103,10 +108,11 @@ export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregi
   const projected = await projectDecisionState(row.input, execution.projection);
   const wire = { state: partitionProjectedState(projected.state, projected.evidence), model: approval.model,
     questions: { q0: JSON.parse(compileJevQuestion(execution.definition).question) } };
-  const estimate = new CanonicalJsonByteEstimator('1.0.0', 1).estimate(wire as import('../context-plan.js').ContextValue);
-  if (estimate.tokens + plan.outputAndHiddenTokenAllowance > plan.perRequestTokenBound) throw new HeldoutError('payload-bound');
+  // Use the adapter's serialized envelope: one UTF-8 byte per input token is a hard conservative bound.
+  const inputTokenBound = Buffer.byteLength(JSON.stringify(wire), 'utf8');
+  if (inputTokenBound + plan.outputAndHiddenTokenAllowance > plan.perRequestTokenBound) throw new HeldoutError('payload-bound');
   if (redactStructured(projected.state).sensitivity !== 'none') throw new HeldoutError('credential-material');
-  return { execution, requestDigest: sha256(wire), estimatedTokens: estimate.tokens };
+  return { execution, requestDigest: sha256(wire), estimatedTokens: inputTokenBound };
 }
 export async function planHeldoutCollection(bundle: HeldoutBundle, digest: string) {
   validateHeldoutBundle(bundle, digest);
@@ -116,7 +122,7 @@ export async function planHeldoutCollection(bundle: HeldoutBundle, digest: strin
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
   }
   const attempts = bundle.corpus.rows.reduce((n, r) => n + r.requests.length, 0) * (1 + bundle.preregistration.providerFailurePolicy.maxRetries);
-  const tokens = attempts * bundle.preregistration.perRequestTokenBound;
+  const tokens = attempts * heldoutReservationTokens(bundle.approval, bundle.preregistration);
   const usdMicros = attempts * heldoutReservationMicros(bundle.approval, bundle.preregistration);
   const a = bundle.approval;
   return { providerCalls: 0, maximumAttempts: attempts, maximumRequestEstimateTokens, reservedTokens: tokens, reservedUsdMicros: usdMicros,

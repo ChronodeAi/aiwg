@@ -10,7 +10,7 @@ import { QUALIFICATION_PRIVACY_SURFACES, scanQualificationPrivacy } from '../qua
 import { executeQualificationPlan, verifyQualificationArtifacts, writeQualificationEvidenceManifest } from '../qualification/runner.js';
 import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from '../qualification/release.js';
 import { redactText } from '../../governance/redaction.js';
-import { heldoutDigest, heldoutRequest, heldoutReservationMicros, HeldoutError, HELDOUT_CAP_USD, HELDOUT_ENV_GATE,
+import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, HeldoutError, HELDOUT_CAP_USD, HELDOUT_ENV_GATE,
   HELDOUT_PORTFOLIO_CAP_USD, planHeldoutCollection, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
 import { appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
   scanHeldoutSpend, writeHeldoutFile } from './journal.js';
@@ -78,11 +78,12 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     const events: HeldoutEvent[] = [];
     const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
     const reserveMicros = heldoutReservationMicros(a, plan);
+    const reserveTokens = heldoutReservationTokens(a, plan);
     const studyPrior = Math.max(prior.studyUsdMicros, Math.ceil(a.priorStudySpendUsd * 1_000_000));
     const portfolioPrior = Math.max(prior.portfolioUsdMicros, Math.ceil(a.priorPortfolioSpendUsd * 1_000_000));
     const usdLimit = Math.floor(Math.min(a.budget.usd * 1_000_000, HELDOUT_CAP_USD[a.study] * 1_000_000 - studyPrior,
       HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - portfolioPrior) * 0.8);
-    let calls = 0, reserved = 0, lastDispatch = started - plan.minDispatchIntervalMs;
+    let calls = 0, reserved = 0, accounted = 0, lastDispatch = started - plan.minDispatchIntervalMs;
     let reason: string | null = null, checkpoint = false;
     const canaries = new Set<string>(['heldout-synthetic-privacy-canary']);
     const failed = new Set(old.filter(attempt => attempt.result?.disposition === 'measurement-failure').map(attempt => attempt.rowId));
@@ -115,18 +116,18 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           try { await assertContextLiveSource(options.sourceRoot, a.sourceCommit); }
           catch { reason = 'source-drift'; break; }
-          const { execution, requestDigest } = await heldoutRequest(corpus, plan, a, row, request);
-          if (calls + 1 > Math.floor(a.budget.calls * 0.8) || (calls + 1) * plan.perRequestTokenBound > Math.floor(a.budget.tokens * 0.8)
-            || reserved + reserveMicros > usdLimit) { reason = 'budget-exhausted'; break; }
+          const { execution, requestDigest, estimatedTokens: inputTokenBound } = await heldoutRequest(corpus, plan, a, row, request);
+          if (calls + 1 > Math.floor(a.budget.calls * 0.8) || (calls + 1) * reserveTokens > Math.floor(a.budget.tokens * 0.8)
+            || accounted + reserveMicros > usdLimit) { reason = 'budget-exhausted'; break; }
           await sleep(Math.max(0, plan.minDispatchIntervalMs - (now() - lastDispatch)));
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           if (now() - started + plan.requestTimeoutMs > plan.sessionLimitMs * 0.8) { checkpoint = true; break; }
           const attempt: HeldoutAttempt = { schemaVersion: 'decision-heldout-attempt/v1', study: a.study, runId: a.runId,
             corpusDigest: a.corpusDigest, preregistrationDigest: a.preregistrationDigest, approvalDigest: options.trustedApprovalDigest,
-            rowId: row.id, requestId: request.id, ordinal, reservedUsdMicros: reserveMicros, reservedTokens: plan.perRequestTokenBound,
+            rowId: row.id, requestId: request.id, ordinal, reservedUsdMicros: reserveMicros, reservedTokens: reserveTokens,
             requestDigest, result: null };
           // fsync completes before credential lookup or any transport call. A crash retains this charge.
-          await appendHeldoutEvent(run, events, attempt); uncertain = true; calls++; reserved += reserveMicros;
+          await appendHeldoutEvent(run, events, attempt); uncertain = true; calls++; reserved += reserveMicros; accounted += reserveMicros;
           const callStarted = now(); lastDispatch = callStarted;
           let observation: AdapterObservation | null = null, receipt: RulesetResult | null = null;
           let wireProblem: string | null = null, responseDigest: Digest | null = null;
@@ -137,16 +138,21 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           const timer = setTimeout(() => controller.abort(), plan.requestTimeoutMs);
           const captured = await captureQualificationLifetime(async () => {
             const resolver = await obtainHost();
-            const inner = new JevDecisionAdapter({ region: a.region, now, fetch: transport ?? ((url, init) => {
+            const inner = new JevDecisionAdapter({ region: a.region, now, fetch: (url, init) => {
+              if (typeof init?.body !== 'string' || Buffer.byteLength(init.body, 'utf8') > inputTokenBound
+                || heldoutDigest(JSON.parse(init.body)) !== requestDigest) throw new HeldoutError('request-bound');
+              if (transport) return transport(url, init);
               if (process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
               if (process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') throw new HeldoutError('tls');
               return fetch(url, init);
-            }),
+            },
               observeResponseBody: (body, metadata) => {
                 responseDigest = byteDigest(new TextEncoder().encode(body)); wireMetadata = metadata;
                 if (!safe(body)) wireProblem = 'credential-anomaly';
                 else if (metadata.actualModel !== null && metadata.actualModel !== a.servedModel) wireProblem = 'served-model';
-                else if ((metadata.usage.inputTokens ?? 0) + (metadata.usage.outputTokens ?? 0) > plan.perRequestTokenBound) wireProblem = 'usage-bound';
+                else if (a.priceBound.outputTokenBound !== undefined && (metadata.usage.outputTokens ?? 0) > a.priceBound.outputTokenBound) wireProblem = 'output-bound';
+                else if ((metadata.usage.inputTokens ?? 0) > inputTokenBound
+                  || (metadata.usage.inputTokens ?? 0) + (metadata.usage.outputTokens ?? 0) > reserveTokens) wireProblem = 'usage-bound';
                 else if (metadata.usage.costUsd !== null && metadata.usage.costUsd * 1_000_000 > reserveMicros) wireProblem = 'price-bound';
               } });
             const adapter: DecisionAdapter = { id: inner.id, version: inner.version, capabilities: () => inner.capabilities(),
@@ -200,8 +206,9 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
             receipt: clean ? completed : null, receiptDigest: clean && completed ? heldoutDigest(completed) : null,
             traceDigest: heldoutDigest(clean ? traces : []), latencyMs: Math.max(0, now() - callStarted),
             accountedUsdMicros: Math.max(reserveMicros, Math.ceil((numeric(observed?.usage.costUsd) ?? 0) * 1_000_000),
-              Math.ceil(((numeric(observed?.usage.inputTokens) ?? 0) + (numeric(observed?.usage.outputTokens) ?? 0))
-                * Math.max(0.1, a.priceBound.inputUsdPerMTok, a.priceBound.outputUsdPerMTok)) + Math.ceil(a.priceBound.perRequestUsd * 1_000_000)) };
+              Math.ceil((numeric(observed?.usage.inputTokens) ?? 0) * Math.max(0.1, a.priceBound.inputUsdPerMTok)
+                + (numeric(observed?.usage.outputTokens) ?? 0) * a.priceBound.outputUsdPerMTok) + Math.ceil(a.priceBound.perRequestUsd * 1_000_000)) };
+          accounted += attempt.result.accountedUsdMicros - reserveMicros;
           await writeHeldoutFile(join(run, `trace-${events.length}.json`), clean ? traces : []);
           await appendHeldoutEvent(run, events, attempt); latest.set(key(attempt), attempt);
           uncertain = false;

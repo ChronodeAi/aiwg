@@ -80,7 +80,8 @@ describe('held-out collector contract and default-off isolation', () => {
     refresh(); expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).not.toThrow();
     expect(heldoutReservationMicros(bundle.approval, bundle.preregistration)).toBe(400);
     bundle.approval.priceBound.outputUsdPerMTok = 2; bundle.approval.priceBound.perRequestUsd = 0.001;
-    expect(heldoutReservationMicros(bundle.approval, bundle.preregistration)).toBe(9000);
+    bundle.approval.priceBound.outputTokenBound = 100;
+    expect(heldoutReservationMicros(bundle.approval, bundle.preregistration)).toBe(1600);
   });
   it('AC8 refuses non-synthetic and credential-bearing payloads before credential resolution', async () => {
     const context = await setup(); const transport = fake();
@@ -328,7 +329,7 @@ describe('held-out recorded evidence and study interface', () => {
     expect(generated.gold).toEqual({ example_0: 'yes', example_1: 'no' });
     expect(() => validateHeldoutInputs(generated.corpus, generated.preregistration)).not.toThrow();
     const planned = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));
-    expect(planned).toMatchObject({ providerCalls: 0, maximumAttempts: 4, reservedTokens: 16000, reservedUsdMicros: 1600, fitsBeforeStop: true });
+    expect(planned).toMatchObject({ providerCalls: 0, maximumAttempts: 4, reservedTokens: 17024, reservedUsdMicros: 1600, fitsBeforeStop: true });
     const real = await vi.importActual<typeof import('../../../src/decision/context-live-qualification.js')>('../../../src/decision/context-live-qualification.js');
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10000 }).trim();
     expect(head).toMatch(/^[a-f0-9]{40}$/);
@@ -349,6 +350,33 @@ describe('held-out recorded evidence and study interface', () => {
 
 
 describe('held-out raw transport controls', () => {
+  it('HIGH2 refuses the 4000-token reservation / 9000-token paid-output probe before dispatch', async () => {
+    const c = await setup(1); c.bundle.approval.budget.usd = 8;
+    c.bundle.approval.priceBound.outputUsdPerMTok = 1000;
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { usage: { input_tokens: 20, output_tokens: 9000 } }));
+    await expect(c.run(transport)).rejects.toThrow('output-bound-required');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
+  it('HIGH2 refuses a schema-permitted tariff whose attested output bound exceeds the remaining cap', async () => {
+    const c = await setup(1); c.bundle.approval.budget.usd = 8;
+    Object.assign(c.bundle.approval.priceBound, { outputUsdPerMTok: 1000, outputTokenBound: 9000 });
+    const transport = fake();
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
+  it('HIGH2 reserves serialized UTF-8 input and attested paid output before dispatch, then halts on excess output', async () => {
+    const c = await setup(2); c.bundle.corpus.rows[0].input.payload = '灯'.repeat(100);
+    Object.assign(c.bundle.approval.priceBound, { inputUsdPerMTok: 2, outputUsdPerMTok: 3, outputTokenBound: 100 });
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const attempt = (await readHeldoutJournal(c.runDir)).at(-1)!.attempt;
+      expect(attempt.reservedTokens).toBeGreaterThanOrEqual(Buffer.byteLength(String(init?.body), 'utf8') + 100);
+      expect(attempt.reservedUsdMicros).toBe(8300);
+      return reply(init, { usage: { input_tokens: 20, output_tokens: 101 } });
+    });
+    expect(await c.run(transport)).toMatchObject({ reason: 'output-bound', status: 'stopped' });
+    expect(transport).toHaveBeenCalledOnce();
+    expect((await readHeldoutJournal(c.runDir)).at(-1)?.attempt.result?.outputTokens).toBe(101);
+  });
   it('HIGH1 refuses incomplete offline options before credentials or global fetch with live and TLS gates unset', async () => {
     const c = await setup(1); const transport = fake();
     vi.stubGlobal('fetch', transport);

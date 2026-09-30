@@ -31,6 +31,7 @@ export interface HeldoutApproval {
   corpusDigest: Digest; preregistrationDigest: Digest; executionDigest: Digest; calibrationDigest: Digest;
   providerTermsReference: string;
   priceBound: { inputUsdPerMTok: number; outputUsdPerMTok: number; perRequestUsd: number;
+    outputTokenBound?: number;
     evidenceReferences: string[]; approvalReference: string };
   budget: { calls: number; tokens: number; usd: number };
   priorStudySpendUsd: number; priorPortfolioSpendUsd: number;

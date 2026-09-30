@@ -154,6 +154,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 512
+        },
+        "outputTokenBound": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
         }
       }
     },

@@ -1,6 +1,6 @@
 import { lstat, mkdir, open, readdir, readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { heldoutDigest, HeldoutError, heldoutReservationMicros, validateHeldoutAttempt, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
+import { heldoutDigest, HeldoutError, heldoutReservationMicros, heldoutReservationTokens, validateHeldoutAttempt, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutSummary } from './types.js';
 
 export const heldoutRunsRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'runs');
@@ -99,7 +99,7 @@ export async function scanHeldoutSpend(root: string, study: string): Promise<Hel
       if (attempt.corpusDigest !== approved.corpusDigest || attempt.preregistrationDigest !== approved.preregistrationDigest
         || attempt.approvalDigest !== heldoutDigest(approved)
         || attempt.reservedUsdMicros !== heldoutReservationMicros(approved, frozen.bundle.preregistration)
-        || attempt.reservedTokens !== frozen.bundle.preregistration.perRequestTokenBound) throw new HeldoutError('journal-pins');
+        || attempt.reservedTokens !== heldoutReservationTokens(approved, frozen.bundle.preregistration)) throw new HeldoutError('journal-pins');
       const key = `${attempt.rowId}/${attempt.requestId}/${attempt.ordinal}`;
       if (!attempt.result) {
         result.portfolioUsdMicros += attempt.reservedUsdMicros;
