@@ -53,13 +53,10 @@ export const SAMPLE_POLICY = {
   maxItems: 3000,
   clinc: { trainPerIntent: 5, calibrationPerIntent: 3, finalPerIntent: 3, oosShift: 300 },
   banking: { trainPerIntent: 5, calibrationPerIntent: 3, finalPerIntent: 3, heldoutPerIntent: 2 },
-  // Live Jev subsets are drawn from the frozen splits above. CLINC150 only: one row per intent for
-  // calibration and final test (independently seeded intent orders) plus a controlled OOS slice.
+  // The live Jev design scores every frozen calibration, final-test and shift row of both tasks.
   live: {
-    task: 'clinc150-intent-choice',
-    calibration: { count: 100, seed: 'issue-2613-v2-live-calibration' },
-    finalTest: { count: 100, seed: 'issue-2613-v2-live-final' },
-    shift: { count: 50, seed: 'issue-2613-v2-live-oos-shift' },
+    tasks: ['clinc150-intent-choice', 'banking77-intent-choice'],
+    selection: 'all-frozen-calibration-finalTest-shift-rows',
   },
 };
 
@@ -280,19 +277,7 @@ export function buildOpenDataFrozen({ clincJson, bankingTrainCsv, bankingTestCsv
 }
 
 function selectLiveSubsets(splits, policy) {
-  const pickOnePerLabel = (split, { count, seed }) => {
-    const groups = groupByLabel(splits[split].filter(row => row.task === policy.task && row.slice === 'nominal'));
-    const labels = [...groups.keys()].sort((a, b) => stableHex(seed, a).localeCompare(stableHex(seed, b)) || a.localeCompare(b));
-    if (labels.length < count) throw new Error(`live ${split} needs ${count} labels, found ${labels.length}`);
-    return labels.slice(0, count).map(label => stableOrder(`${seed}:${label}`, groups.get(label))[0]);
-  };
-  const shiftPool = splits.shift.filter(row => row.task === policy.task && row.slice === 'controlled-oos');
-  if (shiftPool.length < policy.shift.count) throw new Error('not enough controlled-OOS rows for the live shift subset');
-  const rows = {
-    calibration: orderedRows(pickOnePerLabel('calibration', policy.calibration)),
-    finalTest: orderedRows(pickOnePerLabel('finalTest', policy.finalTest)),
-    shift: orderedRows(stableOrder(policy.shift.seed, shiftPool).slice(0, policy.shift.count)),
-  };
+  const rows = Object.fromEntries(LIVE_SPLITS.map(split => [split, orderedRows(splits[split].filter(row => policy.tasks.includes(row.task)))]));
   return {
     policy,
     ids: Object.fromEntries(LIVE_SPLITS.map(split => [split, rows[split].map(row => row.id)])),
@@ -314,7 +299,7 @@ export function liveSubsetRows(frozen, split = null) {
 }
 
 export function liveTaskIds(frozen) {
-  return [frozen.liveSubsets.policy.task];
+  return [...frozen.liveSubsets.policy.tasks];
 }
 
 export function verifyFrozenOpenData(frozen, preregistration) {
@@ -340,8 +325,8 @@ export function verifyFrozenOpenData(frozen, preregistration) {
   let liveItems = 0;
   for (const split of LIVE_SPLITS) {
     const rows = liveSubsetRows(frozen, split);
-    if (new Set(live.ids[split]).size !== rows.length || rows.length !== live.policy[split].count) throw new Error(`live subset size mismatch: ${split}`);
-    if (rows.some(row => row.task !== live.policy.task)) throw new Error(`live subset task mismatch: ${split}`);
+    const expected = frozen.splits[split].filter(row => live.policy.tasks.includes(row.task));
+    if (new Set(live.ids[split]).size !== rows.length || rowHash(rows) !== rowHash(expected)) throw new Error(`live subset membership mismatch: ${split}`);
     if (rowHash(rows) !== live.hashes[split]) throw new Error(`live subset hash mismatch: ${split}`);
     liveItems += rows.length;
   }
@@ -401,7 +386,7 @@ export function expectedLiveCompatibility(frozen, preregistration, taskId) {
     servedModel: pins.liveServedModel,
     adapter: pins.liveAdapter,
     method: preregistration.methods[0].id,
-    calibrationSplit: frozen.liveSubsets.hashes.calibration,
+    calibrationSplit: rowHash(liveSubsetRows(frozen, 'calibration').filter(row => row.task === taskId)),
     prompt: pins.livePromptDigest,
   });
 }

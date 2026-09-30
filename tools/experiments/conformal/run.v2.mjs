@@ -70,7 +70,9 @@ function hasCollectorProvenance(record, preregistration) {
   if (record.collector?.preregistrationHash !== digest(preregistration)) return 'collector preregistration hash';
   if (typeof record.recordDigest !== 'string' || recordDigest(record) !== record.recordDigest) return 'record digest';
   if (!Array.isArray(record.attempts) || !record.attempts.length) return 'attempts';
-  if (!Number.isSafeInteger(record.budgetChargeMicros)) return 'budget charge';
+  if (record.attempts.some(attempt => typeof attempt.reservationId !== 'string' || !attempt.reservationId)) return 'attempt reservation IDs';
+  if (!Number.isSafeInteger(record.budgetChargeMicros)
+    || record.attempts.reduce((sum, attempt) => sum + attempt.chargedMicros, 0) !== record.budgetChargeMicros) return 'budget charge matching its attempts';
   if (record.status === 'success') {
     if (typeof record.requestId !== 'string' || !record.requestId) return 'request ID';
     if (!Number.isSafeInteger(record.usage?.inputTokens) || !Number.isSafeInteger(record.usage?.outputTokens)) return 'usage tokens';
@@ -123,10 +125,47 @@ export function readLiveScores(path, frozen, preregistration, { ledgerPath = joi
       note(`spend ledger rejected: ${error.message}`);
     }
   }
+  // Cross-check every record against the ledger: its attempts must be exactly the reservations and
+  // settlements the collector wrote for that item under this preregistration, each claimed once.
+  const preregistrationHash = digest(preregistration);
+  const reserves = new Map();
+  const settles = new Map();
+  const recordEntries = new Map();
+  for (const entry of ledger?.entries ?? []) {
+    if (entry.type === 'reserve') reserves.set(entry.reservationId, entry);
+    else if (entry.type === 'settle') settles.set(entry.reservationId, entry);
+    else if (entry.type === 'record') recordEntries.set(`${entry.itemId}\0${entry.recordDigest}`, entry);
+  }
+  const claimed = new Set();
+  const requestIds = new Set();
   for (const record of all) {
     const missing = hasCollectorProvenance(record, preregistration);
-    if (missing) note(`record lacks collector provenance: ${missing}`);
-    else if (ledger && !ledger.recordDigests.has(`${record.id}\0${record.recordDigest}`)) note('record digest is not chained into the spend ledger');
+    if (missing) {
+      note(`record lacks collector provenance: ${missing}`);
+      continue;
+    }
+    if (record.status === 'success') {
+      if (requestIds.has(record.requestId)) note('duplicate request ID across success records');
+      requestIds.add(record.requestId);
+    }
+    if (!ledger) continue;
+    const recordEntry = recordEntries.get(`${record.id}\0${record.recordDigest}`);
+    if (!recordEntry) note('record digest is not chained into the spend ledger');
+    else if (recordEntry.preregistrationHash !== preregistrationHash) note('ledger record entry preregistration hash differs from this preregistration');
+    for (const attempt of record.attempts) {
+      const reserve = reserves.get(attempt.reservationId);
+      const settle = settles.get(attempt.reservationId);
+      if (!reserve || !settle || reserve.itemId !== record.id) {
+        note('attempt has no matching ledger reservation and settlement');
+        continue;
+      }
+      if (reserve.preregistrationHash !== preregistrationHash || settle.preregistrationHash !== preregistrationHash) {
+        note('ledger reservation preregistration hash differs from this preregistration');
+      }
+      if (reserve.reservedMicros !== attempt.reservedMicros || settle.chargedMicros !== attempt.chargedMicros) note('attempt charge differs from its ledger settlement');
+      if (claimed.has(attempt.reservationId)) note('ledger reservation claimed by more than one attempt');
+      claimed.add(attempt.reservationId);
+    }
   }
   if (trailingPartial) note('a truncated trailing line was ignored');
 
@@ -259,7 +298,10 @@ function withinTolerance(failures, size, tolerance) {
 function gateDiagnostics({ lac, calibrated, split, scoredRows, task, preregistration, source, failures, subsetSize, calibrationTolerance }) {
   const gates = preregistration.usefulnessGates;
   return {
-    enoughRows: scoredRows.length >= (split === 'finalTest' ? gates.minimumFinalRowsPerTask : gates.minimumSliceRows),
+    // Realized-n rule: at least the preregistered floor and at least (1 - tolerance) of the subset.
+    enoughRows: scoredRows.length >= Math.max(split === 'finalTest' ? gates.minimumFinalRowsPerTask : gates.minimumSliceRows,
+      Math.ceil(subsetSize * (1 - preregistration.resourceBudget.maxTerminalFailureFraction))),
+    // The Wilson lower bound is computed on the realized scored n, so the covered count it needs varies with n.
     failureTolerance: calibrationTolerance && withinTolerance(failures, subsetSize, preregistration.resourceBudget.maxTerminalFailureFraction),
     coverage: lac.coverage95?.lower >= gates.minimumCoverageWilsonLower,
     usefulSize: lac.meanSetSize !== null && lac.meanSetSize <= task.labels.length * gates.maximumMeanSetSizeFractionOfLabels,
@@ -341,7 +383,6 @@ export function runAnalysis({ output, scoresPath = null, ledgerPath, reverse = f
       'No approved D09 calibrated-risk artifact exists; the calibrated-risk baseline is fitted on the same calibration subset as the conformal threshold.',
       'No D14 provider-backed lineage/retention record exists for any provider-backed run reviewed here.',
       'No Noul or Score task is evaluated in v2; the operator-selected public replacements are Choice datasets.',
-      'Banking77 has no live subset under the USD 8 worst-case budget; it is evaluated with synthetic scores for pipeline tests only.',
       'Banking77 test.csv is an exchangeable nominal held-out slice, not a distribution shift; the controlled shift is CLINC150 OOS only.',
       'Class-conditional coverage is unsupported for classes with n < 50 in this bounded sample.',
     ],

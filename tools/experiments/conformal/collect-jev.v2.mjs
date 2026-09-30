@@ -7,10 +7,12 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import {
   DECISION_API_VERSION_STRUCTURED,
   evaluateDecisionRuleset,
@@ -56,11 +58,26 @@ function argValue(parsed, name, fallback = null) {
   return parsed.args.has(name) ? parsed.args.get(name) : fallback;
 }
 
-/** USD per million tokens times tokens is micro-USD, so every budget quantity is an integer. */
+// Rounds away binary floating-point noise (0.1 * 3 = 0.30000000000000004) before rounding up.
+const ceilMicros = value => Math.ceil(Number(value.toFixed(6)));
+
+/**
+ * USD per million tokens times tokens is micro-USD; every budget quantity is an integer number of
+ * micro-USD rounded up. The Jev request contract has no output-token cap, so maxOutputTokensPerCall
+ * is an assumed server-side bound: a larger reported output is charged in full and halts the ledger.
+ */
 export function reservationMicros(preregistration) {
   const budget = preregistration.resourceBudget;
-  return Math.ceil(budget.maxInputTokensPerCall * budget.inputUsdPerMillionTokensCeiling
+  return ceilMicros(budget.maxInputTokensPerCall * budget.inputUsdPerMillionTokensCeiling
     + budget.maxOutputTokensPerCall * budget.outputUsdPerMillionTokensCeiling);
+}
+
+const formatPrice = value => value.toFixed(Math.max(2, (String(value).split('.')[1] ?? '').length));
+
+/** The value AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED must carry, e.g. `0.10/0.10`. */
+export function priceCeilingAttestation(preregistration) {
+  const budget = preregistration.resourceBudget;
+  return `${formatPrice(budget.inputUsdPerMillionTokensCeiling)}/${formatPrice(budget.outputUsdPerMillionTokensCeiling)}`;
 }
 
 export function hardCeilingMicros(preregistration) {
@@ -80,21 +97,27 @@ export function chargeForUsage(preregistration, usage) {
   if (!tokensKnown) {
     return { chargedMicros: Math.max(reservation, reportedMicros ?? 0), basis: 'unknown-tokens-reservation' };
   }
-  const tokenMicros = Math.ceil(usage.inputTokens * budget.inputUsdPerMillionTokensCeiling
+  const tokenMicros = ceilMicros(usage.inputTokens * budget.inputUsdPerMillionTokensCeiling
     + usage.outputTokens * budget.outputUsdPerMillionTokensCeiling);
   return reportedMicros !== null && reportedMicros > tokenMicros
     ? { chargedMicros: reportedMicros, basis: 'reported-provider-cost' }
     : { chargedMicros: tokenMicros, basis: 'reported-tokens-at-price-ceiling' };
 }
 
-export function estimateCollection(preregistration, itemCount, spentMicros = 0) {
+/**
+ * Worst-case plan for `itemCount` pending items. With `strict: false` a plan whose worst case exceeds
+ * the remaining budget is reported (fitsRemaining false) rather than refused: the per-call
+ * reservation guard still prevents any call that could cross the ceiling.
+ */
+export function estimateCollection(preregistration, itemCount, spentMicros = 0, { strict = true } = {}) {
   const budget = preregistration.resourceBudget;
   if (!Number.isInteger(itemCount) || itemCount < 1) throw new Error('item count must be positive');
   if (itemCount > budget.liveMaxItems) throw new Error(`item count ${itemCount} exceeds manifest max ${budget.liveMaxItems}`);
   const reservation = reservationMicros(preregistration);
   const ceiling = hardCeilingMicros(preregistration);
   const worstCase = itemCount * reservation;
-  if (worstCase > ceiling - spentMicros) {
+  const fitsRemaining = worstCase <= ceiling - spentMicros;
+  if (strict && !fitsRemaining) {
     throw new Error(`worst-case cost ${worstCase / 1e6} USD exceeds remaining ceiling ${(ceiling - spentMicros) / 1e6} USD`);
   }
   return {
@@ -105,6 +128,7 @@ export function estimateCollection(preregistration, itemCount, spentMicros = 0) 
     remainingUsd: (ceiling - spentMicros) / 1e6,
     hardCeilingUsd: ceiling / 1e6,
     maxItems: budget.liveMaxItems,
+    fitsRemaining,
   };
 }
 
@@ -370,6 +394,9 @@ export function readSpendLedger(path, { repair = false } = {}) {
   const recordDigests = new Set();
   let halted = null;
   entries.forEach((entry, index) => {
+    if (typeof entry.preregistrationHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(entry.preregistrationHash)) {
+      throw new Error(`spend ledger entry ${index} has no valid preregistrationHash in ${path}`);
+    }
     if (entry.schemaVersion !== LEDGER_SCHEMA || entry.seq !== index || entry.prev !== previous || entry.digest !== digest(withoutField(entry, 'digest'))) {
       throw new Error(`spend ledger chain is broken at entry ${index} in ${path}`);
     }
@@ -436,6 +463,30 @@ export function recordedSpendMicros(stateDir) {
 export function experimentSpendMicros(stateDir) {
   const ledger = readSpendLedger(ledgerPathFor(stateDir));
   return { spentMicros: Math.max(ledger.spentMicros, recordedSpendMicros(stateDir)), halted: ledger.halted };
+}
+
+function resumeState(existing, ledger) {
+  const latest = new Map();
+  const priorAttempts = new Map();
+  for (const record of existing) {
+    latest.set(record.id, record);
+    priorAttempts.set(record.id, (priorAttempts.get(record.id) ?? 0) + (Array.isArray(record.attempts) ? record.attempts.length : 1));
+  }
+  // Reservations orphaned by a crash before settlement still count as attempts.
+  for (const [itemId, count] of ledger.reservationsByItem) priorAttempts.set(itemId, Math.max(priorAttempts.get(itemId) ?? 0, count));
+  return { latest, priorAttempts };
+}
+
+function isPending(row, state, budget) {
+  return !TERMINAL_STATUSES.has(state.latest.get(row.id)?.status) && (state.priorAttempts.get(row.id) ?? 0) < budget.maxAttemptsPerItemTotal;
+}
+
+/** Live subset rows that are neither terminal nor out of attempts, in live-subset order. Read-only. */
+export function pendingLiveRows({ preregistration, frozen, stateDir }) {
+  const ledger = readSpendLedger(ledgerPathFor(stateDir));
+  const existing = readJsonl(join(stateDir, SCORES_FILE)).entries.filter(record => record?.schemaVersion === RECORD_SCHEMA);
+  const state = resumeState(existing, ledger);
+  return liveSubsetRows(frozen).filter(row => isPending(row, state, preregistration.resourceBudget));
 }
 
 function acquireLock(stateDir) {
@@ -521,14 +572,8 @@ export async function collectLiveScores({ preregistration, frozen, rows, model, 
         throw new Error(`refusing to resume into incompatible score file ${scoresPath}: ${error.message}`);
       }
     }
-    const latest = new Map();
-    const priorAttempts = new Map();
-    for (const record of existing) {
-      latest.set(record.id, record);
-      priorAttempts.set(record.id, (priorAttempts.get(record.id) ?? 0) + (Array.isArray(record.attempts) ? record.attempts.length : 1));
-    }
-    // Reservations orphaned by a crash before settlement still count as attempts.
-    for (const [itemId, count] of ledger.reservationsByItem) priorAttempts.set(itemId, Math.max(priorAttempts.get(itemId) ?? 0, count));
+    const state = resumeState(existing, ledger);
+    const { priorAttempts } = state;
     let spent = Math.max(ledger.spentMicros, recordedSpendMicros(directory));
     const startingSpentMicros = spent;
     let completed = 0;
@@ -536,8 +581,7 @@ export async function collectLiveScores({ preregistration, frozen, rows, model, 
     let inputTokens = 0;
     let outputTokens = 0;
     let consecutiveErrors = 0;
-    const pending = rows.filter(row => !TERMINAL_STATUSES.has(latest.get(row.id)?.status)
-      && (priorAttempts.get(row.id) ?? 0) < budget.maxAttemptsPerItemTotal);
+    const pending = rows.filter(row => isPending(row, state, budget));
     const summary = stoppedReason => ({
       output: scoresPath,
       ledger: ledgerPath,
@@ -599,6 +643,7 @@ export async function collectLiveScores({ preregistration, frozen, rows, model, 
         outcome = classify(scored, thrown, model);
         attempts.push({
           attempt: before + attempt + 1,
+          reservationId,
           status: outcome.status,
           reason: outcome.reason,
           requestId: scored?.requestId ?? null,
@@ -627,9 +672,44 @@ export async function collectLiveScores({ preregistration, frozen, rows, model, 
   }
 }
 
-function defaultStateDir(env = process.env) {
-  const stateRoot = env.XDG_STATE_HOME ?? (env.HOME ? join(env.HOME, '.local/state') : '/tmp');
-  return join(stateRoot, 'aiwg/conformal-2613');
+const VOLATILE_ROOTS = ['/tmp', '/var/tmp', '/dev/shm', '/run', tmpdir()];
+
+function nearestRealPath(path) {
+  let current = path;
+  const suffix = [];
+  while (!existsSync(current) && dirname(current) !== current) {
+    suffix.unshift(current.slice(dirname(current).length + 1));
+    current = dirname(current);
+  }
+  return join(realpathSync(current), ...suffix);
+}
+
+function isVolatile(path) {
+  const candidates = [path, nearestRealPath(path)];
+  const roots = VOLATILE_ROOTS.flatMap(root => [resolve(root), existsSync(root) ? realpathSync(root) : resolve(root)]);
+  return candidates.some(candidate => roots.some(root => candidate === root || candidate.startsWith(`${root}/`)));
+}
+
+/**
+ * The spend ledger's directory is the budget's identity, so it must be stable: empty XDG/HOME values
+ * are unset (XDG Base Directory spec), the path must be absolute, and live runs refuse volatile
+ * locations that are wiped on reboot.
+ */
+export function resolveStateDir(env, explicit, { live = false } = {}) {
+  let dir = explicit;
+  if (dir === null || dir === undefined) {
+    const xdg = env.XDG_STATE_HOME?.trim() ? env.XDG_STATE_HOME : null;
+    const home = env.HOME?.trim() ? env.HOME : null;
+    const base = xdg ?? (home ? join(home, '.local/state') : null);
+    if (!base) throw new Error('no experiment state directory: set XDG_STATE_HOME or HOME, or pass an absolute --state-dir');
+    dir = join(base, 'aiwg/conformal-2613');
+  }
+  if (!isAbsolute(dir)) throw new Error(`experiment state directory must be absolute: ${dir}`);
+  const resolved = resolve(dir);
+  if (live && isVolatile(resolved)) {
+    throw new Error(`refusing volatile experiment state directory ${resolved}; pass a durable absolute --state-dir so the spend ledger survives reboots`);
+  }
+  return resolved;
 }
 
 export async function main(env = process.env, argv = process.argv.slice(2), hooks = {}) {
@@ -637,19 +717,19 @@ export async function main(env = process.env, argv = process.argv.slice(2), hook
   const preregistration = JSON.parse(readFileSync(new URL('preregister.v2.json', root), 'utf8'));
   const frozen = JSON.parse(readFileSync(new URL('frozen.v2.json', root), 'utf8'));
   verifyFrozenOpenData(frozen, preregistration);
-  const budget = preregistration.resourceBudget;
   const pinnedModel = preregistration.pins.liveServedModel;
   const model = argValue(parsed, '--model', pinnedModel);
   if (model !== pinnedModel) throw new Error(`--model must equal the pinned live served model '${pinnedModel}'`);
-  const stateDir = argValue(parsed, '--state-dir', defaultStateDir(env));
-  const all = liveSubsetRows(frozen);
-  const limit = Number(argValue(parsed, '--limit', String(all.length)));
-  if (!Number.isInteger(limit) || limit < 1) throw new Error('--limit must be a positive integer');
-  const rows = all.slice(0, limit);
-  const { spentMicros, halted } = experimentSpendMicros(stateDir);
-  const estimate = estimateCollection(preregistration, rows.length, spentMicros);
   const live = parsed.flags.has('--live');
-  const attestation = `${budget.inputUsdPerMillionTokensCeiling}/${budget.outputUsdPerMillionTokensCeiling}`;
+  const stateDir = resolveStateDir(env, argValue(parsed, '--state-dir'));
+  // --limit selects the next N pending rows; completed rows are never re-planned or re-charged.
+  const pending = pendingLiveRows({ preregistration, frozen, stateDir });
+  const limit = parsed.args.has('--limit') ? Number(parsed.args.get('--limit')) : pending.length;
+  if (parsed.args.has('--limit') && (!Number.isInteger(limit) || limit < 1)) throw new Error('--limit must be a positive integer');
+  const rows = pending.slice(0, limit);
+  const { spentMicros, halted } = experimentSpendMicros(stateDir);
+  const estimate = rows.length ? estimateCollection(preregistration, rows.length, spentMicros, { strict: false }) : null;
+  const attestation = priceCeilingAttestation(preregistration);
   const plan = {
     schemaVersion: 'conformal-jev-collection-plan/v2',
     issue: 2613,
@@ -660,13 +740,15 @@ export async function main(env = process.env, argv = process.argv.slice(2), hook
     priceCeilingAttested: env.AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED === attestation,
     model,
     liveSubsetHashes: frozen.liveSubsets.hashes,
+    pendingRows: pending.length,
     rows: rows.length,
+    rowIds: rows.map(row => row.id),
     estimate,
     ledgerHalted: halted,
     stateDir,
     noCallsMade: !live,
   };
-  if (!live) {
+  if (!live || !rows.length) {
     console.log(JSON.stringify(plan, null, 2));
     return plan;
   }
@@ -676,6 +758,7 @@ export async function main(env = process.env, argv = process.argv.slice(2), hook
   if (env.AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED !== attestation) {
     throw new Error(`AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=${attestation} is required: attest that the served model's input/output USD per million tokens do not exceed the preregistered ceiling`);
   }
+  resolveStateDir(env, argValue(parsed, '--state-dir'), { live: true });
   const adapter = hooks.adapter ?? new JevDecisionAdapter({ region: env.AIWG_DECISION_JEV_REGION });
   const summary = await collectLiveScores({
     preregistration,

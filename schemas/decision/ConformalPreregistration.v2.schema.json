@@ -211,17 +211,23 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "task",
+        "tasks",
         "calibration",
         "finalTest",
         "shift",
         "selection",
-        "rationale"
+        "rationale",
+        "gateTable"
       ],
       "properties": {
-        "task": {
-          "type": "string",
-          "minLength": 1
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "calibration": {
           "type": "integer",
@@ -242,6 +248,52 @@
         "rationale": {
           "type": "string",
           "minLength": 1
+        },
+        "gateTable": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "task",
+              "split",
+              "scoredN",
+              "minCovered",
+              "passProbabilityAtTrueCoverage090",
+              "passProbabilityAtTrueCoverage085"
+            ],
+            "properties": {
+              "task": {
+                "type": "string",
+                "minLength": 1
+              },
+              "split": {
+                "enum": [
+                  "finalTest",
+                  "shift"
+                ]
+              },
+              "scoredN": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "minCovered": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "passProbabilityAtTrueCoverage090": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "passProbabilityAtTrueCoverage085": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
         }
       }
     },
@@ -408,12 +460,12 @@
         "liveMaxItems": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 600
+          "maximum": 2000
         },
         "liveSubsetItems": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 600
+          "maximum": 2000
         },
         "sampleMaxItems": {
           "type": "integer",
