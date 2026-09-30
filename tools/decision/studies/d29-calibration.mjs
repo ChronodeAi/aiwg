@@ -16,6 +16,11 @@ const policy = { unknown: 'defer', incompatible: 'fail', shadowRequired: 'shadow
 export async function prepareCalibrationHandoff({ run, trustedApprovalDigest, trustedCalibrationPhaseRecordDigest }) {
   const sealed = await readHeldoutCalibrationPhase(run, trustedApprovalDigest, trustedCalibrationPhaseRecordDigest);
   const prepared = await prepare(sealed.bundle.corpus.provenance.seed);
+  return calibrationHandoffFromSealed(sealed, prepared, trustedApprovalDigest, trustedCalibrationPhaseRecordDigest);
+}
+
+/** Shared fitting path; the public handoff first reconstructs the frozen study. */
+export function calibrationHandoffFromSealed(sealed, prepared, trustedApprovalDigest, trustedCalibrationPhaseRecordDigest) {
   if (heldoutDigest(prepared.corpus) !== heldoutDigest(sealed.bundle.corpus)
     || heldoutDigest(prepared.preregistration) !== heldoutDigest(sealed.bundle.preregistration)) refuse('frozen-study-mismatch');
   const rows = prepared.corpus.rows.filter(row => row.split === 'calibration'), members = new Set(rows.map(row => row.id));
@@ -64,11 +69,17 @@ export async function prepareCalibrationHandoff({ run, trustedApprovalDigest, tr
 
 /** Only a separately anchored operator review can produce an approved, usable D09 artifact. */
 export async function registerCalibrationHandoff(input) {
+  const handoff = await prepareCalibrationHandoff(input);
+  return registerCalibrationHandoffFromPrepared(handoff, input);
+}
+
+/** Shared registration path; the public entry obtains its handoff from the verified seal. */
+export function registerCalibrationHandoffFromPrepared(handoff, input) {
   const { review, trustedReviewDigest } = input;
   try { validateStudyArtifact(review); } catch { refuse('calibration-review'); }
   if (review?.schemaVersion !== 'decision-d29-calibration-review/v1' || !review.approvalReference.trim()
     || heldoutDigest(review) !== trustedReviewDigest) refuse('calibration-review');
-  const handoff = await prepareCalibrationHandoff(input), { artifact } = handoff;
+  const { artifact } = handoff;
   if (review.calibrationArtifactDigest !== artifact.digest || Date.parse(review.reviewedAt) < Date.parse(artifact.effectiveAt)) refuse('calibration-review');
   const { digest, ...payload } = artifact;
   payload.approval = { state: 'approved', reference: review.approvalReference };

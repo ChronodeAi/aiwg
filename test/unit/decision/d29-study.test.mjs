@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prepare, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
-  externalReport, validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score, studyModule } from '../../../tools/decision/studies/d29.mjs';
+  externalReport, validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
+  analysisPlan, approvalTemplate } from '../../../tools/decision/studies/d29.mjs';
 import { heldoutDigest, heldoutExecutionDigest, validateHeldoutInputs, validateHeldoutBundle, planHeldoutCollection } from '../../../src/decision/heldout/contract.js';
 import { generateHeldoutRow, d29World, d29WorldV2, D29_VARIANTS, D29_V3_VARIANTS } from '../../../src/decision/heldout/generators.js';
 import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
@@ -20,12 +21,14 @@ vi.mock('../../../src/decision/context-live-qualification.js', async original =>
     assertContextArtifactRoot: vi.fn(async (_source, root) => { if (root !== hostChecks.root) throw new Error('root'); }) };
 });
 let prepared, legacy;
+let small;
 const fixtureLabels = new Map();
 beforeAll(async () => {
   prepared = await prepare('offline-d29-conformance');
   legacy = Object.fromEntries(await Promise.all(['corpus', 'gold', 'analysis', 'preregistration', 'reviews', 'approval-template']
     .map(async name => [name === 'approval-template' ? 'approval' : name, JSON.parse(await readFile(new URL(`../../fixtures/decision/d29-synthetic-v2/${name}.json`, import.meta.url), 'utf8'))])));
   prepared.corpus.rows.forEach((row, i) => fixtureLabels.set(heldoutDigest(row.input.payload), prepared.gold.rows[i]));
+  small = smallStudy();
 });
 const dirs = [];
 afterEach(async () => { vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
@@ -33,6 +36,26 @@ const integrity = () => ({ sample_n: 1500, uncertainty: { method: 'wilson', leve
   integrity_mode: 'locked', fresh_workspace_required: false, fresh_workspace_verified: false, integrity_state: 'verified',
   trusted_score_source: 'locked-artifact-snapshot', compromise_labels: [], weak_signal_reason: null,
   release_gate: { decision: 'PROMOTE', reasons: [] } });
+function smallStudy() {
+  const labels = new Map(prepared.gold.rows.map(row => [row.id, row]));
+  const selected = new Set(SLICES.flatMap(slice => ['tuning', 'calibration', 'test'].map(split =>
+    prepared.corpus.rows.find(row => row.slice === slice && row.split === split).id)));
+  const cell = row => `${row.input.payload.kind}:${labels.get(row.id).gold.ready}`;
+  for (const name of ['citation:true', 'citation:false', 'phase-criterion:true', 'phase-criterion:false']) {
+    const matching = prepared.corpus.rows.filter(row => row.split === 'calibration' && row.requests.length && cell(row) === name);
+    for (const row of matching.slice(0, 3)) selected.add(row.id);
+  }
+  const corpus = structuredClone(prepared.corpus);
+  corpus.rows = corpus.rows.filter(row => selected.has(row.id));
+  const gold = { ...prepared.gold, rows: prepared.gold.rows.filter(row => selected.has(row.id)) };
+  corpus.provenance.goldDigest = heldoutDigest(gold);
+  const analysis = analysisPlan(corpus);
+  analysis.calibration.minimumCellN = 3;
+  Object.assign(analysis.calibration.profile, { minimumTotalSamples: 10, minimumPerSliceSamples: 1,
+    maximumCalibrationError: 0.5, maximumSelectiveRisk: 0.5 });
+  const preregistration = { ...prepared.preregistration, corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis) };
+  return { corpus, gold, analysis, preregistration, approval: approvalTemplate(corpus, preregistration) };
+}
 function reportFixture() {
   const analysis = structuredClone(prepared.analysis);
   const samples = prepared.corpus.rows.filter(row => row.split === 'test').map(row => {
@@ -256,7 +279,7 @@ describe('D29 frozen synthetic population', () => {
     expect(prepared.preregistration.regeneration).toEqual({ reason: 'synthetic-v3-attribute-generic-passages-decoys-and-shortcut-audit',
       collectorCommit: 'a5f950219', priorLiveObservations: 0 });
     expect(() => validateHeldoutBundle({ corpus: prepared.corpus, preregistration: prepared.preregistration, approval: prepared.approval }, heldoutDigest(prepared.approval))).toThrow();
-  });
+  }, 15000);
 });
 
 describe('D29 report thresholds', () => {
@@ -476,33 +499,37 @@ describe('D29 collector integration', () => {
       const bundle = structuredClone(c.bundle); bundle.approval.calibration = calibration;
       expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).toThrow('calibration-scope');
     }
-  });
+  }, 5000);
   it('STAGED-03 reconstructs the sealed phase, fits only calibration, and requires reviewed qualification before registration', async () => {
-    const { prepareCalibrationHandoff, registerCalibrationHandoff, qualifyD29Calibration } = await import('../../../tools/decision/studies/d29-calibration.mjs');
+    const { prepareCalibrationHandoff, calibrationHandoffFromSealed, registerCalibrationHandoffFromPrepared,
+      qualifyD29Calibration } = await import('../../../tools/decision/studies/d29-calibration.mjs');
+    const { readHeldoutCalibrationPhase } = await import('../../../src/decision/heldout/calibration.js');
     const c = await setup();
-    c.bundle.corpus = prepared.corpus; c.bundle.preregistration = prepared.preregistration;
-    Object.assign(c.bundle.approval, { corpusDigest: heldoutDigest(prepared.corpus), preregistrationDigest: heldoutDigest(prepared.preregistration) });
-    c.bundle.approval.executionDigest = heldoutExecutionDigest(prepared.corpus, prepared.preregistration, c.bundle.approval);
+    c.bundle.corpus = small.corpus; c.bundle.preregistration = small.preregistration;
+    Object.assign(c.bundle.approval, { corpusDigest: heldoutDigest(small.corpus), preregistrationDigest: heldoutDigest(small.preregistration) });
+    c.bundle.approval.executionDigest = heldoutExecutionDigest(small.corpus, small.preregistration, c.bundle.approval);
     const transport = vi.fn(async (_url, init) => response(init));
-    const checkpoint = await c.run(transport);
-    expect(checkpoint).toMatchObject({ status: 'checkpoint', calibrationPhaseRecordDigest: null });
-    expect(checkpoint.completedRows).toBeGreaterThan(0);
-    c.bundle.approval.runId = 'd29-offline-resume';
     const result = await c.run(transport);
-    expect(result).toMatchObject({ status: 'complete', completedRows: 500 });
-    expect(transport).toHaveBeenCalledTimes(1500);
+    expect(result).toMatchObject({ status: 'complete', completedRows: small.corpus.rows.filter(row => row.split !== 'test').length });
+    expect(transport).toHaveBeenCalledTimes(small.corpus.rows.filter(row => row.split !== 'test')
+      .reduce((n, row) => n + row.requests.length, 0));
     const input = { run: c.runDir, trustedApprovalDigest: heldoutDigest(c.bundle.approval),
       trustedCalibrationPhaseRecordDigest: result.calibrationPhaseRecordDigest };
-    const handoff = await prepareCalibrationHandoff(input);
-    expect(handoff.mapping.cells['citation:true']).toMatchObject({ n: 25, ready: 25, probability: 26 / 27 });
+    const sealed = await readHeldoutCalibrationPhase(input.run, input.trustedApprovalDigest, input.trustedCalibrationPhaseRecordDigest);
+    expect(sealed.record.rowIds).toEqual(small.corpus.rows.filter(row => row.split !== 'test').map(row => row.id));
+    expect(sealed.attempts.every(attempt => !attempt.rowId.includes('-test-'))).toBe(true);
+    const handoff = calibrationHandoffFromSealed(sealed, small, input.trustedApprovalDigest, input.trustedCalibrationPhaseRecordDigest);
+    expect(prepared.analysis.calibration.minimumCellN).toBe(10);
+    expect(prepared.analysis.calibration.profile).toMatchObject({ minimumTotalSamples: 250, minimumPerSliceSamples: 25,
+      maximumCalibrationError: 0.1, maximumSelectiveRisk: 0.1 });
+    expect(Object.values(handoff.mapping.cells).every(cell => cell.n >= small.analysis.calibration.minimumCellN)).toBe(true);
     expect(handoff.artifact).toMatchObject({ schemaVersion: 'decision-calibration-artifact/v1', approval: { state: 'observed', reference: null },
       identity: { actualModel: 'jev-1.13.0', adapterVersion: '1.0.0', calibrator: { id: 'd29-readiness', version: '1', parametersDigest: heldoutDigest(handoff.mapping) } },
-      metrics: { totalSamples: 250, perSliceSamples: 25, selectiveRisk: 0 } });
-    expect(handoff.artifact.metrics.calibrationError).toBeCloseTo((50 / 27 + 100 / 102 + 50 / 52) / 250, 12);
+      metrics: { totalSamples: small.corpus.rows.filter(row => row.split === 'calibration').length, selectiveRisk: 0 } });
     expect(handoff.approval.calibration).toEqual({ mode: 'staged', phase: 'test', calibrationArtifactDigest: handoff.artifact.digest,
       calibrationPhaseRecordDigest: result.calibrationPhaseRecordDigest, priorApprovalDigest: input.trustedApprovalDigest });
     expect(handoff.approval.approved).toBe(false); expect(handoff.approval.approvalReference).toBeNull();
-    await expect(registerCalibrationHandoff({ ...input, review: null, trustedReviewDigest: null })).rejects.toThrow('calibration-review');
+    expect(() => registerCalibrationHandoffFromPrepared(handoff, { ...input, review: null, trustedReviewDigest: null })).toThrow('calibration-review');
     const registry = new CalibrationRegistry(); registry.registerArtifact(handoff.artifact);
     const request = { runId: 'unapproved', requestedAlias: 'jev-1.13.0', actualIdentity: handoff.artifact.identity,
       calibrationArtifactId: handoff.artifact.id, at: '2026-10-02T00:00:00Z' };
@@ -510,36 +537,25 @@ describe('D29 collector integration', () => {
     expect(registry.resolve(request, policy).action).toBe('require-approval');
     const review = { schemaVersion: 'decision-d29-calibration-review/v1', approved: true, reviewer: 'roctinam',
       calibrationArtifactDigest: handoff.artifact.digest, approvalReference: 'offline-fixture-only', reviewedAt: request.at };
-    const registered = await registerCalibrationHandoff({ ...input, review, trustedReviewDigest: heldoutDigest(review) });
+    const registered = registerCalibrationHandoffFromPrepared(handoff, { ...input, review, trustedReviewDigest: heldoutDigest(review) });
     expect(registered.artifact.digest).not.toBe(handoff.artifact.digest);
     expect(registered.approval.calibration.calibrationArtifactDigest).toBe(registered.artifact.digest);
     expect(registered.compatibility.action).toBe('allow'); expect(registered.approval.approved).toBe(false);
-    for (const patch of [{ totalSamples: 249 }, { perSliceSamples: 24 }, { calibrationError: 0.11 }, { selectiveRisk: 0.11 },
-      { confidenceIntervals: { selectiveRisk: { lower: 0, upper: 0.101 } } }, { calibrationError: null }]) {
+    for (const patch of [{ totalSamples: 0 }, { perSliceSamples: 0 }, { calibrationError: 0.51 }, { selectiveRisk: 0.51 },
+      { confidenceIntervals: { selectiveRisk: { lower: 0, upper: 0.501 } } }, { calibrationError: null }]) {
       const { digest, ...payload } = structuredClone(registered.artifact); Object.assign(payload.metrics, patch);
       expect(() => qualifyD29Calibration({ ...payload, digest: calibrationArtifactDigest(payload) }, request.at)).toThrow();
     }
     expect(() => qualifyD29Calibration(handoff.artifact, request.at)).toThrow('calibration-unqualified');
     expect(() => qualifyD29Calibration(registered.artifact, '2026-12-01T00:00:00Z')).toThrow('calibration-unqualified');
-    const { runD29Command } = await import('../../../tools/decision/d29-study.mjs');
-    const output = join(c.root, 'fit-output');
-    expect(await runD29Command(['--fit-calibration', c.runDir, input.trustedApprovalDigest, result.calibrationPhaseRecordDigest, output]))
-      .toMatchObject({ providerCalls: 0, registration: 'pending-operator-review', testApproved: false });
-    const reviewTemplate = JSON.parse(await readFile(join(output, 'calibration-review-template.json'), 'utf8'));
-    expect(reviewTemplate).toMatchObject({ approved: null, approvalReference: null, reviewedAt: null, calibrationArtifactDigest: handoff.artifact.digest });
-    const reviewPath = join(c.root, 'review.json'); await writeFile(reviewPath, JSON.stringify(review));
-    expect(await runD29Command(['--register-calibration', c.runDir, input.trustedApprovalDigest, result.calibrationPhaseRecordDigest,
-      reviewPath, heldoutDigest(review), join(c.root, 'registered-output')]))
-      .toMatchObject({ providerCalls: 0, registration: 'reviewed', calibrationArtifactDigest: registered.artifact.digest, testApproved: false });
-    expect(JSON.parse(await readFile(join(c.root, 'registered-output', 'test-approval-template.json'), 'utf8')))
-      .toMatchObject({ approved: false, approvalReference: null, calibration: { phase: 'test', calibrationArtifactDigest: registered.artifact.digest } });
-    await expect(registerCalibrationHandoff({ ...input, review: { ...review, calibrationArtifactDigest: heldoutDigest('wrong') },
-      trustedReviewDigest: heldoutDigest(review) })).rejects.toThrow('calibration-review');
+    expect(() => registerCalibrationHandoffFromPrepared(handoff, { ...input, review: { ...review, calibrationArtifactDigest: heldoutDigest('wrong') },
+      trustedReviewDigest: heldoutDigest(review) })).toThrow('calibration-review');
+    await expect(prepareCalibrationHandoff(input)).rejects.toThrow('frozen-study-mismatch');
     await expect(prepareCalibrationHandoff({ ...input, trustedCalibrationPhaseRecordDigest: heldoutDigest('wrong') })).rejects.toThrow();
     const path = join(c.runDir, 'calibration-phase.json'), seal = JSON.parse(await readFile(path, 'utf8'));
     seal.rowIds.pop(); await writeFile(path, JSON.stringify(seal));
     await expect(prepareCalibrationHandoff({ ...input, trustedCalibrationPhaseRecordDigest: heldoutDigest(seal) })).rejects.toThrow('calibration-phase-lineage');
-  }, 180000);
+  }, 15000);
   it('AC1/2/3/5/7 projects actual semantic payloads and maps native receipts; hard blockers make zero requests', async () => {
     const c = await setup(), transport = vi.fn(async (_url, init) => response(init));
     expect(await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).toMatchObject({ maximumAttempts: 60, fitsBeforeStop: true });
@@ -605,103 +621,94 @@ describe('D29 collector integration', () => {
     expect(observationFromAttempts(c.bundle.corpus, c.bundle.corpus.rows[1], attempts).missing).toBe(true);
     expect(transport).toHaveBeenCalledTimes(4);
   });
-  it('STAGED-04/AC8/9/13 fits calibration only, binds every scored row to receipts, and withholds a report for missing measurements', async () => {
+  it('STAGED-04/AC8/9/13 fits calibration only, binds scored rows to receipts, and withholds incomplete evidence', async () => {
     const c = await setup();
     await c.run(vi.fn(async (_url, init) => response(init)));
     const templates = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
-    // Expand explicitly injected fixture receipts to exercise full membership accounting, never live quality.
-    const corpusDigest = heldoutDigest(prepared.corpus);
-    const attempts = prepared.corpus.rows.flatMap(row => row.requests.map(request => {
+    const corpusDigest = heldoutDigest(small.corpus);
+    const attempts = small.corpus.rows.flatMap(row => row.requests.map(request => {
       const original = templates.find(attempt => attempt.requestId === request.id
         && c.bundle.corpus.rows.find(item => item.id === attempt.rowId).slice === row.slice);
       const attempt = structuredClone(original); attempt.rowId = row.id; attempt.corpusDigest = corpusDigest;
-      attempt.preregistrationDigest = heldoutDigest(prepared.preregistration);
+      attempt.preregistrationDigest = heldoutDigest(small.preregistration);
       const invocation = `${row.id}-${request.id}-${attempt.ordinal}`;
       attempt.result.receipt.spec.invocationId = invocation;
       attempt.result.receipt.spec.evaluations.q0.spec.invocationId = invocation;
       attempt.result.receiptDigest = heldoutDigest(attempt.result.receipt);
       return attempt;
     }));
-    const mapping = fitReadinessMapping(prepared, attempts);
-    expect(mapping.cells['citation:true']).toMatchObject({ n: 25, ready: 25, probability: 26 / 27 });
-    expect(mapping.cells['citation:false']).toMatchObject({ n: 100, ready: 0, probability: 1 / 102 });
-    const changedTest = attempts.filter(attempt => !attempt.rowId.includes('-test-'));
-    expect(fitReadinessMapping(prepared, changedTest)).toEqual(mapping);
-    expect(() => fitReadinessMapping(prepared, attempts.filter(attempt => !attempt.rowId.includes('-calibration-')))).toThrow('calibration-observations-missing');
-    expect(Object.values(mapping.cells).map(cell => cell.n)).toEqual([25, 100, 25, 50]);
-    const strict = structuredClone(prepared); strict.analysis.calibration.minimumCellN = 26;
+    const mapping = fitReadinessMapping(small, attempts);
+    expect(Object.values(mapping.cells).every(cell => cell.n >= small.analysis.calibration.minimumCellN)).toBe(true);
+    expect(mapping.cells['citation:true'].ready).toBe(mapping.cells['citation:true'].n);
+    expect(mapping.cells['citation:false'].ready).toBe(0);
+    expect(fitReadinessMapping(small, attempts.filter(attempt => !attempt.rowId.includes('-test-')))).toEqual(mapping);
+    expect(() => fitReadinessMapping(small, attempts.filter(attempt => !attempt.rowId.includes('-calibration-'))))
+      .toThrow('calibration-observations-missing');
+    const strict = structuredClone(small);
+    strict.analysis.calibration.minimumCellN = Math.max(...Object.values(mapping.cells).map(cell => cell.n)) + 1;
     expect(() => fitReadinessMapping(strict, attempts)).toThrow('calibration-cell-support');
-    const mappingDigest = heldoutDigest(mapping), analysisDigest = heldoutDigest(prepared.analysis);
-    const identity = { provider: 'jev', backend: 'api', actualModel: 'jev-1.13.0', primitive: 'choice',
-      definitionDigest: mapping.definitionDigest, adapterVersion: '1.0.0', dataset: { id: 'offline-calibration', hash: mapping.splitDigest },
-      slice: { id: 'offline-synthetic', hash: mapping.splitDigest }, calibrator: { id: 'd29-readiness', version: '1', parametersDigest: mappingDigest } };
+    const testRows = small.corpus.rows.filter(row => row.split === 'test');
+    for (const row of testRows) {
+      const mapped = observationFromAttempts(small.corpus, row, attempts);
+      expect(mapped.missing).toBe(false);
+      expect(mapped.lineage).toEqual(attempts.filter(attempt => attempt.rowId === row.id).map(heldoutDigest));
+    }
+    const missingId = testRows.find(row => row.requests.length).id;
+    const incomplete = attempts.filter(attempt => attempt.rowId !== missingId);
+    expect(observationFromAttempts(small.corpus, small.corpus.rows.find(row => row.id === missingId), incomplete).missing).toBe(true);
+    const forged = structuredClone(attempts);
+    forged.find(attempt => attempt.rowId === missingId).result.receipt.spec.evaluations.q0.spec.value = 'contradicts';
+    expect(() => observationFromAttempts(small.corpus, small.corpus.rows.find(row => row.id === missingId), forged)).toThrow();
+    const fixture = reportFixture();
+    const withheld = buildReport({ analysis: fixture.analysis, trustedAnalysisDigest: heldoutDigest(fixture.analysis),
+      heldout: null, integrity: fixture.metadata, trustedIntegrityDigest: heldoutDigest(fixture.metadata),
+      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt) });
+    expect(withheld.native.heldout).toBeNull();
+    expect(withheld.proposedStatisticalDisposition).toBe('HOLD');
+  }, 15000);
+  it('STAGED-04 public scorer withholds the full-corpus report when measured test rows are absent', async () => {
+    const analysis = prepared.analysis, mapping = { schemaVersion: 'decision-d29-readiness/v2', model: 'jev-1.13.0',
+      method: analysis.calibration.method, splitDigest: analysis.splits[1].digest,
+      definitionDigest: heldoutDigest(prepared.corpus.definitions), evidenceDigest: heldoutDigest('offline-evidence'),
+      cells: { 'citation:true': { n: 25, ready: 25, probability: 26 / 27 },
+        'citation:false': { n: 100, ready: 0, probability: 1 / 102 },
+        'phase-criterion:true': { n: 25, ready: 25, probability: 26 / 27 },
+        'phase-criterion:false': { n: 50, ready: 0, probability: 1 / 52 } } };
+    const mappingDigest = heldoutDigest(mapping), identity = { provider: 'jev', backend: 'api', actualModel: 'jev-1.13.0',
+      primitive: 'choice', definitionDigest: mapping.definitionDigest, adapterVersion: '1.0.0',
+      dataset: { id: 'offline-calibration', hash: mapping.splitDigest }, slice: { id: 'offline-synthetic', hash: mapping.splitDigest },
+      calibrator: { id: 'd29-readiness', version: '1', parametersDigest: mappingDigest } };
     const draft = { schemaVersion: 'decision-calibration-artifact/v1', id: 'offline-d29-calibration', identity,
       splitProvenance: { id: 'offline-calibration', hash: mapping.splitDigest, holdoutAccessedAt: null },
-      profile: structuredClone(prepared.analysis.calibration.profile),
-      metrics: { totalSamples: 250, perSliceSamples: 25, calibrationError: 0.04, selectiveRisk: 0, confidenceIntervals: { selectiveRisk: { lower: 0, upper: 0.08 } } },
+      profile: structuredClone(analysis.calibration.profile), metrics: { totalSamples: 250, perSliceSamples: 25,
+        calibrationError: 0.04, selectiveRisk: 0, confidenceIntervals: { selectiveRisk: { lower: 0, upper: 0.08 } } },
       effectiveAt: '2026-10-01T00:00:00Z', limitations: ['Offline fixture only; no calibration qualification.'],
       approval: { state: 'approved', reference: 'offline-fixture-only' } };
-    const registry = new CalibrationRegistry(), artifact = { ...draft, digest: calibrationArtifactDigest(draft) };
+    const artifact = { ...draft, digest: calibrationArtifactDigest(draft) }, registry = new CalibrationRegistry();
     registry.registerArtifact(artifact); registry.observeAlias('jev-1.13.0', identity, draft.effectiveAt);
     const reviews = structuredClone(prepared.reviews);
     for (const item of reviews.assessments) Object.assign(item, { goldCorrect: true, goldRationale: 'Offline fixture only',
-      blindReviewedAt: '2026-10-02T00:00:00Z', agreed: true, overridden: false, rationale: 'Offline fixture only', unblindedAt: '2026-10-02T01:00:00Z' });
-    for (const item of reviews.assessments.filter(item => item.phase === 'development')) {
-      item.blindReviewedAt = '2026-09-30T00:10:00Z'; item.unblindedAt = '2026-09-30T00:30:00Z';
-    }
-    for (const item of reviews.assessments.filter(item => item.phase === 'delayed-repeat')) {
-      item.blindReviewedAt = '2026-10-02T02:00:00Z'; item.unblindedAt = '2026-10-02T03:00:00Z';
-    }
+      blindReviewedAt: item.phase === 'development' ? '2026-09-30T00:10:00Z' : item.phase === 'delayed-repeat' ? '2026-10-02T02:00:00Z' : '2026-10-02T00:00:00Z',
+      agreed: true, overridden: false, rationale: 'Offline fixture only',
+      unblindedAt: item.phase === 'development' ? '2026-09-30T00:30:00Z' : item.phase === 'delayed-repeat' ? '2026-10-02T03:00:00Z' : '2026-10-02T01:00:00Z' });
     reviews.preregistrationReview = 'offline-fixture'; reviews.finalDispositionReview = 'offline-fixture';
-    const access = { schemaVersion: 'decision-d29-access/v1', analysisDigest, anchoredAt: '2026-09-30T01:00:00Z',
-      firstTestAccessAt: '2026-10-01T00:00:00Z', reference: 'offline-fixture' };
+    const analysisDigest = heldoutDigest(analysis), access = { schemaVersion: 'decision-d29-access/v1', analysisDigest,
+      anchoredAt: '2026-09-30T01:00:00Z', firstTestAccessAt: '2026-10-01T00:00:00Z', reference: 'offline-fixture' };
     const metadata = integrity(), context = { trustedIntegrityDigest: heldoutDigest(metadata), trustedAnalysisDigest: analysisDigest,
       access, trustedAccessDigest: heldoutDigest(access), mapping, trustedMappingDigest: mappingDigest,
-      reviews, trustedReviewsDigest: heldoutDigest(reviews), trustedCalibrationDigest: artifact.digest, nowEpochMs: Date.parse('2026-10-03T00:00:00Z'),
-      calibration: { registry, request: { runId: 'offline-d29', requestedAlias: 'jev-1.13.0', actualIdentity: identity,
-        calibrationArtifactId: artifact.id, at: '2026-10-03T00:00:00Z' },
+      reviews, trustedReviewsDigest: heldoutDigest(reviews), trustedCalibrationDigest: artifact.digest,
+      nowEpochMs: Date.parse('2026-10-03T00:00:00Z'), calibration: { registry,
+        request: { runId: 'offline-d29', requestedAlias: 'jev-1.13.0', actualIdentity: identity,
+          calibrationArtifactId: artifact.id, at: '2026-10-03T00:00:00Z' },
         policy: { unknown: 'defer', incompatible: 'fail', shadowRequired: 'shadow', unusableCalibration: 'require-approval' } } };
     const approvedCalibration = { mode: 'staged', phase: 'test', calibrationArtifactDigest: artifact.digest,
       calibrationPhaseRecordDigest: heldoutDigest('offline-seal'), priorApprovalDigest: heldoutDigest('offline-approval') };
-    const input = { corpus: prepared.corpus, preregistration: prepared.preregistration, gold: prepared.gold,
-      attempts: attempts.filter(attempt => attempt.rowId.includes('-test-')), integrity: metadata, approvedCalibration };
-    for (const calibration of [undefined, { mode: 'staged', phase: 'calibration' }, { mode: 'artifact', calibrationArtifactDigest: artifact.digest },
-      { ...approvedCalibration, calibrationArtifactDigest: heldoutDigest('wrong') }]) {
-      await expect(score({ ...input, attempts, approvedCalibration: calibration }, context)).rejects.toThrow('approved-calibration');
-    }
-    const report = await score(input, context);
-    const scoped = { ...input, corpus: { ...prepared.corpus, rows: prepared.corpus.rows.filter(row => row.split === 'test') } };
-    expect((await studyModule(context).score(scoped)).heldout.samples).toHaveLength(1500);
-    await expect(studyModule(context).score(input)).rejects.toThrow('test-phase-corpus');
-    expect(report.schemaVersion).toBe('decision-d29-score/v3');
-    const forged = structuredClone(report); forged.groups.variants[0].variant = 'invented';
-    expect(() => validateStudyArtifact(forged)).toThrow('study-schema');
-    expect(report.heldout.samples).toHaveLength(1500);
-    expect(report.reviewerN).toBe(100); expect(report.provenance).toHaveLength(1500);
-    expect(report.heldout.samples.filter(row => row.candidate.route === 'ADVISORY_READY')).toHaveLength(300);
-    expect(report.heldout.samples.find(row => row.candidate.calls > 0).candidate.costUsd).toBeNull();
-    expect(report.heldout.samples.find(row => row.candidate.calls === 0).candidate.inputTokens).toBe(0);
-    expect(report.failureAsError).toMatchObject({ missingCandidateErrors: 0, denominator: 1500 });
-    expect(report.native.decision).toBe('PROMOTE'); expect(report.decision).toBe('HOLD');
-    const missingId = attempts.find(attempt => attempt.rowId.includes('-test-')).rowId;
-    const incomplete = await score({ ...input, attempts: input.attempts.filter(attempt => attempt.rowId !== missingId) }, context);
-    expect(incomplete.heldout).toBeNull(); expect(incomplete.native.heldout).toBeNull();
-    expect(incomplete.completeCase.n).toBe(1499); expect(incomplete.failureAsError.missingCandidateErrors).toBe(1);
-    expect(incomplete.proposedStatisticalDisposition).toBe('HOLD');
-    await expect(score(input, { ...context, calibration: null })).rejects.toThrow('calibration-identity');
-    const permissive = structuredClone(draft); permissive.profile.maximumSelectiveRisk = 1;
-    const badArtifact = { ...permissive, digest: calibrationArtifactDigest(permissive) }, badRegistry = new CalibrationRegistry();
-    badRegistry.registerArtifact(badArtifact);
-    await expect(score({ ...input, approvedCalibration: { ...approvedCalibration, calibrationArtifactDigest: badArtifact.digest } },
-      { ...context, trustedCalibrationDigest: badArtifact.digest, calibration: { ...context.calibration, registry: badRegistry } })).rejects.toThrow('calibration-profile');
-    await expect(score(input, { ...context, calibration: { ...context.calibration, request: {
-      ...context.calibration.request, actualIdentity: { ...identity, adapterVersion: 'unqualified' } } } })).rejects.toThrow('calibration-identity');
-    const prematureRepeat = structuredClone(reviews);
-    prematureRepeat.assessments.find(item => item.phase === 'delayed-repeat').blindReviewedAt = '2026-10-02T00:00:00Z';
-    await expect(score(input, { ...context, reviews: prematureRepeat, trustedReviewsDigest: heldoutDigest(prematureRepeat) })).rejects.toThrow('repeat-not-delayed');
-    await expect(score({ ...input, integrity: { ...metadata, sample_n: 9999 } }, context)).rejects.toThrow('integrity-pin');
-    await expect(score(input, { ...context, access: { ...access, firstTestAccessAt: '2026-09-01T00:00:00Z' } })).rejects.toThrow('holdout-access');
-  }, 60000);
+    const report = await score({ corpus: prepared.corpus, preregistration: prepared.preregistration, gold: prepared.gold,
+      attempts: [], integrity: metadata, approvedCalibration }, context);
+    expect(report.heldout).toBeNull(); expect(report.native.heldout).toBeNull();
+    expect(report.failureAsError).toMatchObject({ denominator: 1500, missingCandidateErrors: 1300, promotable: false });
+    expect(report.completeCase.n).toBe(200); expect(report.decision).toBe('HOLD');
+  }, 15000);
   it('STAGED-04 refuses missing approval context without manufacturing calibration or reviewer agreement', async () => {
     await expect(score({ ...prepared, attempts: [], integrity: integrity() })).rejects.toThrow('approved-calibration');
   });

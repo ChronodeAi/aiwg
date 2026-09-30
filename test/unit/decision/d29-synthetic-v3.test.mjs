@@ -215,5 +215,5 @@ describe('D29 synthetic v3', () => {
       const path = `../../../test/fixtures/decision/d29-synthetic-v3/${name === 'approval' ? 'approval-template' : name}.json`;
       expect(heldoutDigest(JSON.parse(await readFile(new URL(path, import.meta.url), 'utf8'))), name).toBe(heldoutDigest(value));
     }
-  }, 30000);
+  }, 8000);
 });
