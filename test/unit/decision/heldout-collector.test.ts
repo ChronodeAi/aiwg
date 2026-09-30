@@ -250,7 +250,10 @@ describe('held-out recorded evidence and study interface', () => {
     trusted_score_source: 'locked-artifact-snapshot', compromise_labels: [], weak_signal_reason: null,
     release_gate: { decision: 'HOLD' as const, reasons: ['fixture-only'] } });
   it('AC6/7 rereads evidence before the scorer, rejects forged integrity and never upgrades HOLD or ROLLBACK', async () => {
-    const c = await setup(); const summary: any = await c.run(fake());
+    const c = await setup();
+    c.bundle.preregistration.calibration = { scope: 'calibrated', allowedModes: ['artifact'] };
+    c.bundle.approval.calibration = { mode: 'artifact', calibrationArtifactDigest: pin };
+    const summary: any = await c.run(fake());
     const score = vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE', candidateQuality: 0.1, baselineQuality: 1, netSavingsUsd: -1 }));
     const module = { prepare, score } as HeldoutStudyModule;
     const metadata = integrity();
@@ -397,7 +400,7 @@ describe('held-out raw transport controls', () => {
     expect(transport).toHaveBeenCalledOnce();
     expect(await scanHeldoutSpend(c.root, 'D29')).toMatchObject({ studyUsdMicros: 0, portfolioUsdMicros: 47700076 });
   });
-  it('HIGH3 adds three runs to the durable $7 study / $47 portfolio baseline without reusing the remainder', async () => {
+  it('HIGH3 retains the durable $7 study / $47 portfolio baseline across three runs without renewing allowance', async () => {
     const c = await setup(3); c.bundle.approval.priorStudySpendUsd = 7; c.bundle.approval.priorPortfolioSpendUsd = 47;
     c.bundle.approval.budget.calls = 2; c.bundle.approval.priceBound.perRequestUsd = 0.4;
     const transport = fake();
@@ -405,12 +408,12 @@ describe('held-out raw transport controls', () => {
     expect(await readdir(join(c.root, 'research/qualification/heldout/baselines'))).toEqual([]);
     expect(await c.run(transport)).toMatchObject({ completedRows: 1, reservedUsdMicros: 400076 });
     c.bundle.approval.runId = 'floor-02';
-    expect(await c.run(transport)).toMatchObject({ completedRows: 2, reservedUsdMicros: 400076 });
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 1, reservedUsdMicros: 0 });
     c.bundle.approval.runId = 'floor-03';
-    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 2, reservedUsdMicros: 0 });
-    expect(transport).toHaveBeenCalledTimes(2);
-    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 7800152, portfolioUsdMicros: 47800152 });
-    expect(await scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).toMatchObject({ studyUsdMicros: 7800152, portfolioUsdMicros: 47800152 });
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 1, reservedUsdMicros: 0 });
+    expect(transport).toHaveBeenCalledOnce();
+    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 7400076, portfolioUsdMicros: 47400076 });
+    expect(await scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).toMatchObject({ studyUsdMicros: 7400076, portfolioUsdMicros: 47400076 });
     c.bundle.approval.priorPortfolioSpendUsd = 46;
     await expect(scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).rejects.toThrow('baseline-changed');
   });
@@ -611,13 +614,55 @@ describe('held-out calibration scope and two-phase approval', () => {
       calibrationPhaseRecordDigest: summary.calibrationPhaseRecordDigest, priorApprovalDigest } });
     await c.clock.sleep(1); c.refresh();
   }
+  it.each(['staged', 'artifact', 'uncalibrated-diagnostic'] as const)('review P1 %s retains each exhausted threshold through resumes and run deletion', async mode => {
+    for (const budget of ['usd', 'calls', 'tokens'] as const) for (const removeRuns of [true, false]) {
+      const c = await scoped(mode); c.bundle.preregistration.providerFailurePolicy.maxRetries = 0;
+      if (budget === 'usd') c.bundle.approval.priceBound.perRequestUsd = 0.6;
+      if (budget === 'calls') c.bundle.approval.budget.calls = 2;
+      if (budget === 'tokens') c.bundle.approval.budget.tokens = 1600;
+      const originalBudget = structuredClone(c.bundle.approval.budget);
+      expect(await c.run(fake())).toMatchObject({ reason: 'budget-exhausted', completedRows: 1 });
+      const before = await scanHeldoutSpend(c.root, 'D17');
+      expect(before.studyCalls).toBe(1);
+      if (removeRuns) await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'unchanged-resume'; c.host.resolveCredential.mockClear(); const transport = fake();
+      expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+      if (removeRuns) await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'larger-approval'; c.bundle.approval.budget[budget] *= 2;
+      if (removeRuns) c.bundle.corpus.definitions[0].spec.question = 'Is this lamp on?';
+      await expect(c.run(transport)).rejects.toThrow('budget-changed');
+      await expect(scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).rejects.toThrow('budget-changed');
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+      expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyCalls: before.studyCalls,
+        studyReservedTokens: before.studyReservedTokens, studyUsdMicros: before.studyUsdMicros });
+      const baseline = JSON.parse(await readFile(join(c.root, 'research/qualification/heldout/baselines/D17.json'), 'utf8'));
+      expect(baseline.budget).toEqual(originalBudget);
+    }
+  });
+  it('review P1 refuses missing or malformed durable thresholds after deleting run evidence', async () => {
+    for (const budget of [undefined, null, { calls: 2, tokens: 1600, usd: null }, { calls: 2, tokens: 1600, usd: 1, extra: true }]) {
+      const c = await scoped(); await c.run(fake());
+      const path = join(c.root, 'research/qualification/heldout/baselines/D17.json');
+      const baseline = JSON.parse(await readFile(path, 'utf8'));
+      baseline.budget = budget; await writeFile(path, JSON.stringify(baseline));
+      await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'missing-thresholds'; c.host.resolveCredential.mockClear(); const transport = fake();
+      await expect(c.run(transport)).rejects.toThrow('schema');
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+    }
+  });
+  it.each(['uncalibrated-diagnostic', 'staged'] as const)('review P2 rejects a structured PROMOTE from a %s scorer', async mode => {
+    const c = await scoped(mode), summary = await c.run(fake());
+    await expect(scoreRun(c, summary, vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE' })))).rejects.toThrow('uncalibrated-report');
+  });
   it('AC1/3 explicitly binds diagnostic scoring and refuses calibrated claims or an unregistered scope', async () => {
     const c = await scoped('uncalibrated-diagnostic'); const summary = await c.run(fake());
-    const score = vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE' }));
+    const score = vi.fn(async () => ({ calibrated: false, decision: 'HOLD' }));
     expect(await scoreRun(c, summary, score)).toMatchObject({ calibrated: false, d09Qualified: false, calibratedGate: false,
       approvedCalibration: { mode: 'uncalibrated-diagnostic' }, decision: 'HOLD' });
     expect(score.mock.calls[0][0]).toMatchObject({ calibrated: false, approvedCalibration: { mode: 'uncalibrated-diagnostic' } });
-    for (const diagnostic of [{}, { calibrated: true }, { calibrated: false, d09Qualified: true }, { calibrated: false, calibratedGate: true },
+    for (const diagnostic of [{}, { calibrated: false, decision: 'PROMOTE' }, { calibrated: true }, { calibrated: false, d09Qualified: true }, { calibrated: false, calibratedGate: true },
       { calibrated: false, d09Qualified: 'qualified' }, { calibrated: false, calibratedGate: null }]) {
       await expect(scoreRun(c, summary, vi.fn(async () => diagnostic) as any)).rejects.toThrow('uncalibrated-report');
     }
@@ -714,7 +759,8 @@ describe('held-out calibration scope and two-phase approval', () => {
       (c.bundle.approval as any).calibration.calibrationPhaseRecordDigest = heldoutDigest(seal);
     }
     c.host.resolveCredential.mockClear(); const transport = fake();
-    await expect(c.run(transport, change === 'same-time' ? { now: () => Date.parse(sealedAt) } : {})).rejects.toThrow(change === 'preregistration-change' ? 'changed-preregistration' : 'calibration-phase');
+    await expect(c.run(transport, change === 'same-time' ? { now: () => Date.parse(sealedAt) } : {})).rejects.toThrow(change === 'preregistration-change'
+      ? 'changed-preregistration' : change === 'budget-change' ? 'budget-changed' : 'calibration-phase');
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
   it('AC1/5 does not seal a checkpoint or a skipped slice and seals terminal measurement failures on resume', async () => {

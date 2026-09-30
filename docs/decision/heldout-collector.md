@@ -169,19 +169,26 @@ Accounted dollars are conservative charges, never net savings.
 
 D17 admission has a USD 8 study ceiling; D29 has USD 6. The portfolio ceiling
 is USD 48. Before each dispatch, accounted run spend plus the next worst-case
-reservation must fit 80% of the minimum of the approved budget, remaining study
-cap and remaining portfolio cap in artifact/diagnostic mode. Staged collection
-fixes the 80% thresholds against the approved budget and original baseline
+reservation must fit the remaining allowance. Every mode fixes its 80%
+thresholds against the first approved study budget and original baseline
 remainders, then subtracts accumulated charges. Both phases and every resume
-share that allowance; switching phase never applies 80% anew to a remainder. The collector rejects an approval whose budget
+share that allowance; switching mode, phase, corpus or run ID never applies 80%
+anew to a remainder. The collector rejects an approval whose budget
 cannot cover even one of its planned calls (including a USD 0.0005 approval
-with a larger reservation). Calls and reserved tokens also stop at 80% of approval, cumulatively across staged phases and resumes.
+with a larger reservation). Calls and reserved tokens also stop at 80% of the
+first approval, cumulatively across all modes, phases and resumes.
 
 The collector records each operator floor once, with its approval digest and
 the counter's genesis digest, in
 `research/qualification/heldout/baselines/{D17,D29,portfolio}.json` beneath the
 canonical artifact root. The initial floors must include spending outside this
-collector; subsequent approvals repeat the original floors.
+collector; subsequent approvals repeat the original floors. Each study baseline
+also pins the first approval's closed USD/call/token `budget`; the portfolio
+baseline has `budget: null` because it has no separate study allowance. Admission
+and dry-run compare every subsequent approval to the stored study budget,
+independently of corpus identity or surviving run directories. Any changed
+budget is refused before credential access; existing thresholds are never
+rewritten by an approval.
 
 A separate `research/qualification/heldout/spend-counter.jsonl` records every
 reservation and settlement across both studies. Each append is hash-chained and
@@ -202,7 +209,8 @@ chain prefix after deleting all run directories. Preserve the counter, head,
 baselines and remaining run evidence; an operator must reconcile them against
 protected backups and provider billing. Never delete these files to restart.
 There is no automatic repair, migration or baseline reset. Old baselines without
-a genesis pin also require reconciliation. Dry-run uses the same accounting
+a genesis pin or the required budget field also require reconciliation; missing,
+null or malformed study budgets fail closed. Dry-run uses the same accounting
 without creating baseline/counter records.
 
 Under the attested free-output tariff, the only residual per-call cost overrun
@@ -307,8 +315,8 @@ D29 still requires a reviewed registry addition and fresh corpus pins.
 This proves reproducibility, not held-out quality or correctness of the gold.
 These experimental v1 contracts are tightened in place: earlier unproven rows
 must be regenerated, and approvals/attempt token reservations must be refreshed.
-The calibration block, frozen access time, summary seal pin and spend-counter
-reserved tokens are required by the tightened v1 schemas. Existing ledgers need
+The calibration block, frozen access time, summary seal pin, spend-counter
+reserved tokens and baseline budget are required by the tightened v1 schemas. Existing ledgers need
 operator reconciliation; there is no silent conversion or spend reset.
 Generator changes require fresh corpus pins; existing ledgers are not migrated
 automatically across these experimental contract changes.
@@ -326,14 +334,15 @@ not a model-visible input or a mechanism for isolating trusted host code.
 Diagnostic mode and pre-fit calibration-phase collection pass `false`; their
 scorers must return `calibrated: false`; `d09Qualified` and `calibratedGate`
 must also be false when present. Conflicting or missing calibration declarations
-are refused.
+and a structured `decision: 'PROMOTE'` are refused.
 Artifact/test mode passes `null` (unknown), because the collector has not
 validated D09. The wrapper reports the binding,
 `calibrationArtifactValidation: 'not-performed'`, `d09Qualified: false` and `calibratedGate: false`. These are
 collector claims; native study diagnostics require their own trusted artifact
 validation. A scorer is trusted host code; arbitrary diagnostic prose is not
 validated as a qualification claim. The library wrapper always returns HOLD or preserves ROLLBACK,
-including when diagnostics contain a proposed PROMOTE. A scorer callback is
+including when artifact/test diagnostics contain a proposed PROMOTE. Diagnostic
+and pre-fit calibration scorers cannot return that structured decision. A scorer callback is
 trusted host code, not a model-supplied executable. Its actual module digest
 must be independently checked by the caller, as CLI preparation does.
 

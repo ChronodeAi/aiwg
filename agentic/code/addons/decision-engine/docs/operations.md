@@ -127,6 +127,9 @@ The collector does not promote models or establish study quality.
 Jev collection requires attested free output and reserves request bytes plus a
 preregistered provider overhead allowance (default 512 tokens). Preserve the
 separate spend counter, head and baseline files under the canonical artifact
-root; deleting run directories does not restore spend allowance. A damaged
-counter requires operator reconciliation before further collection. See the
+root; deleting run directories does not restore spend allowance. The first
+approval pins each study's budget in its baseline. Every mode and resume keeps
+that budget and subtracts cumulative USD, calls and reserved tokens; changed
+budgets are refused before credentials. Baselines missing this required budget
+and damaged counters require operator reconciliation before further collection. See the
 collector guide for the input-overrun assumption and repair requirements.
