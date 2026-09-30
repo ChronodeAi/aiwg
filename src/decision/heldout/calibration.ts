@@ -35,7 +35,7 @@ function terminal(rows: readonly HeldoutRow[], attempts: readonly HeldoutAttempt
     || row.requests.every(request => attempts.some(a => a.rowId === row.id && a.requestId === request.id && a.result?.disposition === 'success')));
 }
 /** Reconstruct the seal from frozen approvals and full journals, including reservations and retries. */
-async function phaseRecord(run: string, sealedAt: string): Promise<HeldoutCalibrationPhase | null> {
+async function phaseRecord(run: string, sealedAt: string, captured?: { attempts: HeldoutAttempt[]; source: Frozen['source'] }): Promise<HeldoutCalibrationPhase | null> {
   const frozen = await readHeldoutFrozen(run), { bundle } = frozen;
   if (!calibrationApproval(bundle)) throw new HeldoutError('calibration-phase-approval');
   const lineage: HeldoutCalibrationPhase['lineage'] = [], journals = [], attempts: HeldoutAttempt[] = [];
@@ -49,6 +49,7 @@ async function phaseRecord(run: string, sealedAt: string): Promise<HeldoutCalibr
     if (!sameStudy(bundle, prior.bundle) || !sameBudget(bundle, prior.bundle) || !calibrationApproval(prior.bundle)) {
       throw new HeldoutError('calibration-phase-lineage');
     }
+    if (captured && prior.source === 'injected-transport') captured.source = 'injected-transport';
     const events = await readHeldoutJournal(path);
     await validateHeldoutJournal(prior.bundle, events);
     const evidenceDigest = await heldoutEvidenceDigest(path, events);
@@ -60,6 +61,7 @@ async function phaseRecord(run: string, sealedAt: string): Promise<HeldoutCalibr
   }
   const rows = heldoutRowsInScope(bundle);
   if (attempts.some(attempt => attempt.result?.disposition === 'stop') || !terminal(rows, attempts)) return null;
+  captured?.attempts.push(...attempts);
   return { schemaVersion: 'decision-heldout-calibration-phase/v1', study: bundle.approval.study, runId: bundle.approval.runId,
     corpusDigest: bundle.approval.corpusDigest, preregistrationDigest: bundle.approval.preregistrationDigest,
     approvalDigest: heldoutDigest(bundle.approval), sealedAt, rowIds: rows.map(row => row.id), lineage, lineageDigest: heldoutDigest(journals) };
@@ -71,6 +73,20 @@ export async function sealHeldoutCalibrationPhase(run: string, sealedAt: string)
   checkHeldoutSchema('CalibrationPhase', record);
   await writeHeldoutFile(join(run, 'calibration-phase.json'), record);
   return heldoutDigest(record);
+}
+/** Offline fitting reads only a reconstructed, independently pinned terminal phase. */
+export async function readHeldoutCalibrationPhase(run: string, trustedApprovalDigest: Digest,
+  trustedCalibrationPhaseRecordDigest: Digest) {
+  const frozen = await readHeldoutFrozen(run, trustedApprovalDigest);
+  const record = await readHeldoutFile(join(run, 'calibration-phase.json')) as HeldoutCalibrationPhase;
+  checkHeldoutSchema('CalibrationPhase', record);
+  if (heldoutDigest(record) !== trustedCalibrationPhaseRecordDigest || record.approvalDigest !== trustedApprovalDigest) {
+    throw new HeldoutError('calibration-phase-seal');
+  }
+  const captured: { attempts: HeldoutAttempt[]; source: Frozen['source'] } = { attempts: [], source: frozen.source };
+  const reconstructed = await phaseRecord(run, record.sealedAt, captured);
+  if (!reconstructed || heldoutDigest(reconstructed) !== heldoutDigest(record)) throw new HeldoutError('calibration-phase-lineage');
+  return { bundle: frozen.bundle, source: captured.source, record, attempts: captured.attempts };
 }
 /** Test access is bound to a separately approved artifact and the terminal calibration lineage. */
 export async function validateHeldoutPhaseAccess(bundle: HeldoutBundle, runsRoot: string,

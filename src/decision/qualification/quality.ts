@@ -149,8 +149,17 @@ export function evaluateBinaryHeldout(
   splits: readonly QualificationSplit[],
   samples: readonly BinaryQualificationSample[],
 ): { overall: BinarySliceMetrics; slices: Record<string, BinarySliceMetrics> } {
+  return evaluateBinarySplit(splits, samples, 'test');
+}
+
+/** Descriptive fit diagnostics; calibration observations are never held-out test evidence. */
+export function evaluateBinaryCalibration(splits: readonly QualificationSplit[], samples: readonly BinaryQualificationSample[]) {
+  return evaluateBinarySplit(splits, samples, 'calibration');
+}
+
+function evaluateBinarySplit(splits: readonly QualificationSplit[], samples: readonly BinaryQualificationSample[], name: 'test' | 'calibration') {
   verifyQualificationSplits(splits);
-  const test = splits.find(split => split.name === 'test')!;
+  const test = splits.find(split => split.name === name)!;
   if (samples.length !== test.ids.length || new Set(samples.map(sample => sample.id)).size !== samples.length
     || samples.some(sample => !test.ids.includes(sample.id))) {
     throw new Error('held-out sample membership mismatch');

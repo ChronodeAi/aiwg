@@ -29,7 +29,7 @@ const questions = {
   reviewerAttention: 'Is reviewer attention needed for incomplete, conflicting, ambiguous or instruction-bearing evidence?',
 };
 const ajv = new Ajv2020({ strict: true }); addFormats(ajv);
-for (const name of ['SdlcScreeningPreregistration', 'SdlcScreeningRelease']) {
+for (const name of ['SdlcScreeningPreregistration', 'SdlcScreeningRelease', 'CalibrationArtifact']) {
   ajv.addSchema(JSON.parse(readFileSync(new URL(`../../../schemas/decision/${name}.v1.schema.json`, import.meta.url), 'utf8')));
 }
 const artifactValidator = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v1.schema.json', import.meta.url), 'utf8')));
@@ -131,6 +131,7 @@ export async function prepare(seed) {
   const analysis = analysisPlan(corpus);
   const preregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D29', frozenAt: FROZEN_AT,
     corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
+    calibration: { scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration'] },
     regeneration: { reason: 'semantic-gold-repair-after-ambiguous-contradiction', collectorCommit: '0cbde8721', priorLiveObservations: 0 },
     providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },
     perRequestTokenBound: 4000, providerOverheadTokens: 512, outputAndHiddenTokenAllowance: 256,
@@ -149,7 +150,9 @@ export function analysisPlan(corpus) {
       minimumGateBlockingSliceSupport: 200, confidenceInterval: { method: 'wilson', levelBps: 9500 }, qualityNonInferiorityBps: 300,
       efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } },
     external: { minimumAcceptedCoverageLowerBps: 1500, maximumBlockingSliceFalseReadyEvents: 0, maximumBlockingSliceFalseReadyUpperBps: 500 },
-    calibration: { method: 'kind-and-semantic-ready-frequency-v1', minimumCellN: 10, smoothing: 'laplace-1', split: 'calibration' },
+    calibration: { method: 'kind-and-semantic-ready-frequency-v1', minimumCellN: 10, smoothing: 'laplace-1', split: 'calibration',
+      profile: { minimumTotalSamples: 200, minimumPerSliceSamples: 25, powerRule: null, confidenceInterval: { method: 'wilson', level: 0.95 },
+        maximumCalibrationError: 0.1, maximumSelectiveRisk: 0.1, expiresAfterDays: 30 } },
     review: { development: 40, holdout: 80, delayedRepeats: 12, reviewer: 'roctinam' },
     missingPolicy: 'withhold-native-report; complete-case-description; missing-as-error',
     conditionalRates: ['false-support/non-support-gold', 'false-support/accepted-support', 'false-ready/non-ready-gold', 'false-ready/accepted-ready'] };
@@ -157,7 +160,7 @@ export function analysisPlan(corpus) {
 
 export function approvalTemplate(corpus, plan) {
   const template = heldoutApprovalTemplate(corpus, plan);
-  return { ...template, reviewer: 'roctinam', budget: { ...template.budget, tokens: 45000000 },
+  return { ...template, calibration: { mode: 'staged', phase: 'calibration' }, reviewer: 'roctinam', budget: { ...template.budget, tokens: 45000000 },
     priceBound: { inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, perRequestUsd: 0,
     evidenceReferences: ['https://www.eesel.ai/blog/typesafe-jev-pricing', 'https://www.mindstudio.ai/blog/jev-pricing-cost-per-token',
       'roctinam/aiwg#2613 comment 153093'], approvalReference: null } };
@@ -176,17 +179,23 @@ export function reviewTemplate(corpus) {
 }
 
 export async function dryRun(prepared) {
+  const phases = Object.fromEntries(['calibration', 'test'].map(phase => {
+    const rows = prepared.corpus.rows.filter(row => phase === 'test' ? row.split === 'test' : row.split !== 'test');
+    return [phase, { subjects: rows.length, initialCalls: rows.reduce((n, row) => n + row.requests.length, 0) }];
+  }));
   const initial = prepared.corpus.rows.reduce((n, row) => n + row.requests.length, 0);
   const planningApproval = { ...prepared.approval, region: 'fixture-region', credentialRef: 'openbao-approle.fixture.typesafe-jev' };
   let inputTokens = 0, reservedTokens = 0, reservedUsdMicros = 0, maximumRequestEstimateTokens = 0;
   for (const row of prepared.corpus.rows) for (const request of row.requests) {
-    const planned = await heldoutRequest(prepared.corpus, prepared.preregistration, planningApproval, row, request);
+    const approval = row.split === 'test' ? { ...planningApproval, calibration: { mode: 'staged', phase: 'test',
+      calibrationArtifactDigest: null, calibrationPhaseRecordDigest: null, priorApprovalDigest: null } } : planningApproval;
+    const planned = await heldoutRequest(prepared.corpus, prepared.preregistration, approval, row, request);
     inputTokens += planned.estimatedTokens;
     reservedTokens += heldoutReservationTokens(prepared.preregistration, planned.estimatedTokens);
     reservedUsdMicros += heldoutReservationMicros(planningApproval, planned.estimatedTokens);
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
   }
-  return { providerCalls: 0, execution: 'individual-questions', subjects: prepared.corpus.rows.length,
+  return { providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
     deterministicNoCallSubjects: prepared.corpus.rows.filter(row => !row.requests.length).length,
     providerOverheadTokens: prepared.preregistration.providerOverheadTokens,
     maximumRequestEstimateTokens,
@@ -197,6 +206,7 @@ export async function dryRun(prepared) {
       reservedUsd: reservedUsdMicros * 2 / 1e6 },
     hardCapUsd: 6, stopAtUsd: 4.8, preregistrationDigest: heldoutDigest(prepared.preregistration),
     analysisDigest: heldoutDigest(prepared.analysis), corpusDigest: heldoutDigest(prepared.corpus),
+    goldDigest: prepared.corpus.provenance.goldDigest, generatorDigest: prepared.corpus.provenance.generatorDigest, scorerDigest: prepared.preregistration.scorerDigest,
     approvalTemplateDigest: heldoutDigest(prepared.approval), splitDigests: prepared.analysis.splits.map(({ name, digest }) => ({ name, digest })) };
 }
 
@@ -233,7 +243,7 @@ export function observationFromAttempts(corpus, row, attempts, corpusDigest = he
   return { observation, lineage, missing: false };
 }
 
-function readinessCell(observation) {
+export function readinessCell(observation) {
   if (!observation) return null;
   return `${observation.kind}:${observation.kind === 'citation' ? observation.support === 'supports' : observation.completeness === 'complete'}`;
 }
@@ -242,7 +252,8 @@ function readinessCell(observation) {
 export function fitReadinessMapping(prepared, attempts) {
   const cells = Object.fromEntries(['citation:true', 'citation:false', 'phase-criterion:true', 'phase-criterion:false']
     .map(id => [id, { n: 0, ready: 0, probability: null }]));
-  const gold = new Map(prepared.gold.rows.map(row => [row.id, row.gold]));
+  const members = new Set(prepared.analysis.splits.find(split => split.name === 'calibration').ids);
+  const gold = new Map(prepared.gold.rows.filter(row => members.has(row.id)).map(row => [row.id, row.gold]));
   const lineage = [], corpusDigest = heldoutDigest(prepared.corpus);
   for (const row of prepared.corpus.rows.filter(row => row.split === 'calibration')) {
     const mapped = observationFromAttempts(prepared.corpus, row, attempts, corpusDigest);
@@ -328,7 +339,12 @@ function validateReviews(prepared, reviews) {
 
 /** Scoring context comes from protected host artifacts, never from corpus payload or provider output. */
 export function studyModule(context) {
-  return { prepare, score: input => score(input, context) };
+  return { prepare, score: async input => {
+    const prepared = await prepare(input.corpus.provenance.seed);
+    const scoped = { ...prepared.corpus, rows: prepared.corpus.rows.filter(row => row.split === 'test') };
+    if (heldoutDigest(input.corpus) !== heldoutDigest(scoped)) refuse('test-phase-corpus');
+    return score({ ...input, corpus: prepared.corpus }, context);
+  } };
 }
 
 export async function score(input, context = null) {
@@ -347,8 +363,13 @@ export async function score(input, context = null) {
   const problems = qualificationIntegrityAllowlistProblems(input.integrity);
   const rollback = !problems.includes('integrity-invalid') && (input.integrity.release_gate.decision === 'ROLLBACK'
     || input.integrity.compromise_labels.length || input.integrity.integrity_state === 'compromised');
-  if (!context) return validatedArtifact({ schemaVersion: 'decision-d29-score/v1', decision: rollback ? 'ROLLBACK' : 'HOLD', native: null,
-    missingInputs: ['protected integrity anchor', 'holdout access log', 'calibration registry and fitted mapping', '132 operator assessments'] });
+  if (!context) refuse('approved-calibration');
+  const approved = input.approvedCalibration;
+  if (approved?.mode !== 'staged' || approved.phase !== 'test'
+    || !/^sha256:[0-9a-f]{64}$/.test(approved.calibrationArtifactDigest)
+    || approved.calibrationArtifactDigest !== context.trustedCalibrationDigest
+    || !/^sha256:[0-9a-f]{64}$/.test(approved.calibrationPhaseRecordDigest)
+    || !/^sha256:[0-9a-f]{64}$/.test(approved.priorApprovalDigest)) refuse('approved-calibration');
   if (problems.includes('integrity-invalid') || heldoutDigest(input.integrity) !== context.trustedIntegrityDigest) refuse('integrity-pin');
   const analysis = prepared.analysis;
   if (heldoutDigest(analysis) !== context.trustedAnalysisDigest || input.preregistration.studyAnalysisDigest !== context.trustedAnalysisDigest) refuse('analysis-pin');
@@ -363,8 +384,20 @@ export async function score(input, context = null) {
   const corpusDigest = heldoutDigest(input.corpus);
   const mapped = rows.map(row => ({ row, ...observationFromAttempts(input.corpus, row, input.attempts, corpusDigest) }));
   const missing = mapped.filter(item => item.missing).map(item => item.row.id);
-  const mapping = fitReadinessMapping(prepared, input.attempts);
-  if (heldoutDigest(mapping) !== context.trustedMappingDigest || heldoutDigest(context.mapping) !== context.trustedMappingDigest) refuse('mapping-pin');
+  const mapping = context.mapping;
+  validateStudyArtifact(mapping);
+  if (mapping.schemaVersion !== 'decision-d29-readiness/v1' || mapping.model !== MODEL
+    || mapping.splitDigest !== analysis.splits[1].digest || mapping.definitionDigest !== heldoutDigest(input.corpus.definitions)
+    || mapping.method !== analysis.calibration.method || Object.values(mapping.cells).some(cell => cell.n < analysis.calibration.minimumCellN)
+    || heldoutDigest(mapping) !== context.trustedMappingDigest) refuse('mapping-pin');
+  if (context.calibration?.registry instanceof CalibrationRegistry) {
+    const artifact = context.calibration.registry.artifactHistory().find(item => item.digest === context.trustedCalibrationDigest);
+    if (artifact) {
+      if (heldoutDigest(artifact.profile) !== heldoutDigest(analysis.calibration.profile)) refuse('calibration-profile');
+      const { qualifyD29Calibration } = await import('./d29-calibration.mjs');
+      qualifyD29Calibration(artifact, new Date(context.nowEpochMs).toISOString());
+    }
+  }
   const reviewers = validateReviews(prepared, context.reviews);
   if (heldoutDigest(context.reviews) !== context.trustedReviewsDigest) refuse('review-pin');
   for (const item of context.reviews.assessments) {

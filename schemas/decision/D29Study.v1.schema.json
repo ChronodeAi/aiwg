@@ -20,6 +20,9 @@
     },
     {
       "$ref": "#/$defs/score"
+    },
+    {
+      "$ref": "#/$defs/calibrationReview"
     }
   ],
   "$defs": {
@@ -115,7 +118,8 @@
             "method",
             "minimumCellN",
             "smoothing",
-            "split"
+            "split",
+            "profile"
           ],
           "properties": {
             "method": {
@@ -130,6 +134,9 @@
             },
             "split": {
               "const": "calibration"
+            },
+            "profile": {
+              "$ref": "https://aiwg.io/schemas/decision/CalibrationArtifact.v1.schema.json#/properties/profile"
             }
           }
         },
@@ -1856,6 +1863,41 @@
           }
         }
       ]
+    },
+    "calibrationReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "approved",
+        "reviewer",
+        "calibrationArtifactDigest",
+        "approvalReference",
+        "reviewedAt"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-calibration-review/v1"
+        },
+        "approved": {
+          "const": true
+        },
+        "reviewer": {
+          "const": "roctinam"
+        },
+        "calibrationArtifactDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "approvalReference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reviewedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     }
   }
 }

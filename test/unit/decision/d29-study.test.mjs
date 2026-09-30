@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prepare, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
-  externalReport, validateStudyArtifact, fitReadinessMapping, SLICES, LABELS, score } from '../../../tools/decision/studies/d29.mjs';
+  externalReport, validateStudyArtifact, fitReadinessMapping, SLICES, LABELS, score, studyModule } from '../../../tools/decision/studies/d29.mjs';
 import { heldoutDigest, heldoutExecutionDigest, validateHeldoutInputs, validateHeldoutBundle, planHeldoutCollection } from '../../../src/decision/heldout/contract.js';
 import { generateHeldoutRow } from '../../../src/decision/heldout/generators.js';
 import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
@@ -44,6 +44,14 @@ function reportFixture() {
 
 // D29 controls and synthetic study protocol. No fixture response is live model evidence.
 describe('D29 frozen synthetic population', () => {
+  it('STAGED-02 preserves the reviewed development IDs and gold while freezing calibration-only first-phase scope', async () => {
+    const frozen = await prepare('d29-study-v2');
+    expect(frozen.reviews.assessments.filter(item => item.phase === 'development').map(item => item.id)).toEqual(
+      Array.from({ length: 8 }, (_, slice) => Array.from({ length: 5 }, (_, i) => `d29-75af1c4c52a01613-tuning-${slice}-00${i}`)).flat());
+    expect(heldoutDigest(frozen.gold)).toBe('sha256:215d5ee87122c567f0fc0be7a52d00e3c5bdf98b1f41254472209dd5c08a5f97');
+    expect(frozen.preregistration.calibration).toEqual({ scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration'] });
+    expect(frozen.approval.calibration).toEqual({ mode: 'staged', phase: 'calibration' });
+  });
   it('AC1/4 freezes exact balanced counts, disjoint families, payloads and digest-bound gold', async () => {
     expect(prepared.corpus.rows).toHaveLength(1600);
     expect(prepared.analysis.splits.map(split => split.ids.length)).toEqual([200, 200, 1200]);
@@ -163,7 +171,7 @@ describe('D29 frozen synthetic population', () => {
     c.bundle.approval.preregistrationDigest = heldoutDigest(prepared.preregistration);
     c.bundle.approval.executionDigest = heldoutExecutionDigest(prepared.corpus, prepared.preregistration, c.bundle.approval);
     const fullPlan = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));
-    expect(fullPlan).toMatchObject({ maximumAttempts: 9000, reservedTokens: 11254952, reservedUsdMicros: 899348, fitsBeforeStop: true });
+    expect(fullPlan).toMatchObject({ maximumAttempts: 2200, reservedTokens: 2746542, reservedUsdMicros: 219388, fitsBeforeStop: true });
     expect(fullPlan.maximumRequestEstimateTokens).toBeLessThanOrEqual(3744);
     expect(c.host.resolveCredential).not.toHaveBeenCalled();
     expect(prepared.approval.budget).toEqual({ calls: 11250, tokens: 45000000, usd: 6 });
@@ -276,7 +284,7 @@ async function setup() {
   const approval = { ...structuredClone(prepared.approval), approved: true, runId: 'd29-offline', reviewer: 'offline-fixture',
     approvalReference: 'fixture-only', sourceCommit: 'a'.repeat(40), exactHeadCi: 'fixture-only', stagingWorkspace: 'fixture',
     region: 'fixture-region', credentialRef: 'openbao-approle.fixture.typesafe-jev', credentialResolverDigest: heldoutDigest('fixture'),
-    corpusDigest: heldoutDigest(corpus), preregistrationDigest: heldoutDigest(preregistration), calibrationDigest: heldoutDigest('fixture'),
+    corpusDigest: heldoutDigest(corpus), preregistrationDigest: heldoutDigest(preregistration), calibration: { mode: 'staged', phase: 'calibration' },
     providerTermsReference: 'offline-no-egress', priorStudySpendUsd: 0, priorPortfolioSpendUsd: 0 };
   approval.priceBound.approvalReference = 'offline-fixture';
   approval.executionDigest = heldoutExecutionDigest(corpus, preregistration, approval);
@@ -308,6 +316,81 @@ function response(init) {
 }
 
 describe('D29 collector integration', () => {
+  it('STAGED-02 calibration approval cannot collect test rows through the study', async () => {
+    const c = await setup();
+    c.bundle.corpus.rows.push(prepared.corpus.rows.find(row => row.split === 'calibration' && row.slice === SLICES[0]),
+      prepared.corpus.rows.find(row => row.split === 'test' && row.slice === SLICES[0]));
+    c.bundle.preregistration.corpusDigest = heldoutDigest(c.bundle.corpus);
+    c.bundle.approval.corpusDigest = heldoutDigest(c.bundle.corpus);
+    c.bundle.approval.preregistrationDigest = heldoutDigest(c.bundle.preregistration);
+    const transport = vi.fn(async (_url, init) => response(init));
+    const result = await c.run(transport);
+    expect(result.status).toBe('complete'); expect(result.completedRows).toBe(9);
+    expect(result.calibrationPhaseRecordDigest).toMatch(/^sha256:/);
+    const attempts = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
+    expect(attempts).toHaveLength(25); expect(attempts.some(attempt => attempt.rowId.includes('-test-'))).toBe(false);
+    for (const calibration of [{ mode: 'uncalibrated-diagnostic' }, { mode: 'artifact', calibrationArtifactDigest: heldoutDigest('fixture') }]) {
+      const bundle = structuredClone(c.bundle); bundle.approval.calibration = calibration;
+      expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).toThrow('calibration-scope');
+    }
+  });
+  it('STAGED-03 reconstructs the sealed phase, fits only calibration, and requires reviewed qualification before registration', async () => {
+    const { prepareCalibrationHandoff, registerCalibrationHandoff, qualifyD29Calibration } = await import('../../../tools/decision/studies/d29-calibration.mjs');
+    const c = await setup();
+    c.bundle.corpus = prepared.corpus; c.bundle.preregistration = prepared.preregistration;
+    Object.assign(c.bundle.approval, { corpusDigest: heldoutDigest(prepared.corpus), preregistrationDigest: heldoutDigest(prepared.preregistration) });
+    c.bundle.approval.executionDigest = heldoutExecutionDigest(prepared.corpus, prepared.preregistration, c.bundle.approval);
+    const result = await c.run(vi.fn(async (_url, init) => response(init)));
+    expect(result).toMatchObject({ status: 'complete', completedRows: 400 });
+    const input = { run: c.runDir, trustedApprovalDigest: heldoutDigest(c.bundle.approval),
+      trustedCalibrationPhaseRecordDigest: result.calibrationPhaseRecordDigest };
+    const handoff = await prepareCalibrationHandoff(input);
+    expect(handoff.mapping.cells['citation:true']).toMatchObject({ n: 25, ready: 25, probability: 26 / 27 });
+    expect(handoff.artifact).toMatchObject({ schemaVersion: 'decision-calibration-artifact/v1', approval: { state: 'observed', reference: null },
+      identity: { actualModel: 'jev-1.13.0', adapterVersion: '1.0.0', calibrator: { id: 'd29-readiness', version: '1', parametersDigest: heldoutDigest(handoff.mapping) } },
+      metrics: { totalSamples: 200, perSliceSamples: 25, selectiveRisk: 0 } });
+    expect(handoff.artifact.metrics.calibrationError).toBeCloseTo((75 / 27 + 75 / 77) / 200, 12);
+    expect(handoff.approval.calibration).toEqual({ mode: 'staged', phase: 'test', calibrationArtifactDigest: handoff.artifact.digest,
+      calibrationPhaseRecordDigest: result.calibrationPhaseRecordDigest, priorApprovalDigest: input.trustedApprovalDigest });
+    expect(handoff.approval.approved).toBe(false); expect(handoff.approval.approvalReference).toBeNull();
+    await expect(registerCalibrationHandoff({ ...input, review: null, trustedReviewDigest: null })).rejects.toThrow('calibration-review');
+    const registry = new CalibrationRegistry(); registry.registerArtifact(handoff.artifact);
+    const request = { runId: 'unapproved', requestedAlias: 'jev-1.13.0', actualIdentity: handoff.artifact.identity,
+      calibrationArtifactId: handoff.artifact.id, at: '2026-10-02T00:00:00Z' };
+    const policy = { unknown: 'defer', incompatible: 'fail', shadowRequired: 'shadow', unusableCalibration: 'require-approval' };
+    expect(registry.resolve(request, policy).action).toBe('require-approval');
+    const review = { schemaVersion: 'decision-d29-calibration-review/v1', approved: true, reviewer: 'roctinam',
+      calibrationArtifactDigest: handoff.artifact.digest, approvalReference: 'offline-fixture-only', reviewedAt: request.at };
+    const registered = await registerCalibrationHandoff({ ...input, review, trustedReviewDigest: heldoutDigest(review) });
+    expect(registered.artifact.digest).not.toBe(handoff.artifact.digest);
+    expect(registered.approval.calibration.calibrationArtifactDigest).toBe(registered.artifact.digest);
+    expect(registered.compatibility.action).toBe('allow'); expect(registered.approval.approved).toBe(false);
+    for (const patch of [{ totalSamples: 199 }, { perSliceSamples: 24 }, { calibrationError: 0.11 }, { selectiveRisk: 0.11 },
+      { confidenceIntervals: { selectiveRisk: { lower: 0, upper: 0.101 } } }, { calibrationError: null }]) {
+      const { digest, ...payload } = structuredClone(registered.artifact); Object.assign(payload.metrics, patch);
+      expect(() => qualifyD29Calibration({ ...payload, digest: calibrationArtifactDigest(payload) }, request.at)).toThrow();
+    }
+    expect(() => qualifyD29Calibration(handoff.artifact, request.at)).toThrow('calibration-unqualified');
+    expect(() => qualifyD29Calibration(registered.artifact, '2026-12-01T00:00:00Z')).toThrow('calibration-unqualified');
+    const { runD29Command } = await import('../../../tools/decision/d29-study.mjs');
+    const output = join(c.root, 'fit-output');
+    expect(await runD29Command(['--fit-calibration', c.runDir, input.trustedApprovalDigest, result.calibrationPhaseRecordDigest, output]))
+      .toMatchObject({ providerCalls: 0, registration: 'pending-operator-review', testApproved: false });
+    const reviewTemplate = JSON.parse(await readFile(join(output, 'calibration-review-template.json'), 'utf8'));
+    expect(reviewTemplate).toMatchObject({ approved: null, approvalReference: null, reviewedAt: null, calibrationArtifactDigest: handoff.artifact.digest });
+    const reviewPath = join(c.root, 'review.json'); await writeFile(reviewPath, JSON.stringify(review));
+    expect(await runD29Command(['--register-calibration', c.runDir, input.trustedApprovalDigest, result.calibrationPhaseRecordDigest,
+      reviewPath, heldoutDigest(review), join(c.root, 'registered-output')]))
+      .toMatchObject({ providerCalls: 0, registration: 'reviewed', calibrationArtifactDigest: registered.artifact.digest, testApproved: false });
+    expect(JSON.parse(await readFile(join(c.root, 'registered-output', 'test-approval-template.json'), 'utf8')))
+      .toMatchObject({ approved: false, approvalReference: null, calibration: { phase: 'test', calibrationArtifactDigest: registered.artifact.digest } });
+    await expect(registerCalibrationHandoff({ ...input, review: { ...review, calibrationArtifactDigest: heldoutDigest('wrong') },
+      trustedReviewDigest: heldoutDigest(review) })).rejects.toThrow('calibration-review');
+    await expect(prepareCalibrationHandoff({ ...input, trustedCalibrationPhaseRecordDigest: heldoutDigest('wrong') })).rejects.toThrow();
+    const path = join(c.runDir, 'calibration-phase.json'), seal = JSON.parse(await readFile(path, 'utf8'));
+    seal.rowIds.pop(); await writeFile(path, JSON.stringify(seal));
+    await expect(prepareCalibrationHandoff({ ...input, trustedCalibrationPhaseRecordDigest: heldoutDigest(seal) })).rejects.toThrow('calibration-phase-lineage');
+  }, 120000);
   it('AC1/2/3/5/7 projects actual semantic payloads and maps native receipts; hard blockers make zero requests', async () => {
     const c = await setup(), transport = vi.fn(async (_url, init) => response(init));
     expect(await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).toMatchObject({ maximumAttempts: 44, reservedUsdMicros: 4418 });
@@ -373,7 +456,7 @@ describe('D29 collector integration', () => {
     expect(observationFromAttempts(c.bundle.corpus, c.bundle.corpus.rows[1], attempts).missing).toBe(true);
     expect(transport).toHaveBeenCalledTimes(4);
   });
-  it('AC8/9/13 fits calibration only, binds every scored row to receipts, and withholds a report for missing measurements', async () => {
+  it('STAGED-04/AC8/9/13 fits calibration only, binds every scored row to receipts, and withholds a report for missing measurements', async () => {
     const c = await setup();
     await c.run(vi.fn(async (_url, init) => response(init)));
     const templates = (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt);
@@ -402,9 +485,8 @@ describe('D29 collector integration', () => {
       slice: { id: 'offline-synthetic', hash: mapping.splitDigest }, calibrator: { id: 'd29-readiness', version: '1', parametersDigest: mappingDigest } };
     const draft = { schemaVersion: 'decision-calibration-artifact/v1', id: 'offline-d29-calibration', identity,
       splitProvenance: { id: 'offline-calibration', hash: mapping.splitDigest, holdoutAccessedAt: null },
-      profile: { minimumTotalSamples: 100, minimumPerSliceSamples: 20, powerRule: null, confidenceInterval: { method: 'wilson', level: 0.95 },
-        maximumCalibrationError: 0.1, maximumSelectiveRisk: 0.1, expiresAfterDays: 30 },
-      metrics: { totalSamples: 150, perSliceSamples: 25, calibrationError: 0.04, selectiveRisk: 0, confidenceIntervals: { ece: { lower: 0, upper: 0.08 } } },
+      profile: structuredClone(prepared.analysis.calibration.profile),
+      metrics: { totalSamples: 200, perSliceSamples: 25, calibrationError: 0.04, selectiveRisk: 0, confidenceIntervals: { selectiveRisk: { lower: 0, upper: 0.08 } } },
       effectiveAt: '2026-10-01T00:00:00Z', limitations: ['Offline fixture only; no calibration qualification.'],
       approval: { state: 'approved', reference: 'offline-fixture-only' } };
     const registry = new CalibrationRegistry(), artifact = { ...draft, digest: calibrationArtifactDigest(draft) };
@@ -427,8 +509,18 @@ describe('D29 collector integration', () => {
       calibration: { registry, request: { runId: 'offline-d29', requestedAlias: 'jev-1.13.0', actualIdentity: identity,
         calibrationArtifactId: artifact.id, at: '2026-10-03T00:00:00Z' },
         policy: { unknown: 'defer', incompatible: 'fail', shadowRequired: 'shadow', unusableCalibration: 'require-approval' } } };
-    const input = { corpus: prepared.corpus, preregistration: prepared.preregistration, gold: prepared.gold, attempts, integrity: metadata };
+    const approvedCalibration = { mode: 'staged', phase: 'test', calibrationArtifactDigest: artifact.digest,
+      calibrationPhaseRecordDigest: heldoutDigest('offline-seal'), priorApprovalDigest: heldoutDigest('offline-approval') };
+    const input = { corpus: prepared.corpus, preregistration: prepared.preregistration, gold: prepared.gold,
+      attempts: attempts.filter(attempt => attempt.rowId.includes('-test-')), integrity: metadata, approvedCalibration };
+    for (const calibration of [undefined, { mode: 'staged', phase: 'calibration' }, { mode: 'artifact', calibrationArtifactDigest: artifact.digest },
+      { ...approvedCalibration, calibrationArtifactDigest: heldoutDigest('wrong') }]) {
+      await expect(score({ ...input, attempts, approvedCalibration: calibration }, context)).rejects.toThrow('approved-calibration');
+    }
     const report = await score(input, context);
+    const scoped = { ...input, corpus: { ...prepared.corpus, rows: prepared.corpus.rows.filter(row => row.split === 'test') } };
+    expect((await studyModule(context).score(scoped)).heldout.samples).toHaveLength(1200);
+    await expect(studyModule(context).score(input)).rejects.toThrow('test-phase-corpus');
     expect(report.heldout.samples).toHaveLength(1200);
     expect(report.reviewerN).toBe(80); expect(report.provenance).toHaveLength(1200);
     expect(report.heldout.samples.filter(row => row.candidate.route === 'ADVISORY_READY')).toHaveLength(300);
@@ -437,11 +529,16 @@ describe('D29 collector integration', () => {
     expect(report.failureAsError).toMatchObject({ missingCandidateErrors: 0, denominator: 1200 });
     expect(report.native.decision).toBe('PROMOTE'); expect(report.decision).toBe('HOLD');
     const missingId = attempts.find(attempt => attempt.rowId.includes('-test-')).rowId;
-    const incomplete = await score({ ...input, attempts: attempts.filter(attempt => attempt.rowId !== missingId) }, context);
+    const incomplete = await score({ ...input, attempts: input.attempts.filter(attempt => attempt.rowId !== missingId) }, context);
     expect(incomplete.heldout).toBeNull(); expect(incomplete.native.heldout).toBeNull();
     expect(incomplete.completeCase.n).toBe(1199); expect(incomplete.failureAsError.missingCandidateErrors).toBe(1);
     expect(incomplete.proposedStatisticalDisposition).toBe('HOLD');
     await expect(score(input, { ...context, calibration: null })).rejects.toThrow('calibration-identity');
+    const permissive = structuredClone(draft); permissive.profile.maximumSelectiveRisk = 1;
+    const badArtifact = { ...permissive, digest: calibrationArtifactDigest(permissive) }, badRegistry = new CalibrationRegistry();
+    badRegistry.registerArtifact(badArtifact);
+    await expect(score({ ...input, approvedCalibration: { ...approvedCalibration, calibrationArtifactDigest: badArtifact.digest } },
+      { ...context, trustedCalibrationDigest: badArtifact.digest, calibration: { ...context.calibration, registry: badRegistry } })).rejects.toThrow('calibration-profile');
     await expect(score(input, { ...context, calibration: { ...context.calibration, request: {
       ...context.calibration.request, actualIdentity: { ...identity, adapterVersion: 'unqualified' } } } })).rejects.toThrow('calibration-identity');
     const prematureRepeat = structuredClone(reviews);
@@ -450,7 +547,7 @@ describe('D29 collector integration', () => {
     await expect(score({ ...input, integrity: { ...metadata, sample_n: 9999 } }, context)).rejects.toThrow('integrity-pin');
     await expect(score(input, { ...context, access: { ...access, firstTestAccessAt: '2026-09-01T00:00:00Z' } })).rejects.toThrow('holdout-access');
   }, 30000);
-  it('AC8/13 names missing live inputs without manufacturing calibration or reviewer agreement', async () => {
-    expect(await score({ ...prepared, attempts: [], integrity: integrity() })).toMatchObject({ decision: 'HOLD', native: null });
+  it('STAGED-04 refuses missing approval context without manufacturing calibration or reviewer agreement', async () => {
+    await expect(score({ ...prepared, attempts: [], integrity: integrity() })).rejects.toThrow('approved-calibration');
   });
 });
