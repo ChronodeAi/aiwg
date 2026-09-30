@@ -144,6 +144,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off held-out collection pins each study's first approved
+  budget beside its durable spend baseline, enforces cumulative USD/call/token
+  thresholds in every mode after resumes or run deletion, and rejects structured
+  PROMOTE claims from diagnostic and pre-fit calibration scorers. Live
+  qualification remains pending (#2778)
+
 - Close paid-output and deleted-history cap overruns in the experimental,
   default-off held-out collector: require attested free Jev output, reserve
   serialized input bytes plus preregistered provider overhead, retain monotonic
