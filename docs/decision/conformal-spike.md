@@ -23,6 +23,13 @@ versioned derived artifacts.
 - `tools/experiments/conformal/collect-jev.v2.mjs` is an opt-in live collection
   harness through `evaluateDecisionRuleset` and `JevDecisionAdapter`. It is
   dry-run by default. The budget rules are listed below.
+- The offline conformance test injects a separate 180-row, schema-valid design
+  through the collector's existing arguments and `runAnalysis`'s `testDesign`
+  test seam. It exercises collector provenance, the four possible outcomes,
+  budget resume, and pending-row planning with a fake Jev adapter. A dry-run
+  check covers the full 1,816-row plan. These test outcomes are fixture results,
+  not live Jev evidence; the checked-in preregistration and frozen v2 hashes
+  remain unchanged.
 - `schemas/decision/ConformalPreregistration.v2.schema.json`,
   `ConformalFrozenOpenData.v2.schema.json`, and
   `ConformalOpenDataReport.v2.schema.json` are closed, versioned contracts. The
