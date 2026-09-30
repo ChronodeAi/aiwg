@@ -92,6 +92,9 @@ export function validateSensitivityPlan(value: unknown): SensitivityPlan {
       if (!allowed.has(change.path)) problems.push(`variant ${variant.id} changes undeclared path ${change.path}`);
       if (hasForbiddenPointerSegment(change.path)) problems.push(`variant ${variant.id} uses prohibited pointer segment at ${change.path}`);
       if (looksExecutable(change.value)) problems.push(`variant ${variant.id} contains executable or locator-like value at ${change.path}`);
+      if (plan.analysisKind === 'policy-replay' && changesTargetIdentity(change.value)) {
+        problems.push(`variant ${variant.id} would change target identity at ${change.path}`);
+      }
       const domain = domains.get(change.path);
       if (domain && !domain.values.some(value => canonicalJson(value) === canonicalJson(change.value))) {
         problems.push(`variant ${variant.id} value is outside the approved domain for ${change.path}`);
@@ -142,14 +145,26 @@ export function validateSensitivityReport(value: unknown): SensitivityReport {
   return report;
 }
 
+// Binding changes are limited to acceptance policy and fallback routing below a single target;
+// replacing a target, the target list or a whole evaluation could swap the executor.
 function policyReplayPath(path: string): boolean {
   return path.startsWith('/ruleset/spec/rules/') || path === '/ruleset/spec/defaultOutcome'
     || path === '/ruleset/spec/failureOutcome' || path === '/ruleset/spec/conflict'
-    || path.startsWith('/binding/spec/evaluations/');
+    || /^\/binding\/spec\/evaluations\/[^/]+\/(?:targets\/\d+\/acceptance|fallbackOn)(?:\/.*)?$/.test(path);
 }
 
 function forbiddenAuthorityPath(path: string): boolean {
-  return /(?:^|\/)(model|credentialRef|credential|executor|permission|permissions|legalCandidates|subagent|adapter)(?:$|\/)/i.test(path);
+  return /(?:^|\/)(model|requestedModel|credentialRef|credential|executor|permission|permissions|legalCandidates|subagent|adapter|adapterVersion)(?:$|\/)/i.test(path);
+}
+
+const TARGET_IDENTITY_KEYS = new Set(['adapter', 'adapterVersion', 'model', 'requestedModel', 'subagent', 'credentialRef']);
+
+function changesTargetIdentity(value: JsonValue): boolean {
+  if (Array.isArray(value)) return value.some(changesTargetIdentity);
+  if (value && typeof value === 'object') {
+    return Object.entries(value).some(([key, item]) => TARGET_IDENTITY_KEYS.has(key) || changesTargetIdentity(item));
+  }
+  return false;
 }
 
 function hasForbiddenPointerSegment(path: string): boolean {

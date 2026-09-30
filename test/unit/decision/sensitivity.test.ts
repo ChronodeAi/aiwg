@@ -223,6 +223,17 @@ function distinctSource(built: ReturnType<typeof artifacts>, tag: string): Rules
   return sourceResult;
 }
 
+function rotatingPlan(id: string, principal: string): SensitivityPlan {
+  const plan = pinnedPlan('triage-input-field');
+  plan.id = id;
+  plan.actor.principalId = principal;
+  plan.probeControl.maxReportsPerWindow = 1;
+  plan.baselineStability.enabled = false;
+  plan.baselineStability.repeats = 0;
+  plan.variants = [{ id: 'risk-high', changes: [{ path: '/input/riskSignal', value: 'high' }] }];
+  return plan;
+}
+
 function multiEvaluationArtifacts() {
   const built = artifacts();
   built.ruleset.spec.evaluations.push({ alias: 'compliance', decision: artifactPin(built.definition), inputPointer: '' });
@@ -702,6 +713,28 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect(report.rows[0]?.warnings).toContain('unreplayable-unobserved-outcome');
   });
 
+  it('CFX-REPLAY-11 rejects policy-replay changes that could replace target identity', () => {
+    const built = artifacts();
+    const target = built.binding.spec.evaluations.risk!.targets[0]!;
+    const replacement = { ...structuredClone(target), adapter: 'llm-subagent', model: 'totally-different-model',
+      acceptance: { mode: 'confidence-threshold', profile: 'fixture-confidence', minimumBps: 9000 } } as Record<string, unknown>;
+    delete replacement.credentialRef;
+    const probes: Array<{ path: string; value: SensitivityPlan['variants'][number]['changes'][number]['value'] }> = [
+      { path: '/binding/spec/evaluations/risk/targets/0', value: replacement as never },
+      { path: '/binding/spec/evaluations/risk/targets/0/adapterVersion', value: 'other-version' },
+      { path: '/binding/spec/evaluations/risk/targets', value: [replacement] as never },
+    ];
+    for (const probe of probes) {
+      const plan = pinnedPlan('triage-threshold-replay');
+      plan.id = 'triage-target-identity';
+      plan.allowedPaths = [probe.path];
+      plan.pathDomains = [{ path: probe.path, values: [probe.value], sensitivity: 'internal' }];
+      plan.variants = [{ id: 'replace-target', changes: [{ path: probe.path, value: probe.value }] }];
+      const error = rejection(() => validateSensitivityPlan(plan));
+      expect(error.details.join('\n'), probe.path).toMatch(/target identity|not deterministic policy|alter model/);
+    }
+  });
+
   it('CFX-INPUT-01 uses fresh invocation IDs, separates stability controls, and redacts sensitive field values', async () => {
     const built = artifacts();
     const plan = pinnedPlan('triage-input-field');
@@ -957,6 +990,50 @@ describe('D23 sensitivity contracts (#2616)', () => {
     }
   });
 
+  it('CFX-INPUT-10 returns a failed report for unusable returned or thrown reevaluation results', async () => {
+    const built = artifacts();
+    const plan = pinnedPlan('triage-input-field');
+    plan.baselineStability.enabled = false;
+    plan.baselineStability.repeats = 0;
+    plan.variants = [{ id: 'risk-high', changes: [{ path: '/input/riskSignal', value: 'high' }] }];
+    const common = {
+      plan,
+      sourceRuleset: built.ruleset,
+      sourceBinding: built.binding,
+      sourceInput: built.sourceInput,
+      sourceResult: built.sourceResult,
+      generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: PROBE_IDENTITY,
+      now: () => 1_000,
+    };
+    const withUsage = (result: RulesetResult, usage: Record<string, unknown>) => {
+      result.spec.evaluations.risk!.spec.attempts[0]!.usage = usage as never;
+      return result;
+    };
+    // usageValid: the attempt lineage is still trustworthy spend evidence (11 + 3 tokens, 20 micros);
+    // otherwise spend is unknown and the reservation (12 tokens, 10 micros) is charged and flagged.
+    const malformed: Array<[string, boolean, (result: RulesetResult) => RulesetResult]> = [
+      ['missing-metadata', true, result => { delete (result as Partial<RulesetResult>).metadata; return result; }],
+      ['nan-usage', false, result => withUsage(result, { inputTokens: Number.NaN, outputTokens: 1, costUsd: 0 })],
+      ['bigint-usage', false, result => withUsage(result, { inputTokens: 10n, outputTokens: 1, costUsd: 0 })],
+      ['negative-usage', false, result => withUsage(result, { inputTokens: -1_000, outputTokens: 1, costUsd: -5 })],
+      ['cyclic', true, result => { (result.spec as Record<string, unknown>).self = result; return result; }],
+    ];
+    for (const [name, usageValid, mutate] of malformed) {
+      const returned = await analyzeDecisionSensitivity({ ...common, probeState: probeState(),
+        reevaluate: async request => mutate(resultWith(request.input, request.invocationId)) });
+      const thrown = await analyzeDecisionSensitivity({ ...common, probeState: probeState(),
+        reevaluate: async request => { throw Object.assign(new Error('failed'), { result: mutate(resultWith(request.input, request.invocationId)) }); } });
+      for (const report of [returned, thrown]) {
+        expect(report.status, name).toBe('failed');
+        expect(report.budget.backendCalls, name).toBe(1);
+        expect(report.budget.tokens, name).toBe(usageValid ? 14 : 12);
+        expect(report.budget.costMicros, name).toBe(usageValid ? 20 : 10);
+        expect(report.warnings.includes('spend-unknown-reserved'), name).toBe(!usageValid);
+      }
+    }
+  });
+
   it('CFX-AUTH-01 rejects stale authorization before any input reevaluation', async () => {
     const built = artifacts();
     const plan = pinnedPlan('triage-input-field');
@@ -1134,28 +1211,18 @@ describe('D23 sensitivity contracts (#2616)', () => {
     const built = artifacts();
     const windowMs = 3_600_000;
     let clock = 100 * windowMs + 1_000;
-    const common = {
+    // Eight principals each fill their per-principal quota (64) with distinct inputs: 8 x 64 = 512 slots.
+    const run = (principal: number, subject: number) => analyzeDecisionSensitivity({
+      plan: rotatingPlan(`triage-capacity-${principal}-${subject}`, `reviewer-capacity-${principal}`),
       sourceRuleset: built.ruleset,
       sourceBinding: built.binding,
-      sourceInput: built.sourceInput,
+      sourceInput: { riskSignal: `capacity-${principal}-${subject}` },
+      sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
+      probeIdentity: { ...PROBE_IDENTITY, principalId: `reviewer-capacity-${principal}` },
       now: () => clock,
-      reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
-    };
-    // Eight principals each fill their per-principal quota (64) with distinct source results: 8 x 64 = 512 slots.
-    const run = (principal: number, subject: number) => {
-      const sourceResult = distinctSource(built, `capacity-${principal}-${subject}`);
-      const plan = pinnedPlan('triage-input-field');
-      plan.id = `triage-capacity-${principal}-${subject}`;
-      plan.actor.principalId = `reviewer-capacity-${principal}`;
-      plan.source.result = artifactPin(sourceResult);
-      plan.probeControl.maxReportsPerWindow = 1;
-      plan.baselineStability.enabled = false;
-      plan.baselineStability.repeats = 0;
-      plan.variants = [{ id: 'no-change', changes: [{ path: '/input/riskSignal', value: 'low' }] }];
-      return analyzeDecisionSensitivity({ ...common, plan, sourceResult,
-        probeIdentity: { ...PROBE_IDENTITY, principalId: plan.actor.principalId } });
-    };
+      reevaluate: async request => resultWith(request.input, request.invocationId),
+    });
     for (let principal = 0; principal < 8; principal += 1) {
       for (let subject = 0; subject < 64; subject += 1) expect((await run(principal, subject)).status).toBe('completed');
     }
@@ -1255,26 +1322,17 @@ describe('D23 sensitivity contracts (#2616)', () => {
 
   it('CFX-PROBE-07 caps implicit probe slots per principal so one principal cannot exhaust the store', async () => {
     const built = artifacts();
-    const windowMs = 3_600_000;
-    const common = {
+    const run = (principal: string, subject: number) => analyzeDecisionSensitivity({
+      plan: rotatingPlan(`triage-quota-${principal}-${subject}`, principal),
       sourceRuleset: built.ruleset,
       sourceBinding: built.binding,
-      sourceInput: built.sourceInput,
+      sourceInput: { riskSignal: `quota-${principal}-${subject}` },
+      sourceResult: built.sourceResult,
       generatedAt: '2026-09-29T12:00:00.000Z',
-      now: () => 200 * windowMs + 1_000,
-      reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
-    };
-    const run = (principal: string, subject: number) => {
-      const sourceResult = distinctSource(built, `quota-${principal}-${subject}`);
-      const plan = pinnedPlan('triage-input-field');
-      plan.id = `triage-quota-${principal}-${subject}`;
-      plan.actor.principalId = principal;
-      plan.source.result = artifactPin(sourceResult);
-      plan.baselineStability.enabled = false;
-      plan.baselineStability.repeats = 0;
-      plan.variants = [{ id: 'no-change', changes: [{ path: '/input/riskSignal', value: 'low' }] }];
-      return analyzeDecisionSensitivity({ ...common, plan, sourceResult, probeIdentity: { ...PROBE_IDENTITY, principalId: principal } });
-    };
+      probeIdentity: { ...PROBE_IDENTITY, principalId: principal },
+      now: () => 200 * 3_600_000 + 1_000,
+      reevaluate: async request => resultWith(request.input, request.invocationId),
+    });
     const statuses: string[] = [];
     for (let subject = 0; subject < 70; subject += 1) {
       const report = await run('reviewer-rotating', subject);
@@ -1323,6 +1381,64 @@ describe('D23 sensitivity contracts (#2616)', () => {
     expect(noEvaluator.warnings.join(' ')).toContain('host-supplied evaluator');
     expect((await analyzeDecisionSensitivity({ ...common, probeState: evaluatorState, reevaluate, plan: makePlan('triage-after-evaluator', one) })).status)
       .toBe('completed');
+  });
+
+  it('CFX-PROBE-09 keys probe limits on the probed input and policy identity, not the caller-supplied result artifact', async () => {
+    const built = artifacts();
+    const run = (index: number, extra: Record<string, unknown>) => {
+      const sourceResult = distinctSource(built, `rotated-${index}`);
+      const plan = pinnedPlan('triage-input-field');
+      plan.id = `triage-result-rotation-${index}`;
+      plan.source.result = artifactPin(sourceResult);
+      plan.baselineStability.enabled = false;
+      plan.baselineStability.repeats = 0;
+      return analyzeDecisionSensitivity({
+        plan,
+        sourceRuleset: built.ruleset,
+        sourceBinding: built.binding,
+        sourceInput: built.sourceInput,
+        sourceResult,
+        generatedAt: '2026-09-29T12:00:00.000Z',
+        probeIdentity: PROBE_IDENTITY,
+        reevaluate: async (request: { input: unknown; invocationId: string }) => resultWith(request.input, request.invocationId),
+        ...extra,
+      } as never);
+    };
+    const hostState = probeState();
+    const hostStatuses: string[] = [];
+    for (let index = 0; index < 12; index += 1) hostStatuses.push((await run(index, { now: () => 1_000, probeState: hostState })).status);
+    // The fixture allows four reports per window; rotating the result artifact must not add more.
+    expect(hostStatuses.filter(status => status === 'completed')).toHaveLength(4);
+    const defaultStatuses: string[] = [];
+    for (let index = 0; index < 20; index += 1) defaultStatuses.push((await run(100 + index, { now: () => 300 * 3_600_000 + 1_000 })).status);
+    expect(defaultStatuses.filter(status => status === 'completed')).toHaveLength(4);
+    // Padding the input with fields outside the ruleset input schema cannot mint a new subject either.
+    const padded = await run(200, { now: () => 1_000, probeState: probeState(), sourceInput: { riskSignal: 'low', padding: 'x' } });
+    expect(padded.status).toBe('rejected');
+    expect(padded.warnings.join(' ')).toContain('source input');
+  });
+
+  it('CFX-PROBE-10 applies the per-principal slot cap to host-supplied probe state', async () => {
+    const built = artifacts();
+    const state = probeState();
+    const statuses: string[] = [];
+    for (let index = 0; index < 70; index += 1) {
+      const report = await analyzeDecisionSensitivity({
+        plan: rotatingPlan(`triage-host-quota-${index}`, 'reviewer-a'),
+        sourceRuleset: built.ruleset,
+        sourceBinding: built.binding,
+        sourceInput: { riskSignal: `host-quota-${index}` },
+        sourceResult: built.sourceResult,
+        generatedAt: '2026-09-29T12:00:00.000Z',
+        probeIdentity: PROBE_IDENTITY,
+        now: () => 1_000,
+        probeState: state,
+        reevaluate: async request => resultWith(request.input, request.invocationId),
+      });
+      statuses.push(report.status);
+      if (report.status === 'rejected') expect(report.warnings.join(' ')).toContain('probe principal quota exhausted');
+    }
+    expect(statuses.filter(status => status === 'completed')).toHaveLength(64);
   });
 
   it('CFX-DISABLED-01 leaves ordinary decision evaluation byte-identical when sensitivity is not invoked', async () => {

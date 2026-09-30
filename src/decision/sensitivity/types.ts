@@ -186,6 +186,8 @@ export interface SensitivityProbeState {
    * (`floor(now / windowMs)`), never from the plan's `probeControl.windowId`. Defaults to one hour.
    */
   windowMs?: number;
+  /** Host-owned cap on distinct counter entries per principal per window, in each map. Defaults to 64. */
+  maxEntriesPerPrincipal?: number;
 }
 
 /** Host-authenticated caller identity; probe counters are keyed on it, never on plan-authored fields. */

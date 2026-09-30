@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { applyTargetAcceptance } from '../acceptance.js';
 import { composeRuleset } from '../compose.js';
 import { decisionInvocationFingerprint } from '../receipts.js';
-import { artifactDigest, artifactPin, assertArtifactPin, validateBinding, validateRuleset } from '../validate.js';
+import { artifactDigest, artifactPin, assertArtifactPin, validateAgainstSchema, validateBinding, validateRuleset } from '../validate.js';
 import type {
   AdapterObservation,
   ArtifactPin,
@@ -48,7 +48,7 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
   }
   try {
     enforceProbeLimits(plan, request.probeState ?? defaultProbeState, probeRoot(plan, request), request.now?.() ?? Date.now(),
-      request.probeIdentity, artifactPin(request.sourceResult).digest);
+      request.probeIdentity, probeSubjectDigest(request));
   } catch (error) {
     if (error instanceof SensitivityContractError) return rejectedReport(request, error.details.length ? [...error.details] : [error.message]);
     throw error;
@@ -80,16 +80,21 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
         return failedPartialReport(request, plan, rows, budget, warnings, `baseline ${variantId} failed: ${sanitizeReason(error)}`);
       }
       if (!isRulesetResultShape(result)) {
-        spendUnknownReserve(budget, warnings, request.sourceBinding, request.sourceResult);
+        chargeUnusableResult(budget, warnings, request, result);
         return failedPartialReport(request, plan, rows, budget, warnings, `baseline ${variantId} returned a malformed result`);
       }
-      const failure = validateReevaluationResult(request, result, variantId, invocationId, receiptFingerprint, input);
-      if (failure) {
-        spendResult(budget, result);
-        return failedPartialReport(request, plan, rows, budget, warnings, failure);
+      try {
+        const failure = validateReevaluationResult(request, result, variantId, invocationId, receiptFingerprint, input);
+        if (failure) {
+          spendResult(budget, result);
+          return failedPartialReport(request, plan, rows, budget, warnings, failure);
+        }
+        rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: `baseline-${repeat + 1}`,
+          kind: 'baseline-stability', inference: 'new-invocation', changes: [], invocationId }));
+      } catch {
+        chargeUnusableResult(budget, warnings, request, result);
+        return failedPartialReport(request, plan, rows, budget, warnings, `baseline ${variantId} returned an unusable result`);
       }
-      rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: `baseline-${repeat + 1}`,
-        kind: 'baseline-stability', inference: 'new-invocation', changes: [], invocationId }));
       spendResult(budget, result);
     }
   }
@@ -142,16 +147,22 @@ export async function analyzeDecisionSensitivity(request: SensitivityRuntimeRequ
       return failedPartialReport(request, plan, rows, budget, warnings, `variant ${variant.id} failed: ${sanitizeReason(error)}`);
     }
     if (!isRulesetResultShape(result)) {
-      spendUnknownReserve(budget, warnings, request.sourceBinding, request.sourceResult);
+      chargeUnusableResult(budget, warnings, request, result);
       return failedPartialReport(request, plan, rows, budget, warnings, `variant ${variant.id} returned a malformed result`);
     }
-    const failure = validateReevaluationResult(request, result, variant.id, invocationId, receiptFingerprint, input);
-    if (failure) {
-      spendResult(budget, result);
-      return failedPartialReport(request, plan, rows, budget, warnings, failure);
+    try {
+      const failure = validateReevaluationResult(request, result, variant.id, invocationId, receiptFingerprint, input);
+      if (failure) {
+        spendResult(budget, result);
+        return failedPartialReport(request, plan, rows, budget, warnings, failure);
+      }
+      rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: variant.id,
+        kind: noChange ? 'unchanged-control' : 'variant', inference: 'new-invocation', changes: variant.changes, invocationId }));
+    } catch {
+      // For example a cyclic or non-serializable result: fail the run, never throw into the caller.
+      chargeUnusableResult(budget, warnings, request, result);
+      return failedPartialReport(request, plan, rows, budget, warnings, `variant ${variant.id} returned an unusable result`);
     }
-    rows.push(rowForResult({ plan, source: request.sourceResult, result, variantId: variant.id,
-      kind: noChange ? 'unchanged-control' : 'variant', inference: 'new-invocation', changes: variant.changes, invocationId }));
     spendResult(budget, result);
     budget.processedVariants += 1;
   }
@@ -186,6 +197,12 @@ function validateInputs(plan: SensitivityPlan, request: SensitivityRuntimeReques
   if (Date.parse(plan.authorization.expiresAt) <= now) {
     throw new SensitivityContractError('sensitivity authorization is expired', 'semantic', ['authorization expired']);
   }
+  try {
+    validateAgainstSchema(request.sourceRuleset.spec.inputSchema, request.sourceInput, 'sensitivity source input');
+  } catch {
+    throw new SensitivityContractError('sensitivity source input does not match the ruleset input schema', 'semantic',
+      ['source input does not match the ruleset input schema']);
+  }
   const identity = request.probeIdentity as Partial<SensitivityProbeIdentity> | undefined;
   const fields = ['tenantId', 'workspaceId', 'projectId', 'principalId'] as const;
   if (!identity || typeof identity !== 'object' || fields.some(field => typeof identity[field] !== 'string' || identity[field]!.length === 0)) {
@@ -195,6 +212,17 @@ function validateInputs(plan: SensitivityPlan, request: SensitivityRuntimeReques
     || identity.principalId !== plan.actor.principalId) {
     throw new SensitivityContractError('sensitivity probe identity does not match the plan', 'semantic', ['probe identity does not match the plan']);
   }
+}
+
+// The probed subject is the decision input under a named ruleset and binding. The caller-supplied
+// result artifact is not part of the key: re-pinning a cosmetically different result must not mint a
+// new budget for re-evaluating the same input.
+function probeSubjectDigest(request: SensitivityRuntimeRequest): string {
+  return sensitivityDigest({
+    input: request.sourceInput as JsonValue,
+    ruleset: request.sourceRuleset.metadata.id,
+    binding: request.sourceBinding.metadata.id,
+  });
 }
 
 function requiresEvaluator(plan: SensitivityPlan, request: SensitivityRuntimeRequest): boolean {
@@ -242,16 +270,23 @@ function enforceProbeLimits(
       throw new SensitivityContractError('sensitivity path probe limit exceeded', 'semantic', [`probe path limit exceeded: ${charge.path}`]);
     }
   }
+  const perPrincipal = state?.maxEntriesPerPrincipal ?? DEFAULT_PROBE_STATE_MAX_ENTRIES_PER_PRINCIPAL;
+  if (!Number.isSafeInteger(perPrincipal) || perPrincipal <= 0) {
+    throw new SensitivityContractError('sensitivity probe principal quota is invalid', 'semantic', ['probe principal quota is invalid']);
+  }
   if (state === defaultProbeState) {
     evictExpiredWindows(reportsByWindow, window);
     evictExpiredWindows(pathCounts, window);
-    const newReportKeys = reportsByWindow.has(reportKey) ? 0 : 1;
-    const newPathKeys = charges.filter(charge => !pathCounts.has(charge.key)).length;
-    if (principalEntries(reportsByWindow, principal) + newReportKeys > DEFAULT_PROBE_STATE_MAX_ENTRIES_PER_PRINCIPAL
-      || principalEntries(pathCounts, principal) + newPathKeys > DEFAULT_PROBE_STATE_MAX_ENTRIES_PER_PRINCIPAL) {
-      throw new SensitivityContractError('sensitivity probe principal quota exhausted', 'semantic',
-        ['probe principal quota exhausted; supply durable probe state']);
-    }
+  }
+  const newReportKeys = reportsByWindow.has(reportKey) ? 0 : 1;
+  const newPathKeys = charges.filter(charge => !pathCounts.has(charge.key)).length;
+  // Applies to host-supplied state too: one principal cannot mint unbounded subjects in a window.
+  if (principalEntries(reportsByWindow, principal, window) + newReportKeys > perPrincipal
+    || principalEntries(pathCounts, principal, window) + newPathKeys > perPrincipal) {
+    throw new SensitivityContractError('sensitivity probe principal quota exhausted', 'semantic',
+      ['probe principal quota exhausted for this window']);
+  }
+  if (state === defaultProbeState) {
     if (reportsByWindow.size + newReportKeys > DEFAULT_PROBE_STATE_MAX_ENTRIES
       || pathCounts.size + newPathKeys > DEFAULT_PROBE_STATE_MAX_ENTRIES) {
       throw new SensitivityContractError('sensitivity probe state capacity exhausted', 'semantic',
@@ -263,10 +298,12 @@ function enforceProbeLimits(
   for (const charge of charges) pathCounts.set(charge.key, (pathCounts.get(charge.key) ?? 0) + charge.increments);
 }
 
-function principalEntries(map: Map<string, number>, principal: readonly string[]): number {
+function principalEntries(map: Map<string, number>, principal: readonly string[], window: number): number {
   let count = 0;
   for (const key of map.keys()) {
-    const parts = JSON.parse(key) as unknown[];
+    let parts: unknown;
+    try { parts = JSON.parse(key); } catch { continue; }
+    if (!Array.isArray(parts) || parts[0] !== window) continue;
     if (principal.every((value, index) => parts[index + 1] === value)) count += 1;
   }
   return count;
@@ -274,7 +311,8 @@ function principalEntries(map: Map<string, number>, principal: readonly string[]
 
 function evictExpiredWindows(map: Map<string, number>, currentWindow: number): void {
   for (const key of [...map.keys()]) {
-    const window = (JSON.parse(key) as unknown[])[0];
+    let window: unknown;
+    try { window = (JSON.parse(key) as unknown[])[0]; } catch { continue; }
     if (typeof window === 'number' && window < currentWindow) map.delete(key);
   }
 }
@@ -313,6 +351,8 @@ function replayPolicy(
     const target = index === null ? undefined : targets[index];
     const definition = definitions[result.spec.decision.id];
     const replayed = sourceTarget && target ? replayAcceptance(result, sourceTarget, target, definition) : structuredClone(result);
+    // Stored evidence says nothing about a different executor: any change of target identity is unreplayable.
+    if (!sameTargetIdentities(sourceBinding.spec.evaluations[alias]?.targets ?? [], targets)) unreplayable = true;
     // A newly failed acceptance that the binding would route to a later target depends on that
     // target's unobserved outcome.
     if (index !== null && result.spec.status === 'success' && replayed.spec.status !== 'success'
@@ -336,6 +376,14 @@ function replayPolicy(
       evaluations,
     },
   } };
+}
+
+function sameTargetIdentities(left: readonly ExecutionTarget[], right: readonly ExecutionTarget[]): boolean {
+  const identity = (target: ExecutionTarget) => sensitivityDigest({
+    adapter: target.adapter, adapterVersion: target.adapterVersion, model: target.model,
+    subagent: target.subagent ?? null, credentialRef: target.credentialRef ?? null,
+  });
+  return left.length === right.length && left.every((target, index) => identity(target) === identity(right[index]!));
 }
 
 // Changing a target other than the one that produced the stored result, when that target was
@@ -625,16 +673,16 @@ function usage(source: RulesetResult, result: RulesetResult, inference: Sensitiv
   const newAttempts = attempts.filter(attempt => !sourceAttempts.has(`${attempt.ordinal}:${attempt.adapter}:${attempt.requestedModel}`));
   return {
     backendCalls: newAttempts.length,
-    tokens: newAttempts.reduce((sum, attempt) => sum + (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0), 0),
-    costMicros: Math.round(newAttempts.reduce((sum, attempt) => sum + (attempt.usage.costUsd ?? 0), 0) * 1_000_000),
+    tokens: newAttempts.reduce((sum, attempt) => sum + usageNumber(attempt.usage.inputTokens) + usageNumber(attempt.usage.outputTokens), 0),
+    costMicros: Math.round(newAttempts.reduce((sum, attempt) => sum + usageNumber(attempt.usage.costUsd), 0) * 1_000_000),
   };
 }
 
 function spendResult(budget: SensitivityReport['budget'], result: RulesetResult): void {
   const attempts = Object.values(result.spec.evaluations).flatMap(evaluation => evaluation.spec.attempts);
   budget.backendCalls += attempts.length;
-  budget.tokens += attempts.reduce((sum, attempt) => sum + (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0), 0);
-  budget.costMicros += Math.round(attempts.reduce((sum, attempt) => sum + (attempt.usage.costUsd ?? 0), 0) * 1_000_000);
+  budget.tokens += attempts.reduce((sum, attempt) => sum + usageNumber(attempt.usage.inputTokens) + usageNumber(attempt.usage.outputTokens), 0);
+  budget.costMicros += Math.round(attempts.reduce((sum, attempt) => sum + usageNumber(attempt.usage.costUsd), 0) * 1_000_000);
 }
 
 /** Spend can be read from a value only when every evaluation carries attempts with usage objects. */
@@ -643,12 +691,29 @@ function hasAttemptLineage(value: unknown): value is RulesetResult {
   if (!isRecord(spec) || !isRecord(spec.evaluations)) return false;
   return Object.values(spec.evaluations).every(evaluation => isRecord(evaluation) && isRecord(evaluation.spec)
     && Array.isArray(evaluation.spec.attempts)
-    && evaluation.spec.attempts.every(attempt => isRecord(attempt) && isRecord(attempt.usage)));
+    && evaluation.spec.attempts.every(attempt => isRecord(attempt) && isRecord(attempt.usage)
+      && validUsage(attempt.usage.inputTokens) && validUsage(attempt.usage.outputTokens) && validUsage(attempt.usage.costUsd)));
+}
+
+function validUsage(value: unknown): boolean {
+  return value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
+/** Non-negative finite usage; anything else contributes nothing (validated results never reach this). */
+function usageNumber(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function chargeUnusableResult(budget: SensitivityReport['budget'], warnings: string[], request: SensitivityRuntimeRequest, value: unknown): void {
+  if (hasAttemptLineage(value)) spendResult(budget, value);
+  else spendUnknownReserve(budget, warnings, request.sourceBinding, request.sourceResult);
 }
 
 /** A returned reevaluation must have the fields the validator and row builder read. */
 function isRulesetResultShape(value: unknown): value is RulesetResult {
   if (!hasAttemptLineage(value)) return false;
+  const metadata = (value as unknown as Record<string, unknown>).metadata;
+  if (!isRecord(metadata) || typeof metadata.id !== 'string' || typeof metadata.version !== 'string') return false;
   const spec = value.spec as unknown as Record<string, unknown>;
   return typeof spec.invocationId === 'string' && typeof spec.status === 'string' && typeof spec.reason === 'string'
     && Array.isArray(spec.matchedRules) && spec.matchedRules.every(rule => typeof rule === 'string')
@@ -703,8 +768,8 @@ function reevaluationReserve(binding: DecisionBinding, source: RulesetResult): P
   const evaluationCount = Math.max(1, Object.keys(source.spec.evaluations).length, Object.keys(binding.spec.evaluations).length);
   const attempts = Math.max(1, binding.spec.maxAttempts) * evaluationCount;
   const sourceAttempts = Object.values(source.spec.evaluations).flatMap(evaluation => evaluation.spec.attempts);
-  const perAttemptTokens = Math.max(0, ...sourceAttempts.map(attempt => (attempt.usage.inputTokens ?? 0) + (attempt.usage.outputTokens ?? 0)));
-  const perAttemptCostMicros = Math.max(0, ...sourceAttempts.map(attempt => Math.round((attempt.usage.costUsd ?? 0) * 1_000_000)));
+  const perAttemptTokens = Math.max(0, ...sourceAttempts.map(attempt => usageNumber(attempt.usage.inputTokens) + usageNumber(attempt.usage.outputTokens)));
+  const perAttemptCostMicros = Math.max(0, ...sourceAttempts.map(attempt => Math.round(usageNumber(attempt.usage.costUsd) * 1_000_000)));
   return { backendCalls: attempts, tokens: attempts * perAttemptTokens, costMicros: attempts * perAttemptCostMicros };
 }
 

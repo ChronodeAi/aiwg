@@ -19,7 +19,12 @@ policy pins. It declares one analysis kind:
 
 - `policy-replay`: replays preserved evidence through deterministic policy
   changes only. It permits closed caller-authored changes to ruleset
-  composition outcomes/priorities and binding acceptance thresholds. It makes
+  composition outcomes/priorities and, in the binding, only a target's
+  `acceptance` subtree or an evaluation's `fallbackOn`. Paths that replace a
+  target, the target list or a whole evaluation, and any value that names
+  `adapter`, `adapterVersion`, `model`, `requestedModel`, `subagent` or
+  `credentialRef` at any depth, are rejected before replay; a replay whose
+  target identities differ from the source is also reported as unreplayable. It makes
   zero adapter calls. Acceptance is replayed against the target that produced
   the stored result, selected by the adapter, adapter version and requested
   model of the final (successful, when accepted) attempt; an unmatched or
@@ -57,8 +62,11 @@ if acceptance produced it.
 Resource ceilings stop additional variants while keeping completed rows.
 Evaluator failures after completed rows return `partial`; failures before any
 row return `failed` and include host-supplied spend evidence when available.
-When a failure carries no usable spend evidence (including a malformed
-`result` attached to a thrown error, or a malformed returned result) the
+A malformed, cyclic or otherwise unusable returned result produces a `failed`
+or `partial` report instead of throwing; its attempt usage is charged when it
+is well formed (finite, non-negative numbers or null). When a failure carries
+no usable spend evidence (including a malformed `result` attached to a thrown
+error, or NaN, negative or non-numeric usage) the
 backend may still have been called, so the pre-dispatch reservation is charged and the report carries the
 `spend-unknown-reserved` warning; those figures are a conservative reservation,
 not measured spend.
@@ -66,21 +74,26 @@ Both statuses still carry `actionAuthorization: "not-authorized"`.
 Baseline-stability repeats are available only for input reevaluation and are
 labelled separately from perturbation rows. Variants equal to the source are
 retained as deduplicated controls without backend calls or path-probe charges.
-Callers must pass a host-authenticated `probeIdentity` (tenant, workspace,
+The source input must match the ruleset input schema. Callers must pass a
+host-authenticated `probeIdentity` (tenant, workspace,
 project, principal) taken from the host's authentication context. A missing
 identity, or a plan whose tenant, workspace, project or actor differs from it,
 is rejected before inference. Probe counters are keyed by that identity, the
-digest of the pinned source result and (for path counters) path; the
-plan-authored `sourceSubject.subjectRef` is not part of the key, so rotating it
-or other plan fields cannot mint a new budget. Counters use a window derived
+probed subject (the digest of the source input together with the ruleset and
+binding IDs) and (for path counters) path. Neither the plan-authored
+`sourceSubject.subjectRef` nor the caller-supplied source result artifact is
+part of the key, so rotating them cannot mint a new budget for re-evaluating
+the same input. A renamed ruleset or binding is a different subject. Counters use a window derived
 from the injected clock: `floor(now / windowMs)`, where `windowMs` is host-owned probe-state
 configuration (default one hour). The plan's `probeControl.windowId` is a
 descriptive label only and cannot reset a budget. Probe counters are enforced
 even when a caller does not provide state; the implicit process-local state
-holds at most 512 entries per counter map and 64 per principal, evicts only
+holds at most 512 entries per counter map, evicts only
 counters from earlier windows, and when a principal's quota or the store is
 full refuses new probes (`probe principal quota exhausted` or
-`probe state capacity exhausted`) rather than evicting live limit state.
+`probe state capacity exhausted`) rather than evicting live limit state. Every
+state, including host-supplied state, also caps each principal at
+`maxEntriesPerPrincipal` (default 64) distinct counter entries per window.
 Budgets are charged only after a plan passes every pre-inference check
 (identity, authorization, path limits, capacity, evaluator presence). The M08
 amendment requires probes to fail before inference and disclose nothing and
