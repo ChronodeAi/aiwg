@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyReview.v1.schema.json",
+  "title": "D17StudyReview",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "reviewer",
+    "preregistrationReview",
+    "finalDispositionReview",
+    "assessments",
+    "instructions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-review/v1"
+    },
+    "reviewer": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      ]
+    },
+    "preregistrationReview": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      ]
+    },
+    "finalDispositionReview": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      ]
+    },
+    "assessments": {
+      "type": "array",
+      "minItems": 88,
+      "maxItems": 88,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "assessmentId",
+          "rowId",
+          "slice",
+          "stage",
+          "inputDigest",
+          "payload",
+          "reviewedAt",
+          "goldAuditLabel",
+          "goldAmbiguousOrIncorrect",
+          "blindedResultAudit",
+          "rationale"
+        ],
+        "properties": {
+          "assessmentId": {
+            "type": "string",
+            "pattern": "^assessment-[0-9]{2}$"
+          },
+          "rowId": {
+            "type": "string",
+            "pattern": "^d17-(tuning|calibration|test)-(direct-facts|multi-fact|negation|authority)-[0-9]{4}$"
+          },
+          "slice": {
+            "enum": [
+              "direct-facts",
+              "multi-fact",
+              "negation",
+              "authority"
+            ]
+          },
+          "stage": {
+            "enum": [
+              "development",
+              "blind-test",
+              "delayed-repeat"
+            ]
+          },
+          "inputDigest": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "payload": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          },
+          "reviewedAt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+              }
+            ]
+          },
+          "goldAuditLabel": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  "yes",
+                  "no"
+                ]
+              }
+            ]
+          },
+          "goldAmbiguousOrIncorrect": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "blindedResultAudit": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            ]
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            ]
+          }
+        }
+      }
+    },
+    "instructions": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    }
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyDryRun.v1.schema.json",
+  "title": "D17StudyDryRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "providerCalls",
+    "syntheticOnly",
+    "subjects",
+    "splits",
+    "expected",
+    "worstCase",
+    "approvalCeilings",
+    "portfolioUsd",
+    "stopFraction",
+    "fitsStudyCapBeforeStop",
+    "sessionLimitMs",
+    "requiresResumableSessions",
+    "reviewAssessments",
+    "missingInputs"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-dry-run/v1"
+    },
+    "providerCalls": {
+      "const": 0
+    },
+    "syntheticOnly": {
+      "const": true
+    },
+    "subjects": {
+      "const": 1800
+    },
+    "splits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tuning",
+        "calibration",
+        "test"
+      ],
+      "properties": {
+        "tuning": {
+          "const": 200
+        },
+        "calibration": {
+          "const": 400
+        },
+        "test": {
+          "const": 1200
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "firstAttempts",
+        "retryRateBps",
+        "attempts",
+        "inputTokens",
+        "outputTokens",
+        "usd",
+        "costSource"
+      ],
+      "properties": {
+        "firstAttempts": {
+          "const": 7200
+        },
+        "retryRateBps": {
+          "const": 250
+        },
+        "attempts": {
+          "const": 7380
+        },
+        "inputTokens": {
+          "const": 7380000
+        },
+        "outputTokens": {
+          "type": "null"
+        },
+        "usd": {
+          "const": 0.30996
+        },
+        "costSource": {
+          "const": "planning-rate-derived-not-provider-reported"
+        }
+      }
+    },
+    "worstCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempts",
+        "totalTokens",
+        "reservedUsd",
+        "priceFloorUsdPerMTok"
+      ],
+      "properties": {
+        "attempts": {
+          "const": 14400
+        },
+        "totalTokens": {
+          "const": 57600000
+        },
+        "reservedUsd": {
+          "const": 5.76
+        },
+        "priceFloorUsdPerMTok": {
+          "const": 0.1
+        }
+      }
+    },
+    "approvalCeilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calls",
+        "tokens",
+        "usd"
+      ],
+      "properties": {
+        "calls": {
+          "const": 18000
+        },
+        "tokens": {
+          "const": 72000000
+        },
+        "usd": {
+          "const": 8
+        }
+      }
+    },
+    "portfolioUsd": {
+      "const": 48
+    },
+    "stopFraction": {
+      "const": 0.8
+    },
+    "fitsStudyCapBeforeStop": {
+      "const": true
+    },
+    "sessionLimitMs": {
+      "const": 1800000
+    },
+    "requiresResumableSessions": {
+      "const": true
+    },
+    "reviewAssessments": {
+      "const": 88
+    },
+    "missingInputs": {
+      "type": "array",
+      "const": [
+        "operator approval",
+        "compatible D09 calibration",
+        "exact-source CI evidence",
+        "provider terms",
+        "prior study and portfolio spend",
+        "region and credential resolver pin",
+        "live observations",
+        "blind human review"
+      ]
+    }
+  }
+}
