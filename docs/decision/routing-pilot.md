@@ -51,7 +51,9 @@ the runtime checks, in order:
    `ceilings.maxFallbacks`;
 3. the provider circuit, which is opened by any outage, rate-limit or
    circuit-open failure and skips later routes on the same provider;
-4. the cumulative budget: `spent + costMicrosPerAttempt <= min(task, policy)`;
+4. the cumulative budget: `spent + price <= min(task, policy)`, where `price`
+   is the larger of the pinned `costMicrosPerAttempt` and the highest actual
+   cost already charged on that route or provider in this run;
 5. the cumulative deadline: `min(task, policy)` from the start on the injected
    clock, after exponential backoff from `retryDelayMs` (capped at 30 s). The
    backoff uses a real timer when `delay` is omitted.
@@ -67,8 +69,11 @@ status/reason consistency. The reported `actualProvider` and `actualModel`
 must equal the binding's pin. When they do not, the receipt is `review` with
 `model-substitution` or `actual-model-unknown`. The actual reported cost is
 charged cumulatively. An unknown cost stops further attempts (`cost-unknown`),
-and spending over the budget ends in `budget-exceeded`. Timeouts retry the
-same route up to its `maxAttempts`. Circuit failures move to the next route.
+and spending over the budget ends in `budget-exceeded`. A timeout retries the
+same route, up to its `maxAttempts`, only when the dispatch itself reported a
+`timeout` failure with a known cost. A hung dispatch that the runtime aborts
+at its attempt deadline has no known cost, so the run stops with
+`cost-unknown`. Circuit failures move to the next route.
 Other failures stop the run, and cancellation stops before the next attempt
 and aborts an attempt in flight.
 
@@ -97,8 +102,17 @@ that a routed model will succeed. Jev receives only:
 - the projection evidence;
 - sanitized summaries of the eligible routes.
 
-`task.description` is never sent to Jev. The evidence call is bounded by the
-policy deadline.
+`task.description` is never sent to Jev. The authoritative outcome is
+recorded before the evidence call, and the call cannot delay the receipt past
+the task deadline:
+
+- it is not started once the task deadline has passed (`not-evaluated`,
+  `deadline-exhausted`);
+- it is cut off at the remaining task time, capped by the policy deadline
+  (`review`, `jev-evidence-timeout`);
+- the caller's abort ends it at once (`not-evaluated`, `cancelled`);
+- the request carries a `signal` that is aborted in both cases;
+- a failure while evaluating the counterfactual marks only the counterfactual.
 
 The evidence must match the closed evidence schema. Every number must be
 finite and within [0, 1], and `model` must equal the projection's model. The
@@ -159,10 +173,16 @@ rejected.
 
 - Every response except `alert` opens the Jev route circuit through the
   host's `RoutingPolicyControl`.
-- `restore-champion` first runs D17 `rollbackChampionForNewRuns`, which refuses
-  unless the alias currently holds this record's promotion. Only then does it
-  restore the prior pinned routing policy for new runs and verify that the
-  policy was installed.
+- `restore-champion` first does the reversible step: it restores the prior
+  pinned routing policy for new runs and verifies that it was installed. It
+  then runs D17 `rollbackChampionForNewRuns`, which refuses unless the alias
+  currently holds this record's promotion. If D17 refuses, the policy restore
+  is reversed.
+- Any failure throws `RoutingControlDrillError`. Its `state` reports whether the
+  Jev circuit is open, whether the policy was restored, whether the alias was
+  rolled back, whether compensation ran, the current policy, and `consistent:
+  false` when the policy and the alias disagree (for example when compensation
+  itself fails).
 - Active-run pins are read again after the response and must equal the pins
   read before it; otherwise the drill throws.
 
