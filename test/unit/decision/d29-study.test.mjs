@@ -551,6 +551,11 @@ describe('D29 collector integration', () => {
     expect(() => registerCalibrationHandoffFromPrepared(handoff, { ...input, review: { ...review, calibrationArtifactDigest: heldoutDigest('wrong') },
       trustedReviewDigest: heldoutDigest(review) })).toThrow('calibration-review');
     await expect(prepareCalibrationHandoff(input)).rejects.toThrow('frozen-study-mismatch');
+    const { runD29Command } = await import('../../../tools/decision/d29-study.mjs');
+    const output = join(c.root, 'fit-output');
+    await expect(runD29Command(['--fit-calibration', c.runDir, input.trustedApprovalDigest,
+      result.calibrationPhaseRecordDigest, output])).rejects.toThrow('frozen-study-mismatch');
+    await expect(readFile(join(output, 'calibration-artifact.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(prepareCalibrationHandoff({ ...input, trustedCalibrationPhaseRecordDigest: heldoutDigest('wrong') })).rejects.toThrow();
     const path = join(c.runDir, 'calibration-phase.json'), seal = JSON.parse(await readFile(path, 'utf8'));
     seal.rowIds.pop(); await writeFile(path, JSON.stringify(seal));
