@@ -7,7 +7,7 @@
   "approvalReference": "<tracker comment URL recording the operator approval line>",
   "stagingHost": "titan",
   "stagingWorkspace": "<disposable workspace name>",
-  "runId": "egress-2680-live-01",
+  "runId": "egress-2680-live-02",
   "sourceCommit": "<exact clean commit of the runner>",
   "exactHeadCi": "<green exact-head CI run URL>",
   "model": "<requested Jev model>",
@@ -22,8 +22,8 @@
     "resolverConfigDigest": "<sha256 of the host-only resolver config file>"
   },
   "budget": {
-    "requests": 525,
-    "tokens": 2100000,
+    "requests": 600,
+    "tokens": 2400000,
     "usd": 0.5,
     "wallClockMs": 3600000
   },
@@ -48,5 +48,5 @@
     "approvalReference": "<tracker comment URL recording the operator-attested price bound>"
   },
   "corpusDigest": "sha256:b587619e5e65f288d9f0d391dddd24c38e507d9ee05484b6d73ceb78068421b1",
-  "preregistrationDigest": "sha256:fddede399d59bde339e7893cb62db06f4c34e1e602eb4bb6766ae022c82345b4"
+  "preregistrationDigest": "sha256:d0ed541a990fea4bbba2036de07fee96aec39a2f65f56b9fbba66ebbc6df4f07"
 }
