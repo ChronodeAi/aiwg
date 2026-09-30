@@ -42,8 +42,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `PreprocessedEvidence.v1` schema, recorded OCR/ASR/caption/image-description
   fixtures, media-specific resolver policy checks, segment text bound to byte
   ranges of the digest-verified output, append-only human-correction events,
-  an evaluator gate that refuses destination, derived-egress or input-text
-  mismatches, re-derives quality and staleness from current manifests, and
+  an evaluator gate that refuses destination or derived-egress mismatches and
+  any input text that differs from the text recomputed from verified manifests
+  at host-declared bindings, requires host thresholds and lifecycle state,
+  re-derives quality and staleness from current manifests, and
   routes flagged, untrusted, stale, unverified, tombstoned or held lineage to
   review before credential resolution or dispatch, sanitized body-free receipt
   links, D10 lifecycle cascade helpers, docs, and a runnable offline example.
