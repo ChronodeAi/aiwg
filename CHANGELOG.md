@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 staged calibration flow: collect and seal
+  tuning/calibration first, fit an unapproved D09 artifact offline, require
+  operator review for registration, then bind a second test approval to the
+  artifact, seal and prior approval. Reviewed development IDs and gold remain
+  unchanged; live observations and operator approvals remain pending (#2622)
+
 - Experimental, default-off D29 synthetic evidence/citation study with 1,600
   seeded subjects, frozen splits and preregistration, receipt-based scoring,
   calibration-only readiness mapping, native and external report gates,

@@ -101,5 +101,7 @@ review and study-specific statistical reports remain pending.
 
 The [D29 synthetic held-out study](d29-heldout-study.md) supplies a seeded
 1,600-subject corpus, preregistration, receipt scorer, additional error/coverage
-gates and the 132-assessment operator template. It remains experimental and
+gates and the 132-assessment operator template. Its staged runbook collects and
+seals calibration first, fits/registers the reviewed D09 artifact offline, and
+requires a second artifact-bound approval for test access. It remains experimental and
 default-off; live observations, D09 qualification and operator review are pending.

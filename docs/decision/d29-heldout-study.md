@@ -1,11 +1,11 @@
 # D29 synthetic evidence screening study
 
 Experimental, default-off, advisory only (#2622). The source study module is
-`tools/decision/studies/d29.mjs`. It uses the shared collector without changing
-collector core. No live collection, operator approval, calibration qualification,
-or human review has been performed for this implementation.
+`tools/decision/studies/d29.mjs`. It reuses the shared collector, seal verification
+and D09 registry. No live collection, phase approval, calibration qualification
+or new human review is claimed for this implementation.
 
-## Prepare and approve
+## Prepare and approve the calibration phase
 
 Run from this source checkout; no build, package installation, credentials or
 network are needed:
@@ -43,7 +43,7 @@ actual timestamp. Review the exact source commit and matching CI evidence.
 Unknown approval fields remain null: they are mandatory inputs, not inferred
 approvals. Fill the price attestation, actual prior study/portfolio spend,
 provider terms, synthetic egress approval reference, declared region, scoped
-resolver reference/digest, calibration basis, source/CI and titan workspace.
+resolver reference/digest, staged calibration-phase scope, source/CI and titan workspace.
 The template is deliberately invalid for collection until completed.
 
 The proposed tariff is USD 0.042 per million input tokens, output free, no
@@ -67,23 +67,30 @@ previous `d29-study-v1` holdout is superseded; it must not be used for a paid
 run. The new preregistration's `regeneration.priorLiveObservations` is zero;
 it is not an observation or an
 operator attestation. The current source dry-run reports corpus
-`sha256:8c9ecfdf8971b80eb6f1efa1e79ddf562b6d3f62db07dab596fe98af5b383591`,
-preregistration `sha256:8e4d844c590f684ec8ea8d4fbbb0c5d291804211a8d774420816aa5d5a93ae60`,
-analysis `sha256:2bd4a6693a928e6cdcb208609e2f6a1cbcafbf3c93793cd4a8c25acd7f748786`,
+`sha256:82b7c63a1bf821e2dcaf5bd0237348322a15ed8677cbabcacdf30f2f32591a00`,
+preregistration `sha256:5fc3907d6364398c633e84d725c8b6a4ea10bb9e0e34cb85a5cb8e88ac750d02`,
+analysis `sha256:3535d1e22a07c370eef14d95b74dddce1e0ac3e278b676a278779137f4488a7c`,
 test membership `sha256:4acaca7184f02ade5cf6a88e90ae2188f991d0086c5cd14e9b1c6bf2a551f6ce`,
-and incomplete approval template
-`sha256:64e658fde32f3a291eb3934162582eda064b4767dcba9cd67fb653a0e65c9a06`.
+and incomplete calibration-phase approval template
+`sha256:ae5193b1a4fe6e194a2544748371fc5b43c7cdfbca81bf41098b97bee9d25d28`.
 The corpus additionally pins generator
-`sha256:53224ad7f47b1f2850671d677ca53a62ba91f552dc354fda993156649f82c0e5`
+`sha256:6ec07224263503201b99abfd3ea76a09e53c275c1855285e95230eed1af3f83e`
 and separate gold
 `sha256:215d5ee87122c567f0fc0be7a52d00e3c5bdf98b1f41254472209dd5c08a5f97`;
 the preregistration pins scorer
-`sha256:542d65cd0cbbdeb7726105ced1625f422683cd803729cbdbd33216618e4af391`.
+`sha256:42a29259f0f73c1833f7613d1a48885235d29d710653a46863e54a068f6e1db7`.
+The staged-flow update retains seed `d29-study-v2`, all 40 reviewed development
+IDs, gold, generator behavior, oracle, baseline, slices and review selection.
+The generator byte pin changes because the shared registry gained a lamp split
+generator. The new preregistration permits only `staged`, with calibration-phase
+splits exactly `tuning` and `calibration`; neither diagnostic nor independent
+artifact mode can collect this study. Refresh the manifest anchors; the previous
+single-approval digests do not authorize this flow.
 
 One-line approval text, with the actual emitted values substituted:
 
 ```text
-I, roctinam, approve D29 synthetic-only collection for preregistration <PREREGISTRATION_DIGEST>, analysis <ANALYSIS_DIGEST>, corpus <CORPUS_DIGEST> and completed approval <APPROVAL_DIGEST>, at USD 0.042/M input and free output, reserving projected UTF-8 bytes plus 512 provider overhead tokens at no less than USD 0.10/M input within the USD 6 study cap and reconciled spend counter; no gate, publication, efficiency or production promotion is authorized.
+I, roctinam, approve D29 synthetic-only CALIBRATION-PHASE collection of tuning and calibration memberships only for preregistration <PREREGISTRATION_DIGEST>, analysis <ANALYSIS_DIGEST>, corpus <CORPUS_DIGEST> and completed approval <APPROVAL_DIGEST>, at USD 0.042/M input and free output, reserving projected UTF-8 bytes plus 512 provider overhead tokens at no less than USD 0.10/M input within the USD 6 study cap and reconciled spend counter; test collection/scoring requires a second approval bound to the sealed phase and reviewed D09 artifact; no gate, publication, efficiency or production promotion is authorized.
 ```
 
 Assemble `bundle.json` with exactly `corpus`, `preregistration`, and the
@@ -106,6 +113,95 @@ an approval. The 30-minute sessions checkpoint; resume with a new approved run
 ID while keeping corpus and preregistration unchanged. Never remove an
 uncertain-execution lock to force a retry. See the
 [collector reconciliation rules](heldout-collector.md).
+
+## Seal, fit, review, register and approve test access
+
+The first phase stops after 400 subjects (1,100 initial question requests).
+Successful completion emits `summary.calibrationPhaseRecordDigest` and the
+exclusive `RUN/calibration-phase.json`. Anchor that digest and the completed
+first approval independently. The seal binds all tuning/calibration memberships
+and full journals, including reservations, failed attempts and resumed runs.
+A checkpoint, uncertain dispatch or incomplete phase has no seal. Terminal
+measurement failures may seal, but missing calibration observations still refuse
+fitting. No test request is permitted by this approval.
+
+After sealing, the following command is entirely offline. Its three inputs are
+the sealed run directory, independently anchored first approval digest and seal
+digest. Resolve the canonical artifact root first; output directories must be
+new direct children of that root.
+
+```bash
+aiwg artifacts path --json --check-write
+nice -n 19 node tools/decision/d29-study.mjs --fit-calibration \
+  RUN CALIBRATION_APPROVAL_DIGEST SEAL_DIGEST NEW_FIT_DIRECTORY
+```
+
+It reconstructs the seal using the shared journal/trace validators, rechecks the
+frozen D29 corpus and preregistration, and fits `fitReadinessMapping` from sealed
+**calibration** attempts only. Tuning is collected but excluded from fitting;
+test observations are unavailable to the fitter. It writes:
+
+- `readiness-mapping.json`: the frozen four-cell Laplace mapping and attempt lineage.
+- `calibration-artifact.json`: a closed `decision-calibration-artifact/v1`
+  draft with full model/definitions/adapter/dataset/split/calibrator identity,
+  `calibrator.parametersDigest` equal to the mapping digest, measured calibration
+  metrics and explicit limitations. Its state is `observed`, with a null approval
+  reference; that is not an approved or usable calibration artifact.
+- `calibration-review-template.json`: the draft artifact digest, with approval,
+  reference and review time left null for the operator.
+- `test-approval-template.json`: an incomplete second approval bound to the draft
+  artifact digest, sealed phase record and first approval digest.
+
+The command prints `calibrationArtifactDigest` but performs no registration.
+Fit diagnostics cover the 200 calibration rows, including 50 deterministic
+blockers with probability zero; 150 rows fit the four semantic cells. ECE uses
+the shared decile metric. Selective risk counts errors among readiness
+probabilities >= 0.5; Wilson intervals describe that risk and each cell's
+readiness rate, not ECE. The preregistered D09 profile requires 200 total samples,
+25 per slice, ECE <= 0.1, selective risk point estimate and 95% Wilson upper bound
+<= 0.1, and expiry after 30 days from sealing. These are in-sample synthetic fit
+diagnostics, not independent test quality or production qualification.
+
+Review the actual draft, mapping, sealed attempts, metrics and limitations.
+Only the operator may complete `calibration-review-template.json` with
+`approved: true`, an actual immutable `approvalReference` and `reviewedAt`.
+Anchor its canonical `heldoutDigest` separately. A null, rejected, mismatched,
+expired or insufficient review/artifact refuses registration. Run offline:
+
+```bash
+nice -n 19 node tools/decision/d29-study.mjs --register-calibration \
+  RUN CALIBRATION_APPROVAL_DIGEST SEAL_DIGEST \
+  COMPLETED_CALIBRATION_REVIEW.json REVIEW_DIGEST NEW_REGISTERED_DIRECTORY
+```
+
+This revalidates the sealed observations, applies the profile and registry
+compatibility checks, registers the reviewed payload in `CalibrationRegistry`,
+and persists the approved artifact, mapping, compatibility result and refreshed
+test approval template. The approved artifact has a **new digest** because its
+approval changed. Independently anchor that final `calibrationArtifactDigest`
+and use only the refreshed template. The command's registry is process-local;
+the protected scoring host must load the approved artifact into its genuine
+`CalibrationRegistry` and resolve compatibility again at scoring time.
+
+Registration does not approve test collection. Complete the refreshed test
+approval with a new run ID and actual source/CI, price, egress and resolver
+attestations, then independently anchor its approval digest. Keep the first
+phase's budget and baseline prior-spend fields unchanged: the shared durable
+counter already charges calibration spend against both phases. Never reset or
+add that spend again as a new baseline. Suggested second approval text:
+
+```text
+I, roctinam, approve D29 TEST-PHASE collection for preregistration <PREREGISTRATION_DIGEST>, analysis <ANALYSIS_DIGEST>, corpus <CORPUS_DIGEST> and completed second approval <TEST_APPROVAL_DIGEST>, bound to reviewed/registered D09 artifact <FINAL_CALIBRATION_ARTIFACT_DIGEST>, sealed calibration phase <SEAL_DIGEST> and first approval <CALIBRATION_APPROVAL_DIGEST>, under the same reconciled USD 6 study cap and attested tariff; no gate, publication, efficiency or production promotion is authorized.
+```
+
+Assemble the second bundle with the original full corpus and preregistration
+plus this second approval. Run the shared collector's `--dry-run` before the
+separately enabled `--collect-approved` command above. It collects only the 1,200
+test subjects (3,400 initial requests) and validates the seal/first-approval
+handoff before test access. The D29 scorer additionally requires staged phase
+`test` and exact equality between the approved artifact digest and the host's
+independently trusted calibration digest. A matching digest alone is insufficient:
+registry identity, approval, metrics, expiry and mapping pins must also pass.
 
 ## Population, oracle and baseline
 
@@ -166,7 +262,7 @@ registered actual identity must match the served model, definitions,
 calibration split and fitted mapping parameters; its independently trusted
 artifact digest must resolve to `allow`. Unknown calibration fails closed.
 No registry approval or compatibility evidence is fabricated by preparation.
-A compatible D09 basis remains a required operator input for live use.
+A compatible reviewed D09 basis is required before the second approval and test scoring.
 
 `fitReadinessMapping(prepared, attempts)` fits only calibration observations.
 The prespecified cells are citation/criterion crossed with the native support
@@ -185,8 +281,10 @@ mapping and registry compatibility request/policy, completed reviews and a
 clock. The access record is `decision-d29-access/v1` with `analysisDigest`,
 `anchoredAt`, `firstTestAccessAt`, and an external immutable `reference`.
 Recording a future evaluation time is not proof of access history.
-Calling the module's `score` without this context emits HOLD and the missing
-inputs. Do not invoke the direct scorer on unverified production attempts.
+`studyModule(context)` verifies the collector's test-only corpus projection
+against the full frozen corpus before scoring. It consumes the pinned frozen
+mapping; it never refits from test attempts. Calling the direct `score` without
+this approved context refuses scoring. Do not invoke the direct scorer on unverified production attempts.
 
 ## Gates and interpretation
 
@@ -237,7 +335,8 @@ The JSON template supports this two-phase local review; no web review UI ships.
 | Individual questions, 2.5% retry assumption | 4,500 | 4,612.5 expected | 4,587,057.45 input reserved; 5,767,857.45 total reserved | 0.1926564129 input at attested tariff; 0.460904575 reserved |
 | Every individual question retried once | 4,500 | 9,000 maximum | 8,950,356 input reserved; 11,254,356 total reserved | 0.899326 reserved |
 
-Expected attempts are fractional expectations, not observed calls. These
+The table totals both separately approved phases; the first approval cannot
+spend the test portion. Expected attempts are fractional expectations, not observed calls. These
 figures use the source dry-run's `fixture-region` projection identity; a real
 approved region can change serialized bytes. Run the shared collector
 `--dry-run` against the completed approval for authoritative preflight numbers.

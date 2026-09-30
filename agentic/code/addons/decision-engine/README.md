@@ -47,3 +47,8 @@ The experimental, default-off [D29 synthetic evidence screening study](../../../
 provides source-only preparation and offline receipt-scoring tests. It uses the
 shared held-out collector, preserves deterministic gate authority, and requires
 separate live-spend approval and human review.
+
+D29 uses two staged approvals: tuning/calibration collection and sealing first,
+then offline fitting and operator-reviewed D09 registration before a separately
+approved test phase. The [D29 runbook](../../../../docs/decision/d29-heldout-study.md#seal-fit-review-register-and-approve-test-access)
+provides source-only commands; no live data or human approval is supplied.
