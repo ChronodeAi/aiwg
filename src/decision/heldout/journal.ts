@@ -5,7 +5,10 @@ import type { Digest, HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutEve
 
 export const heldoutRunsRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'runs');
 const baselineRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'baselines');
-interface HeldoutBaseline { schemaVersion: 'decision-heldout-baseline/v1'; scope: string; usdMicros: number; approvalDigest: Digest; counterGenesisDigest: Digest }
+interface HeldoutBaseline {
+  schemaVersion: 'decision-heldout-baseline/v1'; scope: string; usdMicros: number; approvalDigest: Digest; counterGenesisDigest: Digest;
+  budget: HeldoutApproval['budget'] | null;
+}
 const counterRoot = (root: string): string => dirname(heldoutRunsRoot(root));
 interface SpendCharge {
   study: string; runId: string; rowId: string; requestId: string; ordinal: number;
@@ -96,9 +99,17 @@ async function readBaselines(root: string): Promise<Map<string, HeldoutBaseline>
   }
   return baselines;
 }
-/** Called under the global dispatch lock, after checking existing journals. Floors are recorded once. */
+function checkBaselineApproval(baselines: Map<string, HeldoutBaseline>, approval: HeldoutApproval): void {
+  for (const [scope, usd] of [[approval.study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
+    if (baselines.has(scope) && baselines.get(scope)!.usdMicros !== Math.ceil(usd * 1_000_000)) throw new HeldoutError('baseline-changed');
+  }
+  const study = baselines.get(approval.study);
+  if (study && heldoutDigest(study.budget) !== heldoutDigest(approval.budget)) throw new HeldoutError('budget-changed');
+}
+/** Called under the global dispatch lock, after checking existing journals. Floors and study budgets are recorded once. */
 export async function reconcileHeldoutBaseline(root: string, approval: HeldoutApproval): Promise<{ study: Digest; portfolio: Digest }> {
   const baselines = await readBaselines(root);
+  checkBaselineApproval(baselines, approval);
   let genesis: Digest;
   if (!baselines.size) {
     const payload = { schemaVersion: 'decision-heldout-spend-event/v1' as const, sequence: 1, previous: null, charge: null, totalUsdMicros: 0 };
@@ -108,9 +119,9 @@ export async function reconcileHeldoutBaseline(root: string, approval: HeldoutAp
   } else genesis = (await readCounter(root, baselines)).events[0].digest;
   for (const [scope, usd] of [[approval.study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
     const usdMicros = Math.ceil(usd * 1_000_000), baseline = baselines.get(scope);
-    if (baseline && baseline.usdMicros !== usdMicros) throw new HeldoutError('baseline-changed');
     if (!baseline) await writeHeldoutFile(join(baselineRoot(root), `${scope}.json`), {
       schemaVersion: 'decision-heldout-baseline/v1', scope, usdMicros, approvalDigest: heldoutDigest(approval), counterGenesisDigest: genesis,
+      budget: scope === 'portfolio' ? null : approval.budget,
     });
   }
   const recorded = await readBaselines(root);
@@ -184,9 +195,7 @@ export async function scanHeldoutSpend(root: string, study: string, approval?: H
   const baselines = await readBaselines(root);
   if (approval) {
     if (approval.study !== study) throw new HeldoutError('baseline-study');
-    for (const [scope, usd] of [[study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
-      if (baselines.has(scope) && baselines.get(scope)!.usdMicros !== Math.ceil(usd * 1_000_000)) throw new HeldoutError('baseline-changed');
-    }
+    checkBaselineApproval(baselines, approval);
   }
   const counter = await readCounter(root, baselines);
   const result: HeldoutScan = { studyUsdMicros: baselines.get(study)?.usdMicros ?? 0,
@@ -263,14 +272,10 @@ export async function validateHeldoutJournal(bundle: HeldoutBundle, events: read
       || attempt.reservedTokens !== heldoutReservationTokens(bundle.preregistration, planned.estimatedTokens)) throw new HeldoutError('journal-pins');
   }
 }
-/** Staged sessions share one allowance; a new phase or run ID cannot move the stop threshold. */
+/** Every mode shares fixed thresholds; admission checks the approval against its durable study baseline. */
 export function heldoutCollectionAllowance(approval: HeldoutApproval, prior: HeldoutScan) {
   const studyRemaining = HELDOUT_CAP_USD[approval.study] * 1_000_000 - prior.studyUsdMicros;
   const portfolioRemaining = HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - prior.portfolioUsdMicros;
-  if (approval.calibration.mode !== 'staged') return {
-    calls: Math.floor(approval.budget.calls * 0.8), tokens: Math.floor(approval.budget.tokens * 0.8),
-    usdMicros: Math.floor(Math.min(approval.budget.usd * 1_000_000, studyRemaining, portfolioRemaining) * 0.8),
-  };
   const studySpent = prior.studyUsdMicros - Math.ceil(approval.priorStudySpendUsd * 1_000_000);
   const portfolioSpent = prior.portfolioUsdMicros - Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000);
   return { calls: Math.floor(approval.budget.calls * 0.8) - prior.studyCalls,
