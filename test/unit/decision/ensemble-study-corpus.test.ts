@@ -156,7 +156,7 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(report.maximumRequestEstimateTokens).toBeGreaterThan(0);
     expect(report.maximumRequestEstimateTokens).toBe(1179);
     expect(report.corpusDigest).toBe('sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804');
-    expect(report.preregistrationDigest).toBe('sha256:1e98fdaf94facdef112efe665e1917051e1e0386fd96ded4bcb24b61e4ab8ca9');
-    expect(report.approvalTemplateDigest).toBe('sha256:ea6d5bc92a4a67fc1a935765fcc2bca9aa429e17f30a72fc223f93d9ea2ea058');
+    expect(report.preregistrationDigest).toBe('sha256:48dbec0376d459c0ea2e972dd34bf05e687c880cd5efc4b9bbdec6777b6cb34b');
+    expect(report.approvalTemplateDigest).toBe('sha256:d42667af7c8ab822dafecbbd98a44da0a0f93da305a677f23ee5c7b651c2833a');
   }, 65000);
 });
