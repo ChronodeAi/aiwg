@@ -41,10 +41,10 @@ try {
       await host.assertContextArtifactRoot(root, artifactRoot);
       await host.assertContextLiveSource(root, bundle.approval.sourceCommit);
       if (mode === '--dry-run') {
-        const prior = await journal.scanHeldoutSpend(artifactRoot, bundle.approval.study);
+        const prior = await journal.scanHeldoutSpend(artifactRoot, bundle.approval.study, bundle.approval);
         const estimate = await contract.planHeldoutCollection(bundle, args[2]);
-        const studyPrior = Math.max(prior.studyUsdMicros, Math.ceil(bundle.approval.priorStudySpendUsd * 1e6));
-        const portfolioPrior = Math.max(prior.portfolioUsdMicros, Math.ceil(bundle.approval.priorPortfolioSpendUsd * 1e6));
+        const studyPrior = prior.studyUsdMicros;
+        const portfolioPrior = prior.portfolioUsdMicros;
         const remaining = Math.min(bundle.approval.budget.usd * 1e6, contract.HELDOUT_CAP_USD[bundle.approval.study] * 1e6 - studyPrior,
           contract.HELDOUT_PORTFOLIO_CAP_USD * 1e6 - portfolioPrior);
         const ready = estimate.fitsBeforeStop && estimate.reservedUsdMicros <= Math.floor(remaining * 0.8)

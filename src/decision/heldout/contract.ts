@@ -142,7 +142,7 @@ export function heldoutApprovalTemplate(corpus: HeldoutCorpus, plan: HeldoutPrer
     corpusDigest: sha256(corpus), preregistrationDigest: sha256(plan), executionDigest: null, calibrationDigest: null,
     providerTermsReference: null, priceBound: { inputUsdPerMTok: null, outputUsdPerMTok: null, perRequestUsd: null,
       evidenceReferences: [], approvalReference: null }, budget: { calls: Math.max(1, Math.ceil(attempts / 0.8)),
-      tokens: Math.max(1, Math.ceil(attempts * plan.perRequestTokenBound / 0.8)), usd: HELDOUT_CAP_USD[corpus.study] },
+      tokens: Math.max(1, Math.ceil(attempts * (plan.perRequestTokenBound + plan.outputAndHiddenTokenAllowance) / 0.8)), usd: HELDOUT_CAP_USD[corpus.study] },
     priorStudySpendUsd: null, priorPortfolioSpendUsd: null };
 }
 export function validateHeldoutAttempt(attempt: HeldoutAttempt): void {

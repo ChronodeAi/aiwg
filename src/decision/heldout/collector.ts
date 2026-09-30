@@ -48,8 +48,8 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
   // Capture the validated seam so caller mutation cannot re-enable the adapter's fetch fallback.
   const transport = offline?.transport;
   const offlineHost = offline?.host;
-  if (!options.offline && process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
-  if (!options.offline && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') {
+  if (!offline && process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
+  if (!offline && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') {
     throw new HeldoutError('tls');
   }
   validateHeldoutBundle(options.bundle, options.trustedApprovalDigest);
@@ -66,18 +66,18 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
   try {
     // Missing/corrupt baselines in an existing ledger require explicit reconciliation, never a reset.
     await scanHeldoutSpend(options.artifactRoot, a.study);
-    await reconcileHeldoutBaseline(options.artifactRoot, a);
+    const baselineDigests = await reconcileHeldoutBaseline(options.artifactRoot, a);
     const prior = await scanHeldoutSpend(options.artifactRoot, a.study);
     // An unacknowledged execution is never silently retried, even in a different study.
     if (prior.attempts.some(attempt => !attempt.result || attempt.result.disposition === 'stop')) throw new HeldoutError('prior-stop');
-    if (!options.offline && prior.runs.some(run => run.corpusDigest === a.corpusDigest && run.source === 'injected-transport')) throw new HeldoutError('injected-prior');
+    if (!offline && prior.runs.some(run => run.corpusDigest === a.corpusDigest && run.source === 'injected-transport')) throw new HeldoutError('injected-prior');
     const old = prior.attempts.filter(attempt => attempt.study === a.study && attempt.corpusDigest === a.corpusDigest);
     if (old.some(attempt => attempt.preregistrationDigest !== a.preregistrationDigest)) throw new HeldoutError('changed-preregistration');
     const latest = new Map<string, HeldoutAttempt>();
     for (const attempt of old) if (attempt.ordinal >= (latest.get(key(attempt))?.ordinal ?? 0)) latest.set(key(attempt), attempt);
     const run = join(heldoutRunsRoot(options.artifactRoot), a.runId);
     await mkdir(run, { mode: 0o700 });
-    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: options.offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
+    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
     const events: HeldoutEvent[] = [];
     const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
     const reserveMicros = heldoutReservationMicros(a, plan);
@@ -94,7 +94,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
       const rows = corpus.rows.filter(row => row.slice === slice && row.split === split);
       return rows.filter(row => failed.has(row.id)).length * 10000 > rows.length * plan.providerFailurePolicy.maximumSliceFailureBps;
     };
-    const attemptSource = options.offline ? 'injected-transport' : 'provider';
+    const attemptSource = offline ? 'injected-transport' : 'provider';
     const safe = (value: unknown) => {
       const text = JSON.stringify(value);
       return typeof text === 'string' && ![...canaries].some(secret => text.includes(secret) || text.includes(JSON.stringify(secret).slice(1, -1)))
@@ -190,7 +190,8 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           else if (options.signal?.aborted) outcome = 'cancelled';
           else if (captured.threw) outcome = 'dispatch-rejected';
           else if (observed?.actualModel && observed.actualModel !== a.servedModel) outcome = 'served-model';
-          else if (observed && (observed.usage.inputTokens ?? 0) + (observed.usage.outputTokens ?? 0) > plan.perRequestTokenBound) outcome = 'usage-bound';
+          else if (observed && ((observed.usage.inputTokens ?? 0) > inputTokenBound
+            || (observed.usage.inputTokens ?? 0) + (observed.usage.outputTokens ?? 0) > reserveTokens)) outcome = 'usage-bound';
           else if (observed?.usage.costUsd !== null && observed?.usage.costUsd !== undefined && observed.usage.costUsd * 1_000_000 > reserveMicros) outcome = 'price-bound';
           else if (observed?.status === 'success') {
             if (observed.actualModel !== a.servedModel) outcome = 'served-model';

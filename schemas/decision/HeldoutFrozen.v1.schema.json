@@ -10,7 +10,8 @@
     "bundle",
     "digest",
     "priorRuns",
-    "source"
+    "source",
+    "baselineDigests"
   ],
   "properties": {
     "schemaVersion": {
@@ -105,6 +106,24 @@
         "injected-transport",
         "provider"
       ]
+    },
+    "baselineDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "study",
+        "portfolio"
+      ],
+      "properties": {
+        "study": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "portfolio": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
     }
   }
 }

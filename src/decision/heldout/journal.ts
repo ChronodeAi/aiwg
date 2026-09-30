@@ -18,7 +18,7 @@ async function readBaselines(root: string): Promise<Map<string, HeldoutBaseline>
   return baselines;
 }
 /** Called under the global dispatch lock, after checking existing journals. Floors are recorded once. */
-export async function reconcileHeldoutBaseline(root: string, approval: HeldoutApproval): Promise<void> {
+export async function reconcileHeldoutBaseline(root: string, approval: HeldoutApproval): Promise<{ study: Digest; portfolio: Digest }> {
   const baselines = await readBaselines(root);
   for (const [scope, usd] of [[approval.study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
     const usdMicros = Math.ceil(usd * 1_000_000), baseline = baselines.get(scope);
@@ -27,6 +27,8 @@ export async function reconcileHeldoutBaseline(root: string, approval: HeldoutAp
       schemaVersion: 'decision-heldout-baseline/v1', scope, usdMicros, approvalDigest: heldoutDigest(approval),
     });
   }
+  const recorded = await readBaselines(root);
+  return { study: heldoutDigest(recorded.get(approval.study)!), portfolio: heldoutDigest(recorded.get('portfolio')!) };
 }
 /** Reject symlinked journal ancestors as well as leaves: spend cannot be redirected to another root. */
 export async function heldoutDirectory(path: string): Promise<void> {
@@ -90,17 +92,23 @@ export interface HeldoutScan {
   studyUsdMicros: number; portfolioUsdMicros: number; attempts: HeldoutAttempt[]; journalDigests: Digest[]; runs: HeldoutPriorRun[];
 }
 /** Count reservations, including crashes and failed requests; successful small usage never refunds spend. */
-export async function scanHeldoutSpend(root: string, study: string): Promise<HeldoutScan> {
+export async function scanHeldoutSpend(root: string, study: string, approval?: HeldoutApproval): Promise<HeldoutScan> {
   const runs = heldoutRunsRoot(root);
   await heldoutDirectory(runs);
   const baselines = await readBaselines(root);
+  if (approval) {
+    if (approval.study !== study) throw new HeldoutError('baseline-study');
+    for (const [scope, usd] of [[study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
+      if (baselines.has(scope) && baselines.get(scope)!.usdMicros !== Math.ceil(usd * 1_000_000)) throw new HeldoutError('baseline-changed');
+    }
+  }
   const result: HeldoutScan = { studyUsdMicros: baselines.get(study)?.usdMicros ?? 0,
     portfolioUsdMicros: baselines.get('portfolio')?.usdMicros ?? 0, attempts: [], journalDigests: [], runs: [] };
   for (const name of (await readdir(runs)).sort()) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) throw new HeldoutError('run-path');
     const run = join(runs, name);
     const frozen = await readHeldoutFile(join(run, 'frozen.json')) as { approval: { runId: string; study: string }; digest: Digest;
-      bundle: HeldoutBundle; priorRuns: HeldoutPriorRun[]; source: 'injected-transport' | 'provider' };
+      bundle: HeldoutBundle; baselineDigests: { study: Digest; portfolio: Digest }; priorRuns: HeldoutPriorRun[]; source: 'injected-transport' | 'provider' };
     checkHeldoutSchema('Frozen', frozen);
     if (frozen.approval?.runId !== name || !['D17', 'D29'].includes(frozen.approval.study)
       || frozen.digest !== heldoutDigest(frozen.bundle)) throw new HeldoutError('frozen-inputs');
@@ -108,6 +116,8 @@ export async function scanHeldoutSpend(root: string, study: string): Promise<Hel
     const approval = frozen.bundle.approval;
     if (baselines.get(approval.study)?.usdMicros !== Math.ceil(approval.priorStudySpendUsd * 1_000_000)
       || baselines.get('portfolio')?.usdMicros !== Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000)) throw new HeldoutError('baseline-mismatch');
+    if (frozen.baselineDigests.study !== heldoutDigest(baselines.get(approval.study)!)
+      || frozen.baselineDigests.portfolio !== heldoutDigest(baselines.get('portfolio')!)) throw new HeldoutError('baseline-mismatch');
     if (frozen.bundle.approval.runId !== name || frozen.bundle.approval.study !== frozen.approval.study) throw new HeldoutError('frozen-run');
     for (const prior of frozen.priorRuns) {
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(prior.runId) || prior.runId === name) throw new HeldoutError('prior-run');
@@ -144,5 +154,8 @@ export async function scanHeldoutSpend(root: string, study: string): Promise<Hel
     result.attempts.push(...latest.values());
     if (events.length) result.journalDigests.push(events.at(-1)!.digest);
   }
+  // A first-run preview includes its proposed baseline without writing it or reusing a max floor.
+  if (approval && !baselines.has(study)) result.studyUsdMicros += Math.ceil(approval.priorStudySpendUsd * 1_000_000);
+  if (approval && !baselines.has('portfolio')) result.portfolioUsdMicros += Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000);
   return result;
 }
