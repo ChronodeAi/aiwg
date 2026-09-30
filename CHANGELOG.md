@@ -14,7 +14,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   a 44-assessment operator audit template. Zero provider calls; the retained
   report honestly stays HOLD on two threshold-boundary errors and pending
   independent integrity and human review (#2616).
-
+- Speed up the experimental, default-off conformal open-data v2 offline tests
+  with a schema-valid 180-row injected design, while retaining a dry-run check
+  of the frozen 1,816-row plan; live Jev evidence remains pending (#2613)
 - Source-checkout TV-12 tooling for D06 live qualification: a digest-pinned OpenBao AppRole
   credential resolver for Jev, a no-call `--dry-run` estimate, reviewer-approved profile and
   margin recording from the preregistered rule, a stored-record enforcement check, and an

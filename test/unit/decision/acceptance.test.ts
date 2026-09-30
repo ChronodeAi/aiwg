@@ -291,3 +291,19 @@ describe('confidence-threshold target acceptance', () => {
     });
   });
 });
+
+describe('confidence-threshold boundary', () => {
+  it('ACC-TARGET-02 accepts a confidence exactly at the basis-point threshold', () => {
+    const target = (minimumBps: number) =>
+      ({ acceptance: { mode: 'confidence-threshold', profile: 'p', minimumBps } } as unknown as Parameters<typeof applyTargetAcceptance>[1]);
+    // 0.7 * 10_000 is 6999.999999999999 in binary floating point; equality must still accept.
+    for (const [confidence, minimumBps] of [[0.7, 7000], [0.29, 2900], [0.57, 5700], [0.1, 1000], [0.3, 3000]] as const) {
+      const observation = {
+        status: 'success', reason: 'none', value: 'yes', uncertainty: { confidence, profile: 'p' }, actualModel: 'm',
+        usage: { inputTokens: 1, outputTokens: 1, costUsd: null }, requestId: 'r',
+      } as unknown as Parameters<typeof applyTargetAcceptance>[2];
+      expect(applyTargetAcceptance({} as Parameters<typeof applyTargetAcceptance>[0], target(minimumBps), observation).status).toBe('success');
+      expect(applyTargetAcceptance({} as Parameters<typeof applyTargetAcceptance>[0], target(minimumBps + 1), observation).status).toBe('abstained');
+    }
+  });
+});
