@@ -11,6 +11,7 @@ import { JEV_ENDPOINT, compileJevQuestion } from '../adapters/jev.js';
 import { projectDecisionState, partitionProjectedState } from '../projection.js';
 import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
+import { reproducibleHeldoutRow } from './generators.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
   HeldoutPreregistration, HeldoutRequest, HeldoutRow, Study } from './types.js';
 
@@ -49,6 +50,7 @@ export function validateHeldoutInputs(corpus: HeldoutCorpus, plan: HeldoutPrereg
   if (definitions.size !== corpus.definitions.length || plan.study !== corpus.study || plan.corpusDigest !== sha256(corpus)
     || plan.outputAndHiddenTokenAllowance >= plan.perRequestTokenBound) throw new HeldoutError('input-pins');
   for (const row of corpus.rows) {
+    if (!reproducibleHeldoutRow(row)) throw new HeldoutError('generator-output');
     if (ids.has(row.id) || families.has(row.familyId) && families.get(row.familyId) !== row.split
       || payloads.has(sha256(row.input)) || new Set(row.requests.map(r => r.id)).size !== row.requests.length
       || row.requests.some(r => !definitions.has(r.definitionId)) || !row.requests.length && row.localOutcome === null) {

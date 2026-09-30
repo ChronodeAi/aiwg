@@ -10,6 +10,7 @@ import { heldoutRunsRoot, readHeldoutJournal, scanHeldoutSpend } from '../../../
 import type { HeldoutBundle, HeldoutStudyModule } from '../../../src/decision/heldout/types.js';
 import { evaluateDecisionRuleset } from '../../../src/decision/evaluate.js';
 import { heldoutExecution } from '../../../src/decision/heldout/contract.js';
+import { generateHeldoutRow } from '../../../src/decision/heldout/generators.js';
 import { prepare } from '../../../agentic/code/addons/decision-engine/examples/heldout-collector-offline.mjs';
 
 // Offline source/root attestation seam. The production checks are exercised separately against real git.
@@ -25,8 +26,7 @@ const pin = heldoutDigest('offline-fixture');
 async function setup(count = 2) {
   const root = await mkdtemp(join(tmpdir(), 'heldout-test-')); dirs.push(root); preflight.canonical = root;
   const { corpus, preregistration, gold } = await prepare('fresh-example');
-  corpus.rows = Array.from({ length: count }, (_, i) => ({ ...structuredClone(corpus.rows[i % 2]), id: `row_${i}`, familyId: `family_${i}`,
-    input: { payload: `Fictional lamp ${i} is on.` }, requests: [corpus.rows[0].requests[0]] }));
+  corpus.rows = Array.from({ length: count }, (_, i) => generateHeldoutRow('heldout-lamp/v1', `fresh-example:${i}:single`));
   corpus.provenance.goldDigest = heldoutDigest(gold);
   preregistration.corpusDigest = heldoutDigest(corpus);
   const bundle: HeldoutBundle = { corpus, preregistration, approval: { schemaVersion: 'decision-heldout-approval/v1', approved: true,
@@ -68,6 +68,9 @@ describe('held-out collector contract and default-off isolation', () => {
     for (const mutate of [
       (b: any) => { b.unregistered = true; },
       (b: any) => { b.approval.priceBound.inputUsdPerMTok = null; },
+      (b: any) => { b.approval.priceBound.outputUsdPerMTok = null; },
+      (b: any) => { b.approval.priceBound.outputTokenBound = null; },
+      (b: any) => { b.approval.priceBound.outputTokenBound = -1; },
       (b: any) => { b.approval.priceBound.evidenceReferences = []; },
       (b: any) => { b.approval.priceBound.extra = true; },
       (b: any) => { b.approval.calibrationDigest = null; },
@@ -101,7 +104,7 @@ describe('held-out collector contract and default-off isolation', () => {
     const old = process.env.AIWG_DECISION_HELDOUT_LIVE; delete process.env.AIWG_DECISION_HELDOUT_LIVE;
     try { await expect(c.run(transport, { offline: undefined })).rejects.toThrow('live-gate'); }
     finally { if (old !== undefined) process.env.AIWG_DECISION_HELDOUT_LIVE = old; }
-    c.bundle.corpus.rows[0].input.payload = 'x'.repeat(4001);
+    c.bundle.corpus.definitions[0].spec.question = 'x'.repeat(4001);
     await expect(c.run(transport)).rejects.toThrow('payload-bound');
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
@@ -312,7 +315,7 @@ describe('held-out recorded evidence and study interface', () => {
   });
   it('AC7 supports a D29 deterministic zero-call row with local evidence, separate from provider measurements', async () => {
     const c = await setup(1); c.bundle.corpus.study = 'D29'; c.bundle.preregistration.study = 'D29'; c.bundle.approval.study = 'D29';
-    c.bundle.corpus.rows[0].requests = []; c.bundle.corpus.rows[0].localOutcome = { route: 'FAIL', reason: 'required-test-failed' };
+    c.bundle.corpus.rows[0] = generateHeldoutRow('heldout-lamp/v1', 'fresh-example:0:local');
     const transport = fake(); expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 1, reservedUsdMicros: 0 });
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
@@ -350,6 +353,25 @@ describe('held-out recorded evidence and study interface', () => {
 
 
 describe('held-out raw transport controls', () => {
+  it.each(['missing', 'unknown', 'digest', 'seed', 'forged'])('provenance re-runs the registered generator and refuses %s row provenance', async kind => {
+    const c = await setup(1); const row = c.bundle.corpus.rows[0];
+    if (kind === 'missing') delete (row as any).provenance;
+    if (kind === 'unknown') row.provenance.generatorId = 'unregistered/v1';
+    if (kind === 'digest') row.provenance.outputDigest = pin;
+    if (kind === 'seed') row.provenance.seed = 'changed:1:single';
+    if (kind === 'forged') {
+      row.input.payload = 'Copied opaque text';
+      const { provenance, ...output } = row; provenance.outputDigest = heldoutDigest(output);
+    }
+    const transport = fake(); await expect(c.run(transport)).rejects.toThrow();
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
+  it('provenance refuses a claimed synthetic row with a forged generator output', async () => {
+    const c = await setup(1); const transport = fake();
+    c.bundle.corpus.rows[0].input.payload = 'Opaque material copied from elsewhere';
+    await expect(c.run(transport)).rejects.toThrow('generator-output');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
   it('HIGH3 refuses a missing or modified baseline instead of resetting prior spend', async () => {
     for (const change of ['missing', 'modified']) {
       const c = await setup(1); await c.run(fake()); c.bundle.approval.runId = 'baseline-rerun';
@@ -397,7 +419,7 @@ describe('held-out raw transport controls', () => {
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
   it('HIGH2 reserves serialized UTF-8 input and attested paid output before dispatch, then halts on excess output', async () => {
-    const c = await setup(2); c.bundle.corpus.rows[0].input.payload = '灯'.repeat(100);
+    const c = await setup(2);
     Object.assign(c.bundle.approval.priceBound, { inputUsdPerMTok: 2, outputUsdPerMTok: 3, outputTokenBound: 100 });
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const attempt = (await readHeldoutJournal(c.runDir)).at(-1)!.attempt;

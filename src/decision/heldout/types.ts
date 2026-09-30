@@ -6,6 +6,7 @@ export type Digest = `sha256:${string}`;
 export type Study = 'D17' | 'D29';
 export interface HeldoutRequest { id: string; arm: string; definitionId: string }
 export interface HeldoutRow {
+  provenance: { generatorId: string; seed: string; outputDigest: Digest };
   id: string; familyId: string; split: 'tuning' | 'calibration' | 'test'; slice: string;
   input: { payload: unknown }; requests: HeldoutRequest[];
   /** An observed deterministic policy outcome, never a fabricated provider observation. */

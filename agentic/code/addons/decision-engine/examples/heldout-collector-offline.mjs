@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { heldoutDigest } from '../../../../../src/decision/heldout/contract.ts';
+import { generateHeldoutRow } from '../../../../../src/decision/heldout/generators.ts';
 
 export async function prepare(seed) {
   const moduleDigest = `sha256:${createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex')}`;
@@ -13,10 +14,7 @@ export async function prepare(seed) {
       options: [{ id: 'yes', description: 'On' }, { id: 'no', description: 'Off' }] }, requiredCapabilities: ['choice'] } };
   const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D17', syntheticOnly: true,
     provenance: { kind: 'authored-synthetic', generatorDigest: moduleDigest, seed, goldDigest: heldoutDigest(gold) }, definitions: [definition],
-    rows: [true, false].map((on, i) => ({ id: `example_${i}`, familyId: `family_${i}`, split: 'test', slice: 'direct',
-      input: { payload: `In fictional world ${seed}, lamp ${i} is ${on ? 'on' : 'off'}.` },
-      requests: [{ id: 'champion', arm: 'baseline', definitionId: definition.metadata.id },
-        ...[1, 2, 3].map(n => ({ id: `member_${n}`, arm: 'candidate', definitionId: definition.metadata.id }))], localOutcome: null })) };
+    rows: [0, 1].map(i => generateHeldoutRow('heldout-lamp/v1', `${seed}:${i}:example`)) };
   return { corpus, gold, preregistration: { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D17',
     frozenAt: '2026-09-30T00:00:00Z', corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest({ exampleOnly: true }),
     scorerDigest: moduleDigest, providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },

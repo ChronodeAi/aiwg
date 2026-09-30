@@ -75,7 +75,8 @@
           "slice",
           "input",
           "requests",
-          "localOutcome"
+          "localOutcome",
+          "provenance"
         ],
         "properties": {
           "id": {
@@ -135,7 +136,32 @@
               }
             }
           },
-          "localOutcome": {}
+          "localOutcome": {},
+          "provenance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "generatorId",
+              "seed",
+              "outputDigest"
+            ],
+            "properties": {
+              "generatorId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "seed": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "outputDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          }
         }
       }
     }
