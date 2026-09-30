@@ -11,8 +11,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 - Experimental, source-checkout-only D10 egress live qualification runner
   (`tools/decision/egress-live-qualification.mjs`) with a frozen, digest-pinned
-  preregistration, a never-logging OpenBao KV resolver, worst-case budget
-  reservation under a USD 2.00 issue cap, stop conditions, and digest-bound D11
+  preregistration, a never-logging OpenBao KV resolver, an operator-attested
+  price bound, worst-case budget reservation under a USD 2.00 issue cap with
+  scanned prior-run spend, stop conditions, and digest-bound D11
   recorded evidence. It is dry-run by default and needs
   `AIWG_DECISION_EGRESS_LIVE=1` for live collection; no live run has been
   performed and nothing is promoted (#2680).

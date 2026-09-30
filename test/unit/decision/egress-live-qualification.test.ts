@@ -1,16 +1,16 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   computeEgressLiveMetrics, EGRESS_ATTACK_CLASSES, EgressLiveBudget, egressLiveDigest, egressLiveDryRun, egressLivePreregistration,
-  generateEgressAttackCorpus, guardEgressTransport, runEgressLiveQualification, scopedCredentialResolver, validateEgressLiveApproval,
+  egressLiveReservationMicros, egressPriorRunSpendUsd, generateEgressAttackCorpus, guardEgressTransport, runEgressLiveQualification, scopedCredentialResolver, validateEgressLiveApproval,
   type EgressCredentialAuditEntry, type EgressLiveApproval, type EgressLiveCorpus, type EgressLiveHost,
 } from '../../../src/decision/egress-live-qualification.js';
 import { JevCredentialError } from '../../../src/decision/adapters/jev.js';
-import { createOpenBaoKvResolver, CredentialResolutionError } from '../../../tools/decision/openbao-kv-credential-resolver.mjs';
+import { createOpenBaoKvResolver, CredentialResolutionError, httpsRequestOptions } from '../../../tools/decision/openbao-kv-credential-resolver.mjs';
 
 // #2680 offline guards and recording tests. All transport here is an injected fake and
 // every run is labelled synthetic; nothing in this file is live qualification evidence.
@@ -34,6 +34,8 @@ function approvalFor(corpus: EgressLiveCorpus, overrides: Partial<EgressLiveAppr
     credential: { secretService: 'fixture-secret-service', scopedRef: 'jev-api-scoped', decoyRef: 'jev-api-decoy', resolverConfigDigest: `sha256:${'c'.repeat(64)}` },
     budget: { requests: Math.ceil(planned / 0.8) + 2, tokens: Math.ceil(planned * 4000 / 0.8) + 4000, usd: 0.5, wallClockMs: 600_000 },
     priorRunsReservedUsd: 0, minDispatchIntervalMs: 0,
+    priceBound: { inputUsdPerMillionTokens: 0.042, outputUsdPerMillionTokens: 0, perRequestUsd: null,
+      evidenceReferences: ['fixture-public-pricing', 'fixture-live-smoke'], approvalReference: 'fixture-price-approval' },
     providerTerms: { retention: 'unknown', residency: 'unknown', zeroDataRetention: 'unknown', evidenceReference: null,
       deploymentRestriction: 'synthetic data only; no production or personal data may be sent until terms are evidenced' },
     corpusDigest: egressLiveDigest(corpus), preregistrationDigest: egressLiveDigest(egressLivePreregistration(corpus)), ...overrides };
@@ -123,10 +125,33 @@ describe('#2680 egress corpus and preregistration', () => {
 
   it('EGRESS-DRYRUN-01 projects calls, tokens and USD without any credential or transport', () => {
     const dry = egressLiveDryRun();
-    expect(dry).toMatchObject({ providerCalls: 0, credentialReads: 0, plannedDispatches: 420, decoyDispatches: 0, reservedTokens: 1_680_000, reservedUsdAtCeiling: 0.168 });
+    expect(dry).toMatchObject({ providerCalls: 0, credentialReads: 0, plannedDispatches: 420, decoyDispatches: 0, reservedTokens: 1_680_000, reservedUsd: 0.168,
+      attestedPriceBound: null });
     expect(dry.maximumRequestEstimateTokens + dry.outputAllowanceTokens).toBeLessThanOrEqual(4000);
-    expect(dry.reservedUsdAtCeiling).toBeLessThan(dry.issueCapUsd * 0.8);
+    expect(dry.reservedUsd).toBeLessThan(dry.issueCapUsd * 0.8);
+    // An attested per-request price is reserved on top of the token reservation.
+    const priced = egressLiveDryRun(undefined, { inputUsdPerMillionTokens: 0.042, outputUsdPerMillionTokens: 0, perRequestUsd: 0.001, evidenceReferences: ['x'], approvalReference: 'x' });
+    expect(priced.reservedUsd).toBeCloseTo(0.168 + 0.42, 10);
+    expect(priced.estimatedUsdAtAttested).toBeLessThan(priced.estimatedUsdAtCeiling);
   });
+
+  it('EGRESS-CLI-01 dry run and live gate make no build, credential read or provider call', async () => {
+    // A PATH holding only node: any attempt to run `npm run build:cli` would fail the command.
+    const bin = await mkdtemp(join(tmpdir(), 'egress-cli-bin-'));
+    try {
+      await symlink(process.execPath, join(bin, 'node'));
+      const env = { PATH: bin, HOME: tmpdir() };
+      const dry = spawnSync(process.execPath, ['tools/decision/egress-live-qualification.mjs', '--dry-run'], { encoding: 'utf8', env, timeout: 120_000 });
+      expect(dry.status, dry.stderr).toBe(0);
+      const report = JSON.parse(dry.stdout);
+      const frozen = JSON.parse(await readFile('docs/decision/evidence/egress-live-v1/preregistration.json', 'utf8'));
+      expect(report).toMatchObject({ providerCalls: 0, credentialReads: 0, plannedDispatches: 420, preregistrationDigest: egressLiveDigest(frozen) });
+      expect(report.attestedPriceBound).toMatchObject({ inputUsdPerMillionTokens: 0.042, outputUsdPerMillionTokens: 0 });
+      const gated = spawnSync(process.execPath, ['tools/decision/egress-live-qualification.mjs', '--collect-approved', 'a', 'b', 'c', 'd'], { encoding: 'utf8', env, timeout: 60_000 });
+      expect(gated.status).toBe(2);
+      expect(gated.stderr).toContain('AIWG_DECISION_EGRESS_LIVE=1');
+    } finally { await rm(bin, { recursive: true, force: true }); }
+  }, 180_000);
 });
 
 describe('#2680 approval and budget', () => {
@@ -144,6 +169,15 @@ describe('#2680 approval and budget', () => {
       a => { a.providerTerms.deploymentRestriction = ''; },
       a => { a.providerTerms.retention = '30 days'; },
       a => { (a as unknown as Record<string, unknown>).extra = true; },
+      // The operator must attest a price bound with its evidence.
+      a => { delete (a as unknown as Record<string, unknown>).priceBound; },
+      a => { a.priceBound.evidenceReferences = []; },
+      a => { a.priceBound.approvalReference = ''; },
+      a => { a.priceBound.inputUsdPerMillionTokens = -1; },
+      a => { a.priceBound.perRequestUsd = Number.NaN; },
+      a => { (a.priceBound as unknown as Record<string, unknown>).discount = 1; },
+      // Fits at the constant ceiling but not at the higher attested price.
+      a => { a.budget.usd = 0.014; a.priceBound.inputUsdPerMillionTokens = 1; },
     ];
     for (const change of bad) {
       const approval = approvalFor(corpus);
@@ -154,9 +188,21 @@ describe('#2680 approval and budget', () => {
     expect(() => validateEgressLiveApproval(approvalFor(corpus), tampered)).toThrow();
   });
 
+  it('EGRESS-PRICE-01 reserves at the higher of the attested price and the constant ceiling, plus any per-request price', () => {
+    const bound = (input: number, output: number, perRequestUsd: number | null = null) => ({ inputUsdPerMillionTokens: input, outputUsdPerMillionTokens: output,
+      perRequestUsd, evidenceReferences: ['x'], approvalReference: 'x' });
+    expect(egressLiveReservationMicros(bound(0.042, 0))).toBe(400); // The 0.10/1M constant dominates the attested 0.042.
+    expect(egressLiveReservationMicros(bound(0.042, 0.5))).toBe(2000); // Output priced higher: every bounded token is priced at it.
+    expect(egressLiveReservationMicros(bound(0.042, 0, 0.001))).toBe(1400);
+    const budget = new EgressLiveBudget({ budget: { requests: 1000, tokens: 1e9, usd: 0.005, wallClockMs: 1e9 }, priceBound: bound(0.5, 0) }, 0, () => 0);
+    budget.reserve(); budget.reserve();
+    expect(() => budget.reserve()).toThrow('budget'); expect(budget.usd).toBeCloseTo(0.004, 10);
+  });
+
   it('EGRESS-BUDGET-01 reserves the worst case before dispatch and stops at 80% of every ceiling', () => {
     let clock = 0;
-    const limited = (budget: EgressLiveApproval['budget']) => new EgressLiveBudget({ budget }, 0, () => clock);
+    const priceBound = approvalFor(corpus).priceBound;
+    const limited = (budget: EgressLiveApproval['budget']) => new EgressLiveBudget({ budget, priceBound }, 0, () => clock);
     const requests = limited({ requests: 10, tokens: 1e9, usd: 100, wallClockMs: 1e9 });
     for (let i = 0; i < 8; i++) requests.reserve();
     expect(() => requests.reserve()).toThrow('budget'); expect(requests.requests).toBe(8);
@@ -266,7 +312,10 @@ describe('#2680 synthetic end-to-end collection through the real evaluator and D
       expect(summary).toMatchObject({ source: 'synthetic', stopped: null, planned: 28, dispatched: 28, recordedRows: 28, qualification: 'HOLD',
         credential: { scopedReadsOnly: true, decoyOutcome: 'denied', enumerationOperations: 0 }, privacy: { clean: true, affected: [] } });
       expect(summary.reserved).toEqual({ requests: 28, tokens: 112_000, usd: 0.0112 });
-      expect(summary.observed).toMatchObject({ inputTokens: 28 * 300, outputTokens: 28 * 4, costUsd: null });
+      expect(summary.observed).toMatchObject({ inputTokens: 28 * 300, outputTokens: 28 * 4, providerReportedUsd: null,
+        attestedUsd: 28 * 300 * 0.042 / 1e6, ceilingUsd: 28 * 304 * 0.1 / 1e6 });
+      expect(summary.stopEvidence).toBeNull();
+      expect(summary.priorRunsSpendUsd).toBe(0);
       // Two items per class cannot bound movement: the preregistered gate refuses to call it within bound.
       expect(summary.movement.verdict).toBe('insufficient-evidence');
       expect(summary.cases).toEqual({ 'EGRESS-CRED-LIVE': 'pass', 'EGRESS-ATTACK-MOVEMENT': 'fail', 'EGRESS-PRIVACY-LIVE': 'pass', 'EGRESS-PROVIDER-TERMS': 'pass' });
@@ -344,6 +393,17 @@ describe('#2680 synthetic end-to-end collection through the real evaluator and D
         artifactRoot: output, host: fakeHost(), offlineTransport: fetch as unknown as typeof fetch });
       expect(summary).toMatchObject({ stopped: reason, dispatched: 1, recordedRows: 0, collectionSuccess: false });
       expect(summary.reserved.requests).toBe(1);
+      // The stopping request is still recorded and charged: reported usage when present, else the full reservation.
+      expect(summary.stopEvidence).toMatchObject({ itemId: 'ovr-01', arm: 'control', reason });
+      if (reason === 'served-model') {
+        expect(summary.stopEvidence).toMatchObject({ inputTokens: 300, outputTokens: 4 });
+        expect(summary.observed).toMatchObject({ inputTokens: 300, outputTokens: 4, ceilingUsd: 304 * 0.1 / 1e6 });
+      } else {
+        expect(summary.stopEvidence).toMatchObject({ inputTokens: null, outputTokens: null });
+        expect(summary.observed.ceilingUsd).toBe(0.0004);
+      }
+      const collection = JSON.parse(await readFile(join(output, 'offline-egress', 'collection.json'), 'utf8'));
+      expect(collection.stopEvidence).toEqual(summary.stopEvidence);
       expect(fetch).toHaveBeenCalledTimes(1);
     });
   }, 60_000);
@@ -360,6 +420,31 @@ describe('#2680 synthetic end-to-end collection through the real evaluator and D
       expect(summary).toMatchObject({ stopped: 'wall-clock', dispatched: 5, recordedRows: 5 });
       const collection = JSON.parse(await readFile(join(output, 'offline-egress', 'collection.json'), 'utf8'));
       expect(collection.rows).toHaveLength(5);
+    });
+  }, 60_000);
+
+  it('EGRESS-PRIOR-01 prior provider spend is scanned from earlier runs and the operator value is only a floor', async () => {
+    await withRun(async ({ source, commit, output, corpus }) => {
+      const write = async (run: string, name: string, value: unknown) => { await mkdir(join(output, run), { recursive: true }); await writeFile(join(output, run, name), JSON.stringify(value)); };
+      await write('earlier-live', 'summary.json', { schemaVersion: 'egress-live-summary/v1', issue: 2680, source: 'provider', reserved: { usd: 0.9 }, observed: { ceilingUsd: 1.1 } });
+      await write('earlier-live', 'approval.json', { schemaVersion: 'egress-live-approval/v1', budget: { usd: 1.2 } });
+      await write('crashed-live', 'approval.json', { schemaVersion: 'egress-live-approval/v1', budget: { usd: 0.45 } });
+      await write('synthetic', 'summary.json', { schemaVersion: 'egress-live-summary/v1', issue: 2680, source: 'synthetic', reserved: { usd: 5 }, observed: { ceilingUsd: 5 } });
+      await write('synthetic', 'approval.json', { schemaVersion: 'egress-live-approval/v1', budget: { usd: 5 } });
+      await write('unrelated', 'summary.json', { schemaVersion: 'other/v1', reserved: { usd: 9 } });
+      // A completed provider run counts its larger of reserved and charged spend; a run with no summary counts its whole budget.
+      expect(await egressPriorRunSpendUsd(output)).toBeCloseTo(1.55, 10);
+      const jev = fakeJev(); const host = fakeHost();
+      await expect(runEgressLiveQualification({ approval: approvalFor(corpus, { sourceCommit: commit }), corpus, sourceRoot: source, artifactRoot: output,
+        host, offlineTransport: jev.fetch as unknown as typeof fetch })).rejects.toThrow('issue cap');
+      expect(host.resolveCredential).not.toHaveBeenCalled(); expect(jev.fetch).not.toHaveBeenCalled();
+      await rm(join(output, 'crashed-live'), { recursive: true });
+      const run = (overrides: Partial<EgressLiveApproval>) => runEgressLiveQualification({ approval: approvalFor(corpus, { sourceCommit: commit, ...overrides }),
+        corpus, sourceRoot: source, artifactRoot: output, host, offlineTransport: jev.fetch as unknown as typeof fetch });
+      expect((await run({ runId: 'scanned' })).priorRunsSpendUsd).toBeCloseTo(1.1, 10);
+      // The operator value only raises the prior spend; it can never lower the scanned amount.
+      expect((await run({ runId: 'floor-high', priorRunsReservedUsd: 1.45 })).priorRunsSpendUsd).toBeCloseTo(1.45, 10);
+      expect((await run({ runId: 'floor-low', priorRunsReservedUsd: 0.2 })).priorRunsSpendUsd).toBeCloseTo(1.1, 10);
     });
   }, 60_000);
 
@@ -394,8 +479,25 @@ describe('#2680 OpenBao KV resolver (offline seams)', () => {
       ['read', 'jev-api-decoy', 'denied'], ['read', 'jev-api-unknown', 'configuration']]);
     expect(JSON.stringify(audit)).not.toMatch(/synthetic-bao-token|synthetic-scoped|fixture\/|kv_fixture/);
     const returned = await resolver.resolveCredential('jev-api-scoped');
-    resolver.dispose();
+    await resolver.dispose();
     expect(new TextDecoder().decode(returned)).toBe(SCOPED); // Callers receive copies; the cache is zeroed separately.
+    // Dispose revokes the AppRole token itself.
+    const revoke = request.mock.calls.at(-1)!;
+    expect([revoke[0].pathname, revoke[1]['X-Vault-Token'], revoke[2]]).toEqual(['/v1/auth/token/revoke-self', 'synthetic-bao-token', 'POST']);
+    expect(resolver.audit().at(-1)).toMatchObject({ op: 'revoke', ref: null });
+    await expect(resolver.resolveCredential('jev-api-decoy')).rejects.toMatchObject({ category: 'failed' });
+  });
+
+  it('EGRESS-RESOLVER-03 refuses disabled TLS verification and always verifies the server certificate', async () => {
+    vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0');
+    try { expect(() => createOpenBaoKvResolver(config, { tokenProvider: async () => 't', request: vi.fn() })).toThrow(CredentialResolutionError); }
+    finally { vi.unstubAllEnvs(); }
+    expect(httpsRequestOptions('GET', { a: 'b' }, undefined)).toMatchObject({ method: 'GET', rejectUnauthorized: true });
+    expect(httpsRequestOptions('POST', {}, Buffer.from('ca'))).toMatchObject({ rejectUnauthorized: true, ca: Buffer.from('ca') });
+    // A resolver that never logged in has no token to revoke.
+    const request = vi.fn();
+    await createOpenBaoKvResolver(config, { tokenProvider: async () => 't', request }).dispose();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it('EGRESS-RESOLVER-02 rejects unsafe config and ambiguous or failed reads with a category only', async () => {

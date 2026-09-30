@@ -36,6 +36,17 @@
     "evidenceReference": null,
     "deploymentRestriction": "Synthetic qualification data only. No production, personal, customer or credential-bearing state may be projected to Jev until provider retention, residency and zero-data-retention terms are evidenced and accepted by the privacy owner."
   },
+  "priceBound": {
+    "inputUsdPerMillionTokens": 0.042,
+    "outputUsdPerMillionTokens": 0,
+    "perRequestUsd": null,
+    "evidenceReferences": [
+      "https://www.eesel.ai/blog/typesafe-jev-pricing",
+      "https://www.mindstudio.ai/blog/jev-pricing-cost-per-token",
+      "roctinam/aiwg#2613 comment 153093 (live smoke usage record)"
+    ],
+    "approvalReference": "<tracker comment URL recording the operator-attested price bound>"
+  },
   "corpusDigest": "sha256:b587619e5e65f288d9f0d391dddd24c38e507d9ee05484b6d73ceb78068421b1",
-  "preregistrationDigest": "sha256:4dd1edbe6760f0c89e34af083e68ba08c5748571ce249ddd060ad7c8eb30eede"
+  "preregistrationDigest": "sha256:fddede399d59bde339e7893cb62db06f4c34e1e602eb4bb6766ae022c82345b4"
 }

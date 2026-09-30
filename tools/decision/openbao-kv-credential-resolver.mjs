@@ -3,8 +3,8 @@
  *
  * It maps logical references (for example `jev-api-scoped`) to host-only KV locators
  * from a private config file, authenticates once with a scoped AppRole token, and
- * performs only exact-path GET reads. It has no list, metadata or write operation, so
- * it cannot enumerate. Errors carry a `category` only; values, tokens, locators and
+ * performs only exact-path GET reads of KV data. It has no list, metadata or KV write
+ * operation, so it cannot enumerate; its only other call revokes its own token on dispose. Errors carry a `category` only; values, tokens, locators and
  * response bodies never appear in errors or in the sanitized audit.
  */
 import { execFile } from 'node:child_process';
@@ -55,13 +55,23 @@ export function appRoleTokenProvider(config) {
   });
 }
 
-/** Minimal HTTPS GET with bounded body and timeout. Returns status and parsed JSON (or null). */
+/** Certificate verification is always explicit; a CA file may only add trust, never disable it. */
+export function httpsRequestOptions(method, headers, ca) {
+  return { method, headers, timeout: 10_000, rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+}
+
+const assertTlsVerification = () => {
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') throw new CredentialResolutionError('configuration');
+};
+
+/** Minimal HTTPS request with bounded body and timeout. Returns status and parsed JSON (or null). */
 export function httpsGetJson(config) {
   let ca;
-  return async (url, headers) => {
+  return async (url, headers, method = 'GET') => {
+    assertTlsVerification();
     if (config.caFile && ca === undefined) ca = await readFile(config.caFile);
     return new Promise((resolve, reject) => {
-      const req = httpsRequest(url, { method: 'GET', headers, timeout: 10_000, ...(ca ? { ca } : {}) }, response => {
+      const req = httpsRequest(url, httpsRequestOptions(method, headers, ca), response => {
         const chunks = []; let size = 0;
         response.on('data', chunk => { size += chunk.length; if (size > MAX_BODY_BYTES) { req.destroy(); reject(new CredentialResolutionError('failed')); } else chunks.push(chunk); });
         response.on('end', () => {
@@ -83,12 +93,15 @@ export function httpsGetJson(config) {
  * Granted values are cached per logical ref for the run and zeroed by `dispose()`.
  */
 export function createOpenBaoKvResolver(rawConfig, seams = {}) {
+  // Refuse a process that has disabled TLS verification globally, even with an injected request seam.
+  assertTlsVerification();
   const config = validateResolverConfig(rawConfig);
   const tokenProvider = seams.tokenProvider ?? appRoleTokenProvider(config);
   const request = seams.request ?? httpsGetJson(config);
   const entries = [];
   const cache = new Map();
   let token;
+  let disposed = false;
   let seq = 0;
   const record = (op, ref, outcome, httpStatus) => { entries.push({ seq: ++seq, op, ref, outcome, httpStatus }); };
   const login = () => {
@@ -98,6 +111,7 @@ export function createOpenBaoKvResolver(rawConfig, seams = {}) {
   };
   return {
     async resolveCredential(ref) {
+      if (disposed) throw new CredentialResolutionError('failed');
       const target = typeof ref === 'string' && REF.test(ref) ? config.refs[ref] : undefined;
       if (!target || !Object.hasOwn(config.refs, ref)) { record('read', REF.test(String(ref)) ? ref : 'invalid-ref', 'configuration', null); throw new CredentialResolutionError('configuration'); }
       if (cache.has(ref)) return new Uint8Array(cache.get(ref));
@@ -121,6 +135,20 @@ export function createOpenBaoKvResolver(rawConfig, seams = {}) {
     },
     /** Sanitized: logical refs, operation, outcome and HTTP status only. */
     audit: () => entries.map(entry => ({ ...entry })),
-    dispose() { for (const bytes of cache.values()) bytes.fill(0); cache.clear(); token = undefined; },
+    /** Zeroes cached values and revokes the AppRole token itself. Revocation failure is recorded, never thrown. */
+    async dispose() {
+      disposed = true;
+      for (const bytes of cache.values()) bytes.fill(0);
+      cache.clear();
+      const pending = token; token = undefined;
+      if (!pending) return;
+      let value;
+      try { value = await pending; } catch { return; }
+      try {
+        const response = await request(new URL('/v1/auth/token/revoke-self', config.addr), { 'X-Vault-Token': value }, 'POST');
+        const status = response?.status ?? 0;
+        record('revoke', null, status === 204 || status === 200 ? 'revoked' : 'failed', status);
+      } catch { record('revoke', null, 'failed', null); }
+    },
   };
 }

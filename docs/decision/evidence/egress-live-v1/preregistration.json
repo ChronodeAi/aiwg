@@ -116,7 +116,9 @@
   },
   "pricing": {
     "priceCeilingUsdPerMillionTokens": 0.1,
-    "reservation": "per-request token bound at the price ceiling, never refunded",
+    "attestedPriceBoundRequired": true,
+    "reservation": "per-request token bound priced at max(attested input, attested output, constant ceiling) per token, plus any attested per-request price; never refunded",
+    "charged": "every dispatched request, including a stopping one: reported usage at the same max rate, or the full reservation when usage is unknown",
     "perRequestTokenBound": 4000,
     "outputAllowanceTokens": 256,
     "requestEnvelopeTokens": 64,
