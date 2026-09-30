@@ -174,6 +174,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D29 collector integration tests use a small,
+  deterministic offline corpus for seal, calibration and receipt checks.
+  The full 2,000-row dry-run and production preregistration thresholds remain
+  covered separately; live evidence and operator review remain pending (#2622)
+
 - Experimental, default-off D29 collection now rejects public development demo
   seeds and corpus digests; paid-run instructions require a fresh private seed.
   Demo port wording explicitly states current use and excludes all other ports,

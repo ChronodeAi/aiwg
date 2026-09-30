@@ -5,6 +5,15 @@ Experimental, default-off, advisory only (#2622). The source study module is
 and D09 registry. No live collection, phase approval, calibration qualification
 or new human review is claimed for this implementation.
 
+CI collector integration uses a small deterministic subset to check phase
+exclusion, seal reconstruction, calibration fitting and receipt binding within
+loaded-runner time limits. Its relaxed calibration sample profile and three-row
+mapping-cell minimum apply only to that offline test fixture. The production
+preregistration still requires 10 observations per mapping cell, 250 total
+calibration samples and 25 per slice. The full 2,000-row population and spend
+plan remain covered by the dry-run and frozen-fixture tests. A subset cannot
+pass the public scoring contract, which fixes a 1,500-row test denominator.
+
 ## Public development demo
 
 Run from this source checkout; no build, package installation, credentials or
