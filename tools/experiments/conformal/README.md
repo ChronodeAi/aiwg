@@ -6,8 +6,10 @@
 `run.v2.mjs`, and `collect-jev.v2.mjs` are the second experiment version. They
 replace the missing internal D11 data with public CLINC150 and Banking77 samples.
 The raw files are not committed; `fetch-open-data.mjs` deterministically downloads
-the canonical public files, verifies their SHA-256 values, records URL, license,
-retrieval date and byte count, and writes a bounded stratified sample.
+the canonical public data and licence files (or re-verifies them with
+`--offline`), verifies their SHA-256 values, records URL, license, licence hash,
+retrieval date and byte count, and writes a bounded stratified sample plus the
+preregistered live subsets.
 
 ```bash
 node tools/experiments/conformal/fetch-open-data.mjs \
@@ -18,35 +20,31 @@ node --import tsx tools/experiments/conformal/run.v2.mjs ARTIFACT_ROOT/research/
 node --import tsx tools/experiments/conformal/collect-jev.v2.mjs --limit 25
 ```
 
-The v2 frozen sample contains labels and text only. It hashes train,
-calibration, final-test and shift splits before any score exists. The offline
-runner proves the full analysis path with a deterministic synthetic-score
-stand-in and produces `INSUFFICIENT EVIDENCE`; synthetic mode can never yield
-`GO`. Supplying `--scores LIVE.jsonl` validates score IDs, frozen split hashes
-and compatibility keys before computing exactly one preregistered outcome.
-No live Jev scores, D09 calibration approval, or D14 provider-backed lineage
-are claimed in the committed artifacts. The live collector is dry-run by default,
-estimates calls and cost, refuses more than the manifest item cap, refuses any
-estimate above USD 8.00, reserves a conservative per-call bound before each call
-or retry, fsyncs each JSONL record as it completes, resumes by completed ID, and
-requires `AIWG_DECISION_JEV_LIVE_SMOKE=1`, `AIWG_DECISION_JEV_API_KEY`, and
-`AIWG_DECISION_JEV_REGION` before using the normalized Jev decision runtime. The
-default live output is under `$XDG_STATE_HOME/aiwg/conformal-2613/` or
-`$HOME/.local/state/aiwg/conformal-2613/`, not inside the repository.
+The frozen splits (1,135 train, 681 calibration, 681 final-test and 454 shift
+rows) are for synthetic pipeline tests only. The live design, re-preregistered
+on 2026-09-30 before any live score existed, is a 250-row CLINC150 subset: 100
+calibration and 100 final-test rows (one per intent) plus 50 controlled OOS
+rows. At USD 0.02828 worst case per call, it costs at most USD 7.07 of the
+USD 8.00 cap. Banking77 is not collected live, so a passing live outcome is
+capped at `CONDITIONAL`. Banking77 `test.csv` rows are an exchangeable nominal
+held-out slice, not a shift. See `docs/decision/conformal-spike.md` for the
+sizing rationale.
 
-Source files frozen on 2026-09-29:
-
-| Dataset | Raw file | SHA-256 | License |
-|---|---|---|---|
-| CLINC150 | `https://raw.githubusercontent.com/clinc/oos-eval/master/data/data_full.json` | `36923c3705a59e08fe9c3883d8bc2dd966ef93e22cb78ac41171782a698d56e0` | CC-BY-3.0; license file `https://raw.githubusercontent.com/clinc/oos-eval/master/LICENSE` sha256 `e6bc9e9c474700b708f568bac9e5a8a9bcb2b1dad53442f5ba449fcb848b8e76` |
-| Banking77 | `https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/train.csv` | `b06e26ac675513959a63135f11b94ea7786ed02da65db93a5650d8838cbc664b` | CC-BY-4.0 |
-| Banking77 | `https://raw.githubusercontent.com/PolyAI-LDN/task-specific-datasets/master/banking_data/test.csv` | `d12d6e3bc4c3103966ae786dc435913c0c563dfa328f5a3646d0e62cfeeb474d` | CC-BY-4.0 |
-
-Banking77 nominal train, calibration and final-test rows are all drawn from
-`train.csv`; Banking77 source-separated shift rows are drawn from `test.csv`.
-This v2 re-freeze occurred before any live scores existed. Per-class coverage is
-reported as unsupported unless a class has at least 50 rows, which this bounded
-high-cardinality sample does not provide for individual intent classes.
+The collector is dry-run by default. Live mode requires
+`AIWG_DECISION_JEV_LIVE_SMOKE=1`, `AIWG_DECISION_JEV_API_KEY`,
+`AIWG_DECISION_JEV_REGION` and `AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=5/5`,
+and only the pinned model `jev-1.13.0`. Before every call it reserves the
+worst-case cost in a hash-chained spend ledger shared by every run in the state
+directory (`$XDG_STATE_HOME/aiwg/conformal-2613/` or
+`$HOME/.local/state/aiwg/conformal-2613/`, not inside the repository). It
+refuses any call that could take global spend past USD 8.00 and halts on the
+first charge above its reservation. It charges reported tokens at the pinned
+price ceiling, or the full reservation when usage is unknown. It records
+distribution-less successes as `missing-distribution`, retries error records on
+resume, and quarantines a truncated trailing line. A lock file prevents two
+concurrent collectors in one state directory. The analysis accepts only records
+whose compatibility key matches the preregistered pins. Records without collector
+provenance chained into the ledger cannot leave `INSUFFICIENT EVIDENCE`.
 
 Closed schemas for the v2 preregistration, frozen sample and report live under
 `schemas/decision/Conformal*.v2.schema.json`.
