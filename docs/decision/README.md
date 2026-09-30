@@ -51,7 +51,9 @@ offline runtime with injected dispatch, registry and telemetry seams. Live
 qualification and production rollout evidence remain pending. The
 [source-only D17 held-out study](ensemble-heldout-study.md) adds a frozen
 synthetic corpus, priced approval and blind-review forms, and paired report
-scaffolding; live observations and calibration remain pending.
+scaffolding. Its only scope is uncalibrated diagnostics; D09 qualification,
+calibrated gates and promotion are unavailable. Live observations and calibration
+remain pending.
 
 The [routing pilot](routing-pilot.md) defines D28 default-off,
 capability-constrained route selection among already-eligible model/subagent

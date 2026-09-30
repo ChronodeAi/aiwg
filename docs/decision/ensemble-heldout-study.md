@@ -5,7 +5,14 @@ deterministic synthetic corpus, preregistration, operator forms and offline
 analysis on top of the [shared held-out collector](heldout-collector.md).
 It changes no existing decision workflow. No live Jev collection, fitted D09
 calibration, completed human audit or production qualification is supplied.
-Study reports stay HOLD, or preserve an upstream ROLLBACK.
+The operator-selected scope is explicitly **UNCALIBRATED diagnostic**:
+preregistration declares `calibration: { scope: 'uncalibrated-diagnostic',
+allowedModes: ['uncalibrated-diagnostic'] }`, and the approval declares
+`calibration: { mode: 'uncalibrated-diagnostic' }`. No genuine D09 artifact
+exists for this study; a fixture digest must never stand in for one.
+Study reports carry `calibrated: false`, `d09Qualified: false` and
+`calibratedGate: false`, and stay HOLD or preserve an upstream ROLLBACK.
+Artifact and staged calibration approvals are refused under this preregistration.
 
 ## Frozen population and arms
 
@@ -81,9 +88,11 @@ operator record establishes the actual review/approval time.
 Both native templates are deliberately incomplete: calibration, execution
 identity, alias/rollback, eligibility and approval pins stay null until supplied
 from real immutable records. The collection approval remains `approved: false`
-and is invalid for dispatch. A pin is not evidence that calibration is
-compatible. Fit/check D09 artifacts using calibration data only; do not invent
-calibrated flags or eligibility records.
+and is invalid for dispatch. Diagnostic collection needs no calibration artifact
+or calibration digest. The disabled native templates describe a future qualified
+workflow and must remain incomplete under this scope. A future calibrated study
+needs a new preregistration and genuine D09 evidence from calibration data only;
+never invent calibrated flags, fixture artifact pins or eligibility records.
 
 ## Preregistered analysis
 
@@ -137,8 +146,11 @@ reports net savings with its sign. Extra ensemble cost normally makes net
 savings negative. D17 preregisters an additional-cost tolerance, not a savings
 claim: an intended operational benefit additionally needs a positive lower
 quality bound and a separately accepted cost/benefit tradeoff. A statistical
-pass alone does not produce PROMOTE. D09 compatibility, blind review, protected
-integrity evidence and separate operational approval remain external inputs.
+pass alone does not produce PROMOTE. The Brier, ECE and risk/coverage calculations
+are descriptive diagnostics,
+not D09 qualification or calibrated gates. D09 compatibility, blind review,
+protected integrity evidence and separate operational approval remain external
+inputs for a future qualified study; they cannot enable promotion under this scope.
 
 ## Price, budget and live operator handoff
 
@@ -174,7 +186,8 @@ and resumptions. No soak or concurrent load is authorized.
 
 Complete the approval with a clean exact source commit, matching CI evidence,
 real reviewer/reference, titan workspace, region, scoped resolver reference
-and byte digest, calibration digest, execution digest, provider terms and actual
+and byte digest, diagnostic calibration mode, execution digest, provider terms
+and actual
 prior study/portfolio spend. Bind the completed approval digest in an external
 immutable record. Assemble the collector's closed bundle from only `corpus`,
 `preregistration` and that approval. Its digest is canonical JSON via
@@ -191,7 +204,7 @@ The second command is an operator handoff, not authorization from this document.
 Approval must precede any spend. The public-seed dry-run emits this placeholder
 approval text; a paid run needs the form generated from its fresh pins:
 
-> I, roctinam, approve D17 synthetic-only preregistration sha256:483c18c53df4a11e68e96313a252602e8d2e421388d2120141f8c278018b653e and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no promotion is authorized.
+> I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration sha256:1e98fdaf94facdef112efe665e1917051e1e0386fd96ded4bcb24b61e4ab8ca9 and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.
 
 ## Operator review and remaining evidence
 
@@ -211,9 +224,11 @@ final disposition; neither artifact review is one of the 88 assessments.
 
 Offline tests establish deterministic generation, isolation, transport/budget
 failure handling and statistical/report gates. AC7's measured ensemble report
-and AC14's live integrity report remain pending actual Jev observations,
-compatible D09 calibration, externally anchored integrity and completed blind
-review. Production risk-tier benefit, independent-provider ensembles,
+and AC14's live integrity report remain **scaffolded-pending D09**: genuine
+compatible member/aggregate D09 artifacts, actual Jev observations, externally
+anchored integrity and completed blind review are missing. This diagnostic
+collection cannot close AC7/AC14 or qualify calibrated gates. Production risk-tier
+benefit, independent-provider ensembles,
 operational drift/rollback, actual promotion and rollout remain open. These
 synthetic worlds cannot establish representative production performance.
 
@@ -225,15 +240,17 @@ operator approval, durable freeze or collected evaluation:
 
 | Artifact | Digest |
 | --- | --- |
-| Corpus | `sha256:c22736953cfa0bb8b3dbdd026688d58ea50d9bcb8b3dd78bb4184171696658a2` |
-| Preregistration | `sha256:483c18c53df4a11e68e96313a252602e8d2e421388d2120141f8c278018b653e` |
-| Unapproved priced template | `sha256:fb24218e78462a3bbdfd667fdbc49d618f53ba5b34d2e907b0757769135e7c6a` |
+| Corpus | `sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804` |
+| Preregistration | `sha256:1e98fdaf94facdef112efe665e1917051e1e0386fd96ded4bcb24b61e4ab8ca9` |
+| Unapproved priced template | `sha256:ea6d5bc92a4a67fc1a935765fcc2bca9aa429e17f30a72fc223f93d9ea2ea058` |
 | Split manifest | `sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f` |
-| Analysis | `sha256:e73e8b091000d742e35ce5036d86fe84992754fc0116df375b380ea902053340` |
+| Analysis | `sha256:89ca743f79f83660ba8279f6d3660594eab98afc3d507b8cbbde22697497574b` |
 | Private gold | `sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db` |
 
-Recompute after any source/schema change. Complete and attest the approval
-separately; its digest will differ from the unapproved template. The projected
+Pins will be regenerated at the new source commit before any operator freeze or
+approval; the source dry-run values above were regenerated from the revised source
+and identify only this offline demonstration. Recompute after any source/schema
+change. Complete and attest the approval separately; its digest will differ from the unapproved template. The projected
 maximum was 1,179 reserved input tokens, including the 512-token provider overhead;
 a further 256-token output/hidden allowance fits under the 4,000-token bound.
 This is not observed provider usage.

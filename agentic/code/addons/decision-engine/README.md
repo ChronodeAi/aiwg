@@ -49,5 +49,7 @@ The source-checkout [ensemble held-out study](../../../../docs/decision/ensemble
 prepares a seeded synthetic corpus, frozen splits, priced approval template and
 88-assessment review form without a build or provider calls. It reuses the
 shared collector and native ensemble/statistical helpers. Collection requires
-separate operator approval; calibration, live measurements and human review
-remain pending. The study is default-off and cannot promote a model.
+separate operator approval in `uncalibrated-diagnostic` mode; no calibration
+artifact or fixture digest is accepted. Reports explicitly disclaim D09
+qualification and calibrated gates. Calibration, live measurements and human
+review remain pending. The study is default-off and cannot promote a model.
