@@ -138,6 +138,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off held-out collector rejects incomplete offline
+  transports, reserves serialized input and attested paid output before dispatch,
+  persists spend baselines across reruns, and reproduces synthetic rows from
+  registered generators. Live qualification remains pending (#2611)
+
 - Experimental, default-off TV-12 collection preregisters one charged retry for terminal
   provider failures, continues after exhausted measurement failures, and derives candidate
   margins only from at least 12 fully measured cases. Dry-run budgets include retries and

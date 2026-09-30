@@ -40,10 +40,15 @@ this documentation is not approval to use it. Library collection additionally
 requires `enabled: true`. Without that flag, the library returns `disabled`
 before reading inputs or invoking any hook. Injected transports are labelled
 `injected-transport` throughout evidence and never presented as live origin.
+An offline seam must contain a callable transport and host credential/disposal
+methods. Incomplete seams fail before preflight, artifact writes or credential
+lookup. The collector always supplies an explicit adapter transport; only the
+fully gated live path can call production fetch, after approval and resolver
+pin checks. The live environment and TLS gates are checked again at dispatch.
 
 ## Approval and accounting
 
-The closed v1 corpus, preregistration, approval, frozen-input, attempt, event and summary
+The closed v1 corpus, preregistration, approval, baseline, frozen-input, attempt, event and summary
 schemas are under `schemas/decision/Heldout*.v1.schema.json`. Definitions and
 receipts also pass the existing decision validators. Unknown fields, null price
 rates/fees, null calibration pins, changed approval pins, duplicate payloads,
@@ -58,21 +63,53 @@ verified results. A calibration digest pins an artifact; it does not establish
 D09 compatibility. Study scorers must use the existing calibration registry.
 
 Every attempt, including retries and failures, fsyncs its full token/USD
-reservation before credential resolution or dispatch. Tokens are priced at the
-maximum of the attested input rate, output rate and USD 0.10 per million, plus
-the attested request fee. A token-only tariff explicitly attests a zero fee;
-null is invalid. Successful small usage never refunds a reservation. Unknown
-usage retains its full reservation; observed overruns increase accounted spend
-and stop collection. Provider cost stays null when absent. Reserved dollars
-are conservative bounds, never provider-reported charges or net savings.
+reservation before credential resolution or dispatch. The collector computes
+the UTF-8 byte length of the projected, serialized request as an input-token
+upper bound (tokens cannot exceed bytes). The preregistered
+`perRequestTokenBound` must cover that bound plus the planning allowance;
+otherwise collection refuses the payload. The transport also checks the actual
+body's byte length and digest against the planned request before sending it.
+Input reservation prices the entire preregistered bound at the maximum of the
+attested input rate and USD 0.10 per million, plus the attested request fee.
 
-D17 has a hard USD 8 study cap; D29 has USD 6. The portfolio ceiling is USD 48.
-The collector scans every prior run beneath the exact canonical artifact root
-and takes the larger of scanned spend and each operator-attested prior-spend
-floor. The portfolio floor must include spending outside this collector.
-Admission stops before a dispatch exceeds 80% of the effective remaining USD,
-call or token ceiling. Dry-run reports worst-case completion feasibility;
-collection also guards each reservation, including partial sessions.
+Output must either have an explicitly attested zero price, as for Jev free
+output, or an approval `priceBound.outputTokenBound`. Paid output reserves that
+bound times its attested output rate, in addition to the input reservation.
+Any observed output beyond an explicit bound halts the run, even at zero price.
+The token reservation includes the output bound, or the preregistered allowance
+for free output. Null rates, fees and explicit null bounds are invalid.
+Successful small usage never refunds a reservation. Unknown usage retains its
+reservation; observed overruns increase accounted spend and stop collection.
+Provider cost stays null when absent. Accounted dollars are conservative
+charges, never provider-reported charges or net savings.
+
+D17 admission has a USD 8 study ceiling; D29 has USD 6. The portfolio ceiling
+is USD 48. Before each dispatch, accounted run spend plus the next worst-case
+reservation must fit 80% of the minimum of the approved budget, remaining study
+cap and remaining portfolio cap. Schema-permitted tariffs that cannot fit are
+refused without a call. Calls and reserved tokens also stop at 80% of approval.
+
+The collector records each operator floor once, with its approval digest, in
+`research/qualification/heldout/baselines/{D17,D29,portfolio}.json` beneath the
+canonical artifact root. Study and portfolio accounting then add all journaled
+run charges to their respective baseline; reruns never reuse a floor via
+`max()`. The initial floors must include spending outside this collector.
+Subsequent approvals repeat the original floors. Changed floors, missing or
+modified baselines for existing journals, and pre-baseline legacy journals
+require explicit operator reconciliation and are refused. There is no automatic
+ledger migration or baseline reset. Dry-run includes the proposed floor for a
+first run and otherwise uses the same accumulated accounting, without writing
+baseline records.
+
+These caps bound admitted reservations under the provider price/input/output
+attestations. Jev has no generation/output-token limit. A provider violating an
+attested paid-output bound, charging undisclosed server-side tokens/fees, or
+violating its tariff can overrun on the one in-flight call; there is no finite
+collector-enforced monetary bound on that violation. The collector records an
+observable breach and halts, but cannot undo billing or detect unreported
+charges. Free output can exceed the token allowance without increasing the
+attested output charge. Unknown execution likewise requires external billing
+reconciliation. Concurrent spending by other runners is outside this ledger.
 
 A filesystem lock serializes arms, processes and studies using this collector.
 It does not serialize unrelated legacy runners. Dispatches are at least one
@@ -137,7 +174,18 @@ release readiness. No G3/G5/G6 flags are fabricated.
 
 `HeldoutStudyModule.prepare(seed)` returns a corpus, preregistration and separate
 gold. CLI preparation checks the module's generator/scorer byte digests and
-gold digest. `scoreHeldoutStudy` rechecks trusted approval/evidence/gold/scorer
+gold digest. Every row additionally carries `provenance.generatorId`, `seed`
+and `outputDigest`. The collector re-runs the source-controlled generator and
+compares the complete row (excluding provenance) and its digest. Rehashed
+copied input, unknown generators and missing provenance fail before dispatch.
+Corpus data cannot register generators or choose executable module paths.
+Only the fictional `heldout-lamp/v1` example generator currently ships; actual
+D17/D29 generators require reviewed registry additions and fresh corpus pins.
+This proves reproducibility, not held-out quality or correctness of the gold.
+These experimental v1 contracts are tightened in place: earlier unproven rows
+must be regenerated, and approvals/attempt token reservations must be refreshed.
+
+`scoreHeldoutStudy` rechecks trusted approval/evidence/gold/scorer
 pins and validates digest-bound upstream eval-integrity before calling the
 local scorer. The library wrapper always returns HOLD or preserves ROLLBACK,
 including when diagnostics contain a proposed PROMOTE. A scorer callback is

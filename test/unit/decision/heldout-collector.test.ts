@@ -448,6 +448,12 @@ describe('held-out raw transport controls', () => {
     expect(transport).toHaveBeenCalledOnce();
     expect((await readHeldoutJournal(c.runDir)).at(-1)?.attempt.result?.outputTokens).toBe(101);
   });
+  it('HIGH2 rejects multibyte input exceeding its token reservation before dispatch', async () => {
+    const c = await setup(1); c.bundle.corpus.definitions[0].spec.question = '💡'.repeat(1000);
+    const transport = fake(); await expect(c.run(transport)).rejects.toThrow('payload-bound');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+    expect(await readdir(c.root)).toEqual([]);
+  });
   it('HIGH1 refuses incomplete offline options before credentials or global fetch with live and TLS gates unset', async () => {
     const c = await setup(1); const transport = fake();
     vi.stubGlobal('fetch', transport);
