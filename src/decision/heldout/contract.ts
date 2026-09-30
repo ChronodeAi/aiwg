@@ -30,7 +30,7 @@ export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approva
   let validate = validators.get(kind);
   if (!validate) {
     const here = dirname(fileURLToPath(import.meta.url));
-    const name = `Heldout${kind}.v1.schema.json`;
+    const name = `Heldout${kind}.${kind === 'SpendHead' ? 'v2' : 'v1'}.schema.json`;
     const root = [resolve(here, '../../../schemas/decision'), resolve(here, '../../../../schemas/decision')]
       .find(path => existsSync(resolve(path, name)));
     if (!root) throw new HeldoutError('schema-unavailable');

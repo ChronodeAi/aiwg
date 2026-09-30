@@ -48,11 +48,13 @@ pin checks. The live environment and TLS gates are checked again at dispatch.
 
 ## Approval and accounting
 
-The closed v1 corpus, preregistration, approval, baseline, spend-event, spend-head,
+The closed v1 corpus, preregistration, approval, baseline, spend-event,
 frozen-input, calibration-phase, attempt, event and summary schemas are under
-`schemas/decision/Heldout*.v1.schema.json`. Definitions and receipts also pass the existing decision validators. Unknown fields, null price
-rates/fees, malformed calibration bindings, changed approval pins, duplicate payloads,
-cross-split families and non-synthetic provenance fail before dispatch.
+`schemas/decision/Heldout*.v1.schema.json`; the current spend-head schema is
+`HeldoutSpendHead.v2.schema.json`. Definitions and receipts also pass the existing
+decision validators. Unknown fields, null price rates/fees, malformed calibration
+bindings, changed approval pins, duplicate payloads, cross-split families and
+non-synthetic provenance fail before dispatch.
 
 Approval binds the corpus and preregistration, requested/served `jev-1.13.0`,
 all execution definition/ruleset/binding/projection pins, adapter version,
@@ -200,8 +202,15 @@ directory, or its events and summary together, therefore cannot restore allowanc
 The counter also preserves call/token allowance and unresolved/stopped-attempt status after such deletion.
 Lost run receipts cannot be reconstructed from this compact counter.
 
-`spend-head.json` independently anchors the latest sequence/digest. It is
-replaced atomically and its directory fsynced after every counter append.
+`spend-head.json` independently anchors the latest sequence/digest and the
+complete set of baseline content digests. Its v2 record is replaced atomically
+and its directory fsynced after every counter append and first approval for a
+study, including an approval that dispatches no calls. Baselines are synced
+before publishing their head pins. Replacing, adding or deleting a baseline
+fails verification even after every run directory is deleted; a matching new
+approval cannot authorize changed baseline contents. Both dry-run and collection
+verify these pins before credential access.
+
 A surviving baseline with a missing, truncated or broken counter, a mismatched
 head, or an interrupted head update refuses further collection with
 `spend-counter-operator-repair-required`. This includes truncation to a valid
@@ -210,7 +219,9 @@ baselines and remaining run evidence; an operator must reconcile them against
 protected backups and provider billing. Never delete these files to restart.
 There is no automatic repair, migration or baseline reset. Old baselines without
 a genesis pin or the required budget field also require reconciliation; missing,
-null or malformed study budgets fail closed. Dry-run uses the same accounting
+null or malformed study budgets fail closed. Legacy v1 heads without baseline
+pins also require operator reconciliation; they are never automatically upgraded
+from unverified baseline files. Dry-run uses the same accounting
 without creating baseline/counter records.
 
 Under the attested free-output tariff, the only residual per-call cost overrun

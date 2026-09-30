@@ -704,6 +704,26 @@
       "consumers": []
     },
     {
+      "logicalName": "schemas.decision.heldoutspendhead.v2",
+      "id": "https://aiwg.io/schemas/decision/HeldoutSpendHead.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/HeldoutSpendHead.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.decision.heldoutsummary.v1",
       "id": "https://aiwg.io/schemas/decision/HeldoutSummary.v1.schema.json",
       "version": "1.0.0",

@@ -386,7 +386,7 @@ describe('held-out raw transport controls', () => {
         if (change === 'approval') value.approvalDigest = pin; else value.usdMicros = 1;
         await writeFile(path, JSON.stringify(value));
       }
-      const transport = fake(); await expect(c.run(transport)).rejects.toThrow(change === 'missing' ? 'operator-repair' : 'baseline-mismatch');
+      const transport = fake(); await expect(c.run(transport)).rejects.toThrow('operator-repair');
       expect(transport).not.toHaveBeenCalled();
     }
   });
@@ -509,7 +509,7 @@ describe('collector re-verification cap probes', () => {
     }
     expect(transport).toHaveBeenCalledOnce();
   });
-  it.each(['budget', 'approval', 'floor', 'study-delete', 'baselines-delete', 'counter-reset', 'head-unbound'])('P1 refuses baseline %s after run deletion before credentials', async change => {
+  it.each(['budget', 'approval', 'floor', 'study-delete', 'study-add', 'baselines-delete', 'counter-reset', 'head-unbound', 'head-legacy', 'head-null', 'head-scope'])('P1 refuses baseline %s after run deletion before credentials', async change => {
     const c = await setup(3); c.bundle.approval.budget = { calls: 2, tokens: 1600, usd: 1 };
     expect(await c.run(fake())).toMatchObject({ reason: 'budget-exhausted', completedRows: 1 });
     await rm(c.runDir, { recursive: true });
@@ -526,10 +526,15 @@ describe('collector re-verification cap probes', () => {
     if (change === 'floor') { baseline.usdMicros = 1; c.bundle.approval.priorStudySpendUsd = 0.000001; }
     await writeFile(path, JSON.stringify(baseline));
     if (change === 'study-delete') await rm(path);
+    if (change === 'study-add') await writeFile(join(root, 'baselines/D29.json'), JSON.stringify({ ...baseline, scope: 'D29' }));
     if (change === 'baselines-delete') await rm(join(root, 'baselines'), { recursive: true });
     if (change === 'counter-reset') await writeFile(join(root, 'spend-counter.jsonl'), counter.split('\n')[0] + '\n');
-    if (change === 'head-unbound') {
-      const value = JSON.parse(head); delete value.baselineDigests;
+    if (change.startsWith('head-')) {
+      const value = JSON.parse(head);
+      if (change === 'head-unbound') delete value.baselineDigests;
+      if (change === 'head-legacy') { value.schemaVersion = 'decision-heldout-spend-head/v1'; delete value.baselineDigests; }
+      if (change === 'head-null') value.baselineDigests.D17 = null;
+      if (change === 'head-scope') value.baselineDigests.D99 = pin;
       await writeFile(join(root, 'spend-head.json'), JSON.stringify(value));
     }
     c.bundle.approval.runId = 'replaced-baseline'; c.host.resolveCredential.mockClear(); const transport = fake();
@@ -537,7 +542,7 @@ describe('collector re-verification cap probes', () => {
     await expect(c.run(transport)).rejects.toThrow('operator-repair');
     expect(c.host.resolveCredential).not.toHaveBeenCalled(); expect(transport).not.toHaveBeenCalled();
     if (change !== 'counter-reset') expect(await readFile(join(root, 'spend-counter.jsonl'), 'utf8')).toBe(counter);
-    if (change !== 'head-unbound') expect(await readFile(join(root, 'spend-head.json'), 'utf8')).toBe(head);
+    if (!change.startsWith('head-')) expect(await readFile(join(root, 'spend-head.json'), 'utf8')).toBe(head);
   });
   it('P1 binds the first approval and a later study even before either dispatches', async () => {
     const c = await setup(1); const transport = fake();
@@ -547,7 +552,7 @@ describe('collector re-verification cap probes', () => {
     const study = JSON.parse(await readFile(join(root, 'baselines/D17.json'), 'utf8'));
     const portfolio = JSON.parse(await readFile(join(root, 'baselines/portfolio.json'), 'utf8'));
     expect(study).toMatchObject({ approvalDigest: heldoutDigest(c.bundle.approval), budget: c.bundle.approval.budget });
-    expect(JSON.parse(await readFile(join(root, 'spend-head.json'), 'utf8'))).toMatchObject({ sequence: 1,
+    expect(JSON.parse(await readFile(join(root, 'spend-head.json'), 'utf8'))).toMatchObject({ schemaVersion: 'decision-heldout-spend-head/v2', sequence: 1,
       baselineDigests: { D17: heldoutDigest(study), portfolio: heldoutDigest(portfolio) } });
     c.bundle.corpus.study = 'D29'; c.bundle.preregistration.study = 'D29'; c.bundle.approval.study = 'D29';
     c.bundle.approval.runId = 'second-study';

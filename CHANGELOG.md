@@ -144,6 +144,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Bind experimental, default-off held-out collector baselines to the independent
+  durable spend head. Changed or missing baselines fail before credential access
+  even after run deletion; legacy heads require operator reconciliation (#2778)
+
 - Experimental, default-off held-out collection pins each study's first approved
   budget beside its durable spend baseline, enforces cumulative USD/call/token
   thresholds in every mode after resumes or run deletion, and rejects structured
