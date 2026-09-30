@@ -12,8 +12,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Experimental, default-off D23 offline comparative policy replay: closed schemas,
   a frozen 600-root synthetic corpus, digest-bound eval-integrity reports, and
   a 44-assessment operator audit template. Zero provider calls; the retained
-  report honestly stays HOLD on two threshold-boundary errors and pending
-  independent integrity and human review (#2616).
+  report now passes the preregistered diagnostic gates after the confidence
+  threshold fix, while its final decision stays HOLD pending independent
+  integrity and human review (#2616)
 - Speed up the experimental, default-off conformal open-data v2 offline tests
   with a schema-valid 180-row injected design, while retaining a dry-run check
   of the frozen 1,816-row plan; live Jev evidence remains pending (#2613)

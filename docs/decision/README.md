@@ -94,4 +94,5 @@ outcome must pass the existing AIWG policy and approval gates independently.
 
 [D23 offline comparative replay](comparative-replay.md) provides an experimental,
 default-off synthetic report and 44-assessment operator audit scaffold. The
-retained report is HOLD; independent integrity and human review remain pending.
+refreshed report passes its diagnostic gates but remains HOLD; independent
+integrity and human review remain pending.

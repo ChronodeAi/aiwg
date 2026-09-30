@@ -1865,8 +1865,8 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-comparative-replay-report/v1",
-      "digest": "sha256:856c132adab57a1e7cb71ee9dd2cac906ab854be3bcae99060237dceede43ffd",
-      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "digest": "sha256:1a76764c1dff0f9c27def46d4fed230c288e49f993183259194bf2b7ed4accf0",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; diagnostic pass, final HOLD pending independent integrity and operator review",
       "links": [
         "D23",
         "JEV-16",

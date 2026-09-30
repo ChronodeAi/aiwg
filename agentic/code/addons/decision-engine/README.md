@@ -49,4 +49,4 @@ The experimental D23 comparative replay runner is source-checkout-only and
 default-off. It reuses stored synthetic evidence with zero provider calls and
 exports a digest-bound HOLD report and 44-assessment operator review packet.
 See [comparative replay](../../../../docs/decision/comparative-replay.md) for the
-explicit command, known diagnostic failures, exact artifacts and pending review.
+explicit command, passing diagnostic gates, exact artifacts and pending review.

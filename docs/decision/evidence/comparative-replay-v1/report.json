@@ -1959,8 +1959,8 @@
       "id": "d23-test-threshold-boundary-041",
       "slice": "threshold-boundary",
       "split": "test",
-      "reportDigest": "sha256:4ef5f721be4bc9b63a90858782c71082a70662be2126c00c29aa981c26583cef",
-      "correct": false,
+      "reportDigest": "sha256:c372b8f894161ed2de3b1975788f245b71f5ce49a9c5ffa44419cb5ad81b3d10",
+      "correct": true,
       "falseNoChange": false
     },
     {
@@ -2295,8 +2295,8 @@
       "id": "d23-test-threshold-boundary-083",
       "slice": "threshold-boundary",
       "split": "test",
-      "reportDigest": "sha256:51065ecc9ff9f37c7b5840e25b4ba97402f66c5cc55abc7b88d905d2ca1e9680",
-      "correct": false,
+      "reportDigest": "sha256:35c075e13581a0b3a4e433e6b88429ffdd450d6bf0d32cbb8d97caff61c16531",
+      "correct": true,
       "falseNoChange": false
     },
     {
@@ -4838,15 +4838,15 @@
   ],
   "metrics": {
     "testRoots": 400,
-    "errors": 2,
+    "errors": 0,
     "falseNoChange": 0,
-    "pairedLowerBps": -181,
-    "errorUpperBps": 181,
+    "pairedLowerBps": -96,
+    "errorUpperBps": 96,
     "slices": {
       "threshold-boundary": {
         "roots": 100,
-        "errors": 2,
-        "errorUpperBps": 701
+        "errors": 0,
+        "errorUpperBps": 370
       },
       "priority-loss": {
         "roots": 100,
@@ -4869,20 +4869,16 @@
     "costMicros": 0,
     "exactReproduction": true
   },
-  "diagnosticDecision": "fail",
+  "diagnosticDecision": "pass",
   "reviewStatus": "pending",
   "findings": [
-    "diagnostic-errors",
-    "error-bound-failed",
     "integrity-mode-not-allowlisted",
     "integrity-not-verified",
-    "non-inferiority-failed",
     "reviewer-audit-pending",
-    "slice-failed:threshold-boundary",
     "upstream-integrity-hold",
     "weak-signal"
   ],
   "upstreamDecision": "HOLD",
   "decision": "HOLD",
-  "digest": "sha256:853373925fc19c510afe7cd193291b51be175c1255c67c58a088a990a8efc511"
+  "digest": "sha256:cfc5e1c8e0752b09da5673b5847d7ff53c258992f3fbcfe5fbda1bb85c307151"
 }

@@ -61,23 +61,25 @@ beforeAll(async () => {
 }, 30_000);
 
 describe('D23 comparative policy replay', () => {
-  it('binds 600 unique synthetic roots and reports the observed threshold equality failures honestly', () => {
+  it('binds 600 unique synthetic roots and passes threshold equality while integrity stays HOLD', () => {
     expect(artifacts.corpus.deduplication).toEqual({ roots: 600, payloads: 600, duplicatePayloads: 0,
       sourceInputs: 600, duplicateSourceInputs: 0, crossSplitFamilies: 0 });
     const report = buildComparativeReplayReport(input);
     expect(report.roots).toHaveLength(600);
     expect(report.metrics.testRoots).toBe(400);
-    expect(report.metrics.errors).toBe(2);
-    expect(report.roots.filter(root => root.split === 'test' && !root.correct).map(root => root.id)).toEqual([
-      'd23-test-threshold-boundary-041', 'd23-test-threshold-boundary-083',
-    ]);
+    expect(report.metrics.errors).toBe(0);
+    expect(report.roots.filter(root => root.split === 'test' && !root.correct)).toEqual([]);
+    for (const id of ['d23-test-threshold-boundary-041', 'd23-test-threshold-boundary-083']) {
+      expect(report.roots.find(root => root.id === id)?.correct).toBe(true);
+    }
     expect(report.metrics.falseNoChange).toBe(0);
     expect(report.metrics).toMatchObject({ backendCalls: 0, tokens: 0, costMicros: 0, exactReproduction: true });
-    expect(report.diagnosticDecision).toBe('fail');
+    expect(report.diagnosticDecision).toBe('pass');
     expect(report.decision).toBe('HOLD');
     expect(report.integrity).toEqual(input.integrity);
     expect(report.findings).toContain('reviewer-audit-pending');
-    expect(report.findings).toContain('error-bound-failed');
+    expect(report.findings).toContain('upstream-integrity-hold');
+    expect(report.findings).not.toContain('error-bound-failed');
     validateComparativeReplayReport(report, input);
   });
 
@@ -303,7 +305,8 @@ describe('D23 comparative policy replay', () => {
     await writeReplayStudy(directory);
     const report = JSON.parse(readFileSync(resolve(directory, 'comparative-report.json'), 'utf8'));
     expect(report.decision).toBe('HOLD');
-    expect(report.metrics.errors).toBe(2);
+    expect(report.metrics.errors).toBe(0);
+    expect(report.diagnosticDecision).toBe('pass');
     const ledger = readFileSync(resolve(directory, 'probe-ledger.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
     expect(ledger.filter(item => item.kind === 'reserved')).toHaveLength(1200);
     expect(ledger.filter(item => item.kind === 'completed')).toHaveLength(1200);

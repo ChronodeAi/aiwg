@@ -1,9 +1,10 @@
 # Offline comparative policy replay
 
 Status: **experimental, default-off, policy replay only** (#2616 comparative
-AC13). The retained synthetic comparison is **HOLD**, with two known diagnostic
-errors and unverified integrity. No provider calls, tokens, API spend, human
-assessments, live qualification or production rollout occurred.
+AC13). The refreshed synthetic comparison passes its preregistered diagnostic
+gates but remains **HOLD** on unverified integrity and pending operator review.
+No provider calls, tokens, API spend, human assessments, live qualification or
+production rollout occurred.
 
 ## Implemented scope
 
@@ -44,20 +45,32 @@ The [retained report](evidence/comparative-replay-v1/report.json) records:
 | Measure | Observed | Required |
 | --- | --- | --- |
 | Test roots | 400, 100 per slice | At least 400, 100 per slice |
-| Exact diagnostic errors | 2 | Zero |
+| Exact diagnostic errors | 0 | Zero |
 | False no-change claims on unreplayable roots | 0 | Zero |
-| Newcombe-10 lower bound, 95% | −181 bps | At least −100 bps |
-| Overall Wilson error upper, 95% | 181 bps | At most 100 bps |
-| Threshold slice Wilson upper | 701 bps | At most 500 bps, zero known errors |
+| Newcombe-10 lower bound, 95% | −96 bps | At least −100 bps |
+| Overall Wilson error upper, 95% | 96 bps | At most 100 bps |
+| Threshold slice Wilson upper | 370 bps | At most 500 bps, zero known errors |
 | Other three slice Wilson uppers | 370 bps each | At most 500 bps, zero known errors |
 | Replay calls / tokens / API cost | 0 / 0 / 0 | Exactly zero |
 | Reproduction | All 600 report digests identical across two passes | Exact |
 
-`d23-test-threshold-boundary-041` and `-083` disagree with independently fixed
-equality gold. The existing confidence acceptance comparison multiplies a
-floating-point confidence by 10,000; equality can round below the integer
-threshold. Gold remains unchanged, and the comparator reports failure. Fixing
-that acceptance behavior is outside this comparative wrapper change.
+`d23-test-threshold-boundary-041` and `-083` now agree with the independently
+fixed equality gold after the merged confidence threshold fix (#2777). The
+frozen corpus, gold, split and preregistration are unchanged. The refreshed
+report has `diagnosticDecision: pass` and zero errors, while its upstream
+integrity decision remains HOLD. The final decision is therefore HOLD; neither
+the runtime fix nor this offline replay supplies independent integrity or
+human review.
+
+The retained report digest changed from
+`sha256:853373925fc19c510afe7cd193291b51be175c1255c67c58a088a990a8efc511`
+to `sha256:cfc5e1c8e0752b09da5673b5847d7ff53c258992f3fbcfe5fbda1bb85c307151`.
+The two corrected diagnostic report digests are
+`sha256:c372b8f894161ed2de3b1975788f245b71f5ce49a9c5ffa44419cb5ad81b3d10`
+and `sha256:35c075e13581a0b3a4e433e6b88429ffdd450d6bf0d32cbb8d97caff61c16531`.
+The 44 blinded packets and operator template are unchanged: their selected
+assessments do not include either corrected root. All 1,200 local replay files
+matched a second deterministic reconstruction before retaining the report.
 
 This is a frozen **synthetic regression corpus**, not a procedurally pristine
 held-out study: implementation inspected the test results. The local freeze and
@@ -134,8 +147,7 @@ may be reported, not independent or inter-rater agreement.
 
 Pending inputs: roctinam's 44 assessments and two signed/anchored artifact
 reviews; an independently anchored protocol before access to a **new** holdout;
-protected-artifact snapshot and verified upstream integrity receipts; and a
-separately reviewed acceptance fix for the two observed boundary failures.
+protected-artifact snapshot and verified upstream integrity receipts.
 Live reevaluation requires a distinct approved integration because D23's current
 input-reevaluation contract forbids external egress. Production cross-restart
 anti-probing, deletion/backups and real-world usefulness remain open.
@@ -148,20 +160,19 @@ package installation or provider call was run.
 | Command | Result |
 | --- | --- |
 | `nice -n 19 npx tsc --noEmit -p .` | Passed, zero diagnostics |
-| `nice -n 19 npx tsc --noEmit --strict --skipLibCheck --target ES2022 --module ES2022 --moduleResolution bundler --esModuleInterop tools/decision/comparative-replay.ts tools/decision/comparative-replay-corpus.ts tools/decision/comparative-replay-assets.ts` | Passed, zero diagnostics |
-| `nice -n 19 npx vitest run --config config/vitest.config.js test/unit/decision/comparative-replay.test.ts test/unit/decision/sensitivity.test.ts test/conformance/decision-v1/fixture-provenance.test.ts --maxWorkers=1` | Final run: 65 passed, zero failed |
-| `nice -n 19 npx vitest run --config config/vitest.config.js test/unit/decision test/conformance/decision-v1 --maxWorkers=1` | 1,863 passed, 2 skipped, 2 child-output failures from inherited color-variable warnings |
-| `nice -n 19 env -u NO_COLOR -u FORCE_COLOR npx vitest run --config config/vitest.config.js test/unit/decision/receipts.test.ts test/conformance/decision-v1/job-quota.test.ts --maxWorkers=1` | Both affected files passed: 35 tests, zero failed |
+| `nice -n 19 npx vitest run --config config/vitest.config.js test/unit/decision/comparative-replay.test.ts test/unit/decision/sensitivity.test.ts test/unit/decision/acceptance.test.ts test/conformance/decision-v1/fixture-provenance.test.ts --maxWorkers=1` | 103 passed, zero failed |
+| `nice -n 19 env -u NO_COLOR -u FORCE_COLOR npx vitest run --config config/vitest.config.js test/unit/decision test/conformance/decision-v1 --maxWorkers=1` | 1,868 passed, 2 skipped, zero failed |
 | `nice -n 19 npm run lint:test-registration` | Passed: 1,109 assigned sources |
 | `nice -n 19 npm run lint:test-process-timeouts` | Passed: zero unbounded calls |
 | `nice -n 19 npm run lint:schemas` | Passed: 197 compiled schemas, zero errors, two pre-existing fixture-marker warnings |
-| `nice -n 19 npm run schema:catalog` | Refreshed catalog after staging schemas |
 | `nice -n 19 npm run schema:catalog:check` | Passed: 106 authorities, 113 files |
 | `nice -n 19 node --import tsx tools/decision/comparative-replay.ts` | Disabled; no artifacts written |
-| `nice -n 19 node --import tsx tools/decision/comparative-replay.ts --replay` | Completed 600 roots twice, retained HOLD; initial missing-directory guard was corrected to honor `write_ready` |
+| `nice -n 19 node --import tsx tools/decision/comparative-replay.ts --replay` | Completed 600 roots twice in a fresh one-shot study directory; diagnostic pass, final HOLD |
 | `git diff --check` and `git diff --cached --check` | Passed |
 
-An earlier focused test run had one assertion expecting digest rejection where
-schema admission rejected the malformed input first. The test now changes a
-schema-valid quantity and proves the digest binding. No Markdown lint command or
-binary is available in this checkout; no package was installed to add one.
+The first refreshed focused run failed fixture provenance because its retained
+report byte digest still named the old report; the manifest now pins the new
+bytes and the rerun passes. The prior one-shot study directory and its lock were
+preserved under `d23-comparative-replay-pre-threshold-fix` before the new CLI
+run. No Markdown lint command or binary is available in this checkout; no
+package was installed to add one.
