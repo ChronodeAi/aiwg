@@ -8,7 +8,8 @@
     "schemaVersion",
     "scope",
     "usdMicros",
-    "approvalDigest"
+    "approvalDigest",
+    "counterGenesisDigest"
   ],
   "properties": {
     "schemaVersion": {
@@ -27,6 +28,10 @@
       "maximum": 48000000
     },
     "approvalDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "counterGenesisDigest": {
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$"
     }

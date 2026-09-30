@@ -93,6 +93,12 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 1800000
+    },
+    "providerOverheadTokens": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64000,
+      "default": 512
     }
   }
 }

@@ -12,7 +12,7 @@ import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMet
 import { redactText } from '../../governance/redaction.js';
 import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, HeldoutError, HELDOUT_CAP_USD, HELDOUT_ENV_GATE,
   HELDOUT_PORTFOLIO_CAP_USD, planHeldoutCollection, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
-import { appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
+import { appendHeldoutSpend, appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
   reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile } from './journal.js';
 import type { AdapterObservation, DecisionAdapter, RulesetResult } from '../types.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutStudyModule, HeldoutSummary } from './types.js';
@@ -69,7 +69,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     const baselineDigests = await reconcileHeldoutBaseline(options.artifactRoot, a);
     const prior = await scanHeldoutSpend(options.artifactRoot, a.study);
     // An unacknowledged execution is never silently retried, even in a different study.
-    if (prior.attempts.some(attempt => !attempt.result || attempt.result.disposition === 'stop')) throw new HeldoutError('prior-stop');
+    if (prior.counterBlocked || prior.attempts.some(attempt => !attempt.result || attempt.result.disposition === 'stop')) throw new HeldoutError('prior-stop');
     if (!offline && prior.runs.some(run => run.corpusDigest === a.corpusDigest && run.source === 'injected-transport')) throw new HeldoutError('injected-prior');
     const old = prior.attempts.filter(attempt => attempt.study === a.study && attempt.corpusDigest === a.corpusDigest);
     if (old.some(attempt => attempt.preregistrationDigest !== a.preregistrationDigest)) throw new HeldoutError('changed-preregistration');
@@ -80,13 +80,11 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
     const events: HeldoutEvent[] = [];
     const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
-    const reserveMicros = heldoutReservationMicros(a, plan);
-    const reserveTokens = heldoutReservationTokens(a, plan);
     const studyPrior = prior.studyUsdMicros;
     const portfolioPrior = prior.portfolioUsdMicros;
     const usdLimit = Math.floor(Math.min(a.budget.usd * 1_000_000, HELDOUT_CAP_USD[a.study] * 1_000_000 - studyPrior,
       HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - portfolioPrior) * 0.8);
-    let calls = 0, reserved = 0, accounted = 0, lastDispatch = started - plan.minDispatchIntervalMs;
+    let calls = 0, reserved = 0, accounted = 0, tokens = 0, lastDispatch = started - plan.minDispatchIntervalMs;
     let reason: string | null = null, checkpoint = false;
     const canaries = new Set<string>(['heldout-synthetic-privacy-canary']);
     const failed = new Set(old.filter(attempt => attempt.result?.disposition === 'measurement-failure').map(attempt => attempt.rowId));
@@ -119,8 +117,10 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           try { await assertContextLiveSource(options.sourceRoot, a.sourceCommit); }
           catch { reason = 'source-drift'; break; }
-          const { execution, requestDigest, estimatedTokens: inputTokenBound } = await heldoutRequest(corpus, plan, a, row, request);
-          if (calls + 1 > Math.floor(a.budget.calls * 0.8) || (calls + 1) * reserveTokens > Math.floor(a.budget.tokens * 0.8)
+          const { execution, requestDigest, requestBytes, estimatedTokens: inputTokenBound } = await heldoutRequest(corpus, plan, a, row, request);
+          const reserveMicros = heldoutReservationMicros(a, inputTokenBound);
+          const reserveTokens = heldoutReservationTokens(plan, inputTokenBound);
+          if (calls + 1 > Math.floor(a.budget.calls * 0.8) || tokens + reserveTokens > Math.floor(a.budget.tokens * 0.8)
             || accounted + reserveMicros > usdLimit) { reason = 'budget-exhausted'; break; }
           await sleep(Math.max(0, plan.minDispatchIntervalMs - (now() - lastDispatch)));
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
@@ -130,7 +130,8 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
             rowId: row.id, requestId: request.id, ordinal, reservedUsdMicros: reserveMicros, reservedTokens: reserveTokens,
             requestDigest, result: null };
           // fsync completes before credential lookup or any transport call. A crash retains this charge.
-          await appendHeldoutEvent(run, events, attempt); uncertain = true; calls++; reserved += reserveMicros; accounted += reserveMicros;
+          uncertain = true; await appendHeldoutSpend(options.artifactRoot, attempt);
+          await appendHeldoutEvent(run, events, attempt); tokens += reserveTokens; calls++; reserved += reserveMicros; accounted += reserveMicros;
           const callStarted = now(); lastDispatch = callStarted;
           let observation: AdapterObservation | null = null, receipt: RulesetResult | null = null;
           let wireProblem: string | null = null, responseDigest: Digest | null = null;
@@ -142,7 +143,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           const captured = await captureQualificationLifetime(async () => {
             const resolver = await obtainHost();
             const inner = new JevDecisionAdapter({ region: a.region, now, fetch: (url, init) => {
-              if (typeof init?.body !== 'string' || Buffer.byteLength(init.body, 'utf8') > inputTokenBound
+              if (typeof init?.body !== 'string' || Buffer.byteLength(init.body, 'utf8') !== requestBytes
                 || heldoutDigest(JSON.parse(init.body)) !== requestDigest) throw new HeldoutError('request-bound');
               if (transport) return transport(url, init);
               if (process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
@@ -214,6 +215,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
                 + (numeric(observed?.usage.outputTokens) ?? 0) * a.priceBound.outputUsdPerMTok) + Math.ceil(a.priceBound.perRequestUsd * 1_000_000)) };
           accounted += attempt.result.accountedUsdMicros - reserveMicros;
           await writeHeldoutFile(join(run, `trace-${events.length}.json`), clean ? traces : []);
+          await appendHeldoutSpend(options.artifactRoot, attempt);
           await appendHeldoutEvent(run, events, attempt); latest.set(key(attempt), attempt);
           uncertain = false;
           if (disposition === 'stop') { reason = outcome; uncertain = !observed || observed.remoteExecution === 'unknown'; break; }

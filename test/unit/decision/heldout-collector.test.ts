@@ -81,10 +81,10 @@ describe('held-out collector contract and default-off isolation', () => {
       expect(() => validateHeldoutBundle(bad, heldoutDigest(bad.approval))).toThrow();
     }
     refresh(); expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).not.toThrow();
-    expect(heldoutReservationMicros(bundle.approval, bundle.preregistration)).toBe(400);
-    bundle.approval.priceBound.outputUsdPerMTok = 2; bundle.approval.priceBound.perRequestUsd = 0.001;
+    expect(heldoutReservationMicros(bundle.approval, 4000)).toBe(400);
+    bundle.approval.priceBound.inputUsdPerMTok = 2; bundle.approval.priceBound.perRequestUsd = 0.001;
     bundle.approval.priceBound.outputTokenBound = 100;
-    expect(heldoutReservationMicros(bundle.approval, bundle.preregistration)).toBe(1600);
+    expect(heldoutReservationMicros(bundle.approval, 4000)).toBe(9000);
   });
   it('AC8 refuses non-synthetic and credential-bearing payloads before credential resolution', async () => {
     const context = await setup(); const transport = fake();
@@ -132,19 +132,19 @@ describe('held-out collector dispatch and durable accounting', () => {
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const events = await readHeldoutJournal(c.runDir);
       expect(events.at(-1)?.attempt.result).toBeNull();
-      expect(events.at(-1)?.attempt.reservedUsdMicros).toBe(400);
+      expect(events.at(-1)?.attempt.reservedUsdMicros).toBe(76);
       const request = JSON.parse(String(init?.body));
       expect(request.state).toEqual({ verified: {}, untrusted: { payload: c.bundle.corpus.rows[transport.mock.calls.length - 1].input.payload } });
       expect(request).not.toHaveProperty('gold'); return reply(init);
     });
     const result = await c.run(transport);
-    expect(result).toMatchObject({ status: 'complete', reservedUsdMicros: 800, completedRows: 2, missingRows: [], decision: 'HOLD', source: 'injected-transport' });
+    expect(result).toMatchObject({ status: 'complete', reservedUsdMicros: 152, completedRows: 2, missingRows: [], decision: 'HOLD', source: 'injected-transport' });
     const attempts = (await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result).map(e => e.attempt);
     expect(attempts).toHaveLength(2);
     expect(attempts[0].result?.receiptDigest).toMatch(/^sha256:/);
     expect(attempts[0].result?.inputTokens).toBe(20);
     expect(attempts[0].result?.providerCostUsd).toBeNull();
-    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(800);
+    expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(152);
     const manifest = JSON.parse(await readFile(join(c.runDir, 'qualification.json'), 'utf8'));
     expect(manifest.mode).toBe('recorded'); expect(manifest.evidence[0]).toMatchObject({ executable: true, outcome: 'pass' });
     expect(c.host.dispose).toHaveBeenCalledOnce();
@@ -153,7 +153,7 @@ describe('held-out collector dispatch and durable accounting', () => {
     const c = await setup(20);
     const transport = vi.fn(async () => new Response('{}', { status: 503 }));
     const result = await c.run(transport);
-    expect(result).toMatchObject({ measurementFailures: ['row_0', 'row_1'], reservedUsdMicros: 1600, completedRows: 0 });
+    expect(result).toMatchObject({ measurementFailures: ['row_0', 'row_1'], reservedUsdMicros: 304, completedRows: 0 });
     expect(transport).toHaveBeenCalledTimes(4);
     const events = await readHeldoutJournal(c.runDir);
     expect(events.filter(e => e.attempt.result).map(e => e.attempt.result?.disposition)).toEqual(['retryable', 'measurement-failure', 'retryable', 'measurement-failure']);
@@ -162,7 +162,7 @@ describe('held-out collector dispatch and durable accounting', () => {
   it('AC2 a successful retry remains a real observation with both paid attempts retained', async () => {
     const c = await setup(1); let n = 0;
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => ++n === 1 ? new Response('{}', { status: 503 }) : reply(init));
-    expect(await c.run(transport)).toMatchObject({ completedRows: 1, reservedUsdMicros: 800 });
+    expect(await c.run(transport)).toMatchObject({ completedRows: 1, reservedUsdMicros: 152 });
     expect((await readHeldoutJournal(c.runDir)).filter(e => e.attempt.result)).toHaveLength(2);
   });
   it.each(['model', 'usage', 'unknown-usage', 'auth', 'rejected', 'credential'])('AC3 stops immediately on %s and preserves completed rows', async kind => {
@@ -175,7 +175,7 @@ describe('held-out collector dispatch and durable accounting', () => {
         : kind === 'unknown-usage' ? { usage: {} } : { model: 'fake-scoped-reader-value' });
     });
     const result = await c.run(transport);
-    expect(result).toMatchObject({ status: 'stopped', completedRows: 1, reservedUsdMicros: 800 });
+    expect(result).toMatchObject({ status: 'stopped', completedRows: 1, reservedUsdMicros: 152 });
     expect(transport).toHaveBeenCalledTimes(2);
     const events = await readHeldoutJournal(c.runDir);
     expect(events[1].attempt.result?.disposition).toBe('success');
@@ -184,7 +184,7 @@ describe('held-out collector dispatch and durable accounting', () => {
   });
   it('AC3 reserves before budget exhaustion and counts prior runs under both hard caps', async () => {
     const c = await setup(3); c.bundle.approval.budget.calls = 2;
-    const transport = fake(); expect(await c.run(transport)).toMatchObject({ status: 'stopped', reason: 'budget-exhausted', completedRows: 1, reservedUsdMicros: 400 });
+    const transport = fake(); expect(await c.run(transport)).toMatchObject({ status: 'stopped', reason: 'budget-exhausted', completedRows: 1, reservedUsdMicros: 76 });
     expect(transport).toHaveBeenCalledOnce();
     c.bundle.approval.runId = 'offline-02'; c.bundle.approval.budget.calls = 1000;
     c.bundle.approval.priorStudySpendUsd = 7.9996;
@@ -206,7 +206,7 @@ describe('held-out collector dispatch and durable accounting', () => {
           else init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
         });
       });
-      expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ status: 'stopped', completedRows: 1, reservedUsdMicros: 800 });
+      expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ status: 'stopped', completedRows: 1, reservedUsdMicros: 152 });
       expect(transport).toHaveBeenCalledTimes(2);
       expect((await readHeldoutJournal(c.runDir)).at(-1)?.attempt.result?.disposition).toBe('stop');
       vi.useRealTimers();
@@ -219,7 +219,7 @@ describe('held-out collector dispatch and durable accounting', () => {
     expect(await c.run(transport)).toMatchObject({ status: 'checkpoint', completedRows: 1 });
     c.bundle.approval.runId = 'offline-resume';
     const summary: any = await c.run(transport);
-    expect(summary).toMatchObject({ completedRows: 2, reservedUsdMicros: 400 });
+    expect(summary).toMatchObject({ completedRows: 2, reservedUsdMicros: 76 });
     const metadata = { sample_n: 2, uncertainty: {}, paired_baseline: {}, integrity_mode: 'locked', fresh_workspace_required: false,
       fresh_workspace_verified: false, integrity_state: 'verified', trusted_score_source: 'locked-artifact-snapshot', compromise_labels: [],
       weak_signal_reason: null, release_gate: { decision: 'HOLD' as const, reasons: ['fixture'] } };
@@ -283,7 +283,7 @@ describe('held-out recorded evidence and study interface', () => {
     const c = await setup(20); c.bundle.preregistration.providerFailurePolicy.maximumSliceFailureBps = 0;
     c.bundle.preregistration.providerFailurePolicy.maxRetries = 0;
     const transport = vi.fn(async () => new Response('{}', { status: 503 }));
-    expect(await c.run(transport)).toMatchObject({ measurementFailures: ['row_0'], reservedUsdMicros: 400 });
+    expect(await c.run(transport)).toMatchObject({ measurementFailures: ['row_0'], reservedUsdMicros: 76 });
     expect(transport).toHaveBeenCalledOnce();
   });
   it('AC3 pre-cancellation makes no reservation; unknown execution blocks all later studies', async () => {
@@ -300,7 +300,7 @@ describe('held-out recorded evidence and study interface', () => {
     const c = await setup(1);
     await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { usage: { input_tokens: 10000, output_tokens: 0 } })));
     expect((await scanHeldoutSpend(c.root, 'D17')).studyUsdMicros).toBe(1000);
-    const next = await setup(1); next.bundle.approval.priorPortfolioSpendUsd = 47.9996;
+    const next = await setup(1); next.bundle.approval.priorPortfolioSpendUsd = 47.99992;
     const transport = fake(); expect(await next.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
     expect(transport).not.toHaveBeenCalled();
   });
@@ -328,11 +328,12 @@ describe('held-out recorded evidence and study interface', () => {
     const help = spawnSync(process.execPath, [cli], { encoding: 'utf8', timeout: 10000 });
     expect(help.status).toBe(0); expect(help.stdout).toContain('--prepare');
     const generated = await prepare('independent-seed');
-    expect(generated.corpus.rows[0].input.payload).toContain('independent-seed');
+    expect(generated.corpus.rows[0].input.payload).toMatch(/world w-[a-f0-9]{16}, lamp/);
+    expect(generated.corpus.rows[0].input.payload).not.toContain('independent-seed');
     expect(generated.gold).toEqual({ example_0: 'yes', example_1: 'no' });
     expect(() => validateHeldoutInputs(generated.corpus, generated.preregistration)).not.toThrow();
     const planned = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));
-    expect(planned).toMatchObject({ providerCalls: 0, maximumAttempts: 4, reservedTokens: 17024, reservedUsdMicros: 1600, fitsBeforeStop: true });
+    expect(planned).toMatchObject({ providerCalls: 0, maximumAttempts: 4, reservedTokens: 4054, reservedUsdMicros: 304, fitsBeforeStop: true });
     const real = await vi.importActual<typeof import('../../../src/decision/context-live-qualification.js')>('../../../src/decision/context-live-qualification.js');
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10000 }).trim();
     expect(head).toMatch(/^[a-f0-9]{40}$/);
@@ -382,7 +383,7 @@ describe('held-out raw transport controls', () => {
         if (change === 'approval') value.approvalDigest = pin; else value.usdMicros = 1;
         await writeFile(path, JSON.stringify(value));
       }
-      const transport = fake(); await expect(c.run(transport)).rejects.toThrow('baseline-mismatch');
+      const transport = fake(); await expect(c.run(transport)).rejects.toThrow(change === 'missing' ? 'operator-repair' : 'baseline-mismatch');
       expect(transport).not.toHaveBeenCalled();
     }
   });
@@ -394,7 +395,7 @@ describe('held-out raw transport controls', () => {
     c.bundle.approval.priorStudySpendUsd = 0; c.bundle.approval.runId = 'other-study';
     expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
     expect(transport).toHaveBeenCalledOnce();
-    expect(await scanHeldoutSpend(c.root, 'D29')).toMatchObject({ studyUsdMicros: 0, portfolioUsdMicros: 47700400 });
+    expect(await scanHeldoutSpend(c.root, 'D29')).toMatchObject({ studyUsdMicros: 0, portfolioUsdMicros: 47700076 });
   });
   it('HIGH3 adds three runs to the durable $7 study / $47 portfolio baseline without reusing the remainder', async () => {
     const c = await setup(3); c.bundle.approval.priorStudySpendUsd = 7; c.bundle.approval.priorPortfolioSpendUsd = 47;
@@ -402,14 +403,14 @@ describe('held-out raw transport controls', () => {
     const transport = fake();
     expect(await scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).toMatchObject({ studyUsdMicros: 7000000, portfolioUsdMicros: 47000000 });
     expect(await readdir(join(c.root, 'research/qualification/heldout/baselines'))).toEqual([]);
-    expect(await c.run(transport)).toMatchObject({ completedRows: 1, reservedUsdMicros: 400400 });
+    expect(await c.run(transport)).toMatchObject({ completedRows: 1, reservedUsdMicros: 400076 });
     c.bundle.approval.runId = 'floor-02';
-    expect(await c.run(transport)).toMatchObject({ completedRows: 2, reservedUsdMicros: 400400 });
+    expect(await c.run(transport)).toMatchObject({ completedRows: 2, reservedUsdMicros: 400076 });
     c.bundle.approval.runId = 'floor-03';
     expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 2, reservedUsdMicros: 0 });
     expect(transport).toHaveBeenCalledTimes(2);
-    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 7800800, portfolioUsdMicros: 47800800 });
-    expect(await scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).toMatchObject({ studyUsdMicros: 7800800, portfolioUsdMicros: 47800800 });
+    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 7800152, portfolioUsdMicros: 47800152 });
+    expect(await scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).toMatchObject({ studyUsdMicros: 7800152, portfolioUsdMicros: 47800152 });
     c.bundle.approval.priorPortfolioSpendUsd = 46;
     await expect(scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).rejects.toThrow('baseline-changed');
   });
@@ -417,31 +418,26 @@ describe('held-out raw transport controls', () => {
     const c = await setup(1); c.bundle.approval.budget.usd = 8;
     c.bundle.approval.priceBound.outputUsdPerMTok = 1000;
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { usage: { input_tokens: 20, output_tokens: 9000 } }));
-    await expect(c.run(transport)).rejects.toThrow('output-bound-required');
+    await expect(c.run(transport)).rejects.toThrow('free-output-required');
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
-  it('HIGH2 refuses a schema-permitted tariff whose attested output bound exceeds the remaining cap', async () => {
-    const c = await setup(1); c.bundle.approval.budget.usd = 8;
-    Object.assign(c.bundle.approval.priceBound, { outputUsdPerMTok: 1000, outputTokenBound: 9000 });
-    const transport = fake();
-    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
-    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
-  });
-  it('HIGH2 admits affordable output within its attested bound and retains the full input/output reservation', async () => {
+  it.each([1, 1000])('HIGH2 refuses paid output priced at %s even with an affordable attested bound', async rate => {
     const c = await setup(1);
-    Object.assign(c.bundle.approval.priceBound, { outputUsdPerMTok: 1, outputTokenBound: 9000 });
-    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { usage: { input_tokens: 20, output_tokens: 9000 } }));
-    expect(await c.run(transport)).toMatchObject({ status: 'complete', completedRows: 1, reservedUsdMicros: 9400 });
-    expect(transport).toHaveBeenCalledOnce();
-    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 9400 });
+    Object.assign(c.bundle.approval.priceBound, { outputUsdPerMTok: rate, outputTokenBound: 100 });
+    const transport = fake();
+    await expect(c.run(transport)).rejects.toThrow('free-output-required');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
   });
-  it('HIGH2 reserves serialized UTF-8 input and attested paid output before dispatch, then halts on excess output', async () => {
+  it('HIGH2 reserves serialized UTF-8 input plus overhead and a fee before dispatch, then halts on excess free output', async () => {
     const c = await setup(2);
-    Object.assign(c.bundle.approval.priceBound, { inputUsdPerMTok: 2, outputUsdPerMTok: 3, outputTokenBound: 100 });
+    Object.assign(c.bundle.approval.priceBound, { inputUsdPerMTok: 2, outputTokenBound: 100, perRequestUsd: 0.001 });
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       const attempt = (await readHeldoutJournal(c.runDir)).at(-1)!.attempt;
-      expect(attempt.reservedTokens).toBeGreaterThanOrEqual(Buffer.byteLength(String(init?.body), 'utf8') + 100);
-      expect(attempt.reservedUsdMicros).toBe(8300);
+      const bytes = Buffer.byteLength(String(init?.body), 'utf8');
+      expect(attempt.reservedTokens).toBe(bytes + 512 + 256);
+      expect(attempt.reservedUsdMicros).toBe((bytes + 512) * 2 + 1000);
+      const counter = (await readFile(join(c.root, 'research/qualification/heldout/spend-counter.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+      expect(counter.at(-1)).toMatchObject({ charge: { accountedUsdMicros: null }, totalUsdMicros: (bytes + 512) * 2 + 1000 });
       return reply(init, { usage: { input_tokens: 20, output_tokens: 101 } });
     });
     expect(await c.run(transport)).toMatchObject({ reason: 'output-bound', status: 'stopped' });
@@ -475,5 +471,112 @@ describe('held-out raw transport controls', () => {
     expect(await c.run(transport)).toMatchObject({ status: 'stopped', completedRows: 0 });
     expect(transport).toHaveBeenCalledOnce();
     expect(JSON.stringify(await readHeldoutJournal(c.runDir))).not.toContain('fake-scoped-reader-value');
+  });
+});
+
+describe('collector re-verification cap probes', () => {
+  it('rejects paid output even with an approved 100-token bound before the 9000-token response', async () => {
+    const c = await setup(1);
+    Object.assign(c.bundle.approval.priceBound, { outputUsdPerMTok: 1000, outputTokenBound: 100 });
+    c.bundle.approval.budget.usd = 8;
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init, { usage: { input_tokens: 20, output_tokens: 9000 } }));
+    await expect(c.run(transport)).rejects.toThrow('free-output-required');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
+  it('rejects the $0.0005 approval when one byte-plus-overhead reservation costs more', async () => {
+    const c = await setup(1); c.bundle.approval.budget.usd = 0.0005;
+    c.bundle.approval.priceBound.inputUsdPerMTok = 1;
+    const transport = fake(); await expect(c.run(transport)).rejects.toThrow('approval-call-budget');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
+  it.each(['run-directory', 'events-and-summary'])('retains the study/portfolio allowance after deleting %s', async change => {
+    const c = await setup(1); const transport = fake();
+    Object.assign(c.bundle.approval, { priorStudySpendUsd: 7, priorPortfolioSpendUsd: 47 });
+    c.bundle.approval.priceBound.perRequestUsd = 0.5;
+    await c.run(transport);
+    const before = await scanHeldoutSpend(c.root, 'D17');
+    if (change === 'run-directory') await rm(c.runDir, { recursive: true });
+    else for (const name of ['00000001.json', '00000002.json', 'summary.json']) await rm(join(c.runDir, name));
+    const after = await scanHeldoutSpend(c.root, 'D17');
+    expect(after.studyUsdMicros).toBe(before.studyUsdMicros);
+    expect(after.portfolioUsdMicros).toBe(before.portfolioUsdMicros);
+    for (const runId of ['deleted-02', 'deleted-03']) {
+      c.bundle.approval.runId = runId;
+      expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
+    }
+    expect(transport).toHaveBeenCalledOnce();
+  });
+  it.each(['delete', 'truncate', 'prefix', 'chain', 'head-delete', 'head-stale', 'interrupted-head'])('fails closed with operator repair on counter %s after deleting run evidence', async change => {
+    const c = await setup(1); await c.run(fake()); await rm(c.runDir, { recursive: true });
+    const path = join(c.root, 'research/qualification/heldout/spend-counter.jsonl');
+    const bytes = await readFile(path, 'utf8');
+    if (change === 'delete') await rm(path);
+    if (change === 'truncate') await writeFile(path, bytes.slice(0, -10));
+    if (change === 'prefix') await writeFile(path, bytes.split('\n')[0] + '\n');
+    if (change === 'head-delete') await rm(join(c.root, 'research/qualification/heldout/spend-head.json'));
+    if (change === 'head-stale') {
+      const head = JSON.parse(await readFile(join(c.root, 'research/qualification/heldout/spend-head.json'), 'utf8'));
+      head.sequence--;
+      await writeFile(join(c.root, 'research/qualification/heldout/spend-head.json'), JSON.stringify(head));
+    }
+    if (change === 'interrupted-head') await writeFile(join(c.root, 'research/qualification/heldout/spend-head.next.json'), '{}');
+    if (change === 'chain') {
+      const lines = bytes.trim().split('\n').map(line => JSON.parse(line)); lines[1].previous = pin;
+      await writeFile(path, lines.map(line => JSON.stringify(line)).join('\n') + '\n');
+    }
+    c.bundle.approval.runId = 'damaged-counter'; const transport = fake();
+    await expect(c.run(transport)).rejects.toThrow('operator-repair');
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it.each([undefined, 1024])('reserves the default or preregistered overhead %s and halts at one excess input token', async overhead => {
+    const c = await setup(2);
+    if (overhead === undefined) delete c.bundle.preregistration.providerOverheadTokens;
+    else c.bundle.preregistration.providerOverheadTokens = overhead;
+    c.bundle.approval.priceBound.inputUsdPerMTok = 10;
+    let reservationBytes = '', bound = 0;
+    const path = join(c.root, 'research/qualification/heldout/spend-counter.jsonl');
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      bound = Buffer.byteLength(String(init?.body), 'utf8') + (overhead ?? 512);
+      const attempt = (await readHeldoutJournal(c.runDir)).at(-1)!.attempt;
+      expect(attempt.reservedUsdMicros).toBe(bound * 10);
+      reservationBytes = await readFile(path, 'utf8');
+      return reply(init, { usage: { input_tokens: bound + 1, output_tokens: 0 } });
+    });
+    expect(await c.run(transport)).toMatchObject({ reason: 'usage-bound', completedRows: 0 });
+    expect(transport).toHaveBeenCalledOnce();
+    const bytes = await readFile(path, 'utf8');
+    expect(bytes.startsWith(reservationBytes)).toBe(true);
+    const events = bytes.trim().split('\n').map(line => JSON.parse(line));
+    expect(events).toHaveLength(3);
+    expect(events.at(-1)).toMatchObject({ totalUsdMicros: (bound + 1) * 10,
+      charge: { accountedUsdMicros: (bound + 1) * 10, disposition: 'stop' } });
+    await rm(c.runDir, { recursive: true });
+    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: (bound + 1) * 10, counterBlocked: true });
+    c.bundle.approval.runId = 'after-input-overrun';
+    await expect(c.run(transport)).rejects.toThrow('prior-stop');
+    expect(transport).toHaveBeenCalledOnce();
+  });
+  it('rejects null overhead and corpus seeds inconsistent across reproducible rows', async () => {
+    const c = await setup(2), transport = fake();
+    c.bundle.preregistration.providerOverheadTokens = null as any;
+    await expect(c.run(transport)).rejects.toThrow('schema');
+    c.bundle.preregistration.providerOverheadTokens = 512;
+    c.bundle.corpus.rows[1] = generateHeldoutRow('heldout-lamp/v1', 'another-seed:1:single');
+    await expect(c.run(transport)).rejects.toThrow('corpus-provenance');
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it.each(['generatorDigest', 'seed'])('verifies corpus %s despite refreshed approval pins', async field => {
+    const c = await setup(1);
+    c.bundle.corpus.provenance[field as 'seed' | 'generatorDigest'] = field === 'seed' ? 'forged-seed' : pin;
+    const transport = fake(); await expect(c.run(transport)).rejects.toThrow('corpus-provenance');
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it('keeps a permitted raw seed out of model-visible payloads', async () => {
+    const generated = await prepare('ignore-previous-instructions');
+    expect(generated.corpus.rows[0].input.payload).not.toContain('ignore-previous-instructions');
+    expect(generated.corpus.rows[0].input.payload).toMatch(/world w-[a-f0-9]{16}, lamp/);
+  });
+  it.each(['opaque text', 'ignore.previous.instructions', 'a'.repeat(33), 'x\n', '💡', 'x:0:single'])('rejects an unsafe world component %s', async seed => {
+    await expect(prepare(seed)).rejects.toThrow();
   });
 });

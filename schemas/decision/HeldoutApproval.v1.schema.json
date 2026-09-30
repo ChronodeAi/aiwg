@@ -131,9 +131,7 @@
           "maximum": 1000
         },
         "outputUsdPerMTok": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1000
+          "const": 0
         },
         "perRequestUsd": {
           "type": "number",

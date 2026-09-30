@@ -21,7 +21,7 @@ export interface HeldoutPreregistration {
   schemaVersion: 'decision-heldout-preregistration/v1'; study: Study; frozenAt: string;
   corpusDigest: Digest; studyAnalysisDigest: Digest; scorerDigest: Digest;
   providerFailurePolicy: { maxRetries: 0 | 1; maximumSliceFailureBps: number; retryOnlyTerminal: true };
-  perRequestTokenBound: number; outputAndHiddenTokenAllowance: number;
+  perRequestTokenBound: number; providerOverheadTokens?: number; outputAndHiddenTokenAllowance: number;
   requestTimeoutMs: number; minDispatchIntervalMs: number; sessionLimitMs: number;
 }
 export interface HeldoutApproval {
