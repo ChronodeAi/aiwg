@@ -509,6 +509,58 @@ describe('collector re-verification cap probes', () => {
     }
     expect(transport).toHaveBeenCalledOnce();
   });
+  it.each(['budget', 'approval', 'floor', 'study-delete', 'baselines-delete', 'counter-reset', 'head-unbound'])('P1 refuses baseline %s after run deletion before credentials', async change => {
+    const c = await setup(3); c.bundle.approval.budget = { calls: 2, tokens: 1600, usd: 1 };
+    expect(await c.run(fake())).toMatchObject({ reason: 'budget-exhausted', completedRows: 1 });
+    await rm(c.runDir, { recursive: true });
+    const root = join(c.root, 'research/qualification/heldout');
+    const path = join(root, 'baselines/D17.json');
+    const baseline = JSON.parse(await readFile(path, 'utf8'));
+    const counter = await readFile(join(root, 'spend-counter.jsonl'), 'utf8');
+    const head = await readFile(join(root, 'spend-head.json'), 'utf8');
+    if (change === 'budget') {
+      baseline.budget = { calls: 4, tokens: 3200, usd: 2 };
+      c.bundle.approval.budget = baseline.budget;
+    }
+    if (change === 'approval') baseline.approvalDigest = pin;
+    if (change === 'floor') { baseline.usdMicros = 1; c.bundle.approval.priorStudySpendUsd = 0.000001; }
+    await writeFile(path, JSON.stringify(baseline));
+    if (change === 'study-delete') await rm(path);
+    if (change === 'baselines-delete') await rm(join(root, 'baselines'), { recursive: true });
+    if (change === 'counter-reset') await writeFile(join(root, 'spend-counter.jsonl'), counter.split('\n')[0] + '\n');
+    if (change === 'head-unbound') {
+      const value = JSON.parse(head); delete value.baselineDigests;
+      await writeFile(join(root, 'spend-head.json'), JSON.stringify(value));
+    }
+    c.bundle.approval.runId = 'replaced-baseline'; c.host.resolveCredential.mockClear(); const transport = fake();
+    await expect(scanHeldoutSpend(c.root, 'D17', c.bundle.approval)).rejects.toThrow('operator-repair');
+    await expect(c.run(transport)).rejects.toThrow('operator-repair');
+    expect(c.host.resolveCredential).not.toHaveBeenCalled(); expect(transport).not.toHaveBeenCalled();
+    if (change !== 'counter-reset') expect(await readFile(join(root, 'spend-counter.jsonl'), 'utf8')).toBe(counter);
+    if (change !== 'head-unbound') expect(await readFile(join(root, 'spend-head.json'), 'utf8')).toBe(head);
+  });
+  it('P1 binds the first approval and a later study even before either dispatches', async () => {
+    const c = await setup(1); const transport = fake();
+    const controller = new AbortController(); controller.abort();
+    expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ reason: 'cancelled', reservedUsdMicros: 0 });
+    const root = join(c.root, 'research/qualification/heldout');
+    const study = JSON.parse(await readFile(join(root, 'baselines/D17.json'), 'utf8'));
+    const portfolio = JSON.parse(await readFile(join(root, 'baselines/portfolio.json'), 'utf8'));
+    expect(study).toMatchObject({ approvalDigest: heldoutDigest(c.bundle.approval), budget: c.bundle.approval.budget });
+    expect(JSON.parse(await readFile(join(root, 'spend-head.json'), 'utf8'))).toMatchObject({ sequence: 1,
+      baselineDigests: { D17: heldoutDigest(study), portfolio: heldoutDigest(portfolio) } });
+    c.bundle.corpus.study = 'D29'; c.bundle.preregistration.study = 'D29'; c.bundle.approval.study = 'D29';
+    c.bundle.approval.runId = 'second-study';
+    expect(await c.run(transport, { signal: controller.signal })).toMatchObject({ reason: 'cancelled', reservedUsdMicros: 0 });
+    const second = JSON.parse(await readFile(join(root, 'baselines/D29.json'), 'utf8'));
+    expect(JSON.parse(await readFile(join(root, 'spend-head.json'), 'utf8'))).toMatchObject({ sequence: 1,
+      baselineDigests: { D17: heldoutDigest(study), D29: heldoutDigest(second), portfolio: heldoutDigest(portfolio) } });
+    await rm(heldoutRunsRoot(c.root), { recursive: true });
+    await rm(join(root, 'baselines/D29.json'));
+    c.bundle.approval.runId = 'recreated-study';
+    await expect(c.run(transport)).rejects.toThrow('operator-repair');
+    expect(c.host.resolveCredential).not.toHaveBeenCalled(); expect(transport).not.toHaveBeenCalled();
+  });
   it.each(['delete', 'truncate', 'prefix', 'chain', 'head-delete', 'head-stale', 'interrupted-head'])('fails closed with operator repair on counter %s after deleting run evidence', async change => {
     const c = await setup(1); await c.run(fake()); await rm(c.runDir, { recursive: true });
     const path = join(c.root, 'research/qualification/heldout/spend-counter.jsonl');
