@@ -611,6 +611,46 @@ describe('held-out calibration scope and two-phase approval', () => {
       calibrationPhaseRecordDigest: summary.calibrationPhaseRecordDigest, priorApprovalDigest } });
     await c.clock.sleep(1); c.refresh();
   }
+  it.each(['staged', 'artifact', 'uncalibrated-diagnostic'] as const)('review P1 %s retains each exhausted threshold through resumes and run deletion', async mode => {
+    for (const budget of ['usd', 'calls', 'tokens'] as const) for (const removeRuns of [true, false]) {
+      const c = await scoped(mode); c.bundle.preregistration.providerFailurePolicy.maxRetries = 0;
+      if (budget === 'usd') c.bundle.approval.priceBound.perRequestUsd = 0.6;
+      if (budget === 'calls') c.bundle.approval.budget.calls = 2;
+      if (budget === 'tokens') c.bundle.approval.budget.tokens = 1600;
+      const originalBudget = structuredClone(c.bundle.approval.budget);
+      expect(await c.run(fake())).toMatchObject({ reason: 'budget-exhausted', completedRows: 1 });
+      const before = await scanHeldoutSpend(c.root, 'D17');
+      expect(before.studyCalls).toBe(1);
+      if (removeRuns) await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'unchanged-resume'; c.host.resolveCredential.mockClear(); const transport = fake();
+      expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+      if (removeRuns) await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'larger-approval'; c.bundle.approval.budget[budget] *= 2;
+      await expect(c.run(transport)).rejects.toThrow('budget-changed');
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+      expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyCalls: before.studyCalls,
+        studyReservedTokens: before.studyReservedTokens, studyUsdMicros: before.studyUsdMicros });
+      const baseline = JSON.parse(await readFile(join(c.root, 'research/qualification/heldout/baselines/D17.json'), 'utf8'));
+      expect(baseline.budget).toEqual(originalBudget);
+    }
+  });
+  it('review P1 refuses missing or malformed durable thresholds after deleting run evidence', async () => {
+    for (const budget of [undefined, null, { calls: 2, tokens: 1600, usd: null }, { calls: 2, tokens: 1600, usd: 1, extra: true }]) {
+      const c = await scoped(); await c.run(fake());
+      const path = join(c.root, 'research/qualification/heldout/baselines/D17.json');
+      const baseline = JSON.parse(await readFile(path, 'utf8'));
+      baseline.budget = budget; await writeFile(path, JSON.stringify(baseline));
+      await rm(heldoutRunsRoot(c.root), { recursive: true });
+      c.bundle.approval.runId = 'missing-thresholds'; c.host.resolveCredential.mockClear(); const transport = fake();
+      await expect(c.run(transport)).rejects.toThrow('schema');
+      expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+    }
+  });
+  it.each(['uncalibrated-diagnostic', 'staged'] as const)('review P2 rejects a structured PROMOTE from a %s scorer', async mode => {
+    const c = await scoped(mode), summary = await c.run(fake());
+    await expect(scoreRun(c, summary, vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE' })))).rejects.toThrow('uncalibrated-report');
+  });
   it('AC1/3 explicitly binds diagnostic scoring and refuses calibrated claims or an unregistered scope', async () => {
     const c = await scoped('uncalibrated-diagnostic'); const summary = await c.run(fake());
     const score = vi.fn(async () => ({ calibrated: false, decision: 'PROMOTE' }));
