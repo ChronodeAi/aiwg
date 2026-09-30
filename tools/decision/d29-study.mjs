@@ -7,7 +7,7 @@ import { register } from 'tsx/esm/api';
 register();
 
 export async function runD29Command(args) {
-  const [mode = '--dry-run', seed = 'd29-study-v2', destination] = args;
+  const [mode = '--dry-run', seed = 'd29-study-v3', destination] = args;
   const { prepare, dryRun } = await import('./studies/d29.mjs');
   const { assertContextArtifactRoot } = await import('../../src/decision/context-live-qualification.ts');
   const { writeHeldoutFile, readHeldoutFile } = await import('../../src/decision/heldout/journal.ts');
