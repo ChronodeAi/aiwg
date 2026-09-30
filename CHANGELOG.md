@@ -9,6 +9,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 generator v4 and public development seed
+  `d29-study-v5` match benign annotations and distractor cues across labels,
+  clarify provider labeling conventions, and audit single and paired shortcuts.
+  A pinned passage baseline is the primary comparator; the original remains
+  secondary. All variant families and injection phrasings are represented in
+  the 50-item development review; live evidence and approval remain pending (#2622)
+
 - Experimental, default-off D29 synthetic generator v3 with attribute-generic
   passage cases, benign look-alikes, varied injections and incomplete-evidence
   forms, a deterministic shortcut audit, and public development seed

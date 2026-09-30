@@ -124,6 +124,14 @@ for synthetic D17/D29 study modules. Preparation and dry-run use source directly
 collection needs a separate priced, digest-bound approval and explicit env gate.
 The collector does not promote models or establish study quality.
 
+The [D29 v4 study](../../../../../docs/decision/d29-heldout-study.md) adds matched
+benign annotations, explicit screening-control cases and frozen provider
+labeling conventions. Its primary passage baseline and unchanged secondary
+baseline are source-pinned; development audits cover single/pairwise shortcuts
+and an informational cross-validated tree. The public `d29-study-v5` corpus is
+an offline demo and is rejected for paid collection. Actual observations,
+reviewed calibration and completed human assessments remain pending.
+
 Jev collection requires attested free output and reserves request bytes plus a
 preregistered provider overhead allowance (default 512 tokens). Preserve the
 separate spend counter, head and baseline files under the canonical artifact

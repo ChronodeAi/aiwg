@@ -321,12 +321,16 @@ derived from the seed digest, so even permitted seed text stays out of model-vis
 state. A bounded identifier still needs synthetic provenance review;
 this constraint does not prove that an identifier has no external meaning.
 The registry includes the fictional `heldout-lamp/v1` and
-`heldout-lamp-splits/v1` examples and the frozen D29 `d29-synthetic/v1` and
-`d29-synthetic/v2` generators. The current [D29 study](d29-heldout-study.md) uses
-the additive `d29-synthetic/v3` registry entry, with 2,000 subjects, ten slices,
-varied attributes and passages, benign look-alikes and a single-feature shortcut
-audit. Public development seeds through `d29-study-v4` are excluded from paid
-collection.
+`heldout-lamp-splits/v1` examples and the frozen D29 `d29-synthetic/v1`,
+`d29-synthetic/v2` and `d29-synthetic/v3` generators. The current
+[D29 study](d29-heldout-study.md) uses the additive `d29-synthetic/v4` registry
+entry, with 2,000 subjects, ten slices, matched benign annotations and
+identifier distributions, explicit screening-control attempts and corrected
+attribute-cardinality conventions. A source-pinned passage baseline is the
+primary comparator; the original baseline remains a reported secondary.
+The development audit applies fixed single/pairwise cutoffs and reports an
+informational cross-validated tree score. Public development seeds and corpus
+digests through `d29-study-v5` are excluded from paid collection.
 The `single` and `local` row seeds encode each version’s fixed split layout;
 malformed layouts and out-of-range indices fail regeneration. D17 still
 requires a reviewed generator addition and fresh corpus pins.
