@@ -4,7 +4,7 @@ The experimental collector is default-off. It collects synthetic observations
 for source-controlled D17 and D29 study modules; it never promotes a model,
 changes a workflow, approves an SDLC gate or claims a study has passed. The
 checked-in example is a two-subject plumbing demonstration, not held-out data.
-No live collection was performed for this implementation (#2611, #2622).
+No live collection was performed for this implementation (#2611, #2622, #2778).
 
 ## Source-only commands
 
@@ -49,18 +49,97 @@ pin checks. The live environment and TLS gates are checked again at dispatch.
 ## Approval and accounting
 
 The closed v1 corpus, preregistration, approval, baseline, spend-event, spend-head,
-frozen-input, attempt, event and summary schemas are under
+frozen-input, calibration-phase, attempt, event and summary schemas are under
 `schemas/decision/Heldout*.v1.schema.json`. Definitions and receipts also pass the existing decision validators. Unknown fields, null price
-rates/fees, null calibration pins, changed approval pins, duplicate payloads,
+rates/fees, malformed calibration bindings, changed approval pins, duplicate payloads,
 cross-split families and non-synthetic provenance fail before dispatch.
 
 Approval binds the corpus and preregistration, requested/served `jev-1.13.0`,
 all execution definition/ruleset/binding/projection pins, adapter version,
-calibration digest, resolver file digest, clean exact source commit, CI evidence
+calibration mode/phase and its required digests, resolver file digest, clean exact source commit, CI evidence
 reference, reviewer, titan workspace, provider terms reference and run ceilings.
 CI and provider terms references are operator attestations, not remotely
-verified results. A calibration digest pins an artifact; it does not establish
-D09 compatibility. Study scorers must use the existing calibration registry.
+verified results. The approval's closed `calibration` block replaces the former
+bare `calibrationDigest`; old approvals must be refreshed. No fixture digest or
+hash of a plan substitutes for a genuine D09 artifact.
+
+### Three calibration modes
+
+| Approval `calibration` | Preregistration `calibration` | Permitted collection |
+| --- | --- | --- |
+| `{mode: 'uncalibrated-diagnostic'}` | `{scope: 'uncalibrated-diagnostic', allowedModes: ['uncalibrated-diagnostic']}` | All declared rows; diagnostic scoring only |
+| `{mode: 'staged', phase: 'calibration'}` | `{scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration']}` | Only the declared calibration-phase splits; never test |
+| `{mode: 'staged', phase: 'test', calibrationArtifactDigest, calibrationPhaseRecordDigest, priorApprovalDigest}` | The same immutable staged preregistration | Only test rows, after verification of the sealed calibration phase |
+| `{mode: 'artifact', calibrationArtifactDigest}` | `{scope: 'calibrated', allowedModes: ['artifact']}` | All declared rows using an independent pre-existing artifact binding |
+
+A calibrated preregistration can allow both `staged` and `artifact`. Declaring
+`staged` requires a nonempty, unique `calibrationPhaseSplits` drawn only from
+`tuning` and `calibration`; either or both can be declared. Diagnostic scope
+allows only diagnostic mode. Unknown fields, null artifact digests, missing
+phase pins and unregistered modes fail closed. Every required digest must have
+the `sha256:` form. Artifact bindings establish identity only: the collector
+does **not** load, validate, qualify or register a D09 artifact. Even a digest
+matching a known fixture receives no validity or compatibility claim.
+
+Dry-run reports `calibration`, `rowsInScope`, phase-only `maximumAttempts`,
+`reservedTokens` and `reservedUsdMicros`, plus the remaining global `allowance`.
+Worst-case estimates include the preregistered terminal retries. Test-phase
+dry-run also requires the matching seal. A feasibility estimate is not a
+collection approval or a D09 qualification.
+
+### Staged runbook
+
+1. Freeze the complete corpus, split memberships and preregistration before
+   either phase. Approve `{mode: 'staged', phase: 'calibration'}` with real
+   source, pricing and operator attestations. No calibration artifact is needed
+   to collect this phase.
+2. Collect only the preregistered tuning/calibration splits. A session
+   checkpoint is not a phase boundary: resume with a new approved run ID and
+   the same corpus, preregistration, budget and original spend floors.
+3. When every in-scope row is terminal, the collector exclusively writes and
+   fsyncs `runs/RUN_ID/calibration-phase.json`. Successful requests, deterministic
+   local rows and terminal measurement failures count as terminal. Unvisited
+   rows skipped by a slice tolerance, checkpoints, stopping failures and
+   unresolved reservations do not seal the phase. A seal proves completion of
+   collection, not adequate samples or acceptable quality.
+4. Fit the mapping, then separately **qualify and register the D09 artifact**
+   through the existing calibration registry and qualification harness. A
+   fitted mapping alone is not D09 qualification. Representative data,
+   sample/slice sufficiency, compatibility, integrity, review and qualification
+   evidence still have to satisfy D09.
+5. Anchor the genuine artifact digest, `heldoutDigest(calibration-phase.json)`
+   and the digest of the calibration approval that owns that seal in protected
+   operator records. `summary.calibrationPhaseRecordDigest` supplies the seal
+   digest; it is null for an incomplete calibration phase.
+6. Approve the test phase with those three pins in `calibration`. The prior
+   approval must be a calibration-phase approval for the same corpus and
+   preregistration. The test approval keeps the shared budget and initial
+   spend floors. No automatic approval transition or artifact fitting occurs.
+7. Collect test rows. Before planning or dispatching them, the collector rereads
+   the seal, its frozen approvals and complete journal/attempt lineage. It
+   records `frozen.testPhaseAccessAt`, strictly later than `sealedAt`; equal,
+   earlier or missing times refuse access. This is a host-clock observation,
+   not an independent timestamp authority.
+8. Score with the test approval and trusted evidence/integrity pins. The scorer
+   receives the exact `approvedCalibration` binding and must compare its
+   artifact digest to the trusted D09 artifact it actually uses, then apply
+   existing D09 validation/compatibility and native study gates.
+
+The seal is closed/versioned and binds all calibration-phase rows, approval,
+corpus, preregistration and the complete prior-run journal/attempt lineage.
+A changed seal, changed lineage, missing prior approval or changed study pins
+refuses test access and scoring. Protected storage and separately anchored
+approval digests remain necessary; local hashes are not signatures.
+
+The offline example additionally exports `prepareStaged(seed)`. It constructs
+three fictional rows, never a D09 artifact or a live approval:
+
+```bash
+node --import tsx --input-type=module -e \
+  "import {prepareStaged} from './agentic/code/addons/decision-engine/examples/heldout-collector-offline.mjs'; console.log(JSON.stringify(await prepareStaged('demo')))"
+```
+
+### Reservations and shared spend
 
 Every attempt, including retries and failures, fsyncs its full token/USD
 reservation before credential resolution or dispatch. The collector computes
@@ -91,9 +170,12 @@ Accounted dollars are conservative charges, never net savings.
 D17 admission has a USD 8 study ceiling; D29 has USD 6. The portfolio ceiling
 is USD 48. Before each dispatch, accounted run spend plus the next worst-case
 reservation must fit 80% of the minimum of the approved budget, remaining study
-cap and remaining portfolio cap. The collector rejects an approval whose budget
+cap and remaining portfolio cap in artifact/diagnostic mode. Staged collection
+fixes the 80% thresholds against the approved budget and original baseline
+remainders, then subtracts accumulated charges. Both phases and every resume
+share that allowance; switching phase never applies 80% anew to a remainder. The collector rejects an approval whose budget
 cannot cover even one of its planned calls (including a USD 0.0005 approval
-with a larger reservation). Calls and reserved tokens also stop at 80% of approval.
+with a larger reservation). Calls and reserved tokens also stop at 80% of approval, cumulatively across staged phases and resumes.
 
 The collector records each operator floor once, with its approval digest and
 the counter's genesis digest, in
@@ -104,11 +186,11 @@ collector; subsequent approvals repeat the original floors.
 A separate `research/qualification/heldout/spend-counter.jsonl` records every
 reservation and settlement across both studies. Each append is hash-chained and
 fsynced; settlement only adds observed excess and never subtracts a reservation.
-The counter stores cumulative collector charges and derives totals per study.
+The counter stores cumulative collector charges and reserved token counts, and derives USD, call and token totals per study.
 For each scope, accounted spend is the maximum of its baseline, its baseline
 plus counter charges, and its baseline plus scanned run charges. Deleting a run
 directory, or its events and summary together, therefore cannot restore allowance.
-The counter also preserves unresolved/stopped-attempt status after such deletion.
+The counter also preserves call/token allowance and unresolved/stopped-attempt status after such deletion.
 Lost run receipts cannot be reconstructed from this compact counter.
 
 `spend-head.json` independently anchors the latest sequence/digest. It is
@@ -212,25 +294,47 @@ copied input, unknown generators and missing provenance fail before dispatch.
 Corpus data cannot register generators or choose executable module paths.
 World seed components and corpus seeds must match `[a-z0-9][a-z0-9-]{0,31}`; row seeds
 append a one-to-five-digit index and one of `example`, `single`, or `local`.
+The additive `heldout-lamp-splits/v1` generator appends an explicit
+`:tuning`, `:calibration` or `:test` split; its full output is also reproduced.
 Whitespace, instruction punctuation, non-ASCII text and overlong components
 are rejected. The dispatched world name is `w-` followed by 16 hex digits
 derived from the seed digest, so even permitted seed text stays out of model-visible
 state. A bounded identifier still needs synthetic provenance review;
 this constraint does not prove that an identifier has no external meaning.
-The registry includes the fictional `heldout-lamp/v1` example and the D29
-`d29-synthetic/v1` study generator. Its `single` and `local` row seeds encode
-the fixed 1,600-subject split layout; malformed layouts and out-of-range
-indices fail regeneration. D17 still requires a reviewed generator addition
-and fresh corpus pins.
+The registry includes the fictional `heldout-lamp/v1` and
+`heldout-lamp-splits/v1` examples and the D29 `d29-synthetic/v1` study generator.
+Its `single` and `local` row seeds encode the fixed 1,600-subject split layout;
+malformed layouts and out-of-range indices fail regeneration. D17 still
+requires a reviewed generator addition and fresh corpus pins.
 This proves reproducibility, not held-out quality or correctness of the gold.
 These experimental v1 contracts are tightened in place: earlier unproven rows
 must be regenerated, and approvals/attempt token reservations must be refreshed.
+The calibration block, frozen access time, summary seal pin and spend-counter
+reserved tokens are required by the tightened v1 schemas. Existing ledgers need
+operator reconciliation; there is no silent conversion or spend reset.
 Generator changes require fresh corpus pins; existing ledgers are not migrated
 automatically across these experimental contract changes.
 
 `scoreHeldoutStudy` rechecks trusted approval/evidence/gold/scorer
 pins and validates digest-bound upstream eval-integrity before calling the
-local scorer. The library wrapper always returns HOLD or preserves ROLLBACK,
+local scorer. It rechecks each journal's phase membership, and test-phase
+scoring re-verifies the seal and recorded access time. The scorer receives only
+the approved phase's `corpus.rows` and attempts; `preregistration.corpusDigest`
+still identifies the full frozen corpus. Gold is caller-supplied local data,
+not a model-visible input or a mechanism for isolating trusted host code.
+
+`HeldoutStudyModule.score` receives `approvedCalibration: HeldoutCalibration`
+(the exact approved mode/phase and digests) and `calibrated: false | null`.
+Diagnostic mode and pre-fit calibration-phase collection pass `false`; their
+scorers must return `calibrated: false`; `d09Qualified` and `calibratedGate`
+must also be false when present. Conflicting or missing calibration declarations
+are refused.
+Artifact/test mode passes `null` (unknown), because the collector has not
+validated D09. The wrapper reports the binding,
+`calibrationArtifactValidation: 'not-performed'`, `d09Qualified: false` and `calibratedGate: false`. These are
+collector claims; native study diagnostics require their own trusted artifact
+validation. A scorer is trusted host code; arbitrary diagnostic prose is not
+validated as a qualification claim. The library wrapper always returns HOLD or preserves ROLLBACK,
 including when diagnostics contain a proposed PROMOTE. A scorer callback is
 trusted host code, not a model-supplied executable. Its actual module digest
 must be independently checked by the caller, as CLI preparation does.
@@ -247,6 +351,7 @@ The following remain open, with no live acceptance claim:
 | --- | --- |
 | D17 measured ensemble report, AC7/AC14 | Fresh frozen 1,800-subject generator/oracle, D09 calibration, Jev observations, native eight-metric mapping, preregistered Newcombe/bootstrap/coverage gates, approved extra-cost tradeoff and blind review |
 | D29 measured screening report, AC8/AC9/AC13 | [Study module](d29-heldout-study.md) implements the corpus/oracle, individual question mapping, calibration recipe and report gates. Actual observations, compatible D09 artifact, operator gold/reviewer audit and protected integrity/access records remain missing. |
+| Staged D09/test handoff | Sealed real calibration observations, genuinely qualified/registered D09 artifact, protected artifact/seal/approval anchors and human test-phase approval |
 | Any live collection | Priced approval with real evidence references, clean source/CI attestation, canonical root, actual prior spend, resolver pin, synthetic privacy approval and provider terms record |
 | Promotion or production rollout | All native and external thresholds evaluated against complete data, compatible calibration, protected eval-integrity evidence and separate operator approval |
 

@@ -76,6 +76,11 @@ function generateD29(seed: string, ordinal: number, layout: string): GeneratedRo
 }
 /** Source-controlled registry only: corpus data cannot register code or supply a module path. */
 function generate(generatorId: string, seed: string): GeneratedRow {
+  if (generatorId === 'heldout-lamp-splits/v1') {
+    const match = /^(.*):(tuning|calibration|test)$/.exec(seed);
+    if (!match) throw new Error('generator-seed');
+    return { ...generate('heldout-lamp/v1', match[1]), split: match[2] as HeldoutRow['split'] };
+  }
   const match = /^([a-z0-9][a-z0-9-]{0,31}):([0-9]{1,5}):(example|single|local)$/.exec(seed);
   if (!match) throw new Error('generator-seed');
   const [, worldSeed, index, layout] = match, i = Number(index);

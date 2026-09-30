@@ -17,6 +17,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   Live observations, calibration qualification and human review remain pending
   (#2622)
 
+- Experimental, default-off held-out calibration scopes for both D17 and D29:
+  explicit uncalibrated diagnostics, staged calibration/test approvals bound to
+  sealed attempt lineage, and independent artifact bindings. Phase collection
+  shares durable USD/call/token limits and passes approved calibration pins to
+  scorers; real D09 qualification, live studies and human approvals remain pending (#2778)
+
 - Experimental, default-off shared D17/D29 held-out collector with source-only
   preparation and dry-run CLI, synthetic provenance checks, priced pre-dispatch
   reservations, durable cross-run caps, scoped Jev resolution and D11 recorded

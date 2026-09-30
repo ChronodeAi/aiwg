@@ -47,7 +47,8 @@
             "ordinal",
             "reservedUsdMicros",
             "accountedUsdMicros",
-            "disposition"
+            "disposition",
+            "reservedTokens"
           ],
           "properties": {
             "study": {
@@ -98,6 +99,11 @@
                 "measurement-failure",
                 "stop"
               ]
+            },
+            "reservedTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
             }
           }
         }
