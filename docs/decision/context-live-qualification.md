@@ -1,8 +1,10 @@
 # TV-12 bounded live collection (#2681)
 
-This tooling collects context estimator comparisons. It does not qualify a profile,
-approve a margin, enable production enforcement, or complete #2681. All tests use
-fake transport and are guard/recording tests, not live qualification evidence.
+This tooling collects context estimator comparisons. Collection alone does not qualify a
+profile or approve a margin. Separate reviewer-gated steps, described below, record the
+margin and run the enforce canary. Nothing here enables production enforcement or
+completes #2681. All tests use fake transport and are guard/recording tests, not live
+qualification evidence.
 
 The entry point is `tools/decision/context-live-qualification.mjs`. This is a
 source-checkout-only tool, not an installed package CLI command. With no arguments
@@ -56,6 +58,71 @@ node tools/decision/context-live-qualification.mjs --collect-approved \
   /canonical/artifact/root /approved/credential-resolver.mjs \
   sha256:RESOLVER_DIGEST
 ```
+
+### Trusted Jev credential resolver
+
+`tools/decision/jev-credential-resolver.mjs` is the reviewed host module for this
+runner. Its logical reference is `openbao-approle:NAME/typesafe/jev`, which names
+the scoped OpenBao reader AppRole. On first use it runs the host token helper
+(`bash $AIWG_OPENBAO_TOKEN_HELPER approle NAME`), reads the key field `token` from the
+KV v2 locator in `AIWG_JEV_OPENBAO_SECRET_PATH` at the HTTPS `BAO_ADDR`, and revokes the
+client token. The locator is host configuration because it is private; it is not in
+source or approval artifacts. TLS is always verified and `BAO_SKIP_VERIFY` is ignored, so
+an internal CA needs `NODE_OPTIONS=--use-system-ca` or `NODE_EXTRA_CA_CERTS`. The key is
+held in memory for the process and each call returns a copy that the adapter zeroes.
+Errors carry a fixed category, never helper, secret-service or provider text. The file
+digest pinned in the approval covers the code only. The AppRole's own scope, not this
+module, is what limits which secret can be read.
+
+### Dry run
+
+`--dry-run` takes the same arguments as `--collect-approved`. It validates the approval
+and corpus, checks the complete generated corpus, the clean exact source commit, the
+canonical artifact root and the resolver pin, and reports the partitions collection would
+send. For each case it lists the partitions and their estimated input tokens, then the
+total requests, the reserved token and USD bounds, and `requestCapacityAtStop`: the most
+requests the 80% stop admits. It never imports the resolver, resolves a credential,
+calls a provider or writes a file. It exits nonzero unless every precondition holds and
+the plan fits before the stop.
+
+## After collection: margin record and enforce canary
+
+These steps are implemented and tested offline only. None has run against Jev.
+
+1. **Margin record.** `--record-qualification APPROVAL CORPUS RUN_DIR REVIEW OUTPUT`
+   reads the retained `*-comparison.json` rows and rebinds each one to its frozen
+   corpus partition by plan digest, profile digest, estimate and usage digest.
+   Synthetic, missing, surplus or edited rows are refused. The selected margin is the
+   preregistered rule's output: the worst undercount plus `extraReserveBps`. If that
+   exceeds `maximumMarginBps`, no record is produced. The reviewer's
+   `context-margin-review/v1` must approve that exact margin, the digest of these
+   records, and a new profile identity. The collection profile's margin must be at
+   least the preregistered maximum, so every collected request stays a single request
+   under the selected margin. The output record holds the qualified profile, its digest,
+   and a `ContextQualification` accepted by `assertContextQualified`.
+2. **Stored-record check.** `--verify-qualification RECORD` runs the enforcement gate
+   on the stored file, then confirms that the same record is rejected when only the
+   profile version changes.
+3. **Enforce canary.** `--canary-approved CANARY_APPROVAL CORPUS RECORD ARTIFACT_ROOT
+   RESOLVER RESOLVER_SHA256` needs a `context-canary-approval/v1` that embeds the
+   canary plan frozen before collection (its digest must match) and names the record
+   digest, served model and region. Each planned case first runs through
+   `evaluateDecisionRuleset` with native batching and `rollout: enforce` using the
+   recorded qualification. It then runs again rolled back to `observe-only`, which
+   evaluates every question singly. Before each phase starts, every dispatch that phase
+   needs is reserved against the approved bound. The run stops at 80% of any ceiling, on
+   the first failed check, or on an evaluation error. A case passes when:
+   - every dispatched partition is within the effective limits;
+   - every reported input is within the documented aggregate limit and the approved bound;
+   - an oversized case produces a context rejection with no dispatch;
+   - the rollback sends no native batch.
+
+   Per-case rows and the summary are metadata only.
+
+The canary uses cases with few questions. An invocation with context planning and 24
+aliases currently produces a result document that exceeds the default entry limits
+(`property-count`). That error is raised after dispatch, so the canary treats it as a
+stop. D11 manifest linking from #2599 and #2604 remains pending.
 
 Missing inputs, source drift (including untracked files), changed corpus or
 preregistration digests, changed resolver digest, and reused run directories fail
