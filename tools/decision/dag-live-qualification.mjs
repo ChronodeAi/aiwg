@@ -4,13 +4,15 @@
  * decision graph on the preregistered synthetic workload. Dry-run by default: without
  * --collect-approved and AIWG_DECISION_DAG_LIVE=1 it never resolves a credential or calls Jev.
  *
- *   node tools/decision/dag-live-qualification.mjs [--dry-run [APPROVAL.json]]
+ * Offline modes (dry run, freeze, record decision) run the TypeScript source through the tsx dev
+ * dependency and never build; only --collect-approved compiles dist, from the exact approved commit.
+ *
+ *   node tools/decision/dag-live-qualification.mjs [--dry-run [APPROVAL.json [ARTIFACT_ROOT]]]
  *   node tools/decision/dag-live-qualification.mjs --freeze OUTPUT_DIR
  *   AIWG_DECISION_DAG_LIVE=1 node tools/decision/dag-live-qualification.mjs --collect-approved \
  *     APPROVAL.json ARTIFACT_ROOT tools/decision/jev-openbao-credential.mjs RESOLVER_SHA256
  *   node tools/decision/dag-live-qualification.mjs --record-decision RUN_DIR promote|hold REVIEWER RATIONALE
  */
-import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -22,8 +24,6 @@ const root = resolve(import.meta.dirname, '../..');
 const frozen = join(root, 'docs/decision/evidence/dag-live-v1');
 const args = process.argv.slice(2);
 const mode = args[0] ?? '--dry-run';
-const runtimePath = join(root, 'dist/src/decision/graph-live-qualification.js');
-const workloadPath = join(root, 'dist/src/decision/graph-live-workload.js');
 const readJson = async path => JSON.parse(await readFile(path, 'utf8'));
 
 if (!['--dry-run', '--freeze', '--collect-approved', '--record-decision'].includes(mode)) {
@@ -38,12 +38,20 @@ try {
     }
     // Compile the exact committed source; stale dist cannot back live evidence.
     execFileSync('npm', ['run', 'build:cli'], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'], timeout: 900_000 });
-  } else if (!existsSync(runtimePath)) {
-    process.stderr.write('Build the runtime first: npm run build:cli. No provider calls made.\n');
-    process.exit(2);
   }
-  const runtime = await import(pathToFileURL(runtimePath).href);
-  const workloads = await import(pathToFileURL(workloadPath).href);
+  const live = mode === '--collect-approved';
+  const module = name => live ? pathToFileURL(join(root, `dist/src/decision/${name}.js`)).href : pathToFileURL(join(root, `src/decision/${name}.ts`)).href;
+  if (!live) {
+    // No build on shared hosts: transpile the source on import through the tsx dev dependency.
+    let register;
+    try { ({ register } = await import('tsx/esm/api')); } catch {
+      process.stderr.write('Offline modes need the tsx dev dependency (npm ci installs it); no build is run. No provider calls made.\n');
+      process.exit(2);
+    }
+    register();
+  }
+  const runtime = await import(module('graph-live-qualification'));
+  const workloads = await import(module('graph-live-workload'));
   if (mode === '--freeze') {
     if (args.length !== 2) throw new Error('usage');
     const workload = workloads.generateDagLiveWorkload();
@@ -59,8 +67,18 @@ try {
   if (mode === '--dry-run') {
     const approval = args[1] ? await readJson(args[1]) : null;
     if (approval) runtime.validateDagLiveApproval(approval, workload, preregistration);
-    const plan = runtime.planDagLiveQualification(workload, preregistration, approval ?? runtime.DAG_LIVE_DEFAULT_LIMITS);
-    process.stdout.write(JSON.stringify({ ...plan, approvalTemplate: approval ? undefined : runtime.dagLiveApprovalTemplate(workload, preregistration) }, null, 2) + '\n');
+    const limits = structuredClone(approval ?? runtime.DAG_LIVE_DEFAULT_LIMITS);
+    // With an artifact root, earlier runs count against the USD 2.00 cap exactly as in collection.
+    let prior = null;
+    if (args[2]) {
+      const scanned = await runtime.dagLivePriorSpend(resolve(args[2]));
+      const priorUsd = Math.max(scanned.usd, limits.priorSpendUsd ?? 0);
+      prior = { priorSpendUsd: priorUsd, priorRuns: scanned.runs };
+      limits.budget.usd = Math.min(limits.budget.usd, Math.max(0, runtime.DAG_LIVE_HARD_CAP_USD - priorUsd));
+    }
+    const plan = limits.budget.usd > 0 ? runtime.planDagLiveQualification(workload, preregistration, limits) : { withinBudget: false, providerCalls: 0 };
+    process.stdout.write(JSON.stringify({ ...plan, ...(prior ?? {}), effectiveRunUsdCap: limits.budget.usd,
+      approvalTemplate: approval ? undefined : runtime.dagLiveApprovalTemplate(workload, preregistration) }, null, 2) + '\n');
     if (!plan.withinBudget || !plan.boundCoversLargestEstimate) process.exitCode = 1;
   } else if (mode === '--record-decision') {
     if (args.length !== 5) throw new Error('usage');

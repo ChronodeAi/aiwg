@@ -1,4 +1,5 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -8,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { generateDagLiveWorkload, dagLivePreregistration, dagLiveDefinitions, DAG_LIVE_PATTERNS, DAG_LIVE_TAXONOMY,
   type DagLiveWorkload, type DagLiveTask } from '../../../src/decision/graph-live-workload.js';
 import { analyzeDagLivePattern, buildDagLiveArms, DagLiveBudget, dagLiveDigest, DAG_LIVE_DEFAULT_LIMITS, DAG_LIVE_SOURCE_GOLDENS,
+  dagLiveChargeMicros, dagLivePriorSpend, dagLiveReservationMicros, DAG_LIVE_RESERVE_FLOOR_USD_PER_MTOK,
   patternCallRatioExceeded, planDagLiveQualification, recordDagLiveDecision, runDagLiveQualification, speculativeActionViolation,
   validateDagLiveApproval, validateDagLiveInputs, type DagLiveApproval, type DagLivePair } from '../../../src/decision/graph-live-qualification.js';
 // @ts-expect-error untyped trusted resolver module
@@ -31,8 +33,10 @@ function approvalFor(workload: DagLiveWorkload, overrides: Partial<DagLiveApprov
     sourceCommit: 'a'.repeat(40), exactHeadCi: 'offline-fixture', model: MODEL, apiRevision: 'v1', region: 'fixture-region',
     secretServiceReference: JEV_SECRET_REFERENCE, credentialResolverDigest: `sha256:${'b'.repeat(64)}`,
     workloadDigest: dagLiveDigest(workload), preregistrationDigest: dagLiveDigest(preregistration),
-    ...structuredClone(DAG_LIVE_DEFAULT_LIMITS), ...overrides };
+    ...structuredClone(DAG_LIVE_DEFAULT_LIMITS), priceBound: { ...structuredClone(DAG_LIVE_DEFAULT_LIMITS.priceBound), approvalReference: 'offline-fixture-attestation' },
+    priorSpendUsd: 0, ...overrides };
 }
+const PRICE = { ...DAG_LIVE_DEFAULT_LIMITS.priceBound, approvalReference: 'offline-fixture-attestation' };
 
 /** Oracle Jev: answers from the frozen labels unless `wrong(taskId, node)` flips an answer. */
 function oracle(workload: DagLiveWorkload, wrong: (task: DagLiveTask, node: string) => boolean = () => false) {
@@ -85,8 +89,10 @@ async function withRepo<T>(work: (paths: { source: string; artifacts: string; co
   } finally { route.root = ''; await rm(source, { recursive: true, force: true }); await rm(artifacts, { recursive: true, force: true }); }
 }
 
-async function run(workload: DagLiveWorkload, fetch: typeof globalThis.fetch, overrides: Partial<DagLiveApproval> = {}, now?: () => number) {
+async function run(workload: DagLiveWorkload, fetch: typeof globalThis.fetch, overrides: Partial<DagLiveApproval> = {}, now?: () => number,
+  seed?: (artifacts: string) => Promise<void>) {
   return withRepo(async ({ source, artifacts, commit }) => {
+    await seed?.(artifacts);
     const approval = approvalFor(workload, { sourceCommit: commit, ...overrides });
     const resolveCredential = vi.fn(async () => new TextEncoder().encode('fixture-secret-value'));
     const result = await runDagLiveQualification({ approval, workload, preregistration: dagLivePreregistration(workload), sourceRoot: source,
@@ -130,13 +136,17 @@ describe('D12 live qualification workload and preregistration (#2686)', () => {
     expect(() => validateDagLiveInputs(relabelled, preregistration)).toThrow('workload');
   });
 
-  it('validates the approval, including the USD 2.00 hard cap and price ceiling', () => {
+  it('validates the approval, including the USD 2.00 hard cap and the operator-attested price bound', () => {
     const workload = generateDagLiveWorkload(11, 3);
     const preregistration = dagLivePreregistration(workload);
     expect(() => validateDagLiveApproval(approvalFor(workload), workload, preregistration)).not.toThrow();
     const cases: Array<Partial<DagLiveApproval> | Record<string, unknown>> = [
       { budget: { ...DAG_LIVE_DEFAULT_LIMITS.budget, usd: 2.01 } },
-      { price: { ...DAG_LIVE_DEFAULT_LIMITS.price, ceilingUsdPerMTok: 0.01 } },
+      { priceBound: undefined }, { price: { ceilingUsdPerMTok: 0.1 } },
+      { priceBound: { ...PRICE, approvalReference: '<operator approval reference>' } },
+      { priceBound: { ...PRICE, evidenceReferences: [] } }, { priceBound: { ...PRICE, inputUsdPerMTok: -1 } },
+      { priceBound: { ...PRICE, perRequestUsd: 0 } }, { priceBound: { ...PRICE, unknown: 1 } },
+      { priorSpendUsd: -0.01 }, { priorSpendUsd: undefined },
       { budget: { ...DAG_LIVE_DEFAULT_LIMITS.budget, perPattern: { ...DAG_LIVE_DEFAULT_LIMITS.budget.perPattern, calls: 5_000 } } },
       { model: 'jev-latest' }, { approved: false as never }, { workloadDigest: `sha256:${'c'.repeat(64)}` }, { extra: 1 },
     ];
@@ -147,34 +157,56 @@ describe('D12 live qualification workload and preregistration (#2686)', () => {
 describe('D12 budget, plan and stop rules', () => {
   const limits = structuredClone(DAG_LIVE_DEFAULT_LIMITS);
   it('reserves the worst case before dispatch and refuses at 80% of each dimension', () => {
-    const tight = (budget: Partial<DagLiveApproval['budget']>) => ({ ...limits, budget: { ...limits.budget, ...budget } });
+    const tight = (budget: Partial<DagLiveApproval['budget']>) => ({ ...limits, priceBound: PRICE, budget: { ...limits.budget, ...budget } });
+    const used = (inputTokens: number, outputTokens = 0) => ({ inputTokens, outputTokens });
     const calls = new DagLiveBudget(tight({ calls: 5 }), 4000, 0.8, 0, () => 0);
-    for (let i = 0; i < 4; i++) calls.reserve('taxonomy-beam')(100);
+    for (let i = 0; i < 4; i++) calls.reserve('taxonomy-beam')(used(100));
     expect(() => calls.reserve('taxonomy-beam')).toThrow('budget-run-calls');
     const usd = new DagLiveBudget(tight({ usd: 0.001 }), 4000, 0.8, 0, () => 0);
     usd.reserve('taxonomy-beam')(null); // unknown usage keeps the full USD 0.0004 reservation
-    usd.reserve('taxonomy-beam')(4000);
+    usd.reserve('taxonomy-beam')(used(3990, 10));
     expect(() => usd.reserve('taxonomy-beam')).toThrow('budget-run-usd');
     expect(usd.total.usdMicros).toBe(800);
-    const pattern = new DagLiveBudget({ ...limits, budget: { ...limits.budget, perPattern: { ...limits.budget.perPattern, tokens: 7_000 } } }, 4000, 0.8, 0, () => 0);
-    pattern.reserve('shortlist-rerank')(1000);
-    pattern.reserve('shortlist-rerank')(1000);
+    const pattern = new DagLiveBudget({ ...limits, priceBound: PRICE, budget: { ...limits.budget, perPattern: { ...limits.budget.perPattern, tokens: 7_000 } } }, 4000, 0.8, 0, () => 0);
+    pattern.reserve('shortlist-rerank')(used(1000));
+    pattern.reserve('shortlist-rerank')(used(1000));
     expect(pattern.total.tokens).toBe(2000);
     expect(() => pattern.reserve('shortlist-rerank')).toThrow('budget-pattern-tokens');
     expect(() => pattern.reserve('taxonomy-beam')).not.toThrow();
-    let clock = 0; const time = new DagLiveBudget(limits, 4000, 0.8, 0, () => clock);
+    let clock = 0; const time = new DagLiveBudget({ ...limits, priceBound: PRICE }, 4000, 0.8, 0, () => clock);
     clock = limits.budget.wallClockMs * 0.8; expect(() => time.reserve('taxonomy-beam')).toThrow('budget-run-wall-clock');
+  });
+
+  it('reserves against the larger of the attested price and the USD 0.10/1M floor, and charges actual usage above the reservation', () => {
+    expect(DAG_LIVE_RESERVE_FLOOR_USD_PER_MTOK).toBe(0.1);
+    // Attested USD 0.042 input / free output: the floor governs the reservation.
+    expect(dagLiveReservationMicros(PRICE, 4000)).toBe(400);
+    expect(dagLiveChargeMicros(PRICE, 369, 38)).toBe(41);
+    // A higher attested price raises both the reservation and the charge.
+    const dear = { ...PRICE, inputUsdPerMTok: 0.5, outputUsdPerMTok: 2 };
+    expect(dagLiveReservationMicros(dear, 4000)).toBe(8000);
+    expect(dagLiveChargeMicros(dear, 1000, 100)).toBe(700);
+    // An attested per-request price is a floor on every reservation and charge.
+    const perRequest = { ...PRICE, perRequestUsd: 0.01 };
+    expect(dagLiveReservationMicros(perRequest, 4000)).toBe(10_000);
+    expect(dagLiveChargeMicros(perRequest, 10, 0)).toBe(10_000);
+    // Usage reported above the reservation is charged in full, never capped at the reservation.
+    const budget = new DagLiveBudget({ ...limits, priceBound: PRICE }, 4000, 0.8, 0, () => 0);
+    budget.reserve('taxonomy-beam')({ inputTokens: 4500, outputTokens: 8 });
+    expect(budget.total).toMatchObject({ calls: 1, tokens: 4508, usdMicros: 451 });
   });
 
   it('plans worst-case calls, tokens and USD without any provider call, and flags a budget that cannot cover it', () => {
     const workload = generateDagLiveWorkload();
     const preregistration = dagLivePreregistration(workload);
-    const plan = planDagLiveQualification(workload, preregistration, limits);
+    const plan = planDagLiveQualification(workload, preregistration, { ...limits, priceBound: PRICE });
     expect(plan.providerCalls).toBe(0);
     expect(plan.totals).toMatchObject({ worstCaseCalls: 1100, worstCaseTokens: 4_400_000, worstCaseReservedUsd: 0.44, hardCapUsd: 2 });
     expect(plan.withinBudget).toBe(true);
     expect(plan.boundCoversLargestEstimate).toBe(true);
-    expect(planDagLiveQualification(workload, preregistration, { ...limits, budget: { ...limits.budget, calls: 1_000 } }).withinBudget).toBe(false);
+    expect(planDagLiveQualification(workload, preregistration, { ...limits, priceBound: PRICE, budget: { ...limits.budget, calls: 1_000 } }).withinBudget).toBe(false);
+    // A higher attested price is reserved even though the floor alone would fit.
+    expect(planDagLiveQualification(workload, preregistration, { ...limits, priceBound: { ...PRICE, inputUsdPerMTok: 1 } }).withinBudget).toBe(false);
   });
 
   it('stops a pattern whose calls exceed three times its Flow baseline', () => {
@@ -186,7 +218,7 @@ describe('D12 budget, plan and stop rules', () => {
   it('treats any node able to request an action or permission as a speculative-action stop', () => {
     const task = generateDagLiveWorkload(11, 2).tasks.find(t => t.pattern === 'taxonomy-beam')!;
     const arms = buildDagLiveArms(task, { model: MODEL, secretServiceReference: JEV_SECRET_REFERENCE, skillId, perCallTokenBound: 4000,
-      ceilingUsdPerMTok: 0.1, taskDeadlineMs: 60_000 });
+      reservationMicros: 400, taskDeadlineMs: 60_000 });
     expect(speculativeActionViolation(arms.candidate.flow)).toBe(false);
     expect(speculativeActionViolation(arms.baseline.flow)).toBe(false);
     const acting = structuredClone(arms.candidate.flow); acting.spec.nodes[1].sideEffectMode = 'external-write';
@@ -199,7 +231,7 @@ describe('D12 budget, plan and stop rules', () => {
 describe('D12 paired analysis applies every preregistered threshold', () => {
   const workload = generateDagLiveWorkload(5, 100);
   const preregistration = dagLivePreregistration(workload);
-  const price = DAG_LIVE_DEFAULT_LIMITS.price;
+  const price = PRICE;
   function pairs(options: { baselineWrong?: number; candidateWrong?: number; candidateCalls?: number; candidateLatency?: number; candidateTokens?: number; n?: number } = {}): DagLivePair[] {
     return workload.tasks.filter(task => task.pattern === 'taxonomy-beam').slice(0, options.n ?? 100).map((task, index) => ({
       pattern: 'taxonomy-beam', taskId: task.id, slice: task.slice, index, order: index % 2 ? 'candidate-first' : 'baseline-first', label: task.label,
@@ -353,8 +385,19 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
     expect(fetch).toHaveBeenCalledTimes(5);
     expect(result.pairs).toBeGreaterThan(0);
     expect(files['pairs.jsonl'].trim().split('\n')).toHaveLength(result.pairs);
-    expect(files['calls.jsonl'].trim().split('\n')).toHaveLength(5);
+    const calls = files['calls.jsonl'].trim().split('\n').map(line => JSON.parse(line));
+    expect(calls).toHaveLength(5);
     expect(result.analyses.some((a: any) => a.eligible)).toBe(false);
+    // The stopping request's reported usage is evidence and is charged to spend.
+    const summary = JSON.parse(files['summary.json']);
+    expect(summary.stoppingCall).toEqual(calls[4]);
+    expect(summary.spend.providerCalls).toBe(5);
+    expect(summary.spend.inputTokens).toBe(calls.reduce((sum: number, call: any) => sum + (call.inputTokens ?? 0), 0));
+    const charged = { 'provider-rate-limited': 4000, 'unknown-usage': 4000, 'served-model-mismatch': 608, 'usage-exceeded-reservation': 4508 }[reason]!;
+    expect(result.reserved.tokens).toBe(4 * 608 + charged);
+    expect(summary.spend.chargedUsd).toBe(result.reserved.usd);
+    if (reason === 'usage-exceeded-reservation') expect(summary.stoppingCall).toMatchObject({ inputTokens: 4500, outputTokens: 8 });
+    if (reason === 'unknown-usage') expect(summary.stoppingCall).toMatchObject({ inputTokens: null, outputTokens: 8 });
     expect(Object.values(files).join('')).not.toContain('private provider text');
     expect(JSON.parse(files['run-manifest.json']).evidence.every((row: any) => row.outcome === 'fail')).toBe(true);
   }, 60_000);
@@ -387,6 +430,59 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
     expect(result.reserved).toMatchObject({ calls: 1, tokens: 4000 });
   }, 30_000);
 
+  it('holds the USD 2.00 cap across reruns: earlier summaries, crashed runs and the operator floor all count', async () => {
+    const workload = generateDagLiveWorkload(21, 2);
+    const seed = async (artifacts: string) => {
+      await mkdir(join(artifacts, 'earlier-complete'));
+      await writeFile(join(artifacts, 'earlier-complete', 'approval.json'), JSON.stringify(approvalFor(workload, { runId: 'earlier-complete' })));
+      await writeFile(join(artifacts, 'earlier-complete', 'summary.json'), JSON.stringify({ schemaVersion: 'dag-live-summary/v1', spend: { chargedUsd: 1.998 } }));
+      // A crashed run has no summary: every logged call plus one in flight is charged at the reservation.
+      await mkdir(join(artifacts, 'earlier-crashed'));
+      await writeFile(join(artifacts, 'earlier-crashed', 'approval.json'), JSON.stringify(approvalFor(workload, { runId: 'earlier-crashed' })));
+      await writeFile(join(artifacts, 'earlier-crashed', 'calls.jsonl'), '{}\n');
+      await mkdir(join(artifacts, 'unrelated')); await writeFile(join(artifacts, 'unrelated', 'summary.json'), '{"spend":{"chargedUsd":5}}');
+    };
+    await withRepo(async ({ artifacts }) => {
+      await seed(artifacts);
+      expect(await dagLivePriorSpend(artifacts)).toEqual({ usd: 1.9988, runs: ['earlier-complete', 'earlier-crashed'] });
+    });
+    // Only USD 0.0012 remains: the run stops at 80% of it, before a reservation could pass the cap.
+    const fetch = oracle(workload);
+    const { result, files } = await run(workload, fetch as never, {}, undefined, seed);
+    expect(result).toMatchObject({ priorSpendUsd: 1.9988, effectiveRunUsdCap: 0.0012, stopped: 'budget-run-usd' });
+    expect(fetch.mock.calls.length).toBeGreaterThan(0);
+    expect(result.spend.chargedUsd).toBeLessThanOrEqual(0.0012 * 0.8);
+    expect(result.spend.chargedUsd + 0.0004).toBeGreaterThan(0.0012 * 0.8);
+    expect(result.priorSpendUsd + result.spend.chargedUsd).toBeLessThan(2);
+    expect(JSON.parse(files['g5-load-result.json']).manifest.bounds.reservedUsdMicros).toBe(1200);
+    // The operator value is a floor: it applies even when no earlier run is on disk.
+    await withRepo(async ({ source, artifacts, commit }) => {
+      const resolveCredential = vi.fn();
+      await expect(runDagLiveQualification({ approval: approvalFor(workload, { sourceCommit: commit, priorSpendUsd: 1.9997 }), workload,
+        preregistration: dagLivePreregistration(workload), sourceRoot: source, artifactRoot: artifacts, host: { resolveCredential },
+        executeFlow: executeFlowGraph, skillId, transport: oracle(workload) as never })).rejects.toThrow('prior spend');
+      expect(resolveCredential).not.toHaveBeenCalled();
+    });
+  }, 60_000);
+
+  it('runs the dry run and --freeze from source without building dist', () => {
+    const out = join(tmpdir(), `d12-freeze-${process.pid}-${Date.now()}`);
+    try {
+      const dry = spawnSync(process.execPath, ['tools/decision/dag-live-qualification.mjs'], { encoding: 'utf8', timeout: 120_000,
+        env: { ...process.env, AIWG_DECISION_DAG_LIVE: '' } });
+      expect(dry.status).toBe(0);
+      const plan = JSON.parse(dry.stdout);
+      expect(plan).toMatchObject({ providerCalls: 0, withinBudget: true, totals: { worstCaseCalls: 1100, worstCaseReservedUsd: 0.44 } });
+      expect(plan.approvalTemplate.priceBound).toMatchObject({ inputUsdPerMTok: 0.042, outputUsdPerMTok: 0 });
+      const freeze = spawnSync(process.execPath, ['tools/decision/dag-live-qualification.mjs', '--freeze', out], { encoding: 'utf8', timeout: 120_000 });
+      expect(freeze.status).toBe(0);
+      expect(readFileSync(join(out, 'workload.json'), 'utf8')).toBe(readFileSync(`${frozen}/workload.json`, 'utf8'));
+      expect(readFileSync(join(out, 'preregistration.json'), 'utf8')).toBe(readFileSync(`${frozen}/preregistration.json`, 'utf8'));
+      // Neither path compiled the runtime: no dist output appeared.
+      expect(existsSync('dist/src/decision/graph-live-qualification.js')).toBe(false);
+    } finally { rmSync(out, { recursive: true, force: true }); }
+  }, 150_000);
+
   it('refuses a live run without the env gate and before any credential or transport use', async () => {
     const workload = generateDagLiveWorkload();
     await withRepo(async ({ source, artifacts, commit }) => {
@@ -401,23 +497,52 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
 });
 
 describe('OpenBao Jev credential resolver', () => {
-  it('passes the token only on stdin, returns the single secret value and never leaks messages', async () => {
-    const runs: Array<{ command: string; args: string[]; input: Buffer | null }> = [];
-    const resolver = createOpenBaoJevResolver({ address: 'https://bao.example.invalid', run: async (command: string, args: string[], input: Buffer | null) => {
-      runs.push({ command, args, input: input ? Buffer.from(input) : null });
-      return command === 'bash' ? Buffer.from('fixture-bao-token\n') : Buffer.from(JSON.stringify({ data: { data: { api_key: 'fixture-jev-key' } } }));
-    } });
+  type Call = { url: string; options: any };
+  function fixture(options: { secret?: unknown; status?: number; env?: Record<string, string> } = {}) {
+    const calls: Call[] = [];
+    const helper = vi.fn(async () => 'fixture-bao-token');
+    const request = vi.fn(async (url: string, requestOptions: any) => {
+      calls.push({ url, options: requestOptions });
+      if (url.endsWith('/revoke-self')) return { status: 204, body: Buffer.alloc(0) };
+      return { status: options.status ?? 200, body: Buffer.from(JSON.stringify({ data: { data: options.secret ?? { token: 'fixture-jev-key', note: 'other' } } })) };
+    });
+    const resolver = createOpenBaoJevResolver({ env: { BAO_ADDR: 'https://bao.example.invalid', ...options.env }, acquireToken: helper, request });
+    return { resolver, calls, helper, request };
+  }
+  it('reads the `token` field over verified TLS, then revokes its own vault token', async () => {
+    const { resolver, calls, helper } = fixture();
     expect(new TextDecoder().decode(await resolver(JEV_SECRET_REFERENCE))).toBe('fixture-jev-key');
-    expect(runs[0]!.args.slice(1)).toEqual(['approle', 'aiwg-jev-reader']);
-    expect(runs[1]!.args.join(' ')).not.toContain('fixture-bao-token');
-    expect(runs[1]!.args).toContain('https://bao.example.invalid/v1/kv_internal/data/typesafe/jev/api-key');
-    expect(runs[1]!.input!.toString()).toBe('X-Vault-Token: fixture-bao-token\n');
-    await expect(resolver('openbao.other.secret')).rejects.toThrow('reference denied');
-    const failing = createOpenBaoJevResolver({ address: 'https://bao.example.invalid', run: async () => { throw new Error('secret-bearing diagnostic'); } });
-    await expect(failing(JEV_SECRET_REFERENCE)).rejects.toThrow(/^Jev credential resolution failed$/);
-    const ambiguous = createOpenBaoJevResolver({ address: 'https://bao.example.invalid', run: async (command: string) => command === 'bash'
-      ? Buffer.from('t') : Buffer.from(JSON.stringify({ data: { data: { a: 'x', b: 'y' } } })) });
-    await expect(ambiguous(JEV_SECRET_REFERENCE)).rejects.toThrow('resolution failed');
-    await expect(createOpenBaoJevResolver({ address: 'http://plain.example.invalid', run: vi.fn() })(JEV_SECRET_REFERENCE)).rejects.toThrow('configuration');
+    expect(helper).toHaveBeenCalledWith('aiwg-jev-reader', expect.anything());
+    expect(calls.map(call => [call.options.method, call.url])).toEqual([
+      ['GET', 'https://bao.example.invalid/v1/kv_internal/data/typesafe/jev/api-key'],
+      ['POST', 'https://bao.example.invalid/v1/auth/token/revoke-self']]);
+    for (const call of calls) {
+      expect(call.options.rejectUnauthorized).toBe(true);
+      expect(call.options.headers['x-vault-token']).toBe('fixture-bao-token');
+      expect(call.url).not.toContain('fixture-bao-token');
+    }
+  });
+  it('revokes the vault token even when the read fails', async () => {
+    const { resolver, calls } = fixture({ status: 403 });
+    await expect(resolver(JEV_SECRET_REFERENCE)).rejects.toThrow('(read)');
+    expect(calls.at(-1)!.url).toMatch(/revoke-self$/);
+  });
+  it.each([
+    ['a TLS verification override', { env: { NODE_TLS_REJECT_UNAUTHORIZED: '0' } }, 'configuration'],
+    ['a plain-HTTP secret service', { env: { BAO_ADDR: 'http://bao.example.invalid' } }, 'configuration'],
+    ['a secret without the token field', { secret: { api_key: 'fixture-jev-key' } }, 'shape'],
+  ])('refuses %s with a fixed category and no secret material', async (_name, options, category) => {
+    const { resolver, request } = fixture(options as never);
+    const error = await resolver(JEV_SECRET_REFERENCE).catch(value => value as Error);
+    expect(error.message).toBe(`Jev credential resolution failed (${category})`);
+    if (category === 'configuration') expect(request).not.toHaveBeenCalled();
+  });
+  it('never exposes the key, path or vault token in errors', async () => {
+    const failing = createOpenBaoJevResolver({ env: { BAO_ADDR: 'https://bao.example.invalid' },
+      acquireToken: async () => { throw new Error('fixture-bao-token kv_internal/data/typesafe/jev/api-key fixture-jev-key'); }, request: vi.fn() });
+    const error = await failing(JEV_SECRET_REFERENCE).catch(value => value as Error);
+    expect(error.message).toBe('Jev credential resolution failed (login)');
+    expect(JSON.stringify({ message: error.message, stack: error.stack })).not.toMatch(/fixture-bao-token|kv_internal|fixture-jev-key/);
+    await expect(fixture().resolver('openbao.other.secret')).rejects.toThrow('(reference)');
   });
 });

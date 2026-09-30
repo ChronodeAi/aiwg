@@ -63,12 +63,34 @@ runner then rejects it.
 
 ## Budget and stop conditions
 
+The USD caps rest on an operator-attested price bound, not on a hard-coded price.
+`approval.json` must carry `priceBound`, and an approval without it is rejected:
+
+- `inputUsdPerMTok` and `outputUsdPerMTok`: attested per-token prices.
+- `perRequestUsd` (optional): an attested minimum price per request.
+- `evidenceReferences`: 1 to 8 references the operator relies on, such as public
+  pricing pages or a live usage receipt.
+- `approvalReference`: where the operator attested the bound. Placeholder values
+  starting with `<` are rejected.
+
 Before every call, the reservation is taken from the whole-run and per-pattern
-ceilings. It covers the 4000-token worst case at the approved price ceiling of
-USD 0.10 per 1M tokens, and it is taken before credential resolution and transport.
-Settlement lowers tokens to the reported actual. A call with unknown usage keeps its
-whole reservation, and calls are never refunded. An approval cannot raise the USD
-cap above the **USD 2.00** hard cap.
+ceilings, before credential resolution and transport. It covers the 4000-token worst
+case at the larger of the attested price and a USD 0.10 per 1M floor, and it is never
+below `perRequestUsd`. Settlement replaces the reservation with the reported usage at
+the same rates, including usage above the reservation. A call with missing usage
+keeps at least its whole reservation, and calls are never refunded.
+
+An approval cannot raise the USD cap above the **USD 2.00** hard cap, and that cap
+spans reruns. Before a run, the runner scans earlier D12 runs under the artifact
+root:
+
+- A run with a summary counts its charged USD.
+- A run with an approval but no summary (crashed or killed) counts each logged call
+  plus one in-flight call at its reservation.
+
+The approval's `priorSpendUsd` is only a floor. The run cap is the lower of the
+approval's USD budget and USD 2.00 minus the prior spend. The runner refuses to start
+if that cap cannot cover one reservation before the stop.
 
 The run stops, with no retry, on any of these:
 
@@ -79,22 +101,27 @@ The run stops, with no retry, on any of these:
   reservation, or a served model that differs from the approved model.
 
 Pairs completed before a stop stay in `pairs.jsonl`. A stopped run is never eligible.
+The request that stopped the run is recorded in `calls.jsonl`, and in the summary as
+`stoppingCall`, with its reported usage. It is charged to spend.
 
-Billable cost is computed from the approved price schedule: USD 0.042 per 1M input
-tokens, with output free. Jev reports no price.
+Jev reports no price. Reported billable cost uses the attested prices: USD 0.042 per
+1M input tokens, with output free. Charges use the rates above.
 
 ## Usage (source checkout only)
 
 ```bash
-npm run build:cli
 node tools/decision/dag-live-qualification.mjs                  # dry run: plan + approval template, no credentials
-node tools/decision/dag-live-qualification.mjs --dry-run APPROVAL.json
+node tools/decision/dag-live-qualification.mjs --dry-run APPROVAL.json [ARTIFACT_ROOT]  # with prior spend
 node tools/decision/dag-live-qualification.mjs --freeze OUT_DIR  # regenerate the frozen inputs
 AIWG_DECISION_DAG_LIVE=1 node tools/decision/dag-live-qualification.mjs --collect-approved \
   APPROVAL.json "$(aiwg artifacts path --json --check-write | jq -r .artifact_root)" \
   tools/decision/jev-openbao-credential.mjs sha256:<resolver digest>
 node tools/decision/dag-live-qualification.mjs --record-decision RUN_DIR promote|hold roctinam "rationale"
 ```
+
+The dry run, `--freeze` and `--record-decision` never build. They run the TypeScript
+source through the `tsx` dev dependency, so they are safe on the titan host, which
+does not allow heavy builds. Only `--collect-approved` runs `npm run build:cli`.
 
 The dry run reports worst-case calls, tokens and reserved USD for the frozen
 workload against the default or approved limits. On the defaults, the worst case is
@@ -110,11 +137,20 @@ artifact root to be the canonical AIWG root. Run it sequentially on the titan
 staging host.
 
 `tools/decision/jev-openbao-credential.mjs` maps the logical reference
-`openbao.typesafe.jev.api-key` to `kv_internal/data/typesafe/jev/api-key`. It gets
-the token by logging in as the scoped `aiwg-jev-reader` AppRole through
-`~/dev/itops/scripts/lib/openbao-token.sh`. The token goes to `curl` as a header on
-stdin, never on argv. The resolver discards every error message. The runner reads
-the key once per run and zeroes its copy at the end.
+`openbao.typesafe.jev.api-key` to the vaulted secret's `token` field. It gets a vault
+token by logging in as the scoped `aiwg-jev-reader` AppRole through the itops OpenBao
+helper, then reads the secret over Node HTTPS with certificate verification always on
+(`rejectUnauthorized: true`, with an optional `BAO_CACERT`). It refuses to run when
+`NODE_TLS_REJECT_UNAUTHORIZED=0`. After the read it revokes its own vault token, even
+when the read failed.
+
+Errors carry a fixed category only, so no key, path, token or helper text reaches an
+error, log or artifact. The runner reads the key once per run and zeroes its copy at
+the end.
+
+This resolver mirrors the TV-12 resolver proposed in #2770, which is not on main and
+uses a logical reference that does not fit this runner's binding `credentialRef`.
+The duplication stays until one shared resolver lands.
 
 ## Evidence
 
@@ -145,14 +181,15 @@ available.
 
 The promotion owner approves the preregistration by replying with one line:
 
-> I, roctinam, approve D12 live qualification (#2686): workload sha256:fb99a6f8aa806aed16f6ef9e5d3aab8025532fa0c6de5997cd0226cca21b5c8b, preregistration sha256:e3ba1ed045c01326d8429c13192dfcce7954c94b4819b79a41fd71e4481f5b60, non-inferiority margin -1000 bps at 90% two-sided Newcombe-10, USD 2.00 cap, sequential on titan.
+> I, roctinam, approve D12 live qualification (#2686): workload sha256:fb99a6f8aa806aed16f6ef9e5d3aab8025532fa0c6de5997cd0226cca21b5c8b, preregistration sha256:e3ba1ed045c01326d8429c13192dfcce7954c94b4819b79a41fd71e4481f5b60, non-inferiority margin -1000 bps at 90% two-sided Newcombe-10; I attest a Jev price bound of USD 0.042/1M input and USD 0/1M output (evidence: https://www.eesel.ai/blog/typesafe-jev-pricing, https://www.mindstudio.ai/blog/jev-pricing-cost-per-token, live smoke roctinam/aiwg#2613 comment 153093, jev-1.13.0, 369 input / 38 output tokens), reserved at no less than USD 0.10/1M; USD 2.00 cap across all runs, sequential on titan.
 
 ## Open items
 
 These need live inputs and are not met by this change:
 
-- The operator approval above, a filled `approval.json` (pinned model, region,
-  exact-head CI and commit), and the resolver digest.
+- The operator approval above, and a filled `approval.json`. It needs the pinned
+  model, region, exact-head CI and commit, `priceBound.approvalReference` pointing at
+  that approval, `priorSpendUsd`, and the resolver digest.
 - A live run on titan.
 - The reviewer's promote-or-hold record.
 - Linking the evidence manifest from #2608.

@@ -9,7 +9,7 @@
  * decision; nothing here promotes the experimental graph runtime.
  */
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { admitEntry, DEFAULT_ENTRY_LIMITS } from './entry.js';
@@ -30,7 +30,7 @@ import { pairedBinaryDifferenceInterval, pairedMeanDifferenceBootstrap, pairedNo
   type PairedDifferenceInterval } from './qualification/quality.js';
 import { executeQualificationPlan, writeQualificationEvidenceManifest } from './qualification/runner.js';
 import { loadManifestDigest, qualificationOutcomesDigest } from './qualification/gate-evidence.js';
-import { DAG_LIVE_PATTERNS, DAG_LIVE_TASKS_PER_PATTERN, dagLiveDefinitions, dagLiveDigest, dagLivePreregistration, generateDagLiveWorkload,
+import { DAG_LIVE_ANALYSIS, DAG_LIVE_PATTERNS, DAG_LIVE_TASKS_PER_PATTERN, dagLiveDefinitions, dagLiveDigest, dagLivePreregistration, generateDagLiveWorkload,
   type DagLivePattern, type DagLivePreregistration, type DagLiveTask, type DagLiveWorkload } from './graph-live-workload.js';
 import type { AdapterObservation, DecisionAdapter, DecisionAdapterRequest, DecisionBinding, DecisionDefinition, DecisionRuleset,
   ExecutionTarget } from './types.js';
@@ -59,9 +59,45 @@ export interface DagLiveApproval {
   model: string; apiRevision: 'v1'; region: string; secretServiceReference: string;
   credentialResolverDigest: `sha256:${string}`; workloadDigest: `sha256:${string}`; preregistrationDigest: `sha256:${string}`;
   budget: DagLiveBudgetLimits & { perPattern: DagLiveBudgetLimits };
-  /** Conservative ceiling reserves every call; billable prices only feed reported economics. */
-  price: { ceilingUsdPerMTok: number; inputUsdPerMTok: number; outputUsdPerMTok: number; source: string };
+  /**
+   * Operator-attested price bound with its evidence. Reservations and charges use the larger of
+   * these prices and DAG_LIVE_RESERVE_FLOOR_USD_PER_MTOK; reported billable cost uses them as attested.
+   */
+  priceBound: DagLivePriceBound;
+  /** Operator-stated spend of earlier D12 runs. A floor: runs found under the artifact root also count. */
+  priorSpendUsd: number;
   taskDeadlineMs: number;
+}
+export interface DagLivePriceBound {
+  inputUsdPerMTok: number; outputUsdPerMTok: number;
+  /** Optional attested minimum price per request; every reservation and charge is at least this. */
+  perRequestUsd?: number;
+  /** Public pricing pages, live usage receipts or invoices the operator relies on. */
+  evidenceReferences: string[];
+  /** Where the operator attested this bound (comment, ticket or signed note). */
+  approvalReference: string;
+}
+/** Hard-coded floor. It never replaces the attestation: a higher attested price always wins. */
+export const DAG_LIVE_RESERVE_FLOOR_USD_PER_MTOK = 0.1;
+const rate = (attested: number) => Math.max(attested, DAG_LIVE_RESERVE_FLOOR_USD_PER_MTOK);
+const perRequestMicros = (bound: DagLivePriceBound) => bound.perRequestUsd === undefined ? 0 : Math.ceil(bound.perRequestUsd * 1_000_000);
+/** Worst-case reservation for one call: every token at the dearest rate, never below the per-request price. */
+export function dagLiveReservationMicros(bound: DagLivePriceBound, perCallTokenBound: number): number {
+  return Math.max(Math.ceil(perCallTokenBound * Math.max(rate(bound.inputUsdPerMTok), rate(bound.outputUsdPerMTok))), perRequestMicros(bound));
+}
+/** Charge for reported usage at the reservation rates, never below the per-request price. */
+export function dagLiveChargeMicros(bound: DagLivePriceBound, inputTokens: number, outputTokens: number): number {
+  return Math.max(Math.ceil(inputTokens * rate(bound.inputUsdPerMTok) + outputTokens * rate(bound.outputUsdPerMTok)), perRequestMicros(bound));
+}
+const attestedText = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && value.length <= 512 && !value.trim().startsWith('<');
+function validPriceBound(bound: DagLivePriceBound | undefined): boolean {
+  if (!bound || typeof bound !== 'object' || Array.isArray(bound)) return false;
+  const allowed = ['inputUsdPerMTok', 'outputUsdPerMTok', 'perRequestUsd', 'evidenceReferences', 'approvalReference'];
+  return Object.keys(bound).every(key => allowed.includes(key)) && allowed.filter(key => key !== 'perRequestUsd').every(key => Object.hasOwn(bound, key))
+    && [bound.inputUsdPerMTok, bound.outputUsdPerMTok].every(n => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1_000)
+    && (bound.perRequestUsd === undefined || (typeof bound.perRequestUsd === 'number' && Number.isFinite(bound.perRequestUsd) && bound.perRequestUsd > 0 && bound.perRequestUsd <= DAG_LIVE_HARD_CAP_USD))
+    && Array.isArray(bound.evidenceReferences) && bound.evidenceReferences.length >= 1 && bound.evidenceReferences.length <= 8
+    && bound.evidenceReferences.every(attestedText) && attestedText(bound.approvalReference);
 }
 export interface DagLiveHost {
   /** Approved secret-service integration. Receives only the logical reference. */
@@ -70,7 +106,7 @@ export interface DagLiveHost {
 export type FlowExecutor = (manifest: unknown, options: Record<string, unknown>) => Promise<GraphFlowReport>;
 
 const APPROVAL_KEYS = ['schemaVersion', 'approved', 'reviewer', 'stagingHost', 'runId', 'sourceCommit', 'exactHeadCi', 'model', 'apiRevision',
-  'region', 'secretServiceReference', 'credentialResolverDigest', 'workloadDigest', 'preregistrationDigest', 'budget', 'price', 'taskDeadlineMs'];
+  'region', 'secretServiceReference', 'credentialResolverDigest', 'workloadDigest', 'preregistrationDigest', 'budget', 'priceBound', 'priorSpendUsd', 'taskDeadlineMs'];
 const LIMIT_KEYS = 'calls,tokens,usd,wallClockMs';
 const validLimits = (limits: DagLiveBudgetLimits | undefined): boolean => !!limits && typeof limits === 'object'
   && Object.keys(limits).filter(key => key !== 'perPattern').sort().join(',') === LIMIT_KEYS
@@ -81,19 +117,18 @@ const validLimits = (limits: DagLiveBudgetLimits | undefined): boolean => !!limi
 export function validateDagLiveApproval(approval: DagLiveApproval, workload: DagLiveWorkload, preregistration: DagLivePreregistration): void {
   admitEntry(approval); admitEntry(workload, WORKLOAD_LIMITS); admitEntry(preregistration);
   const a = approval;
-  if (!a || typeof a !== 'object' || Object.keys(a).some(key => !APPROVAL_KEYS.includes(key)) || APPROVAL_KEYS.some(key => !Object.hasOwn(a, key))
-    || Object.keys(a.price ?? {}).sort().join(',') !== 'ceilingUsdPerMTok,inputUsdPerMTok,outputUsdPerMTok,source') {
+  if (!a || typeof a !== 'object' || Object.keys(a).some(key => !APPROVAL_KEYS.includes(key)) || APPROVAL_KEYS.some(key => !Object.hasOwn(a, key))) {
     throw new Error('Unknown or missing D12 approval field');
   }
-  const { price, budget } = a;
+  if (!validPriceBound(a.priceBound)) throw new Error('D12 approval lacks a valid operator-attested price bound');
+  const { budget } = a;
   if (a.schemaVersion !== 'dag-live-approval/v1' || a.approved !== true || a.apiRevision !== 'v1'
-    || ![a.reviewer, a.stagingHost, a.runId, a.exactHeadCi, a.model, a.region, a.secretServiceReference, price.source].every(v => typeof v === 'string' && v.trim())
+    || ![a.reviewer, a.stagingHost, a.runId, a.exactHeadCi, a.model, a.region, a.secretServiceReference].every(v => typeof v === 'string' && v.trim())
     || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(a.runId) || !/^[a-f0-9]{40}$/.test(a.sourceCommit)
     || !/^sha256:[a-f0-9]{64}$/.test(a.credentialResolverDigest) || /latest|unknown/i.test(a.model) || a.region === 'unknown'
     || !validLimits(budget) || !validLimits(budget.perPattern)
     || (['calls', 'tokens', 'usd', 'wallClockMs'] as const).some(key => budget.perPattern[key] > budget[key])
-    || ![price.ceilingUsdPerMTok, price.inputUsdPerMTok, price.outputUsdPerMTok].every(n => Number.isFinite(n) && n >= 0)
-    || price.ceilingUsdPerMTok <= 0 || price.ceilingUsdPerMTok < price.inputUsdPerMTok || price.ceilingUsdPerMTok < price.outputUsdPerMTok
+    || typeof a.priorSpendUsd !== 'number' || !Number.isFinite(a.priorSpendUsd) || a.priorSpendUsd < 0 || a.priorSpendUsd >= DAG_LIVE_HARD_CAP_USD
     || !Number.isSafeInteger(a.taskDeadlineMs) || a.taskDeadlineMs < 1_000 || a.taskDeadlineMs > budget.perPattern.wallClockMs) {
     throw new Error('Incomplete or invalid D12 approval');
   }
@@ -120,20 +155,22 @@ export class DagLiveStop extends Error {
   constructor(readonly reason: string) { super(`D12 live qualification stopped: ${reason}`); this.name = 'DagLiveStop'; }
 }
 type Totals = { calls: number; tokens: number; usdMicros: number };
+export interface DagLiveReportedUsage { inputTokens: number | null; outputTokens: number | null }
 /**
- * Pure accounting guard. Every call reserves the full per-call token bound at the price
- * ceiling before dispatch and is refused once any global or per-pattern dimension would
- * pass the stop fraction. Settlement lowers tokens to the reported actual; a call with
- * unknown usage keeps its full reservation. Calls are never refunded.
+ * Pure accounting guard. Every call reserves the full per-call token bound at the larger of
+ * the attested price and the floor before dispatch, and is refused once any global or
+ * per-pattern dimension would pass the stop fraction. Settlement replaces the reservation
+ * with the reported usage, including usage above the reservation. A call with missing usage
+ * keeps at least its full reservation. Calls are never refunded.
  */
 export class DagLiveBudget {
   readonly total: Totals = { calls: 0, tokens: 0, usdMicros: 0 };
   private readonly patterns = new Map<DagLivePattern, Totals & { started: number }>();
   private readonly boundMicros: number;
-  constructor(private readonly approval: Pick<DagLiveApproval, 'budget' | 'price'>, private readonly bound: number,
+  constructor(private readonly approval: Pick<DagLiveApproval, 'budget' | 'priceBound'>, private readonly bound: number,
     private readonly stopFraction: number, readonly started: number, private readonly now: () => number = Date.now) {
     if (!Number.isSafeInteger(bound) || bound < 1 || !(stopFraction > 0 && stopFraction <= 1)) throw new Error('invalid D12 budget');
-    this.boundMicros = Math.ceil(bound * approval.price.ceilingUsdPerMTok);
+    this.boundMicros = dagLiveReservationMicros(approval.priceBound, bound);
   }
   usd(totals: Totals = this.total): number { return totals.usdMicros / 1_000_000; }
   pattern(pattern: DagLivePattern): Totals { const { calls, tokens, usdMicros } = this.patterns.get(pattern) ?? { calls: 0, tokens: 0, usdMicros: 0 }; return { calls, tokens, usdMicros }; }
@@ -145,7 +182,7 @@ export class DagLiveBudget {
     if (elapsed >= limits.wallClockMs * f) return 'wall-clock';
     return null;
   }
-  reserve(pattern: DagLivePattern): (actualTokens: number | null) => void {
+  reserve(pattern: DagLivePattern): (usage: DagLiveReportedUsage | null) => { tokens: number; usdMicros: number } {
     const now = this.now();
     const current = this.patterns.get(pattern) ?? { calls: 0, tokens: 0, usdMicros: 0, started: now };
     const global = this.exceeds(this.total, this.approval.budget, now - this.started);
@@ -154,12 +191,17 @@ export class DagLiveBudget {
     for (const target of [this.total, current]) { target.calls++; target.tokens += this.bound; target.usdMicros += this.boundMicros; }
     this.patterns.set(pattern, current);
     let settled = false;
-    return actualTokens => {
+    return usage => {
       if (settled) throw new Error('D12 reservation already settled');
       settled = true;
-      if (actualTokens === null || !Number.isSafeInteger(actualTokens) || actualTokens < 0 || actualTokens > this.bound) return;
-      const micros = Math.ceil(actualTokens * this.approval.price.ceilingUsdPerMTok);
-      for (const target of [this.total, current]) { target.tokens -= this.bound - actualTokens; target.usdMicros -= this.boundMicros - micros; }
+      const count = (value: number | null | undefined) => Number.isSafeInteger(value) && value! >= 0 ? value! : null;
+      const input = count(usage?.inputTokens), output = count(usage?.outputTokens);
+      const complete = input !== null && output !== null;
+      const known = (input ?? 0) + (output ?? 0);
+      const charged = complete ? { tokens: known, usdMicros: dagLiveChargeMicros(this.approval.priceBound, input, output) }
+        : { tokens: Math.max(this.bound, known), usdMicros: Math.max(this.boundMicros, dagLiveChargeMicros(this.approval.priceBound, input ?? 0, output ?? 0)) };
+      for (const target of [this.total, current]) { target.tokens += charged.tokens - this.bound; target.usdMicros += charged.usdMicros - this.boundMicros; }
+      return charged;
     };
   }
 }
@@ -169,10 +211,14 @@ export interface DagLiveCall {
   pattern: DagLivePattern; taskId: string; arm: 'baseline' | 'candidate'; node: string; ordinal: number;
   status: string; reason: string; requestId: string | null; servedModel: string | null;
   inputTokens: number | null; outputTokens: number | null; latencyMs: number;
+  /** Tokens and USD micros charged to spend for this call (reported usage, or the reservation if unknown). */
+  chargedTokens: number; chargedUsdMicros: number;
 }
 interface CallContext { pattern: DagLivePattern; taskId: string; arm: 'baseline' | 'candidate'; node: string }
 class RunControl {
   stopped: string | null = null;
+  /** The provider call whose outcome stopped the run, with its reported usage. */
+  stoppingCall: DagLiveCall | null = null;
   stop(reason: string): void { this.stopped ??= reason; }
 }
 
@@ -195,25 +241,32 @@ class MeteredJevAdapter implements DecisionAdapter {
     const context = this.context;
     if (!context || this.control.stopped) { this.control.stop(this.control.stopped ?? 'unscoped-call'); return notSent('cancelled'); }
     if (request.target.model !== this.model) { this.control.stop('model-mismatch'); return notSent('invalid-request'); }
-    let settle: (actual: number | null) => void;
+    let settle: ReturnType<DagLiveBudget['reserve']>;
     try { settle = this.budget.reserve(context.pattern); }
     catch (error) { this.control.stop(error instanceof DagLiveStop ? error.reason : 'budget'); return notSent('budget-exhausted'); }
     const started = this.now();
-    let observation: AdapterObservation;
+    const before = this.control.stopped;
+    let observation: AdapterObservation | null = null;
     try { observation = await this.inner.evaluate(request); }
-    catch { settle(null); this.control.stop('adapter-exception'); throw new DecisionGraphError('D12 adapter failed'); }
-    const { inputTokens, outputTokens } = observation.usage;
-    const known = Number.isSafeInteger(inputTokens) && Number.isSafeInteger(outputTokens) && inputTokens! >= 0 && outputTokens! >= 0;
-    const total = known ? inputTokens! + outputTokens! : null;
-    settle(total);
-    if (observation.status !== 'success') this.control.stop(`provider-${observation.reason}`);
-    else if (observation.actualModel !== this.model) this.control.stop('served-model-mismatch');
-    else if (!observation.requestId) this.control.stop('missing-request-id');
-    else if (total === null) this.control.stop('unknown-usage');
-    else if (total > this.bound) this.control.stop('usage-exceeded-reservation');
-    await this.record({ ...context, ordinal: this.budget.total.calls, status: observation.status, reason: observation.reason,
-      requestId: observation.requestId ?? null, servedModel: observation.actualModel === this.model ? this.model : null,
-      inputTokens: known ? inputTokens : null, outputTokens: known ? outputTokens : null, latencyMs: Math.max(0, this.now() - started) });
+    catch { this.control.stop('adapter-exception'); }
+    const count = (value: number | null | undefined) => Number.isSafeInteger(value) && value! >= 0 ? value! : null;
+    const inputTokens = count(observation?.usage.inputTokens), outputTokens = count(observation?.usage.outputTokens);
+    const charged = settle({ inputTokens, outputTokens });
+    if (observation) {
+      if (observation.status !== 'success') this.control.stop(`provider-${observation.reason}`);
+      else if (observation.actualModel !== this.model) this.control.stop('served-model-mismatch');
+      else if (!observation.requestId) this.control.stop('missing-request-id');
+      else if (inputTokens === null || outputTokens === null) this.control.stop('unknown-usage');
+      else if (inputTokens + outputTokens > this.bound) this.control.stop('usage-exceeded-reservation');
+    }
+    // Reported usage is recorded and charged even (especially) for the request that stops the run.
+    const call: DagLiveCall = { ...context, ordinal: this.budget.total.calls, status: observation?.status ?? 'error',
+      reason: observation?.reason ?? 'adapter-exception', requestId: observation?.requestId ?? null,
+      servedModel: observation?.actualModel === this.model ? this.model : null, inputTokens, outputTokens,
+      latencyMs: Math.max(0, this.now() - started), chargedTokens: charged.tokens, chargedUsdMicros: charged.usdMicros };
+    if (!before && this.control.stopped) this.control.stoppingCall = call;
+    await this.record(call);
+    if (!observation) throw new DecisionGraphError('D12 adapter failed');
     return observation;
   }
 }
@@ -282,7 +335,7 @@ interface ArmSetup { graph: DecisionGraph; flow: any; requests: Map<string, Node
 export interface DagLiveArms { baseline: ArmSetup; candidate: ArmSetup & { template: DecisionGraphTemplate }; resolvedPins: Set<string> }
 /** Builds both arms for one task. Pins are resolved from the frozen task before any dispatch. */
 export function buildDagLiveArms(task: DagLiveTask, options: { model: string; secretServiceReference: string; skillId: `aiwg:skill:${string}`;
-  perCallTokenBound: number; ceilingUsdPerMTok: number; taskDeadlineMs: number }): DagLiveArms {
+  perCallTokenBound: number; reservationMicros: number; taskDeadlineMs: number }): DagLiveArms {
   const definitions = dagLiveDefinitions(task);
   const timeoutMs = Math.min(30_000, options.taskDeadlineMs);
   const target: ExecutionTarget = { adapter: 'jev', adapterVersion: '1.0.0', model: options.model, credentialRef: options.secretServiceReference,
@@ -299,7 +352,7 @@ export function buildDagLiveArms(task: DagLiveTask, options: { model: string; se
   };
   const jevNodes = task.pattern === 'shortlist-rerank' ? 2 : 3;
   const localNodes = task.pattern === 'taxonomy-beam' ? 2 : 0;
-  const boundMicros = Math.ceil(options.perCallTokenBound * options.ceilingUsdPerMTok);
+  const boundMicros = options.reservationMicros;
   // One spare call of slack: Flow treats a realized resource equal to its ceiling as exceeded.
   const budget = { attempts: jevNodes + localNodes + 1, deadlineMs: options.taskDeadlineMs, tokens: (jevNodes + 1) * options.perCallTokenBound + localNodes,
     costMicros: (jevNodes + 1) * boundMicros + localNodes, fanOut: 2, beamWidth: 2, depth: 4, concurrency: 1 };
@@ -349,10 +402,14 @@ export function patternCallRatioExceeded(pairs: readonly DagLivePair[], pattern:
 }
 
 /** Operator-facing defaults for the dry run and approval template (USD 0.10/1M ceiling, USD 2.00 cap). */
-export const DAG_LIVE_DEFAULT_LIMITS: Pick<DagLiveApproval, 'budget' | 'price' | 'taskDeadlineMs'> = {
+export const DAG_LIVE_DEFAULT_LIMITS: Pick<DagLiveApproval, 'budget' | 'priceBound' | 'priorSpendUsd' | 'taskDeadlineMs'> = {
   budget: { usd: 2, calls: 1_400, tokens: 6_000_000, wallClockMs: 14_400_000,
     perPattern: { usd: 0.25, calls: 500, tokens: 2_000_000, wallClockMs: 5_400_000 } },
-  price: { ceilingUsdPerMTok: 0.1, inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, source: 'operator-stated Jev list price, #2686 assessment' },
+  priceBound: { inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, evidenceReferences: [
+    'https://www.eesel.ai/blog/typesafe-jev-pricing', 'https://www.mindstudio.ai/blog/jev-pricing-cost-per-token',
+    'roctinam/aiwg#2613 comment 153093: live smoke jev-1.13.0, 369 input / 38 output tokens'],
+  approvalReference: '<operator attestation reference>' },
+  priorSpendUsd: 0,
   taskDeadlineMs: 120_000,
 };
 /** Unsigned approval skeleton: every `<...>` value must be filled in and reviewed by the promotion owner. */
@@ -379,7 +436,7 @@ interface PairContext {
 }
 function invoker(context: PairContext, arm: 'baseline' | 'candidate', setup: ArmSetup): (request: GraphFlowRequest) => Promise<GraphFlowResponse> {
   const { task, approval, adapter, control } = context;
-  const unknownCostBoundUsd = Math.ceil(context.perCallTokenBound * approval.price.ceilingUsdPerMTok) / 1_000_000;
+  const unknownCostBoundUsd = dagLiveReservationMicros(approval.priceBound, context.perCallTokenBound) / 1_000_000;
   const projection = policy(approval.model, approval.region);
   return async flow => {
     if (control.stopped || context.signal.aborted) { control.stop(control.stopped ?? 'deadline'); throw new DecisionGraphError('D12 run stopped'); }
@@ -435,7 +492,7 @@ async function runBaseline(context: PairContext, arms: DagLiveArms): Promise<Dag
 async function runCandidate(context: PairContext, arms: DagLiveArms): Promise<DagLivePair['candidate']> {
   const { graph, template, flow } = arms.candidate;
   const records: Array<{ request: GraphFlowRequest; response: GraphFlowResponse }> = [];
-  const perCallMicros = Math.ceil(context.perCallTokenBound * context.approval.price.ceilingUsdPerMTok);
+  const perCallMicros = dagLiveReservationMicros(context.approval.priceBound, context.perCallTokenBound);
   const started = context.now();
   const adapter = admittedDecisionFlowAdapter(new GraphBudgetLedger(graph, template.plan, NARROW),
     request => HOST_LOCAL.has(request.node.id) ? { attempts: 1, tokens: 1, costMicros: 1 } : { attempts: 1, tokens: context.perCallTokenBound, costMicros: perCallMicros },
@@ -484,7 +541,7 @@ export interface DagLivePatternAnalysis {
  * preregistered economics bound met. Unknown values fail closed.
  */
 export function analyzeDagLivePattern(pattern: DagLivePattern, pairs: readonly DagLivePair[], preregistration: DagLivePreregistration,
-  price: DagLiveApproval['price']): DagLivePatternAnalysis {
+  price: Pick<DagLivePriceBound, 'inputUsdPerMTok' | 'outputUsdPerMTok'>): DagLivePatternAnalysis {
   const { nonInferiority: ni, economics: econ } = preregistration.analysis;
   const rows = pairs.filter(pair => pair.pattern === pattern);
   const n = rows.length;
@@ -540,10 +597,11 @@ export function analyzeDagLivePattern(pattern: DagLivePattern, pairs: readonly D
 
 /** Offline, credential-free worst-case plan against the approval limits. */
 export function planDagLiveQualification(workload: DagLiveWorkload, preregistration: DagLivePreregistration,
-  limits: Pick<DagLiveApproval, 'budget' | 'price'>) {
+  limits: Pick<DagLiveApproval, 'budget' | 'priceBound'>) {
   validateDagLiveInputs(workload, preregistration);
   const bound = preregistration.analysis.perCallTokenBound;
   const fraction = preregistration.analysis.stopRules.budgetStopFraction;
+  const perCallMicros = dagLiveReservationMicros(limits.priceBound, bound);
   const patterns = DAG_LIVE_PATTERNS.map(pattern => {
     const tasks = workload.tasks.filter(task => task.pattern === pattern);
     let expectedTokens = 0; let largestCall = 0;
@@ -559,10 +617,10 @@ export function planDagLiveQualification(workload: DagLiveWorkload, preregistrat
     const baselineCalls = tasks.length, candidateCalls = tasks.length * DAG_LIVE_MAX_CANDIDATE_CALLS[pattern];
     const calls = baselineCalls + candidateCalls;
     return { pattern, tasks: tasks.length, worstCase: { baselineCalls, candidateCalls, calls, tokens: calls * bound,
-      reservedUsd: calls * Math.ceil(bound * limits.price.ceilingUsdPerMTok) / 1_000_000 },
+      reservedUsd: calls * perCallMicros / 1_000_000 },
     estimatedVisibleTokens: expectedTokens, largestEstimatedCallTokens: largestCall,
     withinPatternStop: calls <= Math.floor(limits.budget.perPattern.calls * fraction) && calls * bound <= Math.floor(limits.budget.perPattern.tokens * fraction)
-      && calls * Math.ceil(bound * limits.price.ceilingUsdPerMTok) <= Math.floor(limits.budget.perPattern.usd * 1_000_000 * fraction) };
+      && calls * perCallMicros <= Math.floor(limits.budget.perPattern.usd * 1_000_000 * fraction) };
   });
   const calls = patterns.reduce((sum, p) => sum + p.worstCase.calls, 0);
   const reservedUsd = patterns.reduce((sum, p) => sum + p.worstCase.reservedUsd, 0);
@@ -570,11 +628,39 @@ export function planDagLiveQualification(workload: DagLiveWorkload, preregistrat
   return { schemaVersion: 'dag-live-plan/v1', providerCalls: 0, workloadDigest: dagLiveDigest(workload), preregistrationDigest: dagLiveDigest(preregistration),
     perCallTokenBound: bound, stopFraction: fraction, patterns,
     totals: { worstCaseCalls: calls, worstCaseTokens: calls * bound, worstCaseReservedUsd: Math.round(reservedUsd * 1e6) / 1e6,
-      estimatedVisibleTokens: visible, estimatedBillableUsdAtInputPrice: Math.round(visible * limits.price.inputUsdPerMTok) / 1e6,
+      estimatedVisibleTokens: visible, estimatedBillableUsdAtAttestedInputPrice: Math.round(visible * limits.priceBound.inputUsdPerMTok) / 1e6,
+      reservationUsdPerCall: perCallMicros / 1e6,
       hardCapUsd: DAG_LIVE_HARD_CAP_USD },
     boundCoversLargestEstimate: patterns.every(p => p.largestEstimatedCallTokens <= bound),
     withinBudget: patterns.every(p => p.withinPatternStop) && calls <= Math.floor(limits.budget.calls * fraction)
       && calls * bound <= Math.floor(limits.budget.tokens * fraction) && reservedUsd <= limits.budget.usd * fraction };
+}
+
+/**
+ * Spend of earlier D12 runs under the artifact root. A run with a summary counts its charged USD;
+ * a run with an approval but no summary (crashed or killed) counts every logged call plus one in
+ * flight at its reservation. Directories that are not D12 runs are ignored.
+ */
+export async function dagLivePriorSpend(artifactRoot: string): Promise<{ usd: number; runs: string[] }> {
+  let micros = 0; const runs: string[] = [];
+  let entries: string[];
+  try { entries = (await readdir(artifactRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name).sort(); }
+  catch { throw new Error('D12 artifact root is unreadable; prior spend cannot be established'); }
+  const readJson = async (path: string): Promise<any> => { try { return JSON.parse(await readFile(path, 'utf8')); } catch { return undefined; } };
+  for (const name of entries) {
+    const approval = await readJson(join(artifactRoot, name, 'approval.json'));
+    if (approval?.schemaVersion !== 'dag-live-approval/v1') continue;
+    runs.push(name);
+    const summary = await readJson(join(artifactRoot, name, 'summary.json'));
+    const reported = [summary?.spend?.chargedUsd, summary?.reserved?.usd].filter(n => typeof n === 'number' && Number.isFinite(n) && n >= 0);
+    if (summary?.schemaVersion === 'dag-live-summary/v1' && reported.length) { micros += Math.round(Math.max(...reported) * 1_000_000); continue; }
+    let logged = 0;
+    try { logged = (await readFile(join(artifactRoot, name, 'calls.jsonl'), 'utf8')).split('\n').filter(line => line.trim()).length; } catch { logged = 0; }
+    const bound = validPriceBound(approval.priceBound) ? approval.priceBound as DagLivePriceBound
+      : { inputUsdPerMTok: 0, outputUsdPerMTok: 0, evidenceReferences: [], approvalReference: '' };
+    micros += (logged + 1) * dagLiveReservationMicros(bound, DAG_LIVE_ANALYSIS.perCallTokenBound);
+  }
+  return { usd: micros / 1_000_000, runs };
 }
 
 const write = (path: string, value: unknown) => writeFile(path, canonicalJson(value), { flag: 'wx', mode: 0o600 });
@@ -598,6 +684,15 @@ export async function runDagLiveQualification(options: {
   if (!synthetic && (!liveGateOpen() || workload.tasksPerPattern !== DAG_LIVE_TASKS_PER_PATTERN)) throw new Error('D12 live run requires the env gate and the full preregistered workload');
   await assertContextLiveSource(options.sourceRoot, approval.sourceCommit);
   await assertContextArtifactRoot(options.sourceRoot, options.artifactRoot);
+  const { analysis } = preregistration;
+  // The USD 2.00 cap spans reruns: earlier runs on disk count, and the operator value is a floor.
+  const scanned = await dagLivePriorSpend(options.artifactRoot);
+  const priorMicros = Math.max(Math.round(approval.priorSpendUsd * 1_000_000), Math.round(scanned.usd * 1_000_000));
+  const capMicros = Math.min(Math.round(approval.budget.usd * 1_000_000), DAG_LIVE_HARD_CAP_USD * 1_000_000 - priorMicros);
+  if (capMicros * analysis.stopRules.budgetStopFraction < dagLiveReservationMicros(approval.priceBound, analysis.perCallTokenBound)) {
+    throw new Error('D12 prior spend leaves no budget for one call under the USD 2.00 cap');
+  }
+  const effectiveBudget = { ...approval.budget, usd: capMicros / 1_000_000 };
   const now = options.now ?? Date.now;
   const directory = resolve(options.artifactRoot, approval.runId);
   await mkdir(directory, { recursive: false, mode: 0o700 });
@@ -607,9 +702,8 @@ export async function runDagLiveQualification(options: {
   await write(join(directory, 'approval.json'), approval);
   const callsPath = join(directory, 'calls.jsonl'), pairsPath = join(directory, 'pairs.jsonl');
   await writeFile(callsPath, '', { flag: 'wx', mode: 0o600 }); await writeFile(pairsPath, '', { flag: 'wx', mode: 0o600 });
-  const { analysis } = preregistration;
   const started = now();
-  const budget = new DagLiveBudget(approval, analysis.perCallTokenBound, analysis.stopRules.budgetStopFraction, started, now);
+  const budget = new DagLiveBudget({ budget: effectiveBudget, priceBound: approval.priceBound }, analysis.perCallTokenBound, analysis.stopRules.budgetStopFraction, started, now);
   const control = new RunControl();
   const calls: DagLiveCall[] = [];
   const adapter = new MeteredJevAdapter(new JevDecisionAdapter({ region: approval.region, ...(synthetic ? { fetch: options.transport } : {}) }),
@@ -630,7 +724,7 @@ export async function runDagLiveQualification(options: {
       for (const [index, task] of tasks.entries()) {
         if (control.stopped) break;
         const arms = buildDagLiveArms(task, { model: approval.model, secretServiceReference: approval.secretServiceReference, skillId: options.skillId,
-          perCallTokenBound: analysis.perCallTokenBound, ceilingUsdPerMTok: approval.price.ceilingUsdPerMTok, taskDeadlineMs: approval.taskDeadlineMs });
+          perCallTokenBound: analysis.perCallTokenBound, reservationMicros: dagLiveReservationMicros(approval.priceBound, analysis.perCallTokenBound), taskDeadlineMs: approval.taskDeadlineMs });
         if (speculativeActionViolation(arms.baseline.flow) || speculativeActionViolation(arms.candidate.flow)) { control.stop('speculative-action'); break; }
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(approval.taskDeadlineMs)]);
         const context: PairContext = { task, index, approval, adapter, control, calls, host, executeFlow: options.executeFlow,
@@ -652,7 +746,7 @@ export async function runDagLiveQualification(options: {
     }
   } finally { clearTimeout(timer); vault.secret?.fill(0); }
   await assertContextLiveSource(options.sourceRoot, approval.sourceCommit);
-  const analyses = DAG_LIVE_PATTERNS.map(pattern => analyzeDagLivePattern(pattern, pairs, preregistration, approval.price));
+  const analyses = DAG_LIVE_PATTERNS.map(pattern => analyzeDagLivePattern(pattern, pairs, preregistration, approval.priceBound));
   const stopped = control.stopped;
   const recommendation = !stopped && !synthetic && analyses.every(item => item.eligible) ? 'eligible-for-promotion-review' : 'hold';
   const elapsedMs = Math.max(0, now() - started);
@@ -661,11 +755,19 @@ export async function runDagLiveQualification(options: {
     workloadDigest: approval.workloadDigest, preregistrationDigest: approval.preregistrationDigest, approvalDigest: dagLiveDigest(approval),
     callsDigest: await fileDigest(callsPath), pairsDigest: await fileDigest(pairsPath), stopped, pairs: pairs.length, providerCalls: calls.length,
     reserved: { calls: budget.total.calls, tokens: budget.total.tokens, usd: budget.usd() }, elapsedMs,
+    // Every provider call, including the one that stopped the run, as reported and as charged.
+    spend: { providerCalls: calls.length, inputTokens: calls.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),
+      outputTokens: calls.reduce((sum, call) => sum + (call.outputTokens ?? 0), 0),
+      attestedBillableUsd: calls.reduce((sum, call) => sum + (call.inputTokens ?? 0) * approval.priceBound.inputUsdPerMTok
+        + (call.outputTokens ?? 0) * approval.priceBound.outputUsdPerMTok, 0) / 1_000_000,
+      chargedUsd: budget.usd() },
+    stoppingCall: control.stoppingCall, priorSpendUsd: priorMicros / 1_000_000, priorRuns: scanned.runs, effectiveRunUsdCap: effectiveBudget.usd,
+    priceBound: approval.priceBound,
     analyses, recommendation, promotionDecision: 'pending-reviewer', reviewer: approval.reviewer, automaticPromotion: false };
   await write(join(directory, 'summary.json'), summary);
   // G5 input: observed resources against the approved bounds, pinned by manifest digest.
   const loadManifest = { schema: 'decision-load-manifest/v1', mode: synthetic ? 'synthetic-transport' : 'staged-provider', bounds: {
-    calls: approval.budget.calls, tokens: approval.budget.tokens, reservedUsdMicros: Math.round(approval.budget.usd * 1_000_000), wallClockMs: approval.budget.wallClockMs,
+    calls: approval.budget.calls, tokens: approval.budget.tokens, reservedUsdMicros: capMicros, wallClockMs: approval.budget.wallClockMs,
     ...Object.fromEntries(DAG_LIVE_PATTERNS.map(p => [`${p}-call-ratio-milli`, analysis.stopRules.maxPatternCallRatio * 1000])) } };
   const loadPath = join(directory, 'g5-load-result.json');
   await write(loadPath, { schemaVersion: 'decision-load-result/v1', manifestDigest: loadManifestDigest(loadManifest), manifest: loadManifest, mode: loadManifest.mode,
@@ -683,7 +785,7 @@ export async function runDagLiveQualification(options: {
       if (await fileDigest(pairsPath) !== summary.pairsDigest) return { outcome: 'fail' as const, details: { reason: 'pairs-digest-mismatch' } };
       const text = await readFile(pairsPath, 'utf8');
       const recorded = text.split('\n').filter(Boolean).map(line => JSON.parse(line) as DagLivePair);
-      const replay = analyzeDagLivePattern(pattern, recorded, preregistration, approval.price);
+      const replay = analyzeDagLivePattern(pattern, recorded, preregistration, approval.priceBound);
       const matches = canonicalJson(replay) === canonicalJson(analyses.find(item => item.pattern === pattern));
       return { outcome: matches && replay.eligible && !stopped && !synthetic ? 'pass' as const : 'fail' as const,
         details: { summaryDigest, pairsDigest: summary.pairsDigest, replayMatches: matches, stopped, source: summary.source, analysis: replay } };
