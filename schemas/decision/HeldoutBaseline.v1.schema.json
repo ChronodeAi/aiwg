@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutBaseline.v1.schema.json",
+  "title": "HeldoutBaseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "scope",
+    "usdMicros",
+    "approvalDigest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-baseline/v1"
+    },
+    "scope": {
+      "enum": [
+        "portfolio",
+        "D17",
+        "D29"
+      ]
+    },
+    "usdMicros": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 48000000
+    },
+    "approvalDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

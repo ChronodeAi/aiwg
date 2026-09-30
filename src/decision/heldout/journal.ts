@@ -1,9 +1,33 @@
 import { lstat, mkdir, open, readdir, readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { heldoutDigest, HeldoutError, heldoutReservationMicros, heldoutReservationTokens, validateHeldoutAttempt, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
-import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutSummary } from './types.js';
+import type { Digest, HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutSummary } from './types.js';
 
 export const heldoutRunsRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'runs');
+const baselineRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'baselines');
+interface HeldoutBaseline { schemaVersion: 'decision-heldout-baseline/v1'; scope: string; usdMicros: number; approvalDigest: Digest }
+async function readBaselines(root: string): Promise<Map<string, HeldoutBaseline>> {
+  await heldoutDirectory(baselineRoot(root));
+  const baselines = new Map<string, HeldoutBaseline>();
+  for (const name of await readdir(baselineRoot(root))) {
+    const baseline = await readHeldoutFile(join(baselineRoot(root), name)) as HeldoutBaseline;
+    checkHeldoutSchema('Baseline', baseline);
+    if (name !== `${baseline.scope}.json`) throw new HeldoutError('baseline-path');
+    baselines.set(baseline.scope, baseline);
+  }
+  return baselines;
+}
+/** Called under the global dispatch lock, after checking existing journals. Floors are recorded once. */
+export async function reconcileHeldoutBaseline(root: string, approval: HeldoutApproval): Promise<void> {
+  const baselines = await readBaselines(root);
+  for (const [scope, usd] of [[approval.study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
+    const usdMicros = Math.ceil(usd * 1_000_000), baseline = baselines.get(scope);
+    if (baseline && baseline.usdMicros !== usdMicros) throw new HeldoutError('baseline-changed');
+    if (!baseline) await writeHeldoutFile(join(baselineRoot(root), `${scope}.json`), {
+      schemaVersion: 'decision-heldout-baseline/v1', scope, usdMicros, approvalDigest: heldoutDigest(approval),
+    });
+  }
+}
 /** Reject symlinked journal ancestors as well as leaves: spend cannot be redirected to another root. */
 export async function heldoutDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -69,7 +93,9 @@ export interface HeldoutScan {
 export async function scanHeldoutSpend(root: string, study: string): Promise<HeldoutScan> {
   const runs = heldoutRunsRoot(root);
   await heldoutDirectory(runs);
-  const result: HeldoutScan = { studyUsdMicros: 0, portfolioUsdMicros: 0, attempts: [], journalDigests: [], runs: [] };
+  const baselines = await readBaselines(root);
+  const result: HeldoutScan = { studyUsdMicros: baselines.get(study)?.usdMicros ?? 0,
+    portfolioUsdMicros: baselines.get('portfolio')?.usdMicros ?? 0, attempts: [], journalDigests: [], runs: [] };
   for (const name of (await readdir(runs)).sort()) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) throw new HeldoutError('run-path');
     const run = join(runs, name);
@@ -79,6 +105,9 @@ export async function scanHeldoutSpend(root: string, study: string): Promise<Hel
     if (frozen.approval?.runId !== name || !['D17', 'D29'].includes(frozen.approval.study)
       || frozen.digest !== heldoutDigest(frozen.bundle)) throw new HeldoutError('frozen-inputs');
     validateHeldoutBundle(frozen.bundle, heldoutDigest(frozen.bundle.approval));
+    const approval = frozen.bundle.approval;
+    if (baselines.get(approval.study)?.usdMicros !== Math.ceil(approval.priorStudySpendUsd * 1_000_000)
+      || baselines.get('portfolio')?.usdMicros !== Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000)) throw new HeldoutError('baseline-mismatch');
     if (frozen.bundle.approval.runId !== name || frozen.bundle.approval.study !== frozen.approval.study) throw new HeldoutError('frozen-run');
     for (const prior of frozen.priorRuns) {
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(prior.runId) || prior.runId === name) throw new HeldoutError('prior-run');

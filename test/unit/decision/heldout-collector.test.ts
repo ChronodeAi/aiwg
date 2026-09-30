@@ -185,7 +185,7 @@ describe('held-out collector dispatch and durable accounting', () => {
     expect(transport).toHaveBeenCalledOnce();
     c.bundle.approval.runId = 'offline-02'; c.bundle.approval.budget.calls = 1000;
     c.bundle.approval.priorStudySpendUsd = 7.9996;
-    expect(await c.run(transport)).toMatchObject({ status: 'stopped', reason: 'budget-exhausted', reservedUsdMicros: 0 });
+    await expect(c.run(transport)).rejects.toThrow('baseline-changed');
     expect(transport).toHaveBeenCalledOnce();
   });
   it('AC3 cancellation and timeout keep the stopping reservation without retry or undefined hashing', async () => {
@@ -350,6 +350,38 @@ describe('held-out recorded evidence and study interface', () => {
 
 
 describe('held-out raw transport controls', () => {
+  it('HIGH3 refuses a missing or modified baseline instead of resetting prior spend', async () => {
+    for (const change of ['missing', 'modified']) {
+      const c = await setup(1); await c.run(fake()); c.bundle.approval.runId = 'baseline-rerun';
+      const path = join(c.root, 'research/qualification/heldout/baselines/portfolio.json');
+      if (change === 'missing') await rm(path);
+      else { const value = JSON.parse(await readFile(path, 'utf8')); value.usdMicros = 1; await writeFile(path, JSON.stringify(value)); }
+      const transport = fake(); await expect(c.run(transport)).rejects.toThrow('baseline-mismatch');
+      expect(transport).not.toHaveBeenCalled();
+    }
+  });
+  it('HIGH3 charges another study against the same portfolio baseline and prior run spend', async () => {
+    const c = await setup(1); c.bundle.approval.priorStudySpendUsd = 7; c.bundle.approval.priorPortfolioSpendUsd = 47;
+    c.bundle.approval.priceBound.perRequestUsd = 0.7; const transport = fake();
+    await c.run(transport);
+    c.bundle.corpus.study = 'D29'; c.bundle.preregistration.study = 'D29'; c.bundle.approval.study = 'D29';
+    c.bundle.approval.priorStudySpendUsd = 0; c.bundle.approval.runId = 'other-study';
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', reservedUsdMicros: 0 });
+    expect(transport).toHaveBeenCalledOnce();
+    expect(await scanHeldoutSpend(c.root, 'D29')).toMatchObject({ studyUsdMicros: 0, portfolioUsdMicros: 47700400 });
+  });
+  it('HIGH3 adds three runs to the durable $7 study / $47 portfolio baseline without reusing the remainder', async () => {
+    const c = await setup(3); c.bundle.approval.priorStudySpendUsd = 7; c.bundle.approval.priorPortfolioSpendUsd = 47;
+    c.bundle.approval.budget.calls = 2; c.bundle.approval.priceBound.perRequestUsd = 0.4;
+    const transport = fake();
+    expect(await c.run(transport)).toMatchObject({ completedRows: 1, reservedUsdMicros: 400400 });
+    c.bundle.approval.runId = 'floor-02';
+    expect(await c.run(transport)).toMatchObject({ completedRows: 2, reservedUsdMicros: 400400 });
+    c.bundle.approval.runId = 'floor-03';
+    expect(await c.run(transport)).toMatchObject({ reason: 'budget-exhausted', completedRows: 2, reservedUsdMicros: 0 });
+    expect(transport).toHaveBeenCalledTimes(2);
+    expect(await scanHeldoutSpend(c.root, 'D17')).toMatchObject({ studyUsdMicros: 7800800, portfolioUsdMicros: 47800800 });
+  });
   it('HIGH2 refuses the 4000-token reservation / 9000-token paid-output probe before dispatch', async () => {
     const c = await setup(1); c.bundle.approval.budget.usd = 8;
     c.bundle.approval.priceBound.outputUsdPerMTok = 1000;

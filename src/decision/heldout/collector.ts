@@ -13,7 +13,7 @@ import { redactText } from '../../governance/redaction.js';
 import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, HeldoutError, HELDOUT_CAP_USD, HELDOUT_ENV_GATE,
   HELDOUT_PORTFOLIO_CAP_USD, planHeldoutCollection, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
 import { appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
-  scanHeldoutSpend, writeHeldoutFile } from './journal.js';
+  reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile } from './journal.js';
 import type { AdapterObservation, DecisionAdapter, RulesetResult } from '../types.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutStudyModule, HeldoutSummary } from './types.js';
 
@@ -64,6 +64,9 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
   let host: HeldoutHost | undefined;
   let uncertain = false;
   try {
+    // Missing/corrupt baselines in an existing ledger require explicit reconciliation, never a reset.
+    await scanHeldoutSpend(options.artifactRoot, a.study);
+    await reconcileHeldoutBaseline(options.artifactRoot, a);
     const prior = await scanHeldoutSpend(options.artifactRoot, a.study);
     // An unacknowledged execution is never silently retried, even in a different study.
     if (prior.attempts.some(attempt => !attempt.result || attempt.result.disposition === 'stop')) throw new HeldoutError('prior-stop');
@@ -79,8 +82,8 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
     const reserveMicros = heldoutReservationMicros(a, plan);
     const reserveTokens = heldoutReservationTokens(a, plan);
-    const studyPrior = Math.max(prior.studyUsdMicros, Math.ceil(a.priorStudySpendUsd * 1_000_000));
-    const portfolioPrior = Math.max(prior.portfolioUsdMicros, Math.ceil(a.priorPortfolioSpendUsd * 1_000_000));
+    const studyPrior = prior.studyUsdMicros;
+    const portfolioPrior = prior.portfolioUsdMicros;
     const usdLimit = Math.floor(Math.min(a.budget.usd * 1_000_000, HELDOUT_CAP_USD[a.study] * 1_000_000 - studyPrior,
       HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - portfolioPrior) * 0.8);
     let calls = 0, reserved = 0, accounted = 0, lastDispatch = started - plan.minDispatchIntervalMs;

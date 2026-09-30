@@ -24,7 +24,7 @@ const validators = new Map<string, ValidateFunction>();
 export class HeldoutError extends Error {
   constructor(readonly category: string) { super(`Held-out collector refused (${category})`); }
 }
-export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen', value: unknown): void {
+export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen' | 'Baseline', value: unknown): void {
   admitEntry(value, limits);
   let validate = validators.get(kind);
   if (!validate) {
