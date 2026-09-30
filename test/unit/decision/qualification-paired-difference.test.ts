@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalQuantile, pairedBinaryDifferenceInterval, pairedMeanDifferenceBootstrap, pairedNonInferiority, PairedDifferenceError, type PairedDifferenceInterval } from '../../../src/decision/qualification/quality.js';
+import { normalQuantile, pairedBinaryDifferenceInterval, pairedMeanDifferenceBootstrap, pairedNonInferiority, PairedDifferenceError, wilsonScoreInterval, type PairedDifferenceInterval } from '../../../src/decision/qualification/quality.js';
 
 const table = (both: number, candidateOnly: number, baselineOnly: number, neither: number) =>
   ({ both, candidateOnly, baselineOnly, neither });
@@ -199,6 +199,25 @@ describe('paired mean difference bootstrap', () => {
     ];
     for (const input of bad) {
       expect(() => pairedMeanDifferenceBootstrap(input as never)).toThrow(PairedDifferenceError);
+    }
+  });
+});
+
+describe('wilson score interval at a preregistered level', () => {
+  it('matches the closed form for zero events and widens with the level', () => {
+    const z = normalQuantile(0.975);
+    const [lower, upper] = wilsonScoreInterval({ events: 0, n: 20, levelBps: 9500 });
+    expect(lower).toBe(0);
+    expect(upper).toBeCloseTo(z * z / (20 + z * z), 10);
+    const [lower90, upper90] = wilsonScoreInterval({ events: 10, n: 50, levelBps: 9000 });
+    const [lower99, upper99] = wilsonScoreInterval({ events: 10, n: 50, levelBps: 9900 });
+    expect(lower99).toBeLessThan(lower90);
+    expect(upper99).toBeGreaterThan(upper90);
+    expect(lower90).toBeLessThan(0.2);
+    expect(upper90).toBeGreaterThan(0.2);
+    for (const bad of [{ events: 3, n: 2, levelBps: 9500 }, { events: 0, n: 0, levelBps: 9500 }, { events: 1.5, n: 4, levelBps: 9500 },
+      { events: 1, n: 4, levelBps: 10000 }, { events: -1, n: 4, levelBps: 9500 }]) {
+      expect(() => wilsonScoreInterval(bad)).toThrow(PairedDifferenceError);
     }
   });
 });

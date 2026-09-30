@@ -22,7 +22,8 @@ const graph: DecisionGraph = { schemaVersion: 'decision-graph/v1', id: 'graph-ru
 const plan = planDecisionGraph(graph, new Set([pin.digest]));
 const flow = decisionGraphToFlow(graph, { resolvedPins: new Set([pin.digest]), decisionSkillId: skill, terminal: 'left' });
 async function run(branch: boolean) {
-  const ledger = new GraphBudgetLedger(graph, plan);
+  // A fixed clock keeps the 100 ms graph deadline deterministic under loaded CI runners.
+  const ledger = new GraphBudgetLedger(graph, plan, [], () => 0);
   const records: any[] = [];
   const invokeNode = admittedDecisionFlowAdapter(ledger, () => ({ attempts: 1, tokens: 2, costMicros: 2 }),
     async request => ({ outputs: request.node.id === 'root' ? { result: 'root', branch } : { result: request.node.id },
