@@ -167,6 +167,13 @@ sequenceDiagram
 
 Discovery adds authored decision/ruleset/binding data classifications, schema linting, list/show support and reference edges. They are normalized first-class data, not loose prose inside vendor prompts. Resolver accepts a closed local/catalog source set under authorized roots; no path traversal, arbitrary URL fetches or executable artifact content. Runtime results are data, never ingested as trusted rules automatically.
 
+Decision-assisted context pruning is a separate experimental D26 consumer of
+recorded decision evidence. It does not change the evaluator's authority model:
+deterministic code classifies protected context first, model evidence cannot
+override that classification, and shadow mode must leave downstream prompts
+byte-identical. Any proposed drop, truncate or summarize action is a reversible
+receipt, not an authorization to remove content.
+
 ## 6. Security, limits, and operations
 
 Definition authorship and binding selection are trusted control inputs; model states and responses are untrusted data. Separate review of changes to rule outcomes, egress destinations, and executor permissions under existing workspace policy. Default logs contain only identities, counts, timings and reason codes. Raw state/response capture is disabled; the evidence here is deliberately synthetic. Reject credentials embedded in portable configuration; fetch using injected logical resolver configuration. Never log bearer headers, raw errors containing payloads, vault paths or secret hashes.

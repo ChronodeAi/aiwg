@@ -64,5 +64,11 @@ and must come from those validators, and promotion needs record-computed
 held-out evidence, including paired non-inferiority against the baseline. Live
 held-out data is pending.
 
+The [decision-assisted context pruning pilot](context-pruning.md) is
+experimental, default-off and shadow-only by default. It implements
+deterministic protected-item retention, immutable reversible receipts and
+paired-evaluation scaffolding; live/held-out quality and economics evidence
+remain pending.
+
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.
