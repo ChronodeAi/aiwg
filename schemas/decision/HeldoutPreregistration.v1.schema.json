@@ -16,7 +16,8 @@
     "outputAndHiddenTokenAllowance",
     "requestTimeoutMs",
     "minDispatchIntervalMs",
-    "sessionLimitMs"
+    "sessionLimitMs",
+    "calibration"
   ],
   "properties": {
     "schemaVersion": {
@@ -111,6 +112,97 @@
         "previousApprovalTemplateDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
         "liveObservationsAtRegeneration": { "const": false }
       }
+    },
+    "calibration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "allowedModes"
+          ],
+          "properties": {
+            "scope": {
+              "const": "uncalibrated-diagnostic"
+            },
+            "allowedModes": {
+              "const": [
+                "uncalibrated-diagnostic"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "allowedModes"
+          ],
+          "properties": {
+            "scope": {
+              "const": "calibrated"
+            },
+            "allowedModes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "staged",
+                  "artifact"
+                ]
+              }
+            },
+            "calibrationPhaseSplits": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "tuning",
+                  "calibration"
+                ]
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "allowedModes": {
+                    "contains": {
+                      "const": "staged"
+                    },
+                    "type": "array"
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "calibrationPhaseSplits"
+                ],
+                "properties": {
+                  "calibrationPhaseSplits": {}
+                }
+              },
+              "else": {
+                "not": {
+                  "required": [
+                    "calibrationPhaseSplits"
+                  ],
+                  "properties": {
+                    "calibrationPhaseSplits": {}
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
     }
   }
 }

@@ -42,14 +42,16 @@ try {
       await host.assertContextLiveSource(root, bundle.approval.sourceCommit);
       if (mode === '--dry-run') {
         const prior = await journal.scanHeldoutSpend(artifactRoot, bundle.approval.study, bundle.approval);
+        const { validateHeldoutPhaseAccess } = await import('../../src/decision/heldout/calibration.ts');
+        await validateHeldoutPhaseAccess(bundle, journal.heldoutRunsRoot(artifactRoot), prior.runs, new Date().toISOString());
         const estimate = await contract.planHeldoutCollection(bundle, args[2]);
         const studyPrior = prior.studyUsdMicros;
         const portfolioPrior = prior.portfolioUsdMicros;
-        const remaining = Math.min(bundle.approval.budget.usd * 1e6, contract.HELDOUT_CAP_USD[bundle.approval.study] * 1e6 - studyPrior,
-          contract.HELDOUT_PORTFOLIO_CAP_USD * 1e6 - portfolioPrior);
-        const ready = estimate.fitsBeforeStop && estimate.reservedUsdMicros <= Math.floor(remaining * 0.8)
+        const allowance = journal.heldoutCollectionAllowance(bundle.approval, prior);
+        const ready = estimate.fitsBeforeStop && estimate.reservedUsdMicros <= allowance.usdMicros
+          && estimate.maximumAttempts <= allowance.calls && estimate.reservedTokens <= allowance.tokens
           && !prior.counterBlocked && !prior.attempts.some(a => !a.result || a.result.disposition === 'stop');
-        process.stdout.write(JSON.stringify({ ...estimate, priorStudyUsdMicros: studyPrior, priorPortfolioUsdMicros: portfolioPrior, ready }) + '\n');
+        process.stdout.write(JSON.stringify({ ...estimate, priorStudyUsdMicros: studyPrior, priorPortfolioUsdMicros: portfolioPrior, allowance, ready }) + '\n');
         if (!ready) process.exitCode = 1;
       } else {
         const { collectHeldoutStudy } = await import('../../src/decision/heldout/collector.ts');

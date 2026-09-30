@@ -23,7 +23,7 @@
     "corpusDigest",
     "preregistrationDigest",
     "executionDigest",
-    "calibrationDigest",
+    "calibration",
     "providerTermsReference",
     "priceBound",
     "budget",
@@ -102,10 +102,6 @@
       "pattern": "^sha256:[a-f0-9]{64}$"
     },
     "executionDigest": {
-      "type": "string",
-      "pattern": "^sha256:[a-f0-9]{64}$"
-    },
-    "calibrationDigest": {
       "type": "string",
       "pattern": "^sha256:[a-f0-9]{64}$"
     },
@@ -195,6 +191,86 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1000
+    },
+    "calibration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "uncalibrated-diagnostic"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "phase"
+          ],
+          "properties": {
+            "mode": {
+              "const": "staged"
+            },
+            "phase": {
+              "const": "calibration"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "phase",
+            "calibrationArtifactDigest",
+            "calibrationPhaseRecordDigest",
+            "priorApprovalDigest"
+          ],
+          "properties": {
+            "mode": {
+              "const": "staged"
+            },
+            "phase": {
+              "const": "test"
+            },
+            "calibrationArtifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "calibrationPhaseRecordDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "priorApprovalDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "calibrationArtifactDigest"
+          ],
+          "properties": {
+            "mode": {
+              "const": "artifact"
+            },
+            "calibrationArtifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        }
+      ]
     }
   }
 }

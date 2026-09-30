@@ -16,7 +16,8 @@
     "measurementFailures",
     "missingRows",
     "evidenceDigest",
-    "decision"
+    "decision",
+    "calibrationPhaseRecordDigest"
   ],
   "properties": {
     "schemaVersion": {
@@ -84,6 +85,17 @@
     },
     "decision": {
       "const": "HOLD"
+    },
+    "calibrationPhaseRecordDigest": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   }
 }

@@ -17,9 +17,20 @@ export interface HeldoutCorpus {
   provenance: { kind: 'authored-synthetic'; generatorDigest: Digest; seed: string; goldDigest: Digest };
   definitions: DecisionDefinition[]; rows: HeldoutRow[];
 }
+export type HeldoutCalibration = { mode: 'uncalibrated-diagnostic' }
+  | { mode: 'staged'; phase: 'calibration' }
+  | { mode: 'staged'; phase: 'test'; calibrationArtifactDigest: Digest; calibrationPhaseRecordDigest: Digest; priorApprovalDigest: Digest }
+  | { mode: 'artifact'; calibrationArtifactDigest: Digest };
+export type HeldoutCalibrationPlan = { scope: 'uncalibrated-diagnostic'; allowedModes: ['uncalibrated-diagnostic'] }
+  | { scope: 'calibrated'; allowedModes: ('staged' | 'artifact')[]; calibrationPhaseSplits?: ('tuning' | 'calibration')[] };
+export interface HeldoutCalibrationPhase {
+  schemaVersion: 'decision-heldout-calibration-phase/v1'; study: Study; runId: string;
+  corpusDigest: Digest; preregistrationDigest: Digest; approvalDigest: Digest; sealedAt: string;
+  rowIds: string[]; lineage: { runId: string; evidenceDigest: Digest }[]; lineageDigest: Digest;
+}
 export interface HeldoutPreregistration {
   schemaVersion: 'decision-heldout-preregistration/v1'; study: Study; frozenAt: string;
-  corpusDigest: Digest; studyAnalysisDigest: Digest; scorerDigest: Digest;
+  corpusDigest: Digest; studyAnalysisDigest: Digest; scorerDigest: Digest; calibration: HeldoutCalibrationPlan;
   providerFailurePolicy: { maxRetries: 0 | 1; maximumSliceFailureBps: number; retryOnlyTerminal: true };
   perRequestTokenBound: number; providerOverheadTokens?: number; outputAndHiddenTokenAllowance: number;
   requestTimeoutMs: number; minDispatchIntervalMs: number; sessionLimitMs: number;
@@ -31,7 +42,7 @@ export interface HeldoutApproval {
   reviewer: string; approvalReference: string; sourceCommit: string; exactHeadCi: string;
   stagingHost: 'titan'; stagingWorkspace: string; model: 'jev-1.13.0'; servedModel: 'jev-1.13.0';
   region: string; credentialRef: string; credentialResolverDigest: Digest;
-  corpusDigest: Digest; preregistrationDigest: Digest; executionDigest: Digest; calibrationDigest: Digest;
+  corpusDigest: Digest; preregistrationDigest: Digest; executionDigest: Digest; calibration: HeldoutCalibration;
   providerTermsReference: string;
   priceBound: { inputUsdPerMTok: number; outputUsdPerMTok: number; perRequestUsd: number;
     outputTokenBound?: number;
@@ -55,13 +66,13 @@ export interface HeldoutSummary {
   schemaVersion: 'decision-heldout-summary/v1';
   status: 'complete' | 'checkpoint' | 'stopped'; reason: string | null; source: 'injected-transport' | 'provider';
   study: Study; runId: string; reservedUsdMicros: number; completedRows: number; measurementFailures: string[];
-  missingRows: string[]; evidenceDigest: Digest; decision: 'HOLD';
+  missingRows: string[]; evidenceDigest: Digest; calibrationPhaseRecordDigest: Digest | null; decision: 'HOLD';
 }
 /** Trusted source modules generate data locally. Gold is returned separately and is never a request field. */
 export interface HeldoutStudyModule {
   prepare(seed: string): Promise<{ corpus: HeldoutCorpus; preregistration: HeldoutPreregistration; gold: unknown }>;
   score(input: { corpus: HeldoutCorpus; preregistration: HeldoutPreregistration; attempts: readonly HeldoutAttempt[];
-    gold: unknown; integrity: QualificationIntegrityMetadata }): Promise<unknown>;
+    gold: unknown; integrity: QualificationIntegrityMetadata; approvedCalibration: HeldoutCalibration; calibrated: false | null }): Promise<unknown>;
 }
 export interface HeldoutExecution { definition: DecisionDefinition; projection: DecisionProjectionPolicy;
   ruleset: import('../types.js').DecisionRuleset; binding: import('../types.js').DecisionBinding }

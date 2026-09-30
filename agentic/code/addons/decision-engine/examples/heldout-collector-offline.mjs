@@ -17,10 +17,23 @@ export async function prepare(seed) {
     rows: [0, 1].map(i => generateHeldoutRow('heldout-lamp/v1', `${seed}:${i}:example`)) };
   return { corpus, gold, preregistration: { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D17',
     frozenAt: '2026-09-30T00:00:00Z', corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest({ exampleOnly: true }),
-    scorerDigest: moduleDigest, providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },
+    scorerDigest: moduleDigest, calibration: { scope: 'uncalibrated-diagnostic', allowedModes: ['uncalibrated-diagnostic'] },
+    providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },
     perRequestTokenBound: 4000, providerOverheadTokens: 512, outputAndHiddenTokenAllowance: 256, requestTimeoutMs: 1000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000 } };
 }
-export async function score({ attempts }) {
-  return { exampleOnly: true, successfulRequests: attempts.filter(a => a.result?.disposition === 'success').length,
+export async function prepareStaged(seed) {
+  const prepared = await prepare(seed);
+  prepared.corpus.rows = ['tuning', 'calibration', 'test'].map((split, i) =>
+    generateHeldoutRow('heldout-lamp-splits/v1', `${seed}:${i}:single:${split}`));
+  prepared.gold = { row_0: 'yes', row_1: 'no', row_2: 'yes' };
+  prepared.corpus.provenance.goldDigest = heldoutDigest(prepared.gold);
+  prepared.preregistration.corpusDigest = heldoutDigest(prepared.corpus);
+  prepared.preregistration.calibration = { scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration'] };
+  return prepared;
+}
+export async function score({ attempts, approvedCalibration, calibrated }) {
+  if (approvedCalibration.mode !== 'uncalibrated-diagnostic' && approvedCalibration.mode !== 'staged'
+    || approvedCalibration.mode === 'uncalibrated-diagnostic' && calibrated !== false) throw new Error('example-calibration-scope');
+  return { exampleOnly: true, calibrated: false, d09Qualified: false, calibratedGate: false, successfulRequests: attempts.filter(a => a.result?.disposition === 'success').length,
     missingInputs: ['full study corpus', 'calibration', 'blind human audit', 'native statistical report'], decision: 'HOLD' };
 }

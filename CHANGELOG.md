@@ -27,6 +27,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   dry run, priced approval and 88-assessment review templates. Reuses the
   shared collector and native ensemble reports; live observations, compatible
   calibration, human review and promotion remain pending (#2611)
+- Experimental, default-off held-out calibration scopes for both D17 and D29:
+  explicit uncalibrated diagnostics, staged calibration/test approvals bound to
+  sealed attempt lineage, and independent artifact bindings. Phase collection
+  shares durable USD/call/token limits and passes approved calibration pins to
+  scorers; real D09 qualification, live studies and human approvals remain pending (#2778)
 
 - Experimental, default-off shared D17/D29 held-out collector with source-only
   preparation and dry-run CLI, synthetic provenance checks, priced pre-dispatch

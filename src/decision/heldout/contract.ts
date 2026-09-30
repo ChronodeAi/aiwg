@@ -25,7 +25,7 @@ const validators = new Map<string, ValidateFunction>();
 export class HeldoutError extends Error {
   constructor(readonly category: string) { super(`Held-out collector refused (${category})`); }
 }
-export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen' | 'Baseline' | 'SpendEvent' | 'SpendHead', value: unknown): void {
+export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen' | 'Baseline' | 'SpendEvent' | 'SpendHead' | 'CalibrationPhase', value: unknown): void {
   admitEntry(value, limits);
   let validate = validators.get(kind);
   if (!validate) {
@@ -93,6 +93,9 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
   if (a?.priceBound?.outputUsdPerMTok !== 0) throw new HeldoutError('free-output-required');
   checkHeldoutSchema('Approval', a);
   if (redactText(JSON.stringify([plan, a])).sensitivity !== 'none') throw new HeldoutError('credential-material');
+  if (!(plan.calibration.allowedModes as string[]).includes(a.calibration.mode)
+    || a.calibration.mode === 'uncalibrated-diagnostic' && plan.calibration.scope !== 'uncalibrated-diagnostic') throw new HeldoutError('calibration-scope');
+  if (!heldoutRowsInScope(bundle).length) throw new HeldoutError('calibration-phase-empty');
   if (sha256(a) !== trustedApprovalDigest || a.study !== corpus.study || a.corpusDigest !== sha256(corpus)
     || a.preregistrationDigest !== sha256(plan) || a.executionDigest !== heldoutExecutionDigest(corpus, plan, a)
     || a.budget.usd > HELDOUT_CAP_USD[a.study] || a.priorStudySpendUsd >= HELDOUT_CAP_USD[a.study]
@@ -108,8 +111,19 @@ export function heldoutReservationMicros(a: HeldoutApproval, inputTokenBound: nu
 export function heldoutReservationTokens(plan: HeldoutPreregistration, inputTokenBound: number): number {
   return inputTokenBound + plan.outputAndHiddenTokenAllowance;
 }
+export function heldoutRowsInScope(bundle: HeldoutBundle): HeldoutRow[] {
+  const { calibration } = bundle.approval;
+  if (calibration.mode !== 'staged') return bundle.corpus.rows;
+  const plan = bundle.preregistration.calibration;
+  if (plan.scope !== 'calibrated' || !plan.calibrationPhaseSplits?.length) throw new HeldoutError('calibration-scope');
+  return bundle.corpus.rows.filter(row => calibration.phase === 'test' ? row.split === 'test'
+    : (plan.calibrationPhaseSplits as string[]).includes(row.split));
+}
 export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregistration, approval: HeldoutApproval,
   row: HeldoutRow, request: HeldoutRequest) {
+  if (!heldoutRowsInScope({ corpus, preregistration: plan, approval }).some(item => item.id === row.id && sha256(item) === sha256(row))) {
+    throw new HeldoutError('calibration-phase-row');
+  }
   const execution = heldoutExecution(corpus, plan, approval, request);
   const projected = await projectDecisionState(row.input, execution.projection);
   const wire = { state: partitionProjectedState(projected.state, projected.evidence), model: approval.model,
@@ -124,7 +138,8 @@ export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregi
 export async function planHeldoutCollection(bundle: HeldoutBundle, digest: string) {
   validateHeldoutBundle(bundle, digest);
   let maximumRequestEstimateTokens = 0, tokens = 0, usdMicros = 0;
-  for (const row of bundle.corpus.rows) for (const request of row.requests) {
+  const rows = heldoutRowsInScope(bundle);
+  for (const row of rows) for (const request of row.requests) {
     const planned = await heldoutRequest(bundle.corpus, bundle.preregistration, bundle.approval, row, request);
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
     const reservation = heldoutReservationMicros(bundle.approval, planned.estimatedTokens);
@@ -133,9 +148,9 @@ export async function planHeldoutCollection(bundle: HeldoutBundle, digest: strin
     tokens += attempts * heldoutReservationTokens(bundle.preregistration, planned.estimatedTokens);
     usdMicros += attempts * reservation;
   }
-  const attempts = bundle.corpus.rows.reduce((n, r) => n + r.requests.length, 0) * (1 + bundle.preregistration.providerFailurePolicy.maxRetries);
+  const attempts = rows.reduce((n, r) => n + r.requests.length, 0) * (1 + bundle.preregistration.providerFailurePolicy.maxRetries);
   const a = bundle.approval;
-  return { providerCalls: 0, maximumAttempts: attempts, maximumRequestEstimateTokens, reservedTokens: tokens, reservedUsdMicros: usdMicros,
+  return { calibration: structuredClone(a.calibration), rowsInScope: rows.map(row => row.id), providerCalls: 0, maximumAttempts: attempts, maximumRequestEstimateTokens, reservedTokens: tokens, reservedUsdMicros: usdMicros,
     fitsBeforeStop: attempts <= Math.floor(a.budget.calls * 0.8) && tokens <= Math.floor(a.budget.tokens * 0.8)
       && usdMicros <= Math.floor(Math.min(a.budget.usd, HELDOUT_CAP_USD[a.study] - a.priorStudySpendUsd,
         HELDOUT_PORTFOLIO_CAP_USD - a.priorPortfolioSpendUsd) * 800_000) };
@@ -147,7 +162,8 @@ export function heldoutApprovalTemplate(corpus: HeldoutCorpus, plan: HeldoutPrer
   return { schemaVersion: 'decision-heldout-approval/v1', approved: false, study: corpus.study, runId: null,
     reviewer: null, approvalReference: null, sourceCommit: null, exactHeadCi: null, stagingHost: 'titan', stagingWorkspace: null,
     model: 'jev-1.13.0', servedModel: 'jev-1.13.0', region: null, credentialRef: null, credentialResolverDigest: null,
-    corpusDigest: sha256(corpus), preregistrationDigest: sha256(plan), executionDigest: null, calibrationDigest: null,
+    corpusDigest: sha256(corpus), preregistrationDigest: sha256(plan), executionDigest: null, calibration: plan.calibration.scope === 'uncalibrated-diagnostic'
+      ? { mode: 'uncalibrated-diagnostic' } : null,
     providerTermsReference: null, priceBound: { inputUsdPerMTok: null, outputUsdPerMTok: null, perRequestUsd: null,
       evidenceReferences: [], approvalReference: null }, budget: { calls: Math.max(1, Math.ceil(attempts / 0.8)),
       tokens: Math.max(1, Math.ceil(attempts * (plan.perRequestTokenBound + plan.outputAndHiddenTokenAllowance) / 0.8)), usd: HELDOUT_CAP_USD[corpus.study] },
