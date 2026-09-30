@@ -16,6 +16,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   receipts, a D13 durable-review bridge, record-computed held-out
   preregistration with paired non-inferiority against the baseline, docs and
   offline tests (#2622).
+- Experimental default-off D17 decision ensemble runtime APIs for bounded
+  member dispatch, paired champion/challenger shadow evaluation, drift-response
+  execution, promotion gating on D09 plus eval-integrity, rollback for new runs,
+  metadata-only telemetry, docs, tests and an offline synthetic example (#2611).
 - Shared paired non-inferiority intervals and a fail-closed margin check for decision pilots (#2618, #2619, #2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,

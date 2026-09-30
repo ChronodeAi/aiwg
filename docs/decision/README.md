@@ -42,8 +42,9 @@ network-capable adapters; see [state projection](state-projection.md) and the
 [threat-control mapping](threat-control-mapping.md).
 
 The [ensemble, champion/challenger and drift-response contracts](ensembles.md)
-define versioned D17 schemas and pure validators. Their runtime is experimental
-and not implemented.
+define versioned D17 schemas, pure validators, and an experimental default-off
+offline runtime with injected dispatch, registry and telemetry seams. Live
+qualification and production rollout evidence remain pending.
 
 The [offline pattern playground](pattern-playground.md) provides discoverable,
 sanitized examples and a governed authoring checklist without requiring network

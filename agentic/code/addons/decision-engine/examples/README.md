@@ -30,3 +30,15 @@ fixture adapter declares `egress: { mode: 'none' }`, so it needs no policy.
 The Jev and LLM bindings pin the same `ruleset.json` and definitions. A backend
 swap changes only `bindingPath` (and runtime credential/worker configuration),
 not the ruleset, decisions, input, or outcome consumer.
+
+`ensemble-runtime-offline.mjs` exercises the experimental D17 ensemble runtime
+with synthetic member results and no provider transport:
+
+```bash
+npm run build:cli
+node agentic/code/addons/decision-engine/examples/ensemble-runtime-offline.mjs
+```
+
+It demonstrates the default-off runtime API, bounded member orchestration,
+aggregate evidence and retained member-result references. It is not quality,
+calibration, drift-threshold or live Jev evidence.

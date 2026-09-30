@@ -1562,6 +1562,22 @@
         "JEV-16",
         "#2612"
       ]
+    },
+    {
+      "id": "DEC-ENSEMBLE-09",
+      "path": "agentic/code/addons/decision-engine/examples/ensemble-runtime-offline.mjs",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:96f67a7e464a8a5ca2515a88eedb178f20b9add2b5ee6703a40f6d3c7d74a3ba",
+      "expectedOutcome": "D17 offline ensemble runtime example with bounded members, champion/challenger shadow and rollback",
+      "links": [
+        "JEV-16",
+        "#2611"
+      ]
     }
   ]
 }
