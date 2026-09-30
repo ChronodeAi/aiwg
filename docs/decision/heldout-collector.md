@@ -155,7 +155,7 @@ The following remain open, with no live acceptance claim:
 | Study work | Exact missing input |
 | --- | --- |
 | D17 measured ensemble report, AC7/AC14 | Fresh frozen 1,800-subject generator/oracle, D09 calibration, Jev observations, native eight-metric mapping, preregistered Newcombe/bootstrap/coverage gates, approved extra-cost tradeoff and blind review |
-| D29 measured screening report, AC8/AC9/AC13 | Fresh 1,600-subject corpus/oracle, projected question mapping, calibrated readiness, real observations, native false-rate/NI and external coverage gates, blind gold/reviewer audit and integrity snapshot |
+| D29 measured screening report, AC8/AC9/AC13 | [Study module](d29-heldout-study.md) implements the corpus/oracle, individual question mapping, calibration recipe and report gates. Actual observations, compatible D09 artifact, operator gold/reviewer audit and protected integrity/access records remain missing. |
 | Any live collection | Priced approval with real evidence references, clean source/CI attestation, canonical root, actual prior spend, resolver pin, synthetic privacy approval and provider terms record |
 | Promotion or production rollout | All native and external thresholds evaluated against complete data, compatible calibration, protected eval-integrity evidence and separate operator approval |
 

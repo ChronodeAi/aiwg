@@ -96,3 +96,8 @@ The experimental, default-off [shared held-out collector](heldout-collector.md)
 provides source-only preparation, bounded synthetic collection and D11 recorded
 ledger verification for D17/D29 study modules. Live studies, calibration, human
 review and study-specific statistical reports remain pending.
+
+The [D29 synthetic held-out study](d29-heldout-study.md) supplies a seeded
+1,600-subject corpus, preregistration, receipt scorer, additional error/coverage
+gates and the 132-assessment operator template. It remains experimental and
+default-off; live observations, D09 qualification and operator review are pending.

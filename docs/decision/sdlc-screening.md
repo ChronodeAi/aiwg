@@ -204,3 +204,13 @@ held-out false-support/false-ready bounds, production latency/cost, or reviewer
 time savings. Those require a frozen held-out corpus, adjudication guide,
 reviewer identities/rationales, live provider credentials, deployment egress
 approval and positive total-economics evidence.
+
+## Synthetic study module
+
+The [D29 study runbook](d29-heldout-study.md) describes source-only preparation,
+frozen tuning/calibration/test splits, the deterministic oracle and visible-text
+baseline, native receipt mapping and the additional coverage/conditional-rate
+report. Its 132-item operator template is unfilled. Live model observations,
+a compatible D09 artifact, protected integrity/access records and actual
+operator review remain required. No measured synthetic or representative
+SDLC-quality result is claimed by the module's offline fixtures.

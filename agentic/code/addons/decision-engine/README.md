@@ -42,3 +42,8 @@ request fields fail closed.
 
 See [the operator guide](docs/operations.md) and the repository-level
 [decision specification](../../../../docs/decision/specification.md).
+
+The experimental, default-off [D29 synthetic evidence screening study](../../../../docs/decision/d29-heldout-study.md)
+provides source-only preparation and offline receipt-scoring tests. It uses the
+shared held-out collector, preserves deterministic gate authority, and requires
+separate live-spend approval and human review.
