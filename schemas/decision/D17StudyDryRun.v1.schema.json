@@ -156,7 +156,7 @@
       "type": "array",
       "const": [
         "operator approval",
-        "compatible D09 calibration",
+        "genuine D09 calibration for AC7/AC14 (outside diagnostic scope)",
         "exact-source CI evidence",
         "provider terms",
         "prior study and portfolio spend",

@@ -10,6 +10,14 @@ const sources = { 'test-source.ts': heldoutDigest('test-source') };
 const make = () => prepareD17Study('offline-development-v1', moduleDigest, sources);
 
 describe('D17 synthetic corpus and frozen preparation', () => {
+  it('freezes only uncalibrated diagnostics and never supplies a fixture calibration digest', () => {
+    const { preregistration, approvalTemplate } = make();
+    expect(preregistration.calibration).toEqual({ scope: 'uncalibrated-diagnostic', allowedModes: ['uncalibrated-diagnostic'] });
+    expect(approvalTemplate.calibration).toEqual({ mode: 'uncalibrated-diagnostic' });
+    expect(approvalTemplate.approved).toBe(false);
+    expect(approvalTemplate).not.toHaveProperty('calibrationDigest');
+    expect(approvalTemplate.calibration).not.toHaveProperty('calibrationArtifactDigest');
+  });
   it('allocates exactly 1800 independent subjects with balanced labels in every declared split/slice', () => {
     const { corpus, gold, splitManifest } = make();
     expect(corpus.provenance.kind).toBe('authored-synthetic');
@@ -121,7 +129,7 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(preregistration.providerOverheadTokens).toBe(512);
     expect(approvalTemplate.budget).toEqual({ calls: 18000, tokens: 72000000, usd: 8 });
     expect(approvalTemplate.priceBound.evidenceReferences).toHaveLength(3);
-    expect(approvalTemplate.calibrationDigest).toBeNull();
+    expect(approvalTemplate.calibration).toEqual({ mode: 'uncalibrated-diagnostic' });
     expect(() => validateHeldoutBundle({ corpus, preregistration, approval: approvalTemplate } as any,
       heldoutDigest(approvalTemplate))).toThrow();
     expect(reviewTemplate.assessments).toHaveLength(88);
@@ -147,8 +155,8 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(report.worstCase.attempts).toBe(14400);
     expect(report.maximumRequestEstimateTokens).toBeGreaterThan(0);
     expect(report.maximumRequestEstimateTokens).toBe(1179);
-    expect(report.corpusDigest).toBe('sha256:c22736953cfa0bb8b3dbdd026688d58ea50d9bcb8b3dd78bb4184171696658a2');
-    expect(report.preregistrationDigest).toBe('sha256:483c18c53df4a11e68e96313a252602e8d2e421388d2120141f8c278018b653e');
-    expect(report.approvalTemplateDigest).toBe('sha256:fb24218e78462a3bbdfd667fdbc49d618f53ba5b34d2e907b0757769135e7c6a');
+    expect(report.corpusDigest).toBe('sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804');
+    expect(report.preregistrationDigest).toBe('sha256:1e98fdaf94facdef112efe665e1917051e1e0386fd96ded4bcb24b61e4ab8ca9');
+    expect(report.approvalTemplateDigest).toBe('sha256:ea6d5bc92a4a67fc1a935765fcc2bca9aa429e17f30a72fc223f93d9ea2ea058');
   }, 65000);
 });

@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { prepare } from '../../../tools/decision/d17-study.mjs';
 import { evaluateDecisionRuleset } from '../../../src/decision/evaluate.js';
-import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
+import { collectHeldoutStudy, scoreHeldoutStudy } from '../../../src/decision/heldout/collector.js';
 import { heldoutDigest, heldoutExecution, heldoutExecutionDigest, heldoutRequest,
   heldoutReservationMicros, heldoutReservationTokens } from '../../../src/decision/heldout/contract.js';
 import { heldoutRunsRoot, readHeldoutJournal, scanHeldoutSpend } from '../../../src/decision/heldout/journal.js';
 import type { HeldoutBundle } from '../../../src/decision/heldout/types.js';
 import { buildD17NativeReport, scoreD17Study } from '../../../src/decision/ensemble-study/score.js';
+import { validateD17Artifact } from '../../../src/decision/ensemble-study/artifacts.js';
 import { D17_ANALYSIS } from '../../../src/decision/ensemble-study/protocol.js';
 import { pairedThresholdsDigest, validateChampionChallenger, validateEnsembleIntegrityReport } from '../../../src/decision/ensemble/contract.js';
 import { championChallengerInputSetDigest, championChallengerShadowBaseline, runChampionChallengerShadow } from '../../../src/decision/ensemble/runtime.js';
@@ -41,7 +42,7 @@ async function setup(scoring = false) {
     study: 'D17', runId: 'd17-offline-01', reviewer: 'fixture-reviewer', approvalReference: 'fixture-only', sourceCommit: 'a'.repeat(40),
     exactHeadCi: 'fixture-ci', stagingHost: 'titan', stagingWorkspace: 'fixture-workspace', model: 'jev-1.13.0', servedModel: 'jev-1.13.0',
     region: 'fixture-region', credentialRef: 'openbao-approle.fixture.typesafe-jev', credentialResolverDigest: pin,
-    corpusDigest: heldoutDigest(corpus), preregistrationDigest: heldoutDigest(preregistration), executionDigest: pin, calibrationDigest: pin,
+    corpusDigest: heldoutDigest(corpus), preregistrationDigest: heldoutDigest(preregistration), executionDigest: pin, calibration: { mode: 'uncalibrated-diagnostic' },
     providerTermsReference: 'fixture-synthetic-only', priceBound: { inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, perRequestUsd: 0,
       evidenceReferences: ['fixture-rate'], approvalReference: 'fixture-attestation' }, budget: { calls: 100, tokens: 400000, usd: 1 },
     priorStudySpendUsd: 0, priorPortfolioSpendUsd: 0 } };
@@ -74,6 +75,17 @@ function reply(init?: RequestInit, changes: Record<string, unknown> = {}) {
 }
 
 describe('D17 diagnostic collection through the shared collector', () => {
+  it('rejects calibrated approvals outside the frozen diagnostic scope before credentials or dispatch', async () => {
+    const c = await setup();
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit) => reply(init));
+    for (const calibration of [{ mode: 'artifact', calibrationArtifactDigest: pin },
+      { mode: 'staged', phase: 'calibration' }, { mode: 'staged', phase: 'test', calibrationArtifactDigest: pin,
+        calibrationPhaseRecordDigest: pin, priorApprovalDigest: pin }] as const) {
+      c.bundle.approval.calibration = calibration;
+      await expect(c.run(transport)).rejects.toThrow('calibration-scope');
+    }
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+  });
   it('AC3/7 makes four fresh calls per subject with identical projected inputs and separately retained native evidence', async () => {
     const c = await setup(); const bodies: unknown[] = [];
     expect(c.bundle.corpus.rows[0].requests.map(request => request.arm)).toEqual(['baseline', 'candidate', 'candidate', 'candidate']);
@@ -193,7 +205,53 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     release_gate: { decision: 'HOLD', reasons: ['offline-diagnostic-only'] } });
   const input = async (c: Awaited<ReturnType<typeof setup>>) => ({ corpus: c.bundle.corpus, preregistration: c.bundle.preregistration,
     attempts: (await readHeldoutJournal(c.runDir)).filter(event => event.attempt.result).map(event => event.attempt),
-    gold: c.prepared.gold, integrity: integrity() });
+    gold: c.prepared.gold, integrity: integrity(), approvedCalibration: c.bundle.approval.calibration, calibrated: false as const });
+  it('refuses every non-diagnostic or unknown approved calibration mode and any calibrated flag', async () => {
+    const c = await setup(true);
+    await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => reply(init)));
+    const scoredInput = await input(c);
+    for (const approvedCalibration of [undefined, null, {}, { mode: 'unknown' },
+      { mode: 'artifact', calibrationArtifactDigest: pin }, { mode: 'staged', phase: 'calibration' },
+      { mode: 'staged', phase: 'test', calibrationArtifactDigest: pin, calibrationPhaseRecordDigest: pin, priorApprovalDigest: pin },
+      { mode: 'uncalibrated-diagnostic', calibrationArtifactDigest: pin }]) {
+      await expect(scoreD17Study({ ...scoredInput, approvedCalibration } as any, c.prepared)).rejects.toThrow('D17 uncalibrated diagnostic scope');
+    }
+    for (const calibrated of [undefined, null, true]) {
+      await expect(scoreD17Study({ ...scoredInput, calibrated } as any, c.prepared)).rejects.toThrow('D17 uncalibrated diagnostic scope');
+    }
+    const changed = structuredClone(c.prepared);
+    changed.preregistration.calibration = { scope: 'calibrated', allowedModes: ['artifact'] };
+    await expect(scoreD17Study({ ...scoredInput, preregistration: changed.preregistration }, changed))
+      .rejects.toThrow('D17 uncalibrated diagnostic scope');
+  });
+  it('reports explicit no-claim flags through collector scoring and rejects qualification or promotion claims', async () => {
+    const c = await setup(true);
+    const summary = await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => reply(init)));
+    if (summary.status === 'disabled') throw new Error('expected offline collection');
+    expect(summary.calibrationPhaseRecordDigest).toBeNull();
+    const scoredInput = await input(c);
+    const scored = await scoreHeldoutStudy({ run: c.runDir, trustedEvidenceDigest: summary.evidenceDigest,
+      trustedApprovalDigest: heldoutDigest(c.bundle.approval), gold: c.prepared.gold, integrity: scoredInput.integrity,
+      trustedIntegrityDigest: heldoutDigest(scoredInput.integrity), moduleDigest: c.bundle.preregistration.scorerDigest,
+      module: { prepare: async () => c.prepared, score: input => scoreD17Study(input, c.prepared) } });
+    expect(scored).toMatchObject({ calibrated: false, d09Qualified: false, calibratedGate: false, decision: 'HOLD',
+      approvedCalibration: { mode: 'uncalibrated-diagnostic' },
+      diagnostics: { calibrated: false, d09Qualified: false, calibratedGate: false, decision: 'HOLD' } });
+    const report = await scoreD17Study(scoredInput, c.prepared);
+    expect(report.calibrationDiagnostics.calibrated).toBe(false);
+    for (const field of ['calibrated', 'd09Qualified', 'calibratedGate']) {
+      expect(() => validateD17Artifact('report', { ...report, [field]: true })).toThrow('invalid report');
+      const missing = { ...report } as Record<string, unknown>; delete missing[field];
+      expect(() => validateD17Artifact('report', missing)).toThrow('invalid report');
+    }
+    expect(() => validateD17Artifact('report', { ...report, decision: 'PROMOTE' })).toThrow('invalid report');
+    expect(() => validateD17Artifact('report', { ...report, calibrationDiagnostics: { ...report.calibrationDiagnostics, calibrated: true } }))
+      .toThrow('invalid report');
+    expect(await scoreD17Study({ ...scoredInput, integrity: { ...scoredInput.integrity,
+      release_gate: { decision: 'ROLLBACK', reasons: ['offline-control'] } } }, c.prepared)).toMatchObject({ decision: 'ROLLBACK', calibrated: false });
+    expect(await scoreD17Study({ ...scoredInput, integrity: { ...scoredInput.integrity,
+      release_gate: { decision: 'PROMOTE', reasons: [] } } }, c.prepared)).toMatchObject({ decision: 'HOLD', calibrated: false });
+  });
   it('AC6/7 maps native mean distributions but scores shared errors against local gold, never agreement', async () => {
     const c = await setup(true);
     await c.run(vi.fn(async (_url: unknown, init?: RequestInit) => reply(init)));

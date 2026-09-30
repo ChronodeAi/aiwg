@@ -7,6 +7,9 @@
   "required": [
     "schemaVersion",
     "scope",
+    "calibrated",
+    "d09Qualified",
+    "calibratedGate",
     "corpusDigest",
     "preregistrationDigest",
     "executionPins",
@@ -28,6 +31,15 @@
     },
     "scope": {
       "const": "synthetic-diagnostic-only"
+    },
+    "calibrated": {
+      "const": false
+    },
+    "d09Qualified": {
+      "const": false
+    },
+    "calibratedGate": {
+      "const": false
     },
     "corpusDigest": {
       "type": "string",

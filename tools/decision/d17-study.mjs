@@ -48,7 +48,7 @@ async function main() {
   let maximumRequestEstimateTokens = 0;
   for (const row of prepared.corpus.rows) {
     const projected = await heldoutRequest(prepared.corpus, prepared.preregistration,
-      { model: 'jev-1.13.0', region: 'offline-planning', credentialRef: 'offline-planning' }, row, row.requests[0]);
+      { model: 'jev-1.13.0', region: 'offline-planning', credentialRef: 'offline-planning', calibration: prepared.approvalTemplate.calibration }, row, row.requests[0]);
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, projected.estimatedTokens);
   }
   if (mode === '--prepare') {
@@ -64,7 +64,7 @@ async function main() {
     corpusDigest: heldoutDigest(prepared.corpus), preregistrationDigest: heldoutDigest(prepared.preregistration),
     approvalTemplateDigest: heldoutDigest(prepared.approvalTemplate), analysisDigest: heldoutDigest(prepared.analysis),
     splitManifestDigest: heldoutDigest(prepared.splitManifest), goldDigest: heldoutDigest(prepared.gold),
-    approvalText: `I, roctinam, approve D17 synthetic-only preregistration ${heldoutDigest(prepared.preregistration)} and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no promotion is authorized.` }) + '\n');
+    approvalText: `I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration ${heldoutDigest(prepared.preregistration)} and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.` }) + '\n');
 }
 if (process.argv[1] && resolve(process.argv[1]) === ownPath) main().catch(() => {
   process.stderr.write('D17 preparation refused: source pins, protocol, seed, payload bound or artifact root failed.\n'); process.exitCode = 1;

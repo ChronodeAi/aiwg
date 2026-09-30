@@ -153,6 +153,7 @@ export function prepareD17Study(seed: string, moduleDigest: Digest, sourceDigest
     definitions: [structuredClone(definition)], rows };
   const preregistration: HeldoutPreregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D17',
     frozenAt: FROZEN_AT, corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
+    calibration: { scope: 'uncalibrated-diagnostic', allowedModes: ['uncalibrated-diagnostic'] },
     providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true }, perRequestTokenBound: 4000,
     outputAndHiddenTokenAllowance: 256, providerOverheadTokens: 512,
     requestTimeoutMs: 60000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000,
@@ -201,7 +202,7 @@ export function d17DryRun() {
     worstCase: { attempts: 14400, totalTokens: 57600000, reservedUsd: 5.4, priceFloorUsdPerMTok: 0.10 },
     approvalCeilings: { calls: 18000, tokens: 72000000, usd: 8 }, portfolioUsd: 48, stopFraction: 0.8,
     fitsStudyCapBeforeStop: true, sessionLimitMs: 1800000, requiresResumableSessions: true,
-    reviewAssessments: 88, missingInputs: ['operator approval', 'compatible D09 calibration', 'exact-source CI evidence',
+    reviewAssessments: 88, missingInputs: ['operator approval', 'genuine D09 calibration for AC7/AC14 (outside diagnostic scope)', 'exact-source CI evidence',
       'provider terms', 'prior study and portfolio spend', 'region and credential resolver pin', 'live observations', 'blind human review'] };
 }
 

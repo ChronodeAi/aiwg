@@ -41,6 +41,11 @@ function policy(prepared: Prepared, rowAttempts: readonly HeldoutAttempt[]): Dec
 /** Maps retained provider distributions only; confidence and agreement never become calibrated probability. */
 export async function scoreD17Study(input: ScoreInput, prepared: Prepared) {
   validateHeldoutInputs(input.corpus, input.preregistration);
+  if (input.preregistration.calibration.scope !== 'uncalibrated-diagnostic'
+    || !input.approvedCalibration || input.approvedCalibration.mode !== 'uncalibrated-diagnostic'
+    || Object.keys(input.approvedCalibration).join(',') !== 'mode' || input.calibrated !== false) {
+    throw new Error('D17 uncalibrated diagnostic scope');
+  }
   if (heldoutDigest(input.corpus) !== heldoutDigest(prepared.corpus)
     || heldoutDigest(input.preregistration) !== heldoutDigest(prepared.preregistration)
     || heldoutDigest(input.gold) !== input.corpus.provenance.goldDigest
@@ -132,6 +137,7 @@ export async function scoreD17Study(input: ScoreInput, prepared: Prepared) {
   const championReservations = reservation(testAttempts.filter(attempt => attempt.requestId === 'champion'));
   const challengerReservations = reservation(testAttempts.filter(attempt => attempt.requestId !== 'champion'));
   const report = { schemaVersion: 'decision-d17-study-report/v1', scope: 'synthetic-diagnostic-only',
+    calibrated: false, d09Qualified: false, calibratedGate: false,
     corpusDigest: heldoutDigest(input.corpus), preregistrationDigest: heldoutDigest(input.preregistration),
     executionPins: { definition: definitionPin, binding: bindingPin, model: 'jev-1.13.0', adapter: { id: 'jev', version: '1.0.0' },
       aggregatePolicyDigest: observations.find(row => row.aggregate)?.aggregate?.policy.digest ?? null },

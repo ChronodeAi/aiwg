@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D17 held-out study now permits only the explicit
+  uncalibrated-diagnostic calibration scope. Scoring consumes the approved mode,
+  rejects calibrated approvals and forbids D09 qualification, calibrated gates
+  or promotion claims; AC7/AC14 remain pending genuine D09 evidence (#2611)
+
 - Experimental, default-off D17 synthetic study no longer leaks gold through
   ordinal record IDs, label parity, authority notes or payload lengths.
   Regenerated uncollected corpus, preregistration and approval-template pins;
