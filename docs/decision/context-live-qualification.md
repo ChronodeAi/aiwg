@@ -89,8 +89,9 @@ collection profile's margin to reach the preregistered maximum before any spend.
 ### Trusted Jev credential resolver
 
 `tools/decision/jev-credential-resolver.mjs` is the reviewed host module for this
-runner. Its logical reference is `openbao-approle:NAME/typesafe/jev`, which names
-the scoped OpenBao reader AppRole. On first use it runs the host token helper
+runner. Its logical reference is `openbao-approle.NAME.typesafe-jev`, which names
+the scoped OpenBao reader AppRole. The reference goes into the Jev binding's `credentialRef`, so it must
+match `^[a-z][a-z0-9.-]+$`. The approval check enforces this. On first use it runs the host token helper
 (`bash $AIWG_OPENBAO_TOKEN_HELPER approle NAME`), reads the key field `token` from the
 KV v2 locator in `AIWG_JEV_OPENBAO_SECRET_PATH` at the HTTPS `BAO_ADDR`, and revokes the
 client token. The locator is host configuration because it is private; it is not in
@@ -109,7 +110,10 @@ module, is what limits which secret can be read.
 `--dry-run` takes the same arguments as `--collect-approved` and needs no live gate. It
 validates the approval and corpus. It checks the pinned approval and resolver digests, the
 complete generated corpus, the clean exact source commit, the canonical artifact root, and
-the remaining #2681 spend. It then reports the partitions collection would
+the remaining #2681 spend. For every admissible partition it runs the same request checks as
+collection: adapter destination and answer-shape capabilities, the ruleset and binding schemas
+(including the credential reference), and the artifact pins. Oversized cases are recorded as
+rejected, and the run moves on, exactly as in collection. It then reports the partitions collection would
 send. For each case it lists the partitions and their estimated input tokens, then the
 total requests, the reserved token and USD bounds, and `requestCapacityAtStop`: the most
 requests the 80% stop admits under the capped USD ceiling. It never imports the resolver, resolves a credential,

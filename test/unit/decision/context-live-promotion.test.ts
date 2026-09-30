@@ -45,7 +45,7 @@ async function setup(caseIds: string[], factor = 1.1) {
   const corpus: ContextLiveCorpus = { ...structuredClone(generated), cases: structuredClone(generated.cases.filter(c => caseIds.includes(c.id))) };
   const approval: ContextLiveApproval = { schemaVersion: 'context-live-approval/v1', approved: true, reviewer: 'offline-reviewer', stagingWorkspace: 'offline-only',
     runId: 'offline-collection', sourceCommit: 'a'.repeat(40), exactHeadCi: 'offline-fixture', model: MODEL, apiRevision: 'v1', region: 'fixture-region',
-    secretServiceReference: 'fixture-secret-ref', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(corpus), preregistrationDigest: '',
+    secretServiceReference: 'openbao-approle.fixture-jev-reader.typesafe-jev', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(corpus), preregistrationDigest: '',
     budget: { requests: 200, tokens: 100_000_000, usd: 2, wallClockMs: 600_000 },
     perRequestBound: { totalTokens: 72_000, usd: 0.0072, approvalReference: 'offline-fixture-bound' }, marginRule };
   approval.preregistrationDigest = contextLiveDigest(contextLivePreregistration(corpus, marginRule));
@@ -134,7 +134,7 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     adjust(plan);
     const approval: ContextCanaryApproval = { schemaVersion: 'context-canary-approval/v1', approved: true, reviewer: 'offline-reviewer', stagingWorkspace: 'offline-only',
       runId: 'offline-canary', sourceCommit: '', exactHeadCi: 'offline-fixture', model: MODEL, apiRevision: 'v1', region: 'fixture-region',
-      secretServiceReference: 'fixture-secret-ref', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(s.corpus),
+      secretServiceReference: 'openbao-approle.fixture-jev-reader.typesafe-jev', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(s.corpus),
       qualificationRecordDigest: contextLiveDigest(record), canaryPlanDigest: contextLiveDigest(plan), plan };
     const root = await mkdtemp(join(tmpdir(), 'tv12-canary-src-'));
     const output = await mkdtemp(join(tmpdir(), 'tv12-canary-out-')); route.root = output;

@@ -17,14 +17,15 @@
  * - `AIWG_JEV_OPENBAO_SECRET_PATH`: private KV v2 locator (`MOUNT/data/PATH`). It is host
  *   configuration so the locator stays out of source control and approval artifacts.
  *
- * The logical reference `openbao-approle:NAME/typesafe/jev` names the reader AppRole.
+ * The logical reference `openbao-approle.NAME.typesafe-jev` names the reader AppRole. It must also be a
+ * valid DecisionBinding `credentialRef` (`^[a-z][a-z0-9.-]+$`), because the runner puts it in the binding.
  */
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { request as httpsRequest } from 'node:https';
 import { isAbsolute } from 'node:path';
 
-const REFERENCE = /^openbao-approle:([a-z0-9][a-z0-9-]{0,62})\/typesafe\/jev$/;
+const REFERENCE = /^openbao-approle\.([a-z0-9][a-z0-9-]{0,62})\.typesafe-jev$/;
 const SECRET_PATH = /^[a-z0-9_-]+\/data\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/;
 const CLIENT_TOKEN = /^[A-Za-z0-9._-]{8,512}$/;
 const CREDENTIAL = /^[\x21-\x7e]{1,4096}$/;

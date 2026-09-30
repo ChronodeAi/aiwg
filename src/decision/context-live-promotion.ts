@@ -11,7 +11,7 @@ import { CanonicalJsonByteEstimator, ContextPlanError, planDecisionContext, type
 import { assertContextQualified, compareContextUsage, type ContextComparison, type ContextQualification } from './context-qualification.js';
 import {
   assertContextArtifactRoot, assertContextLiveSource, compileContextLiveCase, contextLiveBinding, contextLiveDigest, contextLiveRequestCapacity,
-  contextLiveRuleset, contextLiveTarget, ContextLiveBudget, validateContextLiveApproval, withContextLiveSpendLedger, TV12_ISSUE_USD_CAP,
+  contextLiveRuleset, contextLiveTarget, ContextLiveBudget, validateContextLiveApproval, withContextLiveSpendLedger, TV12_ISSUE_USD_CAP, CREDENTIAL_REF,
   type ContextLiveApproval, type ContextLiveCorpus, type ContextLiveHost, type ContextLiveRecord,
 } from './context-live-qualification.js';
 import { JevDecisionAdapter } from './adapters/jev.js';
@@ -163,6 +163,7 @@ export function validateContextCanaryApproval(approval: ContextCanaryApproval, c
     || approval.schemaVersion !== 'context-canary-approval/v1' || approval.approved !== true || plan.schemaVersion !== 'context-canary-plan/v1' || plan.rollback !== 'observe-only'
     || ![approval.reviewer, approval.stagingWorkspace, approval.exactHeadCi, approval.model, approval.region, approval.secretServiceReference, plan.perRequestBound.approvalReference].every(nonblank)
     || !/^[a-zA-Z0-9_-]+$/.test(approval.runId) || !/^[a-f0-9]{40}$/.test(approval.sourceCommit) || approval.apiRevision !== 'v1' || /latest|unknown/i.test(approval.model)
+    || !CREDENTIAL_REF.test(approval.secretServiceReference)
     || ![approval.credentialResolverDigest, approval.corpusDigest, approval.qualificationRecordDigest, approval.canaryPlanDigest].every(d => sha256.test(d))
     || approval.canaryPlanDigest !== contextLiveDigest(plan) || approval.corpusDigest !== contextLiveDigest(corpus) || approval.corpusDigest !== record.corpusDigest
     || approval.qualificationRecordDigest !== contextLiveDigest(record) || approval.model !== record.model || approval.region !== record.region

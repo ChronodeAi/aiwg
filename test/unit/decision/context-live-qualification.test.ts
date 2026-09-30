@@ -38,7 +38,7 @@ async function setup(caseId = 'many-short') {
   const corpus: ContextLiveCorpus = { ...generated, cases: generated.cases.filter(c => c.id === caseId) };
   const approval: ContextLiveApproval = { schemaVersion: 'context-live-approval/v1', approved: true, reviewer: 'offline-reviewer', stagingWorkspace: 'offline-only',
     runId: 'offline-test', sourceCommit: 'a'.repeat(40), exactHeadCi: 'offline-fixture', model: 'jev-pinned-fixture', apiRevision: 'v1', region: 'fixture-region',
-    secretServiceReference: 'fixture-secret-ref', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(corpus), preregistrationDigest: '',
+    secretServiceReference: 'openbao-approle.fixture-jev-reader.typesafe-jev', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(corpus), preregistrationDigest: '',
     budget: { requests: 100, tokens: 10_000_000, usd: 2, wallClockMs: 60_000 },
     perRequestBound: { totalTokens: 100_000, usd: 0.01, approvalReference: 'offline-fixture-bound' }, marginRule: { extraReserveBps: 100, maximumMarginBps: 1000 } };
   approval.preregistrationDigest = contextLiveDigest(contextLivePreregistration(corpus, approval.marginRule));
@@ -76,6 +76,24 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
     const marginRule = { extraReserveBps: 100, maximumMarginBps: 1500 };
     const widened = { ...approval, marginRule, preregistrationDigest: contextLiveDigest(contextLivePreregistration(corpus, marginRule)) };
     expect(() => validateContextLiveApproval(widened, corpus)).toThrow();
+  });
+  it('rejects a secret-service reference that a DecisionBinding credentialRef would refuse', async () => {
+    const { corpus, approval } = await setup();
+    expect(() => validateContextLiveApproval({ ...approval, secretServiceReference: 'openbao-approle:aiwg-jev-reader/typesafe/jev' }, corpus)).toThrow();
+  });
+  it('dry-run runs the same pre-dispatch request validation as collection', async () => {
+    // 101 short questions plan into one request but exceed the binding's 100-attempt limit, a check that
+    // only runs when the request is built just before admission and dispatch.
+    const s = await setup('many-short');
+    const definitions = s.corpus.cases[0]!.definitions;
+    while (definitions.length < 101) {
+      const copy = structuredClone(definitions[0]!); copy.metadata.id = `short-extra-${definitions.length}`; definitions.push(copy);
+    }
+    s.approval.corpusDigest = contextLiveDigest(s.corpus);
+    s.approval.preregistrationDigest = contextLiveDigest(contextLivePreregistration(s.corpus, s.approval.marginRule));
+    await expect(collectContextLiveCase(s.corpus.cases[0]!, s.corpus, s.approval, { resolveCredential: s.resolver }, s.budget, new AbortController().signal, s.fetch as typeof fetch)).rejects.toThrow('maxAttempts');
+    await expect(estimateContextLiveCollection(s.approval, s.corpus)).rejects.toThrow('maxAttempts');
+    expect(s.fetch).not.toHaveBeenCalled(); expect(s.resolver).not.toHaveBeenCalled();
   });
   it('denies budget before credentials or transport', async () => {
     const s = await setup(); s.approval.budget.requests = 1;
@@ -266,6 +284,9 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
     try {
       const summary = await o.run(o.output, 'live');
       expect(summary).toMatchObject({ source: 'provider', collectionSuccess: true, stopped: false, qualifiedForEnforcement: false });
+      // The corpus starts with oversized cases: each is recorded as rejected and collection continues.
+      expect(s.corpus.cases[0]!.id).toBe('longest-raw-0');
+      expect(summary.rejected).toEqual(['longest-raw-0', 'longest-raw-1', 'longest-raw-2', 'longest-effective-2']);
       expect(requests).toBeGreaterThan(13); expect(summary.collected).toBe(requests); expect(summary.reserved.requests).toBe(requests);
       expect(s.resolver).toHaveBeenCalled(); expect(o.dispose).toHaveBeenCalledTimes(1);
       const manifest = JSON.parse(await readFile(join(runs, s.approval.runId, 'run-manifest.json'), 'utf8'));

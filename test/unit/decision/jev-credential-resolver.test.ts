@@ -4,13 +4,15 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { contextLiveBinding, contextLiveRuleset, contextLiveTarget } from '../../../src/decision/context-live-qualification.js';
+import { validateBinding, validateDefinition } from '../../../src/decision/validate.js';
 // @ts-ignore - untyped trusted host module (pinned by digest, not compiled)
 import { acquireAppRoleToken, createJevCredentialResolver, JevResolverError, verifiedHttpsFetch } from '../../../tools/decision/jev-credential-resolver.mjs';
 
 const SECRET = 'fixture-jev-key-0123456789';
 const CLIENT = 's.fixture-approle-client-token';
 const LOCATOR = 'kv_fixture/data/fixture/jev/api-key';
-const REFERENCE = 'openbao-approle:fixture-jev-reader/typesafe/jev';
+const REFERENCE = 'openbao-approle.fixture-jev-reader.typesafe-jev';
 const env = { BAO_ADDR: 'https://bao.fixture.invalid:8200', AIWG_JEV_OPENBAO_SECRET_PATH: LOCATOR };
 
 function fixture(options: { status?: number; body?: unknown } = {}) {
@@ -51,7 +53,8 @@ describe('TV-12 trusted Jev credential resolver (offline)', () => {
   });
 
   it.each([
-    ['another logical reference', 'openbao-approle:fixture-jev-reader/typesafe/other', env],
+    ['another logical reference', 'openbao-approle.fixture-jev-reader.typesafe-other', env],
+    ['the retired colon/slash form', 'openbao-approle:fixture-jev-reader/typesafe/jev', env],
     ['a non-https secret service', REFERENCE, { ...env, BAO_ADDR: 'http://bao.fixture.invalid:8200' }],
     ['credentials in the service URL', REFERENCE, { ...env, BAO_ADDR: 'https://user:pw@bao.fixture.invalid' }],
     ['a missing locator', REFERENCE, { BAO_ADDR: env.BAO_ADDR }],
@@ -64,10 +67,22 @@ describe('TV-12 trusted Jev credential resolver (offline)', () => {
     expect(acquireToken).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('uses a logical reference that a DecisionBinding credentialRef accepts', () => {
+    // Regression for run r2: the colon/slash form failed binding validation before the first dispatch.
+    const definition = { apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'DecisionDefinition', metadata: { id: 'probe', version: '1.0.0', description: 'probe' },
+      spec: { purpose: 'probe', inputSchema: { type: 'object' }, question: 'probe?', answer: { kind: 'choice', options: [{ id: 'a', description: 'a' }, { id: 'b', description: 'b' }] }, requiredCapabilities: ['choice'] } } as any;
+    validateDefinition(definition);
+    const ruleset = contextLiveRuleset('probe', ['q0'], [definition]);
+    for (const [reference, valid] of [[REFERENCE, true], ['openbao-approle.aiwg-jev-reader.typesafe-jev', true], ['openbao-approle:aiwg-jev-reader/typesafe/jev', false]] as const) {
+      const binding = contextLiveBinding(ruleset, ['q0'], contextLiveTarget({ model: 'jev-pinned', secretServiceReference: reference }, '1.0.0', 1000), 1000);
+      if (valid) expect(() => validateBinding(binding, ruleset)).not.toThrow(); else expect(() => validateBinding(binding, ruleset)).toThrow('credentialRef');
+    }
+  });
+
   it('rejects a second reference after one was resolved', async () => {
     const { resolver } = fixture();
     await resolver.resolveCredential(REFERENCE);
-    expect((await failure(resolver.resolveCredential('openbao-approle:other-reader/typesafe/jev'))).category).toBe('reference');
+    expect((await failure(resolver.resolveCredential('openbao-approle.other-reader.typesafe-jev'))).category).toBe('reference');
   });
 
   it.each([

@@ -37,6 +37,8 @@ export interface ContextLiveHost {
   /** Zeroes host-held credential material; called once when a run ends, however it ends. */
   dispose?(): void;
 }
+/** Mirrors the DecisionBinding `credentialRef` pattern, so a reference that binding validation refuses is rejected at approval. */
+export const CREDENTIAL_REF = /^[a-z][a-z0-9.-]+$/;
 /** #2681 hard cap on all TV-12 provider spend: every collection and canary run, reserved amounts. */
 export const TV12_ISSUE_USD_CAP = 2;
 /** Fixed ledger location beneath the canonical artifact root; every run directory lives here. */
@@ -179,7 +181,7 @@ export function validateContextLiveApproval(approval: ContextLiveApproval, corpu
     || ![approval.reviewer, approval.stagingWorkspace, approval.runId, approval.exactHeadCi, approval.model, approval.region, approval.secretServiceReference,
       approval.perRequestBound?.approvalReference].every(v => typeof v === 'string' && v.trim()) || approval.apiRevision !== 'v1'
     || !/^sha256:[a-f0-9]{64}$/.test(approval.credentialResolverDigest) || !/^[a-f0-9]{40}$/.test(approval.sourceCommit) || !/^[a-zA-Z0-9_-]+$/.test(approval.runId)
-    || /latest|unknown/i.test(approval.model) || approval.region === 'unknown'
+    || /latest|unknown/i.test(approval.model) || approval.region === 'unknown' || !CREDENTIAL_REF.test(approval.secretServiceReference)
     || !approval.budget || Object.keys(approval.budget).sort().join(',') !== 'requests,tokens,usd,wallClockMs' || Object.values(approval.budget).some(n => !Number.isFinite(n) || n <= 0)
     || approval.budget.usd > TV12_ISSUE_USD_CAP
     || approval.budget.usd > Number.MAX_SAFE_INTEGER / 1_000_000 || approval.perRequestBound.usd > Number.MAX_SAFE_INTEGER / 1_000_000
@@ -237,16 +239,22 @@ export async function estimateContextLiveCollection(approval: ContextLiveApprova
   validateContextLiveApproval(approval, corpus);
   const cases: ContextLiveEstimate['cases'] = [];
   for (const item of corpus.cases) {
-    const { input } = await compiled(item, approval.model, approval.region);
+    admitEntry(item); admitEntry(item.input);
+    const { input, policy } = await compiled(item, approval.model, approval.region);
     let plan;
     try { plan = planDecisionContext(input, corpus.profile, estimator); }
     catch (error) {
+      // Same rule as collection: a pre-dispatch rejection records the case and moves on.
       if (error instanceof ContextPlanError && ['oversized-state', 'oversized-question'].includes(error.reason)) { cases.push({ id: item.id, dimension: item.dimension, rejectedBeforeDispatch: true, partitions: [] }); continue; }
       throw error;
     }
+    const { adapter, capabilities } = await contextLiveAdapter(approval, policy);
+    const timeoutMs = Math.max(1, Math.min(30_000, Math.floor(approval.budget.wallClockMs * 0.8)));
     cases.push({ id: item.id, dimension: item.dimension, rejectedBeforeDispatch: false, partitions: plan.partitions.map(partition => {
-      const checked = planDecisionContext({ ...input, questions: input.questions.filter(q => partition.questionIds.includes(q.id)) }, corpus.profile, estimator);
-      if (checked.partitions.length !== 1) throw new Error('TV-12 partition is not one complete request');
+      const selected = input.questions.filter(q => partition.questionIds.includes(q.id));
+      const checked = planDecisionContext({ ...input, questions: selected }, corpus.profile, estimator);
+      if (checked.partitions.length !== 1 || checked.partitions[0]!.questionIds.length !== selected.length) throw new Error('TV-12 partition is not one complete request');
+      contextLivePartitionRequest(item, selected.map(q => q.id), approval, adapter.version, capabilities, timeoutMs);
       return { id: partition.id, questions: partition.questionIds.length, estimatedInputTokens: checked.partitions[0]!.estimate.aggregateTokens };
     }) });
   }
@@ -262,6 +270,33 @@ export async function estimateContextLiveCollection(approval: ContextLiveApprova
 class CollectionStop extends Error {
   constructor(message: string, readonly evidence: { httpStatus: number | null; requestId: string | null; servedModel: string | null; inputTokens: number | null; outputTokens: number | null; costUsd: number | null }) { super(message); }
 }
+/** Built-in Jev adapter plus its destination checks; `capabilities()` makes no network call. */
+async function contextLiveAdapter(approval: ContextLiveApproval, policy: DecisionProjectionPolicy, offlineFetch?: typeof fetch) {
+  const adapter = new JevDecisionAdapter({ region: approval.region, ...(offlineFetch ? { fetch: offlineFetch } : {}) });
+  const capabilities = await adapter.capabilities();
+  if (!capabilities.batch?.native || capabilities.batch.atomic !== true || capabilities.egress?.mode !== 'network' || capabilities.egress.origin !== policy.origin
+    || capabilities.egress.region !== policy.region || adapter.version !== '1.0.0') throw new Error('TV-12 adapter destination mismatch');
+  return { adapter, capabilities };
+}
+/**
+ * Every request-shape check that precedes admission, reservation and dispatch: answer shapes against
+ * adapter capabilities, ruleset and binding schemas (including the credential reference), and pins.
+ * Collection runs it per partition; the dry run runs the same function for the same partitions.
+ */
+function contextLivePartitionRequest(item: ContextLiveCase, aliases: string[], approval: ContextLiveApproval, adapterVersion: string,
+  capabilities: Awaited<ReturnType<JevDecisionAdapter['capabilities']>>, timeoutMs: number) {
+  const definitions = aliases.map(alias => item.definitions[Number(alias.slice(1))]!);
+  const ruleset = contextLiveRuleset(item.id, aliases, definitions);
+  const target = contextLiveTarget(approval, adapterVersion, timeoutMs);
+  const binding = contextLiveBinding(ruleset, aliases, target, timeoutMs);
+  definitions.forEach(d => {
+    if (!capabilities.answerKinds.includes(d.spec.answer.kind) || d.spec.answer.kind === 'choice' && d.spec.answer.options.length > capabilities.maxOptions!
+      || d.spec.answer.kind === 'ordinal-score' && d.spec.answer.levels.length > capabilities.maxLevels!) throw new Error('TV-12 unsupported answer shape');
+  });
+  validateRuleset(ruleset); validateBinding(binding, ruleset); assertArtifactPin(ruleset, binding.spec.ruleset, 'tv12 ruleset');
+  aliases.forEach((alias, i) => assertArtifactPin(definitions[i]!, ruleset.spec.evaluations[i]!.decision, alias));
+  return { definitions, ruleset, target, binding };
+}
 /** Collection-only native request. Exposed for offline guard tests; mocks remain synthetic. */
 export async function collectContextLiveCase(item: ContextLiveCase, corpus: ContextLiveCorpus, approval: ContextLiveApproval,
   host: ContextLiveHost, budget: ContextLiveBudget, signal: AbortSignal,
@@ -275,10 +310,7 @@ export async function collectContextLiveCase(item: ContextLiveCase, corpus: Cont
   let plan;
   try { plan = planDecisionContext(input, corpus.profile, estimator); }
   catch (error) { if (error instanceof ContextPlanError && ['oversized-state', 'oversized-question'].includes(error.reason)) return { rejected: true, records: [], synthetic: !!offlineFetch }; throw error; }
-  const adapter = new JevDecisionAdapter({ region: approval.region, ...(offlineFetch ? { fetch: offlineFetch } : {}) });
-  const capabilities = await adapter.capabilities();
-  if (!capabilities.batch?.native || capabilities.batch.atomic !== true || capabilities.egress?.mode !== 'network' || capabilities.egress.origin !== policy.origin
-    || capabilities.egress.region !== policy.region || adapter.version !== '1.0.0') throw new Error('TV-12 adapter destination mismatch');
+  const { adapter, capabilities } = await contextLiveAdapter(approval, policy, offlineFetch);
   const registry = new DecisionAdmissionRegistry();
   const records: ContextLiveRecord[] = [];
   for (const partition of plan.partitions) {
@@ -288,17 +320,8 @@ export async function collectContextLiveCase(item: ContextLiveCase, corpus: Cont
     const checked = planDecisionContext(partitionInput, corpus.profile, estimator);
     if (checked.partitions.length !== 1 || checked.partitions[0]!.questionIds.length !== selected.length) throw new Error('TV-12 partition is not one complete request');
     if (checked.partitions[0]!.estimate.aggregateTokens > approval.perRequestBound.totalTokens) throw new Error('TV-12 approved token bound below estimate');
-    const definitions = selected.map(q => item.definitions[Number(q.id.slice(1))]!);
-    const ruleset = contextLiveRuleset(item.id, selected.map(q => q.id), definitions);
     const timeoutMs = Math.max(1, Math.min(30_000, Math.floor(approval.budget.wallClockMs * 0.8 - (Date.now() - budget.started))));
-    const target = contextLiveTarget(approval, adapter.version, timeoutMs);
-    const binding = contextLiveBinding(ruleset, selected.map(q => q.id), target, timeoutMs);
-    definitions.forEach(d => {
-      if (!capabilities.answerKinds.includes(d.spec.answer.kind) || d.spec.answer.kind === 'choice' && d.spec.answer.options.length > capabilities.maxOptions!
-        || d.spec.answer.kind === 'ordinal-score' && d.spec.answer.levels.length > capabilities.maxLevels!) throw new Error('TV-12 unsupported answer shape');
-    });
-    validateRuleset(ruleset); validateBinding(binding, ruleset); assertArtifactPin(ruleset, binding.spec.ruleset, 'tv12 ruleset');
-    selected.forEach((q, i) => assertArtifactPin(definitions[i]!, ruleset.spec.evaluations[i]!.decision, q.id));
+    const { definitions, target } = contextLivePartitionRequest(item, selected.map(q => q.id), approval, adapter.version, capabilities, timeoutMs);
     const invocationId = `${approval.runId}:${item.id}:${partition.id}`;
     const limits = { concurrency: 1, maxTokens: approval.perRequestBound.totalTokens, maxCostUsd: approval.perRequestBound.usd, allowUnknownCost: false };
     const scheduler: DecisionSchedulerPolicy = { enabled: true, profileVersion: 'tv12-collection-v1', workspace: { id: approval.stagingWorkspace, limits },
