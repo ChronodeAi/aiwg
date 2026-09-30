@@ -9,6 +9,7 @@
     "schemaVersion",
     "id",
     "manifest",
+    "pilotPack",
     "classCounts",
     "classification",
     "urgency",
@@ -26,6 +27,7 @@
     "schemaVersion": { "const": "decision-issue-triage-evaluation-report/v1" },
     "id": { "type": "string", "minLength": 1 },
     "manifest": { "$ref": "#/$defs/pin" },
+    "pilotPack": { "$ref": "#/$defs/pin" },
     "classCounts": {
       "type": "object",
       "additionalProperties": {

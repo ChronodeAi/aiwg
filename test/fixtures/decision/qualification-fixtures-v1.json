@@ -1588,7 +1588,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-issue-triage-evaluation-manifest/v1",
-      "digest": "sha256:32be22c665be175651d453f6a27a6f924470972c622d3901ccf96fa6e6188460",
+      "digest": "sha256:9bfbbca72cf6f3fe78dc81f9b8ededbc09775be48821e22927a36514a7de8dc7",
       "expectedOutcome": "D25 preregistered issue triage evaluation manifest with slice support, thresholds and holdout ordering",
       "links": [
         "JEV-16",

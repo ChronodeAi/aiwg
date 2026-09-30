@@ -56,7 +56,11 @@ merge tracker issues, and it cannot bypass issue-planner approval.
   insufficient-slice behavior, promotion thresholds, confidence interval method
   and level, sample rules, the digests of the frozen tuning/calibration/test
   splits, and a positive benefit requirement before holdout access.
-- `buildIssueTriageEvaluationReport()` scores only the preregistered test split.
+- `buildIssueTriageEvaluationReport()` scores only the preregistered test split,
+  and only with the pilot pack the manifest pins: the pack's id, version and
+  canonical digest must equal `manifest.pilotPack`, and the report records that
+  pin. Baseline responses are checked against the same taxonomy and closed
+  response fields as cascade responses.
   It never trusts a caller's acceptance verdict or compatibility pin: it
   re-validates each cascade response and recomputes acceptance with the same
   rule as the shadow runtime, resolving compatibility through the supplied
@@ -93,7 +97,7 @@ Every gate reads the preregistered manifest. Any finding yields `HOLD`.
 
 `validateIssueTriageEvaluationReport(report, { inputs, trustedManifestDigest })`
 accepts a report only when the inputs' manifest matches the separately trusted
-digest and rebuilding the report from those inputs gives canonically identical
+digest, the inputs' pack matches the manifest's pack pin, and rebuilding the report from those inputs gives canonically identical
 JSON. An edited, spread-copied or relaxed-manifest report is rejected.
 
 - Alias/model or uncertainty-profile incompatibility disables accepted shadow

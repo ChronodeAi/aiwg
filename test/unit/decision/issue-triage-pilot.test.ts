@@ -41,14 +41,14 @@ const fixture = <T>(name: string): T =>
   JSON.parse(readFileSync(resolve(ROOT, 'test/fixtures/decision/issue-triage', name), 'utf8')) as T;
 
 const pack = (): IssueTriagePilotPack => ({ ...fixture<IssueTriagePilotPack>('pilot-pack.v1.valid.json'), mode: 'offline-shadow' });
-const manifest = (): IssueTriageEvaluationManifest => ({
+/** The evaluated pack is the registered fixture pack itself, which the fixture manifest pins by digest. */
+const evaluatedPack = (): IssueTriagePilotPack => fixture<IssueTriagePilotPack>('pilot-pack.v1.valid.json');
+const pinOf = (pinned: IssueTriagePilotPack) => ({ id: pinned.id, version: pinned.version, digest: issueTriageArtifactDigest(pinned) });
+const manifest = (pinned: IssueTriagePilotPack = evaluatedPack()): IssueTriageEvaluationManifest => ({
   ...fixture<IssueTriageEvaluationManifest>('evaluation-manifest.v1.valid.json'),
-  pilotPack: {
-    id: 'aiwg-issue-triage-jev-shadow',
-    version: '2026.9.29',
-    digest: issueTriageArtifactDigest(fixture<IssueTriagePilotPack>('pilot-pack.v1.valid.json')),
-  },
+  pilotPack: pinOf(pinned),
 });
+const requiredPack = (): IssueTriagePilotPack => ({ ...evaluatedPack(), acceptance: { ...evaluatedPack().acceptance, calibration: 'required' } });
 
 const issue = (): IssueTriageIssueRecord => ({
   id: 'ISSUE-100',
@@ -180,8 +180,8 @@ function splitsFor(samples: readonly IssueTriageEvaluationSample[]): Qualificati
 }
 
 function gatedManifest(splits: readonly QualificationSplit[], thresholds: Partial<IssueTriageEvaluationManifest['thresholds']> = {},
-  slices?: IssueTriageEvaluationManifest['slices']): IssueTriageEvaluationManifest {
-  const base = manifest();
+  slices?: IssueTriageEvaluationManifest['slices'], pinned: IssueTriagePilotPack = evaluatedPack()): IssueTriageEvaluationManifest {
+  const base = manifest(pinned);
   return {
     ...base,
     dataset: {
@@ -219,8 +219,8 @@ function reportInput(samples: IssueTriageEvaluationSample[], thresholds: Partial
     calibration?: IssueTriageEvaluationInput['calibration'] } = {}): IssueTriageEvaluationInput {
   return {
     id: 'triage-report',
-    manifest: gatedManifest(splitsFor(samples), thresholds, extra.slices),
-    pack: extra.pack ?? pack(),
+    manifest: gatedManifest(splitsFor(samples), thresholds, extra.slices, extra.pack ?? evaluatedPack()),
+    pack: extra.pack ?? evaluatedPack(),
     samples,
     splits: extra.splits ?? splitsFor(samples),
     calibration: extra.calibration ?? reportCalibration(),
@@ -891,5 +891,35 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
     expect(missed.duplicates.recall).toBeCloseTo(28 / 40, 12);
     expect(missed.integrity.findings).toContain('duplicate-recall');
     expect(missed.decision).toBe('HOLD');
+  });
+
+  it('TRIAGE-PIN-01 evaluates only the pilot pack the manifest pins, and records that pin', () => {
+    expect(fixture<IssueTriageEvaluationManifest>('evaluation-manifest.v1.valid.json').pilotPack).toEqual(pinOf(evaluatedPack()));
+    const samples = buildSamples(120, { duplicates: 40 });
+    const built = report(samples);
+    expect(built.pilotPack).toEqual(pinOf(evaluatedPack()));
+    // A manifest pinning calibration: required cannot be satisfied by the advisory pack without a registry.
+    const pinnedRequired = { ...reportInput(samples), manifest: gatedManifest(splitsFor(samples), {}, undefined, requiredPack()) };
+    expect(() => buildIssueTriageEvaluationReport(pinnedRequired)).toThrow(/pilot pack does not match the manifest pin/);
+    // A report produced before this check (advisory pack, required-pack manifest) is refused by the validator too.
+    const trustedManifestDigest = issueTriageArtifactDigest(pinnedRequired.manifest);
+    const forged = { ...built, manifest: { ...built.manifest, digest: trustedManifestDigest } };
+    expect(() => validateIssueTriageEvaluationReport(forged, { inputs: pinnedRequired, trustedManifestDigest }))
+      .toThrow(/pilot pack does not match the manifest pin/);
+    const permissive = { ...evaluatedPack(), acceptance: { ...evaluatedPack().acceptance, uncertaintyProfiles: ['anything-goes'] } };
+    expect(() => buildIssueTriageEvaluationReport({ ...reportInput(samples), pack: permissive })).toThrow(/pilot pack does not match the manifest pin/);
+    const renamed = { ...reportInput(samples) };
+    renamed.manifest = { ...renamed.manifest, pilotPack: { ...renamed.manifest.pilotPack, version: '2099.1.1' } };
+    expect(() => buildIssueTriageEvaluationReport(renamed)).toThrow(/pilot pack does not match the manifest pin/);
+  });
+
+  it('TRIAGE-BASELINE-01 validates the baseline arm against the taxonomy and closed response fields', () => {
+    const offTaxonomy = buildSamples(120, { duplicates: 40, mutate: (sample, index) => { if (index === 4) sample.baseline.issueType = 'bogus'; } });
+    expect(() => report(offTaxonomy)).toThrow(/sample S-004 baseline response rejected: issue type bogus/);
+    const extra = buildSamples(120, {
+      duplicates: 40,
+      mutate: (sample, index) => { if (index === 5) (sample.baseline as unknown as Record<string, unknown>).labelToCreate = 'priority:P0'; },
+    });
+    expect(() => report(extra)).toThrow(/sample S-005 baseline response rejected: model response contains unauthorized field labelToCreate/);
   });
 });

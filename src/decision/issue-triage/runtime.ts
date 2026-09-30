@@ -204,6 +204,10 @@ export function validateIssueTriageEvaluationReport(value: unknown, binding: {
     || report.manifest.digest !== binding.trustedManifestDigest) {
     throw new IssueTriagePilotError('issue triage report manifest does not match the trusted manifest digest');
   }
+  verifyPilotPackPin(validateIssueTriagePilotPack(binding.inputs.pack), validateIssueTriageEvaluationManifest(binding.inputs.manifest));
+  if (canonicalJson(report.pilotPack) !== canonicalJson(binding.inputs.manifest.pilotPack)) {
+    throw new IssueTriagePilotError('issue triage pilot pack does not match the manifest pin');
+  }
   const rebuilt = buildIssueTriageEvaluationReport(binding.inputs);
   if (canonicalJson(rebuilt) !== canonicalJson(report)) {
     throw new IssueTriagePilotError('issue triage report does not match a rebuild from its inputs');
@@ -780,6 +784,7 @@ function scoredSamples(input: IssueTriageEvaluationInput, pack: IssueTriagePilot
       if (!registeredSlices.has(slice)) throw new IssueTriagePilotError(`${where} slice ${slice} is not preregistered`);
     }
     verifySampleLineage(sample, pack);
+    semantic(responseProblems(pack, sample.id, sample.lineage, sample.baseline), `${where} baseline response rejected`);
     const { acceptance: _ignored, ...response } = sample.cascade;
     semantic(responseProblems(pack, sample.id, sample.lineage, response), `${where} cascade response rejected`);
     const registry = input.calibration.registry;
@@ -795,9 +800,18 @@ function scoredSamples(input: IssueTriageEvaluationInput, pack: IssueTriagePilot
   });
 }
 
+/** The evaluated pack must be exactly the pack the manifest preregistered: same id, version and canonical digest. */
+function verifyPilotPackPin(pack: IssueTriagePilotPack, manifest: IssueTriageEvaluationManifest): void {
+  const pin = manifest.pilotPack;
+  if (pin.id !== pack.id || pin.version !== pack.version || pin.digest !== artifactDigest(pack)) {
+    throw new IssueTriagePilotError('issue triage pilot pack does not match the manifest pin');
+  }
+}
+
 export function buildIssueTriageEvaluationReport(input: IssueTriageEvaluationInput): IssueTriageEvaluationReport {
   const pack = validateIssueTriagePilotPack(input.pack);
   const manifest = validateIssueTriageEvaluationManifest(input.manifest);
+  verifyPilotPackPin(pack, manifest);
   if (!input.samples.length) throw new IssueTriagePilotError('issue triage evaluation requires at least one held-out sample');
   const splits = verifiedSplits(manifest, input.splits, input.samples);
   const samples = scoredSamples(input, pack, manifest);
@@ -928,6 +942,7 @@ export function buildIssueTriageEvaluationReport(input: IssueTriageEvaluationInp
     schemaVersion: 'decision-issue-triage-evaluation-report/v1',
     id: input.id,
     manifest: { id: manifest.id, version: 'v1', digest: digest(manifest) },
+    pilotPack: { id: pack.id, version: pack.version, digest: artifactDigest(pack) },
     classCounts: {
       issueType: countBy(samples.map(sample => sample.label.issueType)),
       area: countBy(samples.map(sample => sample.label.area)),

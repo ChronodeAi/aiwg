@@ -289,6 +289,8 @@ export interface IssueTriageEvaluationReport {
   schemaVersion: 'decision-issue-triage-evaluation-report/v1';
   id: string;
   manifest: ArtifactPin;
+  /** The evaluated pilot pack; always equal to the manifest's pilotPack pin. */
+  pilotPack: ArtifactPin;
   classCounts: Record<string, Record<string, number>>;
   classification: { issueType: MulticlassMetrics; area: MulticlassMetrics };
   urgency: { sampleN: number; meanAbsoluteError: number; normalizedAbsoluteError: number; exactRate: number };
