@@ -230,14 +230,21 @@ export interface DagLiveCall {
   inputTokens: number | null; outputTokens: number | null; latencyMs: number;
   /** Tokens and USD micros charged to spend for this call (reported usage, or the reservation if unknown). */
   chargedTokens: number; chargedUsdMicros: number;
+  /** 1 for the first attempt, 2 for the single preregistered retry. */
+  attempt: number;
+  /** `ok`, a retryable provider outcome, or the immediate-stop reason. */
+  outcome: string;
 }
 interface CallContext { pattern: DagLivePattern; taskId: string; arm: 'baseline' | 'candidate'; node: string }
 class RunControl {
   stopped: string | null = null;
   /** The provider call whose outcome stopped the run, with its reported usage. */
   stoppingCall: DagLiveCall | null = null;
+  /** Set when a call exhausts its retry: the current task is a measurement failure, not a run stop. */
+  taskFailure: { arm: 'baseline' | 'candidate'; node: string; reason: string } | null = null;
   stop(reason: string): void { this.stopped ??= reason; }
 }
+const RETRYABLE = new Set<string>(DAG_LIVE_ANALYSIS.providerFailurePolicy.retryableOutcomes);
 
 /**
  * Budget and identity guard around the real Jev adapter. Reservation precedes credential
@@ -247,44 +254,59 @@ class MeteredJevAdapter implements DecisionAdapter {
   readonly id = 'jev';
   readonly version: string;
   context: CallContext | null = null;
+  private inflight: Promise<unknown> = Promise.resolve();
+  /** The evaluator may return on a deadline before this adapter finishes; callers wait for the accounting to settle. */
+  async idle(): Promise<void> { await this.inflight.catch(() => undefined); }
   constructor(private readonly inner: JevDecisionAdapter, private readonly budget: DagLiveBudget, private readonly model: string,
     private readonly bound: number, private readonly control: RunControl, private readonly now: () => number,
     private readonly record: (call: DagLiveCall) => Promise<void>) { this.version = inner.version; }
   capabilities() { return this.inner.capabilities(); }
   compile(request: Parameters<NonNullable<DecisionAdapter['compile']>>[0]) { return this.inner.compile(request); }
-  async evaluate(request: DecisionAdapterRequest): Promise<AdapterObservation> {
+  evaluate(request: DecisionAdapterRequest): Promise<AdapterObservation> {
+    const result = this.evaluateMetered(request);
+    this.inflight = result;
+    return result;
+  }
+  private async evaluateMetered(request: DecisionAdapterRequest): Promise<AdapterObservation> {
     const notSent = (reason: AdapterObservation['reason']): AdapterObservation => ({ status: 'error', reason, uncertainty: null, actualModel: null,
       usage: { inputTokens: null, outputTokens: null, costUsd: null }, requestId: null, dispatchCertainty: 'not-sent' });
     const context = this.context;
     if (!context || this.control.stopped) { this.control.stop(this.control.stopped ?? 'unscoped-call'); return notSent('cancelled'); }
     if (request.target.model !== this.model) { this.control.stop('model-mismatch'); return notSent('invalid-request'); }
-    let settle: ReturnType<DagLiveBudget['reserve']>;
-    try { settle = this.budget.reserve(context.pattern); }
-    catch (error) { this.control.stop(error instanceof DagLiveStop ? error.reason : 'budget'); return notSent('budget-exhausted'); }
-    const started = this.now();
-    const before = this.control.stopped;
-    let observation: AdapterObservation | null = null;
-    try { observation = await this.inner.evaluate(request); }
-    catch { this.control.stop('adapter-exception'); }
-    const count = (value: number | null | undefined) => Number.isSafeInteger(value) && value! >= 0 ? value! : null;
-    const inputTokens = count(observation?.usage.inputTokens), outputTokens = count(observation?.usage.outputTokens);
-    const charged = settle({ inputTokens, outputTokens });
-    if (observation) {
-      if (observation.status !== 'success') this.control.stop(`provider-${observation.reason}`);
-      else if (observation.actualModel !== this.model) this.control.stop('served-model-mismatch');
-      else if (!observation.requestId) this.control.stop('missing-request-id');
-      else if (inputTokens === null || outputTokens === null) this.control.stop('unknown-usage');
-      else if (inputTokens + outputTokens > this.bound) this.control.stop('usage-exceeded-reservation');
+    const retries = DAG_LIVE_ANALYSIS.providerFailurePolicy.retriesPerCall;
+    for (let attempt = 1; ; attempt++) {
+      // Every attempt, including the retry, is reserved before dispatch and charged.
+      let settle: ReturnType<DagLiveBudget['reserve']>;
+      try { settle = this.budget.reserve(context.pattern); }
+      catch (error) { this.control.stop(error instanceof DagLiveStop ? error.reason : 'budget'); return notSent('budget-exhausted'); }
+      const started = this.now();
+      let observation: AdapterObservation | null = null;
+      try { observation = await this.inner.evaluate(request); } catch { observation = null; }
+      const count = (value: number | null | undefined) => Number.isSafeInteger(value) && value! >= 0 ? value! : null;
+      const inputTokens = count(observation?.usage.inputTokens), outputTokens = count(observation?.usage.outputTokens);
+      const charged = settle({ inputTokens, outputTokens });
+      const outcome = !observation ? 'adapter-exception'
+        // Only the per-task deadline cancels a call while the run is still live: that is a provider timeout.
+        : observation.status !== 'success' ? (observation.reason === 'cancelled' && !this.control.stopped ? 'provider-timeout' : `provider-${observation.reason}`)
+          : observation.actualModel !== this.model ? 'served-model-mismatch'
+            : !observation.requestId ? 'missing-request-id'
+              : inputTokens === null || outputTokens === null ? 'unknown-usage'
+                : inputTokens + outputTokens > this.bound ? 'usage-exceeded-reservation' : 'ok';
+      const retryable = RETRYABLE.has(outcome);
+      // Reported usage is recorded and charged for every attempt, including the one that stops the run.
+      const call: DagLiveCall = { ...context, ordinal: this.budget.total.calls, status: observation?.status ?? 'error',
+        reason: observation?.reason ?? 'adapter-exception', requestId: observation?.requestId ?? null,
+        servedModel: observation?.actualModel === this.model ? this.model : null, inputTokens, outputTokens,
+        latencyMs: Math.max(0, this.now() - started), chargedTokens: charged.tokens, chargedUsdMicros: charged.usdMicros, attempt, outcome };
+      if (outcome !== 'ok' && !retryable) { this.control.stop(outcome); this.control.stoppingCall ??= call; }
+      await this.record(call);
+      if (!observation) throw new DecisionGraphError('D12 adapter failed');
+      if (outcome === 'ok' || !retryable) return observation;
+      if (attempt > retries || this.control.stopped) {
+        this.control.taskFailure ??= { arm: context.arm, node: context.node, reason: outcome };
+        return observation.status === 'success' ? { ...observation, status: 'error', reason: 'invalid-output', value: undefined } : observation;
+      }
     }
-    // Reported usage is recorded and charged even (especially) for the request that stops the run.
-    const call: DagLiveCall = { ...context, ordinal: this.budget.total.calls, status: observation?.status ?? 'error',
-      reason: observation?.reason ?? 'adapter-exception', requestId: observation?.requestId ?? null,
-      servedModel: observation?.actualModel === this.model ? this.model : null, inputTokens, outputTokens,
-      latencyMs: Math.max(0, this.now() - started), chargedTokens: charged.tokens, chargedUsdMicros: charged.usdMicros };
-    if (!before && this.control.stopped) this.control.stoppingCall = call;
-    await this.record(call);
-    if (!observation) throw new DecisionGraphError('D12 adapter failed');
-    return observation;
   }
 }
 
@@ -413,7 +435,7 @@ export function speculativeActionViolation(flow: { spec?: { permissions?: unknow
 
 /** Stop rule: a pattern's cumulative candidate calls exceed the multiple of its Flow baseline calls. */
 export function patternCallRatioExceeded(pairs: readonly DagLivePair[], pattern: DagLivePattern, maxRatio: number): boolean {
-  const rows = pairs.filter(row => row.pattern === pattern);
+  const rows = pairs.filter(row => row.pattern === pattern && !row.measurementFailure);
   const baseline = rows.reduce((sum, row) => sum + row.baseline.calls, 0), candidate = rows.reduce((sum, row) => sum + row.candidate.calls, 0);
   return candidate > maxRatio * baseline;
 }
@@ -440,12 +462,19 @@ export function dagLiveApprovalTemplate(workload: DagLiveWorkload, preregistrati
 }
 
 export interface DagLiveArmResult {
-  answer: string | null; correct: boolean; calls: number; inputTokens: number; outputTokens: number; latencyMs: number; requestIds: string[];
+  answer: string | null; correct: boolean;
+  /** First-attempt provider calls (the arm's shape). */
+  calls: number;
+  /** Charged retry attempts, reported separately. Tokens include every attempt. */
+  retries?: number;
+  inputTokens: number; outputTokens: number; latencyMs: number; requestIds: string[];
 }
 export interface DagLivePair {
   pattern: DagLivePattern; taskId: string; slice: string; index: number; order: 'baseline-first' | 'candidate-first'; label: string;
   baseline: DagLiveArmResult;
   candidate: DagLiveArmResult & { outcome: string; receiptDigest: string; unusedCalls: number; unusedTokens: number };
+  /** Present when a call exhausted its retry: the task is excluded from both arms of the paired analysis. */
+  measurementFailure?: { arm: 'baseline' | 'candidate'; node: string; reason: string };
 }
 
 interface PairContext {
@@ -457,6 +486,7 @@ function invoker(context: PairContext, arm: 'baseline' | 'candidate', setup: Arm
   const unknownCostBoundUsd = dagLiveReservationMicros(approval.priceBound, context.perCallTokenBound) / 1_000_000;
   const projection = policy(approval.model, approval.region);
   return async flow => {
+    if (control.taskFailure) throw new DecisionGraphError('D12 task is a measurement failure');
     if (control.stopped || context.signal.aborted) { control.stop(control.stopped ?? 'deadline'); throw new DecisionGraphError('D12 run stopped'); }
     const { node, input } = decisionFlowNode(setup.graph, flow);
     if (HOST_LOCAL.has(node.id)) {
@@ -480,7 +510,11 @@ function invoker(context: PairContext, arm: 'baseline' | 'candidate', setup: Arm
     } finally { adapter.context = null; }
     const evaluation = result.spec.evaluations.answer;
     if (!evaluation || evaluation.spec.status !== 'success' || evaluation.spec.value === undefined) {
-      control.stop(control.stopped ?? `evaluation-${evaluation?.spec.reason ?? result.spec.reason}`);
+      await adapter.idle();
+      // The per-task deadline (not a run stop) is a provider timeout for this task.
+      if (!control.taskFailure && !control.stopped && context.signal.aborted) control.taskFailure = { arm, node: node.id, reason: 'provider-timeout' };
+      // An exhausted retry is a measurement failure for this task; anything else stops the run.
+      if (!control.taskFailure) control.stop(control.stopped ?? `evaluation-${evaluation?.spec.reason ?? result.spec.reason}`);
       throw new DecisionGraphError('D12 evaluation failed');
     }
     const value = evaluation.spec.value;
@@ -491,7 +525,8 @@ function invoker(context: PairContext, arm: 'baseline' | 'candidate', setup: Arm
 }
 function armCalls(calls: DagLiveCall[], taskId: string, arm: 'baseline' | 'candidate') {
   const rows = calls.filter(call => call.taskId === taskId && call.arm === arm);
-  return { calls: rows.length, inputTokens: rows.reduce((sum, row) => sum + (row.inputTokens ?? 0), 0),
+  // Calls are first attempts (the graph's shape); retries are counted separately. Tokens include every attempt.
+  return { calls: rows.filter(row => row.attempt === 1).length, retries: rows.filter(row => row.attempt > 1).length, inputTokens: rows.reduce((sum, row) => sum + (row.inputTokens ?? 0), 0),
     outputTokens: rows.reduce((sum, row) => sum + (row.outputTokens ?? 0), 0), requestIds: rows.flatMap(row => row.requestId ? [row.requestId] : []), rows };
 }
 
@@ -502,7 +537,7 @@ async function runBaseline(context: PairContext, arms: DagLiveArms): Promise<Dag
   const latencyMs = Math.max(0, context.now() - started);
   const usage = armCalls(context.calls, context.task.id, 'baseline');
   const raw = report.status === 'completed' ? report.results.flat?.outputs.result : undefined;
-  if (typeof raw !== 'string') context.control.stop(context.control.stopped ?? `baseline-${report.status}`);
+  if (typeof raw !== 'string' && !context.control.taskFailure) context.control.stop(context.control.stopped ?? `baseline-${report.status}`);
   const answer = typeof raw === 'string' ? raw : null;
   const { rows: _rows, ...totals } = usage;
   return { answer, correct: answer === context.task.label, ...totals, latencyMs };
@@ -520,7 +555,8 @@ async function runCandidate(context: PairContext, arms: DagLiveArms): Promise<Da
   const usage = armCalls(context.calls, context.task.id, 'candidate');
   const { rows, ...totals } = usage;
   let outcome = 'error'; let receiptDigest = ''; let answer: string | null = null; let unusedCalls = 0; let unusedTokens = 0;
-  if (!context.control.stopped) {
+  if (context.control.taskFailure) outcome = 'measurement-failure';
+  else if (!context.control.stopped) {
     const receipt = finalizeDecisionGraphRun(graph, template.plan, report, records, NARROW);
     outcome = receipt.outcome; receiptDigest = receipt.receiptDigest;
     const unused = new Set(receipt.evidence.stages.flatMap(stage => stage.nodes.filter(node => node.status === 'ok' && !node.used).map(node => node.id)));
@@ -539,7 +575,9 @@ const quantile = (values: number[], q: number): number | null => {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))]!;
 };
 export interface DagLivePatternAnalysis {
-  pattern: DagLivePattern; n: number; complete: boolean;
+  /** n counts usable pairs only; measurement failures are excluded from the paired table. */
+  pattern: DagLivePattern; n: number; attempted: number; measurementFailures: number; measurementFailureTolerance: number; complete: boolean;
+  verdict: 'eligible' | 'not-eligible' | 'insufficient-evidence';
   quality: { baselineCorrect: number; candidateCorrect: number; table: { both: number; candidateOnly: number; baselineOnly: number; neither: number };
     baselineAccuracyInterval: readonly [number, number] | null; candidateAccuracyInterval: readonly [number, number] | null;
     difference: PairedDifferenceInterval | null; nonInferiority: { decision: string; reason: string };
@@ -550,6 +588,8 @@ export interface DagLivePatternAnalysis {
     net: { calls: number; tokens: number; billableUsd: number };
     callRatio: number | null; p95LatencyRatio: number | null; extraTokensPerTask: PairedDifferenceInterval | null; extraTokensPerTaskUpper: number | null;
     speculative: { unusedCalls: number; unusedTokens: number }; outcomes: Record<string, number>;
+    retries: { baseline: number; candidate: number };
+    measurementFailureSpend: { calls: number; retries: number; tokens: number };
     checks: { callRatio: boolean; p95LatencyRatio: boolean; extraTokensPerTask: boolean }; pass: boolean };
   eligible: boolean;
 }
@@ -561,8 +601,12 @@ export interface DagLivePatternAnalysis {
 export function analyzeDagLivePattern(pattern: DagLivePattern, pairs: readonly DagLivePair[], preregistration: DagLivePreregistration,
   price: Pick<DagLivePriceBound, 'inputUsdPerMTok' | 'outputUsdPerMTok'>): DagLivePatternAnalysis {
   const { nonInferiority: ni, economics: econ } = preregistration.analysis;
-  const rows = pairs.filter(pair => pair.pattern === pattern);
+  const all = pairs.filter(pair => pair.pattern === pattern);
+  const failures = all.filter(pair => pair.measurementFailure);
+  const rows = all.filter(pair => !pair.measurementFailure);
   const n = rows.length;
+  const policy = preregistration.analysis.providerFailurePolicy;
+  const tolerance = Math.floor(policy.maxMeasurementFailureFractionPerPattern * preregistration.tasksPerPattern);
   const table = { both: 0, candidateOnly: 0, baselineOnly: 0, neither: 0 };
   const slices: DagLivePatternAnalysis['quality']['slices'] = {};
   for (const row of rows) {
@@ -597,9 +641,13 @@ export function analyzeDagLivePattern(pattern: DagLivePattern, pairs: readonly D
     extraTokensPerTask: extraTokensPerTaskUpper !== null && extraTokensPerTaskUpper <= econ.maxExtraTokensPerTaskUpper };
   const outcomes: Record<string, number> = {};
   for (const row of rows) outcomes[row.candidate.outcome] = (outcomes[row.candidate.outcome] ?? 0) + 1;
-  const complete = n === preregistration.tasksPerPattern && new Set(rows.map(row => row.taskId)).size === n;
+  const complete = all.length === preregistration.tasksPerPattern && new Set(all.map(row => row.taskId)).size === all.length;
+  const withinTolerance = failures.length <= tolerance;
+  const qualifies = complete && withinTolerance && decision.decision === 'non-inferior';
   const economicsPass = checks.callRatio && checks.p95LatencyRatio && checks.extraTokensPerTask;
-  return { pattern, n, complete,
+  const armSpend = (row: DagLivePair, key: 'baseline' | 'candidate') => ({ calls: row[key].calls, retries: row[key].retries ?? 0, tokens: row[key].inputTokens + row[key].outputTokens });
+  return { pattern, n, attempted: all.length, measurementFailures: failures.length, measurementFailureTolerance: tolerance, complete,
+    verdict: !withinTolerance || (!complete && failures.length > 0) ? 'insufficient-evidence' : qualifies && economicsPass ? 'eligible' : 'not-eligible',
     quality: { baselineCorrect, candidateCorrect, table,
       baselineAccuracyInterval: n ? wilsonScoreInterval({ events: baselineCorrect, n, levelBps: ni.levelBps }) : null,
       candidateAccuracyInterval: n ? wilsonScoreInterval({ events: candidateCorrect, n, levelBps: ni.levelBps }) : null,
@@ -609,8 +657,11 @@ export function analyzeDagLivePattern(pattern: DagLivePattern, pairs: readonly D
       billableUsd: candidate.billableUsd - baseline.billableUsd },
       callRatio, p95LatencyRatio, extraTokensPerTask, extraTokensPerTaskUpper,
       speculative: { unusedCalls: rows.reduce((sum, row) => sum + row.candidate.unusedCalls, 0), unusedTokens: rows.reduce((sum, row) => sum + row.candidate.unusedTokens, 0) },
-      outcomes, checks, pass: economicsPass },
-    eligible: complete && decision.decision === 'non-inferior' && economicsPass };
+      outcomes, checks, pass: economicsPass,
+      retries: { baseline: rows.reduce((sum, row) => sum + (row.baseline.retries ?? 0), 0), candidate: rows.reduce((sum, row) => sum + (row.candidate.retries ?? 0), 0) },
+      measurementFailureSpend: failures.flatMap(row => [armSpend(row, 'baseline'), armSpend(row, 'candidate')])
+        .reduce((sum, item) => ({ calls: sum.calls + item.calls, retries: sum.retries + item.retries, tokens: sum.tokens + item.tokens }), { calls: 0, retries: 0, tokens: 0 }) },
+    eligible: qualifies && economicsPass };
 }
 
 /** Offline, credential-free worst-case plan against the approval limits. */
@@ -764,6 +815,7 @@ export async function runDagLiveQualification(options: {
   const timer = setTimeout(() => { control.stop('budget-run-wall-clock'); controller.abort(); },
     Math.min(2_147_483_647, Math.floor(approval.budget.wallClockMs * analysis.stopRules.budgetStopFraction)));
   const pairs: DagLivePair[] = [];
+  const abandonedPatterns: DagLivePattern[] = [];
   // One secret-service read per run; each call gets a copy the adapter zeroes after use.
   const vault: { secret: Uint8Array | null } = { secret: null };
   const host: DagLiveHost = { resolveCredential: async reference => {
@@ -786,16 +838,33 @@ export async function runDagLiveQualification(options: {
           skillId: options.skillId, perCallTokenBound: analysis.perCallTokenBound, now, signal };
         const order = index % 2 === 0 ? 'baseline-first' as const : 'candidate-first' as const;
         let baseline: DagLiveArmResult | undefined, candidate: DagLivePair['candidate'] | undefined;
+        control.taskFailure = null;
+        const proceed = () => !control.stopped && !control.taskFailure;
         try {
-          if (order === 'baseline-first') { baseline = await runBaseline(context, arms); if (!control.stopped) candidate = await runCandidate(context, arms); }
-          else { candidate = await runCandidate(context, arms); if (!control.stopped) baseline = await runBaseline(context, arms); }
-        } catch { control.stop(control.stopped ?? 'pair-exception'); }
-        // A pair counts only when both arms finished without a stop.
-        if (control.stopped || !baseline || !candidate) break;
-        const pair: DagLivePair = { pattern, taskId: task.id, slice: task.slice, index, order, label: task.label, baseline, candidate };
+          if (order === 'baseline-first') { baseline = await runBaseline(context, arms); if (proceed()) candidate = await runCandidate(context, arms); }
+          else { candidate = await runCandidate(context, arms); if (proceed()) baseline = await runBaseline(context, arms); }
+        } catch { if (!control.taskFailure) control.stop(control.stopped ?? 'pair-exception'); }
+        // Settle any call the evaluator abandoned on a deadline before accounting for this task.
+        await adapter.idle();
+        if (control.stopped) break;
+        const failure = control.taskFailure as DagLivePair['measurementFailure'] | null;
+        if (!failure && (!baseline || !candidate)) { control.stop('pair-incomplete'); break; }
+        // A measurement failure is recorded for both arms and excluded from the paired analysis.
+        const emptyArm = (arm: 'baseline' | 'candidate'): DagLiveArmResult => {
+          const { rows: _rows, ...usage } = armCalls(calls, task.id, arm);
+          return { answer: null, correct: false, ...usage, latencyMs: 0 };
+        };
+        const pair: DagLivePair = { pattern, taskId: task.id, slice: task.slice, index, order, label: task.label,
+          baseline: failure ? { ...(baseline ?? emptyArm('baseline')), answer: null, correct: false } : baseline!,
+          candidate: failure ? { ...(candidate ?? { ...emptyArm('candidate'), receiptDigest: '', unusedCalls: 0, unusedTokens: 0 }),
+            answer: null, correct: false, outcome: 'measurement-failure' } : candidate!,
+          ...(failure ? { measurementFailure: failure } : {}) };
         pairs.push(pair);
         await appendFile(pairsPath, `${canonicalJson(pair)}\n`);
         if (patternCallRatioExceeded(pairs, pattern, analysis.stopRules.maxPatternCallRatio)) control.stop('pattern-call-ratio');
+        // Beyond the tolerance the pattern cannot qualify: stop spending on it and move to the next one.
+        const tolerance = Math.floor(analysis.providerFailurePolicy.maxMeasurementFailureFractionPerPattern * preregistration.tasksPerPattern);
+        if (pairs.filter(row => row.pattern === pattern && row.measurementFailure).length > tolerance) { abandonedPatterns.push(pattern); break; }
       }
       if (control.stopped) break;
     }
@@ -808,7 +877,8 @@ export async function runDagLiveQualification(options: {
   const summary = { schemaVersion: 'dag-live-summary/v1', issue: '#2686', runId: approval.runId, sourceCommit: approval.sourceCommit,
     source: synthetic ? 'synthetic' : 'provider', liveEvidence: !synthetic, stagingHost: approval.stagingHost, model: approval.model,
     workloadDigest: approval.workloadDigest, preregistrationDigest: approval.preregistrationDigest, approvalDigest: dagLiveDigest(approval),
-    callsDigest: await fileDigest(callsPath), pairsDigest: await fileDigest(pairsPath), stopped, pairs: pairs.length, providerCalls: calls.length,
+    callsDigest: await fileDigest(callsPath), pairsDigest: await fileDigest(pairsPath), stopped, abandonedPatterns,
+    measurementFailures: pairs.filter(pair => pair.measurementFailure).length, pairs: pairs.length, providerCalls: calls.length,
     reserved: { calls: budget.total.calls, tokens: budget.total.tokens, usd: budget.usd() }, elapsedMs,
     // Every provider call, including the one that stopped the run, as reported and as charged.
     spend: { providerCalls: calls.length, inputTokens: calls.reduce((sum, call) => sum + (call.inputTokens ?? 0), 0),

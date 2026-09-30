@@ -37,7 +37,7 @@ regenerates them byte for byte:
   and parcel logs, with no customer or personal data. Slices cover no-match near
   misses, tickets with off-topic asides, and superseded or distractor parcel notes.
 - `preregistration.json`, `dag-live-preregistration/v1`, digest
-  `sha256:e3ba1ed045c01326d8429c13192dfcce7954c94b4819b79a41fd71e4481f5b60`. It
+  `sha256:e42dfdf852c142f84d24cdb0210f5161653ea781205685f2ff46b55035549683`. It
   binds the workload digest and the digest of every per-task definition pin. It
   also fixes the following:
   - Quality: exact-match accuracy, paired by task, with the Newcombe method 10
@@ -48,15 +48,22 @@ regenerates them byte for byte:
     and at most 8000 extra tokens per task. The extra-token bound applies to the
     upper limit of a seeded paired bootstrap at 90% (seed `0x2686`, 20,000
     resamples).
-  - Stop rules, a per-call token bound of 4000 and concurrency 1.
+  - Stop rules, the provider-failure policy, a per-call token bound of 4000 and
+    concurrency 1.
 
 The helpers are the shared `pairedBinaryDifferenceInterval`, `pairedNonInferiority`,
 `wilsonScoreInterval` and `pairedMeanDifferenceBootstrap`. A pattern is `eligible`
 only when all of the following hold:
 
-- All 100 pairs completed.
+- All 100 tasks were attempted.
+- At most 5 of them (5%) are measurement failures. Those are excluded from both arms
+  and from the paired table.
 - The difference's lower bound is at or above the margin.
-- Every economics bound holds. A null ratio fails.
+- Every economics bound holds. A null ratio fails. Call ratios count first attempts
+  only; retries are charged and reported separately.
+
+Each pattern gets a verdict: `eligible`, `not-eligible`, or `insufficient-evidence`
+when measurement failures exceed the tolerance.
 
 Changing the margin or any threshold changes the preregistration digest. The
 runner then rejects it.
@@ -94,13 +101,32 @@ The approval's `priorSpendUsd` is only a floor. The run cap is the lower of the
 approval's USD budget and USD 2.00 minus the prior spend. The runner refuses to start
 if that cap cannot cover one reservation before the stop.
 
-The run stops, with no retry, on any of these:
+Jev returns occasional non-success outcomes. The #2613 study measured about 2-3%
+invalid output on nominal inputs, so a zero-tolerance run would almost never finish
+1,100 calls. The preregistered provider-failure policy is:
+
+- **Retryable outcomes:** invalid output (including HTTP 200 with null usage), a
+  timeout (including the per-task deadline), a network error, a rate limit, overload,
+  a 5xx, or a successful answer with missing usage.
+- **One retry:** each retryable outcome gets at most one retry. The retry is reserved
+  before dispatch and charged like any call; a not-sent attempt keeps its full
+  reservation.
+- **Measurement failure:** if the retry also fails, the task is a measurement failure
+  in both arms. It is recorded in `pairs.jsonl` with `measurementFailure` and
+  excluded from the Newcombe table. Any remaining arm is not run.
+- **Tolerance:** more than 5% of a pattern's tasks failing makes that pattern
+  `insufficient-evidence`. The runner stops spending on it and moves to the next
+  pattern. The run itself does not stop.
+
+The run stops at once, with no retry, on any of these:
 
 - Any calls, tokens, USD or wall-clock dimension reaches 80%.
-- A pattern's cumulative candidate calls exceed 3x its baseline calls.
+- A pattern's cumulative first-attempt candidate calls exceed 3x its baseline calls.
 - A Flow node could request an action, capability or permission (speculative action).
-- A provider error or timeout, a missing request ID, unknown usage, usage above the
-  reservation, or a served model that differs from the approved model.
+- A served model that differs from the approved model, usage above the reservation,
+  or a missing request ID.
+- A credential, authorization or data-boundary failure, an invalid request, an
+  adapter exception, or any other provider outcome outside the retryable list.
 
 Pairs completed before a stop stay in `pairs.jsonl`. A stopped run is never eligible.
 The request that stopped the run is recorded in `calls.jsonl`, and in the summary as
@@ -201,7 +227,7 @@ available.
 
 The promotion owner approves the preregistration by replying with one line:
 
-> I, roctinam, approve D12 live qualification (#2686): workload sha256:fb99a6f8aa806aed16f6ef9e5d3aab8025532fa0c6de5997cd0226cca21b5c8b, preregistration sha256:e3ba1ed045c01326d8429c13192dfcce7954c94b4819b79a41fd71e4481f5b60, non-inferiority margin -1000 bps at 90% two-sided Newcombe-10; I attest a Jev price bound of USD 0.042/1M input and USD 0/1M output (evidence: https://www.eesel.ai/blog/typesafe-jev-pricing, https://www.mindstudio.ai/blog/jev-pricing-cost-per-token, live smoke roctinam/aiwg#2613 comment 153093, jev-1.13.0, 369 input / 38 output tokens), reserved at no less than USD 0.10/1M; vault pinned to https://rca-g2.s9.internal:8200 and secret path sha256:5764c8bf2bf4a92eea32619f3d9a25fd2a1b5e675646f7ff30d425b1f791a883; USD 2.00 cap across all runs, sequential on titan.
+> I, roctinam, approve D12 live qualification (#2686): workload sha256:fb99a6f8aa806aed16f6ef9e5d3aab8025532fa0c6de5997cd0226cca21b5c8b, preregistration sha256:e42dfdf852c142f84d24cdb0210f5161653ea781205685f2ff46b55035549683, non-inferiority margin -1000 bps at 90% two-sided Newcombe-10; I attest a Jev price bound of USD 0.042/1M input and USD 0/1M output (evidence: https://www.eesel.ai/blog/typesafe-jev-pricing, https://www.mindstudio.ai/blog/jev-pricing-cost-per-token, live smoke roctinam/aiwg#2613 comment 153093, jev-1.13.0, 369 input / 38 output tokens), reserved at no less than USD 0.10/1M; vault pinned to https://rca-g2.s9.internal:8200 and secret path sha256:5764c8bf2bf4a92eea32619f3d9a25fd2a1b5e675646f7ff30d425b1f791a883; USD 2.00 cap across all runs, sequential on titan.
 
 ## Open items
 

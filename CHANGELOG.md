@@ -14,7 +14,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   workload (3 patterns x 100 tasks) with a preregistered -1000 bps
   non-inferiority margin. It reserves budget before each call against an
   operator-attested price bound (never below USD 0.10/1M), charges reported usage
-  including the stopping request, and stops at 80% of any ceiling or at the USD 2.00
+  including the stopping request. It retries a failed provider call once, then records
+  the task as a measurement failure, within a preregistered 5% per-pattern tolerance.
+  It stops at 80% of any ceiling or at the USD 2.00
   cap, which it applies across reruns by scanning earlier run summaries. It
   writes digest-bound D11/G5/G6 evidence and records the reviewer's decision.
   The dry run and freeze run from source without a build. Live collection needs

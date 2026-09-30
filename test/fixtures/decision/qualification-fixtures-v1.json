@@ -1605,8 +1605,8 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "dag-live-preregistration/v1",
-      "digest": "sha256:66ed6949cc5c80b5adf5ae7086afb7d3fadadf0b7f4b7d92ad3eaf12abec339a",
-      "expectedOutcome": "D12 preregistration binding the workload digest, Newcombe-10 90% level, -1000 bps non-inferiority margin, economics bounds and stop rules",
+      "digest": "sha256:352c2a895654ab5a0f06773d0e6cdd28a1c255d5b25231b4a72d3b70fa1af5df",
+      "expectedOutcome": "D12 preregistration binding the workload digest, Newcombe-10 90% level, -1000 bps non-inferiority margin, economics bounds, stop rules and the provider-failure policy (one charged retry, task-level measurement failure, 5% per-pattern tolerance)",
       "links": [
         "JEV-16",
         "#2686",

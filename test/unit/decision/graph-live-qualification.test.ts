@@ -250,6 +250,37 @@ describe('D12 paired analysis applies every preregistered threshold', () => {
         outputTokens: 24, latencyMs: (options.candidateLatency ?? 300) + index, requestIds: [], outcome: 'complete', receiptDigest: 'x', unusedCalls: 0, unusedTokens: 0 },
     }));
   }
+  it('excludes measurement-failure tasks from the paired table and applies the preregistered 5% tolerance', () => {
+    const policy = preregistration.analysis.providerFailurePolicy;
+    expect(policy).toMatchObject({ retriesPerCall: 1, maxMeasurementFailureFractionPerPattern: 0.05, beyondTolerance: 'pattern-insufficient-evidence' });
+    const failed = (rows: DagLivePair[], count: number) => rows.map((row, index) => index < count
+      ? { ...row, baseline: { ...row.baseline, correct: false }, candidate: { ...row.candidate, correct: false, outcome: 'measurement-failure' },
+        measurementFailure: { arm: 'candidate' as const, node: 'detail-branch-a', reason: 'provider-invalid-output' } } : row);
+    // Five failed tasks (5%): excluded from Newcombe, the pattern can still be eligible.
+    const within = analyzeDagLivePattern('taxonomy-beam', failed(pairs(), 5), preregistration, price);
+    expect(within.measurementFailures).toBe(5);
+    expect(within.n).toBe(95);
+    expect(within.quality.difference!.n).toBe(95);
+    // The excluded tasks were the first rows, which were wrong in both arms: they are not in the table.
+    expect(within.quality.table).toEqual({ both: 90, candidateOnly: 0, baselineOnly: 0, neither: 5 });
+    expect(within.verdict).toBe('eligible');
+    expect(within.eligible).toBe(true);
+    // Six failed tasks exceed the tolerance: insufficient evidence, never eligible, whatever the quality.
+    const beyond = analyzeDagLivePattern('taxonomy-beam', failed(pairs(), 6), preregistration, price);
+    expect(beyond.verdict).toBe('insufficient-evidence');
+    expect(beyond.eligible).toBe(false);
+    // A regressed candidate is still not eligible within tolerance.
+    expect(analyzeDagLivePattern('taxonomy-beam', failed(pairs({ candidateWrong: 25 }), 2), preregistration, price).verdict).toBe('not-eligible');
+  });
+
+  it('bases the call ratio on first attempts: retries are charged and reported, not counted as graph calls', () => {
+    const retried = pairs().map((row, index) => index < 10 ? { ...row, candidate: { ...row.candidate, retries: 1 } } : row);
+    const analysis = analyzeDagLivePattern('taxonomy-beam', retried, preregistration, price);
+    expect(analysis.economics.callRatio).toBe(3);
+    expect(analysis.economics.retries).toEqual({ baseline: 0, candidate: 10 });
+    expect(patternCallRatioExceeded(retried, 'taxonomy-beam', 3)).toBe(false);
+  });
+
   it('marks an equal-quality candidate within economics eligible for the reviewer', () => {
     const analysis = analyzeDagLivePattern('taxonomy-beam', pairs(), preregistration, price);
     expect(analysis.quality.nonInferiority.decision).toBe('non-inferior');
@@ -379,11 +410,6 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
   }, 60_000);
 
   it.each([
-    ['a rate-limited provider', 'provider-rate-limited', (response: Response) => new Response('private provider text', { status: 429 })],
-    ['missing token usage', 'unknown-usage', async (response: Response) => {
-      const body = await response.json(); delete body.usage.input_tokens;
-      return new Response(JSON.stringify(body), { headers: response.headers });
-    }],
     ['a different served model', 'served-model-mismatch', async (response: Response) => {
       const body = await response.json(); body.model = 'other-model';
       return new Response(JSON.stringify(body), { headers: response.headers });
@@ -392,7 +418,11 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
       const body = await response.json(); body.usage.input_tokens = 4_500;
       return new Response(JSON.stringify(body), { headers: response.headers });
     }],
-  ])('stops without retry on %s and keeps completed pairs', async (_name, reason, mutate) => {
+    ['a missing request identity', 'missing-request-id', async (response: Response) => {
+      const headers = new Headers(response.headers); headers.delete('x-request-id');
+      return new Response(await response.text(), { headers });
+    }],
+  ])('stops immediately, without retry, on %s and keeps completed pairs', async (_name, reason, mutate) => {
     const workload = generateDagLiveWorkload(21, 4);
     const inner = oracle(workload);
     let requests = 0;
@@ -413,13 +443,69 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
     expect(summary.stoppingCall).toEqual(calls[4]);
     expect(summary.spend.providerCalls).toBe(5);
     expect(summary.spend.inputTokens).toBe(calls.reduce((sum: number, call: any) => sum + (call.inputTokens ?? 0), 0));
-    const charged = { 'provider-rate-limited': 4000, 'unknown-usage': 4000, 'served-model-mismatch': 608, 'usage-exceeded-reservation': 4508 }[reason]!;
+    const charged = { 'served-model-mismatch': 608, 'usage-exceeded-reservation': 4508, 'missing-request-id': 608 }[reason]!;
     expect(result.reserved.tokens).toBe(4 * 608 + charged);
     expect(summary.spend.chargedUsd).toBe(result.reserved.usd);
     if (reason === 'usage-exceeded-reservation') expect(summary.stoppingCall).toMatchObject({ inputTokens: 4500, outputTokens: 8 });
-    if (reason === 'unknown-usage') expect(summary.stoppingCall).toMatchObject({ inputTokens: null, outputTokens: 8 });
-    expect(Object.values(files).join('')).not.toContain('private provider text');
     expect(JSON.parse(files['run-manifest.json']).evidence.every((row: any) => row.outcome === 'fail')).toBe(true);
+  }, 60_000);
+
+  it.each([
+    ['an invalid output (HTTP 200, null usage)', 'provider-invalid-output', async () => new Response('{"model":"jev-fixture-model","answers":{}}',
+      { headers: { 'content-type': 'application/json', 'x-request-id': 'invalid-1' } })],
+    ['a 5xx', 'provider-service-error', async () => new Response('private provider text', { status: 503, headers: { 'x-request-id': 'fail-1' } })],
+    ['a rate limit', 'provider-rate-limited', async () => new Response('private provider text', { status: 429 })],
+    ['missing token usage', 'unknown-usage', async (response: Response) => {
+      const body = await response.json(); delete body.usage.input_tokens;
+      return new Response(JSON.stringify(body), { headers: response.headers });
+    }],
+  ])('retries once after %s, charges both attempts and completes the run', async (_name, reason, mutate) => {
+    const workload = generateDagLiveWorkload(21, 4);
+    const inner = oracle(workload);
+    let requests = 0;
+    const fetch = vi.fn(async (url: unknown, init: RequestInit) => {
+      const response = await inner(url, init);
+      return ++requests === 5 ? mutate(response) : response;
+    });
+    const { result, files } = await run(workload, fetch as never);
+    expect(result.stopped).toBeNull();
+    expect(result.pairs).toBe(12);
+    const calls = files['calls.jsonl'].trim().split('\n').map(line => JSON.parse(line));
+    expect(calls[4]).toMatchObject({ attempt: 1, outcome: reason });
+    expect(calls[5]).toMatchObject({ attempt: 2, outcome: 'ok', taskId: calls[4].taskId, node: calls[4].node, arm: calls[4].arm });
+    expect(calls).toHaveLength(fetch.mock.calls.length);
+    // Every attempt was reserved and charged; the retried attempt is reported, not counted as a graph call.
+    expect(result.reserved.calls).toBe(fetch.mock.calls.length);
+    const pair = files['pairs.jsonl'].trim().split('\n').map(line => JSON.parse(line)).find((row: any) => row.taskId === calls[4].taskId);
+    expect(pair.measurementFailure).toBeUndefined();
+    expect(pair[calls[4].arm].retries).toBe(1);
+    expect(Object.values(files).join('')).not.toContain('private provider text');
+  }, 60_000);
+
+  it('records a task that fails twice as a measurement failure in both arms and carries on', async () => {
+    const workload = generateDagLiveWorkload(21, 4);
+    const inner = oracle(workload);
+    let requests = 0;
+    const invalid = () => new Response('{"model":"jev-fixture-model","answers":{}}', { headers: { 'content-type': 'application/json', 'x-request-id': 'bad' } });
+    const fetch = vi.fn(async (url: unknown, init: RequestInit) => {
+      const response = await inner(url, init);
+      return [5, 6].includes(++requests) ? invalid() : response;
+    });
+    const { result, files } = await run(workload, fetch as never);
+    expect(result.stopped).toBeNull();
+    const pairs = files['pairs.jsonl'].trim().split('\n').map(line => JSON.parse(line));
+    const failed = pairs.filter((row: any) => row.measurementFailure);
+    expect(failed).toHaveLength(1);
+    expect(failed[0].measurementFailure).toMatchObject({ reason: 'provider-invalid-output' });
+    // With 4 tasks per pattern the 5% tolerance allows none, so that pattern is abandoned as
+    // insufficient evidence; the other patterns still complete. The run is not stopped.
+    const byPattern = Object.fromEntries(result.analyses.map((a: any) => [a.pattern, a]));
+    const failedPattern = failed[0].pattern;
+    expect(byPattern[failedPattern].verdict).toBe('insufficient-evidence');
+    expect(byPattern[failedPattern].measurementFailures).toBe(1);
+    expect(result.abandonedPatterns).toEqual([failedPattern]);
+    for (const pattern of DAG_LIVE_PATTERNS.filter(p => p !== failedPattern)) expect(byPattern[pattern].n).toBe(4);
+    expect(result.recommendation).toBe('hold');
   }, 60_000);
 
   it('stops before dispatch when the run budget is exhausted and at the wall-clock stop fraction', async () => {
@@ -436,19 +522,23 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
     expect(timed.mock.calls.length).toBeLessThan(10);
   }, 60_000);
 
-  it('stops on a hung provider at the task deadline without retry and without hanging the run', async () => {
+  it('treats a hung provider as a measurement failure after one retry and never hangs the run', async () => {
     const workload = generateDagLiveWorkload(21, 2);
     const fetch = vi.fn((_url: unknown, init: RequestInit) => new Promise<Response>((_resolve, reject) => {
       init.signal!.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
     }));
     const { result, files } = await run(workload, fetch as never, { taskDeadlineMs: 1_000 });
-    expect(result.stopped).toMatch(/^provider-(timeout|cancelled)$/);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(result.pairs).toBe(0);
-    expect(JSON.parse(files['calls.jsonl'])).toMatchObject({ status: expect.not.stringMatching(/^success$/), inputTokens: null });
-    // Unknown usage keeps the whole reservation.
-    expect(result.reserved).toMatchObject({ calls: 1, tokens: 4000 });
-  }, 30_000);
+    expect(result.stopped).toBeNull();
+    // Each pattern loses its first task (tolerance 0 of 2) and is abandoned as insufficient evidence.
+    expect(result.abandonedPatterns).toEqual([...DAG_LIVE_PATTERNS]);
+    expect(result.analyses.every((a: any) => a.verdict === 'insufficient-evidence')).toBe(true);
+    const calls = files['calls.jsonl'].trim().split('\n').map(line => JSON.parse(line));
+    expect(calls.map((call: any) => call.attempt)).toEqual([1, 2, 1, 2, 1, 2]);
+    expect(calls.every((call: any) => call.inputTokens === null && call.chargedTokens === 4000)).toBe(true);
+    // Unknown usage keeps the whole reservation for every attempt.
+    expect(result.reserved).toMatchObject({ calls: 6, tokens: 24_000 });
+    expect(result.recommendation).toBe('hold');
+  }, 60_000);
 
   it('holds the USD 2.00 cap across reruns: earlier summaries, crashed runs and the operator floor all count', async () => {
     const workload = generateDagLiveWorkload(21, 2);

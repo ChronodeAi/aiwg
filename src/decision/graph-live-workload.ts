@@ -235,7 +235,24 @@ export const DAG_LIVE_ANALYSIS = {
   nonInferiority: { method: 'newcombe-10' as const, levelBps: 9000, marginBps: -1000 },
   economics: { maxCallRatio: 3, maxP95LatencyRatio: 4, maxExtraTokensPerTaskUpper: 8000,
     bootstrap: { levelBps: 9000, seed: 0x2686, resamples: 20_000 } },
-  stopRules: { maxPatternCallRatio: 3, budgetStopFraction: 0.8, retries: 0, speculativeAction: 'stop-run', providerFailure: 'stop-run' },
+  /** Call ratios (economics and the stop rule) count first attempts of usable pairs; retries are charged and reported. */
+  stopRules: { maxPatternCallRatio: 3, callRatioBasis: 'first-attempt-calls-of-usable-pairs', budgetStopFraction: 0.8, speculativeAction: 'stop-run' },
+  /**
+   * Jev returns occasional non-success outcomes (about 2-3% invalid output in the #2613 study). A retryable
+   * outcome gets at most one retry, reserved and charged like any call; a second failure makes the TASK a
+   * measurement failure in both arms, excluded from the paired table. More than the tolerated fraction of a
+   * pattern's tasks makes that pattern insufficient evidence (and it is abandoned), not a run stop.
+   * Identity, accounting, budget and credential anomalies still stop the run at once.
+   */
+  providerFailurePolicy: {
+    retriesPerCall: 1, retryCharged: true,
+    retryableOutcomes: ['provider-invalid-output', 'provider-timeout', 'provider-network-transient', 'provider-rate-limited',
+      'provider-overloaded', 'provider-service-error', 'unknown-usage'],
+    measurementFailure: 'task-excluded-from-both-arms', maxMeasurementFailureFractionPerPattern: 0.05,
+    beyondTolerance: 'pattern-insufficient-evidence',
+    immediateStops: ['served-model-mismatch', 'usage-exceeded-reservation', 'missing-request-id', 'budget', 'credential-or-authorization',
+      'data-boundary-denied', 'invalid-request', 'adapter-exception', 'any-other-provider-outcome'],
+  },
   perCallTokenBound: 4000, concurrency: 1,
 } as const;
 export interface DagLivePreregistration {
