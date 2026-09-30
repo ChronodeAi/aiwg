@@ -112,6 +112,15 @@ threshold replay, deterministic outcome/loss-matrix sensitivity, one-field
 input perturbation, and an unchanged no-change control. The unit suite runs
 those examples offline; it does not call Jev or any live provider.
 
+## Comparative policy replay
+
+The [D23 comparative replay wrapper](comparative-replay.md) adds frozen synthetic
+corpus/gold bindings, all diagnostic report digests, preregistered CI gates and
+the #2037/#2048 integrity envelope. Its retained report is HOLD with two known
+threshold-equality errors. The 44-assessment audit and operator protocol/report
+reviews remain pending; this is regression evidence, not pristine held-out or
+model-quality evidence.
+
 ## Pending live inputs
 
 Live Jev calls, representative held-out data, production probe/rate storage,

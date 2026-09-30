@@ -91,3 +91,7 @@ does not add native media support to Jev, and stores receipt/trace references
 
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.
+
+[D23 offline comparative replay](comparative-replay.md) provides an experimental,
+default-off synthetic report and 44-assessment operator audit scaffold. The
+retained report is HOLD; independent integrity and human review remain pending.

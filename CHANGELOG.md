@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D23 offline comparative policy replay: closed schemas,
+  a frozen 600-root synthetic corpus, digest-bound eval-integrity reports, and
+  a 44-assessment operator audit template. Zero provider calls; the retained
+  report honestly stays HOLD on two threshold-boundary errors and pending
+  independent integrity and human review (#2616).
+
 - Source-checkout TV-12 tooling for D06 live qualification: a digest-pinned OpenBao AppRole
   credential resolver for Jev, a no-call `--dry-run` estimate, reviewer-approved profile and
   margin recording from the preregistered rule, a stored-record enforcement check, and an
