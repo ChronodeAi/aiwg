@@ -4,7 +4,7 @@ import { resolve, join } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { register } from 'tsx/esm/api';
 register();
-const [mode = '--dry-run', seed = 'd29-study-v1', destination] = process.argv.slice(2);
+const [mode = '--dry-run', seed = 'd29-study-v2', destination] = process.argv.slice(2);
 try {
   if (!['--dry-run', '--prepare'].includes(mode) || mode === '--prepare' && !destination) throw new Error('usage');
   const { prepare, dryRun } = await import('./studies/d29.mjs');

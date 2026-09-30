@@ -131,7 +131,7 @@ export async function prepare(seed) {
   const analysis = analysisPlan(corpus);
   const preregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D29', frozenAt: FROZEN_AT,
     corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
-    regeneration: { reason: 'collector-provenance-and-reservation-contract', collectorCommit: '0cbde8721', priorLiveObservations: 0 },
+    regeneration: { reason: 'semantic-gold-repair-after-ambiguous-contradiction', collectorCommit: '0cbde8721', priorLiveObservations: 0 },
     providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },
     perRequestTokenBound: 4000, providerOverheadTokens: 512, outputAndHiddenTokenAllowance: 256,
     requestTimeoutMs: 30000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000 };

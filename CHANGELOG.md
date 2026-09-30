@@ -146,6 +146,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D29 gold now uses an explicit single-port
+  constraint for contradiction and an explicit lack of verified rollback
+  coverage for the incomplete criterion. A possible-world regression covers
+  every rendered template; the new `d29-study-v2` holdout and manifest pins
+  supersede the ambiguous v1 corpus before any live collection (#2622)
+
 - Close paid-output and deleted-history cap overruns in the experimental,
   default-off held-out collector: require attested free Jev output, reserve
   serialized input bytes plus preregistered provider overhead, retain monotonic

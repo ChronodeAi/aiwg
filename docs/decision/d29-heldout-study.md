@@ -11,9 +11,9 @@ Run from this source checkout; no build, package installation, credentials or
 network are needed:
 
 ```bash
-nice -n 19 node tools/decision/d29-study.mjs --dry-run d29-study-v1
+nice -n 19 node tools/decision/d29-study.mjs --dry-run d29-study-v2
 aiwg artifacts path --json --check-write
-nice -n 19 node tools/decision/d29-study.mjs --prepare d29-study-v1 NEW_ARTIFACT_DIRECTORY
+nice -n 19 node tools/decision/d29-study.mjs --prepare d29-study-v2 NEW_ARTIFACT_DIRECTORY
 ```
 
 The new directory must be directly below the canonical artifact root returned
@@ -61,13 +61,24 @@ the collector's baseline genesis, hash-chained counter and spend head before
 approving a run; an incomplete or changed counter refuses collection.
 
 The preregistration records that these source-only manifests were regenerated
-for collector commit `0cbde8721` before any live observations existed. Its
-`regeneration.priorLiveObservations` is zero; it is not an observation or an
+with a new seed after the ambiguous contradiction gold was repaired, using
+collector commit `0cbde8721`, before any live observations existed. The
+previous `d29-study-v1` holdout is superseded; it must not be used for a paid
+run. The new preregistration's `regeneration.priorLiveObservations` is zero;
+it is not an observation or an
 operator attestation. The current source dry-run reports corpus
-`sha256:8ae169c7d333e24a9e0b46f2832f724667bebc95a9c9678cc76fbae2ca9fca3b`,
-preregistration `sha256:f99530e1c31503f6d272a9e93a9a15769f0655baf75f32fc7aa747d991d25b65`,
+`sha256:8c9ecfdf8971b80eb6f1efa1e79ddf562b6d3f62db07dab596fe98af5b383591`,
+preregistration `sha256:8e4d844c590f684ec8ea8d4fbbb0c5d291804211a8d774420816aa5d5a93ae60`,
+analysis `sha256:2bd4a6693a928e6cdcb208609e2f6a1cbcafbf3c93793cd4a8c25acd7f748786`,
+test membership `sha256:4acaca7184f02ade5cf6a88e90ae2188f991d0086c5cd14e9b1c6bf2a551f6ce`,
 and incomplete approval template
-`sha256:18f4ea8a5d3c562e7dfb8a97357a1e62bf8512f9e84261faa7760e4a460b76ec`.
+`sha256:64e658fde32f3a291eb3934162582eda064b4767dcba9cd67fb653a0e65c9a06`.
+The corpus additionally pins generator
+`sha256:53224ad7f47b1f2850671d677ca53a62ba91f552dc354fda993156649f82c0e5`
+and separate gold
+`sha256:215d5ee87122c567f0fc0be7a52d00e3c5bdf98b1f41254472209dd5c08a5f97`;
+the preregistration pins scorer
+`sha256:542d65cd0cbbdeb7726105ced1625f422683cd803729cbdbd33216618e4af391`.
 
 One-line approval text, with the actual emitted values substituted:
 
@@ -121,11 +132,13 @@ else. Its route/support output is saved before computing correctness. It
 cannot read latent worlds or gold. The deliberately narrow baseline is free;
 no reviewer-time or cost saving is claimed.
 
-Labeling guide: an explicit matching port fact supports the claim; an explicit
-different port contradicts it; a tentative fact is unclear; a color fact is
-unrelated and does not support a port claim. A deployment checklist that lacks
-rollback coverage is incomplete for a rollback criterion even if schemas/tests
-pass. Missing artifacts and failed tests are non-ready regardless of semantic
+Labeling guide: an explicit matching port fact supports the claim; a source
+stating that the module uses exactly one, different port contradicts it.
+A positive statement about a different port alone leaves the claim unclear.
+A tentative fact is unclear; a color fact is unrelated and does not support a
+port claim. The incomplete-criterion source explicitly states that the module
+has no verified rollback coverage, even though it has a deployment checklist.
+Missing artifacts and failed tests are non-ready regardless of semantic
 answers. Instruction-bearing source text remains untrusted and non-ready.
 The supplied injection variants occupy the unclear slice. Template effects,
 limited language variation and transfer to real work remain limitations.
@@ -221,8 +234,8 @@ The JSON template supports this two-phase local review; no web review UI ships.
 
 | Source-only planning case | Initial requests | Attempts | Tokens | USD |
 | --- | ---: | ---: | ---: | ---: |
-| Individual questions, 2.5% retry assumption | 4,500 | 4,612.5 expected | 4,563,248.75 input reserved; 5,744,048.75 total reserved | 0.1916564475 input at attested tariff; 0.458356425 reserved |
-| Every individual question retried once | 4,500 | 9,000 maximum | 8,903,900 input reserved; 11,207,900 total reserved | 0.894354 reserved |
+| Individual questions, 2.5% retry assumption | 4,500 | 4,612.5 expected | 4,587,057.45 input reserved; 5,767,857.45 total reserved | 0.1926564129 input at attested tariff; 0.460904575 reserved |
+| Every individual question retried once | 4,500 | 9,000 maximum | 8,950,356 input reserved; 11,254,356 total reserved | 0.899326 reserved |
 
 Expected attempts are fractional expectations, not observed calls. These
 figures use the source dry-run's `fixture-region` projection identity; a real
