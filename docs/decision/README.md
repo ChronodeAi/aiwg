@@ -39,7 +39,9 @@ Probabilistic downstream feature export is described in
 Jev request, retry, cancellation, and egress behavior is documented in the
 [transport contract](jev-transport.md). State projection is mandatory for
 network-capable adapters; see [state projection](state-projection.md) and the
-[threat-control mapping](threat-control-mapping.md).
+[threat-control mapping](threat-control-mapping.md). The
+[egress live qualification runner](egress-live-qualification.md) prepares the #2680 live
+credential, attack-movement and canary evidence; no live run has been performed.
 
 The [ensemble, champion/challenger and drift-response contracts](ensembles.md)
 define versioned D17 schemas, pure validators, and an experimental default-off

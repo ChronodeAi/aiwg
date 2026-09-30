@@ -9,6 +9,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, source-checkout-only D10 egress live qualification runner
+  (`tools/decision/egress-live-qualification.mjs`) with a frozen, digest-pinned
+  preregistration, a never-logging OpenBao KV resolver, worst-case budget
+  reservation under a USD 2.00 issue cap, stop conditions, and digest-bound D11
+  recorded evidence. It is dry-run by default and needs
+  `AIWG_DECISION_EGRESS_LIVE=1` for live collection; no live run has been
+  performed and nothing is promoted (#2680).
 - Experimental default-off D17 decision ensemble runtime APIs for bounded
   member dispatch, paired champion/challenger shadow evaluation, drift-response
   execution, promotion gating on D09 plus eval-integrity, rollback for new runs,
