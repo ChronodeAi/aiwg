@@ -81,12 +81,14 @@ the same rates, including usage above the reservation. A call with missing usage
 keeps at least its whole reservation, and calls are never refunded.
 
 An approval cannot raise the USD cap above the **USD 2.00** hard cap, and that cap
-spans reruns. Before a run, the runner scans earlier D12 runs under the artifact
-root:
+spans reruns. The artifact root must be the canonical AIWG artifact root itself,
+compared by real path, and not a subdirectory of it. Before a run, the runner scans
+recursively for every earlier D12 run below that root:
 
 - A run with a summary counts its charged USD.
 - A run with an approval but no summary (crashed or killed) counts each logged call
-  plus one in-flight call at its reservation.
+  at its charged amount, or at the reservation if a line carries none. It also counts
+  one in-flight call at the reservation.
 
 The approval's `priorSpendUsd` is only a floor. The run cap is the lower of the
 approval's USD budget and USD 2.00 minus the prior spend. The runner refuses to start
@@ -133,16 +135,33 @@ input price.
 `--collect-approved` requires `AIWG_DECISION_DAG_LIVE=1`. It rebuilds from source,
 requires a clean checkout at the approved commit, and checks the approval against
 both digests. It also requires the resolver file to match its pinned SHA-256 and the
-artifact root to be the canonical AIWG root. Run it sequentially on the titan
+artifact root to be the canonical AIWG artifact root itself. The approval's
+`reviewer` must be the preregistered promotion owner. Run it sequentially on the titan
 staging host.
+
+The approval pins the secret service in `secretService`:
+
+- `origin`: the exact HTTPS vault origin.
+- `secretPathDigest`: the SHA-256 of the KV secret path's UTF-8 bytes.
+
+The default template pins `https://rca-g2.s9.internal:8200` and
+`sha256:5764c8bf2bf4a92eea32619f3d9a25fd2a1b5e675646f7ff30d425b1f791a883`. The runner reads the resolver file once, checks those bytes against both
+digest pins, imports the same bytes, and builds the resolver with the approval's
+secret-service pin.
+
+The resolver refuses the following before it requests a vault token:
+
+- a `BAO_ADDR` or `AIWG_JEV_OPENBAO_SECRET_PATH` that differs from the pin;
+- a missing pin.
 
 `tools/decision/jev-openbao-credential.mjs` maps the logical reference
 `openbao.typesafe.jev.api-key` to the vaulted secret's `token` field. It gets a vault
 token by logging in as the scoped `aiwg-jev-reader` AppRole through the itops OpenBao
 helper, then reads the secret over Node HTTPS with certificate verification always on
 (`rejectUnauthorized: true`, with an optional `BAO_CACERT`). It refuses to run when
-`NODE_TLS_REJECT_UNAUTHORIZED=0`. After the read it revokes its own vault token, even
-when the read failed.
+`NODE_TLS_REJECT_UNAUTHORIZED=0`. After the read it revokes its own vault token. It
+also revokes a helper token that fails validation, if the token can be sent as a
+header at all, and it revokes when the read failed.
 
 Errors carry a fixed category only, so no key, path, token or helper text reaches an
 error, log or artifact. The runner reads the key once per run and zeroes its copy at
@@ -173,7 +192,8 @@ Everything is written create-once under `<artifact root>/<runId>/`:
 
 `--record-decision` writes `g6-review-record.json` (`decision-qualification-review/v1`)
 and `promotion-decision.json`. Only the approved promotion owner can record a
-decision. `promote` is refused unless the summary still matches its review request
+decision. That reviewer must also be the `promotionOwner` in the run's
+digest-bound `preregistration.json`. `promote` is refused unless the summary still matches its review request
 and the run was live, unstopped and eligible for every pattern. `hold` is always
 available.
 
@@ -181,7 +201,7 @@ available.
 
 The promotion owner approves the preregistration by replying with one line:
 
-> I, roctinam, approve D12 live qualification (#2686): workload sha256:fb99a6f8aa806aed16f6ef9e5d3aab8025532fa0c6de5997cd0226cca21b5c8b, preregistration sha256:e3ba1ed045c01326d8429c13192dfcce7954c94b4819b79a41fd71e4481f5b60, non-inferiority margin -1000 bps at 90% two-sided Newcombe-10; I attest a Jev price bound of USD 0.042/1M input and USD 0/1M output (evidence: https://www.eesel.ai/blog/typesafe-jev-pricing, https://www.mindstudio.ai/blog/jev-pricing-cost-per-token, live smoke roctinam/aiwg#2613 comment 153093, jev-1.13.0, 369 input / 38 output tokens), reserved at no less than USD 0.10/1M; USD 2.00 cap across all runs, sequential on titan.
+> I, roctinam, approve D12 live qualification (#2686): workload sha256:fb99a6f8aa806aed16f6ef9e5d3aab8025532fa0c6de5997cd0226cca21b5c8b, preregistration sha256:e3ba1ed045c01326d8429c13192dfcce7954c94b4819b79a41fd71e4481f5b60, non-inferiority margin -1000 bps at 90% two-sided Newcombe-10; I attest a Jev price bound of USD 0.042/1M input and USD 0/1M output (evidence: https://www.eesel.ai/blog/typesafe-jev-pricing, https://www.mindstudio.ai/blog/jev-pricing-cost-per-token, live smoke roctinam/aiwg#2613 comment 153093, jev-1.13.0, 369 input / 38 output tokens), reserved at no less than USD 0.10/1M; vault pinned to https://rca-g2.s9.internal:8200 and secret path sha256:5764c8bf2bf4a92eea32619f3d9a25fd2a1b5e675646f7ff30d425b1f791a883; USD 2.00 cap across all runs, sequential on titan.
 
 ## Open items
 
@@ -189,7 +209,7 @@ These need live inputs and are not met by this change:
 
 - The operator approval above, and a filled `approval.json`. It needs the pinned
   model, region, exact-head CI and commit, `priceBound.approvalReference` pointing at
-  that approval, `priorSpendUsd`, and the resolver digest.
+  that approval, `priorSpendUsd`, the `secretService` pin, and the resolver digest.
 - A live run on titan.
 - The reviewer's promote-or-hold record.
 - Linking the evidence manifest from #2608.

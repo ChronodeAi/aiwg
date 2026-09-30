@@ -9,12 +9,13 @@
  * decision; nothing here promotes the experimental graph runtime.
  */
 import { createHash } from 'node:crypto';
-import { appendFile, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { appendFile, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { admitEntry, DEFAULT_ENTRY_LIMITS } from './entry.js';
 import { CanonicalJsonByteEstimator } from './context-plan.js';
-import { assertContextArtifactRoot, assertContextLiveSource } from './context-live-qualification.js';
+import { assertContextLiveSource } from './context-live-qualification.js';
 import { compileJevQuestion, JevDecisionAdapter, JEV_ENDPOINT } from './adapters/jev.js';
 import { evaluateDecisionRuleset } from './evaluate.js';
 import { artifactPin, validateBinding, validateRuleset } from './validate.js';
@@ -66,6 +67,11 @@ export interface DagLiveApproval {
   priceBound: DagLivePriceBound;
   /** Operator-stated spend of earlier D12 runs. A floor: runs found under the artifact root also count. */
   priorSpendUsd: number;
+  /**
+   * Pinned secret service: the exact HTTPS vault origin and the SHA-256 of the KV secret path.
+   * The resolver refuses any other origin or path before a vault token is requested.
+   */
+  secretService: { origin: string; secretPathDigest: `sha256:${string}` };
   taskDeadlineMs: number;
 }
 export interface DagLivePriceBound {
@@ -89,6 +95,15 @@ export function dagLiveReservationMicros(bound: DagLivePriceBound, perCallTokenB
 export function dagLiveChargeMicros(bound: DagLivePriceBound, inputTokens: number, outputTokens: number): number {
   return Math.max(Math.ceil(inputTokens * rate(bound.inputUsdPerMTok) + outputTokens * rate(bound.outputUsdPerMTok)), perRequestMicros(bound));
 }
+function validSecretService(pin: DagLiveApproval['secretService'] | undefined): boolean {
+  if (!pin || typeof pin !== 'object' || Object.keys(pin).sort().join(',') !== 'origin,secretPathDigest') return false;
+  let url: URL;
+  try { url = new URL(pin.origin); } catch { return false; }
+  return url.protocol === 'https:' && url.origin === pin.origin && !url.username && !url.password
+    && /^sha256:[a-f0-9]{64}$/.test(pin.secretPathDigest);
+}
+/** Digest that pins a KV secret path: SHA-256 of its UTF-8 bytes (the resolver computes the same). */
+export const dagLiveSecretPathDigest = (path: string): `sha256:${string}` => `sha256:${createHash('sha256').update(path).digest('hex')}`;
 const attestedText = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && value.length <= 512 && !value.trim().startsWith('<');
 function validPriceBound(bound: DagLivePriceBound | undefined): boolean {
   if (!bound || typeof bound !== 'object' || Array.isArray(bound)) return false;
@@ -106,7 +121,7 @@ export interface DagLiveHost {
 export type FlowExecutor = (manifest: unknown, options: Record<string, unknown>) => Promise<GraphFlowReport>;
 
 const APPROVAL_KEYS = ['schemaVersion', 'approved', 'reviewer', 'stagingHost', 'runId', 'sourceCommit', 'exactHeadCi', 'model', 'apiRevision',
-  'region', 'secretServiceReference', 'credentialResolverDigest', 'workloadDigest', 'preregistrationDigest', 'budget', 'priceBound', 'priorSpendUsd', 'taskDeadlineMs'];
+  'region', 'secretServiceReference', 'credentialResolverDigest', 'workloadDigest', 'preregistrationDigest', 'budget', 'priceBound', 'priorSpendUsd', 'secretService', 'taskDeadlineMs'];
 const LIMIT_KEYS = 'calls,tokens,usd,wallClockMs';
 const validLimits = (limits: DagLiveBudgetLimits | undefined): boolean => !!limits && typeof limits === 'object'
   && Object.keys(limits).filter(key => key !== 'perPattern').sort().join(',') === LIMIT_KEYS
@@ -121,6 +136,8 @@ export function validateDagLiveApproval(approval: DagLiveApproval, workload: Dag
     throw new Error('Unknown or missing D12 approval field');
   }
   if (!validPriceBound(a.priceBound)) throw new Error('D12 approval lacks a valid operator-attested price bound');
+  if (!validSecretService(a.secretService)) throw new Error('D12 approval lacks a valid pinned secret service');
+  if (a.reviewer !== preregistration?.promotionOwner) throw new Error('D12 approval must come from the preregistered promotion owner');
   const { budget } = a;
   if (a.schemaVersion !== 'dag-live-approval/v1' || a.approved !== true || a.apiRevision !== 'v1'
     || ![a.reviewer, a.stagingHost, a.runId, a.exactHeadCi, a.model, a.region, a.secretServiceReference].every(v => typeof v === 'string' && v.trim())
@@ -418,7 +435,8 @@ export function dagLiveApprovalTemplate(workload: DagLiveWorkload, preregistrati
     runId: '<unique-run-id>', sourceCommit: '<exact 40-hex commit>', exactHeadCi: '<green CI run URL for that commit>', model: '<pinned Jev model id>',
     apiRevision: 'v1', region: '<recorded deployment region>', secretServiceReference: 'openbao.typesafe.jev.api-key',
     credentialResolverDigest: '<sha256 of tools/decision/jev-openbao-credential.mjs>', workloadDigest: dagLiveDigest(workload),
-    preregistrationDigest: dagLiveDigest(preregistration), ...structuredClone(DAG_LIVE_DEFAULT_LIMITS) };
+    preregistrationDigest: dagLiveDigest(preregistration), ...structuredClone(DAG_LIVE_DEFAULT_LIMITS),
+    secretService: { origin: 'https://rca-g2.s9.internal:8200', secretPathDigest: dagLiveSecretPathDigest('kv_internal/data/typesafe/jev/api-key') } };
 }
 
 export interface DagLiveArmResult {
@@ -637,30 +655,64 @@ export function planDagLiveQualification(workload: DagLiveWorkload, preregistrat
 }
 
 /**
- * Spend of earlier D12 runs under the artifact root. A run with a summary counts its charged USD;
- * a run with an approval but no summary (crashed or killed) counts every logged call plus one in
- * flight at its reservation. Directories that are not D12 runs are ignored.
+ * Spend of every earlier D12 run anywhere below the artifact root (depth-limited, symlinks not
+ * followed). A run with a summary counts its charged USD. A run with an approval but no summary
+ * (crashed or killed) counts each logged call at its charged amount (the reservation when a line
+ * carries none) plus one call in flight at the reservation. Directories that are not D12 runs are ignored.
  */
 export async function dagLivePriorSpend(artifactRoot: string): Promise<{ usd: number; runs: string[] }> {
   let micros = 0; const runs: string[] = [];
-  let entries: string[];
-  try { entries = (await readdir(artifactRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name).sort(); }
-  catch { throw new Error('D12 artifact root is unreadable; prior spend cannot be established'); }
   const readJson = async (path: string): Promise<any> => { try { return JSON.parse(await readFile(path, 'utf8')); } catch { return undefined; } };
-  for (const name of entries) {
+  const directories: string[] = [];
+  const walk = async (relative: string, depth: number): Promise<void> => {
+    let entries;
+    try { entries = await readdir(join(artifactRoot, relative), { withFileTypes: true }); }
+    catch { if (!relative) throw new Error('D12 artifact root is unreadable; prior spend cannot be established'); return; }
+    for (const entry of entries.filter(item => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+      const child = relative ? `${relative}/${entry.name}` : entry.name;
+      directories.push(child);
+      if (depth < 8) await walk(child, depth + 1);
+    }
+  };
+  await walk('', 1);
+  for (const name of directories.sort()) {
     const approval = await readJson(join(artifactRoot, name, 'approval.json'));
     if (approval?.schemaVersion !== 'dag-live-approval/v1') continue;
     runs.push(name);
     const summary = await readJson(join(artifactRoot, name, 'summary.json'));
     const reported = [summary?.spend?.chargedUsd, summary?.reserved?.usd].filter(n => typeof n === 'number' && Number.isFinite(n) && n >= 0);
     if (summary?.schemaVersion === 'dag-live-summary/v1' && reported.length) { micros += Math.round(Math.max(...reported) * 1_000_000); continue; }
-    let logged = 0;
-    try { logged = (await readFile(join(artifactRoot, name, 'calls.jsonl'), 'utf8')).split('\n').filter(line => line.trim()).length; } catch { logged = 0; }
     const bound = validPriceBound(approval.priceBound) ? approval.priceBound as DagLivePriceBound
       : { inputUsdPerMTok: 0, outputUsdPerMTok: 0, evidenceReferences: [], approvalReference: '' };
-    micros += (logged + 1) * dagLiveReservationMicros(bound, DAG_LIVE_ANALYSIS.perCallTokenBound);
+    const reservation = dagLiveReservationMicros(bound, DAG_LIVE_ANALYSIS.perCallTokenBound);
+    let lines: string[] = [];
+    try { lines = (await readFile(join(artifactRoot, name, 'calls.jsonl'), 'utf8')).split('\n').filter(line => line.trim()); } catch { lines = []; }
+    for (const line of lines) {
+      let charged: unknown;
+      try { charged = JSON.parse(line)?.chargedUsdMicros; } catch { charged = undefined; }
+      micros += Number.isSafeInteger(charged) && (charged as number) >= 0 ? charged as number : reservation;
+    }
+    micros += reservation;
   }
   return { usd: micros / 1_000_000, runs };
+}
+
+/** The artifact root must BE the canonical AIWG artifact root, never a subdirectory of it. */
+export async function assertDagLiveArtifactRoot(sourceRoot: string, artifactRoot: string): Promise<void> {
+  let route: { artifact_root?: unknown };
+  try { route = JSON.parse(execFileSync('aiwg', ['artifacts', 'path', '--json', '--check-write'], { cwd: sourceRoot, encoding: 'utf8', timeout: 30_000 })); }
+  catch { throw new Error('D12 requires the canonical artifact root'); }
+  if (typeof route.artifact_root !== 'string' || await realpath(route.artifact_root) !== await realpath(artifactRoot)) {
+    throw new Error('D12 evidence must use the canonical artifact root itself');
+  }
+}
+
+/** Reads the resolver file once, checks that exact content against both pins, then imports those bytes. */
+export async function loadDagLiveResolver(path: string, expectedDigest: string, approvedDigest: string): Promise<Record<string, unknown>> {
+  const bytes = await readFile(path);
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (digest !== expectedDigest || digest !== approvedDigest) throw new Error('resolver-pin');
+  return import(`data:text/javascript;base64,${bytes.toString('base64')}`) as Promise<Record<string, unknown>>;
 }
 
 const write = (path: string, value: unknown) => writeFile(path, canonicalJson(value), { flag: 'wx', mode: 0o600 });
@@ -683,7 +735,7 @@ export async function runDagLiveQualification(options: {
   const synthetic = options.transport !== undefined;
   if (!synthetic && (!liveGateOpen() || workload.tasksPerPattern !== DAG_LIVE_TASKS_PER_PATTERN)) throw new Error('D12 live run requires the env gate and the full preregistered workload');
   await assertContextLiveSource(options.sourceRoot, approval.sourceCommit);
-  await assertContextArtifactRoot(options.sourceRoot, options.artifactRoot);
+  await assertDagLiveArtifactRoot(options.sourceRoot, options.artifactRoot);
   const { analysis } = preregistration;
   // The USD 2.00 cap spans reruns: earlier runs on disk count, and the operator value is a floor.
   const scanned = await dagLivePriorSpend(options.artifactRoot);
@@ -715,7 +767,10 @@ export async function runDagLiveQualification(options: {
   // One secret-service read per run; each call gets a copy the adapter zeroes after use.
   const vault: { secret: Uint8Array | null } = { secret: null };
   const host: DagLiveHost = { resolveCredential: async reference => {
-    vault.secret ??= new Uint8Array(await options.host.resolveCredential(reference));
+    if (!vault.secret) {
+      const issued = await options.host.resolveCredential(reference);
+      try { vault.secret = new Uint8Array(issued); } finally { issued.fill(0); }
+    }
     return new Uint8Array(vault.secret);
   } };
   try {
@@ -816,6 +871,12 @@ export async function recordDagLiveDecision(runDirectory: string, decision: 'pro
   const request = JSON.parse(await readFile(requestPath, 'utf8')) as { summaryDigest: string; outcomesDigest: `sha256:${string}`; runId: string };
   if (request.summaryDigest !== await fileDigest(summaryPath) || request.runId !== summary.runId) throw new Error('D12 review request does not bind this summary');
   if (reviewer !== summary.reviewer) throw new Error('D12 decision must come from the approved promotion owner');
+  // The owner comes from the run's preregistration, which must still be the one the summary binds.
+  const preregistration = JSON.parse(await readFile(join(runDirectory, 'preregistration.json'), 'utf8')) as DagLivePreregistration;
+  const bound = (summary as { preregistrationDigest?: string }).preregistrationDigest;
+  if (dagLiveDigest(preregistration) !== bound || preregistration.promotionOwner !== reviewer) {
+    throw new Error('D12 decision does not match the preregistration promotion owner');
+  }
   if (decision === 'promote' && (summary.recommendation !== 'eligible-for-promotion-review' || !summary.liveEvidence || summary.stopped)) {
     throw new Error('D12 promotion refused: evidence is not live, complete and eligible');
   }

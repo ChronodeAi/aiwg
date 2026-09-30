@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { generateDagLiveWorkload, dagLivePreregistration, dagLiveDefinitions, DAG_LIVE_PATTERNS, DAG_LIVE_TAXONOMY,
   type DagLiveWorkload, type DagLiveTask } from '../../../src/decision/graph-live-workload.js';
 import { analyzeDagLivePattern, buildDagLiveArms, DagLiveBudget, dagLiveDigest, DAG_LIVE_DEFAULT_LIMITS, DAG_LIVE_SOURCE_GOLDENS,
-  dagLiveChargeMicros, dagLivePriorSpend, dagLiveReservationMicros, DAG_LIVE_RESERVE_FLOOR_USD_PER_MTOK,
+  dagLiveChargeMicros, dagLivePriorSpend, dagLiveReservationMicros, DAG_LIVE_RESERVE_FLOOR_USD_PER_MTOK, loadDagLiveResolver,
   patternCallRatioExceeded, planDagLiveQualification, recordDagLiveDecision, runDagLiveQualification, speculativeActionViolation,
   validateDagLiveApproval, validateDagLiveInputs, type DagLiveApproval, type DagLivePair } from '../../../src/decision/graph-live-qualification.js';
 // @ts-expect-error untyped trusted resolver module
@@ -34,8 +34,11 @@ function approvalFor(workload: DagLiveWorkload, overrides: Partial<DagLiveApprov
     secretServiceReference: JEV_SECRET_REFERENCE, credentialResolverDigest: `sha256:${'b'.repeat(64)}`,
     workloadDigest: dagLiveDigest(workload), preregistrationDigest: dagLiveDigest(preregistration),
     ...structuredClone(DAG_LIVE_DEFAULT_LIMITS), priceBound: { ...structuredClone(DAG_LIVE_DEFAULT_LIMITS.priceBound), approvalReference: 'offline-fixture-attestation' },
-    priorSpendUsd: 0, ...overrides };
+    priorSpendUsd: 0, secretService: structuredClone(SECRET_SERVICE), ...overrides };
 }
+const BAO_ORIGIN = 'https://bao.example.invalid';
+const SECRET_PATH = 'kv_internal/data/typesafe/jev/api-key';
+const SECRET_SERVICE = { origin: BAO_ORIGIN, secretPathDigest: `sha256:${createHash('sha256').update(SECRET_PATH).digest('hex')}` as const };
 const PRICE = { ...DAG_LIVE_DEFAULT_LIMITS.priceBound, approvalReference: 'offline-fixture-attestation' };
 
 /** Oracle Jev: answers from the frozen labels unless `wrong(taskId, node)` flips an answer. */
@@ -94,7 +97,8 @@ async function run(workload: DagLiveWorkload, fetch: typeof globalThis.fetch, ov
   return withRepo(async ({ source, artifacts, commit }) => {
     await seed?.(artifacts);
     const approval = approvalFor(workload, { sourceCommit: commit, ...overrides });
-    const resolveCredential = vi.fn(async () => new TextEncoder().encode('fixture-secret-value'));
+    const issued: Uint8Array[] = [];
+    const resolveCredential = vi.fn(async () => { const key = new TextEncoder().encode('fixture-secret-value'); issued.push(key); return key; });
     const result = await runDagLiveQualification({ approval, workload, preregistration: dagLivePreregistration(workload), sourceRoot: source,
       artifactRoot: artifacts, host: { resolveCredential }, executeFlow: executeFlowGraph, skillId, transport: fetch, ...(now ? { now } : {}) }) as any;
     const directory = join(artifacts, approval.runId);
@@ -102,7 +106,7 @@ async function run(workload: DagLiveWorkload, fetch: typeof globalThis.fetch, ov
     const files = Object.fromEntries(await Promise.all(['summary.json', 'pairs.jsonl', 'calls.jsonl', 'run-manifest.json', 'evidence-manifest.json',
       'g5-load-result.json', 'g6-review-request.json'].map(async name => [name, await read(name)])));
     const decisions = { hold: await recordDagLiveDecision(directory, 'hold', 'roctinam', 'synthetic offline run').catch(error => error as Error) };
-    return { result, files, resolveCredential, directory, decisions };
+    return { result, files, resolveCredential, directory, decisions, issued };
   });
 }
 
@@ -147,6 +151,12 @@ describe('D12 live qualification workload and preregistration (#2686)', () => {
       { priceBound: { ...PRICE, evidenceReferences: [] } }, { priceBound: { ...PRICE, inputUsdPerMTok: -1 } },
       { priceBound: { ...PRICE, perRequestUsd: 0 } }, { priceBound: { ...PRICE, unknown: 1 } },
       { priorSpendUsd: -0.01 }, { priorSpendUsd: undefined },
+      // The approver must be the preregistered promotion owner.
+      { reviewer: 'someone-else' },
+      // The vault origin and secret path are pinned: missing, plain HTTP, pathful or malformed pins are refused.
+      { secretService: undefined }, { secretService: { ...SECRET_SERVICE, origin: 'http://bao.example.invalid' } },
+      { secretService: { ...SECRET_SERVICE, origin: 'https://bao.example.invalid/v1' } },
+      { secretService: { ...SECRET_SERVICE, secretPathDigest: SECRET_PATH } }, { secretService: { ...SECRET_SERVICE, extra: 1 } },
       { budget: { ...DAG_LIVE_DEFAULT_LIMITS.budget, perPattern: { ...DAG_LIVE_DEFAULT_LIMITS.budget.perPattern, calls: 5_000 } } },
       { model: 'jev-latest' }, { approved: false as never }, { workloadDigest: `sha256:${'c'.repeat(64)}` }, { extra: 1 },
     ];
@@ -274,7 +284,7 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
   it('runs both arms through Flow, writes digest-bound D11 evidence and never recommends promotion', async () => {
     const workload = generateDagLiveWorkload(21, 4);
     const fetch = oracle(workload, (task, node) => task.id === 'tb-002' && node === 'flat');
-    const { result, files, resolveCredential, decisions } = await run(workload, fetch as never);
+    const { result, files, resolveCredential, decisions, issued } = await run(workload, fetch as never);
     expect(result.stopped).toBeNull();
     expect(result.pairs).toBe(12);
     expect(result.source).toBe('synthetic'); expect(result.liveEvidence).toBe(false);
@@ -294,6 +304,9 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
     expect(result.reserved.tokens).toBe(608 * fetch.mock.calls.length);
     // The credential is read once per run, sent on every call and never persisted.
     expect(resolveCredential).toHaveBeenCalledTimes(1);
+    // The array the resolver returned is zeroed once copied.
+    expect(issued).toHaveLength(1);
+    expect(issued[0]!.every(byte => byte === 0)).toBe(true);
     expect(fetch.mock.calls.every(([, init]) => (init.headers as Record<string, string>).authorization === 'Bearer fixture-secret-value')).toBe(true);
     for (const text of Object.values(files)) expect(text).not.toContain('fixture-secret-value');
     // Model-visible state is the D10 projection: only the subject and predecessor evidence, never labels.
@@ -351,6 +364,13 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
       const directory = join(artifacts, approval.runId);
       await expect(recordDagLiveDecision(directory, 'promote', 'roctinam', 'looks good')).rejects.toThrow('promotion refused');
       await expect(recordDagLiveDecision(directory, 'hold', 'someone-else', 'n/a')).rejects.toThrow('promotion owner');
+      // The decision is checked against the run's preregistered owner, and that file is digest-bound.
+      const preregistered = JSON.parse(await readFile(join(directory, 'preregistration.json'), 'utf8'));
+      await rm(join(directory, 'preregistration.json'));
+      await writeFile(join(directory, 'preregistration.json'), JSON.stringify({ ...preregistered, promotionOwner: 'mallory' }));
+      await expect(recordDagLiveDecision(directory, 'hold', 'roctinam', 'n/a')).rejects.toThrow('preregistration');
+      await rm(join(directory, 'preregistration.json'));
+      await writeFile(join(directory, 'preregistration.json'), JSON.stringify(preregistered));
       const summary = JSON.parse(await readFile(join(directory, 'summary.json'), 'utf8'));
       await rm(join(directory, 'summary.json'));
       await writeFile(join(directory, 'summary.json'), JSON.stringify({ ...summary, recommendation: 'eligible-for-promotion-review', liveEvidence: true }));
@@ -436,25 +456,26 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
       await mkdir(join(artifacts, 'earlier-complete'));
       await writeFile(join(artifacts, 'earlier-complete', 'approval.json'), JSON.stringify(approvalFor(workload, { runId: 'earlier-complete' })));
       await writeFile(join(artifacts, 'earlier-complete', 'summary.json'), JSON.stringify({ schemaVersion: 'dag-live-summary/v1', spend: { chargedUsd: 1.998 } }));
-      // A crashed run has no summary: every logged call plus one in flight is charged at the reservation.
-      await mkdir(join(artifacts, 'earlier-crashed'));
-      await writeFile(join(artifacts, 'earlier-crashed', 'approval.json'), JSON.stringify(approvalFor(workload, { runId: 'earlier-crashed' })));
-      await writeFile(join(artifacts, 'earlier-crashed', 'calls.jsonl'), '{}\n');
+      // A crashed run, nested below the root, has no summary: each logged call counts at its charged amount
+      // (a line without one at the reservation), plus one call in flight at the reservation.
+      await mkdir(join(artifacts, 'team', 'earlier-crashed'), { recursive: true });
+      await writeFile(join(artifacts, 'team', 'earlier-crashed', 'approval.json'), JSON.stringify(approvalFor(workload, { runId: 'earlier-crashed' })));
+      await writeFile(join(artifacts, 'team', 'earlier-crashed', 'calls.jsonl'), '{"chargedUsdMicros":500}\n{}\n');
       await mkdir(join(artifacts, 'unrelated')); await writeFile(join(artifacts, 'unrelated', 'summary.json'), '{"spend":{"chargedUsd":5}}');
     };
     await withRepo(async ({ artifacts }) => {
       await seed(artifacts);
-      expect(await dagLivePriorSpend(artifacts)).toEqual({ usd: 1.9988, runs: ['earlier-complete', 'earlier-crashed'] });
+      expect(await dagLivePriorSpend(artifacts)).toEqual({ usd: 1.9993, runs: ['earlier-complete', 'team/earlier-crashed'] });
     });
-    // Only USD 0.0012 remains: the run stops at 80% of it, before a reservation could pass the cap.
+    // Only USD 0.0007 remains: the run stops at 80% of it, before a reservation could pass the cap.
     const fetch = oracle(workload);
     const { result, files } = await run(workload, fetch as never, {}, undefined, seed);
-    expect(result).toMatchObject({ priorSpendUsd: 1.9988, effectiveRunUsdCap: 0.0012, stopped: 'budget-run-usd' });
+    expect(result).toMatchObject({ priorSpendUsd: 1.9993, effectiveRunUsdCap: 0.0007, stopped: 'budget-run-usd' });
     expect(fetch.mock.calls.length).toBeGreaterThan(0);
-    expect(result.spend.chargedUsd).toBeLessThanOrEqual(0.0012 * 0.8);
-    expect(result.spend.chargedUsd + 0.0004).toBeGreaterThan(0.0012 * 0.8);
+    expect(result.spend.chargedUsd).toBeLessThanOrEqual(0.0007 * 0.8);
+    expect(result.spend.chargedUsd + 0.0004).toBeGreaterThan(0.0007 * 0.8);
     expect(result.priorSpendUsd + result.spend.chargedUsd).toBeLessThan(2);
-    expect(JSON.parse(files['g5-load-result.json']).manifest.bounds.reservedUsdMicros).toBe(1200);
+    expect(JSON.parse(files['g5-load-result.json']).manifest.bounds.reservedUsdMicros).toBe(700);
     // The operator value is a floor: it applies even when no earlier run is on disk.
     await withRepo(async ({ source, artifacts, commit }) => {
       const resolveCredential = vi.fn();
@@ -464,6 +485,33 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
       expect(resolveCredential).not.toHaveBeenCalled();
     });
   }, 60_000);
+
+  it('accepts only the canonical artifact root itself, so a subdirectory cannot reset the cap', async () => {
+    const workload = generateDagLiveWorkload(21, 2);
+    await withRepo(async ({ source, artifacts, commit }) => {
+      await mkdir(join(artifacts, 'sub'));
+      const resolveCredential = vi.fn();
+      await expect(runDagLiveQualification({ approval: approvalFor(workload, { sourceCommit: commit }), workload,
+        preregistration: dagLivePreregistration(workload), sourceRoot: source, artifactRoot: join(artifacts, 'sub'), host: { resolveCredential },
+        executeFlow: executeFlowGraph, skillId, transport: oracle(workload) as never })).rejects.toThrow('canonical artifact root');
+      expect(resolveCredential).not.toHaveBeenCalled();
+    });
+  });
+
+  it('loads the resolver from the same bytes it digests and refuses any pin mismatch', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'd12-resolver-'));
+    try {
+      const file = join(dir, 'resolver.mjs');
+      const bytes = 'import { createHash } from "node:crypto";\nexport function createOpenBaoJevResolver() { return async () => new Uint8Array([createHash("sha256").digest().length]); }\n';
+      await writeFile(file, bytes);
+      const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}` as const;
+      const loaded = await loadDagLiveResolver(file, digest, digest);
+      expect(typeof loaded.createOpenBaoJevResolver).toBe('function');
+      await expect(loadDagLiveResolver(file, digest, `sha256:${'c'.repeat(64)}`)).rejects.toThrow('resolver-pin');
+      await writeFile(file, bytes + '// swapped\n');
+      await expect(loadDagLiveResolver(file, digest, digest)).rejects.toThrow('resolver-pin');
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
 
   it('runs the dry run and --freeze from source without building dist', () => {
     const out = join(tmpdir(), `d12-freeze-${process.pid}-${Date.now()}`);
@@ -498,15 +546,16 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
 
 describe('OpenBao Jev credential resolver', () => {
   type Call = { url: string; options: any };
-  function fixture(options: { secret?: unknown; status?: number; env?: Record<string, string> } = {}) {
+  function fixture(options: { secret?: unknown; status?: number; env?: Record<string, string>; pin?: unknown; token?: string } = {}) {
     const calls: Call[] = [];
-    const helper = vi.fn(async () => 'fixture-bao-token');
+    const helper = vi.fn(async () => options.token ?? 'fixture-bao-token');
     const request = vi.fn(async (url: string, requestOptions: any) => {
       calls.push({ url, options: requestOptions });
       if (url.endsWith('/revoke-self')) return { status: 204, body: Buffer.alloc(0) };
       return { status: options.status ?? 200, body: Buffer.from(JSON.stringify({ data: { data: options.secret ?? { token: 'fixture-jev-key', note: 'other' } } })) };
     });
-    const resolver = createOpenBaoJevResolver({ env: { BAO_ADDR: 'https://bao.example.invalid', ...options.env }, acquireToken: helper, request });
+    const resolver = createOpenBaoJevResolver({ env: { BAO_ADDR: BAO_ORIGIN, ...options.env }, acquireToken: helper, request,
+      pin: 'pin' in options ? (options as any).pin : SECRET_SERVICE });
     return { resolver, calls, helper, request };
   }
   it('reads the `token` field over verified TLS, then revokes its own vault token', async () => {
@@ -531,14 +580,26 @@ describe('OpenBao Jev credential resolver', () => {
     ['a TLS verification override', { env: { NODE_TLS_REJECT_UNAUTHORIZED: '0' } }, 'configuration'],
     ['a plain-HTTP secret service', { env: { BAO_ADDR: 'http://bao.example.invalid' } }, 'configuration'],
     ['a secret without the token field', { secret: { api_key: 'fixture-jev-key' } }, 'shape'],
+    ['a vault origin other than the pinned one', { env: { BAO_ADDR: 'https://attacker.example.invalid' } }, 'configuration'],
+    ['a secret path other than the pinned one', { env: { AIWG_JEV_OPENBAO_SECRET_PATH: 'kv_internal/data/other/secret' } }, 'configuration'],
+    ['a missing approval pin', { pin: undefined }, 'configuration'],
   ])('refuses %s with a fixed category and no secret material', async (_name, options, category) => {
-    const { resolver, request } = fixture(options as never);
+    const { resolver, request, helper } = fixture(options as never);
     const error = await resolver(JEV_SECRET_REFERENCE).catch(value => value as Error);
     expect(error.message).toBe(`Jev credential resolution failed (${category})`);
-    if (category === 'configuration') expect(request).not.toHaveBeenCalled();
+    // Configuration is refused before any vault token exists or is sent anywhere.
+    if (category === 'configuration') { expect(helper).not.toHaveBeenCalled(); expect(request).not.toHaveBeenCalled(); }
+  });
+  it('revokes a helper token that fails validation, and never sends a header-unsafe one', async () => {
+    const odd = fixture({ token: 'short' });
+    await expect(odd.resolver(JEV_SECRET_REFERENCE)).rejects.toThrow('(login)');
+    expect(odd.calls.map(call => call.url)).toEqual([`${BAO_ORIGIN}/v1/auth/token/revoke-self`]);
+    const unsafe = fixture({ token: 'bad\ntoken-value' });
+    await expect(unsafe.resolver(JEV_SECRET_REFERENCE)).rejects.toThrow('(login)');
+    expect(unsafe.request).not.toHaveBeenCalled();
   });
   it('never exposes the key, path or vault token in errors', async () => {
-    const failing = createOpenBaoJevResolver({ env: { BAO_ADDR: 'https://bao.example.invalid' },
+    const failing = createOpenBaoJevResolver({ env: { BAO_ADDR: BAO_ORIGIN }, pin: SECRET_SERVICE,
       acquireToken: async () => { throw new Error('fixture-bao-token kv_internal/data/typesafe/jev/api-key fixture-jev-key'); }, request: vi.fn() });
     const error = await failing(JEV_SECRET_REFERENCE).catch(value => value as Error);
     expect(error.message).toBe('Jev credential resolution failed (login)');

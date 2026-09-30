@@ -14,7 +14,6 @@
  *   node tools/decision/dag-live-qualification.mjs --record-decision RUN_DIR promote|hold REVIEWER RATIONALE
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -71,6 +70,7 @@ try {
     // With an artifact root, earlier runs count against the USD 2.00 cap exactly as in collection.
     let prior = null;
     if (args[2]) {
+      await runtime.assertDagLiveArtifactRoot(root, resolve(args[2]));
       const scanned = await runtime.dagLivePriorSpend(resolve(args[2]));
       const priorUsd = Math.max(scanned.usd, limits.priorSpendUsd ?? 0);
       prior = { priorSpendUsd: priorUsd, priorRuns: scanned.runs };
@@ -85,17 +85,17 @@ try {
     process.stdout.write(JSON.stringify(await runtime.recordDagLiveDecision(resolve(args[1]), args[2], args[3], args[4])) + '\n');
   } else {
     const approval = await readJson(args[1]);
-    const resolverPath = resolve(args[3]);
-    const digest = `sha256:${createHash('sha256').update(await readFile(resolverPath)).digest('hex')}`;
-    if (args[4] !== digest || approval.credentialResolverDigest !== digest) throw new Error('resolver-pin');
     runtime.validateDagLiveApproval(approval, workload, preregistration);
-    const host = await import(pathToFileURL(resolverPath).href);
-    if (typeof host.resolveCredential !== 'function') throw new Error('resolver-interface');
+    // One read: the digested bytes are exactly the bytes imported.
+    const resolver = await runtime.loadDagLiveResolver(resolve(args[3]), args[4], approval.credentialResolverDigest);
+    if (typeof resolver.createOpenBaoJevResolver !== 'function') throw new Error('resolver-interface');
+    // The resolver refuses any vault origin or secret path other than the approved pin.
+    const host = { resolveCredential: resolver.createOpenBaoJevResolver({ pin: approval.secretService }) };
     const { resolveDecisionEvaluateSkill } = await import(pathToFileURL(join(root, 'dist/src/decision/graph-skill-bridge.js')).href);
     const skill = await resolveDecisionEvaluateSkill(root);
     const { executeFlowGraph } = createRequire(import.meta.url)('../../agentic/code/addons/composition-engine/lib/runtime.mjs');
     const result = await runtime.runDagLiveQualification({ approval, workload, preregistration, sourceRoot: root, artifactRoot: resolve(args[2]),
-      host: { resolveCredential: host.resolveCredential }, executeFlow: executeFlowGraph, skillId: skill.id });
+      host, executeFlow: executeFlowGraph, skillId: skill.id });
     const { analyses, ...summary } = result;
     process.stdout.write(JSON.stringify({ ...summary, patterns: analyses.map(item => ({ pattern: item.pattern, n: item.n, eligible: item.eligible,
       nonInferiority: item.quality.nonInferiority.decision, difference: item.quality.difference, callRatio: item.economics.callRatio })) }, null, 2) + '\n');
