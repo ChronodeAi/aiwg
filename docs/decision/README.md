@@ -100,9 +100,9 @@ scorer identity separate from D09 qualification. Live studies, calibration, huma
 review and study-specific statistical reports remain pending.
 
 The [D29 synthetic held-out study](d29-heldout-study.md) supplies a seeded
-2,000-subject v2 public development demo with balanced paraphrases and
-injection/near-miss traps, preregistration, receipt scorer, additional error/coverage
-gates and the 165-assessment operator template. Its staged runbook collects and
+2,000-subject v3 public development demo with varied attributes, passages,
+benign look-alikes, injection/near-miss traps, a single-feature shortcut audit,
+preregistration, receipt scorer, additional error/coverage gates and the 165-assessment operator template. Its staged runbook collects and
 seals calibration first, fits/registers the reviewed D09 artifact offline, and
 requires a second artifact-bound approval for test access. It remains experimental and
 default-off; paid collection rejects public demo seeds/corpus digests and requires

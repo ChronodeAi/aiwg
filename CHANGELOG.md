@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 synthetic generator v3 with attribute-generic
+  passage cases, benign look-alikes, varied injections and incomplete-evidence
+  forms, a deterministic shortcut audit, and public development seed
+  `d29-study-v4`. V1/v2 rows and the frozen baseline remain unchanged; live
+  observations, calibration qualification and operator review remain pending (#2622)
+
 - Experimental, default-off D29 synthetic dataset v2 with 2,000 subjects,
   balanced paraphrases, exclusive/non-exclusive port and near-miss traps,
   independent injection blockers, per-variant candidate/baseline metrics and
