@@ -13,6 +13,23 @@ vi.mock('node:child_process', async original => {
   return { ...actual, execFileSync: (command: string, args: string[], options: unknown) => command === 'aiwg'
     ? JSON.stringify({ artifact_root: route.root, write_ready: true }) : actual.execFileSync(command, args, { ...(options as object), timeout: 10_000 }) };
 });
+/*
+ * Live-path test double: a JevDecisionAdapter constructed WITHOUT a transport (the live runner's form) gets
+ * this fake. With no fake installed it refuses, so no test in this file can reach the network.
+ */
+const live = vi.hoisted(() => ({ fetch: null as null | typeof fetch }));
+vi.mock('../../../src/decision/adapters/jev.js', async original => {
+  const actual = await original<typeof import('../../../src/decision/adapters/jev.js')>();
+  class LiveDoubleAdapter extends actual.JevDecisionAdapter {
+    constructor(options: ConstructorParameters<typeof actual.JevDecisionAdapter>[0] = {}) {
+      super(options.fetch ? options : { ...options, fetch: (async (...args: Parameters<typeof fetch>) => {
+        if (!live.fetch) throw new Error('network disabled in tests');
+        return live.fetch(...args);
+      }) as typeof fetch });
+    }
+  }
+  return { ...actual, JevDecisionAdapter: LiveDoubleAdapter };
+});
 const estimator = new CanonicalJsonByteEstimator();
 const profile = { id: 'jev-tv12-unqualified', version: '1.0.0', estimator: { id: estimator.id, version: estimator.version },
   limits: { aggregateTokens: 64000, stateAndLongestQuestionTokens: 32000 }, safetyMarginBps: 1000, requestEnvelopeTokens: 32 };
@@ -203,8 +220,8 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
     s.approval.sourceCommit = git('rev-parse', 'HEAD');
     const runs = contextLiveRunsRoot(output);
     const dispose = vi.fn();
-    const run = (artifactRoot = output) => runContextLiveCollection({ approval: s.approval, corpus: s.corpus, sourceRoot: root, artifactRoot,
-      host: { resolveCredential: s.resolver, dispose }, offlineTransport: s.fetch as typeof fetch }) as Promise<any>;
+    const run = (artifactRoot = output, transport: 'offline' | 'live' = 'offline') => runContextLiveCollection({ approval: s.approval, corpus: s.corpus, sourceRoot: root, artifactRoot,
+      host: { resolveCredential: s.resolver, dispose }, ...(transport === 'offline' ? { offlineTransport: s.fetch as typeof fetch } : {}) }) as Promise<any>;
     const seed = async (runId: string, files: Record<string, unknown>) => {
       await mkdir(join(runs, runId), { recursive: true });
       for (const [name, value] of Object.entries(files)) await writeFile(join(runs, runId, name), JSON.stringify(value));
@@ -235,6 +252,27 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
       // The completed run now counts against the issue cap at its charged reservation.
       expect(await contextLivePriorSpendUsd(runs)).toBeCloseTo(summary.reserved.usd, 9);
     } finally { await o.cleanup(); }
+  });
+  it('executes provider-path collection and records it through a D11 mode that runs executors', async () => {
+    // Regression for the first approved run: D11 "live" mode skips every executor as live-evidence-unavailable,
+    // so collection dispatched nothing and the evidence manifest refused the skipped cases.
+    const o = await orchestration(); const { s, runs } = o;
+    const original = s.fetch.getMockImplementation()!; let requests = 0;
+    live.fetch = (async (url: any, init: any) => {
+      requests++;
+      const response = await original(url, init);
+      return new Response(await response.text(), { headers: { ...Object.fromEntries(response.headers), 'x-request-id': `live-double-${requests}` } });
+    }) as typeof fetch;
+    try {
+      const summary = await o.run(o.output, 'live');
+      expect(summary).toMatchObject({ source: 'provider', collectionSuccess: true, stopped: false, qualifiedForEnforcement: false });
+      expect(requests).toBeGreaterThan(13); expect(summary.collected).toBe(requests); expect(summary.reserved.requests).toBe(requests);
+      expect(s.resolver).toHaveBeenCalled(); expect(o.dispose).toHaveBeenCalledTimes(1);
+      const manifest = JSON.parse(await readFile(join(runs, s.approval.runId, 'run-manifest.json'), 'utf8'));
+      expect(manifest.mode).toBe('recorded');
+      expect(manifest.evidence.every((row: any) => row.outcome === 'pass' && !row.error)).toBe(true);
+      expect(JSON.parse(await readFile(join(runs, summary.evidenceManifest), 'utf8')).evidence).toHaveLength(17);
+    } finally { live.fetch = null; await o.cleanup(); }
   });
   it('requires the canonical artifact root itself, not a subdirectory', async () => {
     const o = await orchestration();

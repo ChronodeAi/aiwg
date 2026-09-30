@@ -163,6 +163,10 @@ not an arbitrary subset labelled synthetic. It snapshots the approved synthetic 
 private mode-0600 files before dispatch. Each D11 case binds those inputs by digest.
 The corpus is the approved private study input, not a provider body export; comparison
 and D11 evidence contain only metadata. The existing D11 writer retains that evidence.
+The generic D11 runner never invokes executors in `live` mode. Collection therefore runs every
+case itself, sequentially, and then records the outcomes. It uses D11 mode `recorded` for the
+provider path and `offline` for the synthetic seam. Provider provenance is in each comparison
+record (request ID, served model, usage digest), not in the D11 mode label.
 
 ## Collection boundary
 

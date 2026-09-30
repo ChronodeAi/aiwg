@@ -400,26 +400,36 @@ async function collectWithinLedger(approval: ContextLiveApproval, corpus: Contex
     const frozenInputs = { corpus: { path: 'corpus.json', digest: approval.corpusDigest },
       preregistration: { path: 'preregistration.json', digest: approval.preregistrationDigest },
       approval: { path: 'approval.json', digest: contextLiveDigest(approval) } };
-    const run = await executeQualificationPlan({ artifactRoot: runsRoot, timeoutMs: Math.min(600_000, Math.floor(approval.budget.wallClockMs)), concurrency: 1,
-      manifest: { schemaVersion: 'decision-qualification-run/v1', mode: offlineTransport ? 'offline' : 'live', runId: approval.runId, generatedAt: new Date().toISOString(),
+    type CaseResult = { outcome: 'pass' | 'fail'; details: Record<string, unknown> };
+    // Collection runs here, sequentially, before D11 recording. The generic D11 runner never invokes
+    // executors in `live` mode (a callback cannot authenticate a provider), so provider-backed outcomes
+    // are recorded afterwards in `recorded` mode; their provider proof is the retained request ID and
+    // usage digest in each comparison record.
+    const outcomes = new Map<string, CaseResult>();
+    for (const item of corpus.cases) {
+      if (stopped) { outcomes.set(item.id, { outcome: 'fail', details: { reason: 'prior-stop', frozenInputs } }); continue; }
+      try {
+        const collectionHost: ContextLiveHost = { resolveCredential: reference => host.resolveCredential(reference), record: async record => {
+          const usage = { source: record.source, servedModel: record.servedModel, requestId: record.requestId, inputTokens: record.inputTokens, outputTokens: record.outputTokens, costUsd: record.costUsd };
+          if (contextLiveDigest(usage) !== record.usageArtifactDigest) throw new Error('TV-12 usage digest mismatch');
+          await writeFile(join(directory, `usage-${record.usageArtifactDigest.slice(7)}.json`), canonicalJson(usage), { flag: 'wx', mode: 0o600 });
+          await writeFile(join(directory, `${record.caseId}-${record.partitionId}-comparison.json`), canonicalJson(record), { flag: 'wx', mode: 0o600 });
+          records.push(record);
+          await host.record?.(structuredClone(record));
+        } };
+        if (!offlineTransport) liveHosts.add(collectionHost);
+        const collected = await collectContextLiveCase(item, corpus, approval, collectionHost, budget, signal, offlineTransport);
+        if (collected.rejected) rejected.push(item.id);
+        outcomes.set(item.id, { outcome: 'pass', details: { frozenInputs, rejectedBeforeDispatch: collected.rejected, records: collected.records } });
+      } catch (error) {
+        stopped = true;
+        outcomes.set(item.id, { outcome: 'fail', details: { reason: 'collection-stopped', frozenInputs, ...(error instanceof CollectionStop ? { provider: error.evidence } : {}), records: records.filter(row => row.caseId === item.id), reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd } } });
+      }
+    }
+    const run = await executeQualificationPlan({ artifactRoot: runsRoot, timeoutMs: 60_000, concurrency: 1,
+      manifest: { schemaVersion: 'decision-qualification-run/v1', mode: offlineTransport ? 'offline' : 'recorded', runId: approval.runId, generatedAt: new Date().toISOString(),
         sourceCommit: approval.sourceCommit, dirty: false, cases: corpus.cases.map(item => ({ id: item.id, kind: 'baseline', mandatory: true, candidateTests: [], evidenceIds: ['CTX-TV12'] })) },
-      executors: Object.fromEntries(corpus.cases.map(item => [item.id, async ({ signal: caseSignal }) => {
-        if (stopped) return { outcome: 'fail' as const, details: { reason: 'prior-stop', frozenInputs } };
-        try {
-          const collectionHost: ContextLiveHost = { resolveCredential: reference => host.resolveCredential(reference), record: async record => {
-            const usage = { source: record.source, servedModel: record.servedModel, requestId: record.requestId, inputTokens: record.inputTokens, outputTokens: record.outputTokens, costUsd: record.costUsd };
-            if (contextLiveDigest(usage) !== record.usageArtifactDigest) throw new Error('TV-12 usage digest mismatch');
-            await writeFile(join(directory, `usage-${record.usageArtifactDigest.slice(7)}.json`), canonicalJson(usage), { flag: 'wx', mode: 0o600 });
-            await writeFile(join(directory, `${record.caseId}-${record.partitionId}-comparison.json`), canonicalJson(record), { flag: 'wx', mode: 0o600 });
-            records.push(record);
-            await host.record?.(structuredClone(record));
-          } };
-          if (!offlineTransport) liveHosts.add(collectionHost);
-          const collected = await collectContextLiveCase(item, corpus, approval, collectionHost, budget, AbortSignal.any([signal, caseSignal]), offlineTransport);
-          if (collected.rejected) rejected.push(item.id);
-          return { outcome: 'pass' as const, details: { frozenInputs, rejectedBeforeDispatch: collected.rejected, records: collected.records } };
-        } catch (error) { stopped = true; return { outcome: 'fail' as const, details: { reason: 'collection-stopped', frozenInputs, ...(error instanceof CollectionStop ? { provider: error.evidence } : {}), records: records.filter(row => row.caseId === item.id), reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd } } }; }
-      }])), sanitizeDetails: details => details });
+      executors: Object.fromEntries(corpus.cases.map(item => [item.id, async () => outcomes.get(item.id)!])), sanitizeDetails: details => details });
     await assertContextLiveSource(sourceRoot, approval.sourceCommit);
     const worst = Math.max(0, ...records.map(row => row.undercountBps));
     const collectionSuccess = !stopped && records.length > 0 && run.evidence.length === corpus.cases.length && run.evidence.every(row => row.outcome === 'pass')
