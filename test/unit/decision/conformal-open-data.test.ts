@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as openData from '../../../tools/experiments/conformal/open-data.mjs';
 import * as collector from '../../../tools/experiments/conformal/collect-jev.v2.mjs';
 import * as analysis from '../../../tools/experiments/conformal/run.v2.mjs';
@@ -23,6 +23,7 @@ const {
   syntheticChoiceDistribution,
   topIndex,
   verifyFrozenOpenData,
+  wilson,
 } = openData;
 const { buildRuntimeArtifacts, collectLiveScores, estimateCollection, main: collectMain, scoreRowThroughRuntime } = collector;
 const { runAnalysis } = analysis;
@@ -34,6 +35,54 @@ const CLINC = 'clinc150-intent-choice';
 const BANKING = 'banking77-intent-choice';
 const PIN = preregistration.pins.liveServedModel;
 const REGION = 'fixture-region';
+
+// A separate, internally pinned test design. The checked-in v2 manifests never change.
+const testDesign = (() => {
+  const registration = structuredClone(preregistration);
+  const sample = structuredClone(frozen);
+  sample.splits.train = [];
+  for (const split of ['calibration', 'finalTest', 'shift']) {
+    sample.splits[split] = [CLINC, BANKING].flatMap(task =>
+      frozen.splits[split].filter(row => row.task === task).slice(0, 30));
+  }
+  sample.splitHashes = Object.fromEntries(Object.entries(sample.splits).map(([split, rows]) => [split, rowHash(rows)]));
+  sample.liveSubsets.ids = Object.fromEntries(['calibration', 'finalTest', 'shift'].map(split =>
+    [split, sample.splits[split].map(row => row.id)]));
+  sample.liveSubsets.hashes = Object.fromEntries(['calibration', 'finalTest', 'shift'].map(split =>
+    [split, rowHash(sample.splits[split])]));
+  registration.resourceBudget.liveSubsetItems = 180;
+  for (const split of ['calibration', 'finalTest', 'shift']) registration.liveDesign[split] = 60;
+  registration.liveDesign.selection = 'Offline test fixture: first 30 frozen rows per task and live split';
+  registration.liveDesign.rationale = 'Bounded deterministic collector and analysis test only.';
+  registration.usefulnessGates.minimumFinalRowsPerTask = 25;
+  registration.usefulnessGates.minimumSliceRows = 25;
+  const passProbability = (n: number, k: number, p: number) => {
+    let term = (1 - p) ** n;
+    let tail = 0;
+    for (let count = 0; count <= n; count += 1) {
+      if (count >= k) tail += term;
+      term *= (n - count) / (count + 1) * p / (1 - p);
+    }
+    return tail;
+  };
+  registration.liveDesign.gateTable = [CLINC, BANKING].flatMap(task => ['finalTest', 'shift'].map(split => {
+    const scoredN = 30;
+    const minCovered = Array.from({ length: scoredN + 1 }, (_, k) => k)
+      .find(k => wilson(k, scoredN).lower >= registration.usefulnessGates.minimumCoverageWilsonLower);
+    return { task, split, scoredN, minCovered,
+      passProbabilityAtTrueCoverage090: passProbability(scoredN, minCovered, 0.9),
+      passProbabilityAtTrueCoverage085: passProbability(scoredN, minCovered, 0.85) };
+  }));
+  sample.preregistrationHash = digest(registration);
+  sample.sampleDigest = digest({ license: sample.license, retrievalDate: sample.retrievalDate,
+    sourceFiles: sample.sourceFiles, tasks: sample.tasks, splitHashes: sample.splitHashes,
+    splits: sample.splits, liveSubsets: sample.liveSubsets });
+  verifyFrozenOpenData(sample, registration);
+  return { preregistration: registration, frozen: sample };
+})();
+
+const fixtureRows = () => collector.liveSubsetRows(testDesign.frozen);
+const runFixtureAnalysis = (args: Record<string, unknown>) => runAnalysis({ ...args, testDesign });
 
 function ajv() {
   const validator = new Ajv2020({ strict: false });
@@ -151,17 +200,17 @@ async function readJsonl(path: string) {
 
 /** Hand-written score records with no collector provenance (the HEAD-era fixture shape). */
 async function writeHandWrittenScores(path: string, mutate: (record: any) => void = () => {}) {
-  const rows = liveRows();
+  const rows = fixtureRows();
   const positions = splitIndex(rows);
   const codeVersion = experimentCodeVersion(conformalRoot);
   const lines = rows.map((row: any) => {
-    const task = frozen.tasks[row.task];
+    const task = testDesign.frozen.tasks[row.task];
     const compatibility = typeof openData.expectedLiveCompatibility === 'function'
-      ? openData.expectedLiveCompatibility(frozen, preregistration, row.task)
-      : compatibilityForTask(frozen, row.task, 1 - preregistration.coverageTarget, codeVersion, {
+      ? openData.expectedLiveCompatibility(testDesign.frozen, testDesign.preregistration, row.task)
+      : compatibilityForTask(testDesign.frozen, row.task, 1 - testDesign.preregistration.coverageTarget, codeVersion, {
         servedModel: 'fixture-live-model',
         adapter: 'jev-decision-runtime/v2',
-        calibrationSplit: rowHash(frozen.splits.calibration.filter((candidate: any) => candidate.task === row.task)),
+        calibrationSplit: rowHash(testDesign.frozen.splits.calibration.filter((candidate: any) => candidate.task === row.task)),
       });
     const probabilities = fixtureDistribution(row, task.labels, 'go', positions.get(row.id));
     const record = {
@@ -234,6 +283,12 @@ describe('conformal open-data v2 experiment (#2613)', () => {
       expect(validator.validate(schema, { ...artifact, unexpected: true })).toBe(false);
     }
     expect(() => verifyFrozenOpenData(frozen, preregistration)).not.toThrow();
+    const fixtureValidator = ajv();
+    expect(fixtureValidator.validate(JSON.parse(readFileSync('schemas/decision/ConformalPreregistration.v2.schema.json', 'utf8')), testDesign.preregistration)).toBe(true);
+    expect(fixtureValidator.validate(JSON.parse(readFileSync('schemas/decision/ConformalFrozenOpenData.v2.schema.json', 'utf8')), testDesign.frozen)).toBe(true);
+    expect(frozen.preregistrationHash).toBe('sha256:652e198f3604fe780585336ebeaa94872057c33b7426cf561cd9557697cc3283');
+    expect(frozen.sampleDigest).toBe('sha256:3dde33c42f7f405ec4ab7f6bd72553d620772b754a57669cbd23a31c7f3acaea');
+    expect(preregistration.pins.collectorCodeDigest).toBe('sha256:c50b4e1ccccfaee52a46a244944c1e3ca7d2c2e9461ecff9f208825d11a0626f');
     expect(frozen.license).toBe('mixed: CLINC150 CC-BY-3.0; Banking77 CC-BY-4.0');
     expect(frozen.sourceFiles.map((file: { license: string }) => file.license)).toEqual(['CC-BY-3.0', 'CC-BY-4.0', 'CC-BY-4.0']);
     expect(frozen.sourceFiles[0].licenseUrl).toBe('https://raw.githubusercontent.com/clinc/oos-eval/master/LICENSE');
@@ -313,6 +368,9 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     const firstReport = await readFile(join(root, 'first/report.v2.json'), 'utf8');
     expect(firstReport).toBe(await readFile(join(root, 'reverse/report.v2.json'), 'utf8'));
     expect(await readFile(join(root, 'first/per-example.v2.jsonl'), 'utf8')).toBe(await readFile(join(root, 'reverse/per-example.v2.jsonl'), 'utf8'));
+    runAnalysis({ output: join(root, 'library') });
+    expect(await readFile(join(root, 'library/report.v2.json'), 'utf8')).toBe(firstReport);
+    expect(await readFile(join(root, 'library/per-example.v2.jsonl'), 'utf8')).toBe(await readFile(join(root, 'first/per-example.v2.jsonl'), 'utf8'));
     const report = JSON.parse(firstReport);
     const schema = JSON.parse(readFileSync('schemas/decision/ConformalOpenDataReport.v2.schema.json', 'utf8'));
     const validator = ajv();
@@ -363,16 +421,16 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     beforeAll(async () => {
       for (const mode of ['go', 'conditional', 'no-go', 'insufficient']) {
         const stateDir = await temporary(`aiwg-conformal-${mode}-`);
-        const rows = liveRows();
+        const rows = fixtureRows();
         const failing = new Set(rows.filter(row => row.split === 'finalTest').sort((a, b) => a.id.localeCompare(b.id))
           .filter((_, index) => index % 10 === 0).map(row => row.id));
         const { adapter } = fakeAdapter(rows, row => (mode === 'insufficient' && failing.has(row.id) ? new Error('fixture transport failure') : {}), mode);
-        await collectLiveScores(collectArgs(stateDir, rows, adapter));
-        const summary = runAnalysis({ output: join(stateDir, 'report'), scoresPath: join(stateDir, 'live-scores.v2.jsonl') });
+        await collectLiveScores(collectArgs(stateDir, rows, adapter, testDesign));
+        const summary = runFixtureAnalysis({ output: join(stateDir, 'report'), scoresPath: join(stateDir, 'live-scores.v2.jsonl') });
         const report = JSON.parse(await readFile(join(stateDir, 'report/report.v2.json'), 'utf8'));
         outcomes[mode] = { stateDir, summary, report };
       }
-    }, 240_000);
+    });
 
     it('CONF2-09 computes preregistered outcomes only from collector-provenanced live records', () => {
       expect(outcomes.go.report.provenance.representative).toBe(true);
@@ -388,7 +446,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
         expect(validator.validate(schema, report), JSON.stringify(validator.errors)).toBe(true);
         expect(report.integrity.release_gate.decision).not.toBe('PROMOTE');
       }
-      expect(outcomes.go.report.actuals.providerCalls).toBe(liveRows().length);
+      expect(outcomes.go.report.actuals.providerCalls).toBe(fixtureRows().length);
     });
 
     it('CONF2-09b decideOutcome reaches GO only when every preregistered task has passing live evidence', () => {
@@ -405,7 +463,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
       const { report } = outcomes.go;
       const baseline = report.tasks[CLINC].calibratedBaseline;
       const binned = Object.values(baseline.bins).reduce((sum: number, bin: any) => sum + bin.n, 0);
-      expect(binned).toBe(liveRows().filter(row => row.task === CLINC && row.split === 'calibration').length);
+      expect(binned).toBe(fixtureRows().filter(row => row.task === CLINC && row.split === 'calibration').length);
       expect(baseline.source).toMatch(/live calibration/);
       // A regressed calibrated baseline (bins fitted on live data with an uncertain decile) reviews rows LAC accepts.
       const final = report.tasks[CLINC].splits.finalTest;
@@ -423,7 +481,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
       const records = await readJsonl(scoresPath);
       records[0].probabilities = records[1].probabilities;
       await writeFile(scoresPath, `${records.map(record => JSON.stringify(record)).join('\n')}\n`);
-      const tampered = runAnalysis({ output: join(copy, 'report'), scoresPath });
+      const tampered = runFixtureAnalysis({ output: join(copy, 'report'), scoresPath });
       expect(tampered.outcome).toBe('INSUFFICIENT EVIDENCE');
       const report = JSON.parse(await readFile(join(copy, 'report/report.v2.json'), 'utf8'));
       expect(report.provenance.representative).toBe(false);
@@ -441,7 +499,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
       const forged = await temporary('aiwg-conformal-forged-');
       await writeJsonl(join(forged, scoresName), genuine);
       await writeJsonl(join(forged, ledgerName), rechain(ledger.filter(entry => entry.type === 'record')));
-      runAnalysis({ output: join(forged, 'report'), scoresPath: join(forged, scoresName) });
+      runFixtureAnalysis({ output: join(forged, 'report'), scoresPath: join(forged, scoresName) });
       const forgedReport = JSON.parse(await readFile(join(forged, 'report/report.v2.json'), 'utf8'));
       expect(forgedReport.provenance.representative).toBe(false);
       expect(forgedReport.provenance.reasons.join(' ')).toMatch(/reservation/);
@@ -452,7 +510,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
       const digests = new Map(sameId.map(record => [record.id, record.recordDigest]));
       await writeJsonl(join(duplicated, scoresName), sameId);
       await writeJsonl(join(duplicated, ledgerName), rechain(ledger.map(entry => (entry.type === 'record' ? { ...entry, recordDigest: digests.get(entry.itemId) } : entry))));
-      runAnalysis({ output: join(duplicated, 'report'), scoresPath: join(duplicated, scoresName) });
+      runFixtureAnalysis({ output: join(duplicated, 'report'), scoresPath: join(duplicated, scoresName) });
       const duplicateReport = JSON.parse(await readFile(join(duplicated, 'report/report.v2.json'), 'utf8'));
       expect(duplicateReport.provenance.representative).toBe(false);
       expect(duplicateReport.provenance.reasons.join(' ')).toMatch(/request ID/);
@@ -461,7 +519,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
       const otherPrereg = await temporary('aiwg-conformal-prereg-');
       await writeJsonl(join(otherPrereg, scoresName), genuine);
       await writeJsonl(join(otherPrereg, ledgerName), rechain(ledger.map(entry => ({ ...entry, preregistrationHash: digest('another preregistration') }))));
-      runAnalysis({ output: join(otherPrereg, 'report'), scoresPath: join(otherPrereg, scoresName) });
+      runFixtureAnalysis({ output: join(otherPrereg, 'report'), scoresPath: join(otherPrereg, scoresName) });
       const preregReport = JSON.parse(await readFile(join(otherPrereg, 'report/report.v2.json'), 'utf8'));
       expect(preregReport.provenance.representative).toBe(false);
       expect(preregReport.provenance.reasons.join(' ')).toMatch(/preregistration/);
@@ -471,7 +529,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
   it('CONF2-R2-10b cannot reach GO from a hand-written JSONL without collector provenance', async () => {
     const root = await temporary('aiwg-conformal-handwritten-');
     await writeHandWrittenScores(join(root, 'scores.jsonl'));
-    const summary = runAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') });
+    const summary = runFixtureAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') });
     expect(summary.outcome).not.toBe('GO');
     const report = JSON.parse(await readFile(join(root, 'report/report.v2.json'), 'utf8'));
     expect(report.provenance?.representative).toBe(false);
@@ -480,9 +538,9 @@ describe('conformal open-data v2 experiment (#2613)', () => {
   it('CONF2-R2-07b fits live-mode calibrated-risk bins from the supplied calibration scores only', async () => {
     const root = await temporary('aiwg-conformal-baseline-');
     await writeHandWrittenScores(join(root, 'scores.jsonl'));
-    runAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') });
+    runFixtureAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') });
     const report = JSON.parse(await readFile(join(root, 'report/report.v2.json'), 'utf8'));
-    const calibrationRows = liveRows().filter(row => row.split === 'calibration' && row.task === CLINC).length;
+    const calibrationRows = fixtureRows().filter(row => row.split === 'calibration' && row.task === CLINC).length;
     const bins = report.tasks[CLINC].calibratedBaseline.bins;
     expect(Object.values(bins).reduce((sum: number, bin: any) => sum + bin.n, 0)).toBe(calibrationRows);
     // Every hand-written calibration row sits in decile 9 (p=0.95) or decile 6 (p=0.62); synthetic scores would not.
@@ -493,31 +551,45 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     const root = await temporary('aiwg-conformal-partial-');
     const stateDir = join(root, 'aiwg/conformal-2613');
     await rm(stateDir, { recursive: true, force: true });
-    const rows = liveRows();
+    const rows = fixtureRows();
     // Earlier spend of USD 2.25 recorded in another score file, then 80 rows collected.
     await (await import('node:fs/promises')).mkdir(stateDir, { recursive: true });
     await writeFile(join(stateDir, 'earlier.jsonl'), `${JSON.stringify({ schemaVersion: 'conformal-live-score/v2', final: true, id: 'earlier', budgetChargeMicros: 2_250_000 })}\n`);
-    await collectLiveScores(collectArgs(stateDir, rows.slice(0, 80), fakeAdapter(rows).adapter));
+    await collectLiveScores(collectArgs(stateDir, rows.slice(0, 80), fakeAdapter(rows).adapter, testDesign));
     // Three consecutive errors stop a run; those rows stay pending.
     const failing = fakeAdapter(rows, () => new Error('fixture transport failure'));
-    const stopped = await collectLiveScores(collectArgs(stateDir, rows.slice(80, 90), failing.adapter));
+    const stopped = await collectLiveScores(collectArgs(stateDir, rows.slice(80, 90), failing.adapter, testDesign));
     expect(stopped.stoppedReason).toBe('consecutive-errors');
 
-    const plan = await collectMain({ XDG_STATE_HOME: root, PATH: process.env.PATH }, []);
-    expect(plan.rows).toBe(rows.length - 80);
-    const limited = await collectMain({ XDG_STATE_HOME: root }, ['--limit', '5']);
-    expect(limited.rows).toBe(5);
-    expect(limited.rowIds).toEqual(rows.slice(80, 85).map(row => row.id));
-
-    const pending = collector.pendingLiveRows({ preregistration, frozen, stateDir });
+    const pending = collector.pendingLiveRows({ ...testDesign, stateDir });
     expect(pending.map(row => row.id)).toEqual(rows.slice(80).map(row => row.id));
-    const resumed = await collectLiveScores(collectArgs(stateDir, pending, fakeAdapter(rows).adapter));
+    const spent = collector.experimentSpendMicros(stateDir).spentMicros;
+    expect(spent).toBeGreaterThan(2_250_000);
+    const plan = estimateCollection(testDesign.preregistration, pending.length, spent);
+    expect(plan.providerCalls).toBe(rows.length - 80);
+    expect(plan.worstCaseUsd).toBe((rows.length - 80) * collector.reservationMicros(testDesign.preregistration) / 1e6);
+    expect(pending.slice(0, 5).map(row => row.id)).toEqual(rows.slice(80, 85).map(row => row.id));
+    // The CLI uses the frozen full design for planning, but shares this state directory.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const fullPending = liveRows().filter(row => !rows.slice(0, 80).some(done => done.id === row.id));
+      const dryRun = await collectMain({ XDG_STATE_HOME: root }, []);
+      expect(dryRun.pendingRows).toBe(fullPending.length);
+      expect(dryRun.estimate.providerCalls).toBe(fullPending.length);
+      expect(dryRun.estimate.spentUsd).toBe(spent / 1e6);
+      const limited = await collectMain({ XDG_STATE_HOME: root }, ['--limit', '5']);
+      expect(limited.rowIds).toEqual(fullPending.slice(0, 5).map(row => row.id));
+      expect(limited.estimate.providerCalls).toBe(5);
+    } finally {
+      log.mockRestore();
+    }
+    const resumed = await collectLiveScores(collectArgs(stateDir, pending, fakeAdapter(rows).adapter, testDesign));
     expect(resumed.stoppedReason).toBeNull();
     expect(resumed.endingSpentMicros).toBeLessThanOrEqual(8_000_000);
     const latest = new Map((await readJsonl(join(stateDir, 'live-scores.v2.jsonl'))).map(record => [record.id, record.status]));
     expect(rows.every(row => latest.get(row.id) === 'success')).toBe(true);
-    expect(collector.pendingLiveRows({ preregistration, frozen, stateDir })).toEqual([]);
-  }, 120_000);
+    expect(collector.pendingLiveRows({ ...testDesign, stateDir })).toEqual([]);
+  });
 
   it('CONF2-R2-16 refuses relative, unset and volatile live state directories', async () => {
     const home = await temporary('aiwg-conformal-home-');
@@ -621,7 +693,10 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     expect(records[0].budgetChargeMicros).toBe(expectedTokenCharge);
     expect(records[1].budgetChargeMicros).toBe(collector.reservationMicros(preregistration));
     // The preregistered per-call input bound covers the measured 151-option CLINC request body.
-    const measured = Math.max(...await Promise.all(liveRows().map(row => collector.measureRequestBytes({ row, task: frozen.tasks[row.task], model: PIN, region: REGION }))));
+    const largestTextPerTask = [CLINC, BANKING].map(task => liveRows().filter(row => row.task === task)
+      .sort((a, b) => Buffer.byteLength(b.text) - Buffer.byteLength(a.text))[0]);
+    const measured = Math.max(...await Promise.all(largestTextPerTask.map(row =>
+      collector.measureRequestBytes({ row, task: frozen.tasks[row.task], model: PIN, region: REGION }))));
     expect(measured).toBe(budget.measuredMaxRequestBodyBytes);
     expect(measured + budget.serverOverheadTokensAllowance).toBeLessThanOrEqual(budget.maxInputTokensPerCall);
   }, 60_000);
@@ -637,6 +712,18 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     expect(budget.liveMaxItems).toBe(2000);
     expect(collector.reservationMicros(preregistration)).toBe(566);
     expect(rows.length * collector.reservationMicros(preregistration)).toBe(1_027_856);
+    const stateRoot = await temporary('aiwg-conformal-full-plan-');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let plan;
+    try {
+      plan = await collectMain({ XDG_STATE_HOME: stateRoot }, []);
+    } finally {
+      log.mockRestore();
+    }
+    expect(plan.noCallsMade).toBe(true);
+    expect(plan.rows).toBe(1816);
+    expect(plan.estimate.providerCalls).toBe(1816);
+    expect(plan.estimate.worstCaseUsd).toBe(1.027856);
     expect(collector.priceCeilingAttestation(preregistration)).toBe('0.10/0.10');
     for (const split of ['calibration', 'finalTest', 'shift']) {
       const members = rows.filter(row => row.split === split);
@@ -644,14 +731,16 @@ describe('conformal open-data v2 experiment (#2613)', () => {
       expect(rowHash(members)).toBe(live.hashes[split]);
     }
     expect(rows.filter(row => row.split === 'shift' && row.task === BANKING).every(row => row.slice === 'nominal-heldout')).toBe(true);
-    // Probe: the analysis reads exactly the preregistered live subset and rejects rows outside it.
+  });
+
+  it('CONF2-R2-04b analyzes only the injected test subset', async () => {
     const root = await temporary('aiwg-conformal-subset-');
     await writeHandWrittenScores(join(root, 'scores.jsonl'));
-    expect(() => runAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') })).not.toThrow();
+    expect(() => runFixtureAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') })).not.toThrow();
     const outside = frozen.splits.train.find((row: any) => row.task === CLINC);
     const extra = JSON.parse((await readFile(join(root, 'scores.jsonl'), 'utf8')).split('\n')[0]);
     await appendFile(join(root, 'scores.jsonl'), `${JSON.stringify({ ...extra, id: outside.id, label: outside.label, split: 'train' })}\n`);
-    expect(() => runAnalysis({ output: join(root, 'report-outside'), scoresPath: join(root, 'scores.jsonl') })).toThrow(/live subset/);
+    expect(() => runFixtureAnalysis({ output: join(root, 'report-outside'), scoresPath: join(root, 'scores.jsonl') })).toThrow(/live subset/);
   });
 
   it('CONF2-R2-05 rejects served-model, adapter, alpha and code-version drift against the preregistered pins', async () => {
@@ -664,7 +753,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     ] as const) {
       const path = join(root, `${field}.jsonl`);
       await writeHandWrittenScores(path, record => { record.compatibility = { ...record.compatibility, [field]: value }; if (field === 'servedModel') record.actualModel = value; });
-      expect(() => runAnalysis({ output: join(root, field), scoresPath: path })).toThrow(pattern);
+      expect(() => runFixtureAnalysis({ output: join(root, field), scoresPath: path })).toThrow(pattern);
     }
     const rows = liveRows().slice(0, 1);
     const unpinned = fakeAdapter(rows);
@@ -673,7 +762,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     const resumeDir = await temporary('aiwg-conformal-compat-resume-');
     await writeHandWrittenScores(join(resumeDir, 'live-scores.v2.jsonl'), record => { record.compatibility = { ...record.compatibility, servedModel: 'jev-other-model' }; });
     const resume = fakeAdapter(rows);
-    await expect(collectLiveScores(collectArgs(resumeDir, rows, resume.adapter))).rejects.toThrow(/incompatible/);
+    await expect(collectLiveScores(collectArgs(resumeDir, rows, resume.adapter, testDesign))).rejects.toThrow(/incompatible/);
     expect(resume.state.calls).toBe(0);
   });
 
@@ -693,7 +782,7 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     expect(preregistration.pins.livePromptDigest).toBe(collector.livePromptDigest(frozen, PIN));
     const root = await temporary('aiwg-conformal-prompt-');
     await writeHandWrittenScores(join(root, 'scores.jsonl'), record => { record.compatibility = { ...record.compatibility, prompt: digest('different question text') }; });
-    expect(() => runAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') })).toThrow(/prompt/);
+    expect(() => runFixtureAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') })).toThrow(/prompt/);
     const changed = structuredClone(preregistration);
     changed.pins.livePromptDigest = digest('different question text');
     const rows = liveRows().slice(0, 1);
@@ -715,16 +804,16 @@ describe('conformal open-data v2 experiment (#2613)', () => {
     expect([...latest.values()].every(record => record.status === 'success')).toBe(true);
 
     const root = await temporary('aiwg-conformal-error-analysis-');
-    const errorIds = new Set(liveRows().filter(row => row.split === 'finalTest' && row.task === CLINC).slice(0, 30).map(row => row.id));
+    const errorIds = new Set(fixtureRows().filter(row => row.split === 'finalTest' && row.task === CLINC).slice(0, 3).map(row => row.id));
     await writeHandWrittenScores(join(root, 'scores.jsonl'), record => {
       if (!errorIds.has(record.id)) return;
       Object.assign(record, { status: 'error', value: null, uncertainty: null });
       delete record.probabilities;
     });
-    const summary = runAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') });
+    const summary = runFixtureAnalysis({ output: join(root, 'report'), scoresPath: join(root, 'scores.jsonl') });
     expect(summary.outcome).toBe('INSUFFICIENT EVIDENCE');
     const report = JSON.parse(await readFile(join(root, 'report/report.v2.json'), 'utf8'));
-    expect(report.tasks[CLINC].splits.finalTest.failures).toMatchObject({ error: 30, missingDistribution: 0, notCollected: 0 });
+    expect(report.tasks[CLINC].splits.finalTest.failures).toMatchObject({ error: 3, missingDistribution: 0, notCollected: 0 });
     expect(report.tasks[CLINC].splits.finalTest.gateDiagnostics.failureTolerance).toBe(false);
   });
 
