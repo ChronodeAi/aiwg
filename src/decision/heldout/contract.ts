@@ -19,9 +19,10 @@ export { sha256 as heldoutDigest };
 export const HELDOUT_CAP_USD: Readonly<Record<Study, number>> = Object.freeze({ D17: 8, D29: 6 });
 export const HELDOUT_PORTFOLIO_CAP_USD = 48;
 export const HELDOUT_ENV_GATE = 'AIWG_DECISION_HELDOUT_LIVE';
-const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3']);
+const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4']);
 // Canonical corpus digests, including the public version before the wording correction.
 const D29_PUBLIC_DEMO_CORPORA = new Set([
+  'sha256:505283a46217e158b39ba93f61e17c28c39c582cad857f7090f38e8844a6794a',
   'sha256:35ecc8936b7a251d1c34cf630e9b09ed82eff0d05f96c901c01edfa0f9849934',
   'sha256:372cb180f129938280751bf3db76e4f9bc142ef85e68f38370b88aeec5602963',
 ]);

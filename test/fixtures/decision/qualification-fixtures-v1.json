@@ -1950,6 +1950,134 @@
         "JEV-16",
         "#2622"
       ]
+    },
+    {
+      "id": "DEC-DSYNTHV-01",
+      "path": "test/fixtures/decision/d29-synthetic-v3/README.md",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:cc9f2547cf50f3f907085afbb6bb63199298a3abf50a9755ee872c5e27860811",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTHV-02",
+      "path": "test/fixtures/decision/d29-synthetic-v3/analysis.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-analysis/v2",
+      "digest": "sha256:d23666f000d342a22fd2a85fe0aca8260ec0fb93e618e9f0da6cb2fda7b1352b",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTHV-03",
+      "path": "test/fixtures/decision/d29-synthetic-v3/approval-template.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-heldout-approval/v1",
+      "digest": "sha256:197b3e2fee2198639ed8883ef846ab2b59190179df75c3445afbd28dfaf9e7f0",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTHV-04",
+      "path": "test/fixtures/decision/d29-synthetic-v3/corpus.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-heldout-corpus/v1",
+      "digest": "sha256:2dd943f6e2bb9bf14907c7edff5d97fc80ac0e5218c17232e3c8b66d011cb1c5",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTHV-05",
+      "path": "test/fixtures/decision/d29-synthetic-v3/dry-run.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:4e51b401e636df208d0006e51c521177bbb565732e16076768476660a5a21613",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTHV-06",
+      "path": "test/fixtures/decision/d29-synthetic-v3/gold.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-gold/v3",
+      "digest": "sha256:f097b278e69dceca47255fe9b64ddc7ce50fca7f4f956a695075d62cc4a681da",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTHV-07",
+      "path": "test/fixtures/decision/d29-synthetic-v3/preregistration.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-heldout-preregistration/v1",
+      "digest": "sha256:3eab928335ed3012645e0ab0c870bc992b157c49b772adb00f595d0025c354df",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DSYNTHV-08",
+      "path": "test/fixtures/decision/d29-synthetic-v3/reviews.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-review/v2",
+      "digest": "sha256:7110fc1578c5f3e1921f282a2dcfe03f524982957999f1c68f21391c13389ee4",
+      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
     }
   ]
 }

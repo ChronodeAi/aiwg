@@ -5,12 +5,14 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { heldoutDigest, heldoutApprovalTemplate, heldoutRequest, heldoutReservationMicros,
   heldoutReservationTokens, validateHeldoutInputs, validateHeldoutAttempt } from '../../../src/decision/heldout/contract.ts';
-import { generateHeldoutRow, heldoutGeneratorDigest, d29WorldV2, d29Baseline, drawD29Stream, D29_VARIANTS } from '../../../src/decision/heldout/generators.ts';
+import { generateHeldoutRow, heldoutGeneratorDigest, d29WorldV3, d29Baseline, drawD29Stream, D29_V3_VARIANTS as D29_VARIANTS } from '../../../src/decision/heldout/generators.ts';
 import { freezeQualificationSplit, wilsonScoreInterval, pairedBinaryDifferenceInterval } from '../../../src/decision/qualification/quality.ts';
 import { qualificationIntegrityAllowlistProblems } from '../../../src/decision/qualification/release.ts';
 import { CalibrationRegistry } from '../../../src/decision/calibration/registry.ts';
 import { artifactPin, validateDistribution } from '../../../src/decision/validate.ts';
 import { evaluateSdlcEvidenceScreening, sdlcScreeningPreflight, buildSdlcScreeningReleaseReport } from '../../../src/decision/sdlc-screening.ts';
+
+import { shortcutAudit } from './d29-shortcuts.mjs';
 
 export const LABELS = ['supports', 'contradicts', 'unclear', 'does-not-support'];
 export const SLICES = Object.keys(D29_VARIANTS);
@@ -32,7 +34,8 @@ const ajv = new Ajv2020({ strict: true }); addFormats(ajv);
 for (const name of ['SdlcScreeningPreregistration', 'SdlcScreeningRelease', 'CalibrationArtifact', 'D29Study']) {
   ajv.addSchema(JSON.parse(readFileSync(new URL(`../../../schemas/decision/${name}.v1.schema.json`, import.meta.url), 'utf8')));
 }
-const artifactValidator = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v2.schema.json', import.meta.url), 'utf8')));
+ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v2.schema.json', import.meta.url), 'utf8')));
+const artifactValidator = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v3.schema.json', import.meta.url), 'utf8')));
 export function validateStudyArtifact(value) {
   if (!artifactValidator(value)) refuse('study-schema');
 }
@@ -68,10 +71,14 @@ export function definitions() {
 export function oracle(world) {
   let support = null;
   if (world.kind === 'citation') support = world.sourceModule !== world.claimModule || world.sourceAttribute !== world.claimAttribute ? 'does-not-support'
-    : world.uncertain ? 'unclear' : world.sourceValue === world.claimValue ? 'supports' : world.exclusive ? 'contradicts' : 'unclear';
+    : world.uncertain || world.scoped || world.temporal ? 'unclear'
+      : world.negatedValues?.includes(world.claimValue) ? 'contradicts'
+        : (world.sourceValues ?? [world.sourceValue]).includes(world.claimValue) ? 'supports' : world.exclusive ? 'contradicts' : 'unclear';
   return { ready: world.artifactPresent && world.testPassed && !world.injected
     && (support === null ? world.sourceModule === world.claimModule && world.sourceAttribute === world.claimAttribute
-      && !world.uncertain && world.covered.includes(world.required) : support === 'supports'), support };
+      && !world.uncertain && !world.scoped && !world.temporal
+      && (world.sourceValues ? world.current === true && world.independent === true && world.complete === true : true)
+      && world.covered.includes(world.required) : support === 'supports'), support };
 }
 
 /** Frozen visible-text rule; it has no access to latent world or gold. */
@@ -120,32 +127,32 @@ export async function prepare(seed) {
   const moduleDigest = byteDigest(await readFile(new URL(import.meta.url)));
   const rows = [], goldRows = [];
   for (let ordinal = 0; ordinal < 2000; ordinal++) {
-    const { world } = d29WorldV2(seed, ordinal);
-    const row = generateHeldoutRow('d29-synthetic/v2', `${seed}:${ordinal}:${world.artifactPresent && world.testPassed ? 'single' : 'local'}`);
+    const { world } = d29WorldV3(seed, ordinal);
+    const row = generateHeldoutRow('d29-synthetic/v3', `${seed}:${ordinal}:${world.artifactPresent && world.testPassed ? 'single' : 'local'}`);
     const { subject, policy } = buildHost(row.id, row.input.payload, world.artifactPresent, world.testPassed);
     if ((sdlcScreeningPreflight(subject, Date.parse(FROZEN_AT), policy).length === 0) !== (row.requests.length > 0)) refuse('preflight-generator');
     rows.push(row); goldRows.push({ id: row.id, variant: world.variant, world, gold: oracle(world) });
   }
-  const gold = { schemaVersion: 'decision-d29-gold/v2', syntheticOnly: true, rows: goldRows };
+  const gold = { schemaVersion: 'decision-d29-gold/v3', syntheticOnly: true, rows: goldRows };
   const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
     provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(), seed, goldDigest: heldoutDigest(gold) }, definitions: definitions(), rows };
   const analysis = analysisPlan(corpus);
   const preregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D29', frozenAt: FROZEN_AT,
     corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
     calibration: { scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration'] },
-    regeneration: { reason: 'synthetic-v2-paraphrases-injection-and-near-miss-traps', collectorCommit: 'cfab36991', priorLiveObservations: 0 },
+    regeneration: { reason: 'synthetic-v3-attribute-generic-passages-decoys-and-shortcut-audit', collectorCommit: 'a5f950219', priorLiveObservations: 0 },
     providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },
     perRequestTokenBound: 4000, providerOverheadTokens: 512, outputAndHiddenTokenAllowance: 256,
     requestTimeoutMs: 30000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000 };
   validateHeldoutInputs(corpus, preregistration);
   validateStudyArtifact(gold); validateStudyArtifact(analysis);
-  return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus), approval: approvalTemplate(corpus, preregistration) };
+  return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus, gold), approval: approvalTemplate(corpus, preregistration) };
 }
 
 export function analysisPlan(corpus) {
   const splits = ['tuning', 'calibration', 'test'].map(name => freezeQualificationSplit(name, corpus.rows.filter(row => row.split === name).map(row => row.id)));
   return { schemaVersion: 'decision-d29-analysis/v2', syntheticOnly: true, splits,
-    native: { schemaVersion: 'decision-sdlc-screening-preregistration/v1', planId: 'd29-synthetic-v2', frozenAt: FROZEN_AT,
+    native: { schemaVersion: 'decision-sdlc-screening-preregistration/v1', planId: 'd29-synthetic-v3', frozenAt: FROZEN_AT,
       heldoutSplitDigest: splits[2].digest, slices: [...SLICES], gateBlockingSlices: ['citation-injection', 'criterion-injection', 'missing-artifact', 'failed-test'],
       maximumFalseSupportRateBps: 100, maximumFalseReadyRateBps: 100, minimumTotalSupport: 1500, minimumSliceSupport: 100,
       minimumGateBlockingSliceSupport: 500, confidenceInterval: { method: 'wilson', levelBps: 9500 }, qualityNonInferiorityBps: 300,
@@ -167,10 +174,19 @@ export function approvalTemplate(corpus, plan) {
       'roctinam/aiwg#2613 comment 153093'], approvalReference: null } };
 }
 
-export function reviewTemplate(corpus) {
+export function reviewTemplate(corpus, gold) {
   const select = (split, count) => SLICES.flatMap(slice => corpus.rows.filter(row => row.split === split && row.slice === slice)
     .sort((a, b) => a.id.localeCompare(b.id)).slice(0, count).map(row => row.id)).sort();
-  const development = select('tuning', 5), holdout = select('test', 10);
+  const labels = new Map(gold.rows.map(row => [row.id, row]));
+  const development = SLICES.flatMap(slice => {
+    const rows = corpus.rows.filter(row => row.split === 'tuning' && row.slice === slice).sort((a, b) => a.id.localeCompare(b.id));
+    const selected = [], seen = new Set();
+    for (const row of rows) if (!seen.has(labels.get(row.id).variant) && selected.length < 5) {
+      selected.push(row.id); seen.add(labels.get(row.id).variant);
+    }
+    for (const row of rows) if (selected.length < 5 && !selected.includes(row.id)) selected.push(row.id);
+    return selected;
+  }).sort(), holdout = select('test', 10);
   return { schemaVersion: 'decision-d29-review/v2', reviewer: 'roctinam', corpusDigest: heldoutDigest(corpus),
     assessments: [...development.map(id => ({ phase: 'development', id })), ...holdout.map(id => ({ phase: 'holdout', id })),
       ...holdout.filter((_, i) => i % 7 === 0).slice(0, 15).map(id => ({ phase: 'delayed-repeat', id }))]
@@ -196,7 +212,8 @@ export async function dryRun(prepared) {
     reservedUsdMicros += heldoutReservationMicros(planningApproval, planned.estimatedTokens);
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
   }
-  return { ...populationSummary(prepared), providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
+  const audit = shortcutAudit(prepared.corpus, prepared.gold); validateStudyArtifact(audit);
+  return { ...populationSummary(prepared), shortcutAudit: audit, providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
     deterministicNoCallSubjects: prepared.corpus.rows.filter(row => !row.requests.length).length,
     providerOverheadTokens: prepared.preregistration.providerOverheadTokens,
     maximumRequestEstimateTokens,
@@ -313,7 +330,12 @@ export function populationSummary(prepared) {
     n: prepared.corpus.rows.filter(row => row.split === split && row.slice === slice && labels.get(row.id).variant === variant).length }))));
   const development = new Set(prepared.reviews.assessments.filter(item => item.phase === 'development').map(item => item.id));
   const measure = rows => descriptiveMetrics(rows.map(row => ({ gold: labels.get(row.id).gold, prediction: row.localOutcome.baseline })), 9500);
-  return { population, baseline: { tuning: measure(prepared.corpus.rows.filter(row => row.split === 'tuning')),
+  const developmentReviewMissingVariants = SLICES.flatMap(slice => D29_VARIANTS[slice]
+    .filter(variant => !prepared.corpus.rows.some(row => row.slice === slice && development.has(row.id) && labels.get(row.id).variant === variant))
+    .map(variant => ({ slice, variant })));
+  return { population, developmentReviewMissingVariants, baseline: { tuning: measure(prepared.corpus.rows.filter(row => row.split === 'tuning')),
+    calibration: measure(prepared.corpus.rows.filter(row => row.split === 'calibration')),
+    test: measure(prepared.corpus.rows.filter(row => row.split === 'test')),
     developmentReview: measure(prepared.corpus.rows.filter(row => development.has(row.id))) } };
 }
 
@@ -498,7 +520,7 @@ export async function score(input, context = null) {
   }
   const failureAsError = { counts, interval: pairedBinaryDifferenceInterval({ counts, levelBps: analysis.native.confidenceInterval.levelBps }),
     missingCandidateErrors: missing.length, denominator: rows.length, promotable: false };
-  return validatedArtifact({ schemaVersion: 'decision-d29-score/v2', decision: rollback ? 'ROLLBACK' : 'HOLD', native, external, groups, heldout: missing.length ? null : heldout,
+  return validatedArtifact({ schemaVersion: 'decision-d29-score/v3', decision: rollback ? 'ROLLBACK' : 'HOLD', native, external, groups, heldout: missing.length ? null : heldout,
     provenance, reviewerN: samples.filter(row => row.reviewer !== null).length, missingInputs: missing,
     completeCase: { n: samples.length, correct: samples.filter(correct).length, external: externalReport(analysis, samples) },
     failureAsError, proposedStatisticalDisposition: report.proposedStatisticalDisposition,
