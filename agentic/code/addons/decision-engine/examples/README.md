@@ -64,3 +64,15 @@ Recorded multimodal preprocessing lineage examples live under
 caption, and image-description fixtures into ordinary text state before the
 existing projection/evaluation path. Jev still receives text only, never raw
 media, and the lineage feature is experimental and default-off.
+
+`heldout-collector-offline.mjs` prepares two reproducible fictional lamp rows
+from the registered `heldout-lamp/v1` generator, with verified corpus and row
+seed/digest provenance, a 512-token provider overhead allowance and separate gold. Run it through the source-only commands in the
+[held-out collector guide](../../../../../docs/decision/heldout-collector.md).
+The collector is experimental and default-off; its approval template cannot
+authorize collection, and this example supplies no live qualification evidence.
+
+The source-only `heldout-collector-offline.mjs` exports `prepare(seed)` for
+uncalibrated diagnostics and `prepareStaged(seed)` for a three-row fictional
+calibration/test example. Both keep gold separate and create no approval or D09
+artifact. See the [staged runbook](../../../../../docs/decision/heldout-collector.md).

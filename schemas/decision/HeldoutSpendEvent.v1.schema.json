@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutSpendEvent.v1.schema.json",
+  "title": "HeldoutSpendEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sequence",
+    "previous",
+    "charge",
+    "totalUsdMicros",
+    "digest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-spend-event/v1"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "charge": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "study",
+            "runId",
+            "rowId",
+            "requestId",
+            "ordinal",
+            "reservedUsdMicros",
+            "accountedUsdMicros",
+            "disposition",
+            "reservedTokens"
+          ],
+          "properties": {
+            "study": {
+              "enum": [
+                "D17",
+                "D29"
+              ]
+            },
+            "runId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            },
+            "rowId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            },
+            "requestId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+            },
+            "ordinal": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2
+            },
+            "reservedUsdMicros": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "accountedUsdMicros": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "disposition": {
+              "enum": [
+                null,
+                "success",
+                "retryable",
+                "measurement-failure",
+                "stop"
+              ]
+            },
+            "reservedTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        }
+      ]
+    },
+    "totalUsdMicros": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

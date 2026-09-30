@@ -15,6 +15,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   report now passes the preregistered diagnostic gates after the confidence
   threshold fix, while its final decision stays HOLD pending independent
   integrity and human review (#2616)
+- Experimental, default-off held-out calibration scopes for both D17 and D29:
+  explicit uncalibrated diagnostics, staged calibration/test approvals bound to
+  sealed attempt lineage, and independent artifact bindings. Phase collection
+  shares durable USD/call/token limits and passes approved calibration pins to
+  scorers; real D09 qualification, live studies and human approvals remain pending (#2778)
+
+- Experimental, default-off shared D17/D29 held-out collector with source-only
+  preparation and dry-run CLI, synthetic provenance checks, priced pre-dispatch
+  reservations, durable cross-run caps, scoped Jev resolution and D11 recorded
+  evidence. Study-specific live data, calibration, statistical reports and human
+  review remain pending (#2611)
+
 - Speed up the experimental, default-off conformal open-data v2 offline tests
   with a schema-valid 180-row injected design, while retaining a dry-run check
   of the frozen 1,816-row plan; live Jev evidence remains pending (#2613)
@@ -140,6 +152,27 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   support to Jev (#2617).
 
 ### Fixed
+
+- Bind experimental, default-off held-out collector baselines to the independent
+  durable spend head. Changed or missing baselines fail before credential access
+  even after run deletion; legacy heads require operator reconciliation (#2778)
+
+- Experimental, default-off held-out collection pins each study's first approved
+  budget beside its durable spend baseline, enforces cumulative USD/call/token
+  thresholds in every mode after resumes or run deletion, and rejects structured
+  PROMOTE claims from diagnostic and pre-fit calibration scorers. Live
+  qualification remains pending (#2778)
+
+- Close paid-output and deleted-history cap overruns in the experimental,
+  default-off held-out collector: require attested free Jev output, reserve
+  serialized input bytes plus preregistered provider overhead, retain monotonic
+  spend outside run directories, and verify corpus generator/seed provenance.
+  Live qualification remains pending (#2778)
+
+- Experimental, default-off held-out collector rejects incomplete offline
+  transports, reserves serialized input before dispatch,
+  persists spend baselines across reruns, and reproduces synthetic rows from
+  registered generators. Live qualification remains pending (#2611)
 
 - Experimental, default-off TV-12 collection preregisters one charged retry for terminal
   provider failures, continues after exhausted measurement failures, and derives candidate
