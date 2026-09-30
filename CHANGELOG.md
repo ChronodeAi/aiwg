@@ -9,6 +9,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Refreshed experimental, default-off D17 source dry-run pins after the shared
+  acceptance threshold fix entered the source digest; the corpus and split/gold
+  pins are unchanged. Live evidence and approval remain pending (#2611)
+
 - Experimental, default-off D17 schema loading now resolves source and compiled
   layouts, so building the CLI no longer breaks the mandatory SQLite session
   regression suite. Refreshed uncollected source pins; live evidence remains
