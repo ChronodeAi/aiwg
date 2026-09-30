@@ -569,6 +569,78 @@
       "publication": { "public": true }
     },
     {
+      "logicalName": "decision.routing-policy",
+      "id": "https://aiwg.io/schemas/decision/DecisionRoutingPolicy.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionRoutingPolicy.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-routing-contract", "boundary": "D28 default-off/shadow route candidate policy; permissions remain external", "path": "src/decision/routing/contract.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/routing/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/routing/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.routing-task",
+      "id": "https://aiwg.io/schemas/decision/DecisionRoutingTask.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionRoutingTask.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-routing-runtime", "boundary": "D28 closed task requirements and ordinary authorization ceiling; unknown requirements fail closed", "path": "src/decision/routing/runtime.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/routing/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/routing/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.route-receipt",
+      "id": "https://aiwg.io/schemas/decision/DecisionRouteReceipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionRouteReceipt.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-routing-runtime", "boundary": "D28 sanitized route eligibility, Jev evidence, attempts, fallbacks and outcome receipt", "path": "src/decision/routing/runtime.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/routing/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/routing/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.routing-shadow-report",
+      "id": "https://aiwg.io/schemas/decision/DecisionRoutingShadowReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionRoutingShadowReport.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-routing-report", "boundary": "D28 shadow/economics report preserving eval-integrity PROMOTE/HOLD/ROLLBACK", "path": "src/decision/routing/report.ts" }],
+      "projections": [
+        { "kind": "types", "path": "src/decision/routing/types.ts", "generated": false },
+        { "kind": "validator", "path": "src/decision/routing/contract.ts", "generated": false }
+      ],
+      "publication": { "public": true }
+    },
+    {
       "logicalName": "decision.ensemble-policy",
       "id": "https://aiwg.io/schemas/decision/DecisionEnsemblePolicy.v1.schema.json",
       "version": "1.0.0",
@@ -678,19 +750,46 @@
       "dialect": "https://json-schema.org/draft/2020-12/schema",
       "lifecycle": "active",
       "stability": "experimental",
-      "owner": { "id": "decision-engine" },
-      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionSensitivityPlan.v1.schema.json" },
-      "compatibility": { "mode": "backward" },
-      "consumers": [{ "id": "decision-sensitivity-contract", "boundary": "D23 bounded sensitivity plans; default-off reviewer analysis only", "path": "src/decision/sensitivity/contract.ts" }],
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionSensitivityPlan.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "decision-sensitivity-contract",
+          "boundary": "D23 bounded sensitivity plans; default-off reviewer analysis only",
+          "path": "src/decision/sensitivity/contract.ts"
+        }
+      ],
       "fixtures": {
-        "valid": ["test/fixtures/decision/sensitivity/sensitivity-plan.v1.valid.json"],
-        "invalid": ["test/fixtures/decision/sensitivity/sensitivity-plan.v1.invalid.json"]
+        "valid": [
+          "test/fixtures/decision/sensitivity/sensitivity-plan.v1.valid.json"
+        ],
+        "invalid": [
+          "test/fixtures/decision/sensitivity/sensitivity-plan.v1.invalid.json"
+        ]
       },
       "projections": [
-        { "kind": "types", "path": "src/decision/sensitivity/types.ts", "generated": false },
-        { "kind": "validator", "path": "src/decision/sensitivity/contract.ts", "generated": false }
+        {
+          "kind": "types",
+          "path": "src/decision/sensitivity/types.ts",
+          "generated": false
+        },
+        {
+          "kind": "validator",
+          "path": "src/decision/sensitivity/contract.ts",
+          "generated": false
+        }
       ],
-      "publication": { "public": true }
+      "publication": {
+        "public": true
+      }
     },
     {
       "logicalName": "decision.sensitivity-report",
@@ -700,15 +799,171 @@
       "dialect": "https://json-schema.org/draft/2020-12/schema",
       "lifecycle": "active",
       "stability": "experimental",
-      "owner": { "id": "decision-engine" },
-      "authority": { "kind": "canonical", "path": "schemas/decision/DecisionSensitivityReport.v1.schema.json" },
-      "compatibility": { "mode": "backward" },
-      "consumers": [{ "id": "decision-sensitivity-contract", "boundary": "Immutable sensitivity reports; associative evidence, never action authority", "path": "src/decision/sensitivity/contract.ts" }],
-      "projections": [
-        { "kind": "types", "path": "src/decision/sensitivity/types.ts", "generated": false },
-        { "kind": "validator", "path": "src/decision/sensitivity/contract.ts", "generated": false }
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionSensitivityReport.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "decision-sensitivity-contract",
+          "boundary": "Immutable sensitivity reports; associative evidence, never action authority",
+          "path": "src/decision/sensitivity/contract.ts"
+        }
       ],
-      "publication": { "public": true }
+      "projections": [
+        {
+          "kind": "types",
+          "path": "src/decision/sensitivity/types.ts",
+          "generated": false
+        },
+        {
+          "kind": "validator",
+          "path": "src/decision/sensitivity/contract.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      }
+    },
+    {
+      "logicalName": "decision.issue-triage-pilot-pack",
+      "id": "https://aiwg.io/schemas/decision/DecisionIssueTriagePilotPack.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionIssueTriagePilotPack.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "decision-issue-triage-pilot",
+          "boundary": "Default-off Jev issue triage shadow pilot pack; no tracker mutation authority",
+          "path": "src/decision/issue-triage/runtime.ts"
+        }
+      ],
+      "fixtures": {
+        "valid": [
+          "test/fixtures/decision/issue-triage/pilot-pack.v1.valid.json"
+        ]
+      },
+      "projections": [
+        {
+          "kind": "types",
+          "path": "src/decision/issue-triage/types.ts",
+          "generated": false
+        },
+        {
+          "kind": "validator",
+          "path": "src/decision/issue-triage/runtime.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      }
+    },
+    {
+      "logicalName": "decision.issue-triage-evaluation-manifest",
+      "id": "https://aiwg.io/schemas/decision/DecisionIssueTriageEvaluationManifest.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionIssueTriageEvaluationManifest.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "decision-issue-triage-pilot",
+          "boundary": "Preregistered slices, thresholds and holdout rules before live issue holdout access",
+          "path": "src/decision/issue-triage/runtime.ts"
+        }
+      ],
+      "fixtures": {
+        "valid": [
+          "test/fixtures/decision/issue-triage/evaluation-manifest.v1.valid.json"
+        ]
+      },
+      "projections": [
+        {
+          "kind": "types",
+          "path": "src/decision/issue-triage/types.ts",
+          "generated": false
+        },
+        {
+          "kind": "validator",
+          "path": "src/decision/issue-triage/runtime.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      }
+    },
+    {
+      "logicalName": "decision.issue-triage-evaluation-report",
+      "id": "https://aiwg.io/schemas/decision/DecisionIssueTriageEvaluationReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionIssueTriageEvaluationReport.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "decision-issue-triage-pilot",
+          "boundary": "Offline shadow report with quality, economics and eval-integrity gate preservation",
+          "path": "src/decision/issue-triage/runtime.ts"
+        }
+      ],
+      "projections": [
+        {
+          "kind": "types",
+          "path": "src/decision/issue-triage/types.ts",
+          "generated": false
+        },
+        {
+          "kind": "validator",
+          "path": "src/decision/issue-triage/runtime.ts",
+          "generated": false
+        }
+      ],
+      "publication": {
+        "public": true
+      }
     },
     {
       "logicalName": "decision.projection-policy",
@@ -739,6 +994,20 @@
       "publication": { "public": true }
     },
     {
+      "logicalName": "decision.preprocessed-evidence",
+      "id": "https://aiwg.io/schemas/decision/PreprocessedEvidence.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/PreprocessedEvidence.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-preprocessed-evidence", "boundary": "Default-off recorded preprocessing lineage for text-only decision input derived from non-text sources", "path": "src/decision/preprocessed-evidence.ts" }],
+      "publication": { "public": true }
+    },
+    {
       "logicalName": "decision.feature-set",
       "id": "https://aiwg.io/schemas/decision/DecisionFeatureSet.v1.schema.json",
       "version": "1.0.0",
@@ -764,6 +1033,62 @@
       "authority": { "kind": "canonical", "path": "schemas/decision/DecisionFeatureObservation.v1.schema.json" },
       "compatibility": { "mode": "backward" },
       "consumers": [{ "id": "decision-feature-export", "boundary": "Governed feature rows with lineage, missingness, batch accounting and lifecycle references", "path": "src/decision/feature-export.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-candidate",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningCandidate.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningCandidate.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "D26 deterministic protected-item envelope; model evidence cannot alter this classification", "path": "src/decision/context-pruning.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-receipt",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningReceipt.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningReceipt.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "Immutable reversible shadow/advisory pruning receipts", "path": "src/decision/context-pruning.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-preregistration",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningPreregistration.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningPreregistration.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "Holdout-before-access promotion thresholds for D26", "path": "src/decision/context-pruning.ts" }],
+      "publication": { "public": true }
+    },
+    {
+      "logicalName": "decision.context-pruning-evaluation-report",
+      "id": "https://aiwg.io/schemas/decision/ContextPruningEvaluationReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": { "id": "decision-engine" },
+      "authority": { "kind": "canonical", "path": "schemas/decision/ContextPruningEvaluationReport.v1.schema.json" },
+      "compatibility": { "mode": "backward" },
+      "consumers": [{ "id": "decision-context-pruning", "boundary": "Paired context-pruning quality/economics report that preserves PROMOTE/HOLD/ROLLBACK", "path": "src/decision/context-pruning.ts" }],
       "publication": { "public": true }
     }
   ]

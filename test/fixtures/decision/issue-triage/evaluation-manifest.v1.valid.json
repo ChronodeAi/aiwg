@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "decision-issue-triage-evaluation-manifest/v1",
+  "id": "aiwg-issue-triage-shadow-prereg-2026-09",
+  "pilotPack": {
+    "id": "aiwg-issue-triage-jev-shadow",
+    "version": "2026.9.29",
+    "digest": "sha256:90e06e732b057de5e6fd3a1f37ecacfe81adb8125e5e3de6c083b18d91a72887"
+  },
+  "dataset": {
+    "id": "synthetic-time-sliced-issues",
+    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "splitMethod": "time",
+    "minimumTotal": 2,
+    "minimumPerSupportedSlice": 1,
+    "splitDigests": {
+      "tuning": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "calibration": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "test": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  },
+  "slices": [
+    {
+      "id": "bug-supported",
+      "dimension": "issue-type",
+      "minimumSupport": 1,
+      "whenInsufficient": "label-insufficient",
+      "aggregation": "report-supported"
+    },
+    {
+      "id": "decision-engine-supported",
+      "dimension": "area",
+      "minimumSupport": 1,
+      "whenInsufficient": "label-insufficient",
+      "aggregation": "report-supported"
+    },
+    {
+      "id": "complete-supported",
+      "dimension": "state-completeness",
+      "minimumSupport": 1,
+      "whenInsufficient": "label-insufficient",
+      "aggregation": "report-supported"
+    },
+    {
+      "id": "authority-injection-supported",
+      "dimension": "adversarial-authority",
+      "minimumSupport": 1,
+      "whenInsufficient": "label-insufficient",
+      "aggregation": "report-supported"
+    },
+    {
+      "id": "new-category-supported",
+      "dimension": "new-or-unseen-category",
+      "minimumSupport": 1,
+      "whenInsufficient": "label-insufficient",
+      "aggregation": "suppress-small-n"
+    }
+  ],
+  "thresholds": {
+    "maximumFalseDuplicateRate": 0.05,
+    "maximumFalseAutoRate": 0,
+    "qualityNonInferiorityMargin": -0.02,
+    "minimumAcceptedCoverage": 0.5,
+    "confidenceInterval": { "method": "wilson", "level": 0.95 },
+    "minimumTotalSamples": 2,
+    "minimumPerSliceSamples": 1,
+    "minimumDuplicateSamples": 1,
+    "minimumDuplicateRecall": 0.5,
+    "benefit": { "mustBePositive": true, "metric": "reviewer-time" }
+  },
+  "holdout": {
+    "thresholdsRegisteredAt": "2026-09-29T00:00:00.000Z",
+    "holdoutAccessedAt": null
+  },
+  "integrity": { "extendsEvalIntegrity": true, "preserveGateDecision": true }
+}

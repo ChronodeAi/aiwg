@@ -39,6 +39,15 @@ reevaluation requires an explicit host-supplied evaluator and fresh invocation
 IDs. Reports are additive diagnostics and cannot feed the review/effect
 authorization path as authority.
 
+D24 adds `PreprocessedEvidence.v1` as an adapter-neutral, default-off lineage
+artifact for text derived from non-text sources. It lives in the same decision
+schema/runtime/docs/test areas, but it is not a Jev media adapter and does not
+select an OCR, ASR, captioning, vision, or document parser. Host code resolves
+recorded extraction manifests before evaluation, then passes ordinary text state
+through the existing projection boundary. `RulesetResult.spec.preprocessingLineage`
+stores body-free links and the evaluator's pre-dispatch gate verdict only when
+non-empty host evidence is supplied.
+
 ## Alternatives and consequences
 
 - Direct Jev calls in each workflow minimize initial code but couple workflow semantics to vendor shapes and make replacement expensive. Rejected.

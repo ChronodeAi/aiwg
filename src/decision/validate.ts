@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Ajv2020, { type ErrorObject, type ValidateFunction } from 'ajv/dist/2020.js';
+import addFormats from 'ajv-formats';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { admitEntry, EntryAdmissionError } from './entry.js';
 import { DECISION_API_VERSION, DECISION_API_VERSION_STRUCTURED } from './types.js';
@@ -43,6 +44,8 @@ export class DecisionValidationError extends Error {
 }
 
 let validators: Map<string, ValidateFunction> | null = null;
+let decisionAjv: Ajv2020 | null = null;
+let preprocessedEvidenceValidator: ValidateFunction | null = null;
 
 function schemaRoot(): string {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -61,6 +64,7 @@ function getValidators(): Map<string, ValidateFunction> {
   ajv.addSchema(admissionSchema);
   ajv.addSchema(contextEvidenceSchema);
   ajv.addSchema(providerPrefixSchema);
+  decisionAjv = ajv;
   validators = new Map();
   for (const [kind, filename] of Object.entries(schemaFiles) as Array<[DecisionKind, string]>) {
     const schema = JSON.parse(readFileSync(resolve(schemaRoot(), filename), 'utf8')) as JsonSchema;
@@ -71,6 +75,28 @@ function getValidators(): Map<string, ValidateFunction> {
     validators.set(`decision.aiwg.io/v1alpha2:${kind}`, ajv.compile(schema));
   }
   return validators;
+}
+
+/**
+ * D24: closed-schema errors for a PreprocessedEvidence manifest, with formats enforced, or
+ * null when valid. The runtime resolver runs this so it can never accept what the schema rejects.
+ */
+export function preprocessedEvidenceSchemaErrors(value: unknown): string | null {
+  if (!preprocessedEvidenceValidator) {
+    const ajv = new Ajv2020({ strict: true, allErrors: true });
+    (addFormats as unknown as (instance: Ajv2020) => void)(ajv);
+    preprocessedEvidenceValidator = ajv.compile(JSON.parse(readFileSync(resolve(schemaRoot(),
+      'PreprocessedEvidence.v1.schema.json'), 'utf8')) as JsonSchema);
+  }
+  return preprocessedEvidenceValidator(value) ? null : ajvMessage(preprocessedEvidenceValidator.errors);
+}
+
+/** D24: RulesetResult v1alpha2 `preprocessingLineage` shape errors, or null when valid. */
+export function preprocessingLineageSchemaErrors(value: unknown): string | null {
+  getValidators();
+  const validate = decisionAjv!.getSchema('https://aiwg.io/schemas/decision/RulesetResult.v1alpha2.schema.json#/$defs/preprocessingLineage');
+  if (!validate) throw new DecisionValidationError('preprocessing lineage schema is unavailable');
+  return validate(value) ? null : ajvMessage(validate.errors);
 }
 
 export function artifactDigest(value: unknown): ArtifactPin['digest'] {
@@ -145,6 +171,7 @@ export const DECISION_RESULT_V1ALPHA2_FIELDS = [
   { field: 'calibrationCompatibility', scope: 'decision', owner: 'D09', semantic: 'calibration-pin' },
   { field: 'cache', scope: 'ruleset', owner: 'D15', semantic: 'result-cache-receipt' },
   { field: 'projection', scope: 'ruleset', owner: 'D10', semantic: 'projection-opt-out' },
+  { field: 'preprocessingLineage', scope: 'ruleset', owner: 'D24', semantic: 'trust-projection' },
 ] as const;
 
 /** JSON paths of every v1alpha2-only field present in a DecisionResult or RulesetResult. */
