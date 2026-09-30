@@ -321,8 +321,10 @@ derived from the seed digest, so even permitted seed text stays out of model-vis
 state. A bounded identifier still needs synthetic provenance review;
 this constraint does not prove that an identifier has no external meaning.
 The registry includes the fictional `heldout-lamp/v1` and
-`heldout-lamp-splits/v1` examples and the D29 `d29-synthetic/v1` study generator.
-Its `single` and `local` row seeds encode the fixed 1,600-subject split layout;
+`heldout-lamp-splits/v1` examples and the frozen D29 `d29-synthetic/v1` generator. The current
+[D29 study](d29-heldout-study.md) uses the additive `d29-synthetic/v2` registry
+entry, with 2,000 subjects, ten slices and balanced wording/trap variants.
+The `single` and `local` row seeds encode each version’s fixed split layout;
 malformed layouts and out-of-range indices fail regeneration. D17 still
 requires a reviewed generator addition and fresh corpus pins.
 This proves reproducibility, not held-out quality or correctness of the gold.

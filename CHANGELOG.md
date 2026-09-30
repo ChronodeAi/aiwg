@@ -9,13 +9,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 synthetic dataset v2 with 2,000 subjects,
+  balanced paraphrases, exclusive/non-exclusive port and near-miss traps,
+  independent injection blockers, per-variant candidate/baseline metrics and
+  a 165-assessment review template. Seed `d29-study-v3` supersedes earlier
+  preparations before any live observations; the v1 generator and frozen
+  baseline remain unchanged. Live calibration and operator review remain pending (#2622)
+
 - Experimental, default-off D29 staged calibration flow: collect and seal
   tuning/calibration first, fit an unapproved D09 artifact offline, require
   operator review for registration, then bind a second test approval to the
-  artifact, seal and prior approval. Reviewed development IDs and gold remain
-  unchanged; live observations and operator approvals remain pending (#2622)
+  artifact, seal and prior approval. Live observations and operator approvals
+  remain pending (#2622)
 
-- Experimental, default-off D29 synthetic evidence/citation study with 1,600
+- Experimental, default-off D29 v1 synthetic evidence/citation study with 1,600
   seeded subjects, frozen splits and preregistration, receipt-based scoring,
   calibration-only readiness mapping, native and external report gates,
   registered row/corpus regeneration, source-only byte-priced dry-run and
