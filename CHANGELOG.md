@@ -9,6 +9,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off issue triage shadow pilot contracts and runtime for
+  Jev classification, completeness/clarification scoring, and deterministic
+  duplicate reranking. The offline harness adds closed schemas, point-in-time
+  candidate replay, shared credential redaction, a tracker-free runtime,
+  preregistered split and threshold manifests, and report gates that use paired
+  non-inferiority, Wilson bounds and receipt-reconciled economics. It does not
+  claim live Jev, held-out, or human-review qualification (#2618).
 - Experimental default-off D28 routing pilot APIs for capability-constrained
   model/subagent selection after hard-constraint filtering. Shadow mode executes
   only the existing deterministic route and records the Jev-assisted choice as a
@@ -34,7 +41,7 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   schemas, and anchored preregistration/report scaffolding that applies the
   shared paired non-inferiority intervals to raw per-pair outcomes, per-slice
   support and provider-reconciled cache economics; live held-out
-  quality/economics evidence remains pending (#2619).
+   quality/economics evidence remains pending (#2619).
 - Shared paired non-inferiority intervals and a fail-closed margin check for decision pilots (#2618, #2619, #2622).
 - Add governed decision probabilistic feature export with JSONL/CSV equivalence, train/serve validation, D10 lifecycle
   enforcement, request-scoped batch accounting, qualification-release integrity, offline and installed package smokes,
