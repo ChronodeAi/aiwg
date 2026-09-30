@@ -30,6 +30,7 @@ export * from './context-qualification.js';
 export * from './context-pruning.js';
 export * from './calibration/index.js';
 export * from './projection.js';
+export * from './preprocessed-evidence.js';
 export * from './lifecycle.js';
 export * from './file-lifecycle-store.js';
 export * from './receipts.js';

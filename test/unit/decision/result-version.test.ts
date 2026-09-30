@@ -95,7 +95,9 @@ describe('decision result version ownership', () => {
   });
 
   it('treats the D15 result-cache caller receipt as a v1alpha2-only RulesetResult field', () => {
-    expect(DECISION_RESULT_V1ALPHA2_FIELDS.filter(entry => entry.scope === 'ruleset').map(entry => entry.field).sort()).toEqual(['batchRequests', 'cache', 'context', 'contextFailure', 'projection']);
+    expect(DECISION_RESULT_V1ALPHA2_FIELDS.filter(entry => entry.scope === 'ruleset').map(entry => entry.field).sort()).toEqual([
+      'batchRequests', 'cache', 'context', 'contextFailure', 'preprocessingLineage', 'projection',
+    ]);
     const cache = { disposition: 'cache-hit', callerInvocationId: 'caller', sourceInvocationId: 'source', sourceReceiptId: 'source',
       originalEvaluatedAtEpochMs: 10, cacheEntryId: 'entry', createdAtEpochMs: 20, providerAttempted: false };
     const legacy = fixture<RulesetResult>('ruleset-result.json');

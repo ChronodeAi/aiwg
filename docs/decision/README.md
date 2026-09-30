@@ -70,5 +70,11 @@ deterministic protected-item retention, immutable reversible receipts and
 paired-evaluation scaffolding; live/held-out quality and economics evidence
 remain pending.
 
+Experimental [multimodal preprocessing lineage](preprocessing-lineage.md)
+records how text-only decision input was derived from non-text sources using
+recorded OCR, ASR, caption, or image-description fixtures. It is default-off,
+does not add native media support to Jev, and stores receipt/trace references
+instead of raw media or derived text bodies.
+
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.

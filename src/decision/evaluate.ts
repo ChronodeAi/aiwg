@@ -21,6 +21,10 @@ import {
   DecisionProjectionError, normalizeProjectionOrigin, projectDecisionState, type DecisionProjectionEvidence,
 } from './projection.js';
 import { DecisionRuntimeTrace, runtimeTraceOf, type DecisionRuntimeSpan } from './telemetry/runtime.js';
+import {
+  gatePreprocessedEvidenceDispatch, isEmptyPreprocessingLineage, isWellFormedPreprocessingLineage, PREPROCESSING_LOCAL_ORIGIN,
+  type PreprocessingEgressDestination,
+} from './preprocessed-evidence.js';
 import { assertContextQualified } from './context-qualification.js';
 import {
   assertContextPlanCurrent,
@@ -82,6 +86,10 @@ export async function evaluateDecisionRuleset(request: DecisionEvaluationRequest
 /** A cache hit is a historical result accompanied by a NEW caller receipt, not a fresh adapter attempt. */
 async function evaluateWithResultCache(request: DecisionEvaluationRequest): Promise<RulesetResult> {
   const config = request.resultCache!;
+  // A cache hit would bypass the D24 pre-dispatch lineage gate, so lineage is never cached.
+  if (preprocessingGateApplies(request)) {
+    throw new Error('Result cache does not support preprocessing lineage');
+  }
   if (!config.policy.sideEffectFree || !request.receiptStore || !request.calibrationPin || !request.policyPin
     || !config.recordCallerReceipt) {
     throw new Error('Result cache requires side-effect-free policy, durable receipts, policy and calibration pins');
@@ -240,6 +248,20 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
   }
   if (contextPlan) base = withRulesetContext(base, contextPlan, []);
   runtimeTraceOf(request)?.validated(false);
+  // D24: stored preprocessing lineage is gated before receipts, credentials and transport.
+  if (preprocessingGateApplies(request)) {
+    const gate = gatePreprocessedEvidenceDispatch(request.preprocessingLineage, request.preprocessingVerification,
+      resolved.flatMap(item => request.binding.spec.evaluations[item.alias]!.targets
+        .map(target => preprocessingDestination(request, item.alias, target))), request.input,
+      request.ruleset.spec.evaluations.map(evaluation => evaluation.inputPointer));
+    base = { ...base, spec: { ...base.spec, preprocessingLineage: base.spec.preprocessingLineage
+      ? { ...base.spec.preprocessingLineage, dispatchGate: gate }
+      : { schemaVersion: 'decision-preprocessing-lineage/v1', status: 'review', references: [], traces: [], dispatchGate: gate } } };
+    if (gate.outcome === 'refused') return failureResult(base, 'data-boundary-denied');
+    if (gate.outcome === 'review') {
+      return { ...base, spec: { ...base.spec, status: 'review', reason: 'insufficient-information', matchedRules: [], evaluations: {} } };
+    }
+  }
   const batchPolicy = request.batchReceipts;
   if (batchPolicy?.unknownCostBound && (!Number.isSafeInteger(batchPolicy.unknownCostBound.upperBoundMicros)
     || batchPolicy.unknownCostBound.upperBoundMicros < 0 || !batchPolicy.unknownCostBound.policyId
@@ -965,6 +987,33 @@ async function invokeWithDeadline(
 /** Requests whose projection evidence prohibited automatic action (allowed incomplete context). */
 const projectionBlockedAutomaticAction = new WeakSet<DecisionEvaluationRequest>();
 
+/**
+ * D24 applies when lineage is supplied or the host supplied verification expecting lineage.
+ * Requests with neither keep the text-native path unchanged.
+ */
+function preprocessingGateApplies(request: DecisionEvaluationRequest): boolean {
+  return !isEmptyPreprocessingLineage(request.preprocessingLineage) || request.preprocessingVerification !== undefined;
+}
+
+/**
+ * The D10 destination a target would send derived text to: the projection policy's provider and
+ * origin, or the local no-egress destination when no projection is configured (projection then
+ * denies any network adapter before credentials). `null` means the destination cannot be bound.
+ */
+function preprocessingDestination(request: DecisionEvaluationRequest, alias: string,
+  target: ExecutionTarget): PreprocessingEgressDestination | null {
+  const projection = request.projection;
+  if (!projection) return { provider: target.adapter, origin: PREPROCESSING_LOCAL_ORIGIN };
+  if (isUnprojectedLocalOptOut(projection)) return null;
+  try {
+    const policy = projection.resolve({ alias, target: structuredClone(target) });
+    return typeof policy?.provider === 'string' && typeof policy.origin === 'string'
+      ? { provider: policy.provider, origin: policy.origin } : null;
+  } catch {
+    return null;
+  }
+}
+
 function isUnprojectedLocalOptOut(
   projection: DecisionEvaluationRequest['projection'],
 ): projection is DecisionUnprojectedLocalOptOut {
@@ -1212,7 +1261,10 @@ function resultBase(request: DecisionEvaluationRequest, ruleset: ArtifactPin, bi
     apiVersion: resultVersion(request), kind: 'RulesetResult',
     metadata: { id: request.invocationId, version: '1.0.0', description: `Ruleset result for ${request.ruleset.metadata.id}` },
     spec: { ruleset, binding, runId: request.runId, invocationId: request.invocationId, status: 'error', reason: 'evaluation-failed', matchedRules: [], evaluations: {},
-      ...(isUnprojectedLocalOptOut(request.projection) ? { projection: { mode: 'unprojected-local', authority: 'host' } } : {}) },
+      ...(isUnprojectedLocalOptOut(request.projection) ? { projection: { mode: 'unprojected-local', authority: 'host' } } : {}),
+      // Only a lineage the D24 gate can read is copied; a malformed one is recorded by the gate as refused.
+      ...(!isEmptyPreprocessingLineage(request.preprocessingLineage) && isWellFormedPreprocessingLineage(request.preprocessingLineage)
+        ? { preprocessingLineage: structuredClone(request.preprocessingLineage) } : {}) },
   };
 }
 
@@ -1228,7 +1280,7 @@ function resultVersion(request: DecisionEvaluationRequest): typeof DECISION_API_
     || request.ruleset.apiVersion === DECISION_API_VERSION_STRUCTURED || request.binding.apiVersion === DECISION_API_VERSION_STRUCTURED
     || Object.values(request.definitions).some(definition => definition.apiVersion === DECISION_API_VERSION_STRUCTURED)
     || request.batching || request.batchReceipts || request.scheduler?.enabled || request.providerPrefix || request.context
-    || request.resultCache?.policy.enabled) {
+    || request.resultCache?.policy.enabled || preprocessingGateApplies(request)) {
     return DECISION_API_VERSION_STRUCTURED;
   }
   return DECISION_API_VERSION;

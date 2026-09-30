@@ -57,3 +57,10 @@ shadow semantics (the deterministic route executes; the Jev-assisted utility
 choice is recorded only as `counterfactual`), mandatory reservation hooks and
 retained attempts. It is not live Jev, held-out quality, security/privacy
 approval or production rollout evidence.
+
+Recorded multimodal preprocessing lineage examples live under
+`test/fixtures/decision/preprocessing/` and are exercised by
+`test/unit/decision/preprocessed-evidence.test.ts`. They resolve OCR, ASR,
+caption, and image-description fixtures into ordinary text state before the
+existing projection/evaluation path. Jev still receives text only, never raw
+media, and the lineage feature is experimental and default-off.

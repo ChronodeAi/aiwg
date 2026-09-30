@@ -32,6 +32,15 @@ Artifacts have human-readable stable identity, immutable version and content dig
 
 Product homes are `schemas/decision/`, `src/decision/`, `docs/decision/`, and `test/unit/decision/`. The packaged dispatcher is the `decision-evaluate` skill in the `decision-engine` addon under `agentic/code/addons/`. Runtime artifacts use `<artifact_root>/decisions/{definitions,rulesets,bindings,runs}/`.
 
+D24 adds `PreprocessedEvidence.v1` as an adapter-neutral, default-off lineage
+artifact for text derived from non-text sources. It lives in the same decision
+schema/runtime/docs/test areas, but it is not a Jev media adapter and does not
+select an OCR, ASR, captioning, vision, or document parser. Host code resolves
+recorded extraction manifests before evaluation, then passes ordinary text state
+through the existing projection boundary. `RulesetResult.spec.preprocessingLineage`
+stores body-free links and the evaluator's pre-dispatch gate verdict only when
+non-empty host evidence is supplied.
+
 ## Alternatives and consequences
 
 - Direct Jev calls in each workflow minimize initial code but couple workflow semantics to vendor shapes and make replacement expensive. Rejected.
