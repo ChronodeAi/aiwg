@@ -53,11 +53,38 @@ orchestration tests use manifest mode `offline`. It cannot produce live evidence
 or receive a live-host admission token. The CLI exposes no offline transport seam.
 
 ```sh
-node tools/decision/context-live-qualification.mjs --collect-approved \
-  /approved/approval.json /approved/corpus.json \
+AIWG_DECISION_TV12_LIVE=1 node tools/decision/context-live-qualification.mjs --collect-approved \
+  /approved/approval.json sha256:APPROVAL_FILE_DIGEST /approved/corpus.json \
   /canonical/artifact/root /approved/credential-resolver.mjs \
   sha256:RESOLVER_DIGEST
 ```
+
+### Live-mode preflight and the #2681 spend cap
+
+`--collect-approved` and `--canary-approved` are refused before the build, the resolver
+import or any credential read when:
+
+- `AIWG_DECISION_TV12_LIVE` is not `1`;
+- `NODE_TLS_REJECT_UNAUTHORIZED` is set to anything other than `1`;
+- the SHA-256 of the approval file or the resolver differs from the digest given on the
+  command line.
+
+`ARTIFACT_ROOT` must resolve to the canonical `artifact_root` itself, not a subdirectory.
+Every run directory lives in the fixed ledger `research/qualification/2681/runs/` beneath it.
+Every approval and canary plan is capped at USD 2.00, the #2681 limit. The cap also covers
+all runs together. Before the first reservation, a run takes the ledger lock and sums the
+earlier collection and canary spend:
+
+- a run with a summary counts its charged reservation;
+- a run without one (crashed or interrupted) counts its full approved budget;
+- an unrecognized or unreadable entry refuses the run.
+
+The run's USD ceiling is the smaller of its approval and USD 2.00 minus that prior spend,
+and the 80% stop applies to it. When nothing remains, the run is refused. A run writes its
+approval first, so an interrupted run is always charged its full budget. A stale
+`.tv12-spend.lock` is never removed automatically. The approval check also requires the
+collection profile's margin to reach the preregistered maximum before any spend. The host
+`dispose()` zeroes the key when a run ends.
 
 ### Trusted Jev credential resolver
 
@@ -67,21 +94,25 @@ the scoped OpenBao reader AppRole. On first use it runs the host token helper
 (`bash $AIWG_OPENBAO_TOKEN_HELPER approle NAME`), reads the key field `token` from the
 KV v2 locator in `AIWG_JEV_OPENBAO_SECRET_PATH` at the HTTPS `BAO_ADDR`, and revokes the
 client token. The locator is host configuration because it is private; it is not in
-source or approval artifacts. TLS is always verified and `BAO_SKIP_VERIFY` is ignored, so
-an internal CA needs `NODE_OPTIONS=--use-system-ca` or `NODE_EXTRA_CA_CERTS`. The key is
-held in memory for the process and each call returns a copy that the adapter zeroes.
+source or approval artifacts. Secret-service requests set `rejectUnauthorized: true`
+explicitly, and `BAO_SKIP_VERIFY` has no effect. A `NODE_TLS_REJECT_UNAUTHORIZED` value
+other than `1` is refused. An internal CA needs `BAO_CACERT`, `NODE_OPTIONS=--use-system-ca`
+or `NODE_EXTRA_CA_CERTS`. If the helper output fails validation, any token-shaped word in
+it is still revoked. The key is held in memory for the process, each call returns a copy
+that the adapter zeroes, and the exported `dispose()` zeroes the key itself.
 Errors carry a fixed category, never helper, secret-service or provider text. The file
 digest pinned in the approval covers the code only. The AppRole's own scope, not this
 module, is what limits which secret can be read.
 
 ### Dry run
 
-`--dry-run` takes the same arguments as `--collect-approved`. It validates the approval
-and corpus, checks the complete generated corpus, the clean exact source commit, the
-canonical artifact root and the resolver pin, and reports the partitions collection would
+`--dry-run` takes the same arguments as `--collect-approved` and needs no live gate. It
+validates the approval and corpus. It checks the pinned approval and resolver digests, the
+complete generated corpus, the clean exact source commit, the canonical artifact root, and
+the remaining #2681 spend. It then reports the partitions collection would
 send. For each case it lists the partitions and their estimated input tokens, then the
 total requests, the reserved token and USD bounds, and `requestCapacityAtStop`: the most
-requests the 80% stop admits. It never imports the resolver, resolves a credential,
+requests the 80% stop admits under the capped USD ceiling. It never imports the resolver, resolves a credential,
 calls a provider or writes a file. It exits nonzero unless every precondition holds and
 the plan fits before the stop.
 
@@ -103,8 +134,8 @@ These steps are implemented and tested offline only. None has run against Jev.
 2. **Stored-record check.** `--verify-qualification RECORD` runs the enforcement gate
    on the stored file, then confirms that the same record is rejected when only the
    profile version changes.
-3. **Enforce canary.** `--canary-approved CANARY_APPROVAL CORPUS RECORD ARTIFACT_ROOT
-   RESOLVER RESOLVER_SHA256` needs a `context-canary-approval/v1` that embeds the
+3. **Enforce canary.** `--canary-approved CANARY_APPROVAL APPROVAL_SHA256 CORPUS RECORD
+   ARTIFACT_ROOT RESOLVER RESOLVER_SHA256` needs a `context-canary-approval/v1` that embeds the
    canary plan frozen before collection (its digest must match) and names the record
    digest, served model and region. Each planned case first runs through
    `evaluateDecisionRuleset` with native batching and `rollout: enforce` using the
@@ -119,10 +150,10 @@ These steps are implemented and tested offline only. None has run against Jev.
 
    Per-case rows and the summary are metadata only.
 
-The canary uses cases with few questions. An invocation with context planning and 24
-aliases currently produces a result document that exceeds the default entry limits
-(`property-count`). That error is raised after dispatch, so the canary treats it as a
-stop. D11 manifest linking from #2599 and #2604 remains pending.
+A canary case may have at most 8 questions, so `many-short` is rejected. An invocation
+with context planning and 24 aliases currently produces a result document that exceeds the
+default entry limits (`property-count`). That error is raised after dispatch, and the canary
+treats it as a stop. D11 manifest linking from #2599 and #2604 remains pending.
 
 Missing inputs, source drift (including untracked files), changed corpus or
 preregistration digests, changed resolver digest, and reused run directories fail

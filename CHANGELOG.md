@@ -12,7 +12,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Source-checkout TV-12 tooling for D06 live qualification: a digest-pinned OpenBao AppRole
   credential resolver for Jev, a no-call `--dry-run` estimate, reviewer-approved profile and
   margin recording from the preregistered rule, a stored-record enforcement check, and an
-  enforce-mode canary with rollback to single calls. Experimental and default-off; no live
+  enforce-mode canary with rollback to single calls. Live modes need an explicit env gate,
+  command-line approval and resolver digests, verified TLS, and stay under a USD 2.00 cap
+  across all #2681 runs. Experimental and default-off; no live
   qualification has run and no qualified profile ships (#2681).
 - Experimental default-off D17 decision ensemble runtime APIs for bounded
   member dispatch, paired champion/challenger shadow evaluation, drift-response
