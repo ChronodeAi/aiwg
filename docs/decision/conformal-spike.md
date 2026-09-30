@@ -31,51 +31,83 @@ versioned derived artifacts.
 
 ## Live Sample Design (re-preregistered 2026-09-30)
 
-v2 was re-preregistered and re-frozen on 2026-09-30, before any v2 live score
-existed; no Jev call has been made for v2. The earlier design required 1,816
-live rows, which the operator's caps (USD 8.00 total and at most 600 items)
-could not cover, and its 2,000-token per-call bound was below the measured
-request size.
+v2 was re-preregistered and re-frozen on 2026-09-30. No v2 live score existed at
+re-pin time, and no Jev call has been made for v2 collection. The operator
+restored the full two-dataset design and re-pinned the price ceiling.
 
-| Live split | Rows | Selection |
-|---|---:|---|
-| Calibration | 100 | CLINC150 validation rows, one per intent, 100 intents from a seeded order |
-| Final test | 100 | CLINC150 test rows, one per intent, 100 intents from an independent seeded order |
-| Controlled shift | 50 | Seeded CLINC150 `oos_test` rows |
+| Task | Calibration | Final test | Shift split |
+|---|---:|---:|---|
+| CLINC150 | 450 | 450 | 300 controlled OOS rows (`oos_test`, a label never seen in calibration) |
+| Banking77 | 231 | 231 | 154 `test.csv` rows: a nominal held-out slice, **not** a shift |
 
-Banking77 has no live subset. Its frozen rows and the larger frozen CLINC150
-splits remain for synthetic pipeline tests only. Because only one task is
-collected live, a passing live result is capped at `CONDITIONAL`.
+The live sample is every frozen calibration, final-test and shift row: 1,816
+items under a preregistered 2,000-item cap. The 1,135 frozen train rows are not
+collected live.
 
-Budget arithmetic: the largest measured Jev request body for the live subset is
-4,779 bytes (151 options). Byte-level tokenizers emit at most one token per
-byte, so the preregistered bound is 5,400 input tokens (4,779 bytes plus a
-512-token server allowance) and 256 output tokens. At the pinned ceiling of
-USD 5 per million input and output tokens, every call reserves USD 0.02828.
-The 250-row subset therefore costs at most USD 7.07, leaving USD 0.93 (32
-reservations) for retries. The server allowance, the output bound and the price
-ceiling are assumptions. The collector halts at the first call whose charge
-exceeds its reservation, and live mode requires the operator to attest the price
-ceiling (`AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=5/5`).
+**Pricing and worst-case cost.** Published Jev pricing is USD 0.042 per million
+input tokens with output free
+([eesel.ai](https://www.eesel.ai/blog/typesafe-jev-pricing),
+[MindStudio](https://www.mindstudio.ai/blog/jev-pricing-cost-per-token)). An
+operator smoke call on 2026-09-30 returned 369 input and 38 output tokens,
+served model `jev-1.13.0` and `costUsd: null`. The pinned ceiling is USD 0.10
+per million tokens for both input and output, about 2.4 times the published
+input price. The largest measured request body across the 1,816 live rows is
+4,796 bytes (the 151-option CLINC150 prompt). Byte-level tokenizers emit at most
+one token per byte, so the per-call bound is 5,400 input tokens (4,796 bytes
+plus a 512-token server allowance) and 256 output tokens. Each call reserves
+5,656 tokens × USD 0.10 per million = USD 0.0005656, rounded up to 566 micro-USD.
+The design's worst case is 1,816 × 566 = 1,027,856 micro-USD, which is
+**USD 1.027856** (USD 1.0271296 before per-call rounding). That is well inside
+the unchanged USD 8.00 hard cap.
 
-Statistical rationale: with 100 calibration rows, split conformal gives marginal
-coverage between 0.900 and 0.910. With 100 final-test rows, the 0.80 Wilson
-lower-bound gate needs at least 88 of 100 rows covered. A method whose true
-coverage is 0.90 passes with probability 0.80, one at 0.85 with probability
-0.25, and one at 0.80 with probability 0.025. Terminal errors or missing
-distributions above 5% of any live split make the outcome
-`INSUFFICIENT EVIDENCE`.
+**Assumptions.** The Jev request contract (`{state, model, questions}`) has no
+output-token cap, so the 256-token output bound is an assumed server-side bound,
+like the 512-token server allowance. A call reporting more is charged in full,
+and the ledger halts. Live mode requires
+`AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=0.10/0.10`.
+
+**Gates.** Split conformal with 450 (CLINC150) or 231 (Banking77) calibration
+rows gives marginal coverage between 0.900 and 0.902 or 0.904. The coverage
+gate is a 95% Wilson lower bound of at least 0.83, computed on the realized
+scored n of each split, so the covered count it requires depends on n. The
+preregistration's `liveDesign.gateTable` lists it at full size and at the 5%
+failure-tolerance floor:
+
+| Split | Scored n | Covered rows needed | P(pass), true coverage 0.90 | P(pass), true coverage 0.85 |
+|---|---:|---:|---:|---:|
+| CLINC150 final | 450 / 428 | 390 / 371 | 0.991 / 0.989 | 0.178 / 0.183 |
+| CLINC150 OOS shift | 300 / 285 | 262 / 249 | 0.945 / 0.939 | 0.146 / 0.149 |
+| Banking77 final | 231 / 220 | 203 / 194 | 0.880 / 0.844 | 0.127 / 0.107 |
+| Banking77 held-out | 154 / 147 | 137 / 131 | 0.722 / 0.699 | 0.100 / 0.096 |
+
+These are binomial pass probabilities and ignore variance from the calibration
+draw. A split has enough rows when at least max(floor, ceil(0.95 × its size))
+rows are scored. The floors are 200 final-test rows and 50 slice rows. Terminal
+errors or missing distributions above 5% of any live split make the outcome
+`INSUFFICIENT EVIDENCE`. Other usefulness gates are unchanged: mean set size at
+most 8% of the labels, review at most 45%, selective risk at most 0.12, and
+improvement over the live calibrated-risk baseline. `GO` needs both tasks to
+pass on final test and on their shift split. The CLINC150 OOS slice is the only
+controlled shift, so AC5 rests on it alone.
 
 ## Live Collection Budget Rules
 
 - Every call or retry durably reserves the worst case before dispatch. The
-  collector refuses when the spend already recorded plus that reservation would
+  collector refuses when spend already recorded plus that reservation would
   exceed USD 8.00.
 - Spend is global for the experiment state directory: the larger of a
   hash-chained, fsynced spend ledger and the sum of charges in every score file
   in the directory. It survives resumes, per-split outputs and deleted score
   files. A reservation that is never settled, for example after a crash, stays
-  counted as spent.
+  counted as spent and counts as an attempt. Reservation IDs are unique.
+- The state directory is the budget's identity. Empty `XDG_STATE_HOME` or
+  `HOME` values count as unset, the directory must be absolute, and live runs
+  refuse volatile locations (`/tmp`, `/var/tmp`, `/dev/shm`, `/run`, the OS
+  temp directory). With neither variable set, pass an absolute `--state-dir`.
+- Planning and `--limit` cover only pending rows: rows that are not yet
+  terminal and still have attempts left. A resume after partial spend, or after
+  a stop on three consecutive errors, continues with the next pending rows. The
+  per-call reservation guard, not the plan, is what enforces the ceiling.
 - Charges use reported tokens at the pinned price ceiling, or a higher reported
   provider cost. When tokens are unknown, the call is charged the full
   reservation. A charge above its reservation halts the ledger, and later runs
@@ -88,11 +120,20 @@ distributions above 5% of any live split make the outcome
   with no probabilities. It is never turned into one-hot probabilities.
 - Error records are retried on resume, up to three attempts per item. A single
   truncated trailing line is moved to `<file>.quarantine` and resume continues.
-- Each record carries collector provenance (collector version, request ID,
-  usage, attempts and a record digest chained into the ledger). Records without
-  verifiable provenance, including hand-written JSONL, cannot produce a
-  `CONDITIONAL` or `GO` outcome.
-- The calibrated-risk baseline is fitted on the same live calibration subset as
+- A record is representative only if it carries collector provenance and passes
+  every ledger check:
+  - its attempts match, one to one, the reserve and settle entries for that
+    item;
+  - its charges equal the settlements;
+  - its record digest is chained into the ledger;
+  - every entry it references carries this preregistration's hash;
+  - its request ID is non-empty and unique among success records.
+
+  Records that fail, including hand-written or re-chained JSONL, cannot produce
+  a `CONDITIONAL` or `GO` outcome. The chain is tamper-evident, not
+  cryptographically authenticated: nobody signs it, so someone with write access
+  to the state directory could still forge a full ledger.
+- The calibrated-risk baseline is fitted on the same live calibration split as
   the conformal threshold, so `baselineImprovement` compares live against live.
 
 ## Pending Evidence

@@ -20,31 +20,32 @@ node --import tsx tools/experiments/conformal/run.v2.mjs ARTIFACT_ROOT/research/
 node --import tsx tools/experiments/conformal/collect-jev.v2.mjs --limit 25
 ```
 
-The frozen splits (1,135 train, 681 calibration, 681 final-test and 454 shift
-rows) are for synthetic pipeline tests only. The live design, re-preregistered
-on 2026-09-30 before any live score existed, is a 250-row CLINC150 subset: 100
-calibration and 100 final-test rows (one per intent) plus 50 controlled OOS
-rows. At USD 0.02828 worst case per call, it costs at most USD 7.07 of the
-USD 8.00 cap. Banking77 is not collected live, so a passing live outcome is
-capped at `CONDITIONAL`. Banking77 `test.csv` rows are an exchangeable nominal
-held-out slice, not a shift. See `docs/decision/conformal-spike.md` for the
-sizing rationale.
+The live design, re-preregistered on 2026-09-30 before any v2 score existed,
+scores every frozen calibration, final-test and shift row of both tasks: 1,816
+items (CLINC150 450/450/300, Banking77 231/231/154) under a 2,000-item cap. The
+1,135 train rows are pipeline-only. At the pinned USD 0.10 per million token
+ceiling, each call reserves 566 micro-USD, so the design costs at most
+USD 1.027856 of the USD 8.00 cap. Banking77 `test.csv` rows are an exchangeable
+nominal held-out slice, not a shift; the controlled shift is CLINC150 OOS. See
+`docs/decision/conformal-spike.md` for pricing sources, gates and the realized-n
+coverage table.
 
 The collector is dry-run by default. Live mode requires
 `AIWG_DECISION_JEV_LIVE_SMOKE=1`, `AIWG_DECISION_JEV_API_KEY`,
-`AIWG_DECISION_JEV_REGION` and `AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=5/5`,
-and only the pinned model `jev-1.13.0`. Before every call it reserves the
-worst-case cost in a hash-chained spend ledger shared by every run in the state
-directory (`$XDG_STATE_HOME/aiwg/conformal-2613/` or
-`$HOME/.local/state/aiwg/conformal-2613/`, not inside the repository). It
-refuses any call that could take global spend past USD 8.00 and halts on the
-first charge above its reservation. It charges reported tokens at the pinned
-price ceiling, or the full reservation when usage is unknown. It records
-distribution-less successes as `missing-distribution`, retries error records on
-resume, and quarantines a truncated trailing line. A lock file prevents two
-concurrent collectors in one state directory. The analysis accepts only records
-whose compatibility key matches the preregistered pins. Records without collector
-provenance chained into the ledger cannot leave `INSUFFICIENT EVIDENCE`.
+`AIWG_DECISION_JEV_REGION`, `AIWG_DECISION_JEV_PRICE_CEILING_ATTESTED=0.10/0.10`,
+and only the pinned model `jev-1.13.0`. It also requires a durable absolute
+state directory: `$XDG_STATE_HOME/aiwg/conformal-2613/`,
+`$HOME/.local/state/aiwg/conformal-2613/` or `--state-dir`. Empty variables
+count as unset, and `/tmp`-like volatile paths are refused. Before every call
+the collector reserves the worst-case cost in a hash-chained spend ledger
+shared by every run in that directory. It refuses any call that could take
+global spend past USD 8.00 and halts on the first charge above its reservation.
+Planning and `--limit` cover only pending rows, so a resume continues where the
+last run stopped. Jev has no output-token cap, so the 256-token output bound is
+assumed and enforced after the fact by the halt. The analysis accepts only
+records whose compatibility key matches the preregistered pins, and only
+records whose attempts match the ledger's reservations and settlements can
+leave `INSUFFICIENT EVIDENCE`.
 
 Closed schemas for the v2 preregistration, frozen sample and report live under
 `schemas/decision/Conformal*.v2.schema.json`.
