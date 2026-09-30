@@ -1,6 +1,6 @@
 import { lstat, mkdir, open, readdir, readFile, realpath, rename } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { heldoutDigest, HeldoutError, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, validateHeldoutAttempt, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
+import { heldoutDigest, HeldoutError, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, validateHeldoutAttempt, validateHeldoutBundle, checkHeldoutSchema, HELDOUT_CAP_USD, HELDOUT_PORTFOLIO_CAP_USD } from './contract.js';
 import type { Digest, HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutSummary } from './types.js';
 
 export const heldoutRunsRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'runs');
@@ -9,7 +9,7 @@ interface HeldoutBaseline { schemaVersion: 'decision-heldout-baseline/v1'; scope
 const counterRoot = (root: string): string => dirname(heldoutRunsRoot(root));
 interface SpendCharge {
   study: string; runId: string; rowId: string; requestId: string; ordinal: number;
-  reservedUsdMicros: number; accountedUsdMicros: number | null;
+  reservedUsdMicros: number; reservedTokens: number; accountedUsdMicros: number | null;
   disposition: NonNullable<HeldoutAttempt['result']>['disposition'] | null;
 }
 interface SpendEvent {
@@ -51,7 +51,7 @@ async function readCounter(root: string, baselines: Map<string, HeldoutBaseline>
         const key = chargeKey(charge), prior = latest.get(key);
         if (charge.accountedUsdMicros === null ? prior || charge.disposition !== null
           : !prior || prior.accountedUsdMicros !== null || charge.disposition === null
-            || charge.reservedUsdMicros !== prior.reservedUsdMicros || charge.accountedUsdMicros < charge.reservedUsdMicros) throw repair();
+            || charge.reservedTokens !== prior.reservedTokens || charge.reservedUsdMicros !== prior.reservedUsdMicros || charge.accountedUsdMicros < charge.reservedUsdMicros) throw repair();
         const delta = charge.accountedUsdMicros === null ? charge.reservedUsdMicros : charge.accountedUsdMicros - charge.reservedUsdMicros;
         total += delta; studies.set(charge.study, (studies.get(charge.study) ?? 0) + delta); latest.set(key, charge);
       }
@@ -70,11 +70,11 @@ async function readCounter(root: string, baselines: Map<string, HeldoutBaseline>
 export async function appendHeldoutSpend(root: string, attempt: HeldoutAttempt): Promise<void> {
   const counter = await readCounter(root, await readBaselines(root));
   const charge: SpendCharge = { study: attempt.study, runId: attempt.runId, rowId: attempt.rowId, requestId: attempt.requestId,
-    ordinal: attempt.ordinal, reservedUsdMicros: attempt.reservedUsdMicros,
+    ordinal: attempt.ordinal, reservedUsdMicros: attempt.reservedUsdMicros, reservedTokens: attempt.reservedTokens,
     accountedUsdMicros: attempt.result?.accountedUsdMicros ?? null, disposition: attempt.result?.disposition ?? null };
   validateHeldoutAttempt(attempt);
   const prior = [...counter.events].reverse().find(event => event.charge && chargeKey(event.charge) === chargeKey(charge))?.charge;
-  if (attempt.result ? !prior || prior.accountedUsdMicros !== null || prior.reservedUsdMicros !== charge.reservedUsdMicros
+  if (attempt.result ? !prior || prior.accountedUsdMicros !== null || prior.reservedUsdMicros !== charge.reservedUsdMicros || prior.reservedTokens !== charge.reservedTokens
     || attempt.result.accountedUsdMicros < attempt.reservedUsdMicros : prior) throw repair();
   const delta = attempt.result ? attempt.result.accountedUsdMicros - attempt.reservedUsdMicros : attempt.reservedUsdMicros;
   const payload = { schemaVersion: 'decision-heldout-spend-event/v1' as const, sequence: counter.events.length + 1,
@@ -175,7 +175,7 @@ export async function heldoutEvidenceDigest(run: string, events: HeldoutEvent[])
     journalDigest: events.at(-1)?.digest ?? heldoutDigest([]) });
 }
 export interface HeldoutScan {
-  studyUsdMicros: number; portfolioUsdMicros: number; counterBlocked: boolean; attempts: HeldoutAttempt[]; journalDigests: Digest[]; runs: HeldoutPriorRun[];
+  studyUsdMicros: number; portfolioUsdMicros: number; studyCalls: number; studyReservedTokens: number; counterBlocked: boolean; attempts: HeldoutAttempt[]; journalDigests: Digest[]; runs: HeldoutPriorRun[];
 }
 /** Count reservations, including crashes and failed requests; successful small usage never refunds spend. */
 export async function scanHeldoutSpend(root: string, study: string, approval?: HeldoutApproval): Promise<HeldoutScan> {
@@ -190,7 +190,10 @@ export async function scanHeldoutSpend(root: string, study: string, approval?: H
   }
   const counter = await readCounter(root, baselines);
   const result: HeldoutScan = { studyUsdMicros: baselines.get(study)?.usdMicros ?? 0,
-    portfolioUsdMicros: baselines.get('portfolio')?.usdMicros ?? 0, counterBlocked: counter.blocked, attempts: [], journalDigests: [], runs: [] };
+    portfolioUsdMicros: baselines.get('portfolio')?.usdMicros ?? 0, studyCalls: 0, studyReservedTokens: 0, counterBlocked: counter.blocked, attempts: [], journalDigests: [], runs: [] };
+  for (const { charge } of counter.events) if (charge?.study === study && charge.accountedUsdMicros === null) {
+    result.studyCalls++; result.studyReservedTokens += charge.reservedTokens;
+  }
   for (const name of (await readdir(runs)).sort()) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) throw new HeldoutError('run-path');
     const run = join(runs, name);
@@ -212,6 +215,7 @@ export async function scanHeldoutSpend(root: string, study: string, approval?: H
       if (await heldoutEvidenceDigest(path, await readHeldoutJournal(path)) !== prior.evidenceDigest) throw new HeldoutError('prior-evidence');
     }
     const events = await readHeldoutJournal(run);
+    await validateHeldoutJournal(frozen.bundle, events);
     if ((await readdir(run)).includes('summary.json')) {
       const summary = await readHeldoutFile(join(run, 'summary.json')) as HeldoutSummary;
       checkHeldoutSchema('Summary', summary);
@@ -221,15 +225,6 @@ export async function scanHeldoutSpend(root: string, study: string, approval?: H
     const latest = new Map<string, HeldoutAttempt>();
     for (const { attempt } of events) {
       if (attempt.runId !== name || attempt.study !== frozen.approval.study) throw new HeldoutError('journal-run');
-      const approved = frozen.bundle.approval;
-      const row = frozen.bundle.corpus.rows.find(row => row.id === attempt.rowId);
-      const request = row?.requests.find(request => request.id === attempt.requestId);
-      if (!row || !request) throw new HeldoutError('journal-pins');
-      const planned = await heldoutRequest(frozen.bundle.corpus, frozen.bundle.preregistration, approved, row, request);
-      if (attempt.corpusDigest !== approved.corpusDigest || attempt.preregistrationDigest !== approved.preregistrationDigest
-        || attempt.approvalDigest !== heldoutDigest(approved) || attempt.requestDigest !== planned.requestDigest
-        || attempt.reservedUsdMicros !== heldoutReservationMicros(approved, planned.estimatedTokens)
-        || attempt.reservedTokens !== heldoutReservationTokens(frozen.bundle.preregistration, planned.estimatedTokens)) throw new HeldoutError('journal-pins');
       const key = `${attempt.rowId}/${attempt.requestId}/${attempt.ordinal}`;
       if (!attempt.result) {
         result.portfolioUsdMicros += attempt.reservedUsdMicros;
@@ -251,4 +246,36 @@ export async function scanHeldoutSpend(root: string, study: string, approval?: H
   if (approval && !baselines.has(study)) result.studyUsdMicros += Math.ceil(approval.priorStudySpendUsd * 1_000_000);
   if (approval && !baselines.has('portfolio')) result.portfolioUsdMicros += Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000);
   return result;
+}
+
+/** Replay enforces the same membership, phase and reservation pins as dispatch. */
+export async function validateHeldoutJournal(bundle: HeldoutBundle, events: readonly HeldoutEvent[]): Promise<void> {
+  for (const { attempt } of events) {
+    if (attempt.runId !== bundle.approval.runId || attempt.study !== bundle.approval.study) throw new HeldoutError('journal-run');
+    const approved = bundle.approval;
+    const row = bundle.corpus.rows.find(row => row.id === attempt.rowId);
+    const request = row?.requests.find(request => request.id === attempt.requestId);
+    if (!row || !request) throw new HeldoutError('journal-pins');
+    const planned = await heldoutRequest(bundle.corpus, bundle.preregistration, approved, row, request);
+    if (attempt.corpusDigest !== approved.corpusDigest || attempt.preregistrationDigest !== approved.preregistrationDigest
+      || attempt.approvalDigest !== heldoutDigest(approved) || attempt.requestDigest !== planned.requestDigest
+      || attempt.reservedUsdMicros !== heldoutReservationMicros(approved, planned.estimatedTokens)
+      || attempt.reservedTokens !== heldoutReservationTokens(bundle.preregistration, planned.estimatedTokens)) throw new HeldoutError('journal-pins');
+  }
+}
+/** Staged sessions share one allowance; a new phase or run ID cannot move the stop threshold. */
+export function heldoutCollectionAllowance(approval: HeldoutApproval, prior: HeldoutScan) {
+  const studyRemaining = HELDOUT_CAP_USD[approval.study] * 1_000_000 - prior.studyUsdMicros;
+  const portfolioRemaining = HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - prior.portfolioUsdMicros;
+  if (approval.calibration.mode !== 'staged') return {
+    calls: Math.floor(approval.budget.calls * 0.8), tokens: Math.floor(approval.budget.tokens * 0.8),
+    usdMicros: Math.floor(Math.min(approval.budget.usd * 1_000_000, studyRemaining, portfolioRemaining) * 0.8),
+  };
+  const studySpent = prior.studyUsdMicros - Math.ceil(approval.priorStudySpendUsd * 1_000_000);
+  const portfolioSpent = prior.portfolioUsdMicros - Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000);
+  return { calls: Math.floor(approval.budget.calls * 0.8) - prior.studyCalls,
+    tokens: Math.floor(approval.budget.tokens * 0.8) - prior.studyReservedTokens,
+    usdMicros: Math.min(Math.floor(approval.budget.usd * 800_000) - studySpent,
+      Math.floor((studyRemaining + studySpent) * 0.8) - studySpent,
+      Math.floor((portfolioRemaining + portfolioSpent) * 0.8) - portfolioSpent) };
 }

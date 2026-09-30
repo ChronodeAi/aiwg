@@ -1814,12 +1814,13 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "source-module",
-      "digest": "sha256:e53f22541d1f3d3669873b2d9ff6cca22b8b1c96b985da3afe5e3582e9f0d968",
-      "expectedOutcome": "Two-subject offline generator/scorer interface example; no live qualification or promotion",
+      "digest": "sha256:fcf17202a4b4be5df50180fa4ec4d74df250ed10fcd0143b8ee9f1a2ebd7ed08",
+      "expectedOutcome": "Offline diagnostic and staged calibration/test generator/scorer interface examples; no D09 validity, live qualification or promotion",
       "links": [
         "JEV-16",
         "#2611",
-        "#2622"
+        "#2622",
+        "#2778"
       ]
     }
   ]

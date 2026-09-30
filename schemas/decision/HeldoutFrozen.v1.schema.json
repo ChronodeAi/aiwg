@@ -11,7 +11,8 @@
     "digest",
     "priorRuns",
     "source",
-    "baselineDigests"
+    "baselineDigests",
+    "testPhaseAccessAt"
   ],
   "properties": {
     "schemaVersion": {
@@ -124,6 +125,13 @@
           "pattern": "^sha256:[a-f0-9]{64}$"
         }
       }
+    },
+    "testPhaseAccessAt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
     }
   }
 }

@@ -10,10 +10,11 @@ import { QUALIFICATION_PRIVACY_SURFACES, scanQualificationPrivacy } from '../qua
 import { executeQualificationPlan, verifyQualificationArtifacts, writeQualificationEvidenceManifest } from '../qualification/runner.js';
 import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from '../qualification/release.js';
 import { redactText } from '../../governance/redaction.js';
-import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, HeldoutError, HELDOUT_CAP_USD, HELDOUT_ENV_GATE,
-  HELDOUT_PORTFOLIO_CAP_USD, planHeldoutCollection, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
+import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, HeldoutError, HELDOUT_ENV_GATE,
+  heldoutRowsInScope, planHeldoutCollection, validateHeldoutBundle } from './contract.js';
 import { appendHeldoutSpend, appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
-  reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile } from './journal.js';
+  reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile, validateHeldoutJournal, heldoutCollectionAllowance } from './journal.js';
+import { readHeldoutFrozen, sealHeldoutCalibrationPhase, validateHeldoutPhaseAccess } from './calibration.js';
 import type { AdapterObservation, DecisionAdapter, RulesetResult } from '../types.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutStudyModule, HeldoutSummary } from './types.js';
 
@@ -55,7 +56,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
   validateHeldoutBundle(options.bundle, options.trustedApprovalDigest);
   // Clone after admission: caller mutation cannot change a dispatched or recorded pin.
   const bundle = structuredClone(options.bundle), { corpus, preregistration: plan, approval: a } = bundle;
-  await planHeldoutCollection(bundle, options.trustedApprovalDigest);
+  if (a.calibration.mode !== 'staged' || a.calibration.phase !== 'test') await planHeldoutCollection(bundle, options.trustedApprovalDigest);
   await assertContextLiveSource(options.sourceRoot, a.sourceCommit);
   await assertContextArtifactRoot(options.sourceRoot, options.artifactRoot);
   await heldoutDirectory(heldoutRunsRoot(options.artifactRoot));
@@ -75,15 +76,16 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     if (old.some(attempt => attempt.preregistrationDigest !== a.preregistrationDigest)) throw new HeldoutError('changed-preregistration');
     const latest = new Map<string, HeldoutAttempt>();
     for (const attempt of old) if (attempt.ordinal >= (latest.get(key(attempt))?.ordinal ?? 0)) latest.set(key(attempt), attempt);
+    const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
+    const testPhaseAccessAt = a.calibration.mode === 'staged' && a.calibration.phase === 'test' ? new Date(started).toISOString() : null;
+    await validateHeldoutPhaseAccess(bundle, heldoutRunsRoot(options.artifactRoot), prior.runs, testPhaseAccessAt);
+    if (testPhaseAccessAt !== null) await planHeldoutCollection(bundle, options.trustedApprovalDigest);
+    const rows = heldoutRowsInScope(bundle);
     const run = join(heldoutRunsRoot(options.artifactRoot), a.runId);
     await mkdir(run, { mode: 0o700 });
-    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
+    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, testPhaseAccessAt, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
     const events: HeldoutEvent[] = [];
-    const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
-    const studyPrior = prior.studyUsdMicros;
-    const portfolioPrior = prior.portfolioUsdMicros;
-    const usdLimit = Math.floor(Math.min(a.budget.usd * 1_000_000, HELDOUT_CAP_USD[a.study] * 1_000_000 - studyPrior,
-      HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - portfolioPrior) * 0.8);
+    const allowance = heldoutCollectionAllowance(a, prior);
     let calls = 0, reserved = 0, accounted = 0, tokens = 0, lastDispatch = started - plan.minDispatchIntervalMs;
     let reason: string | null = null, checkpoint = false;
     const canaries = new Set<string>(['heldout-synthetic-privacy-canary']);
@@ -100,7 +102,7 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     };
     // The scoped resolver starts only after every input and durable accounting check.
     const obtainHost = async () => host ??= offlineHost ?? await liveHost({ ...options, bundle });
-    for (const row of corpus.rows) {
+    for (const row of rows) {
       if (reason || checkpoint) break;
       if (options.signal?.aborted) { reason = 'cancelled'; break; }
       if (failed.has(row.id) || overSlice(row.slice, row.split)) continue;
@@ -120,8 +122,8 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           const { execution, requestDigest, requestBytes, estimatedTokens: inputTokenBound } = await heldoutRequest(corpus, plan, a, row, request);
           const reserveMicros = heldoutReservationMicros(a, inputTokenBound);
           const reserveTokens = heldoutReservationTokens(plan, inputTokenBound);
-          if (calls + 1 > Math.floor(a.budget.calls * 0.8) || tokens + reserveTokens > Math.floor(a.budget.tokens * 0.8)
-            || accounted + reserveMicros > usdLimit) { reason = 'budget-exhausted'; break; }
+          if (calls + 1 > allowance.calls || tokens + reserveTokens > allowance.tokens
+            || accounted + reserveMicros > allowance.usdMicros) { reason = 'budget-exhausted'; break; }
           await sleep(Math.max(0, plan.minDispatchIntervalMs - (now() - lastDispatch)));
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           if (now() - started + plan.requestTimeoutMs > plan.sessionLimitMs * 0.8) { checkpoint = true; break; }
@@ -226,12 +228,14 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
     }
     try { await assertContextLiveSource(options.sourceRoot, a.sourceCommit); } catch { reason = 'source-drift'; }
     const all = [...latest.values()];
-    const completedRows = corpus.rows.filter(row => row.requests.every(request => latest.get(`${row.id}/${request.id}`)?.result?.disposition === 'success')).length;
-    const missingRows = corpus.rows.filter(row => row.requests.some(request => latest.get(`${row.id}/${request.id}`)?.result?.disposition !== 'success')).map(row => row.id);
+    const completedRows = rows.filter(row => row.requests.every(request => latest.get(`${row.id}/${request.id}`)?.result?.disposition === 'success')).length;
+    const missingRows = rows.filter(row => row.requests.some(request => latest.get(`${row.id}/${request.id}`)?.result?.disposition !== 'success')).map(row => row.id);
     const evidenceDigest = await heldoutEvidenceDigest(run, events);
+    const calibrationPhaseRecordDigest = !reason && !checkpoint && a.calibration.mode === 'staged' && a.calibration.phase === 'calibration'
+      ? await sealHeldoutCalibrationPhase(run, new Date(now()).toISOString()) : null;
     const summary: HeldoutSummary = { schemaVersion: 'decision-heldout-summary/v1', status: reason ? 'stopped' : checkpoint ? 'checkpoint' : 'complete', reason,
       source: attemptSource, study: a.study, runId: a.runId, reservedUsdMicros: reserved, completedRows,
-      measurementFailures: [...failed], missingRows, evidenceDigest, decision: 'HOLD' };
+      measurementFailures: [...failed].filter(id => rows.some(row => row.id === id)), missingRows, evidenceDigest, calibrationPhaseRecordDigest, decision: 'HOLD' };
     await writeHeldoutFile(join(run, 'summary.json'), summary);
     // Recorded mode re-reads the durable ledger, rather than trusting a live-mode callback.
     const manifest = await executeQualificationPlan({ artifactRoot: run, manifest: { schemaVersion: 'decision-qualification-run/v1',
@@ -258,17 +262,15 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
 /** Scoring is local and advisory. Digest-bound upstream integrity can only retain HOLD or tighten to ROLLBACK. */
 export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDigest: Digest; trustedApprovalDigest: Digest;
   module: HeldoutStudyModule; moduleDigest: Digest; gold: unknown; integrity: QualificationIntegrityMetadata; trustedIntegrityDigest: Digest }) {
-  const frozen = await readHeldoutFile(join(input.run, 'frozen.json')) as { bundle: HeldoutBundle; digest: Digest;
-    priorRuns: import('./journal.js').HeldoutPriorRun[]; source: 'injected-transport' | 'provider' };
-  checkHeldoutSchema('Frozen', frozen);
-  if (frozen.digest !== heldoutDigest(frozen.bundle)) throw new HeldoutError('frozen-inputs');
-  validateHeldoutBundle(frozen.bundle, input.trustedApprovalDigest);
-  const { corpus, preregistration } = frozen.bundle;
+  const frozen = await readHeldoutFrozen(input.run, input.trustedApprovalDigest);
+  const { corpus, preregistration, approval } = frozen.bundle;
+  await validateHeldoutPhaseAccess(frozen.bundle, resolve(input.run, '..'), frozen.priorRuns, frozen.testPhaseAccessAt);
   if (heldoutDigest(input.gold) !== corpus.provenance.goldDigest || input.moduleDigest !== preregistration.scorerDigest
     || heldoutDigest(input.integrity) !== input.trustedIntegrityDigest) throw new HeldoutError('scoring-pins');
   const problems = qualificationIntegrityAllowlistProblems(input.integrity);
   if (problems.includes('integrity-invalid')) throw new HeldoutError('integrity-invalid');
   const events = await readHeldoutJournal(input.run);
+  await validateHeldoutJournal(frozen.bundle, events);
   if (await heldoutEvidenceDigest(input.run, events) !== input.trustedEvidenceDigest) throw new HeldoutError('evidence-pin');
   const manifest = await readHeldoutFile(join(input.run, 'qualification.json')) as Parameters<typeof verifyQualificationArtifacts>[0];
   if (manifest.mode !== 'recorded' || !(await verifyQualificationArtifacts(manifest, input.run)).every(v => v.verified)
@@ -276,16 +278,29 @@ export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDig
   for (const prior of frozen.priorRuns) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(prior.runId) || prior.corpusDigest !== preregistration.corpusDigest || prior.study !== corpus.study) throw new HeldoutError('prior-evidence');
     const path = resolve(input.run, '..', prior.runId), journal = await readHeldoutJournal(path);
+    const previous = await readHeldoutFrozen(path);
+    if (previous.bundle.approval.preregistrationDigest !== approval.preregistrationDigest) throw new HeldoutError('prior-evidence');
+    await validateHeldoutJournal(previous.bundle, journal);
+    await validateHeldoutPhaseAccess(previous.bundle, resolve(input.run, '..'), previous.priorRuns, previous.testPhaseAccessAt);
     if (await heldoutEvidenceDigest(path, journal) !== prior.evidenceDigest) throw new HeldoutError('prior-evidence');
     events.unshift(...journal);
   }
   const latest = new Map<string, HeldoutAttempt>();
   for (const { attempt } of events) latest.set(`${key(attempt)}/${attempt.ordinal}`, attempt);
-  const attempts = [...latest.values()];
-  const complete = corpus.rows.every(row => row.requests.every(request => attempts.some(a => a.rowId === row.id
+  const rows = heldoutRowsInScope(frozen.bundle);
+  const attempts = [...latest.values()].filter(attempt => rows.some(row => row.id === attempt.rowId));
+  const complete = rows.every(row => row.requests.every(request => attempts.some(a => a.rowId === row.id
     && a.requestId === request.id && a.result?.disposition === 'success')));
-  const diagnostics = await input.module.score({ corpus, preregistration, attempts, gold: input.gold, integrity: structuredClone(input.integrity) });
+  const approvedCalibration = structuredClone(approval.calibration);
+  const calibrated = approvedCalibration.mode === 'uncalibrated-diagnostic'
+    || approvedCalibration.mode === 'staged' && approvedCalibration.phase === 'calibration' ? false : null;
+  const diagnostics = await input.module.score({ corpus: { ...corpus, rows }, preregistration, attempts, gold: input.gold,
+    integrity: structuredClone(input.integrity), approvedCalibration: structuredClone(approvedCalibration), calibrated });
+  if (calibrated === false && (!diagnostics || typeof diagnostics !== 'object'
+    || (diagnostics as Record<string, unknown>).calibrated !== false
+    || 'd09Qualified' in diagnostics && diagnostics.d09Qualified !== false
+    || 'calibratedGate' in diagnostics && diagnostics.calibratedGate !== false)) throw new HeldoutError('uncalibrated-report');
   return { schemaVersion: 'decision-heldout-score/v1', source: frozen.priorRuns.some(run => run.source === 'injected-transport') ? 'injected-transport' : frozen.source, evidenceDigest: input.trustedEvidenceDigest, integrityDigest: input.trustedIntegrityDigest,
-    complete, diagnostics, integrityProblems: problems, decision: input.integrity.release_gate.decision === 'ROLLBACK'
+    complete, diagnostics, approvedCalibration, calibrated, d09Qualified: false, calibratedGate: false, calibrationArtifactValidation: 'not-performed', integrityProblems: problems, decision: input.integrity.release_gate.decision === 'ROLLBACK'
       || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' as const : 'HOLD' as const };
 }
