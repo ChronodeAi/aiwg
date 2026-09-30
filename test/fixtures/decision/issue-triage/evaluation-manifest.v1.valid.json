@@ -63,6 +63,8 @@
     "confidenceInterval": { "method": "wilson", "level": 0.95 },
     "minimumTotalSamples": 2,
     "minimumPerSliceSamples": 1,
+    "minimumDuplicateSamples": 1,
+    "minimumDuplicateRecall": 0.5,
     "benefit": { "mustBePositive": true, "metric": "reviewer-time" }
   },
   "holdout": {

@@ -32,12 +32,15 @@ merge tracker issues, and it cannot bypass issue-planner approval.
   the D10 projection boundary, allowlists metadata, and omits final labels,
   final duplicate decisions, resolution, and close data. Title, body, author,
   every allowlisted metadata string, and candidate titles pass through the
-  shared `redactText()` helper from `src/governance/redaction.ts` (private keys,
+  shared `redactText()` helper from `src/governance/redaction.ts` (PEM private
+  keys including `ENCRYPTED`, RSA, EC, DSA, OpenSSH and PGP headers, Stripe
+  `sk_live_`/`sk_test_`/`rk_live_` keys,
   `Authorization`/`Bearer` values, `ghp_`/`gho_`/`github_pat_`, `sk-`, `xox?-`,
   `AKIA` keys, JSON/YAML/`key=value` password, secret and token fields, and
   encoded secrets) plus issue-triage patterns for JWTs and `AKIA`/`ASIA` AWS
   keys. The assignment rule is deliberately broad: ordinary prose such as
-  "token accounting" is also redacted.
+  "token accounting" is also redacted. An allowlisted metadata value that is
+  not a string, number, boolean or null is refused.
 - `validateIssueTriageModelResponse()` requires provider usage receipts.
   Caller `usage` totals, Jev and fallback call counts, and the cache flag must
   reconcile with them. Compatibility is resolved through `CalibrationRegistry`
@@ -53,8 +56,13 @@ merge tracker issues, and it cannot bypass issue-planner approval.
   insufficient-slice behavior, promotion thresholds, confidence interval method
   and level, sample rules, the digests of the frozen tuning/calibration/test
   splits, and a positive benefit requirement before holdout access.
-- `buildIssueTriageEvaluationReport()` scores only the preregistered test split
-  and refuses samples whose slice IDs were not preregistered or whose cascade
+- `buildIssueTriageEvaluationReport()` scores only the preregistered test split.
+  It never trusts a caller's acceptance verdict or compatibility pin: it
+  re-validates each cascade response and recomputes acceptance with the same
+  rule as the shadow runtime, resolving compatibility through the supplied
+  `CalibrationRegistry` requests. It refuses samples whose sample, baseline and
+  cascade issue IDs differ, whose issue type or area label is outside the
+  taxonomy, whose slice IDs were not preregistered, or whose cascade
   duplicate answer does not match the sample's deterministic lineage (ID and
   rank) before computing top-k and nDCG. It reports class counts, macro and
   per-class precision/recall/F1, urgency ordinal error (from
@@ -76,11 +84,17 @@ Every gate reads the preregistered manifest. Any finding yields `HOLD`.
 | Quality non-inferiority | Per-issue paired outcomes (baseline correct vs cascade correct) go to `pairedBinaryDifferenceInterval` (Newcombe method 10), then `pairedNonInferiority`. The margin is cascade minus baseline and must be `<= 0`; for example, `-0.02` allows the cascade to be two points worse. A positive margin would be a superiority test and is rejected when the manifest is validated. |
 | False-auto rate | Wilson upper bound of the error rate among accepted samples must not exceed `maximumFalseAutoRate`. No accepted samples is `false-auto-insufficient`. |
 | Accepted coverage | Wilson lower bound of coverage must be at least `minimumAcceptedCoverage`. |
-| False duplicates | Wilson upper bound over `none` cases must not exceed `maximumFalseDuplicateRate`. An evaluation set with no `none` cases, or with no duplicate cases, cannot promote. |
+| False duplicates | Wilson upper bound over `none` cases must not exceed `maximumFalseDuplicateRate`. An evaluation set with no `none` cases cannot promote. |
+| Duplicate support and recall | At least `minimumDuplicateSamples` labeled duplicate cases, and the Wilson lower bound of duplicate recall must be at least `minimumDuplicateRecall`. |
 | Usage | Every arm's totals, call counts and cache flag must reconcile with its provider receipts, or the report records `usage-unreconciled` and token and cost comparisons become unknown. |
 | Benefit | Computed only on the preregistered metric (`reviewer-time` or `total-task-token-cost`), from reconciled receipts that include fallback calls and cache reads. An unknown value is `benefit-insufficient`; tokens never stand in for an unknown cost. |
-| Calibration | With `acceptance.calibration: required`, an accepted sample without an `allow` registry pin for its alias and served model is `calibration-required-unverified`. |
+| Calibration | With `acceptance.calibration: required`, a sample is accepted only if its registry request resolves to `allow` for its alias and served model; a report built without registry requests for every sample is `calibration-required-unverified`. |
 | Integrity | The upstream eval-integrity `PROMOTE`/`HOLD`/`ROLLBACK` can be preserved or tightened, never upgraded. |
+
+`validateIssueTriageEvaluationReport(report, { inputs, trustedManifestDigest })`
+accepts a report only when the inputs' manifest matches the separately trusted
+digest and rebuilding the report from those inputs gives canonically identical
+JSON. An edited, spread-copied or relaxed-manifest report is rejected.
 
 - Alias/model or uncertainty-profile incompatibility disables accepted shadow
   scoring and records a defer/drift event while preserving the raw suggestion.

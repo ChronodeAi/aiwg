@@ -71,6 +71,8 @@
         "confidenceInterval",
         "minimumTotalSamples",
         "minimumPerSliceSamples",
+        "minimumDuplicateSamples",
+        "minimumDuplicateRecall",
         "benefit"
       ],
       "properties": {
@@ -94,6 +96,15 @@
         },
         "minimumTotalSamples": { "type": "integer", "minimum": 1 },
         "minimumPerSliceSamples": { "type": "integer", "minimum": 1 },
+        "minimumDuplicateSamples": {
+          "description": "Minimum labeled duplicate cases before duplicate metrics can support PROMOTE.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimumDuplicateRecall": {
+          "description": "Minimum Wilson lower bound of duplicate recall at the preregistered level.",
+          "$ref": "#/$defs/unit"
+        },
         "benefit": {
           "type": "object",
           "additionalProperties": false,

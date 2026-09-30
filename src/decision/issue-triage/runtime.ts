@@ -7,7 +7,6 @@ import addFormats from 'ajv-formats';
 import { redactText, type OrganizationRedactionPattern } from '../../governance/redaction.js';
 import { canonicalJson } from '../../security/artifact-trust.js';
 import { correlateAtomicBatch } from '../batch.js';
-import type { CompatibilityDecision } from '../calibration/types.js';
 import { admitEntry } from '../entry.js';
 import { projectDecisionState, type DecisionProjectionField, type DecisionProjectionPolicy } from '../projection.js';
 import {
@@ -29,6 +28,7 @@ import type {
   IssueTriageCandidateInput,
   IssueTriageCandidateLineage,
   IssueTriageDuplicateCandidate,
+  IssueTriageEvaluationInput,
   IssueTriageEvaluationManifest,
   IssueTriageEvaluationReport,
   IssueTriageEvaluationSample,
@@ -175,7 +175,7 @@ export function validateIssueTriageEvaluationManifest(value: unknown): IssueTria
   return manifest;
 }
 
-export function validateIssueTriageEvaluationReport(value: unknown): IssueTriageEvaluationReport {
+function checkIssueTriageEvaluationReportShape(value: unknown): IssueTriageEvaluationReport {
   checkSchema('report', value);
   const report = value as IssueTriageEvaluationReport;
   const problems: string[] = [];
@@ -183,7 +183,31 @@ export function validateIssueTriageEvaluationReport(value: unknown): IssueTriage
     problems.push(`issue triage report cannot upgrade ${report.integrity.upstreamDecision} to ${report.decision}`);
   }
   if (report.decision === 'PROMOTE' && report.integrity.findings.length > 0) problems.push('PROMOTE requires no findings');
+  if (report.decision === 'PROMOTE' && report.baselineComparison.qualityNonInferiority?.decision !== 'non-inferior') {
+    problems.push('PROMOTE requires a non-inferior paired quality interval');
+  }
   semantic(problems, 'issue triage evaluation report rejected');
+  return report;
+}
+
+/**
+ * A report is accepted only if it is exactly what this module rebuilds from the same inputs, and only if
+ * those inputs use the manifest whose digest was preregistered out of band. A spread-copied or edited
+ * report, or one built from a relaxed manifest, is rejected.
+ */
+export function validateIssueTriageEvaluationReport(value: unknown, binding: {
+  inputs: IssueTriageEvaluationInput;
+  trustedManifestDigest: `sha256:${string}`;
+}): IssueTriageEvaluationReport {
+  const report = checkIssueTriageEvaluationReportShape(value);
+  if (!binding || digest(binding.inputs.manifest) !== binding.trustedManifestDigest
+    || report.manifest.digest !== binding.trustedManifestDigest) {
+    throw new IssueTriagePilotError('issue triage report manifest does not match the trusted manifest digest');
+  }
+  const rebuilt = buildIssueTriageEvaluationReport(binding.inputs);
+  if (canonicalJson(rebuilt) !== canonicalJson(report)) {
+    throw new IssueTriagePilotError('issue triage report does not match a rebuild from its inputs');
+  }
   return report;
 }
 
@@ -298,7 +322,13 @@ function allowedMetadata(metadata: IssueTriageIssueRecord['metadata']): IssueTri
   if (!metadata) return undefined;
   const entries = Object.entries(metadata)
     .filter(([key]) => (METADATA_ALLOWLIST as readonly string[]).includes(key))
-    .map(([key, value]) => [key, typeof value === 'string' ? redactCredentialMaterial(value) : value] as const);
+    .map(([key, value]) => {
+      // Structured values could smuggle unredacted text; only scalars are model-visible.
+      if (value !== null && !['string', 'number', 'boolean'].includes(typeof value)) {
+        throw new IssueTriagePilotError(`metadata ${key} must be a string, number, boolean or null`);
+      }
+      return [key, typeof value === 'string' ? redactCredentialMaterial(value) : value] as const;
+    });
   return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
@@ -382,13 +412,9 @@ export function validateIssueTriageBatchSubject(questions: readonly IssueTriageB
   return questions[0]!.issueId;
 }
 
-export function validateIssueTriageModelResponse(
-  packInput: IssueTriagePilotPack,
-  projection: IssueTriageProjection,
-  response: IssueTriageModelResponse,
-  calibration: IssueTriageCalibrationContext,
-): IssueTriageValidatedResponse {
-  const pack = validateIssueTriagePilotPack(packInput);
+/** Structural, taxonomy and lineage problems of one response for one subject; usage reconciliation is separate. */
+function responseProblems(pack: IssueTriagePilotPack, subjectId: string, lineage: IssueTriageCandidateLineage,
+  response: IssueTriageModelResponse): string[] {
   const problems: string[] = [];
   for (const key of Object.keys(response as unknown as Record<string, unknown>)) {
     if (!(RESPONSE_FIELDS as readonly string[]).includes(key)) problems.push(`model response contains unauthorized field ${key}`);
@@ -396,28 +422,36 @@ export function validateIssueTriageModelResponse(
   for (const key of Object.keys(response.duplicate as unknown as Record<string, unknown>)) {
     if (!(DUPLICATE_RESPONSE_FIELDS as readonly string[]).includes(key)) problems.push(`duplicate response contains unauthorized field ${key}`);
   }
-  if (response.issueId !== projection.modelState.issue.id) problems.push('response issue id does not match the projected subject');
+  if (response.issueId !== subjectId) problems.push('response issue id does not match the projected subject');
   if (!pack.taxonomies.issueTypes.includes(response.issueType)) problems.push(`issue type ${response.issueType} is not in the governed taxonomy`);
   if (!pack.taxonomies.areas.includes(response.area)) problems.push(`area ${response.area} is not in the governed taxonomy`);
   if (!pack.urgencyRubric.some(level => level.id === response.urgency)) problems.push(`urgency ${response.urgency} is not in the governed rubric`);
   if (!pack.taxonomies.stateCompleteness.includes(response.completeness)) problems.push(`completeness ${response.completeness} is not in the governed taxonomy`);
   if (!pack.taxonomies.clarificationNeed.includes(response.clarificationNeed)) problems.push(`clarification ${response.clarificationNeed} is not in the governed taxonomy`);
-  if (response.duplicate.issueId !== 'none' && !projection.lineage.candidates.some(candidate => candidate.issueId === response.duplicate.issueId)) {
+  if (response.duplicate.issueId !== 'none' && !lineage.candidates.some(candidate => candidate.issueId === response.duplicate.issueId)) {
     problems.push(`duplicate candidate ${response.duplicate.issueId} was not deterministically generated`);
   }
   const deterministicRank = response.duplicate.issueId === 'none'
     ? null
-    : projection.lineage.candidates.find(candidate => candidate.issueId === response.duplicate.issueId)?.rank ?? null;
+    : lineage.candidates.find(candidate => candidate.issueId === response.duplicate.issueId)?.rank ?? null;
   if (response.duplicate.issueId === 'none' && response.duplicate.rank !== null) problems.push('none duplicate outcome must not carry a rank');
   if (response.duplicate.issueId !== 'none' && response.duplicate.rank !== deterministicRank) {
     problems.push(`duplicate rank for ${response.duplicate.issueId} does not match deterministic rank ${deterministicRank}`);
   }
+  if (typeof response.accepted !== 'boolean') problems.push('accepted must be a boolean');
   if (!Number.isFinite(response.latencyMs) || response.latencyMs < 0) problems.push('latency must be finite and nonnegative');
   if ([response.calls.jev, response.calls.fallbackModel, response.retries, response.fallbacks].some(value => !Number.isSafeInteger(value) || value < 0)) {
     problems.push('call, retry and fallback counts must be nonnegative integers');
   }
-  problems.push(...usageReconciliationProblems(response));
-  semantic(problems, 'issue triage model response rejected');
+  return problems;
+}
+
+/**
+ * The single acceptance rule for shadow scoring. Compatibility comes only from resolving the registry
+ * request; with calibration: required, no registry resolution means no accepted scoring.
+ */
+function acceptanceFor(pack: IssueTriagePilotPack, response: IssueTriageModelResponse,
+  calibration: IssueTriageCalibrationContext): IssueTriageValidatedResponse['acceptance'] {
   const compatibility = calibration.registry
     ? calibration.registry.registry.resolve(calibration.registry.request, calibration.registry.policy)
     : null;
@@ -433,11 +467,26 @@ export function validateIssueTriageModelResponse(
     ? pack.acceptance.calibration !== 'required'
     : compatibility.action === 'allow' && !registryDrift;
   const modelCompatible = aliasCompatible && !registryDrift;
-  const acceptedScoring = response.accepted && profileCompatible && modelCompatible && registryCompatible;
-  const reason = acceptedScoring ? 'compatible' : !response.accepted ? 'defer-response-rejected'
+  const acceptedScoring = response.accepted === true && profileCompatible && modelCompatible && registryCompatible;
+  const reason = acceptedScoring ? 'compatible' : response.accepted !== true ? 'defer-response-rejected'
     : modelCompatible ? 'defer-calibration-incompatible' : 'defer-drift';
   const driftEvent = modelCompatible ? null : `model-drift:${response.requestedModel}->${response.actualModel}`;
-  return { ...response, acceptance: { acceptedScoring, reason, driftEvent, compatibility } };
+  return { acceptedScoring, reason, driftEvent, compatibility };
+}
+
+export function validateIssueTriageModelResponse(
+  packInput: IssueTriagePilotPack,
+  projection: IssueTriageProjection,
+  response: IssueTriageModelResponse,
+  calibration: IssueTriageCalibrationContext,
+): IssueTriageValidatedResponse {
+  const pack = validateIssueTriagePilotPack(packInput);
+  const problems = [
+    ...responseProblems(pack, projection.modelState.issue.id, projection.lineage, response),
+    ...usageReconciliationProblems(response),
+  ];
+  semantic(problems, 'issue triage model response rejected');
+  return { ...response, acceptance: acceptanceFor(pack, response, calibration) };
 }
 
 /**
@@ -562,13 +611,16 @@ export function applyIssueTriagePilot<T>(
   return previousWorkflowResult;
 }
 
+/** A sample whose cascade acceptance was recomputed by this module. */
+type ScoredSample = Omit<IssueTriageEvaluationSample, 'cascade'> & { cascade: IssueTriageValidatedResponse };
+
 function prf(tp: number, fp: number, fn: number): PrecisionRecallF1 {
   const precision = tp + fp === 0 ? 0 : tp / (tp + fp);
   const recall = tp + fn === 0 ? 0 : tp / (tp + fn);
   return { precision, recall, f1: precision + recall === 0 ? 0 : 2 * precision * recall / (precision + recall) };
 }
 
-function multiclass(samples: readonly IssueTriageEvaluationSample[], key: 'issueType' | 'area', pack: IssueTriagePilotPack): MulticlassMetrics {
+function multiclass(samples: readonly ScoredSample[], key: 'issueType' | 'area', pack: IssueTriagePilotPack): MulticlassMetrics {
   const classes = key === 'issueType' ? pack.taxonomies.issueTypes : pack.taxonomies.areas;
   const perClass = Object.fromEntries(classes.map(label => {
     const tp = samples.filter(sample => sample.label[key] === label && sample.cascade[key] === label).length;
@@ -584,8 +636,8 @@ function multiclass(samples: readonly IssueTriageEvaluationSample[], key: 'issue
   return { sampleN: samples.length, macro, perClass };
 }
 
-function binary(samples: readonly IssueTriageEvaluationSample[], predicted: (sample: IssueTriageEvaluationSample) => boolean,
-  actual: (sample: IssueTriageEvaluationSample) => boolean): BinaryMetrics {
+function binary(samples: readonly ScoredSample[], predicted: (sample: ScoredSample) => boolean,
+  actual: (sample: ScoredSample) => boolean): BinaryMetrics {
   const tp = samples.filter(sample => predicted(sample) && actual(sample)).length;
   const fp = samples.filter(sample => predicted(sample) && !actual(sample)).length;
   const fn = samples.filter(sample => !predicted(sample) && actual(sample)).length;
@@ -596,7 +648,7 @@ function rate(numerator: number, denominator: number): number {
   return denominator ? numerator / denominator : 0;
 }
 
-function correct(sample: IssueTriageEvaluationSample, which: 'baseline' | 'cascade'): boolean {
+function correct(sample: ScoredSample, which: 'baseline' | 'cascade'): boolean {
   const observed = sample[which];
   return observed.issueType === sample.label.issueType
     && observed.area === sample.label.area
@@ -678,13 +730,13 @@ function verifySampleLineage(sample: IssueTriageEvaluationSample, pack: IssueTri
   }
 }
 
-function armUsage(samples: readonly IssueTriageEvaluationSample[], which: 'baseline' | 'cascade', key: 'inputTokens' | 'outputTokens' | 'costUsd'): number | null {
+function armUsage(samples: readonly ScoredSample[], which: 'baseline' | 'cascade', key: 'inputTokens' | 'outputTokens' | 'costUsd'): number | null {
   const totals = samples.map(sample => receiptTotal(sample[which].usageReceipts, key));
   if (totals.some(total => total === null)) return null;
   return (totals as number[]).reduce((sum, value) => sum + value, 0);
 }
 
-function sliceMetrics(samples: readonly IssueTriageEvaluationSample[]): IssueTriageSliceMetrics {
+function sliceMetrics(samples: readonly ScoredSample[]): IssueTriageSliceMetrics {
   const accepted = samples.filter(sample => sample.cascade.acceptance.acceptedScoring);
   const noneCases = samples.filter(sample => sample.label.duplicateOf === 'none');
   const duplicateCases = samples.filter(sample => sample.label.duplicateOf !== 'none');
@@ -699,28 +751,56 @@ function sliceMetrics(samples: readonly IssueTriageEvaluationSample[]): IssueTri
   };
 }
 
-export function buildIssueTriageEvaluationReport(input: {
-  id: string;
-  manifest: IssueTriageEvaluationManifest;
-  pack: IssueTriagePilotPack;
-  samples: readonly IssueTriageEvaluationSample[];
-  /** Tuning/calibration/test memberships frozen before scoring; digests must match the manifest. */
-  splits: readonly QualificationSplit[];
-  upstreamDecision: IssueTriageGateDecision;
-}): IssueTriageEvaluationReport {
-  const pack = validateIssueTriagePilotPack(input.pack);
-  const manifest = validateIssueTriageEvaluationManifest(input.manifest);
-  const samples = [...input.samples];
-  if (!samples.length) throw new IssueTriagePilotError('issue triage evaluation requires at least one held-out sample');
-  const splits = verifiedSplits(manifest, input.splits, samples);
+/**
+ * Validates each sample and recomputes its cascade acceptance with the same rule the shadow runtime uses.
+ * Caller-supplied acceptance and compatibility pins are discarded.
+ */
+function scoredSamples(input: IssueTriageEvaluationInput, pack: IssueTriagePilotPack,
+  manifest: IssueTriageEvaluationManifest): ScoredSample[] {
   const registeredSlices = new Set(manifest.slices.map(slice => slice.id));
-  for (const sample of samples) {
-    if (sample.label.id !== sample.id) throw new IssueTriagePilotError(`sample ${sample.id} label id does not match`);
+  return input.samples.map(sample => {
+    const where = `sample ${sample.id}`;
+    if (sample.label.id !== sample.id) throw new IssueTriagePilotError(`${where} label id does not match`);
+    for (const arm of ['baseline', 'cascade'] as const) {
+      if (sample[arm].issueId !== sample.id) {
+        throw new IssueTriagePilotError(`${where} ${arm} issue id ${sample[arm].issueId} does not match`);
+      }
+    }
+    for (const key of ['issueType', 'area'] as const) {
+      const allowed = key === 'issueType' ? pack.taxonomies.issueTypes : pack.taxonomies.areas;
+      if (!allowed.includes(sample.label[key])) {
+        throw new IssueTriagePilotError(`${where} label ${key} ${sample.label[key]} is not in the governed taxonomy`);
+      }
+    }
+    if (!pack.taxonomies.stateCompleteness.includes(sample.label.completeness)
+      || !pack.taxonomies.clarificationNeed.includes(sample.label.clarificationNeed)) {
+      throw new IssueTriagePilotError(`${where} label completeness or clarification is not in the governed taxonomy`);
+    }
     for (const slice of sample.label.slices) {
-      if (!registeredSlices.has(slice)) throw new IssueTriagePilotError(`sample ${sample.id} slice ${slice} is not preregistered`);
+      if (!registeredSlices.has(slice)) throw new IssueTriagePilotError(`${where} slice ${slice} is not preregistered`);
     }
     verifySampleLineage(sample, pack);
-  }
+    const { acceptance: _ignored, ...response } = sample.cascade;
+    semantic(responseProblems(pack, sample.id, sample.lineage, response), `${where} cascade response rejected`);
+    const registry = input.calibration.registry;
+    const request = registry?.requests[sample.id];
+    const acceptance = acceptanceFor(pack, response, {
+      requestedModel: input.calibration.requestedModel,
+      actualModel: response.actualModel,
+      compatibleActualModels: input.calibration.compatibleActualModels,
+      uncertaintyProfile: input.calibration.uncertaintyProfile,
+      ...(registry && request ? { registry: { registry: registry.registry, policy: registry.policy, request } } : {}),
+    });
+    return { ...sample, cascade: { ...response, acceptance } };
+  });
+}
+
+export function buildIssueTriageEvaluationReport(input: IssueTriageEvaluationInput): IssueTriageEvaluationReport {
+  const pack = validateIssueTriagePilotPack(input.pack);
+  const manifest = validateIssueTriageEvaluationManifest(input.manifest);
+  if (!input.samples.length) throw new IssueTriagePilotError('issue triage evaluation requires at least one held-out sample');
+  const splits = verifiedSplits(manifest, input.splits, input.samples);
+  const samples = scoredSamples(input, pack, manifest);
   const findings = new Set<string>();
   const levelBps = levelInBps(manifest.thresholds.confidenceInterval);
   if (levelBps === null) findings.add('confidence-interval-unsupported');
@@ -766,7 +846,8 @@ export function buildIssueTriageEvaluationReport(input: {
       };
     }))
     : { sampleN: 0, comparablePairs: 0, concordance: null };
-  if (!duplicateCases.length) findings.add('duplicate-insufficient');
+  const duplicateSupported = duplicateCases.length >= manifest.thresholds.minimumDuplicateSamples;
+  if (!duplicateSupported) findings.add('duplicate-insufficient');
   // Ranks below were re-validated against each sample's deterministic lineage.
   const topK: Record<string, number> = {};
   for (const k of [1, 3, 5]) {
@@ -824,14 +905,18 @@ export function buildIssueTriageEvaluationReport(input: {
     if (selectiveRiskUpper === null) findings.add('false-auto-insufficient');
     else if (selectiveRiskUpper > manifest.thresholds.maximumFalseAutoRate) findings.add('false-auto-rate');
     if (coverageLower! < manifest.thresholds.minimumAcceptedCoverage) findings.add('accepted-coverage');
+    if (duplicateSupported && wilsonScoreInterval({ events: duplicateHits, n: duplicateCases.length, levelBps })[0]
+      < manifest.thresholds.minimumDuplicateRecall) {
+      findings.add('duplicate-recall');
+    }
     if (!noneCases.length) findings.add('false-duplicate-insufficient');
     else if (wilsonScoreInterval({ events: falseDuplicates, n: noneCases.length, levelBps })[1] > manifest.thresholds.maximumFalseDuplicateRate) {
       findings.add('false-duplicate-rate');
     }
   }
   const compatibilityRequired = pack.acceptance.calibration === 'required';
-  if (compatibilityRequired && samples.some(sample => sample.cascade.acceptance.acceptedScoring
-    && !registryAllows(sample.cascade.acceptance.compatibility, sample.cascade))) {
+  if (compatibilityRequired && (!input.calibration.registry
+    || samples.some(sample => sample.cascade.acceptance.compatibility === null))) {
     findings.add('calibration-required-unverified');
   }
   const benefit = economicsBenefit(baselineComparison, manifest.thresholds.benefit.metric);
@@ -901,12 +986,7 @@ export function buildIssueTriageEvaluationReport(input: {
     integrity: { upstreamDecision: input.upstreamDecision, findings: sortedFindings },
     decision: gateDecision(input.upstreamDecision, sortedFindings),
   };
-  return validateIssueTriageEvaluationReport(report);
-}
-
-function registryAllows(compatibility: CompatibilityDecision | null, response: IssueTriageModelResponse): boolean {
-  return compatibility !== null && compatibility.action === 'allow' && compatibility.state !== 'unknown'
-    && compatibility.requestedAlias === response.requestedModel && compatibility.actualModel === response.actualModel;
+  return checkIssueTriageEvaluationReportShape(report);
 }
 
 /**
@@ -926,7 +1006,7 @@ function countBy(values: readonly string[]): Record<string, number> {
 }
 
 /** Arm totals are summed from provider receipts; unreconciled usage leaves token and cost comparisons unknown. */
-function comparison(samples: readonly IssueTriageEvaluationSample[], usageReconciled: boolean)
+function comparison(samples: readonly ScoredSample[], usageReconciled: boolean)
   : Omit<IssueTriageEvaluationReport['baselineComparison'], 'qualityNonInferiority'> {
   const arm = (which: 'baseline' | 'cascade') => {
     const input = armUsage(samples, which, 'inputTokens');

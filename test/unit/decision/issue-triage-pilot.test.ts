@@ -7,6 +7,7 @@ import {
   defaultIssueTriagePilotPack,
   deterministicIssueDuplicateCandidates,
   issueTriageArtifactDigest,
+  IssueTriagePilotError,
   projectIssueTriageModelState,
   runIssueTriageShadow,
   validateIssueTriageBatchSubject,
@@ -16,6 +17,7 @@ import {
   validateIssueTriagePilotPack,
   type IssueTriageCandidateInput,
   type IssueTriageCandidateLineage,
+  type IssueTriageEvaluationInput,
   type IssueTriageEvaluationManifest,
   type IssueTriageEvaluationSample,
   type IssueTriageIssueRecord,
@@ -200,23 +202,34 @@ function gatedManifest(splits: readonly QualificationSplit[], thresholds: Partia
       confidenceInterval: { method: 'wilson', level: 0.95 },
       minimumTotalSamples: 20,
       minimumPerSliceSamples: 1,
+      minimumDuplicateSamples: 30,
+      minimumDuplicateRecall: 0.8,
       benefit: { mustBePositive: true, metric: 'reviewer-time' },
       ...thresholds,
     },
   };
 }
 
-function report(samples: IssueTriageEvaluationSample[], thresholds: Partial<IssueTriageEvaluationManifest['thresholds']> = {},
-  extra: { pack?: IssueTriagePilotPack; slices?: IssueTriageEvaluationManifest['slices']; splits?: QualificationSplit[] } = {}) {
-  const splits = extra.splits ?? splitsFor(samples);
-  return buildIssueTriageEvaluationReport({
+const reportCalibration = (): IssueTriageEvaluationInput['calibration'] => ({
+  requestedModel: 'jev-latest', compatibleActualModels: ['jev-2026-09-01'], uncertaintyProfile: 'typesafe-distribution-v1',
+});
+
+function reportInput(samples: IssueTriageEvaluationSample[], thresholds: Partial<IssueTriageEvaluationManifest['thresholds']> = {},
+  extra: { pack?: IssueTriagePilotPack; slices?: IssueTriageEvaluationManifest['slices']; splits?: QualificationSplit[];
+    calibration?: IssueTriageEvaluationInput['calibration'] } = {}): IssueTriageEvaluationInput {
+  return {
     id: 'triage-report',
     manifest: gatedManifest(splitsFor(samples), thresholds, extra.slices),
     pack: extra.pack ?? pack(),
     samples,
-    splits,
+    splits: extra.splits ?? splitsFor(samples),
+    calibration: extra.calibration ?? reportCalibration(),
     upstreamDecision: 'PROMOTE',
-  });
+  };
+}
+
+function report(...args: Parameters<typeof reportInput>) {
+  return buildIssueTriageEvaluationReport(reportInput(...args));
 }
 
 const hash = (character: string) => `sha256:${character.repeat(64)}` as const;
@@ -401,15 +414,14 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
     expect(built.baselineComparison.qualityNonInferiority).toMatchObject({
       method: 'newcombe-hybrid-score', levelBps: 9500, marginBps: -500, estimateBps: 0, n: 120, decision: 'non-inferior',
     });
-    expect(validateIssueTriageEvaluationReport(built)).toBe(built);
+    const inputs = reportInput(samples);
+    expect(validateIssueTriageEvaluationReport(built, { inputs, trustedManifestDigest: issueTriageArtifactDigest(inputs.manifest) })).toBe(built);
     // The same good data under an integrity HOLD or ROLLBACK is never upgraded.
     for (const upstreamDecision of ['HOLD', 'ROLLBACK'] as const) {
-      expect(buildIssueTriageEvaluationReport({
-        id: 'upstream', manifest: gatedManifest(splitsFor(samples)), pack: pack(), samples, splits: splitsFor(samples), upstreamDecision,
-      }).decision).toBe(upstreamDecision);
+      expect(buildIssueTriageEvaluationReport({ ...inputs, upstreamDecision }).decision).toBe(upstreamDecision);
     }
-    expect(() => validateIssueTriageEvaluationReport({ ...built, integrity: { ...built.integrity, upstreamDecision: 'ROLLBACK' }, decision: 'PROMOTE' }))
-      .toThrow(/cannot upgrade ROLLBACK/);
+    expect(() => validateIssueTriageEvaluationReport({ ...built, integrity: { ...built.integrity, upstreamDecision: 'ROLLBACK' }, decision: 'PROMOTE' },
+      { inputs, trustedManifestDigest: issueTriageArtifactDigest(inputs.manifest) })).toThrow(/cannot upgrade ROLLBACK/);
   });
 
   it('TRIAGE-NI-01 (A) holds when the paired non-inferiority lower bound falls below the margin', () => {
@@ -419,7 +431,7 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
       mutate: (sample, index) => {
         if (index >= 40 && index < 50) {
           sample.cascade.urgency = 'low';
-          sample.cascade.acceptance = { ...sample.cascade.acceptance, acceptedScoring: false, reason: 'defer-response-rejected' };
+          sample.cascade.accepted = false;
         }
       },
     });
@@ -440,7 +452,7 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
         const cascadeOnly = index >= 6 && index < 31;
         if (!both && !cascadeOnly) sample.cascade.issueType = 'feature';
         if (cascadeOnly) sample.baseline.issueType = 'feature';
-        sample.cascade.acceptance = { ...sample.cascade.acceptance, acceptedScoring: both || cascadeOnly };
+        sample.cascade.accepted = both || cascadeOnly;
       },
     });
     const built = report(samples, { minimumAcceptedCoverage: 0.1 });
@@ -682,12 +694,9 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
     expect(built.urgency.normalizedAbsoluteError).toBeCloseTo(1 / 360, 12);
     expect(built.duplicates).toMatchObject({ concordance: 1, comparablePairs: 40 * 3 });
     const otherTest = [...samples.slice(0, 119), { ...samples[119]!, id: 'S-OTHER', label: { ...samples[119]!.label, id: 'S-OTHER' } }];
-    expect(() => buildIssueTriageEvaluationReport({
-      id: 'mismatch', manifest: gatedManifest(splitsFor(samples)), pack: pack(), samples: otherTest, splits: splitsFor(samples), upstreamDecision: 'PROMOTE',
-    })).toThrow(/membership/);
-    expect(() => buildIssueTriageEvaluationReport({
-      id: 'unregistered', manifest: gatedManifest(splitsFor(samples)), pack: pack(), samples: otherTest, splits: splitsFor(otherTest), upstreamDecision: 'PROMOTE',
-    })).toThrow(/split digests do not match the preregistered manifest/);
+    expect(() => buildIssueTriageEvaluationReport({ ...reportInput(samples), samples: otherTest })).toThrow(/membership/);
+    expect(() => buildIssueTriageEvaluationReport({ ...reportInput(samples), samples: otherTest, splits: splitsFor(otherTest) }))
+      .toThrow(/split digests do not match the preregistered manifest/);
   });
 
   it('TRIAGE-REUSE-02 (I) resolves compatibility through the calibration registry and honours required calibration', async () => {
@@ -713,7 +722,9 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
     expect(deferred.acceptance).toMatchObject({ acceptedScoring: false, reason: 'defer-drift', compatibility: { action: 'defer' } });
     // The report refuses to count accepted samples without a registry pin when calibration is required.
     const samples = buildSamples(120, { duplicates: 40 });
-    expect(report(samples, {}, { pack: required }).integrity.findings).toContain('calibration-required-unverified');
+    const unpinned = report(samples, {}, { pack: required });
+    expect(unpinned.integrity.findings).toContain('calibration-required-unverified');
+    expect(unpinned.calibration.riskCoverage.acceptedN).toBe(0);
   });
 
   it('TRIAGE-RISK-01 (J) reports a selective-risk/coverage summary from the held-out helper', () => {
@@ -721,7 +732,7 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
       duplicates: 40,
       mutate: (sample, index) => {
         if (index >= 40 && index < 44) sample.cascade.urgency = 'low';
-        if (index >= 44 && index < 50) sample.cascade.acceptance = { ...sample.cascade.acceptance, acceptedScoring: false };
+        if (index >= 44 && index < 50) sample.cascade.accepted = false;
       },
     });
     const built = report(samples);
@@ -763,5 +774,122 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
     expect(built.duplicates).toMatchObject({ duplicateN: 0, noneN: 120 });
     expect(built.integrity.findings).toEqual(['duplicate-insufficient']);
     expect(built.decision).toBe('HOLD');
+  });
+
+  it('TRIAGE-ACCEPT-01 recomputes acceptance from the cascade response and ignores a caller-supplied verdict', () => {
+    const forged = buildSamples(120, {
+      duplicates: 40,
+      mutate: sample => {
+        sample.cascade.accepted = false;
+        sample.cascade.actualModel = 'other-model';
+        sample.cascade.uncertaintyProfile = 'bogus';
+        sample.cascade.acceptance = { acceptedScoring: true, reason: 'compatible', driftEvent: null, compatibility: null };
+      },
+    });
+    const built = report(forged);
+    expect(built.calibration.riskCoverage.acceptedN).toBe(0);
+    expect(built.integrity.findings).toEqual(expect.arrayContaining(['accepted-coverage', 'false-auto-insufficient']));
+    expect(built.calibration.driftEvents).toEqual(['model-drift:jev-latest->other-model']);
+    expect(built.decision).toBe('HOLD');
+  });
+
+  it('TRIAGE-ACCEPT-02 re-resolves required calibration through the registry instead of trusting a supplied pin', () => {
+    const required = { ...pack(), acceptance: { ...pack().acceptance, calibration: 'required' as const } };
+    const forgedPin = {
+      schemaVersion: 'decision-calibration-compatibility/v1' as const, pinId: 'forged', runId: 'forged', requestedAlias: 'jev-latest',
+      actualModel: 'jev-2026-09-01', aliasRevision: 1, artifactId: 'triage-cal-1', artifactDigest: hash('9'), state: 'exact' as const,
+      action: 'allow' as const, reasons: [], decidedAt: '2026-09-10T00:00:00.000Z',
+    };
+    const samples = buildSamples(120, {
+      duplicates: 40,
+      mutate: sample => { sample.cascade.acceptance = { ...sample.cascade.acceptance, compatibility: forgedPin }; },
+    });
+    const forged = report(samples, {}, { pack: required });
+    expect(forged.calibration.riskCoverage.acceptedN).toBe(0);
+    expect(forged.decision).toBe('HOLD');
+    const registry = new CalibrationRegistry();
+    registry.registerArtifact(calibrationArtifact());
+    registry.observeAlias('jev-latest', calibrationIdentity(), '2026-09-01T00:00:00.000Z');
+    const requests = Object.fromEntries(samples.map(sample => [sample.id, {
+      runId: `run-${sample.id}`, requestedAlias: 'jev-latest', actualIdentity: calibrationIdentity(), calibrationArtifactId: 'triage-cal-1',
+      at: '2026-09-10T00:00:00.000Z',
+    }]));
+    const pinned = report(samples, {}, { pack: required, calibration: { ...reportCalibration(), registry: { registry, policy: calibrationPolicy, requests } } });
+    expect(pinned.calibration.riskCoverage.acceptedN).toBe(120);
+    expect(pinned.integrity.findings).toEqual([]);
+    expect(pinned.decision).toBe('PROMOTE');
+  });
+
+  it('TRIAGE-ID-01 requires the sample, baseline and cascade to describe the same issue', () => {
+    for (const arm of ['baseline', 'cascade'] as const) {
+      const samples = buildSamples(120, { duplicates: 40, mutate: (sample, index) => { if (index === 7) sample[arm].issueId = 'S-999'; } });
+      expect(() => report(samples), arm).toThrow(new RegExp(`sample S-007 ${arm} issue id S-999 does not match`));
+    }
+  });
+
+  it('TRIAGE-VERIFY-01 validates a report only by rebuilding it from its inputs against a trusted manifest digest', () => {
+    const holding = buildSamples(120, {
+      duplicates: 40,
+      mutate: (sample, index) => { if (index >= 40 && index < 50) { sample.cascade.urgency = 'low'; sample.cascade.accepted = false; } },
+    });
+    const inputs = reportInput(holding);
+    const trustedManifestDigest = issueTriageArtifactDigest(inputs.manifest);
+    const genuine = buildIssueTriageEvaluationReport(inputs);
+    expect(genuine.decision).toBe('HOLD');
+    expect(validateIssueTriageEvaluationReport(genuine, { inputs, trustedManifestDigest })).toBe(genuine);
+    const forgedFindings = { ...genuine, integrity: { ...genuine.integrity, findings: [] }, decision: 'PROMOTE' as const };
+    expect(() => validateIssueTriageEvaluationReport(forgedFindings, { inputs, trustedManifestDigest })).toThrow(IssueTriagePilotError);
+    // A forgery that passes every shape rule (a non-inferior interval) is still caught by the rebuild.
+    const forgedPassing = {
+      ...forgedFindings,
+      baselineComparison: {
+        ...genuine.baselineComparison,
+        qualityNonInferiority: { ...genuine.baselineComparison.qualityNonInferiority!, lowerBps: -100, decision: 'non-inferior' as const },
+      },
+    };
+    expect(() => validateIssueTriageEvaluationReport(forgedPassing, { inputs, trustedManifestDigest })).toThrow(/does not match a rebuild/);
+    const forgedInterval = { ...forgedFindings, baselineComparison: { ...genuine.baselineComparison, qualityNonInferiority: null } };
+    expect(() => validateIssueTriageEvaluationReport(forgedInterval, { inputs, trustedManifestDigest })).toThrow(IssueTriagePilotError);
+    expect(() => validateIssueTriageEvaluationReport(genuine, { inputs, trustedManifestDigest: hash('7') })).toThrow(/trusted manifest digest/);
+    const relaxed = { ...inputs, manifest: { ...inputs.manifest, thresholds: { ...inputs.manifest.thresholds, qualityNonInferiorityMargin: -0.2 } } };
+    expect(() => validateIssueTriageEvaluationReport(buildIssueTriageEvaluationReport(relaxed), { inputs: relaxed, trustedManifestDigest }))
+      .toThrow(/trusted manifest digest/);
+  });
+
+  it('TRIAGE-REDACT-02 (G) redacts encrypted PEM keys and Stripe keys and refuses structured metadata values', async () => {
+    const pemBody = 'MIIFHzBJBgkqhkiG9w0BBQ0wPDAbencryptedcanary';
+    const stripe = 'sk_live_51Hcanary0123456789abcdefABCDEF';
+    const leaky: IssueTriageIssueRecord = {
+      ...issue(),
+      body: `-----BEGIN ENCRYPTED PRIVATE KEY-----\n${pemBody}\n-----END ENCRYPTED PRIVATE KEY-----\nstripe ${stripe}`,
+      metadata: { component: stripe },
+    };
+    const visible = JSON.stringify((await projectIssueTriageModelState(pack(), leaky, deterministicIssueDuplicateCandidates(leaky, corpus(), pack()))).modelState);
+    expect(visible).not.toContain(pemBody);
+    expect(visible).not.toContain(stripe);
+    const structured = { ...issue(), metadata: { component: { nested: `token=${stripe}` } } } as unknown as IssueTriageIssueRecord;
+    await expect(projectIssueTriageModelState(pack(), structured, deterministicIssueDuplicateCandidates(structured, corpus(), pack())))
+      .rejects.toThrow(/metadata component must be a string, number, boolean or null/);
+  });
+
+  it('TRIAGE-LABEL-01 rejects issue type and area labels outside the governed taxonomy', () => {
+    for (const [key, value] of [['issueType', 'not-a-type'], ['area', 'not-an-area']] as const) {
+      const samples = buildSamples(120, { duplicates: 40, mutate: (sample, index) => { if (index === 3) sample.label[key] = value; } });
+      expect(() => report(samples), key).toThrow(new RegExp(`sample S-003 label ${key} ${value} is not in the governed taxonomy`));
+    }
+  });
+
+  it('TRIAGE-DUP-02 (L) requires preregistered duplicate support and recall; one duplicate in 120 cannot promote', () => {
+    const single = report(buildSamples(120, { duplicates: 1 }));
+    expect(single.duplicates).toMatchObject({ duplicateN: 1, recall: 1 });
+    expect(single.integrity.findings).toEqual(['duplicate-insufficient']);
+    expect(single.decision).toBe('HOLD');
+    const missed = report(buildSamples(120, {
+      duplicates: 40,
+      mutate: (sample, index) => { if (index < 12) { sample.cascade.duplicate = { issueId: 'none', rank: null }; sample.cascade.accepted = false; } },
+    }));
+    expect(missed.duplicates.recall).toBeCloseTo(28 / 40, 12);
+    expect(missed.integrity.findings).toContain('duplicate-recall');
+    expect(missed.decision).toBe('HOLD');
   });
 });

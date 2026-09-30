@@ -2,6 +2,7 @@ import type { ArtifactPin } from '../types.js';
 import type { CalibrationRegistry } from '../calibration/registry.js';
 import type { CompatibilityDecision, CompatibilityPolicy, CompatibilityRequest } from '../calibration/types.js';
 import type { DecisionProjectionEvidence } from '../projection.js';
+import type { QualificationSplit } from '../qualification/quality.js';
 
 export type IssueTriageMode = 'disabled' | 'offline-shadow' | 'advisory';
 export type IssueTriageGateDecision = 'PROMOTE' | 'HOLD' | 'ROLLBACK';
@@ -72,6 +73,10 @@ export interface IssueTriageEvaluationManifest {
     confidenceInterval: { method: 'wilson' | 'bootstrap' | 'exact'; level: number };
     minimumTotalSamples: number;
     minimumPerSliceSamples: number;
+    /** Minimum number of labeled duplicate cases before any duplicate metric can support PROMOTE. */
+    minimumDuplicateSamples: number;
+    /** Minimum Wilson lower bound of duplicate recall at the preregistered level. */
+    minimumDuplicateRecall: number;
     benefit: { mustBePositive: true; metric: 'total-task-token-cost' | 'reviewer-time' };
   };
   holdout: { thresholdsRegisteredAt: string; holdoutAccessedAt: string | null };
@@ -241,7 +246,27 @@ export interface IssueTriageEvaluationSample {
   lineage: IssueTriageCandidateLineage;
   label: IssueTriageEvaluationLabel;
   baseline: IssueTriageModelResponse;
-  cascade: IssueTriageValidatedResponse;
+  /** Raw cascade response. Any caller-supplied `acceptance` is ignored; the report recomputes it. */
+  cascade: IssueTriageModelResponse & { acceptance?: IssueTriageValidatedResponse['acceptance'] };
+}
+
+export interface IssueTriageEvaluationCalibration {
+  requestedModel: string;
+  compatibleActualModels: string[];
+  uncertaintyProfile: string;
+  /** Registry resolution per sample ID; required for accepted scoring when the pack sets calibration: required. */
+  registry?: { registry: CalibrationRegistry; policy: CompatibilityPolicy; requests: Record<string, CompatibilityRequest> };
+}
+
+export interface IssueTriageEvaluationInput {
+  id: string;
+  manifest: IssueTriageEvaluationManifest;
+  pack: IssueTriagePilotPack;
+  samples: readonly IssueTriageEvaluationSample[];
+  /** Tuning/calibration/test memberships frozen before scoring; digests must match the manifest. */
+  splits: readonly QualificationSplit[];
+  calibration: IssueTriageEvaluationCalibration;
+  upstreamDecision: IssueTriageGateDecision;
 }
 
 export interface PrecisionRecallF1 {
