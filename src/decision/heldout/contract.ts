@@ -9,9 +9,9 @@ import { artifactPin, validateDefinition, validateDecisionDocument } from '../va
 import { contextLiveBinding, contextLiveRuleset, contextLiveTarget } from '../context-live-qualification.js';
 import { JEV_ENDPOINT, compileJevQuestion } from '../adapters/jev.js';
 import { projectDecisionState, partitionProjectedState } from '../projection.js';
-import { CanonicalJsonByteEstimator } from '../context-plan.js';
 import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
+import { heldoutGeneratorDigest, heldoutCorpusSeed, reproducibleHeldoutRow } from './generators.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
   HeldoutPreregistration, HeldoutRequest, HeldoutRow, Study } from './types.js';
 
@@ -25,7 +25,7 @@ const validators = new Map<string, ValidateFunction>();
 export class HeldoutError extends Error {
   constructor(readonly category: string) { super(`Held-out collector refused (${category})`); }
 }
-export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen', value: unknown): void {
+export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen' | 'Baseline' | 'SpendEvent' | 'SpendHead', value: unknown): void {
   admitEntry(value, limits);
   let validate = validators.get(kind);
   if (!validate) {
@@ -44,12 +44,16 @@ export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approva
 }
 export function validateHeldoutInputs(corpus: HeldoutCorpus, plan: HeldoutPreregistration): void {
   checkHeldoutSchema('Corpus', corpus); checkHeldoutSchema('Preregistration', plan);
+  if (corpus.provenance.generatorDigest !== heldoutGeneratorDigest() || corpus.provenance.seed !== heldoutCorpusSeed(corpus.rows)) {
+    throw new HeldoutError('corpus-provenance');
+  }
   const ids = new Set<string>(), families = new Map<string, string>(), payloads = new Set<string>();
   const definitions = new Set(corpus.definitions.map(d => d.metadata.id));
   corpus.definitions.forEach(validateDefinition);
   if (definitions.size !== corpus.definitions.length || plan.study !== corpus.study || plan.corpusDigest !== sha256(corpus)
     || plan.outputAndHiddenTokenAllowance >= plan.perRequestTokenBound) throw new HeldoutError('input-pins');
   for (const row of corpus.rows) {
+    if (!reproducibleHeldoutRow(row)) throw new HeldoutError('generator-output');
     if (ids.has(row.id) || families.has(row.familyId) && families.get(row.familyId) !== row.split
       || payloads.has(sha256(row.input)) || new Set(row.requests.map(r => r.id)).size !== row.requests.length
       || row.requests.some(r => !definitions.has(r.definitionId)) || !row.requests.length && row.localOutcome === null) {
@@ -85,17 +89,24 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
   admitEntry(bundle, limits);
   if (Object.keys(bundle).sort().join(',') !== 'approval,corpus,preregistration') throw new HeldoutError('bundle-fields');
   const { corpus, preregistration: plan, approval: a } = bundle;
-  validateHeldoutInputs(corpus, plan); checkHeldoutSchema('Approval', a);
+  validateHeldoutInputs(corpus, plan);
+  if (a?.priceBound?.outputUsdPerMTok !== 0) throw new HeldoutError('free-output-required');
+  checkHeldoutSchema('Approval', a);
   if (redactText(JSON.stringify([plan, a])).sensitivity !== 'none') throw new HeldoutError('credential-material');
   if (sha256(a) !== trustedApprovalDigest || a.study !== corpus.study || a.corpusDigest !== sha256(corpus)
     || a.preregistrationDigest !== sha256(plan) || a.executionDigest !== heldoutExecutionDigest(corpus, plan, a)
     || a.budget.usd > HELDOUT_CAP_USD[a.study] || a.priorStudySpendUsd >= HELDOUT_CAP_USD[a.study]
     || a.priorPortfolioSpendUsd >= HELDOUT_PORTFOLIO_CAP_USD || a.region.toLowerCase() === 'unknown') throw new HeldoutError('approval-pins');
 }
-/** Token reservation uses the existing price-floor helper; a flat fee is additive, not a minimum. */
-export function heldoutReservationMicros(a: HeldoutApproval, plan: HeldoutPreregistration): number {
-  return dagLiveReservationMicros({ ...a.priceBound, perRequestUsd: undefined }, plan.perRequestTokenBound)
+/** Input-only pricing: Jev has no remote generation limit, so paid output is inadmissible. */
+export function heldoutReservationMicros(a: HeldoutApproval, inputTokenBound: number): number {
+  if (a.priceBound.outputUsdPerMTok !== 0) throw new HeldoutError('free-output-required');
+  if (!Number.isSafeInteger(inputTokenBound) || inputTokenBound < 1) throw new HeldoutError('input-bound');
+  return dagLiveReservationMicros({ ...a.priceBound, perRequestUsd: undefined }, inputTokenBound)
     + Math.ceil(a.priceBound.perRequestUsd * 1_000_000);
+}
+export function heldoutReservationTokens(plan: HeldoutPreregistration, inputTokenBound: number): number {
+  return inputTokenBound + plan.outputAndHiddenTokenAllowance;
 }
 export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregistration, approval: HeldoutApproval,
   row: HeldoutRow, request: HeldoutRequest) {
@@ -103,21 +114,26 @@ export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregi
   const projected = await projectDecisionState(row.input, execution.projection);
   const wire = { state: partitionProjectedState(projected.state, projected.evidence), model: approval.model,
     questions: { q0: JSON.parse(compileJevQuestion(execution.definition).question) } };
-  const estimate = new CanonicalJsonByteEstimator('1.0.0', 1).estimate(wire as import('../context-plan.js').ContextValue);
-  if (estimate.tokens + plan.outputAndHiddenTokenAllowance > plan.perRequestTokenBound) throw new HeldoutError('payload-bound');
+  // Provider-added input is covered by a preregistered allowance, not by a remote token limit.
+  const requestBytes = Buffer.byteLength(JSON.stringify(wire), 'utf8');
+  const inputTokenBound = requestBytes + (plan.providerOverheadTokens ?? 512);
+  if (inputTokenBound + plan.outputAndHiddenTokenAllowance > plan.perRequestTokenBound) throw new HeldoutError('payload-bound');
   if (redactStructured(projected.state).sensitivity !== 'none') throw new HeldoutError('credential-material');
-  return { execution, requestDigest: sha256(wire), estimatedTokens: estimate.tokens };
+  return { execution, requestDigest: sha256(wire), requestBytes, estimatedTokens: inputTokenBound };
 }
 export async function planHeldoutCollection(bundle: HeldoutBundle, digest: string) {
   validateHeldoutBundle(bundle, digest);
-  let maximumRequestEstimateTokens = 0;
+  let maximumRequestEstimateTokens = 0, tokens = 0, usdMicros = 0;
   for (const row of bundle.corpus.rows) for (const request of row.requests) {
     const planned = await heldoutRequest(bundle.corpus, bundle.preregistration, bundle.approval, row, request);
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
+    const reservation = heldoutReservationMicros(bundle.approval, planned.estimatedTokens);
+    if (reservation > Math.floor(bundle.approval.budget.usd * 1_000_000)) throw new HeldoutError('approval-call-budget');
+    const attempts = 1 + bundle.preregistration.providerFailurePolicy.maxRetries;
+    tokens += attempts * heldoutReservationTokens(bundle.preregistration, planned.estimatedTokens);
+    usdMicros += attempts * reservation;
   }
   const attempts = bundle.corpus.rows.reduce((n, r) => n + r.requests.length, 0) * (1 + bundle.preregistration.providerFailurePolicy.maxRetries);
-  const tokens = attempts * bundle.preregistration.perRequestTokenBound;
-  const usdMicros = attempts * heldoutReservationMicros(bundle.approval, bundle.preregistration);
   const a = bundle.approval;
   return { providerCalls: 0, maximumAttempts: attempts, maximumRequestEstimateTokens, reservedTokens: tokens, reservedUsdMicros: usdMicros,
     fitsBeforeStop: attempts <= Math.floor(a.budget.calls * 0.8) && tokens <= Math.floor(a.budget.tokens * 0.8)
@@ -134,7 +150,7 @@ export function heldoutApprovalTemplate(corpus: HeldoutCorpus, plan: HeldoutPrer
     corpusDigest: sha256(corpus), preregistrationDigest: sha256(plan), executionDigest: null, calibrationDigest: null,
     providerTermsReference: null, priceBound: { inputUsdPerMTok: null, outputUsdPerMTok: null, perRequestUsd: null,
       evidenceReferences: [], approvalReference: null }, budget: { calls: Math.max(1, Math.ceil(attempts / 0.8)),
-      tokens: Math.max(1, Math.ceil(attempts * plan.perRequestTokenBound / 0.8)), usd: HELDOUT_CAP_USD[corpus.study] },
+      tokens: Math.max(1, Math.ceil(attempts * (plan.perRequestTokenBound + plan.outputAndHiddenTokenAllowance) / 0.8)), usd: HELDOUT_CAP_USD[corpus.study] },
     priorStudySpendUsd: null, priorPortfolioSpendUsd: null };
 }
 export function validateHeldoutAttempt(attempt: HeldoutAttempt): void {

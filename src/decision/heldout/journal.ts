@@ -1,9 +1,121 @@
-import { lstat, mkdir, open, readdir, readFile, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, realpath, rename } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { heldoutDigest, HeldoutError, heldoutReservationMicros, validateHeldoutAttempt, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
-import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutSummary } from './types.js';
+import { heldoutDigest, HeldoutError, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, validateHeldoutAttempt, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
+import type { Digest, HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutSummary } from './types.js';
 
 export const heldoutRunsRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'runs');
+const baselineRoot = (root: string): string => join(root, 'research', 'qualification', 'heldout', 'baselines');
+interface HeldoutBaseline { schemaVersion: 'decision-heldout-baseline/v1'; scope: string; usdMicros: number; approvalDigest: Digest; counterGenesisDigest: Digest }
+const counterRoot = (root: string): string => dirname(heldoutRunsRoot(root));
+interface SpendCharge {
+  study: string; runId: string; rowId: string; requestId: string; ordinal: number;
+  reservedUsdMicros: number; accountedUsdMicros: number | null;
+  disposition: NonNullable<HeldoutAttempt['result']>['disposition'] | null;
+}
+interface SpendEvent {
+  schemaVersion: 'decision-heldout-spend-event/v1'; sequence: number; previous: Digest | null;
+  charge: SpendCharge | null; totalUsdMicros: number; digest: Digest;
+}
+interface SpendCounter { events: SpendEvent[]; studies: Map<string, number>; blocked: boolean }
+const chargeKey = (charge: SpendCharge) => `${charge.study}/${charge.runId}/${charge.rowId}/${charge.requestId}/${charge.ordinal}`;
+const repair = () => new HeldoutError('spend-counter-operator-repair-required');
+async function counterHead(root: string, event: SpendEvent): Promise<void> {
+  const dir = counterRoot(root), temporary = join(dir, 'spend-head.next.json');
+  await writeHeldoutFile(temporary, { schemaVersion: 'decision-heldout-spend-head/v1', sequence: event.sequence, digest: event.digest });
+  await rename(temporary, join(dir, 'spend-head.json'));
+  const directory = await open(dir, 'r');
+  try { await directory.sync(); } finally { await directory.close(); }
+}
+/** The independent head detects even a valid-prefix truncation after all run files disappear. */
+async function readCounter(root: string, baselines: Map<string, HeldoutBaseline>): Promise<SpendCounter> {
+  const dir = counterRoot(root), path = join(dir, 'spend-counter.jsonl');
+  const names = await readdir(dir);
+  if (!names.includes('spend-counter.jsonl') && !baselines.size && !names.includes('spend-head.json')
+    && !names.includes('spend-head.next.json')) return { events: [], studies: new Map(), blocked: false };
+  try {
+    if (names.includes('spend-head.next.json')) throw repair();
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32_000_000) throw repair();
+    const bytes = await readFile(path, 'utf8');
+    if (!bytes.endsWith('\n')) throw repair();
+    const events: SpendEvent[] = [], studies = new Map<string, number>(), latest = new Map<string, SpendCharge>();
+    let total = 0;
+    for (const line of bytes.slice(0, -1).split('\n')) {
+      const event = JSON.parse(line) as SpendEvent;
+      checkHeldoutSchema('SpendEvent', event);
+      const { digest, ...payload } = event;
+      if (event.sequence !== events.length + 1 || event.previous !== (events.at(-1)?.digest ?? null)
+        || digest !== heldoutDigest(payload) || (events.length === 0) !== (event.charge === null)) throw repair();
+      const charge = event.charge;
+      if (charge) {
+        const key = chargeKey(charge), prior = latest.get(key);
+        if (charge.accountedUsdMicros === null ? prior || charge.disposition !== null
+          : !prior || prior.accountedUsdMicros !== null || charge.disposition === null
+            || charge.reservedUsdMicros !== prior.reservedUsdMicros || charge.accountedUsdMicros < charge.reservedUsdMicros) throw repair();
+        const delta = charge.accountedUsdMicros === null ? charge.reservedUsdMicros : charge.accountedUsdMicros - charge.reservedUsdMicros;
+        total += delta; studies.set(charge.study, (studies.get(charge.study) ?? 0) + delta); latest.set(key, charge);
+      }
+      if (event.totalUsdMicros !== total || !Number.isSafeInteger(total)) throw repair();
+      events.push(event);
+    }
+    const head = await readHeldoutFile(join(dir, 'spend-head.json')) as { sequence: number; digest: Digest };
+    checkHeldoutSchema('SpendHead', head);
+    if (head.sequence !== events.length || head.digest !== events.at(-1)?.digest
+      || [...baselines.values()].some(b => b.counterGenesisDigest !== events[0].digest)) throw repair();
+    if (!baselines.has('portfolio') || [...studies.keys()].some(study => !baselines.has(study))) throw repair();
+    return { events, studies, blocked: [...latest.values()].some(c => c.disposition === null || c.disposition === 'stop') };
+  } catch { throw repair(); }
+}
+/** Caller holds the global dispatch lock. Never rewrite or refund a counter entry. */
+export async function appendHeldoutSpend(root: string, attempt: HeldoutAttempt): Promise<void> {
+  const counter = await readCounter(root, await readBaselines(root));
+  const charge: SpendCharge = { study: attempt.study, runId: attempt.runId, rowId: attempt.rowId, requestId: attempt.requestId,
+    ordinal: attempt.ordinal, reservedUsdMicros: attempt.reservedUsdMicros,
+    accountedUsdMicros: attempt.result?.accountedUsdMicros ?? null, disposition: attempt.result?.disposition ?? null };
+  validateHeldoutAttempt(attempt);
+  const prior = [...counter.events].reverse().find(event => event.charge && chargeKey(event.charge) === chargeKey(charge))?.charge;
+  if (attempt.result ? !prior || prior.accountedUsdMicros !== null || prior.reservedUsdMicros !== charge.reservedUsdMicros
+    || attempt.result.accountedUsdMicros < attempt.reservedUsdMicros : prior) throw repair();
+  const delta = attempt.result ? attempt.result.accountedUsdMicros - attempt.reservedUsdMicros : attempt.reservedUsdMicros;
+  const payload = { schemaVersion: 'decision-heldout-spend-event/v1' as const, sequence: counter.events.length + 1,
+    previous: counter.events.at(-1)!.digest, charge, totalUsdMicros: counter.events.at(-1)!.totalUsdMicros + delta };
+  const event: SpendEvent = { ...payload, digest: heldoutDigest(payload) };
+  checkHeldoutSchema('SpendEvent', event);
+  const file = await open(join(counterRoot(root), 'spend-counter.jsonl'), 'a');
+  try { await file.writeFile(JSON.stringify(event) + '\n'); await file.sync(); } finally { await file.close(); }
+  await counterHead(root, event);
+}
+async function readBaselines(root: string): Promise<Map<string, HeldoutBaseline>> {
+  await heldoutDirectory(baselineRoot(root));
+  const baselines = new Map<string, HeldoutBaseline>();
+  for (const name of await readdir(baselineRoot(root))) {
+    const baseline = await readHeldoutFile(join(baselineRoot(root), name)) as HeldoutBaseline;
+    checkHeldoutSchema('Baseline', baseline);
+    if (name !== `${baseline.scope}.json`) throw new HeldoutError('baseline-path');
+    baselines.set(baseline.scope, baseline);
+  }
+  return baselines;
+}
+/** Called under the global dispatch lock, after checking existing journals. Floors are recorded once. */
+export async function reconcileHeldoutBaseline(root: string, approval: HeldoutApproval): Promise<{ study: Digest; portfolio: Digest }> {
+  const baselines = await readBaselines(root);
+  let genesis: Digest;
+  if (!baselines.size) {
+    const payload = { schemaVersion: 'decision-heldout-spend-event/v1' as const, sequence: 1, previous: null, charge: null, totalUsdMicros: 0 };
+    const event: SpendEvent = { ...payload, digest: heldoutDigest(payload) }; genesis = event.digest;
+    await writeHeldoutFile(join(counterRoot(root), 'spend-counter.jsonl'), event);
+    await counterHead(root, event);
+  } else genesis = (await readCounter(root, baselines)).events[0].digest;
+  for (const [scope, usd] of [[approval.study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
+    const usdMicros = Math.ceil(usd * 1_000_000), baseline = baselines.get(scope);
+    if (baseline && baseline.usdMicros !== usdMicros) throw new HeldoutError('baseline-changed');
+    if (!baseline) await writeHeldoutFile(join(baselineRoot(root), `${scope}.json`), {
+      schemaVersion: 'decision-heldout-baseline/v1', scope, usdMicros, approvalDigest: heldoutDigest(approval), counterGenesisDigest: genesis,
+    });
+  }
+  const recorded = await readBaselines(root);
+  return { study: heldoutDigest(recorded.get(approval.study)!), portfolio: heldoutDigest(recorded.get('portfolio')!) };
+}
 /** Reject symlinked journal ancestors as well as leaves: spend cannot be redirected to another root. */
 export async function heldoutDirectory(path: string): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
@@ -63,22 +175,36 @@ export async function heldoutEvidenceDigest(run: string, events: HeldoutEvent[])
     journalDigest: events.at(-1)?.digest ?? heldoutDigest([]) });
 }
 export interface HeldoutScan {
-  studyUsdMicros: number; portfolioUsdMicros: number; attempts: HeldoutAttempt[]; journalDigests: Digest[]; runs: HeldoutPriorRun[];
+  studyUsdMicros: number; portfolioUsdMicros: number; counterBlocked: boolean; attempts: HeldoutAttempt[]; journalDigests: Digest[]; runs: HeldoutPriorRun[];
 }
 /** Count reservations, including crashes and failed requests; successful small usage never refunds spend. */
-export async function scanHeldoutSpend(root: string, study: string): Promise<HeldoutScan> {
+export async function scanHeldoutSpend(root: string, study: string, approval?: HeldoutApproval): Promise<HeldoutScan> {
   const runs = heldoutRunsRoot(root);
   await heldoutDirectory(runs);
-  const result: HeldoutScan = { studyUsdMicros: 0, portfolioUsdMicros: 0, attempts: [], journalDigests: [], runs: [] };
+  const baselines = await readBaselines(root);
+  if (approval) {
+    if (approval.study !== study) throw new HeldoutError('baseline-study');
+    for (const [scope, usd] of [[study, approval.priorStudySpendUsd], ['portfolio', approval.priorPortfolioSpendUsd]] as const) {
+      if (baselines.has(scope) && baselines.get(scope)!.usdMicros !== Math.ceil(usd * 1_000_000)) throw new HeldoutError('baseline-changed');
+    }
+  }
+  const counter = await readCounter(root, baselines);
+  const result: HeldoutScan = { studyUsdMicros: baselines.get(study)?.usdMicros ?? 0,
+    portfolioUsdMicros: baselines.get('portfolio')?.usdMicros ?? 0, counterBlocked: counter.blocked, attempts: [], journalDigests: [], runs: [] };
   for (const name of (await readdir(runs)).sort()) {
     if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name)) throw new HeldoutError('run-path');
     const run = join(runs, name);
     const frozen = await readHeldoutFile(join(run, 'frozen.json')) as { approval: { runId: string; study: string }; digest: Digest;
-      bundle: HeldoutBundle; priorRuns: HeldoutPriorRun[]; source: 'injected-transport' | 'provider' };
+      bundle: HeldoutBundle; baselineDigests: { study: Digest; portfolio: Digest }; priorRuns: HeldoutPriorRun[]; source: 'injected-transport' | 'provider' };
     checkHeldoutSchema('Frozen', frozen);
     if (frozen.approval?.runId !== name || !['D17', 'D29'].includes(frozen.approval.study)
       || frozen.digest !== heldoutDigest(frozen.bundle)) throw new HeldoutError('frozen-inputs');
     validateHeldoutBundle(frozen.bundle, heldoutDigest(frozen.bundle.approval));
+    const approval = frozen.bundle.approval;
+    if (baselines.get(approval.study)?.usdMicros !== Math.ceil(approval.priorStudySpendUsd * 1_000_000)
+      || baselines.get('portfolio')?.usdMicros !== Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000)) throw new HeldoutError('baseline-mismatch');
+    if (frozen.baselineDigests.study !== heldoutDigest(baselines.get(approval.study)!)
+      || frozen.baselineDigests.portfolio !== heldoutDigest(baselines.get('portfolio')!)) throw new HeldoutError('baseline-mismatch');
     if (frozen.bundle.approval.runId !== name || frozen.bundle.approval.study !== frozen.approval.study) throw new HeldoutError('frozen-run');
     for (const prior of frozen.priorRuns) {
       if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(prior.runId) || prior.runId === name) throw new HeldoutError('prior-run');
@@ -96,10 +222,14 @@ export async function scanHeldoutSpend(root: string, study: string): Promise<Hel
     for (const { attempt } of events) {
       if (attempt.runId !== name || attempt.study !== frozen.approval.study) throw new HeldoutError('journal-run');
       const approved = frozen.bundle.approval;
+      const row = frozen.bundle.corpus.rows.find(row => row.id === attempt.rowId);
+      const request = row?.requests.find(request => request.id === attempt.requestId);
+      if (!row || !request) throw new HeldoutError('journal-pins');
+      const planned = await heldoutRequest(frozen.bundle.corpus, frozen.bundle.preregistration, approved, row, request);
       if (attempt.corpusDigest !== approved.corpusDigest || attempt.preregistrationDigest !== approved.preregistrationDigest
-        || attempt.approvalDigest !== heldoutDigest(approved)
-        || attempt.reservedUsdMicros !== heldoutReservationMicros(approved, frozen.bundle.preregistration)
-        || attempt.reservedTokens !== frozen.bundle.preregistration.perRequestTokenBound) throw new HeldoutError('journal-pins');
+        || attempt.approvalDigest !== heldoutDigest(approved) || attempt.requestDigest !== planned.requestDigest
+        || attempt.reservedUsdMicros !== heldoutReservationMicros(approved, planned.estimatedTokens)
+        || attempt.reservedTokens !== heldoutReservationTokens(frozen.bundle.preregistration, planned.estimatedTokens)) throw new HeldoutError('journal-pins');
       const key = `${attempt.rowId}/${attempt.requestId}/${attempt.ordinal}`;
       if (!attempt.result) {
         result.portfolioUsdMicros += attempt.reservedUsdMicros;
@@ -115,5 +245,10 @@ export async function scanHeldoutSpend(root: string, study: string): Promise<Hel
     result.attempts.push(...latest.values());
     if (events.length) result.journalDigests.push(events.at(-1)!.digest);
   }
+  result.studyUsdMicros = Math.max(result.studyUsdMicros, (baselines.get(study)?.usdMicros ?? 0) + (counter.studies.get(study) ?? 0));
+  result.portfolioUsdMicros = Math.max(result.portfolioUsdMicros, (baselines.get('portfolio')?.usdMicros ?? 0) + (counter.events.at(-1)?.totalUsdMicros ?? 0));
+  // A first-run preview includes its proposed baseline without writing it or reusing a max floor.
+  if (approval && !baselines.has(study)) result.studyUsdMicros += Math.ceil(approval.priorStudySpendUsd * 1_000_000);
+  if (approval && !baselines.has('portfolio')) result.portfolioUsdMicros += Math.ceil(approval.priorPortfolioSpendUsd * 1_000_000);
   return result;
 }

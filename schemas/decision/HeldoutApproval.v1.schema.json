@@ -131,9 +131,7 @@
           "maximum": 1000
         },
         "outputUsdPerMTok": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1000
+          "const": 0
         },
         "perRequestUsd": {
           "type": "number",
@@ -154,6 +152,11 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 512
+        },
+        "outputTokenBound": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
         }
       }
     },

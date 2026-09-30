@@ -6,6 +6,7 @@ export type Digest = `sha256:${string}`;
 export type Study = 'D17' | 'D29';
 export interface HeldoutRequest { id: string; arm: string; definitionId: string }
 export interface HeldoutRow {
+  provenance: { generatorId: string; seed: string; outputDigest: Digest };
   id: string; familyId: string; split: 'tuning' | 'calibration' | 'test'; slice: string;
   input: { payload: unknown }; requests: HeldoutRequest[];
   /** An observed deterministic policy outcome, never a fabricated provider observation. */
@@ -20,7 +21,7 @@ export interface HeldoutPreregistration {
   schemaVersion: 'decision-heldout-preregistration/v1'; study: Study; frozenAt: string;
   corpusDigest: Digest; studyAnalysisDigest: Digest; scorerDigest: Digest;
   providerFailurePolicy: { maxRetries: 0 | 1; maximumSliceFailureBps: number; retryOnlyTerminal: true };
-  perRequestTokenBound: number; outputAndHiddenTokenAllowance: number;
+  perRequestTokenBound: number; providerOverheadTokens?: number; outputAndHiddenTokenAllowance: number;
   requestTimeoutMs: number; minDispatchIntervalMs: number; sessionLimitMs: number;
 }
 export interface HeldoutApproval {
@@ -31,6 +32,7 @@ export interface HeldoutApproval {
   corpusDigest: Digest; preregistrationDigest: Digest; executionDigest: Digest; calibrationDigest: Digest;
   providerTermsReference: string;
   priceBound: { inputUsdPerMTok: number; outputUsdPerMTok: number; perRequestUsd: number;
+    outputTokenBound?: number;
     evidenceReferences: string[]; approvalReference: string };
   budget: { calls: number; tokens: number; usd: number };
   priorStudySpendUsd: number; priorPortfolioSpendUsd: number;
