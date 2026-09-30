@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/HeldoutSpendHead.v1.schema.json",
+  "title": "HeldoutSpendHead",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "sequence",
+    "digest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-heldout-spend-head/v1"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}

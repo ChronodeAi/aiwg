@@ -10,10 +10,10 @@ import { QUALIFICATION_PRIVACY_SURFACES, scanQualificationPrivacy } from '../qua
 import { executeQualificationPlan, verifyQualificationArtifacts, writeQualificationEvidenceManifest } from '../qualification/runner.js';
 import { qualificationIntegrityAllowlistProblems, type QualificationIntegrityMetadata } from '../qualification/release.js';
 import { redactText } from '../../governance/redaction.js';
-import { heldoutDigest, heldoutRequest, heldoutReservationMicros, HeldoutError, HELDOUT_CAP_USD, HELDOUT_ENV_GATE,
+import { heldoutDigest, heldoutRequest, heldoutReservationMicros, heldoutReservationTokens, HeldoutError, HELDOUT_CAP_USD, HELDOUT_ENV_GATE,
   HELDOUT_PORTFOLIO_CAP_USD, planHeldoutCollection, validateHeldoutBundle, checkHeldoutSchema } from './contract.js';
-import { appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
-  scanHeldoutSpend, writeHeldoutFile } from './journal.js';
+import { appendHeldoutSpend, appendHeldoutEvent, heldoutDirectory, heldoutEvidenceDigest, heldoutRunsRoot, readHeldoutFile, readHeldoutJournal,
+  reconcileHeldoutBaseline, scanHeldoutSpend, writeHeldoutFile } from './journal.js';
 import type { AdapterObservation, DecisionAdapter, RulesetResult } from '../types.js';
 import type { Digest, HeldoutAttempt, HeldoutBundle, HeldoutEvent, HeldoutStudyModule, HeldoutSummary } from './types.js';
 
@@ -40,8 +40,16 @@ async function liveHost(options: HeldoutOptions): Promise<HeldoutHost> {
 /** Default-off, sequential collection. No runtime alias, calibration record, gate or workflow is changed. */
 export async function collectHeldoutStudy(options: HeldoutOptions): Promise<HeldoutSummary | { status: 'disabled' }> {
   if (options.enabled !== true) return { status: 'disabled' };
-  if (!options.offline && process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
-  if (!options.offline && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') {
+  const offline = options.offline;
+  if (offline !== undefined && (!offline || typeof offline.transport !== 'function'
+    || typeof offline.host?.resolveCredential !== 'function' || typeof offline.host?.dispose !== 'function')) {
+    throw new HeldoutError('offline-options');
+  }
+  // Capture the validated seam so caller mutation cannot re-enable the adapter's fetch fallback.
+  const transport = offline?.transport;
+  const offlineHost = offline?.host;
+  if (!offline && process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
+  if (!offline && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') {
     throw new HeldoutError('tls');
   }
   validateHeldoutBundle(options.bundle, options.trustedApprovalDigest);
@@ -56,25 +64,27 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
   let host: HeldoutHost | undefined;
   let uncertain = false;
   try {
+    // Missing/corrupt baselines in an existing ledger require explicit reconciliation, never a reset.
+    await scanHeldoutSpend(options.artifactRoot, a.study);
+    const baselineDigests = await reconcileHeldoutBaseline(options.artifactRoot, a);
     const prior = await scanHeldoutSpend(options.artifactRoot, a.study);
     // An unacknowledged execution is never silently retried, even in a different study.
-    if (prior.attempts.some(attempt => !attempt.result || attempt.result.disposition === 'stop')) throw new HeldoutError('prior-stop');
-    if (!options.offline && prior.runs.some(run => run.corpusDigest === a.corpusDigest && run.source === 'injected-transport')) throw new HeldoutError('injected-prior');
+    if (prior.counterBlocked || prior.attempts.some(attempt => !attempt.result || attempt.result.disposition === 'stop')) throw new HeldoutError('prior-stop');
+    if (!offline && prior.runs.some(run => run.corpusDigest === a.corpusDigest && run.source === 'injected-transport')) throw new HeldoutError('injected-prior');
     const old = prior.attempts.filter(attempt => attempt.study === a.study && attempt.corpusDigest === a.corpusDigest);
     if (old.some(attempt => attempt.preregistrationDigest !== a.preregistrationDigest)) throw new HeldoutError('changed-preregistration');
     const latest = new Map<string, HeldoutAttempt>();
     for (const attempt of old) if (attempt.ordinal >= (latest.get(key(attempt))?.ordinal ?? 0)) latest.set(key(attempt), attempt);
     const run = join(heldoutRunsRoot(options.artifactRoot), a.runId);
     await mkdir(run, { mode: 0o700 });
-    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: options.offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
+    await writeHeldoutFile(join(run, 'frozen.json'), { schemaVersion: 'decision-heldout-frozen/v1', source: offline ? 'injected-transport' : 'provider', approval: { study: a.study, runId: a.runId }, bundle, baselineDigests, digest: heldoutDigest(bundle), priorRuns: prior.runs.filter(r => r.study === a.study && r.corpusDigest === a.corpusDigest) });
     const events: HeldoutEvent[] = [];
     const now = options.now ?? Date.now, sleep = options.sleep ?? delay, started = now();
-    const reserveMicros = heldoutReservationMicros(a, plan);
-    const studyPrior = Math.max(prior.studyUsdMicros, Math.ceil(a.priorStudySpendUsd * 1_000_000));
-    const portfolioPrior = Math.max(prior.portfolioUsdMicros, Math.ceil(a.priorPortfolioSpendUsd * 1_000_000));
+    const studyPrior = prior.studyUsdMicros;
+    const portfolioPrior = prior.portfolioUsdMicros;
     const usdLimit = Math.floor(Math.min(a.budget.usd * 1_000_000, HELDOUT_CAP_USD[a.study] * 1_000_000 - studyPrior,
       HELDOUT_PORTFOLIO_CAP_USD * 1_000_000 - portfolioPrior) * 0.8);
-    let calls = 0, reserved = 0, lastDispatch = started - plan.minDispatchIntervalMs;
+    let calls = 0, reserved = 0, accounted = 0, tokens = 0, lastDispatch = started - plan.minDispatchIntervalMs;
     let reason: string | null = null, checkpoint = false;
     const canaries = new Set<string>(['heldout-synthetic-privacy-canary']);
     const failed = new Set(old.filter(attempt => attempt.result?.disposition === 'measurement-failure').map(attempt => attempt.rowId));
@@ -82,14 +92,14 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
       const rows = corpus.rows.filter(row => row.slice === slice && row.split === split);
       return rows.filter(row => failed.has(row.id)).length * 10000 > rows.length * plan.providerFailurePolicy.maximumSliceFailureBps;
     };
-    const attemptSource = options.offline ? 'injected-transport' : 'provider';
+    const attemptSource = offline ? 'injected-transport' : 'provider';
     const safe = (value: unknown) => {
       const text = JSON.stringify(value);
       return typeof text === 'string' && ![...canaries].some(secret => text.includes(secret) || text.includes(JSON.stringify(secret).slice(1, -1)))
         && redactText(text).sensitivity === 'none';
     };
     // The scoped resolver starts only after every input and durable accounting check.
-    const obtainHost = async () => host ??= options.offline?.host ?? await liveHost({ ...options, bundle });
+    const obtainHost = async () => host ??= offlineHost ?? await liveHost({ ...options, bundle });
     for (const row of corpus.rows) {
       if (reason || checkpoint) break;
       if (options.signal?.aborted) { reason = 'cancelled'; break; }
@@ -107,18 +117,21 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           try { await assertContextLiveSource(options.sourceRoot, a.sourceCommit); }
           catch { reason = 'source-drift'; break; }
-          const { execution, requestDigest } = await heldoutRequest(corpus, plan, a, row, request);
-          if (calls + 1 > Math.floor(a.budget.calls * 0.8) || (calls + 1) * plan.perRequestTokenBound > Math.floor(a.budget.tokens * 0.8)
-            || reserved + reserveMicros > usdLimit) { reason = 'budget-exhausted'; break; }
+          const { execution, requestDigest, requestBytes, estimatedTokens: inputTokenBound } = await heldoutRequest(corpus, plan, a, row, request);
+          const reserveMicros = heldoutReservationMicros(a, inputTokenBound);
+          const reserveTokens = heldoutReservationTokens(plan, inputTokenBound);
+          if (calls + 1 > Math.floor(a.budget.calls * 0.8) || tokens + reserveTokens > Math.floor(a.budget.tokens * 0.8)
+            || accounted + reserveMicros > usdLimit) { reason = 'budget-exhausted'; break; }
           await sleep(Math.max(0, plan.minDispatchIntervalMs - (now() - lastDispatch)));
           if (options.signal?.aborted) { reason = 'cancelled'; break; }
           if (now() - started + plan.requestTimeoutMs > plan.sessionLimitMs * 0.8) { checkpoint = true; break; }
           const attempt: HeldoutAttempt = { schemaVersion: 'decision-heldout-attempt/v1', study: a.study, runId: a.runId,
             corpusDigest: a.corpusDigest, preregistrationDigest: a.preregistrationDigest, approvalDigest: options.trustedApprovalDigest,
-            rowId: row.id, requestId: request.id, ordinal, reservedUsdMicros: reserveMicros, reservedTokens: plan.perRequestTokenBound,
+            rowId: row.id, requestId: request.id, ordinal, reservedUsdMicros: reserveMicros, reservedTokens: reserveTokens,
             requestDigest, result: null };
           // fsync completes before credential lookup or any transport call. A crash retains this charge.
-          await appendHeldoutEvent(run, events, attempt); uncertain = true; calls++; reserved += reserveMicros;
+          uncertain = true; await appendHeldoutSpend(options.artifactRoot, attempt);
+          await appendHeldoutEvent(run, events, attempt); tokens += reserveTokens; calls++; reserved += reserveMicros; accounted += reserveMicros;
           const callStarted = now(); lastDispatch = callStarted;
           let observation: AdapterObservation | null = null, receipt: RulesetResult | null = null;
           let wireProblem: string | null = null, responseDigest: Digest | null = null;
@@ -129,12 +142,21 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           const timer = setTimeout(() => controller.abort(), plan.requestTimeoutMs);
           const captured = await captureQualificationLifetime(async () => {
             const resolver = await obtainHost();
-            const inner = new JevDecisionAdapter({ region: a.region, now, ...(options.offline ? { fetch: options.offline.transport } : {}),
+            const inner = new JevDecisionAdapter({ region: a.region, now, fetch: (url, init) => {
+              if (typeof init?.body !== 'string' || Buffer.byteLength(init.body, 'utf8') !== requestBytes
+                || heldoutDigest(JSON.parse(init.body)) !== requestDigest) throw new HeldoutError('request-bound');
+              if (transport) return transport(url, init);
+              if (process.env[HELDOUT_ENV_GATE] !== '1') throw new HeldoutError('live-gate');
+              if (process.env.NODE_TLS_REJECT_UNAUTHORIZED !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '1') throw new HeldoutError('tls');
+              return fetch(url, init);
+            },
               observeResponseBody: (body, metadata) => {
                 responseDigest = byteDigest(new TextEncoder().encode(body)); wireMetadata = metadata;
                 if (!safe(body)) wireProblem = 'credential-anomaly';
                 else if (metadata.actualModel !== null && metadata.actualModel !== a.servedModel) wireProblem = 'served-model';
-                else if ((metadata.usage.inputTokens ?? 0) + (metadata.usage.outputTokens ?? 0) > plan.perRequestTokenBound) wireProblem = 'usage-bound';
+                else if (a.priceBound.outputTokenBound !== undefined && (metadata.usage.outputTokens ?? 0) > a.priceBound.outputTokenBound) wireProblem = 'output-bound';
+                else if ((metadata.usage.inputTokens ?? 0) > inputTokenBound
+                  || (metadata.usage.inputTokens ?? 0) + (metadata.usage.outputTokens ?? 0) > reserveTokens) wireProblem = 'usage-bound';
                 else if (metadata.usage.costUsd !== null && metadata.usage.costUsd * 1_000_000 > reserveMicros) wireProblem = 'price-bound';
               } });
             const adapter: DecisionAdapter = { id: inner.id, version: inner.version, capabilities: () => inner.capabilities(),
@@ -169,7 +191,8 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
           else if (options.signal?.aborted) outcome = 'cancelled';
           else if (captured.threw) outcome = 'dispatch-rejected';
           else if (observed?.actualModel && observed.actualModel !== a.servedModel) outcome = 'served-model';
-          else if (observed && (observed.usage.inputTokens ?? 0) + (observed.usage.outputTokens ?? 0) > plan.perRequestTokenBound) outcome = 'usage-bound';
+          else if (observed && ((observed.usage.inputTokens ?? 0) > inputTokenBound
+            || (observed.usage.inputTokens ?? 0) + (observed.usage.outputTokens ?? 0) > reserveTokens)) outcome = 'usage-bound';
           else if (observed?.usage.costUsd !== null && observed?.usage.costUsd !== undefined && observed.usage.costUsd * 1_000_000 > reserveMicros) outcome = 'price-bound';
           else if (observed?.status === 'success') {
             if (observed.actualModel !== a.servedModel) outcome = 'served-model';
@@ -188,9 +211,11 @@ export async function collectHeldoutStudy(options: HeldoutOptions): Promise<Held
             receipt: clean ? completed : null, receiptDigest: clean && completed ? heldoutDigest(completed) : null,
             traceDigest: heldoutDigest(clean ? traces : []), latencyMs: Math.max(0, now() - callStarted),
             accountedUsdMicros: Math.max(reserveMicros, Math.ceil((numeric(observed?.usage.costUsd) ?? 0) * 1_000_000),
-              Math.ceil(((numeric(observed?.usage.inputTokens) ?? 0) + (numeric(observed?.usage.outputTokens) ?? 0))
-                * Math.max(0.1, a.priceBound.inputUsdPerMTok, a.priceBound.outputUsdPerMTok)) + Math.ceil(a.priceBound.perRequestUsd * 1_000_000)) };
+              Math.ceil((numeric(observed?.usage.inputTokens) ?? 0) * Math.max(0.1, a.priceBound.inputUsdPerMTok)
+                + (numeric(observed?.usage.outputTokens) ?? 0) * a.priceBound.outputUsdPerMTok) + Math.ceil(a.priceBound.perRequestUsd * 1_000_000)) };
+          accounted += attempt.result.accountedUsdMicros - reserveMicros;
           await writeHeldoutFile(join(run, `trace-${events.length}.json`), clean ? traces : []);
+          await appendHeldoutSpend(options.artifactRoot, attempt);
           await appendHeldoutEvent(run, events, attempt); latest.set(key(attempt), attempt);
           uncertain = false;
           if (disposition === 'stop') { reason = outcome; uncertain = !observed || observed.remoteExecution === 'unknown'; break; }

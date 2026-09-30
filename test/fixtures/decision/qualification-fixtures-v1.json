@@ -1814,7 +1814,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "source-module",
-      "digest": "sha256:0b78851bb322f3b1513c506ac2be97572ffa6850f0a4a81c1f741c6c45b35403",
+      "digest": "sha256:e53f22541d1f3d3669873b2d9ff6cca22b8b1c96b985da3afe5e3582e9f0d968",
       "expectedOutcome": "Two-subject offline generator/scorer interface example; no live qualification or promotion",
       "links": [
         "JEV-16",
