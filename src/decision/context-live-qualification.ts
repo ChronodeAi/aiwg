@@ -34,6 +34,7 @@ export interface ContextLiveHost {
   resolveCredential(reference: string): Promise<Uint8Array>;
   /** Metadata-only durable sink called before the next partition. */
   record?(record: ContextLiveRecord): Promise<void>;
+  recordFailure?(failure: ContextLiveProviderFailure): Promise<void>;
   /** Zeroes host-held credential material; called once when a run ends, however it ends. */
   dispose?(): void;
 }
@@ -166,9 +167,18 @@ export async function generateContextLiveCorpus(profile: ContextProviderProfile)
   cases.push({ id: 'dominant', dimension: 'dominant', input: { payload: 'synthetic' }, definitions: [dominant, definition('short')] });
   return { schemaVersion: 'context-live-corpus/v1', syntheticOnly: true, profile: structuredClone(profile), cases };
 }
+export const TV12_MAX_RETRIES = 1;
+export const TV12_MIN_MEASURED_CASES = 12;
+const retryableReasons = ['invalid-output', 'service-error', 'overloaded'];
 export function contextLivePreregistration(corpus: ContextLiveCorpus, marginRule: ContextLiveApproval['marginRule']) {
-  return { schemaVersion: 'context-live-preregistration/v1', corpusDigest: contextLiveDigest(corpus), estimator: { id: estimator.id, version: estimator.version },
-    metrics: ['absolute-error-tokens', 'undercount-bps'], marginRule, stopFraction: 0.8, retries: 0, automaticPromotion: false };
+  return { schemaVersion: 'context-live-preregistration/v2', corpusDigest: contextLiveDigest(corpus), estimator: { id: estimator.id, version: estimator.version },
+    metrics: ['absolute-error-tokens', 'undercount-bps'], marginRule, stopFraction: 0.8, automaticPromotion: false,
+    providerFailurePolicy: { maxRetriesPerRequest: TV12_MAX_RETRIES, retryableReasons: [...retryableReasons], terminalResponsesOnly: true,
+      accounting: 'reserve every attempt before dispatch; never refund', exhausted: 'measurement-failure-and-continue',
+      marginPopulation: 'fully measured cases only; exclude every partition of a failed case', minimumMeasuredCases: TV12_MIN_MEASURED_CASES,
+      rationale: '12 of 13 admissible cases; at most one missing case, no coverage claim for its input class',
+      stillStopImmediately: ['served-model-change', 'usage-bound', 'budget', 'credential-anomaly', 'source-drift',
+        'missing-success-request-id', 'unknown-success-model', 'missing-success-usage', 'deadline', 'uncertain-execution', 'other-provider-outcome'] } };
 }
 export function validateContextLiveApproval(approval: ContextLiveApproval, corpus: ContextLiveCorpus): void {
   admitEntry(approval); admitEntry(corpus, { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 8_388_608, properties: 100_000, entries: 200_000, memoryBytes: 67_108_864 });
@@ -201,7 +211,7 @@ export function validateContextLiveApproval(approval: ContextLiveApproval, corpu
   if (corpus.profile.safetyMarginBps < approval.marginRule.maximumMarginBps) throw new Error('TV-12 collection margin is below the preregistered maximum');
 }
 export async function assertContextLiveSource(root: string, expected: string): Promise<void> {
-  const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', timeout: 10_000 }).trim();
   if (git('rev-parse', 'HEAD') !== expected || git('status', '--porcelain', '--untracked-files=all')) throw new Error('TV-12 requires clean exact source commit');
 }
 export interface ContextLiveRecord {
@@ -229,9 +239,9 @@ export function contextLiveRequestCapacity(approval: Pick<ContextLiveApproval, '
     Math.floor(budget.tokens * 0.8 / bound.totalTokens), Math.floor(Math.floor(budget.usd * 800_000) / Math.ceil(bound.usd * 1_000_000)));
 }
 export interface ContextLiveEstimate {
-  schemaVersion: 'context-live-estimate/v1'; providerCalls: 0; credentialResolved: false;
+  schemaVersion: 'context-live-estimate/v2'; providerCalls: 0; credentialResolved: false;
   cases: Array<{ id: string; dimension: string; rejectedBeforeDispatch: boolean; partitions: Array<{ id: string; questions: number; estimatedInputTokens: number }> }>;
-  requests: number; estimatedInputTokens: number; maxPartitionEstimate: number;
+  requests: number; maximumRequestsWithRetries: number; estimatedInputTokens: number; maxPartitionEstimate: number;
   reserved: { requests: number; tokens: number; usd: number }; requestCapacityAtStop: number; fitsBeforeStop: boolean;
 }
 /** Dry run: the exact partitions collection would dispatch, without credentials, transport or writes. */
@@ -260,12 +270,19 @@ export async function estimateContextLiveCollection(approval: ContextLiveApprova
   }
   const partitions = cases.flatMap(c => c.partitions);
   const requests = partitions.length;
+  const maximumRequestsWithRetries = requests * (1 + TV12_MAX_RETRIES);
   const capacity = contextLiveRequestCapacity(approval);
   const maxPartitionEstimate = Math.max(0, ...partitions.map(p => p.estimatedInputTokens));
-  return { schemaVersion: 'context-live-estimate/v1', providerCalls: 0, credentialResolved: false, cases, requests,
+  return { schemaVersion: 'context-live-estimate/v2', providerCalls: 0, credentialResolved: false, cases, requests, maximumRequestsWithRetries,
     estimatedInputTokens: partitions.reduce((sum, p) => sum + p.estimatedInputTokens, 0), maxPartitionEstimate,
-    reserved: { requests, tokens: requests * approval.perRequestBound.totalTokens, usd: requests * Math.ceil(approval.perRequestBound.usd * 1_000_000) / 1_000_000 },
-    requestCapacityAtStop: capacity, fitsBeforeStop: requests <= capacity && maxPartitionEstimate <= approval.perRequestBound.totalTokens };
+    reserved: { requests: maximumRequestsWithRetries, tokens: maximumRequestsWithRetries * approval.perRequestBound.totalTokens, usd: maximumRequestsWithRetries * Math.ceil(approval.perRequestBound.usd * 1_000_000) / 1_000_000 },
+    requestCapacityAtStop: capacity, fitsBeforeStop: maximumRequestsWithRetries <= capacity && maxPartitionEstimate <= approval.perRequestBound.totalTokens };
+}
+export interface ContextLiveProviderFailure {
+  schemaVersion: 'context-live-provider-failure/v1'; source: 'provider' | 'synthetic';
+  caseId: string; partitionId: string; attempt: number; reason: string; measurementFailure: boolean;
+  httpStatus: number | null; requestId: string | null; servedModel: string | null;
+  inputTokens: number | null; outputTokens: number | null; costUsd: number | null;
 }
 class CollectionStop extends Error {
   constructor(message: string, readonly evidence: { httpStatus: number | null; requestId: string | null; servedModel: string | null; inputTokens: number | null; outputTokens: number | null; costUsd: number | null }) { super(message); }
@@ -300,7 +317,7 @@ function contextLivePartitionRequest(item: ContextLiveCase, aliases: string[], a
 /** Collection-only native request. Exposed for offline guard tests; mocks remain synthetic. */
 export async function collectContextLiveCase(item: ContextLiveCase, corpus: ContextLiveCorpus, approval: ContextLiveApproval,
   host: ContextLiveHost, budget: ContextLiveBudget, signal: AbortSignal,
-  offlineFetch?: typeof fetch): Promise<{ rejected: boolean; records: ContextLiveRecord[]; synthetic: boolean }> {
+  offlineFetch?: typeof fetch): Promise<{ rejected: boolean; records: ContextLiveRecord[]; failures: ContextLiveProviderFailure[]; synthetic: boolean }> {
   validateContextLiveApproval(approval, corpus);
   if (!offlineFetch && !liveHosts.has(host)) throw new Error('Live collection requires the source-verified runner');
   admitEntry(item);
@@ -309,75 +326,98 @@ export async function collectContextLiveCase(item: ContextLiveCase, corpus: Cont
   const { input, projected, policy } = await compiled(item, approval.model, approval.region);
   let plan;
   try { plan = planDecisionContext(input, corpus.profile, estimator); }
-  catch (error) { if (error instanceof ContextPlanError && ['oversized-state', 'oversized-question'].includes(error.reason)) return { rejected: true, records: [], synthetic: !!offlineFetch }; throw error; }
+  catch (error) { if (error instanceof ContextPlanError && ['oversized-state', 'oversized-question'].includes(error.reason)) return { rejected: true, records: [], failures: [], synthetic: !!offlineFetch }; throw error; }
   const { adapter, capabilities } = await contextLiveAdapter(approval, policy, offlineFetch);
   const registry = new DecisionAdmissionRegistry();
   const records: ContextLiveRecord[] = [];
+  const failures: ContextLiveProviderFailure[] = [];
   for (const partition of plan.partitions) {
-    if (signal.aborted) throw new Error('TV-12 deadline reached');
-    const selected = input.questions.filter(q => partition.questionIds.includes(q.id));
-    const partitionInput = { ...input, questions: selected };
-    const checked = planDecisionContext(partitionInput, corpus.profile, estimator);
-    if (checked.partitions.length !== 1 || checked.partitions[0]!.questionIds.length !== selected.length) throw new Error('TV-12 partition is not one complete request');
-    if (checked.partitions[0]!.estimate.aggregateTokens > approval.perRequestBound.totalTokens) throw new Error('TV-12 approved token bound below estimate');
-    const timeoutMs = Math.max(1, Math.min(30_000, Math.floor(approval.budget.wallClockMs * 0.8 - (Date.now() - budget.started))));
-    const { definitions, target } = contextLivePartitionRequest(item, selected.map(q => q.id), approval, adapter.version, capabilities, timeoutMs);
-    const invocationId = `${approval.runId}:${item.id}:${partition.id}`;
-    const limits = { concurrency: 1, maxTokens: approval.perRequestBound.totalTokens, maxCostUsd: approval.perRequestBound.usd, allowUnknownCost: false };
-    const scheduler: DecisionSchedulerPolicy = { enabled: true, profileVersion: 'tv12-collection-v1', workspace: { id: approval.stagingWorkspace, limits },
-      principal: { id: approval.reviewer, limits }, providers: { jev: limits } };
-    const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
-    const deadlineEpochMs = Date.now() + timeoutMs;
-    const lease = await registry.controllerFor(scheduler, Date.now).acquire({ budgetId: invocationId, workspaceId: approval.stagingWorkspace,
-      principalId: approval.reviewer, providerId: 'jev', estimate: { tokens: approval.perRequestBound.totalTokens, costUsd: approval.perRequestBound.usd,
-        attempts: 1, batchSize: selected.length, items: selected.length }, deadlineEpochMs, signal: requestSignal });
-    let success = false;
-    try {
-      // Reservation precedes adapter invocation, DNS, credential resolution and network.
-      budget.reserve();
-      const requests: DecisionAdapterRequest[] = selected.map((q, i) => ({ alias: q.id, questionId: q.id, definition: definitions[i]!,
-        input: projected.state, projectionEvidence: projected.evidence, target, invocationId, deadlineEpochMs, signal: requestSignal,
-        resolveCredential: async reference => {
-          if (requestSignal.aborted || reference !== approval.secretServiceReference) throw new Error('TV-12 credential access denied');
-          return host.resolveCredential(reference);
-        }, compiledArtifact: compileJevQuestion(definitions[i]!) }));
-      const wire = { state: input.authorizedState, model: approval.model, questions: Object.fromEntries(selected.map(q => [q.id, q.entry])) };
-      const response = requests.length > 1 ? await adapter.evaluateMany({ requests, decisionSubject: subject })
-        : await adapter.evaluate(requests[0]!).then(observation => ({ answers: [{ questionId: selected[0]!.id, observation }], sharedUsage: observation.usage }));
-      const first = response.answers[0]?.observation;
-      const stopEvidence = { httpStatus: first?.httpStatus ?? null, requestId: first?.requestId ?? null,
-        servedModel: first?.actualModel === approval.model ? approval.model : null, ...response.sharedUsage };
-      // All failures stop collection, including first limit-related 4xx. No provider text escapes.
-      if (response.answers.length !== selected.length || response.answers.some(answer => answer.observation.status !== 'success'
-        || answer.observation.actualModel !== approval.model || !answer.observation.requestId)) throw new CollectionStop('TV-12 provider identity or outcome failed', stopEvidence);
-      const requestIds = new Set(response.answers.map(a => a.observation.requestId));
-      if (requestIds.size !== 1) throw new Error('TV-12 inconsistent shared request identity');
-      const usage = response.sharedUsage;
-      if (!Number.isSafeInteger(usage.inputTokens) || !Number.isSafeInteger(usage.outputTokens) || usage.inputTokens! < 0 || usage.outputTokens! < 0
-        || usage.inputTokens! + usage.outputTokens! > approval.perRequestBound.totalTokens
-        || (usage.costUsd !== null && (!Number.isFinite(usage.costUsd) || usage.costUsd < 0 || usage.costUsd > approval.perRequestBound.usd))) {
-        throw new CollectionStop('TV-12 usage missing or approved bound exceeded', stopEvidence);
-      }
-      const usageArtifact = { source: offlineFetch ? 'synthetic' : 'provider', servedModel: approval.model, requestId: [...requestIds][0]!, ...usage };
-      const usageArtifactDigest = contextLiveDigest(usageArtifact);
-      const usageRef = `usage:${usageArtifactDigest}`;
-      const comparison = compareContextUsage([{ caseId: `${item.id}:${partition.id}`, input: partitionInput,
-        actualInputTokens: usage.inputTokens!, source: offlineFetch ? 'synthetic' : 'provider', usageRef }], corpus.profile, estimator).cases[0]!;
-      const record: ContextLiveRecord = { source: offlineFetch ? 'synthetic' : 'provider', estimator: { id: estimator.id, version: estimator.version },
-        wireDigest: contextLiveDigest(wire), wireBytes: Buffer.byteLength(JSON.stringify(wire)), caseId: item.id, partitionId: partition.id, planDigest: checked.planDigest, profileDigest: checked.providerProfile.digest,
-        servedModel: approval.model, requestId: [...requestIds][0]!, estimatedInputTokens: comparison.estimatedInputTokens,
-        actualInputTokens: comparison.actualInputTokens, errorTokens: comparison.errorTokens, absoluteErrorTokens: Math.abs(comparison.errorTokens),
-        undercountBps: comparison.undercountBps, usageRef, usageArtifactDigest, ...usage as { inputTokens: number; outputTokens: number; costUsd: number | null } };
-      records.push(record);
-      await host.record?.(structuredClone(record));
-      success = true;
-    } finally { lease.release({ success }); }
+    for (let attempt = 1; attempt <= 1 + TV12_MAX_RETRIES; attempt++) {
+      if (signal.aborted) throw new Error('TV-12 deadline reached');
+      const selected = input.questions.filter(q => partition.questionIds.includes(q.id));
+      const partitionInput = { ...input, questions: selected };
+      const checked = planDecisionContext(partitionInput, corpus.profile, estimator);
+      if (checked.partitions.length !== 1 || checked.partitions[0]!.questionIds.length !== selected.length) throw new Error('TV-12 partition is not one complete request');
+      if (checked.partitions[0]!.estimate.aggregateTokens > approval.perRequestBound.totalTokens) throw new Error('TV-12 approved token bound below estimate');
+      const timeoutMs = Math.max(1, Math.min(30_000, Math.floor(approval.budget.wallClockMs * 0.8 - (Date.now() - budget.started))));
+      const { definitions, target } = contextLivePartitionRequest(item, selected.map(q => q.id), approval, adapter.version, capabilities, timeoutMs);
+      const invocationId = `${approval.runId}:${item.id}:${partition.id}:${attempt}`;
+      const limits = { concurrency: 1, maxTokens: approval.perRequestBound.totalTokens, maxCostUsd: approval.perRequestBound.usd, allowUnknownCost: false };
+      const scheduler: DecisionSchedulerPolicy = { enabled: true, profileVersion: 'tv12-collection-v1', workspace: { id: approval.stagingWorkspace, limits },
+        principal: { id: approval.reviewer, limits }, providers: { jev: limits } };
+      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+      const deadlineEpochMs = Date.now() + timeoutMs;
+      const lease = await registry.controllerFor(scheduler, Date.now).acquire({ budgetId: invocationId, workspaceId: approval.stagingWorkspace,
+        principalId: approval.reviewer, providerId: 'jev', estimate: { tokens: approval.perRequestBound.totalTokens, costUsd: approval.perRequestBound.usd,
+          attempts: 1, batchSize: selected.length, items: selected.length }, deadlineEpochMs, signal: requestSignal });
+      let success = false;
+      try {
+        // Reservation precedes adapter invocation, DNS, credential resolution and network.
+        budget.reserve();
+        const requests: DecisionAdapterRequest[] = selected.map((q, i) => ({ alias: q.id, questionId: q.id, definition: definitions[i]!,
+          input: projected.state, projectionEvidence: projected.evidence, target, invocationId, deadlineEpochMs, signal: requestSignal,
+          resolveCredential: async reference => {
+            if (requestSignal.aborted || reference !== approval.secretServiceReference) throw new Error('TV-12 credential access denied');
+            return host.resolveCredential(reference);
+          }, compiledArtifact: compileJevQuestion(definitions[i]!) }));
+        const wire = { state: input.authorizedState, model: approval.model, questions: Object.fromEntries(selected.map(q => [q.id, q.entry])) };
+        const response = requests.length > 1 ? await adapter.evaluateMany({ requests, decisionSubject: subject })
+          : await adapter.evaluate(requests[0]!).then(observation => ({ answers: [{ questionId: selected[0]!.id, observation }], sharedUsage: observation.usage }));
+        const first = response.answers[0]?.observation;
+        const stopEvidence = { httpStatus: first?.httpStatus ?? null, requestId: first?.requestId ?? null,
+          servedModel: first?.actualModel === approval.model ? approval.model : null, ...response.sharedUsage };
+        const usage = response.sharedUsage;
+        // Safety stops dominate the measurement retry, even on a non-success response.
+        if (requestSignal.aborted || response.answers.some(a => a.observation.actualModel !== null && a.observation.actualModel !== approval.model)
+          || [usage.inputTokens, usage.outputTokens].some(n => n !== null && (!Number.isSafeInteger(n) || n < 0 || n > approval.perRequestBound.totalTokens))
+          || usage.inputTokens !== null && usage.outputTokens !== null && usage.inputTokens + usage.outputTokens > approval.perRequestBound.totalTokens
+          || usage.costUsd !== null && (!Number.isFinite(usage.costUsd) || usage.costUsd < 0 || usage.costUsd > approval.perRequestBound.usd)) {
+          throw new CollectionStop('TV-12 provider identity or usage bound failed', stopEvidence);
+        }
+        const failed = response.answers.filter(a => a.observation.status !== 'success');
+        if (response.answers.length === selected.length && failed.length > 0 && failed.every(a =>
+          a.observation.dispatchCertainty === 'terminal-response' && a.observation.remoteExecution !== 'unknown'
+          && retryableReasons.includes(a.observation.reason)
+          && (a.observation.httpStatus === 200 || a.observation.httpStatus! >= 500 && a.observation.httpStatus! <= 599))) {
+          const failure: ContextLiveProviderFailure = { schemaVersion: 'context-live-provider-failure/v1', source: offlineFetch ? 'synthetic' : 'provider',
+            caseId: item.id, partitionId: partition.id, attempt, reason: failed[0]!.observation.reason,
+            measurementFailure: attempt === 1 + TV12_MAX_RETRIES, ...stopEvidence };
+          failures.push(failure);
+          await host.recordFailure?.(structuredClone(failure));
+          continue;
+        }
+        // Other outcomes stop collection, including first limit-related 4xx. No provider text escapes.
+        if (response.answers.length !== selected.length || response.answers.some(answer => answer.observation.status !== 'success'
+          || answer.observation.actualModel !== approval.model || !answer.observation.requestId)) throw new CollectionStop('TV-12 provider identity or outcome failed', stopEvidence);
+        const requestIds = new Set(response.answers.map(a => a.observation.requestId));
+        if (requestIds.size !== 1) throw new Error('TV-12 inconsistent shared request identity');
+        if (!Number.isSafeInteger(usage.inputTokens) || !Number.isSafeInteger(usage.outputTokens) || usage.inputTokens! < 0 || usage.outputTokens! < 0
+          || usage.inputTokens! + usage.outputTokens! > approval.perRequestBound.totalTokens
+          || (usage.costUsd !== null && (!Number.isFinite(usage.costUsd) || usage.costUsd < 0 || usage.costUsd > approval.perRequestBound.usd))) {
+          throw new CollectionStop('TV-12 usage missing or approved bound exceeded', stopEvidence);
+        }
+        const usageArtifact = { source: offlineFetch ? 'synthetic' : 'provider', servedModel: approval.model, requestId: [...requestIds][0]!, ...usage };
+        const usageArtifactDigest = contextLiveDigest(usageArtifact);
+        const usageRef = `usage:${usageArtifactDigest}`;
+        const comparison = compareContextUsage([{ caseId: `${item.id}:${partition.id}`, input: partitionInput,
+          actualInputTokens: usage.inputTokens!, source: offlineFetch ? 'synthetic' : 'provider', usageRef }], corpus.profile, estimator).cases[0]!;
+        const record: ContextLiveRecord = { source: offlineFetch ? 'synthetic' : 'provider', estimator: { id: estimator.id, version: estimator.version },
+          wireDigest: contextLiveDigest(wire), wireBytes: Buffer.byteLength(JSON.stringify(wire)), caseId: item.id, partitionId: partition.id, planDigest: checked.planDigest, profileDigest: checked.providerProfile.digest,
+          servedModel: approval.model, requestId: [...requestIds][0]!, estimatedInputTokens: comparison.estimatedInputTokens,
+          actualInputTokens: comparison.actualInputTokens, errorTokens: comparison.errorTokens, absoluteErrorTokens: Math.abs(comparison.errorTokens),
+          undercountBps: comparison.undercountBps, usageRef, usageArtifactDigest, ...usage as { inputTokens: number; outputTokens: number; costUsd: number | null } };
+        records.push(record);
+        await host.record?.(structuredClone(record));
+        success = true;
+        break;
+      } finally { lease.release({ success }); }
+    }
   }
-  return { rejected: false, records, synthetic: !!offlineFetch };
+  return { rejected: false, records, failures, synthetic: !!offlineFetch };
 }
 /** `exact` (run evidence) requires the canonical root itself; `within` (prepared inputs) allows a descendant. */
 export async function assertContextArtifactRoot(sourceRoot: string, artifactRoot: string, mode: 'exact' | 'within' = 'exact'): Promise<void> {
-  const route = JSON.parse(execFileSync('aiwg', ['artifacts', 'path', '--json', '--check-write'], { cwd: sourceRoot, encoding: 'utf8' }));
+  const route = JSON.parse(execFileSync('aiwg', ['artifacts', 'path', '--json', '--check-write'], { cwd: sourceRoot, encoding: 'utf8', timeout: 10_000 }));
   if (typeof route.artifact_root !== 'string') throw new Error('Canonical artifact root unavailable');
   const delta = relative(await realpath(route.artifact_root), await realpath(artifactRoot));
   if (mode === 'exact' ? delta !== '' : delta === '..' || delta.startsWith('../') || isAbsolute(delta)) throw new Error('TV-12 evidence must use the canonical artifact root');
@@ -419,6 +459,7 @@ async function collectWithinLedger(approval: ContextLiveApproval, corpus: Contex
     }
     const records: ContextLiveRecord[] = [];
     const rejected: string[] = [];
+    const failed: string[] = [];
     let stopped = false;
     const frozenInputs = { corpus: { path: 'corpus.json', digest: approval.corpusDigest },
       preregistration: { path: 'preregistration.json', digest: approval.preregistrationDigest },
@@ -432,7 +473,14 @@ async function collectWithinLedger(approval: ContextLiveApproval, corpus: Contex
     for (const item of corpus.cases) {
       if (stopped) { outcomes.set(item.id, { outcome: 'fail', details: { reason: 'prior-stop', frozenInputs } }); continue; }
       try {
-        const collectionHost: ContextLiveHost = { resolveCredential: reference => host.resolveCredential(reference), record: async record => {
+        await assertContextLiveSource(sourceRoot, approval.sourceCommit);
+        const collectionHost: ContextLiveHost = { recordFailure: async failure => {
+          await writeFile(join(directory, `${failure.caseId}-${failure.partitionId}-attempt-${failure.attempt}-failure.json`), canonicalJson(failure), { flag: 'wx', mode: 0o600 });
+          await host.recordFailure?.(structuredClone(failure));
+        }, resolveCredential: async reference => {
+          await assertContextLiveSource(sourceRoot, approval.sourceCommit);
+          return host.resolveCredential(reference);
+        }, record: async record => {
           const usage = { source: record.source, servedModel: record.servedModel, requestId: record.requestId, inputTokens: record.inputTokens, outputTokens: record.outputTokens, costUsd: record.costUsd };
           if (contextLiveDigest(usage) !== record.usageArtifactDigest) throw new Error('TV-12 usage digest mismatch');
           await writeFile(join(directory, `usage-${record.usageArtifactDigest.slice(7)}.json`), canonicalJson(usage), { flag: 'wx', mode: 0o600 });
@@ -443,7 +491,10 @@ async function collectWithinLedger(approval: ContextLiveApproval, corpus: Contex
         if (!offlineTransport) liveHosts.add(collectionHost);
         const collected = await collectContextLiveCase(item, corpus, approval, collectionHost, budget, signal, offlineTransport);
         if (collected.rejected) rejected.push(item.id);
-        outcomes.set(item.id, { outcome: 'pass', details: { frozenInputs, rejectedBeforeDispatch: collected.rejected, records: collected.records } });
+        const measurementFailure = collected.failures.some(f => f.measurementFailure);
+        if (measurementFailure) failed.push(item.id);
+        outcomes.set(item.id, { outcome: measurementFailure ? 'fail' : 'pass', details: { frozenInputs, rejectedBeforeDispatch: collected.rejected,
+          ...(measurementFailure ? { reason: 'measurement-failure' } : {}), failures: collected.failures, records: collected.records } });
       } catch (error) {
         stopped = true;
         outcomes.set(item.id, { outcome: 'fail', details: { reason: 'collection-stopped', frozenInputs, ...(error instanceof CollectionStop ? { provider: error.evidence } : {}), records: records.filter(row => row.caseId === item.id), reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd } } });
@@ -453,14 +504,20 @@ async function collectWithinLedger(approval: ContextLiveApproval, corpus: Contex
       manifest: { schemaVersion: 'decision-qualification-run/v1', mode: offlineTransport ? 'offline' : 'recorded', runId: approval.runId, generatedAt: new Date().toISOString(),
         sourceCommit: approval.sourceCommit, dirty: false, cases: corpus.cases.map(item => ({ id: item.id, kind: 'baseline', mandatory: true, candidateTests: [], evidenceIds: ['CTX-TV12'] })) },
       executors: Object.fromEntries(corpus.cases.map(item => [item.id, async () => outcomes.get(item.id)!])), sanitizeDetails: details => details });
-    await assertContextLiveSource(sourceRoot, approval.sourceCommit);
-    const worst = Math.max(0, ...records.map(row => row.undercountBps));
+    let sourceDrift = false;
+    try { await assertContextLiveSource(sourceRoot, approval.sourceCommit); } catch { stopped = true; sourceDrift = true; }
+    const measured = corpus.cases.filter(item => !failed.includes(item.id) && outcomes.get(item.id)?.outcome === 'pass'
+      && expected.get(item.id)! > 0 && expected.get(item.id) === records.filter(row => row.caseId === item.id).length).map(item => item.id);
+    const unmeasured = corpus.cases.map(item => item.id).filter(id => !measured.includes(id) && !failed.includes(id) && !rejected.includes(id));
+    const worst = Math.max(0, ...records.filter(row => measured.includes(row.caseId)).map(row => row.undercountBps));
+    const candidateMarginBps = !stopped && measured.length >= TV12_MIN_MEASURED_CASES ? worst + approval.marginRule.extraReserveBps : null;
+    const marginValid = candidateMarginBps !== null && candidateMarginBps <= approval.marginRule.maximumMarginBps;
     const collectionSuccess = !stopped && records.length > 0 && run.evidence.length === corpus.cases.length && run.evidence.every(row => row.outcome === 'pass')
       && corpus.cases.every(item => expected.get(item.id) === records.filter(row => row.caseId === item.id).length
         && (expected.get(item.id) !== 0 || rejected.includes(item.id)));
-    const summary = { schemaVersion: 'context-live-collection/v1', sourceCommit: approval.sourceCommit, corpusDigest: approval.corpusDigest,
-      preregistrationDigest: approval.preregistrationDigest, frozenInputs, source: offlineTransport ? 'synthetic' : 'provider', collectionSuccess, collected: records.length, rejected, stopped,
-      candidateMarginBps: worst + approval.marginRule.extraReserveBps, withinApprovedMaximum: worst + approval.marginRule.extraReserveBps <= approval.marginRule.maximumMarginBps,
+    const summary = { schemaVersion: 'context-live-collection/v2', sourceCommit: approval.sourceCommit, corpusDigest: approval.corpusDigest,
+      preregistrationDigest: approval.preregistrationDigest, frozenInputs, source: offlineTransport ? 'synthetic' : 'provider', collectionSuccess, collected: records.length, measured, failed, rejected, unmeasured, stopped, sourceDrift, marginValid, minimumMeasuredCases: TV12_MIN_MEASURED_CASES,
+      candidateMarginBps, withinApprovedMaximum: candidateMarginBps !== null && candidateMarginBps <= approval.marginRule.maximumMarginBps,
       qualifiedForEnforcement: false, pending: ['reviewer-margin-approval', 'versioned-profile-qualification', 'enforce-canary', 'rollback-evidence'],
       reserved: { requests: budget.requests, tokens: budget.tokens, usd: budget.usd }, issueSpend, elapsedMs: Date.now() - started };
     await writeFile(join(directory, 'summary.json'), canonicalJson(summary), { flag: 'wx', mode: 0o600 });

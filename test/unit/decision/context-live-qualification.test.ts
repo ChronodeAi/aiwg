@@ -117,6 +117,35 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
     expect(result.records[0]!.estimatedInputTokens).toBe(estimator.estimate(wire.state).tokens
       + Object.values(wire.questions).reduce<number>((sum, question) => sum + estimator.estimate(question as any).tokens, 0) + profile.requestEnvelopeTokens);
   });
+  it('admits the declared 255-option boundary without reducing it after provider failure', async () => {
+    const s = await setup('choice-255');
+    const estimate = await estimateContextLiveCollection(s.approval, s.corpus);
+    expect(estimate.cases[0]!.rejectedBeforeDispatch).toBe(false);
+    const result = await collectContextLiveCase(s.corpus.cases[0]!, s.corpus, s.approval, { resolveCredential: s.resolver }, s.budget, new AbortController().signal, s.fetch as typeof fetch);
+    expect(result.records).toHaveLength(1); expect(s.fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([200, 500, 529])('retries terminal provider failure once and charges both attempts (HTTP %i)', async status => {
+    const s = await setup('choice-255');
+    s.fetch.mockImplementation(async () => new Response('{}', { status, headers: { 'x-request-id': 'failed-request' } }));
+    const result = await collectContextLiveCase(s.corpus.cases[0]!, s.corpus, s.approval, { resolveCredential: s.resolver }, s.budget, new AbortController().signal, s.fetch as typeof fetch);
+    expect(result.records).toEqual([]);
+    expect(result.failures).toHaveLength(2);
+    expect(result.failures[1]).toMatchObject({ attempt: 2, httpStatus: status, requestId: 'failed-request', measurementFailure: true, servedModel: null, inputTokens: null });
+    expect(s.fetch).toHaveBeenCalledTimes(2); expect(s.budget.requests).toBe(2); expect(s.budget.usd).toBe(0.02);
+  });
+  it('retains the failed attempt when its retry measures successfully', async () => {
+    const s = await setup('choice-255');
+    s.fetch.mockImplementationOnce(async () => new Response('{}', { headers: { 'x-request-id': 'failed-first' } }));
+    const result = await collectContextLiveCase(s.corpus.cases[0]!, s.corpus, s.approval, { resolveCredential: s.resolver }, s.budget, new AbortController().signal, s.fetch as typeof fetch);
+    expect(result.records).toHaveLength(1); expect(result.failures).toMatchObject([{ attempt: 1, measurementFailure: false, requestId: 'failed-first' }]);
+    expect(s.fetch).toHaveBeenCalledTimes(2); expect(s.budget.requests).toBe(2);
+  });
+  it('reserves the retry before dispatch and stops when it cannot fit', async () => {
+    const s = await setup('choice-255'); s.approval.budget.requests = 2;
+    s.fetch.mockImplementation(async () => new Response('{}', { headers: { 'x-request-id': 'failed-first' } }));
+    await expect(collectContextLiveCase(s.corpus.cases[0]!, s.corpus, s.approval, { resolveCredential: s.resolver }, s.budget, new AbortController().signal, s.fetch as typeof fetch)).rejects.toThrow('budget');
+    expect(s.fetch).toHaveBeenCalledTimes(1); expect(s.budget.requests).toBe(1);
+  });
   it('stops on first 4xx without retry', async () => {
     const s = await setup(); s.fetch.mockImplementation(async () => new Response('sensitive provider text', { status: 413 }));
     await expect(collectContextLiveCase(s.corpus.cases[0]!, s.corpus, s.approval, { resolveCredential: s.resolver }, s.budget, new AbortController().signal, s.fetch as typeof fetch)).rejects.toThrow('identity or outcome');
@@ -210,8 +239,8 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
       expect(collected.records.map(r => [r.partitionId, r.estimatedInputTokens])).toEqual(planned.partitions.map(p => [p.id, p.estimatedInputTokens]));
     }
     expect(s.fetch).toHaveBeenCalledTimes(estimate.requests);
-    expect(estimate.reserved).toMatchObject({ requests: estimate.requests, tokens: estimate.requests * 100_000 });
-    expect(estimate.reserved.usd).toBeCloseTo(estimate.requests * 0.01, 9);
+    expect(estimate.reserved).toMatchObject({ requests: estimate.requests * 2, tokens: estimate.requests * 2 * 100_000 });
+    expect(estimate.reserved.usd).toBeCloseTo(estimate.requests * 2 * 0.01, 9);
     expect(estimate.fitsBeforeStop).toBe(true);
     s.approval.budget.requests = Math.ceil(estimate.requests / 0.8) - 1;
     expect((await estimateContextLiveCollection(s.approval, s.corpus)).fitsBeforeStop).toBe(false);
@@ -294,6 +323,94 @@ describe('TV-12 live collector offline guards (not qualification evidence)', () 
       expect(manifest.evidence.every((row: any) => row.outcome === 'pass' && !row.error)).toBe(true);
       expect(JSON.parse(await readFile(join(runs, summary.evidenceManifest), 'utf8')).evidence).toHaveLength(17);
     } finally { live.fetch = null; await o.cleanup(); }
+  });
+  it.each([1, 2])('continues after %i measurement failures and gates the margin on measured cases', async failures => {
+    const o = await orchestration(); const { s, runs } = o;
+    try {
+      const original = s.fetch.getMockImplementation()!; let requests = 0;
+      s.fetch.mockImplementation(async (url, init) => {
+        const questions = Object.values(JSON.parse(init.body as string).questions) as any[];
+        if (questions.some(q => q.type === 'choice' && Object.keys(q.criteria).length === 255)
+          || failures === 2 && questions.some(q => q.type === 'score')) {
+          return new Response('{}', { headers: { 'x-request-id': 'failed-request' } });
+        }
+        const response = await original(url, init); const body = await response.json(); body.usage.input_tokens = 1;
+        return new Response(JSON.stringify(body), { headers: { 'x-request-id': `measured-${++requests}` } });
+      });
+      await o.seed('r3', { 'approval.json': { budget: { usd: 0.2 } }, 'summary.json': { reserved: { usd: 0.1008 } } });
+      const summary = await o.run();
+      expect(summary.stopped).toBe(false); expect(summary.collectionSuccess).toBe(false);
+      expect(summary.measured).toHaveLength(13 - failures); expect(summary.failed).toHaveLength(failures); expect(summary.rejected).toHaveLength(4);
+      expect(summary.measured).toContain('dominant'); expect(summary.measured).toContain('many-short');
+      expect(summary.measured).not.toContain('choice-255'); expect(summary.marginValid).toBe(failures === 1);
+      expect(summary.candidateMarginBps).toBe(failures === 1 ? 100 : null);
+      expect(summary.issueSpend.priorUsd).toBe(0.1008);
+      const manifest = JSON.parse(await readFile(join(runs, s.approval.runId, 'run-manifest.json'), 'utf8'));
+      expect(manifest.evidence.find((row: any) => row.caseId === 'choice-255').outcome).toBe('fail');
+      const evidence = JSON.parse(await readFile(join(runs, s.approval.runId, 'choice-255.json'), 'utf8'));
+      expect(evidence.details.reason).toBe('measurement-failure'); expect(evidence.details.failures).toHaveLength(2);
+      expect(summary.reserved.requests).toBe(s.fetch.mock.calls.length);
+    } finally { await o.cleanup(); }
+  });
+  it('excludes completed partitions of a failed case from margin derivation while retaining them', async () => {
+    const o = await orchestration(); const { s, runs } = o;
+    try {
+      const estimate = await estimateContextLiveCollection(s.approval, s.corpus);
+      const owners = estimate.cases.flatMap(item => item.partitions.map(() => item.id));
+      const first = owners.indexOf('aggregate-effective-2');
+      expect(owners[first + 1]).toBe('aggregate-effective-2');
+      const original = s.fetch.getMockImplementation()!; let calls = 0;
+      s.fetch.mockImplementation(async (url, init) => {
+        const call = calls++;
+        if (call === first + 1 || call === first + 2) return new Response('{}', { status: 500, headers: { 'x-request-id': `failed-${call}` } });
+        const response = await original(url, init); const body = await response.json(); body.usage.input_tokens = call === first ? 90_000 : 1;
+        return new Response(JSON.stringify(body), { headers: { 'x-request-id': `partial-${call}` } });
+      });
+      const summary = await o.run();
+      expect(summary.failed).toEqual(['aggregate-effective-2']); expect(summary.measured).toHaveLength(12);
+      expect(summary.candidateMarginBps).toBe(100); expect(summary.marginValid).toBe(true);
+      const evidence = JSON.parse(await readFile(join(runs, s.approval.runId, 'aggregate-effective-2.json'), 'utf8'));
+      expect(evidence.details.records).toHaveLength(1); expect(evidence.details.records[0].undercountBps).toBeGreaterThan(1000);
+    } finally { await o.cleanup(); }
+  });
+  it.each(['dispatch-rejection', 'cancellation', 'timeout', 'budget', 'credential', 'source-drift'])('persists completed comparisons and stops end-to-end on %s', async fault => {
+    const o = await orchestration(); const { s, runs } = o;
+    try {
+      const original = s.fetch.getMockImplementation()!; let calls = 0;
+      s.fetch.mockImplementation(async (url, init) => {
+        if (++calls === 1) {
+          if (fault === 'source-drift') await writeFile(join(o.root, 'drift'), 'changed');
+          return original(url, init);
+        }
+        if (fault === 'cancellation' || fault === 'timeout') throw new DOMException('private', fault === 'timeout' ? 'TimeoutError' : 'AbortError');
+        throw new Error('private transport rejection');
+      });
+      if (fault === 'budget') s.approval.budget.requests = 2;
+      if (fault === 'credential') s.resolver.mockImplementationOnce(async () => new TextEncoder().encode('fixture-secret'))
+        .mockImplementation(async () => { throw new Error('private credential failure'); });
+      const summary = await o.run();
+      expect(summary.stopped).toBe(true); expect(summary.collectionSuccess).toBe(false);
+      expect(summary.collected).toBe(1); expect(summary.candidateMarginBps).toBeNull();
+      expect(calls).toBe(['dispatch-rejection', 'cancellation', 'timeout'].includes(fault) ? 2 : 1);
+      expect(summary.sourceDrift).toBe(fault === 'source-drift');
+      const manifest = JSON.parse(await readFile(join(runs, s.approval.runId, 'run-manifest.json'), 'utf8'));
+      expect(manifest.evidence.some((row: any) => row.outcome === 'fail')).toBe(true);
+      expect(JSON.stringify(manifest)).not.toContain('private');
+    } finally { await o.cleanup(); }
+  });
+  it('does not validate a measured margin above the preregistered maximum', async () => {
+    const o = await orchestration(); const { s } = o;
+    try {
+      const original = s.fetch.getMockImplementation()!; let calls = 0;
+      s.fetch.mockImplementation(async (url, init) => {
+        const response = await original(url, init); const body = await response.json(); body.usage.input_tokens = 90_000;
+        return new Response(JSON.stringify(body), { headers: { 'x-request-id': `undercount-${++calls}` } });
+      });
+      const summary = await o.run();
+      expect(summary.measured).toHaveLength(13); expect(summary.stopped).toBe(false);
+      expect(summary.candidateMarginBps).toBeGreaterThan(s.approval.marginRule.maximumMarginBps);
+      expect(summary.marginValid).toBe(false); expect(summary.withinApprovedMaximum).toBe(false); expect(summary.qualifiedForEnforcement).toBe(false);
+    } finally { await o.cleanup(); }
   });
   it('requires the canonical artifact root itself, not a subdirectory', async () => {
     const o = await orchestration();

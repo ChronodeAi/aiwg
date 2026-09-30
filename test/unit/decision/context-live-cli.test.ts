@@ -17,10 +17,19 @@ function run(args: string[], env: Record<string, string | undefined>) {
   for (const [key, value] of Object.entries(env)) if (value === undefined) delete childEnv[key];
   const started = Date.now();
   const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', env: childEnv, timeout: 30_000 });
-  return { status: result.status, stderr: result.stderr, elapsedMs: Date.now() - started };
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr, elapsedMs: Date.now() - started };
 }
 
 describe('TV-12 CLI live-mode preflight (offline)', () => {
+  it('keeps default-off CLI output byte-identical without loading the collector or resolver', () => {
+    const result = run([], { AIWG_DECISION_TV12_LIVE: undefined });
+    expect(result.status).toBe(0); expect(result.stderr).toBe('');
+    expect(result.stdout).toBe('No provider calls. Use --prepare PROFILE.json OUTPUT.json; '
+      + '--dry-run or --collect-approved APPROVAL.json APPROVAL_SHA256 CORPUS.json ARTIFACT_ROOT TRUSTED_RESOLVER.mjs RESOLVER_SHA256; '
+      + '--record-qualification APPROVAL.json CORPUS.json RUN_DIR REVIEW.json OUTPUT.json; --verify-qualification RECORD.json; '
+      + '--canary-approved CANARY_APPROVAL.json APPROVAL_SHA256 CORPUS.json RECORD.json ARTIFACT_ROOT TRUSTED_RESOLVER.mjs RESOLVER_SHA256. '
+      + 'Live modes require AIWG_DECISION_TV12_LIVE=1.\n');
+  });
   async function files() {
     const directory = await mkdtemp(join(tmpdir(), 'tv12-cli-'));
     const approval = join(directory, 'approval.json'); const resolver = join(directory, 'resolver.mjs');

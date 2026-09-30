@@ -43,7 +43,7 @@ try {
   }
   const root = resolve(import.meta.dirname, '../..');
   // Compile the exact source before importing the runtime; stale dist cannot back live evidence.
-  execFileSync('npm', ['run', 'build:cli'], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'] });
+  execFileSync('npm', ['run', 'build:cli'], { cwd: root, stdio: ['ignore', 'ignore', 'inherit'], timeout: 300_000 });
   const runtime = await import('../../dist/src/decision/context-live-qualification.js');
   const promotion = await import('../../dist/src/decision/context-live-promotion.js');
   const pinnedHost = async (resolverPath, expected, approved) => {
@@ -75,7 +75,7 @@ try {
       canonicalArtifactRoot,
       approvalPinned: true,
       resolverPinned: approval.credentialResolverDigest === args[6],
-      issueBudgetRemaining: runUsdCeiling > 0 && estimate.requests <= requestCapacityAtStop,
+      issueBudgetRemaining: runUsdCeiling > 0 && estimate.maximumRequestsWithRetries <= requestCapacityAtStop,
     };
     const ready = Object.values(preconditions).every(Boolean) && estimate.fitsBeforeStop;
     process.stdout.write(JSON.stringify({ ...estimate, requestCapacityAtStop, issueSpend: { capUsd: runtime.TV12_ISSUE_USD_CAP, priorUsd, runUsdCeiling },
