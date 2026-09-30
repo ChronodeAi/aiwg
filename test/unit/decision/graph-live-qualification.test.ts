@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -515,6 +515,9 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
 
   it('runs the dry run and --freeze from source without building dist', () => {
     const out = join(tmpdir(), `d12-freeze-${process.pid}-${Date.now()}`);
+    // CI may already hold a built dist/, so assert these paths leave it exactly as they found it.
+    const built = 'dist/src/decision/graph-live-qualification.js';
+    const before = existsSync(built) ? statSync(built).mtimeMs : null;
     try {
       const dry = spawnSync(process.execPath, ['tools/decision/dag-live-qualification.mjs'], { encoding: 'utf8', timeout: 120_000,
         env: { ...process.env, AIWG_DECISION_DAG_LIVE: '' } });
@@ -526,8 +529,8 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
       expect(freeze.status).toBe(0);
       expect(readFileSync(join(out, 'workload.json'), 'utf8')).toBe(readFileSync(`${frozen}/workload.json`, 'utf8'));
       expect(readFileSync(join(out, 'preregistration.json'), 'utf8')).toBe(readFileSync(`${frozen}/preregistration.json`, 'utf8'));
-      // Neither path compiled the runtime: no dist output appeared.
-      expect(existsSync('dist/src/decision/graph-live-qualification.js')).toBe(false);
+      // Neither path compiled the runtime: dist output is unchanged.
+      expect(existsSync(built) ? statSync(built).mtimeMs : null).toBe(before);
     } finally { rmSync(out, { recursive: true, force: true }); }
   }, 150_000);
 
