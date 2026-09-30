@@ -204,7 +204,7 @@ The second command is an operator handoff, not authorization from this document.
 Approval must precede any spend. The public-seed dry-run emits this placeholder
 approval text; a paid run needs the form generated from its fresh pins:
 
-> I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration sha256:48dbec0376d459c0ea2e972dd34bf05e687c880cd5efc4b9bbdec6777b6cb34b and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.
+> I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration sha256:94d1b1c22d8e176f541381112340e4bb40bec12e3943d418befcdd11fa41b737 and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.
 
 ## Operator review and remaining evidence
 
@@ -241,10 +241,10 @@ operator approval, durable freeze or collected evaluation:
 | Artifact | Digest |
 | --- | --- |
 | Corpus | `sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804` |
-| Preregistration | `sha256:48dbec0376d459c0ea2e972dd34bf05e687c880cd5efc4b9bbdec6777b6cb34b` |
-| Unapproved priced template | `sha256:d42667af7c8ab822dafecbbd98a44da0a0f93da305a677f23ee5c7b651c2833a` |
+| Preregistration | `sha256:94d1b1c22d8e176f541381112340e4bb40bec12e3943d418befcdd11fa41b737` |
+| Unapproved priced template | `sha256:86622fe151315b279efb3b57355bc8ee9a6bdab4308659976dd883542f571c9a` |
 | Split manifest | `sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f` |
-| Analysis | `sha256:24982f2a6af0cb3c4900d36b9ceeec13fe202d97011c3af544fec208cf916b2e` |
+| Analysis | `sha256:70d1adba91d6bc71c2c52949f412550a534a13b4fa14a24d3be3f3cfc5ec8777` |
 | Private gold | `sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db` |
 
 Pins will be regenerated at the new source commit before any operator freeze or
