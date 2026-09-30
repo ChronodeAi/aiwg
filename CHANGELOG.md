@@ -9,6 +9,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- D12 live paired qualification runner for dependent decision graphs: a flat
+  FlowGraph baseline against each graph pattern on a frozen, seeded synthetic
+  workload (3 patterns x 100 tasks) with a preregistered -1000 bps
+  non-inferiority margin. It reserves budget before each call, stops at 80% of any
+  ceiling or the USD 2.00 cap, writes digest-bound D11/G5/G6 evidence and records
+  the reviewer's decision. It is dry-run by default and needs
+  `AIWG_DECISION_DAG_LIVE=1` plus an approval bound to both digests for live
+  collection. The graph runtime stays experimental, and no live run is recorded
+  (#2686).
 - Experimental default-off D17 decision ensemble runtime APIs for bounded
   member dispatch, paired champion/challenger shadow evaluation, drift-response
   execution, promotion gating on D09 plus eval-integrity, rollback for new runs,
