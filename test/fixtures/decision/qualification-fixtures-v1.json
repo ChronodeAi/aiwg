@@ -1564,6 +1564,38 @@
       ]
     },
     {
+      "id": "DEC-ENSEMBLE-09",
+      "path": "agentic/code/addons/decision-engine/examples/ensemble-runtime-offline.mjs",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:96f67a7e464a8a5ca2515a88eedb178f20b9add2b5ee6703a40f6d3c7d74a3ba",
+      "expectedOutcome": "D17 offline ensemble runtime example with bounded members, champion/challenger shadow and rollback",
+      "links": [
+        "JEV-16",
+        "#2611"
+      ]
+    },
+    {
+      "id": "DEC-ROUTING-01",
+      "path": "agentic/code/addons/decision-engine/examples/routing-pilot-offline.mjs",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-29",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:d056af367700b9a10f0f0494807e519f17cc4026229bfd2a736a9704d9ea8c11",
+      "expectedOutcome": "D28 offline shadow routing example: hard-constraint filtering, deterministic route executed, fake Jev evidence recorded as a counterfactual",
+      "links": [
+        "JEV-16",
+        "#2620"
+      ]
+    },
+    {
       "id": "DEC-EXAMPLE-26",
       "path": "agentic/code/addons/decision-engine/examples/preprocessing-lineage-offline.mjs",
       "origin": "repository-authored",
