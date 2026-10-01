@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prepare, prepareV6, prepareV8, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
   validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
-  analysisPlan, approvalTemplate, LABELING_CONVENTIONS,
+  analysisPlan, approvalTemplate, LABELING_CONVENTIONS, LABELING_CONVENTIONS_V8,
   GATE_PACK_ID, GATE_CEILING_PACK_ID, GATE_BLOCKING_SLICES } from '../../../tools/decision/studies/d29.mjs';
 import { artifactDigest } from '../../../src/decision/validate.js';
 import { loadGatePackFile } from '../../../src/gates/discovery.js';
@@ -543,7 +543,8 @@ async function setup() {
 }
 function response(init) {
   const wire = JSON.parse(init.body), question = wire.questions.q0, criteria = question.criteria;
-  expect(JSON.stringify(question)).toContain(LABELING_CONVENTIONS);
+  // Collector integration runs on v8 corpora, whose prompts carry the v8 conventions.
+  expect(JSON.stringify(question)).toContain(LABELING_CONVENTIONS_V8);
   expect(JSON.stringify(question)).not.toContain('instruction-bearing');
   const payload = wire.state.untrusted.payload;
   expect(wire.state.verified).toEqual({}); expect(payload.kind).toMatch(/citation|phase-criterion/);

@@ -31,8 +31,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   (`decision-d29-analysis/v7`, `D29Study.v9`) records every audit parameter and
   the passing report digest. Fresh private seeds prepare with v8; scoring and
   calibration regenerate with the generator recorded in the corpus rows; and
-  paid bundles must use a paid-eligible generator (v8 only), so v6/v7 are
-  public-replay-only. v6/v7 rows, gold and generator pins are unchanged (#2622)
+  paid bundles must use a paid-eligible generator (v8 only, for every row), so
+  v6/v7 and relabelled non-D29 generators are refused. The anchor clause sits
+  only in single-clause records, so no pronoun or ellipsis can resolve to the
+  claimed module, and v8 prompts use v8-only labeling conventions that decide
+  screening-control by target rather than addressee. v6/v7 rows, gold and generator pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

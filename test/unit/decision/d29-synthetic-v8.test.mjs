@@ -16,7 +16,8 @@ import { D29_PAID_GENERATOR_IDS } from '../../../src/decision/heldout/d29-genera
 import { shortcutAuditV8, surfaceFeaturesV8, SHORTCUT_AUDIT_V8_PARAMETERS } from '../../../tools/decision/studies/d29-shortcuts-v8.mjs';
 import { shortcutAuditV7 } from '../../../tools/decision/studies/d29-shortcuts-v7.mjs';
 import { prepare, prepareV7, dryRun, validateStudyArtifact, oracle, studyModule, buildReport, d29GeneratorForSeed,
-  d29CorpusGeneratorId, prepareWithGenerator, analysisPlanV8, dryRunV8, V8_DATASET_FROZEN_AT, GATE_PACK_ID } from '../../../tools/decision/studies/d29.mjs';
+  d29CorpusGeneratorId, prepareWithGenerator, analysisPlanV8, dryRunV8, V8_DATASET_FROZEN_AT, GATE_PACK_ID,
+  definitions, definitionsV8, LABELING_CONVENTIONS, LABELING_CONVENTIONS_V8 } from '../../../tools/decision/studies/d29.mjs';
 
 let prepared, dry, v7;
 beforeAll(async () => {
@@ -410,7 +411,17 @@ describe('D29 v8 review round 2', () => {
       const bundle = approve(await prepareWithGenerator(generator, 'zz-priv-a'));
       expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval)), generator).toThrow('paid-generator');
     }
-    const bundle = approve(await prepare('fresh-private-seed'));
+    // A non-D29 generator relabelled as D29 (the lamp fixture) is refused too.
+    const { generateRegisteredHeldoutRow } = await import('../../../src/decision/heldout/generator-registry.js');
+    const fresh = await prepare('fresh-private-seed');
+    for (const [id, seed] of [['heldout-lamp/v1', i => `zz-priv-c:${i}:single`], ['heldout-lamp-splits/v1', i => `zz-priv-c:${i}:single:tuning`]]) {
+      const corpus = { ...fresh.corpus, rows: Array.from({ length: 4 }, (_, i) => generateRegisteredHeldoutRow(id, seed(i))) };
+      const lamp = approve({ ...fresh, corpus, preregistration: { ...fresh.preregistration, corpusDigest: heldoutDigest(corpus) } });
+      lamp.approval.corpusDigest = heldoutDigest(corpus); lamp.approval.preregistrationDigest = heldoutDigest(lamp.preregistration);
+      lamp.approval.executionDigest = heldoutExecutionDigest(corpus, lamp.preregistration, lamp.approval);
+      expect(() => validateHeldoutBundle(lamp, heldoutDigest(lamp.approval)), id).toThrow('paid-generator');
+    }
+    const bundle = approve(fresh);
     expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).not.toThrow();
     expect(D29_PAID_GENERATOR_IDS).toEqual([D29_V8_GENERATOR_ID]);
   }, 120_000);
@@ -436,4 +447,49 @@ describe('D29 v8 review round 2', () => {
     const tampered = structuredClone(prepared); tampered.analysis.shortcutAudit.reportDigest = heldoutDigest('forged');
     return expect(dryRunV8(tampered)).rejects.toThrow('shortcut-audit');
   }, 60_000);
+});
+
+describe('D29 v8 review round 3', () => {
+  /** The claimed module named after another module's subject and before a pronoun, ellipsis or exclusivity tail. */
+  const ambiguities = (payload, claimModule) => {
+    const claim = `Module ${claimModule}`, hits = [];
+    const sentences = [payload.source ?? payload.evidence ?? '', payload.context ?? ''].join(' ').split(/(?<=[.!?])\s+/);
+    sentences.forEach((sentence, k) => {
+      const at = sentence.indexOf(claim), first = /Module [0-9]{6}-[0-9]{6}-[0-9]{6}/.exec(sentence);
+      if (at < 0 || !first || first.index >= at) return;
+      const tail = sentence.slice(at + claim.length);
+      if (/;\s*(it|now|that module)\b|\b(it|that module)\b/i.test(tail) || /,\s*(with no alternatives|nothing else)/.test(tail)) hits.push(sentence);
+      const last = [...sentence.matchAll(/Module [0-9]{6}-[0-9]{6}-[0-9]{6}/g)].at(-1);
+      if (last?.[0] === claim && /^\W*(It|That module)\b(?! is possible that| might be the case that)/.test(sentences[k + 1] ?? '')) hits.push(sentence);
+    });
+    return hits;
+  };
+
+  it('V8-16 never lets a pronoun or ellipsis resolve to the claimed module named in an anchor clause', () => {
+    for (const seed of [D29_V8_SEED, 'zz-ambiguity-a', 'zz-ambiguity-b']) {
+      let anchored = 0;
+      for (const row of worlds(d29WorldV8, seed).filter(item => item.world.kind === 'citation')) {
+        expect(ambiguities(row.payload, row.world.claimModule), `${seed}/${row.id}`).toEqual([]);
+        const pool = row.world.pool === 'train' ? D29_TRAIN_V8 : D29_TEST_V8;
+        if (row.payload.source.includes(`${pool.anchor} Module ${row.world.claimModule}`)) anchored++;
+      }
+      expect(anchored, seed).toBe(1250);
+    }
+    // The scan catches the round-2 rendering: an anchor inside a moved record.
+    expect(ambiguities({ source: 'Module 111111-111111-111111, which sits beside Module 222222-222222-222222, was reassigned from team Aspen; it now belongs to team Cedar.' },
+      '222222-222222-222222')).toHaveLength(1);
+  }, 120_000);
+
+  it('V8-17 prompts v8 corpora with v8 labeling conventions while v6/v7 definitions stay byte-identical', () => {
+    expect(LABELING_CONVENTIONS_V8).not.toBe(LABELING_CONVENTIONS);
+    expect(LABELING_CONVENTIONS_V8).toContain('screening-control whoever it addresses, operators included');
+    expect(LABELING_CONVENTIONS_V8).not.toContain('Benign instructions addressed to operators');
+    expect(heldoutDigest(prepared.corpus.definitions)).toBe(heldoutDigest(definitionsV8()));
+    for (const definition of prepared.corpus.definitions) {
+      expect(definition.metadata.version).toBe('5.0.0');
+      expect(definition.spec.question).toContain(LABELING_CONVENTIONS_V8);
+    }
+    expect(heldoutDigest(v7.corpus.definitions)).toBe(heldoutDigest(definitions()));
+    for (const definition of definitions()) expect(definition.spec.question).toContain(LABELING_CONVENTIONS);
+  });
 });

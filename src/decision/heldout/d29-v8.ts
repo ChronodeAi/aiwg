@@ -102,6 +102,9 @@ function coreference(module: string, sentence: string, lead: string, pronoun: st
 
 const coreferenceLeads = ['completed its scheduled migration last week', 'finished its planned maintenance window yesterday', 'closed its rollout review this morning'];
 
+/** Single-clause rendering modes that may carry the anchor relative clause. */
+const ANCHOR_MODES = ['negated', 'exclusive-restricted', 'scoped', 'temporal', 'tentative'];
+
 /** The variant a non-injected counterpart row at this offset renders (supports / ready mix). */
 function counterpartVariant(citation: boolean, claimAttribute: string, offset: number): string {
   const variants = D29_V4_VARIANTS[citation ? 'citation-supports' : 'criterion-ready'];
@@ -192,12 +195,14 @@ export function d29WorldV8(seed: string, ordinal: number) {
   // module (two claimed-module distractors), one other-module record that
   // never carries the claimed value takes a further non-claim attribute, so
   // attribute counts cannot reveal the variant.
+  let freeIndex = -1;
   if (records[relevantIndex].module === world.claimModule && records[relevantIndex].attribute === world.claimAttribute) {
-    const free = others.filter(i => records[i].module !== world.claimModule).at(-1)!;
+    const free = freeIndex = others.filter(i => records[i].module !== world.claimModule).at(-1)!;
     const used = new Set(records.filter(record => record.module === world.claimModule).map(record => record.attribute));
     const extra = citation ? rotated.filter(attribute => !used.has(attribute)) : rotated;
     records[free].attribute = extra[random(extra.length)];
   }
+  let anchorIndex = -1;
   if (world.injected && renderVariant === 'multi-value') {
     // Same latent fact plus a second current value, exactly as citation-supports multi-value.
     world.sourceValues = [drawValue(random, world.claimAttribute, world.claimValue), world.claimValue];
@@ -213,9 +218,14 @@ export function d29WorldV8(seed: string, ordinal: number) {
       ? world.sourceValues.join(' and ') : `${world.sourceValues[0]} as well as ${world.sourceValues[1]}`;
     if (renderVariant === 'paraphrase') relevant.mode = 'paraphrase';
     if (['different-current', 'different-nonexclusive'].includes(world.variant)) relevant.value = world.sourceValue;
-    // The claimed value appears four times, including facts about other entities.
+    // The anchor is a single-clause claimed-value record about another module
+    // (see below); it carries the claimed value first. The claimed value
+    // appears four times, including facts about other entities.
+    const carriers = others.filter(i => records[i].module !== world.claimModule && i !== freeIndex);
+    anchorIndex = carriers.find(i => ANCHOR_MODES.includes(records[i].mode)) ?? -1;
+    if (anchorIndex < 0) throw new Error('generator-anchor');
     let remaining = 4 - Number(relevant.value.split(' and ').includes(world.claimValue) || relevant.value.split(' as well as ').includes(world.claimValue));
-    for (const i of others.filter(i => records[i].module !== world.claimModule)) {
+    for (const i of [anchorIndex, ...carriers.filter(i => i !== anchorIndex)]) {
       if (!remaining) break;
       records[i].attribute = world.claimAttribute; records[i].value = world.claimValue; remaining--;
     }
@@ -236,10 +246,13 @@ export function d29WorldV8(seed: string, ordinal: number) {
   //   row's variant is the supports multi-value case;
   // - an anchor: one claimed-value record about another module names the
   //   claimed module in a relative clause, so the claimed module and the
-  //   claimed value share a clause in every row.
+  //   claimed value share a clause in every row. The anchor is always a
+  //   single-clause mode (negated, restricted, scoped, temporal, tentative):
+  //   never a move (`…; now …` / `…; it …`) or an exclusivity tail, so no
+  //   later pronoun or elliptical clause can take the claimed module as its
+  //   antecedent.
   const relevantRecord = records[relevantIndex];
-  const anchor = citation ? others.map(i => records[i]).find(record => record.module !== world.claimModule
-    && record.value === world.claimValue && record.mode !== 'exact') ?? null : null;
+  const anchor = citation ? records[anchorIndex] : null;
   if (citation) {
     const exactRecord = records[modes.indexOf('exact')];
     const surface = counterpartVariant(true, world.claimAttribute, offset);

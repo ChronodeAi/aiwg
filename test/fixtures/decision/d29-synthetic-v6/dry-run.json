@@ -5342,13 +5342,13 @@
   },
   "hardCapUsd": 6,
   "stopAtUsd": 4.8,
-  "preregistrationDigest": "sha256:491a25c2ef7317f7c0849adcd091c33225a4f5882423e7a1f7e3dada92c2a80c",
+  "preregistrationDigest": "sha256:a90d3b942f8809585b25698d38a64088cbdff7820e16116fdd80234e00d70713",
   "analysisDigest": "sha256:a16afa742fe3c2fb78a6087a65060782e8f130b2fd408c64ec2d5ad6ea1cad08",
   "corpusDigest": "sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549",
   "goldDigest": "sha256:cc96a3359b53cab0b20d083fb9fba11ac8fd6d3c7e06c4e943e3b9925536443e",
   "generatorDigest": "sha256:eb11b1ae0c91cb285c8ee2bde5a5cd3d08deace0b03d706185ffc6409f7df6a1",
-  "scorerDigest": "sha256:9261ee4ca0a250eb2c7fe053d635a8cfcfbcdbf7f5baa933f8f18020c05e9b68",
-  "approvalTemplateDigest": "sha256:23d4956926eeff8c675cf45367cb86246c2b9fc12d4013a24b9de09ad51509bf",
+  "scorerDigest": "sha256:d5c4b908f2a5b15598b1a340eb130d1dc860f10b68f15fb7401ad6e40c97b514",
+  "approvalTemplateDigest": "sha256:80546b8e354b3f1da919a03a90f5c2d38cc4c22d0ee3f9e97c8717b15e63ae85",
   "splitDigests": [
     {
       "name": "tuning",

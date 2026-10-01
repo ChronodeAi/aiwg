@@ -20,6 +20,13 @@ vi.mock('../../../src/decision/context-live-qualification.js', async original =>
   return { ...module, assertContextLiveSource: vi.fn(async () => { if (preflight.failSource) throw new Error('dirty'); }),
     assertContextArtifactRoot: vi.fn(async (_source: string, root: string) => { if (root !== preflight.canonical) throw new Error('root'); }) };
 });
+// Test-only allowlist: the shared-collector spend and phase fixtures relabel lamp rows as D29 to exercise
+// D29 study caps. Production code reads the frozen D29_PAID_GENERATOR_IDS; only this file's module graph
+// sees the widened list, and the D29 paid-generator rule itself is tested in d29-synthetic-v8.test.mjs.
+vi.mock('../../../src/decision/heldout/d29-generator-ids.js', async original => {
+  const module = await original<typeof import('../../../src/decision/heldout/d29-generator-ids.js')>();
+  return { ...module, D29_PAID_GENERATOR_IDS: [...module.D29_PAID_GENERATOR_IDS, 'heldout-lamp/v1', 'heldout-lamp-splits/v1'] };
+});
 const dirs: string[] = [];
 afterEach(async () => { preflight.failSource = false; vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('offline-fixture');

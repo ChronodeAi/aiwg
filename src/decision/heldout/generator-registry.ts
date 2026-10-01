@@ -18,7 +18,7 @@ import type { HeldoutRow } from './types.js';
  * Source-controlled only: corpus data cannot register code or supply a path.
  */
 const D29_V8_GENERATOR_SOURCES = ['src/decision/heldout/generator-registry.ts', 'src/decision/heldout/d29-generator-ids.ts',
-  'src/decision/heldout/generators.ts', 'src/decision/compile-cache/identity.ts',
+  'src/decision/heldout/generators.ts', 'src/decision/compile-cache/identity.ts', 'src/security/artifact-trust.ts',
   'src/decision/heldout/d29-v8.ts', 'src/decision/heldout/d29-pools.ts', 'src/decision/heldout/d29-pools-v8.ts',
   'src/decision/heldout/d29-passage-baseline.ts', 'src/decision/heldout/d29-passage-baseline-v2.ts',
   'src/decision/heldout/d29-passage-baseline-v3.ts'] as const;
