@@ -31,7 +31,9 @@ export interface HeldoutCalibrationPhase {
 export interface HeldoutPreregistration {
   schemaVersion: 'decision-heldout-preregistration/v1'; study: Study; frozenAt: string;
   corpusDigest: Digest; studyAnalysisDigest: Digest; scorerDigest: Digest; calibration: HeldoutCalibrationPlan;
-  regeneration?: { reason: string; collectorCommit: string; priorLiveObservations: 0 };
+  regeneration?: { reason: string; collectorCommit: string; priorLiveObservations: 0 }
+  | { reason: string; previousCorpusDigest: Digest; previousPreregistrationDigest: Digest;
+    previousApprovalTemplateDigest: Digest; liveObservationsAtRegeneration: false };
   providerFailurePolicy: { maxRetries: 0 | 1; maximumSliceFailureBps: number; retryOnlyTerminal: true };
   perRequestTokenBound: number; providerOverheadTokens?: number; outputAndHiddenTokenAllowance: number;
   requestTimeoutMs: number; minDispatchIntervalMs: number; sessionLimitMs: number;

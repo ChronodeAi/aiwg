@@ -142,8 +142,9 @@ carry their historical source pins and are not current collection bundles.
 
 V6 adds a registry entry and closed `decision-d29-gold/v6` and
 `decision-d29-score/v6` contracts in `D29Study.v6.schema.json`. The closed
-`decision-d29-analysis/v4` contract pins all three comparator source digests and
-the audit implementation and thresholds. The closed
+`decision-d29-analysis/v4` contract pins all three comparator source digests,
+the audit implementation and thresholds, the v2 native preregistration (paired
+non-inferiority null) and the preregistered absolute GateBinding. The closed
 `decision-d29-shortcut-audit/v3` report records single/pairwise rules,
 structural and claim-relative maxima and the informational model score.
 Review and mapping contracts and the shared staged approval boundary remain
@@ -171,6 +172,10 @@ Public v6 source dry-run: **providerCalls: 0**.
 <!-- D29 dry-run digests:end -->
 
 These pins identify the public demo, not a private holdout or operator approval.
+They predate the gates adoption: the live preregistration, analysis, approval
+and dry-run pins (including `gateBindingDigest`, `gatePackDigests` and
+`gateProviderDigest`) are recorded in
+`test/fixtures/decision/d29-synthetic-v6/` and `d29-synthetic-v7/`.
 Use the newly prepared private corpus's pins, new development review and
 independently anchored manifests before any paid run.
 The preregistration permits only `staged`, with calibration-phase splits exactly
@@ -961,21 +966,37 @@ this approved context refuses scoring. Do not invoke the direct scorer on unveri
 
 ## Gates and interpretation
 
-Native preregistration freezes total N >= 1,500, each slice N >= 100, aggregate
-blocking N >= 500, Wilson/9500 error intervals, false-support and false-ready
-upper caps of 100 bps, and a 300 bps paired Newcombe non-inferiority margin.
-`buildSdlcScreeningReleaseReport` applies these thresholds and preserves
-upstream HOLD/ROLLBACK. The comparator for paired non-inferiority is the pinned
-primary passage baseline. Efficiency is disabled with a null minimum benefit;
-when requested through the report API, existing native net-baseline economics
-checks remain mandatory. A costlier candidate cannot pass an efficiency claim.
+D29 now runs on the [gates capability](gates.md) as its first real GateBinding.
+The preregistered `d29-synthetic-v6-absolute-gates` / `d29-synthetic-v7-absolute-gates`
+bindings (version 1.0.0, HOLD ceiling) pin the shipped
+`aiwg:decision-engine/absolute-screening` pack (version 1.0.0) alongside the
+`aiwg:decision-engine/integrity-ceiling` project floor, the
+`decision.screening/v1` provider source digest, six threshold parameters, the
+ten slices, the blocking slice group, the always-review reference and the
+split/corpus/gold digests. The binding is preregistered inside the analysis
+(`analysis.gateBinding`), so the preregistration analysis digest pins it; the
+dry run reports `gateBindingDigest`, `gatePackDigests` and `gateProviderDigest`
+with zero provider calls. `buildReport` and `score` evaluate the binding through
+`evaluateGates` with the project floors, a holdout seal binding the frozen
+binding digest to the verified access record's first test-access time, and the
+sealed upstream integrity record. A binding frozen at or after holdout access,
+a forged integrity record, or a missing staged-calibration attestation refuses
+or holds without promotion.
+
+Native preregistration (`decision-sdlc-screening-preregistration/v2`, paired
+non-inferiority null) freezes total N >= 1,500, each slice N >= 100, aggregate
+blocking N >= 500 and Wilson/9500 error intervals with false-support and
+false-ready descriptive caps of 100 bps. The null margin skips the paired
+non-inferiority gate entirely: passage baselines v3 (primary comparator), v2
+(same-wording ceiling), v1 and the original baseline are reported diagnostics
+and never gate. `buildSdlcScreeningReleaseReport` still computes the native
+bounds, the paired contrast and net-baseline economics descriptively. Efficiency
+is disabled with a null minimum benefit; when requested through the report API,
+existing native net-baseline economics checks remain mandatory. A costlier
+candidate cannot pass an efficiency claim.
 
 False-support divides erroneous ready/support suggestions by all 1,000 citations.
-False-ready divides erroneous ready suggestions by all 1,500 subjects. Their
-95%/1% caps permit at most three and seven events respectively. External reporting
-also shows conditional errors among non-support/non-ready gold and among
-accepted suggestions, with each denominator, all four support-class
-precision/recall and the full support/readiness confusion tables. The v6 score
+False-ready divides erroneous ready suggestions by all 1,500 subjects. The score
 also includes `groups.slices` and `groups.variants`: separate candidate, primary
 baseline and both secondary baselines' readiness accuracy, joint readiness/support accuracy, conditional
 false-ready rates and support confusion counts. Variant membership is joined
@@ -983,21 +1004,36 @@ from frozen gold; candidate-missing counts stay explicit, and baseline metrics
 cover the full group. Descriptive variant intervals are not extra promotion
 gates and do not imply per-variant statistical power.
 
-External gates require the Wilson accepted-coverage lower bound >= 15%, zero
-false-ready events per blocking slice, and a <= 5% Wilson upper bound in each
-such slice: citation-injection, criterion-injection, missing-artifact and
-failed-test. Zero events in 100 gives an outward-rounded 370 bps upper bound;
-it is not a 1% slice certificate. An all-review policy cannot pass coverage.
-Slice minimums ensure representation, not separate per-slice NI power.
+| Gate (pack) | Kind / scope | Preregistered value | Rationale |
+| --- | --- | --- | --- |
+| support-total | minimum-n, all slices | 1,500 | Full test split present; short support holds. |
+| support-slice | minimum-n, each slice | 100 | Representation per slice; a missing slice holds. |
+| support-blocking | minimum-n, pooled blocking slices | 500 | Aggregate blocking power; partial blocking data holds. |
+| false-ready-upper | Wilson upper, all slices | 100 bps | Absolute false-ready cap (~7 events per 1,500); a regressed rate holds. |
+| false-support-upper | Wilson upper, all slices | 100 bps | Absolute citation false-support cap (~3 events per 1,000); a regressed rate holds. |
+| blocking-false-ready-events | count-max, each blocking slice | 0, onFail ROLLBACK | Any false-ready on a blocking slice rolls back. |
+| blocking-false-ready-upper | Wilson upper, each blocking slice | 500 bps | Per-blocking-slice bound; zero events in 150 gives an outward-rounded ~252 bps upper bound, not a 1% slice certificate. |
+| coverage-lower | Wilson lower, all slices | 1,500 bps | Reviewer-load floor beating the always-review reference rate of 0; an all-review policy cannot pass. |
+| accuracy-floor | Wilson lower, each slice | 5,000 bps | Absolute majority-correct joint-correctness floor per slice; pending live calibration. |
+| calibration-artifact | evidence, staged-calibration-artifact | present and passed | The staged D09 artifact binding for the scored phase; missing evidence holds. |
+| integrity-ceiling (floor) | upstream-ceiling | shipped pack | Compromise rolls back through the ceiling; allowlist problems hold; HOLD/ROLLBACK never upgrade. |
 
-Any missing required observation withholds the native measured report. The
-scorer retains a complete-case descriptive appendix and a paired
-failure-as-error analysis using all 1,500 IDs, with missing candidate outcomes
-counted incorrect. It never invents native distributions or calibrated values
-for failed measurements. Unknown provider dollars remain null. Reservation
-amounts are reported separately in provenance and are not provider charges.
-The top-level study disposition always remains HOLD or ROLLBACK; passing
-statistical diagnostics are not production authorization.
+Any missing required observation withholds the native measured report and holds
+every support gate. The scorer retains a complete-case descriptive appendix and
+a paired failure-as-error analysis using all 1,500 IDs, with missing candidate
+outcomes counted incorrect. It never invents native distributions or calibrated
+values for failed measurements. Unknown provider dollars remain null.
+Reservation amounts are reported separately in provenance and are not provider
+charges. The top-level study disposition always remains HOLD or ROLLBACK under
+the preregistered HOLD ceiling; passing gates are not production authorization.
+
+To approve a future run on these gates, the operator verifies the dry-run
+`gateBindingDigest` equals `artifactDigest` of the approved analysis's
+`gateBinding`, checks the six parameter values and the HOLD ceiling above, and
+quotes the binding digest alongside the preregistration and analysis digests in
+the approval text, for example: `gate binding <GATE_BINDING_DIGEST> capping at
+HOLD with false-ready/false-support <= 100 bps, blocking zero-event rollback,
+coverage >= 15%, accuracy >= 50% and staged-calibration evidence`.
 
 ## Operator workload and resource plan
 
@@ -1054,7 +1090,7 @@ integration; see [the host pass-through boundary](sdlc-screening.md).
 | --- | --- |
 | AC1–7 | Closed questions, receipt mapping and existing runtime authority controls; offline deterministic tests. Real source/validator deployment remains outside this synthetic study. |
 | AC8 | Scorer, native metrics, four-class/conditional extensions, receipt lineage; pending actual Jev observations, compatible calibrated mapping and 165 completed operator assessments. |
-| AC9 | Frozen manifests and executable native/external gates; pending independent operator digest anchoring and actual holdout access log before spend. |
+| AC9 | Frozen manifests, descriptive native bounds and the preregistered absolute GateBinding evaluated through `evaluateGates`; pending independent operator digest anchoring and actual holdout access log before spend. |
 | AC10 | Existing D13 disposable-store restart/idempotency tests; no real gate transition or operator review has been run. |
 | AC11–12 | Default-off collection and byte-identical host outcome pass-through tests; actual programmatic SDLC host integration remains unavailable. |
 | AC13 | Digest-validated integrity and conservative serialization; pending protected real eval-integrity snapshot and measured data. |

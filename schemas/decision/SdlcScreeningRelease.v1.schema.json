@@ -109,7 +109,10 @@
       ],
       "properties": {
         "schemaVersion": {
-          "const": "decision-sdlc-screening-preregistration/v1"
+          "enum": [
+            "decision-sdlc-screening-preregistration/v1",
+            "decision-sdlc-screening-preregistration/v2"
+          ]
         },
         "planId": {
           "type": "string",
@@ -178,7 +181,7 @@
           }
         },
         "qualityNonInferiorityBps": {
-          "$ref": "#/$defs/bps"
+          "$ref": "#/$defs/bpsOrNull"
         },
         "efficiencyClaim": {
           "type": "object",

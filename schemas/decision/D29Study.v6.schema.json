@@ -669,14 +669,13 @@
         "schemaVersion",
         "decision",
         "native",
-        "external",
+        "gateReport",
         "heldout",
         "provenance",
         "reviewerN",
         "missingInputs",
         "completeCase",
         "failureAsError",
-        "proposedStatisticalDisposition",
         "limitations",
         "groups"
       ],
@@ -690,8 +689,8 @@
         "native": {
           "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/native"
         },
-        "external": {
-          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/external"
+        "gateReport": {
+          "$ref": "https://aiwg.io/schemas/gates/GateReport.v1alpha1.schema.json"
         },
         "heldout": {
           "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/heldout"
@@ -835,13 +834,25 @@
           "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/missingInputs"
         },
         "completeCase": {
-          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/completeCase"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "correct"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "correct": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         },
         "failureAsError": {
           "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/failureAsError"
-        },
-        "proposedStatisticalDisposition": {
-          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/proposedStatisticalDisposition"
         },
         "limitations": {
           "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/limitations"
@@ -963,7 +974,7 @@
         "syntheticOnly",
         "splits",
         "native",
-        "external",
+        "gateBinding",
         "calibration",
         "review",
         "missingPolicy",
@@ -1015,32 +1026,10 @@
           "maxItems": 3
         },
         "native": {
-          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningPreregistration.v1.schema.json"
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningPreregistration.v2.schema.json"
         },
-        "external": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "minimumAcceptedCoverageLowerBps",
-            "maximumBlockingSliceFalseReadyEvents",
-            "maximumBlockingSliceFalseReadyUpperBps"
-          ],
-          "properties": {
-            "minimumAcceptedCoverageLowerBps": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 10000
-            },
-            "maximumBlockingSliceFalseReadyEvents": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "maximumBlockingSliceFalseReadyUpperBps": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 10000
-            }
-          }
+        "gateBinding": {
+          "$ref": "https://aiwg.io/schemas/gates/GateBinding.v1alpha1.schema.json"
         },
         "calibration": {
           "type": "object",

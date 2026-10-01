@@ -1546,6 +1546,22 @@
       }
     }
   },
+  "gateBindingDigest": "sha256:6422c4b383011859090871cbd0b68415d99ecf9188f14d096e7e7db1435d3efc",
+  "gatePackDigests": [
+    {
+      "id": "aiwg:decision-engine/absolute-screening",
+      "version": "1.0.0",
+      "digest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295",
+      "resolvedDigest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295"
+    },
+    {
+      "id": "aiwg:decision-engine/integrity-ceiling",
+      "version": "1.0.0",
+      "digest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058",
+      "resolvedDigest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058"
+    }
+  ],
+  "gateProviderDigest": "sha256:737b20f3320b50c7118c01f561cebcc67f113c8cf12f23f4776984c6a3506288",
   "shortcutAudit": {
     "schemaVersion": "decision-d29-shortcut-audit/v4",
     "splits": [
@@ -4004,13 +4020,13 @@
   },
   "hardCapUsd": 6,
   "stopAtUsd": 4.8,
-  "preregistrationDigest": "sha256:b8c548299b02ac0fc1c205b57d785353f6ff0f4b3fe3a6c28db2f07f5c78893a",
-  "analysisDigest": "sha256:a320b4b1e7c0c27483f28fbc8a7a236329444a560059db15419802c1a0814ac4",
-  "corpusDigest": "sha256:5d09130d1327033dc00e7edb6e936fc3388036c3177aaef3ba20ae1a6ae38604",
+  "preregistrationDigest": "sha256:92ba94892f11e039ca6cc48ea832cf00daa886f801d83923e713adf00591a511",
+  "analysisDigest": "sha256:cef372140cb9988853750c9a7925f2ca8dc0b9ab766f7af0c57a21cdbeaac6ad",
+  "corpusDigest": "sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855",
   "goldDigest": "sha256:b175f64db211e5710c3fff11efa479f4797cf631a96913f3a65da366bd70044e",
-  "generatorDigest": "sha256:82ac8ad9c44d6fad71fdf96de8b1286ef196711efbf3b65b55d4616a59478aff",
-  "scorerDigest": "sha256:91fdd3f3aa9ab05b94eda04581af3a728f5f6afe29742e51f0a899f3611b25cc",
-  "approvalTemplateDigest": "sha256:5e0d7e7734a8717ac8a2fb47b6f8bfde36e1ed03331daf1dc315eeec388571ec",
+  "generatorDigest": "sha256:451abcd1960257e9fd4d7186736b4bf5780b6a8105e24269da543415235218d9",
+  "scorerDigest": "sha256:737bb523d95604898f72d14323359046a0dcf870b464acdb29920bf985f84188",
+  "approvalTemplateDigest": "sha256:2d6232a7afd7a4fd37c172c97dfe480cf3bc8b749d205cb6f22f7ed2af0ae56c",
   "splitDigests": [
     {
       "name": "tuning",

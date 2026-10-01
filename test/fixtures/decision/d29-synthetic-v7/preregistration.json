@@ -2,9 +2,9 @@
   "schemaVersion": "decision-heldout-preregistration/v1",
   "study": "D29",
   "frozenAt": "2026-09-30T00:00:00.000Z",
-  "corpusDigest": "sha256:5d09130d1327033dc00e7edb6e936fc3388036c3177aaef3ba20ae1a6ae38604",
-  "studyAnalysisDigest": "sha256:a320b4b1e7c0c27483f28fbc8a7a236329444a560059db15419802c1a0814ac4",
-  "scorerDigest": "sha256:91fdd3f3aa9ab05b94eda04581af3a728f5f6afe29742e51f0a899f3611b25cc",
+  "corpusDigest": "sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855",
+  "studyAnalysisDigest": "sha256:cef372140cb9988853750c9a7925f2ca8dc0b9ab766f7af0c57a21cdbeaac6ad",
+  "scorerDigest": "sha256:737bb523d95604898f72d14323359046a0dcf870b464acdb29920bf985f84188",
   "calibration": {
     "scope": "calibrated",
     "allowedModes": [

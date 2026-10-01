@@ -48,7 +48,12 @@ credential, attack-movement and canary evidence; no live run has been performed.
 The [ensemble, champion/challenger and drift-response contracts](ensembles.md)
 define versioned D17 schemas, pure validators, and an experimental default-off
 offline runtime with injected dispatch, registry and telemetry seams. Live
-qualification and production rollout evidence remain pending.
+qualification and production rollout evidence remain pending. The
+[source-only D17 held-out study](ensemble-heldout-study.md) adds a frozen
+synthetic corpus, priced approval and blind-review forms, and paired report
+scaffolding. Its only scope is uncalibrated diagnostics; D09 qualification,
+calibrated gates and promotion are unavailable. Live observations and calibration
+remain pending.
 
 The [routing pilot](routing-pilot.md) defines D28 default-off,
 capability-constrained route selection among already-eligible model/subagent
@@ -92,6 +97,11 @@ does not add native media support to Jev, and stores receipt/trace references
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.
 
+[D23 offline comparative replay](comparative-replay.md) provides an experimental,
+default-off synthetic report and 44-assessment operator audit scaffold. The
+refreshed report passes its diagnostic gates but remains HOLD; independent
+integrity and human review remain pending.
+
 The experimental, default-off [shared held-out collector](heldout-collector.md)
 provides source-only preparation, bounded synthetic collection and D11 recorded
 ledger verification for D17/D29 study modules. Explicit diagnostic, staged
@@ -114,3 +124,18 @@ approvals and a reviewed D09 artifact. Experimental and default-off, the study
 rejects public seeds through `d29-study-v7` and their pinned corpus digests for
 paid collection. Live observations, calibration qualification and human review
 remain pending.
+
+The experimental, default-off [gates capability phase 1 core](gates.md)
+adds declarative gate packs, a pure offline evaluator with digest-bound
+reports, an exact Clopper-Pearson interval, and canonical-JSON evidence
+digests with a versioned legacy mode. Packs are discoverable (`gate-pack`
+in `aiwg discover`/`aiwg show`), declared per bundle (`gatePacks` manifest
+field, `<bundle>/gate-packs/*.gatepack.yaml|json`) and exercised through
+the offline `aiwg gates validate|evaluate|show|list` CLI; the bundled
+`aiwg:decision-engine/integrity-ceiling` example pack validates. Project
+floors from `aiwg.config` `gates` (including the shipped default
+integrity-ceiling floor) are a required evaluator input; the opt-out is
+explicit and documented. Addon/extension [bundle
+providers](gate-providers.md) load only with an explicit opt-in and a
+verified code digest plus review attestation. D29 is the first migrated study (absolute-screening pack, HOLD ceiling);
+live criteria remain pending.

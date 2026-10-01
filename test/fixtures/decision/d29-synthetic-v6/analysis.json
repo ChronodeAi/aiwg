@@ -2043,7 +2043,7 @@
     "support": 0.8
   },
   "native": {
-    "schemaVersion": "decision-sdlc-screening-preregistration/v1",
+    "schemaVersion": "decision-sdlc-screening-preregistration/v2",
     "planId": "d29-synthetic-v6",
     "frozenAt": "2026-09-30T00:00:00.000Z",
     "heldoutSplitDigest": "sha256:a1b792d1194fc8bc77187d9e24984a03e846a18b5853dcbcbd77f439cc690c35",
@@ -2074,16 +2074,84 @@
       "method": "wilson",
       "levelBps": 9500
     },
-    "qualityNonInferiorityBps": 300,
+    "qualityNonInferiorityBps": null,
     "efficiencyClaim": {
       "enabled": false,
       "minimumPositiveTotalEconomicsUsd": null
     }
   },
-  "external": {
-    "minimumAcceptedCoverageLowerBps": 1500,
-    "maximumBlockingSliceFalseReadyEvents": 0,
-    "maximumBlockingSliceFalseReadyUpperBps": 500
+  "gateBinding": {
+    "apiVersion": "gates.aiwg.io/v1alpha1",
+    "kind": "GateBinding",
+    "metadata": {
+      "id": "d29-synthetic-v6-absolute-gates",
+      "version": "1.0.0",
+      "description": "D29 absolute screening gates for d29-synthetic-v6."
+    },
+    "spec": {
+      "packs": [
+        {
+          "id": "aiwg:decision-engine/absolute-screening",
+          "version": "1.0.0",
+          "digest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295",
+          "resolvedDigest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295"
+        },
+        {
+          "id": "aiwg:decision-engine/integrity-ceiling",
+          "version": "1.0.0",
+          "digest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058",
+          "resolvedDigest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058"
+        }
+      ],
+      "parameters": {
+        "aiwg:decision-engine/absolute-screening.falseReadyMaxBps": 100,
+        "aiwg:decision-engine/absolute-screening.falseSupportMaxBps": 100,
+        "aiwg:decision-engine/absolute-screening.blockingFalseReadyMaxEvents": 0,
+        "aiwg:decision-engine/absolute-screening.blockingFalseReadyMaxUpperBps": 500,
+        "aiwg:decision-engine/absolute-screening.coverageMinLowerBps": 1500,
+        "aiwg:decision-engine/absolute-screening.accuracyMinLowerBps": 5000
+      },
+      "slices": [
+        "citation-supports",
+        "citation-contradicts",
+        "citation-unclear",
+        "citation-does-not-support",
+        "citation-injection",
+        "criterion-ready",
+        "criterion-incomplete",
+        "criterion-injection",
+        "missing-artifact",
+        "failed-test"
+      ],
+      "sliceGroups": {
+        "blocking": [
+          "citation-injection",
+          "criterion-injection",
+          "missing-artifact",
+          "failed-test"
+        ]
+      },
+      "references": [
+        {
+          "name": "always-review",
+          "kind": "always-review"
+        }
+      ],
+      "metricProviders": [
+        {
+          "id": "decision.screening/v1",
+          "version": "1.0.0",
+          "sourceDigest": "sha256:737b20f3320b50c7118c01f561cebcc67f113c8cf12f23f4776984c6a3506288"
+        }
+      ],
+      "ceiling": "HOLD",
+      "registeredAt": "2026-09-30T00:00:00.000Z",
+      "frozenAt": "2026-09-30T00:00:00.000Z",
+      "holdoutAccessedAt": null,
+      "splitDigest": "sha256:a1b792d1194fc8bc77187d9e24984a03e846a18b5853dcbcbd77f439cc690c35",
+      "corpusDigest": "sha256:76186887d4753a8fd011b6abf438f467d19e3b11b15881522fc59d6f0c7cc7d6",
+      "goldDigest": "sha256:cc96a3359b53cab0b20d083fb9fba11ac8fd6d3c7e06c4e943e3b9925536443e"
+    }
   },
   "calibration": {
     "method": "kind-and-safe-semantic-ready-frequency-v2",

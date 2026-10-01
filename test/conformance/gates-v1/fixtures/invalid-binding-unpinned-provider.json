@@ -1,0 +1,47 @@
+{
+  "apiVersion": "gates.aiwg.io/v1alpha1",
+  "kind": "GateBinding",
+  "metadata": {
+    "id": "test-gates/invalid-unpinned",
+    "version": "1.0.0",
+    "description": "Binding that pins only the proportion provider while its gates use four providers."
+  },
+  "spec": {
+    "packs": [
+      {
+        "id": "aiwg:test-gates/conformance-v1",
+        "version": "1.0.0",
+        "digest": "sha256:38a59f70033bf01a7395b776f2b44849254127508ef4b5816a73ed6be450daed",
+        "resolvedDigest": "sha256:38a59f70033bf01a7395b776f2b44849254127508ef4b5816a73ed6be450daed"
+      }
+    ],
+    "parameters": {
+      "aiwg:test-gates/conformance-v1.falseReadyMaxBps": 100,
+      "aiwg:test-gates/conformance-v1.coverageMinBps": 1500,
+      "aiwg:test-gates/conformance-v1.minTotalN": 50,
+      "aiwg:test-gates/conformance-v1.maxBlockingEvents": 0,
+      "aiwg:test-gates/conformance-v1.maxLatency": 500
+    },
+    "slices": [
+      "a",
+      "b"
+    ],
+    "references": [
+      {
+        "name": "always-review",
+        "kind": "always-review"
+      }
+    ],
+    "metricProviders": [
+      {
+        "id": "test.proportion/v1",
+        "version": "1.0.0",
+        "sourceDigest": "sha256:8e533b21822c74d7eded47528bd1c65d4ea2466e157e63fca5093ca0f412e737"
+      }
+    ],
+    "ceiling": "PROMOTE",
+    "registeredAt": "2026-09-01T00:00:00.000Z",
+    "frozenAt": "2026-09-02T00:00:00.000Z",
+    "holdoutAccessedAt": null
+  }
+}

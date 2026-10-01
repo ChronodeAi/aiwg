@@ -5,8 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prepare, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
-  externalReport, validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
-  analysisPlan, approvalTemplate, LABELING_CONVENTIONS } from '../../../tools/decision/studies/d29.mjs';
+  validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
+  analysisPlan, approvalTemplate, LABELING_CONVENTIONS,
+  GATE_PACK_ID, GATE_CEILING_PACK_ID, GATE_BLOCKING_SLICES } from '../../../tools/decision/studies/d29.mjs';
+import { artifactDigest } from '../../../src/decision/validate.js';
+import { loadGatePackFile } from '../../../src/gates/discovery.js';
 import { heldoutDigest, heldoutExecutionDigest, validateHeldoutInputs, validateHeldoutBundle, planHeldoutCollection } from '../../../src/decision/heldout/contract.js';
 import { generateHeldoutRow, d29World, d29WorldV2, D29_VARIANTS, D29_V4_VARIANTS, heldoutGeneratorDigest } from '../../../src/decision/heldout/generators.js';
 import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
@@ -93,8 +96,9 @@ function reportFixture() {
   });
   const heldout = { schemaVersion: 'decision-sdlc-screening-heldout-records/v1', evaluatedAt: '2026-10-02T00:00:00.000Z', splits: analysis.splits, samples };
   const metadata = integrity();
-  const build = () => buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout, integrity: metadata,
-    trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(heldout.evaluatedAt) });
+  const build = (gate = {}) => buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout, integrity: metadata,
+    trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(heldout.evaluatedAt),
+    firstTestAccessAt: '2026-10-01T00:00:00.000Z', ...gate });
   return { analysis, heldout, metadata, build };
 }
 
@@ -271,9 +275,24 @@ describe('D29 frozen synthetic population', () => {
     expect(() => validateStudyArtifact(forgedGold)).toThrow('study-schema');
     const bad = structuredClone(prepared.analysis); bad.native.maximumFalseReadyRateBps = null;
     expect(() => validateStudyArtifact(bad)).toThrow('study-schema');
-    expect(prepared.analysis.native).toMatchObject({ minimumTotalSupport: 1500, minimumSliceSupport: 100, minimumGateBlockingSliceSupport: 500,
+    expect(prepared.analysis.native).toMatchObject({ schemaVersion: 'decision-sdlc-screening-preregistration/v2',
+      minimumTotalSupport: 1500, minimumSliceSupport: 100, minimumGateBlockingSliceSupport: 500,
       maximumFalseSupportRateBps: 100, maximumFalseReadyRateBps: 100, confidenceInterval: { method: 'wilson', levelBps: 9500 },
-      qualityNonInferiorityBps: 300, efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } });
+      qualityNonInferiorityBps: null, efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } });
+    expect(prepared.analysis.gateBinding).toMatchObject({ apiVersion: 'gates.aiwg.io/v1alpha1', kind: 'GateBinding',
+      metadata: { id: 'd29-synthetic-v6-absolute-gates', version: '1.0.0' } });
+    expect(prepared.analysis.gateBinding.spec).toMatchObject({ ceiling: 'HOLD', slices: SLICES,
+      sliceGroups: { blocking: GATE_BLOCKING_SLICES }, references: [{ name: 'always-review', kind: 'always-review' }],
+      parameters: { [`${GATE_PACK_ID}.falseReadyMaxBps`]: 100, [`${GATE_PACK_ID}.falseSupportMaxBps`]: 100,
+        [`${GATE_PACK_ID}.blockingFalseReadyMaxEvents`]: 0, [`${GATE_PACK_ID}.blockingFalseReadyMaxUpperBps`]: 500,
+        [`${GATE_PACK_ID}.coverageMinLowerBps`]: 1500, [`${GATE_PACK_ID}.accuracyMinLowerBps`]: 5000 } });
+    for (const { id, version, digest } of prepared.analysis.gateBinding.spec.packs) {
+      const file = id === GATE_PACK_ID ? 'absolute-screening.gatepack.yaml' : 'integrity-ceiling.gatepack.yaml';
+      expect([GATE_PACK_ID, GATE_CEILING_PACK_ID]).toContain(id);
+      expect(artifactDigest(loadGatePackFile(new URL(`../../../agentic/code/addons/decision-engine/gate-packs/${file}`,
+        import.meta.url).pathname))).toBe(digest);
+      expect(version).toBe('1.0.0');
+    }
     expect(prepared.reviews.assessments).toHaveLength(165);
     expect(new Set(prepared.reviews.assessments.filter(item => item.phase === 'holdout').map(item => item.id)).size).toBe(100);
     expect(prepared.reviews.assessments.filter(item => item.phase === 'delayed-repeat')).toHaveLength(15);
@@ -308,28 +327,36 @@ describe('D29 frozen synthetic population', () => {
   }, 15000);
 });
 
+const CALIBRATED = { id: 'staged-calibration-artifact', passed: true };
 describe('D29 report thresholds', () => {
-  it('AC8/9 computes full four-class confusion and true conditional denominators', () => {
-    const { build } = reportFixture(), result = build();
-    expect(result.native.preregisteredDecision).toBe('pass');
-    expect(result.proposedStatisticalDisposition).toBe('pass');
-    expect(result.decision).toBe('HOLD');
-    expect(result.external.confusion['does-not-support']['does-not-support']).toBe(200);
-    expect(result.external.classes['does-not-support']).toEqual({ n: 200, precisionBps: 10000, recallBps: 10000 });
-    expect(result.external.conditional.falseSupportAmongNonSupport.n).toBe(600);
-    expect(result.external.conditional.falseSupportAmongAcceptedSupport.n).toBe(200);
-    expect(result.external.conditional.falseReadyAmongNonReady.n).toBe(1200);
-    expect(result.external.conditional.falseReadyAmongAcceptedReady.n).toBe(300);
-    expect(result.external.blocking['failed-test'].upperBps).toBe(370);
+  it('AC8/9 evaluates the preregistered binding through evaluateGates and caps promotion at the HOLD ceiling', () => {
+    const f = reportFixture();
+    expect(f.analysis.gateBinding.spec.ceiling).toBe('HOLD');
+    const held = f.build();
+    expect(held.native.preregisteredDecision).toBe('pass');
+    expect(held.decision).toBe('HOLD');
+    expect(held.gateReport.gateEvidence.find(entry => entry.gateId === 'calibration-artifact'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
+    const result = f.build({ calibrationAttestation: CALIBRATED });
+    expect(result.gateReport.decision).toBe('HOLD');
+    expect(result.gateReport.ceilings).toMatchObject({ packOutcome: 'PROMOTE', bindingCeiling: 'HOLD' });
+    expect(result.gateReport.gateEvidence.every(entry => entry.status === 'pass')).toBe(true);
+    expect(result.gateReport.references).toEqual([{ name: 'always-review', kind: 'always-review', observed: false }]);
+    expect(result.gateReport.binding.digest).toBe(artifactDigest(f.analysis.gateBinding));
   });
-  it('V2-07 applies the false-ready gate independently to both injection slices', () => {
+  it('V2-07 rolls back a false-ready event on either injection slice through the absolute gates', () => {
     for (const slice of ['citation-injection', 'criterion-injection']) {
       const f = reportFixture();
       expect(f.analysis.native.gateBlockingSlices).toContain(slice);
-      expect(f.build().external.blocking[slice].events).toBe(0);
+      expect(f.build({ calibrationAttestation: CALIBRATED }).gateReport.gateEvidence
+        .find(entry => entry.gateId === 'blocking-false-ready-events' && entry.slice === slice))
+        .toMatchObject({ status: 'pass' });
       f.heldout.samples.find(row => row.slice === slice).candidate.route = 'ADVISORY_READY';
-      expect(f.build().external.reasons).toContain(`blocking-slice:${slice}`);
-      expect(f.build().proposedStatisticalDisposition).toBe('HOLD');
+      const result = f.build({ calibrationAttestation: CALIBRATED });
+      expect(result.gateReport.gateEvidence.find(entry => entry.gateId === 'blocking-false-ready-events' && entry.slice === slice))
+        .toMatchObject({ status: 'fail', outcome: 'ROLLBACK' });
+      expect(result.gateReport.decision).toBe('ROLLBACK');
+      expect(result.decision).toBe('ROLLBACK');
     }
   });
   it('V2-08 reports separate candidate/baseline counts for every slice and variant, including missing candidates', () => {
@@ -350,7 +377,7 @@ describe('D29 report thresholds', () => {
     const incomplete = groupedMetrics(prepared.corpus, prepared.gold, f.heldout.samples.filter(row => row.id !== changed.id));
     expect(incomplete.slices.find(row => row.slice === changed.slice)).toMatchObject({ n: 200, missingCandidate: 1, candidate: { n: 199 }, baseline: { n: 200 } });
   });
-  it('V4-PRIMARY binds paired non-inferiority to the passage comparator, not the secondary all-review result', () => {
+  it('V4-PRIMARY reports the paired passage contrast without gating on it; absolute gates hold a low-coverage candidate', () => {
     const f = reportFixture(), rows = new Map(prepared.corpus.rows.map(row => [row.id, row]));
     for (const sample of f.heldout.samples) {
       const { baseline, passageBaseline } = rows.get(sample.id).localOutcome;
@@ -358,88 +385,121 @@ describe('D29 report thresholds', () => {
       sample.baseline.correct = (passageBaseline.route === 'ADVISORY_READY') === sample.gold.ready
         && (sample.kind !== 'citation' || passageBaseline.support === sample.gold.support);
     }
-    const result = f.build();
+    const result = f.build({ calibrationAttestation: CALIBRATED });
     expect(result.native.heldout.paired.baselineOnly).toBe(700);
     expect(result.native.heldout.paired.candidateOnly).toBe(100);
-    expect(result.native.reasons).toContain('quality-not-non-inferior');
-    expect(result.proposedStatisticalDisposition).toBe('HOLD');
+    expect(result.native.reasons).not.toContain('quality-not-non-inferior');
+    expect(result.native.reasons).not.toContain('quality-non-inferiority-insufficient');
+    expect(result.gateReport.gateEvidence.find(entry => entry.gateId === 'coverage-lower'))
+      .toMatchObject({ status: 'fail', outcome: 'HOLD' });
+    expect(result.gateReport.ceilings.packOutcome).toBe('HOLD');
+    expect(result.gateReport.decision).toBe('HOLD');
+    expect(result.decision).toBe('HOLD');
     expect(f.analysis.comparators.primary.id).toBe('d29-passage-baseline/v2');
     expect(f.analysis.comparators.secondary.id).toBe('d29-baseline/v1');
   });
   it('AC8/13 withholds malformed native records without dereferencing absent candidate fields', () => {
     const f = reportFixture(); delete f.heldout.samples[0].candidate;
-    const report = f.build();
+    const report = f.build({ calibrationAttestation: CALIBRATED });
     expect(report.native.reasons).toContain('heldout-records-invalid');
-    expect(report.native.heldout).toBeNull(); expect(report.proposedStatisticalDisposition).toBe('HOLD');
+    expect(report.native.heldout).toBeNull();
+    expect(report.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
+    expect(report.gateReport.decision).toBe('HOLD');
+    expect(report.decision).toBe('HOLD');
   });
-  it('AC9 prevents all-review success and applies stricter coverage and per-blocker thresholds', () => {
+  it('AC9 holds all-review coverage below the preregistered floor and applies tightened binding parameters', () => {
     const f = reportFixture(); f.heldout.samples.forEach(row => { row.candidate.route = 'REVIEW'; });
-    expect(f.build().external.reasons).toContain('accepted-coverage-floor');
-    expect(f.build().proposedStatisticalDisposition).toBe('HOLD');
-    const strict = reportFixture(); strict.analysis.external.minimumAcceptedCoverageLowerBps = 3000;
-    expect(strict.build().external.reasons).toContain('accepted-coverage-floor');
-    const failed = strict.heldout.samples.find(row => row.slice === 'failed-test'); failed.candidate.route = 'ADVISORY_READY';
-    expect(strict.build().external.reasons).toContain('blocking-slice:failed-test');
+    const held = f.build({ calibrationAttestation: CALIBRATED });
+    expect(held.gateReport.gateEvidence.find(entry => entry.gateId === 'coverage-lower'))
+      .toMatchObject({ status: 'fail', outcome: 'HOLD' });
+    expect(held.gateReport.decision).toBe('HOLD');
+    expect(held.gateReport.references).toEqual([{ name: 'always-review', kind: 'always-review', observed: false }]);
+    const strict = reportFixture();
+    strict.analysis.gateBinding.spec.parameters[`${GATE_PACK_ID}.blockingFalseReadyMaxUpperBps`] = 150;
+    const tightened = strict.build({ calibrationAttestation: CALIBRATED });
+    expect(tightened.gateReport.gateEvidence
+      .filter(entry => entry.gateId === 'blocking-false-ready-upper' && entry.status === 'fail').map(entry => entry.slice).sort())
+      .toEqual([...GATE_BLOCKING_SLICES].sort());
+    const allowed = reportFixture();
+    allowed.analysis.gateBinding.spec.parameters[`${GATE_PACK_ID}.blockingFalseReadyMaxEvents`] = 1;
+    allowed.heldout.samples.find(row => row.slice === 'failed-test').candidate.route = 'ADVISORY_READY';
+    expect(allowed.build({ calibrationAttestation: CALIBRATED }).gateReport.gateEvidence
+      .find(entry => entry.gateId === 'blocking-false-ready-events' && entry.slice === 'failed-test'))
+      .toMatchObject({ status: 'pass' });
   });
-  it('AC9 uses Wilson upper bounds: four false supports or eight false-ready events fail', () => {
-    for (const [count, support, reason] of [[4, true, 'false-support-bound-exceeded'], [8, false, 'false-ready-bound-exceeded']]) {
+  it('AC9 holds Wilson upper-bound breaches through the absolute gates: four false supports or ten false-ready events', () => {
+    for (const [count, support, gateId] of [[4, true, 'false-support-upper'], [10, false, 'false-ready-upper']]) {
       const f = reportFixture();
       const candidates = f.heldout.samples.filter(row => support ? row.gold.support === 'contradicts' : row.slice === 'criterion-incomplete');
       candidates.slice(0, count).forEach(row => { row.candidate.route = 'ADVISORY_READY'; if (support) row.candidate.support = 'supports'; });
-      expect(f.build().native.reasons).toContain(reason);
-      expect(f.build().proposedStatisticalDisposition).toBe('HOLD');
+      const result = f.build({ calibrationAttestation: CALIBRATED });
+      expect(result.gateReport.gateEvidence.find(entry => entry.gateId === gateId))
+        .toMatchObject({ status: 'fail', outcome: 'HOLD' });
+      expect(result.gateReport.decision).toBe('HOLD');
+      expect(result.decision).toBe('HOLD');
     }
   });
-  it('AC9 enforces CI method/level, per-slice support and paired NI instead of point accuracy', () => {
+  it('AC9 keeps CI method/level and per-slice support natively while paired NI stays a non-gating diagnostic', () => {
     const f = reportFixture();
     f.heldout.samples.filter(row => row.gold.ready).slice(0, 40).forEach(row => { row.candidate.route = 'REVIEW'; });
-    expect(f.build().native.reasons).toContain('quality-not-non-inferior');
-    f.analysis.native.qualityNonInferiorityBps = 1000;
-    expect(f.build().native.reasons).not.toContain('quality-not-non-inferior');
+    const skipped = f.build({ calibrationAttestation: CALIBRATED });
+    expect(skipped.native.reasons).not.toContain('quality-not-non-inferior');
+    expect(skipped.native.reasons).not.toContain('quality-non-inferiority-insufficient');
+    expect(skipped.native.heldout.paired.baselineOnly).toBe(40);
+    f.analysis.native.qualityNonInferiorityBps = 0;
+    expect(f.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('quality-not-non-inferior');
+    f.analysis.native.qualityNonInferiorityBps = null;
     f.analysis.native.confidenceInterval.method = 'exact-binomial';
-    expect(f.build().native.reasons).toContain('confidence-interval-unsupported');
+    expect(f.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('confidence-interval-unsupported');
     const g = reportFixture(); g.analysis.native.maximumFalseSupportRateBps = 39;
-    expect(g.build().native.preregisteredDecision).toBe('pass');
+    expect(g.build({ calibrationAttestation: CALIBRATED }).native.preregisteredDecision).toBe('pass');
     g.analysis.native.confidenceInterval.levelBps = 9900;
-    expect(g.build().native.reasons).toContain('false-support-bound-exceeded');
+    expect(g.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('false-support-bound-exceeded');
     const h = reportFixture(); h.heldout.samples.filter(row => row.slice === 'missing-artifact').forEach(row => { row.slice = 'failed-test'; });
-    expect(h.build().native.reasons).toContain('slice-support-missing:missing-artifact');
-    expect(h.build().external.reasons).toContain('blocking-slice:missing-artifact');
+    expect(h.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('slice-support-missing:missing-artifact');
+    expect(h.build({ calibrationAttestation: CALIBRATED }).gateReport.gateEvidence
+      .find(entry => entry.gateId === 'support-slice' && entry.slice === 'missing-artifact'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
   });
-  it('AC9 independently applies every support minimum and external blocking cap', () => {
+  it('AC9 enforces every support minimum natively and holds short support through the absolute gates', () => {
     for (const [field, value, reason] of [['minimumTotalSupport', 1501, 'minimum-total-support-missing'],
       ['minimumSliceSupport', 101, 'slice-support-missing:criterion-ready'],
       ['minimumGateBlockingSliceSupport', 501, 'gate-blocking-slice-support-missing']]) {
       const f = reportFixture(); f.analysis.native[field] = value;
-      expect(f.build().native.reasons).toContain(reason); expect(f.build().proposedStatisticalDisposition).toBe('HOLD');
+      expect(f.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain(reason);
     }
-    const f = reportFixture(); f.analysis.external.maximumBlockingSliceFalseReadyUpperBps = 369;
-    expect(f.build().external.reasons).toContain('blocking-slice:failed-test');
-    f.analysis.external.maximumBlockingSliceFalseReadyUpperBps = 1000;
-    f.heldout.samples.find(row => row.slice === 'failed-test').candidate.route = 'ADVISORY_READY';
-    expect(f.build().external.reasons).toContain('blocking-slice:failed-test');
-    f.analysis.external.maximumBlockingSliceFalseReadyEvents = 1;
-    expect(f.build().external.reasons).not.toContain('blocking-slice:failed-test');
+    const short = reportFixture();
+    short.heldout.samples = short.heldout.samples.filter(row => row.slice !== 'missing-artifact');
+    const result = short.build({ calibrationAttestation: CALIBRATED });
+    expect(result.gateReport.gateEvidence.find(entry => entry.gateId === 'support-slice' && entry.slice === 'missing-artifact'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
+    expect(result.gateReport.gateEvidence.find(entry => entry.gateId === 'support-blocking'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
+    expect(result.gateReport.decision).toBe('HOLD');
   });
   it('AC13 uses net baseline savings and never upgrades upstream HOLD/ROLLBACK or forged integrity', () => {
     const f = reportFixture(); f.analysis.native.efficiencyClaim = { enabled: true, minimumPositiveTotalEconomicsUsd: 0.1 };
-    expect(f.build().native.reasons).toContain('total-economics-not-positive');
+    expect(f.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('total-economics-not-positive');
     f.heldout.samples.forEach(row => { row.candidate.costUsd = null; });
-    expect(f.build().native.reasons).toContain('total-economics-unknown');
+    expect(f.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('total-economics-unknown');
     for (const decision of ['HOLD', 'ROLLBACK']) {
       const g = reportFixture(); g.metadata.release_gate.decision = decision;
-      expect(g.build().decision).toBe(decision);
-      expect(g.build().proposedStatisticalDisposition).toBe('HOLD');
+      const result = g.build({ calibrationAttestation: CALIBRATED });
+      expect(result.decision).toBe(decision);
+      expect(result.gateReport.decision).toBe(decision);
+      expect(result.gateReport.ceilings.upstreamCeiling).toBe(decision);
     }
     const savings = reportFixture(); savings.heldout.samples.forEach(row => { row.baseline.costUsd = 0.002; });
     savings.analysis.native.efficiencyClaim = { enabled: true, minimumPositiveTotalEconomicsUsd: 1 };
-    expect(savings.build().native.preregisteredDecision).toBe('pass');
+    expect(savings.build({ calibrationAttestation: CALIBRATED }).native.preregisteredDecision).toBe('pass');
     savings.analysis.native.efficiencyClaim.minimumPositiveTotalEconomicsUsd = 2;
-    expect(savings.build().native.reasons).toContain('total-economics-not-positive');
+    expect(savings.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('total-economics-not-positive');
     const g = reportFixture();
     expect(() => buildReport({ analysis: g.analysis, trustedAnalysisDigest: heldoutDigest(g.analysis), heldout: g.heldout,
       integrity: { ...g.metadata, sample_n: 1201 }, trustedIntegrityDigest: heldoutDigest(g.metadata), nowEpochMs: 0 })).toThrow('report-anchor');
-    g.metadata.integrity_mode = 'invented'; expect(g.build().proposedStatisticalDisposition).toBe('HOLD');
+    g.metadata.integrity_mode = 'invented';
+    expect(g.build({ calibrationAttestation: CALIBRATED }).gateReport.decision).toBe('HOLD');
   });
 });
 
@@ -713,9 +773,11 @@ describe('D29 collector integration', () => {
     const fixture = reportFixture();
     const withheld = buildReport({ analysis: fixture.analysis, trustedAnalysisDigest: heldoutDigest(fixture.analysis),
       heldout: null, integrity: fixture.metadata, trustedIntegrityDigest: heldoutDigest(fixture.metadata),
-      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt) });
+      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt), firstTestAccessAt: '2026-10-01T00:00:00.000Z' });
     expect(withheld.native.heldout).toBeNull();
-    expect(withheld.proposedStatisticalDisposition).toBe('HOLD');
+    expect(withheld.gateReport.decision).toBe('HOLD');
+    expect(withheld.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
   }, 15000);
   it('STAGED-04 public scorer withholds the full-corpus report when measured test rows are absent', async () => {
     const analysis = prepared.analysis, mapping = { schemaVersion: 'decision-d29-readiness/v2', model: 'jev-1.13.0',
@@ -759,6 +821,9 @@ describe('D29 collector integration', () => {
     expect(report.heldout).toBeNull(); expect(report.native.heldout).toBeNull();
     expect(report.failureAsError).toMatchObject({ denominator: 1500, missingCandidateErrors: 1300, promotable: false });
     expect(report.completeCase.n).toBe(200); expect(report.decision).toBe('HOLD');
+    expect(report.gateReport.binding.digest).toBe(artifactDigest(analysis.gateBinding));
+    expect(report.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
   }, 15000);
   it('STAGED-04 refuses missing approval context without manufacturing calibration or reviewer agreement', async () => {
     await expect(score({ ...prepared, attempts: [], integrity: integrity() })).rejects.toThrow('approved-calibration');

@@ -321,19 +321,19 @@ derived from the seed digest, so even permitted seed text stays out of model-vis
 state. A bounded identifier still needs synthetic provenance review;
 this constraint does not prove that an identifier has no external meaning.
 The registry includes the fictional `heldout-lamp/v1` and
-`heldout-lamp-splits/v1` examples and the frozen D29 `d29-synthetic/v1`,
-`d29-synthetic/v2` and `d29-synthetic/v3` generators. The current
-[D29 study](d29-heldout-study.md) uses the additive `d29-synthetic/v4` registry
-entry, with 2,000 subjects, ten slices, matched benign annotations and
-identifier distributions, explicit screening-control attempts and corrected
-attribute-cardinality conventions. A source-pinned passage baseline is the
-primary comparator; the original baseline remains a reported secondary.
-The development audit applies fixed single/pairwise cutoffs and reports an
-informational cross-validated tree score. Public development seeds and corpus
-digests through `d29-study-v5` are excluded from paid collection.
+`heldout-lamp-splits/v1` examples, the frozen D29 `d29-synthetic/v1` through
+`d29-synthetic/v7` generators, and the source-controlled `d17-entailment/v1`
+synthetic generator. The current
+[D29 study](d29-heldout-study.md) uses the `d29-synthetic/v7` registry
+entry, with 2,000 subjects, ten slices, disjoint train/test wording pools,
+matched benign annotations and identifier distributions, explicit
+screening-control attempts and corrected attribute-cardinality conventions.
+A source-pinned train-only passage baseline v3 is the primary comparator;
+passage v2 remains the same-wording solvability-ceiling diagnostic, with
+passage v1 and the original baseline secondary. Public development seeds and
+corpus digests through `d29-study-v7` are excluded from paid collection.
 The `single` and `local` row seeds encode each version’s fixed split layout;
-malformed layouts and out-of-range indices fail regeneration. D17 still
-requires a reviewed generator addition and fresh corpus pins.
+malformed layouts and out-of-range indices fail regeneration.
 This proves reproducibility, not held-out quality or correctness of the gold.
 These experimental v1 contracts are tightened in place: earlier unproven rows
 must be regenerated, and approvals/attempt token reservations must be refreshed.
@@ -373,13 +373,16 @@ ensemble members), or zero requests with an observed local outcome (D29 failed
 hard prerequisites). Model output cannot select IDs, ranks or protected status.
 Study modules must implement their own native observation mappings and gold
 oracle; the collector does not fabricate distributions, calibration or reviews.
+The experimental [D17 module](ensemble-heldout-study.md) supplies its synthetic
+generator, source-only preparation, native mapping and statistical report
+scaffolding. Use its preparation command to retain all study-specific artifacts.
 
 The following remain open, with no live acceptance claim:
 
 | Study work | Exact missing input |
 | --- | --- |
-| D17 measured ensemble report, AC7/AC14 | Fresh frozen 1,800-subject generator/oracle, D09 calibration, Jev observations, native eight-metric mapping, preregistered Newcombe/bootstrap/coverage gates, approved extra-cost tradeoff and blind review |
-| D29 measured screening report, AC8/AC9/AC13 | [Study module](d29-heldout-study.md) implements the corpus/oracle, individual question mapping, calibration recipe and report gates. Actual observations, compatible D09 artifact, operator gold/reviewer audit and protected integrity/access records remain missing. |
+| D17 measured ensemble report, AC7/AC14 | Genuine D09 member/aggregate calibration (outside the current uncalibrated-diagnostic scope), actual Jev observations, externally anchored integrity, approved extra-cost tradeoff and blind review; generator, split/threshold freeze, mapper and statistical scaffolding now exist in the [D17 module](ensemble-heldout-study.md) |
+| D29 measured screening report, AC8/AC9/AC13 | [Study module](d29-heldout-study.md) implements the corpus/oracle, individual question mapping, calibration recipe and the absolute GateBinding. Actual observations, compatible D09 artifact, operator gold/reviewer audit and protected integrity/access records remain missing. |
 | Staged D09/test handoff | Sealed real calibration observations, genuinely qualified/registered D09 artifact, protected artifact/seal/approval anchors and human test-phase approval |
 | Any live collection | Priced approval with real evidence references, clean source/CI attestation, canonical root, actual prior spend, resolver pin, synthetic privacy approval and provider terms record |
 | Promotion or production rollout | All native and external thresholds evaluated against complete data, compatible calibration, protected eval-integrity evidence and separate operator approval |

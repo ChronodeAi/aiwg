@@ -33,6 +33,8 @@ const D29_PUBLIC_DEMO_CORPORA = new Set([
   'sha256:53dea2a1008af107c1634c4d35c663fc18a9412a82a662141a50b0c8bbbdaf64',
   'sha256:018912caaae0102593be0196fa86f0721edded8b2bed625b5a32b4df260b8a6e',
   'sha256:6f5834c418810e5d89ce37185b13063ce0c8922220becbb43ae7253678d2da23',
+  'sha256:76186887d4753a8fd011b6abf438f467d19e3b11b15881522fc59d6f0c7cc7d6',
+  'sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855',
 ]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };

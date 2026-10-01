@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { sha256 } from '../compile-cache/identity.js';
 import { d29WorldV6, d29V6RendererDigest } from './d29-v6.js';
 import { d29WorldV7, d29V7RendererDigest, D29_V7_GENERATOR_ID } from './d29-v7.js';
@@ -8,6 +8,7 @@ import { d29PassageBaselineV3 } from './d29-passage-baseline-v3.js';
 import { d29PassageBaselineV2 } from './d29-passage-baseline-v2.js';
 import { d29PassageBaseline } from './d29-passage-baseline.js';
 import type { HeldoutRow } from './types.js';
+import { d17GenerateCase } from '../ensemble-study/corpus.js';
 
 type GeneratedRow = Omit<HeldoutRow, 'provenance'>;
 const D29_SLICES = ['citation-supports', 'citation-contradicts', 'citation-unclear', 'citation-does-not-support',
@@ -583,6 +584,7 @@ function generateD29V6(seed: string, ordinal: number, layout: string): Generated
 
 /** Source-controlled registry only: corpus data cannot register code or supply a module path. */
 function generate(generatorId: string, seed: string): GeneratedRow {
+  if (generatorId === 'd17-entailment/v1') return d17GenerateCase(seed).row;
   if (generatorId === 'heldout-lamp-splits/v1') {
     const match = /^(.*):(tuning|calibration|test)$/.exec(seed);
     if (!match) throw new Error('generator-seed');
@@ -619,7 +621,10 @@ export function reproducibleHeldoutRow(row: HeldoutRow): boolean {
 
 /** The corpus pins the registered implementation, independently of its trusted study/scorer module. */
 export function heldoutGeneratorDigest(): `sha256:${string}` {
-  return sha256({ registry: readFileSync(new URL(import.meta.url), 'utf8'), renderer: d29V6RendererDigest(),
+  const source = new URL('../ensemble-study/corpus.ts', import.meta.url);
+  const implementation = existsSync(source) ? source : new URL('../ensemble-study/corpus.js', import.meta.url);
+  return sha256({ registry: readFileSync(new URL(import.meta.url), 'utf8'),
+    implementation: readFileSync(implementation, 'utf8'), renderer: d29V6RendererDigest(),
     v7renderer: d29V7RendererDigest(), v7pools: d29PoolsDigest() });
 }
 export function heldoutCorpusSeed(rows: readonly HeldoutRow[]): string | null {

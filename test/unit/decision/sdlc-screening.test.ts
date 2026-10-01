@@ -7,6 +7,7 @@ import addFormats from 'ajv-formats';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   DecisionReviewService, FileDecisionReviewStore, type ReviewScope,
+  SDLC_SCREENING_PREREGISTRATION_VERSION_V2,
   applySdlcScreeningToGateOutcome,
   buildSdlcScreeningReleaseReport,
   evaluateSdlcEvidenceScreening,
@@ -209,6 +210,33 @@ describe('SDLC evidence screening (#2622)', () => {
     const release = buildSdlcScreeningReleaseReport({ preregistration: plan, trustedPreregistrationDigest: anchored(plan),
       heldout: heldoutRecords(regressed), integrity: verifiedIntegrity(), nowEpochMs: HELDOUT_NOW });
     expect(release).toMatchObject({ decision: 'HOLD', preregisteredDecision: 'fail', reasons: ['quality-not-non-inferior'] });
+  });
+
+  it('skips paired non-inferiority under a v2 preregistration with a null margin', () => {
+    const v2 = { ...preregistration(), schemaVersion: SDLC_SCREENING_PREREGISTRATION_VERSION_V2, qualityNonInferiorityBps: null };
+    const result = evaluateSdlcScreeningPreregistration(v2, anchored(v2), heldoutRecords(), HELDOUT_NOW);
+    expect(result).toMatchObject({ decision: 'pass', reasons: [] });
+    // The same 20 missed-ready items that fail v1 NI leave v2 without any NI reason.
+    let flipped = 0;
+    const regressed = heldoutSamples().map(sample => sample.gold.ready && flipped < 20 && ++flipped
+      ? { ...sample, candidate: { ...sample.candidate, route: 'REVIEW' as const, readyProbability: 0.1 } } : sample);
+    const gated = evaluateSdlcScreeningPreregistration(v2, anchored(v2), heldoutRecords(regressed), HELDOUT_NOW);
+    expect(gated.reasons).not.toContain('quality-not-non-inferior');
+    expect(gated.reasons).not.toContain('quality-non-inferiority-insufficient');
+    // A numeric v2 margin gates exactly like v1.
+    const numeric = { ...v2, qualityNonInferiorityBps: 300 };
+    expect(evaluateSdlcScreeningPreregistration(numeric, anchored(numeric), heldoutRecords(regressed), HELDOUT_NOW))
+      .toMatchObject({ decision: 'fail', reasons: ['quality-not-non-inferior'] });
+    // Null is v2-only: a v1 preregistration carrying null fails closed.
+    const v1null = preregistration({ qualityNonInferiorityBps: null as unknown as number });
+    expect(() => evaluateSdlcScreeningPreregistration(v1null, anchored(v1null), heldoutRecords(), HELDOUT_NOW)).toThrow('basis points');
+    // The v2 preregistration validates against the v2 schema and rides the release report.
+    const v2schema = schema('SdlcScreeningPreregistration.v2.schema.json');
+    expect(v2schema(v2), JSON.stringify(v2schema.errors)).toBe(true);
+    const release = buildSdlcScreeningReleaseReport({ preregistration: v2, trustedPreregistrationDigest: anchored(v2),
+      heldout: heldoutRecords(), integrity: verifiedIntegrity(), nowEpochMs: HELDOUT_NOW });
+    expect(release).toMatchObject({ preregisteredDecision: 'pass' });
+    expect(schema('SdlcScreeningRelease.v1.schema.json')(release)).toBe(true);
   });
 
   it('never upgrades upstream integrity HOLD or ROLLBACK', () => {

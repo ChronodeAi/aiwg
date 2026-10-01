@@ -112,8 +112,10 @@ dispatched twice by repeated resume.
 The repository includes closed schemas for:
 
 - `SdlcEvidenceScreening.v1` (the request)
-- `SdlcScreeningPreregistration.v1`
-- `SdlcScreeningRelease.v1`
+- `SdlcScreeningPreregistration.v1` (paired non-inferiority required)
+- `SdlcScreeningPreregistration.v2` (paired non-inferiority optional: a null
+  margin skips the NI gate; passage baselines stay reported diagnostics)
+- `SdlcScreeningRelease.v1` (carries a v1 or v2 preregistration)
 
 The preregistration pins the held-out test split digest, the preregistered
 slices and gate-blocking slices, maximum false-support and false-ready rates,
@@ -135,7 +137,8 @@ are bounded by the upper limit of the Wilson score interval
 (`wilsonScoreInterval`) at the preregistered level.
 
 Quality is a paired non-inferiority test against the baseline screening path on
-the same items. An item is correct when the readiness route matches gold and,
+the same items (v1, or v2 with a numeric margin; a null v2 margin skips this
+test and contributes no gate reason). An item is correct when the readiness route matches gold and,
 for citations, the support label also matches gold; each record's
 `baseline.correct` must use the same definition. The paired table
 (both / candidate-only / baseline-only / neither correct) goes to

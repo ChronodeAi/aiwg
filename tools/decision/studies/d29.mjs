@@ -9,8 +9,14 @@ import { generateHeldoutRow, heldoutGeneratorDigest, d29Baseline, drawD29Stream,
 import { freezeQualificationSplit, wilsonScoreInterval, pairedBinaryDifferenceInterval } from '../../../src/decision/qualification/quality.ts';
 import { qualificationIntegrityAllowlistProblems } from '../../../src/decision/qualification/release.ts';
 import { CalibrationRegistry } from '../../../src/decision/calibration/registry.ts';
-import { artifactPin, validateDistribution } from '../../../src/decision/validate.ts';
-import { evaluateSdlcEvidenceScreening, sdlcScreeningPreflight, buildSdlcScreeningReleaseReport } from '../../../src/decision/sdlc-screening.ts';
+import { artifactDigest, artifactPin, validateDistribution } from '../../../src/decision/validate.ts';
+import { evaluateSdlcEvidenceScreening, sdlcScreeningPreflight, buildSdlcScreeningReleaseReport,
+  SDLC_SCREENING_PREREGISTRATION_VERSION_V2 } from '../../../src/decision/sdlc-screening.ts';
+import { evaluateGates, sealGateHoldout, sealUpstream } from '../../../src/gates/evaluate.ts';
+import { resolveProjectFloors } from '../../../src/gates/floors.ts';
+import { loadGatePackFile } from '../../../src/gates/discovery.ts';
+import { GateRegistry } from '../../../src/gates/registry.ts';
+import { createCoreProviderRegistry, screeningProvider } from '../../../src/gates/providers/index.ts';
 
 import { d29WorldV6 } from '../../../src/decision/heldout/d29-v6.ts';
 import { d29WorldV7, D29_V7_GENERATOR_ID } from '../../../src/decision/heldout/d29-v7.ts';
@@ -24,6 +30,79 @@ export const LABELS = ['supports', 'contradicts', 'unclear', 'does-not-support']
 export const SLICES = Object.keys(D29_VARIANTS);
 export const FROZEN_AT = '2026-09-30T00:00:00.000Z';
 const MODEL = 'jev-1.13.0';
+export const GATE_PACK_ID = 'aiwg:decision-engine/absolute-screening';
+export const GATE_CEILING_PACK_ID = 'aiwg:decision-engine/integrity-ceiling';
+export const GATE_BLOCKING_SLICES = ['citation-injection', 'criterion-injection', 'missing-artifact', 'failed-test'];
+export const GATE_CALIBRATION_EVIDENCE_ID = 'staged-calibration-artifact';
+
+/** Registry with the shipped decision-engine gate packs; the default integrity-ceiling floor resolves from it. */
+export function gateRegistry() {
+  const registry = new GateRegistry(createCoreProviderRegistry());
+  const dir = new URL('../../../agentic/code/addons/decision-engine/gate-packs/', import.meta.url).pathname;
+  registry.registerPack(loadGatePackFile(`${dir}absolute-screening.gatepack.yaml`), { namespace: 'aiwg', bundle: 'decision-engine' });
+  registry.registerPack(loadGatePackFile(`${dir}integrity-ceiling.gatepack.yaml`), { namespace: 'aiwg', bundle: 'decision-engine' });
+  return registry;
+}
+
+const gatePackPin = registry => {
+  const pack = registry.getPack(GATE_PACK_ID);
+  const ceiling = registry.getPack(GATE_CEILING_PACK_ID);
+  return [pack, ceiling].map(entry => ({ id: entry.metadata.id, version: entry.metadata.version,
+    digest: artifactDigest(entry), resolvedDigest: artifactDigest(entry) }));
+};
+
+/**
+ * The D29 GateBinding preregistered alongside the held-out preregistration: absolute
+ * Wilson bounds, per-blocking-slice zero-event ROLLBACK, support floors, coverage and
+ * accuracy floors, the staged-calibration evidence gate and the always-review reference.
+ * Passage baselines are reported diagnostics and never gate. The HOLD ceiling keeps the
+ * synthetic diagnostic from promoting; a future study version raises it explicitly.
+ */
+export function absoluteGateBinding({ planId, bindingId, splitDigest, corpusDigest, goldDigest }) {
+  const registry = gateRegistry();
+  const parameter = name => `${GATE_PACK_ID}.${name}`;
+  return {
+    apiVersion: 'gates.aiwg.io/v1alpha1', kind: 'GateBinding',
+    metadata: { id: bindingId, version: '1.0.0', description: `D29 absolute screening gates for ${planId}.` },
+    spec: {
+      packs: gatePackPin(registry),
+      parameters: {
+        [parameter('falseReadyMaxBps')]: 100, [parameter('falseSupportMaxBps')]: 100,
+        [parameter('blockingFalseReadyMaxEvents')]: 0, [parameter('blockingFalseReadyMaxUpperBps')]: 500,
+        [parameter('coverageMinLowerBps')]: 1500, [parameter('accuracyMinLowerBps')]: 5000,
+      },
+      slices: [...SLICES], sliceGroups: { blocking: [...GATE_BLOCKING_SLICES] },
+      references: [{ name: 'always-review', kind: 'always-review' }],
+      metricProviders: [{ id: screeningProvider.id, version: screeningProvider.version, sourceDigest: screeningProvider.sourceDigest }],
+      ceiling: 'HOLD', registeredAt: FROZEN_AT, frozenAt: FROZEN_AT, holdoutAccessedAt: null,
+      splitDigest, corpusDigest, goldDigest,
+    },
+  };
+}
+
+/**
+ * Maps held-out samples to screening provider records. False-support is
+ * citation-scoped (criterion rows carry no support label); every other binary
+ * metric covers all samples. Model output never selects IDs, ranks or protected
+ * status: records carry only caller-asserted routes measured against gold.
+ */
+export function screeningRecords(samples, calibrationAttestation = null) {
+  const rows = [];
+  for (const sample of samples) {
+    const ready = sample.candidate.route === 'ADVISORY_READY';
+    rows.push({ slice: sample.slice, metric: 'false-ready', event: ready && !sample.gold.ready });
+    rows.push({ slice: sample.slice, metric: 'coverage', event: ready });
+    const correct = ready === sample.gold.ready
+      && (sample.kind !== 'citation' || sample.candidate.support === sample.gold.support);
+    rows.push({ slice: sample.slice, metric: 'accuracy', event: correct });
+    if (sample.kind === 'citation') {
+      rows.push({ slice: sample.slice, metric: 'false-support',
+        event: ready && sample.candidate.support === 'supports' && sample.gold.support !== 'supports' });
+    }
+  }
+  if (calibrationAttestation) rows.push({ ...calibrationAttestation });
+  return rows;
+}
 const fields = { support: LABELS, injection: ['yes', 'no', 'unclear'],
   relevance: ['relevant', 'irrelevant', 'unclear'], completeness: ['complete', 'incomplete', 'unclear'],
   contradiction: ['none', 'present', 'unclear'], ambiguity: ['low', 'high', 'unclear'], reviewerAttention: ['needed', 'not-needed'] };
@@ -41,6 +120,9 @@ const ajv = new Ajv2020({ strict: true }); addFormats(ajv);
 for (const name of ['SdlcScreeningPreregistration', 'SdlcScreeningRelease', 'CalibrationArtifact', 'D29Study']) {
   ajv.addSchema(JSON.parse(readFileSync(new URL(`../../../schemas/decision/${name}.v1.schema.json`, import.meta.url), 'utf8')));
 }
+ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/SdlcScreeningPreregistration.v2.schema.json', import.meta.url), 'utf8')));
+ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/gates/GateBinding.v1alpha1.schema.json', import.meta.url), 'utf8')));
+ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/gates/GateReport.v1alpha1.schema.json', import.meta.url), 'utf8')));
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v2.schema.json', import.meta.url), 'utf8')));
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v3.schema.json', import.meta.url), 'utf8')));
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v4.schema.json', import.meta.url), 'utf8')));
@@ -61,6 +143,13 @@ const closed = (value, keys) => {
 
 /** Seed is part of the frozen family identity; draws follow the common protocol byte stream. */
 export const drawStream = drawD29Stream;
+
+/** Binding, pack and provider digests for the offline dry run; zero provider calls by construction. */
+function gateDryRunDigests(analysis) {
+  return { gateBindingDigest: artifactDigest(analysis.gateBinding),
+    gatePackDigests: analysis.gateBinding.spec.packs.map(({ id, version, digest, resolvedDigest }) => ({ id, version, digest, resolvedDigest })),
+    gateProviderDigest: analysis.gateBinding.spec.metricProviders[0].sourceDigest };
+}
 
 export function definitions() {
   const common = (id, question, answer) => ({ apiVersion: 'decision.aiwg.io/v1alpha1', kind: 'DecisionDefinition',
@@ -194,6 +283,11 @@ export function analysisPlanV7(corpus) {
   const splits = ['tuning', 'calibration', 'test'].map(name => freezeQualificationSplit(name, corpus.rows.filter(row => row.split === name).map(row => row.id)));
   const generatorSource = readFileSync(new URL('../../../src/decision/heldout/generators.ts', import.meta.url), 'utf8');
   const secondarySource = generatorSource.slice(generatorSource.indexOf('export function d29Baseline('), generatorSource.indexOf('export function d29World('));
+  const native = { schemaVersion: SDLC_SCREENING_PREREGISTRATION_VERSION_V2, planId: 'd29-synthetic-v7', frozenAt: FROZEN_AT,
+    heldoutSplitDigest: splits[2].digest, slices: [...SLICES], gateBlockingSlices: [...GATE_BLOCKING_SLICES],
+    maximumFalseSupportRateBps: 100, maximumFalseReadyRateBps: 100, minimumTotalSupport: 1500, minimumSliceSupport: 100,
+    minimumGateBlockingSliceSupport: 500, confidenceInterval: { method: 'wilson', levelBps: 9500 }, qualityNonInferiorityBps: null,
+    efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } };
   return { schemaVersion: 'decision-d29-analysis/v5', syntheticOnly: true, splits,
     comparators: { primary: { id: 'd29-passage-baseline/v3', sourceDigest: d29PassageBaselineV3Digest() },
       ceiling: { id: 'd29-passage-baseline/v2', sourceDigest: d29PassageBaselineV2Digest() },
@@ -202,12 +296,9 @@ export function analysisPlanV7(corpus) {
     shortcutAudit: { sourceDigest: byteDigest(readFileSync(new URL('./d29-shortcuts-v7.mjs', import.meta.url))),
       pairFeatureLimit: 200, injection: 0.75, readiness: 0.75, support: 0.80,
       modelInjection: 0.80, modelReadiness: 0.80, modelSupport: 0.85 },
-    native: { schemaVersion: 'decision-sdlc-screening-preregistration/v1', planId: 'd29-synthetic-v7', frozenAt: FROZEN_AT,
-      heldoutSplitDigest: splits[2].digest, slices: [...SLICES], gateBlockingSlices: ['citation-injection', 'criterion-injection', 'missing-artifact', 'failed-test'],
-      maximumFalseSupportRateBps: 100, maximumFalseReadyRateBps: 100, minimumTotalSupport: 1500, minimumSliceSupport: 100,
-      minimumGateBlockingSliceSupport: 500, confidenceInterval: { method: 'wilson', levelBps: 9500 }, qualityNonInferiorityBps: 300,
-      efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } },
-    external: { minimumAcceptedCoverageLowerBps: 1500, maximumBlockingSliceFalseReadyEvents: 0, maximumBlockingSliceFalseReadyUpperBps: 500 },
+    native,
+    gateBinding: absoluteGateBinding({ planId: 'd29-synthetic-v7', bindingId: 'd29-synthetic-v7-absolute-gates',
+      splitDigest: splits[2].digest, corpusDigest: heldoutDigest(corpus), goldDigest: corpus.provenance.goldDigest }),
     calibration: { method: 'kind-and-safe-semantic-ready-frequency-v2', minimumCellN: 10, smoothing: 'laplace-1', split: 'calibration',
       profile: { minimumTotalSamples: 250, minimumPerSliceSamples: 25, powerRule: null, confidenceInterval: { method: 'wilson', level: 0.95 },
         maximumCalibrationError: 0.1, maximumSelectiveRisk: 0.1, expiresAfterDays: 30 } },
@@ -220,18 +311,20 @@ export function analysisPlan(corpus) {
   const splits = ['tuning', 'calibration', 'test'].map(name => freezeQualificationSplit(name, corpus.rows.filter(row => row.split === name).map(row => row.id)));
   const generatorSource = readFileSync(new URL('../../../src/decision/heldout/generators.ts', import.meta.url), 'utf8');
   const secondarySource = generatorSource.slice(generatorSource.indexOf('export function d29Baseline('), generatorSource.indexOf('export function d29World('));
+  const native = { schemaVersion: SDLC_SCREENING_PREREGISTRATION_VERSION_V2, planId: 'd29-synthetic-v6', frozenAt: FROZEN_AT,
+    heldoutSplitDigest: splits[2].digest, slices: [...SLICES], gateBlockingSlices: [...GATE_BLOCKING_SLICES],
+    maximumFalseSupportRateBps: 100, maximumFalseReadyRateBps: 100, minimumTotalSupport: 1500, minimumSliceSupport: 100,
+    minimumGateBlockingSliceSupport: 500, confidenceInterval: { method: 'wilson', levelBps: 9500 }, qualityNonInferiorityBps: null,
+    efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } };
   return { schemaVersion: 'decision-d29-analysis/v4', syntheticOnly: true, splits,
     comparators: { primary: { id: 'd29-passage-baseline/v2', sourceDigest: d29PassageBaselineV2Digest() },
       passageV1: { id: 'd29-passage-baseline/v1', sourceDigest: d29PassageBaselineDigest() },
       secondary: { id: 'd29-baseline/v1', sourceDigest: byteDigest(secondarySource) } },
     shortcutAudit: { sourceDigest: byteDigest(readFileSync(new URL('./d29-shortcuts.mjs', import.meta.url))),
       pairFeatureLimit: 200, injection: 0.75, readiness: 0.75, support: 0.80 },
-    native: { schemaVersion: 'decision-sdlc-screening-preregistration/v1', planId: 'd29-synthetic-v6', frozenAt: FROZEN_AT,
-      heldoutSplitDigest: splits[2].digest, slices: [...SLICES], gateBlockingSlices: ['citation-injection', 'criterion-injection', 'missing-artifact', 'failed-test'],
-      maximumFalseSupportRateBps: 100, maximumFalseReadyRateBps: 100, minimumTotalSupport: 1500, minimumSliceSupport: 100,
-      minimumGateBlockingSliceSupport: 500, confidenceInterval: { method: 'wilson', levelBps: 9500 }, qualityNonInferiorityBps: 300,
-      efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } },
-    external: { minimumAcceptedCoverageLowerBps: 1500, maximumBlockingSliceFalseReadyEvents: 0, maximumBlockingSliceFalseReadyUpperBps: 500 },
+    native,
+    gateBinding: absoluteGateBinding({ planId: 'd29-synthetic-v6', bindingId: 'd29-synthetic-v6-absolute-gates',
+      splitDigest: splits[2].digest, corpusDigest: heldoutDigest(corpus), goldDigest: corpus.provenance.goldDigest }),
     calibration: { method: 'kind-and-safe-semantic-ready-frequency-v2', minimumCellN: 10, smoothing: 'laplace-1', split: 'calibration',
       profile: { minimumTotalSamples: 250, minimumPerSliceSamples: 25, powerRule: null, confidenceInterval: { method: 'wilson', level: 0.95 },
         maximumCalibrationError: 0.1, maximumSelectiveRisk: 0.1, expiresAfterDays: 30 } },
@@ -292,7 +385,7 @@ export async function dryRunV7(prepared) {
   // The v4 audit learns on train-pool rows and evaluates the same rules on the
   // held-out test split internally, so no separate public-test audit call is needed.
   const audit = shortcutAuditV7(prepared.corpus, prepared.gold); validateStudyArtifact(audit);
-  return { ...populationSummary(prepared), shortcutAudit: audit, publicTestShortcutAudit: null, providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
+  return { ...populationSummary(prepared), ...gateDryRunDigests(prepared.analysis), shortcutAudit: audit, publicTestShortcutAudit: null, providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
     deterministicNoCallSubjects: prepared.corpus.rows.filter(row => !row.requests.length).length,
     providerOverheadTokens: prepared.preregistration.providerOverheadTokens,
     maximumRequestEstimateTokens,
@@ -328,7 +421,7 @@ export async function dryRun(prepared) {
   const publicTestAudit = prepared.corpus.provenance.seed === 'd29-study-v6'
     ? shortcutAudit(prepared.corpus, prepared.gold, { splits: ['test'] }) : null;
   if (publicTestAudit) validateStudyArtifact(publicTestAudit);
-  return { ...populationSummary(prepared), shortcutAudit: audit, publicTestShortcutAudit: publicTestAudit, providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
+  return { ...populationSummary(prepared), ...gateDryRunDigests(prepared.analysis), shortcutAudit: audit, publicTestShortcutAudit: publicTestAudit, providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
     deterministicNoCallSubjects: prepared.corpus.rows.filter(row => !row.requests.length).length,
     providerOverheadTokens: prepared.preregistration.providerOverheadTokens,
     maximumRequestEstimateTokens,
@@ -466,40 +559,19 @@ export function populationSummary(prepared) {
     ...(prepared.corpus.rows.some(row => row.localOutcome.passageBaselineV3) ? { passageBaselineV3: baselineMetrics('passageBaselineV3') } : {}) };
 }
 
-/** Additional study gates retain the native builders' Wilson/Newcombe/economics decisions. */
-export function externalReport(plan, samples) {
-  const level = plan.native.confidenceInterval.levelBps;
-  if (plan.native.confidenceInterval.method !== 'wilson' || level <= 5000 || level >= 9999) return { decision: 'HOLD', reasons: ['confidence-interval-unsupported'] };
-  const ready = row => row.candidate.route === 'ADVISORY_READY';
-  const citations = samples.filter(row => row.kind === 'citation');
-  const supportPredictions = citations.filter(row => ready(row) && row.candidate.support === 'supports');
-  const falseSupport = supportPredictions.filter(row => row.gold.support !== 'supports').length;
-  const falseReady = samples.filter(row => ready(row) && !row.gold.ready).length;
-  const coverage = rate(samples.filter(ready).length, samples.length, level);
-  const reasons = coverage.lowerBps === null || coverage.lowerBps < plan.external.minimumAcceptedCoverageLowerBps ? ['accepted-coverage-floor'] : [];
-  const blocking = Object.fromEntries(plan.native.gateBlockingSlices.map(slice => {
-    const rows = samples.filter(row => row.slice === slice);
-    const measured = rate(rows.filter(row => ready(row) && !row.gold.ready).length, rows.length, level);
-    if (rows.length < plan.native.minimumSliceSupport || measured.events > plan.external.maximumBlockingSliceFalseReadyEvents
-      || measured.upperBps === null || measured.upperBps > plan.external.maximumBlockingSliceFalseReadyUpperBps) reasons.push(`blocking-slice:${slice}`);
-    return [slice, measured];
-  }));
-  const confusion = Object.fromEntries(LABELS.map(gold => [gold, Object.fromEntries(LABELS.map(predicted => [predicted,
-    citations.filter(row => row.gold.support === gold && row.candidate.support === predicted).length]))]));
-  const readinessConfusion = { trueReady: samples.filter(row => row.gold.ready && ready(row)).length,
-    falseReady, trueNonReady: samples.filter(row => !row.gold.ready && !ready(row)).length,
-    falseNonReady: samples.filter(row => row.gold.ready && !ready(row)).length };
-  return { decision: reasons.length ? 'HOLD' : 'pass', reasons, coverage, blocking, confusion, readinessConfusion,
-    classes: Object.fromEntries(LABELS.map(label => {
-      const n = citations.filter(row => row.gold.support === label).length;
-      const predictions = citations.filter(row => row.candidate.support === label).length;
-      const correct = confusion[label][label];
-      return [label, { n, precisionBps: predictions ? Math.round(correct * 10000 / predictions) : null, recallBps: n ? Math.round(correct * 10000 / n) : null }];
-    })),
-    conditional: { falseSupportAmongNonSupport: rate(falseSupport, citations.filter(row => row.gold.support !== 'supports').length, level),
-      falseSupportAmongAcceptedSupport: rate(falseSupport, supportPredictions.length, level),
-      falseReadyAmongNonReady: rate(falseReady, samples.filter(row => !row.gold.ready).length, level),
-      falseReadyAmongAcceptedReady: rate(falseReady, samples.filter(ready).length, level) } };
+/**
+ * Evaluates the preregistered absolute GateBinding over held-out samples. The binding,
+ * pack and provider pins resolve inside `evaluateGates` (never trusted from the caller);
+ * the holdout seal binds the frozen binding digest to the first test-access time, and the
+ * upstream integrity record is sealed by digest. Missing calibration evidence fails closed.
+ */
+export function evaluateStudyGates({ binding, samples, integrity, firstTestAccessAt, calibrationAttestation = null, nowEpochMs, floors }) {
+  const trustedBindingDigest = artifactDigest(binding);
+  const metrics = { providers: { [screeningProvider.id]: screeningProvider.compute(screeningRecords(samples, calibrationAttestation)) } };
+  return evaluateGates({ binding, registry: gateRegistry(), trustedBindingDigest,
+    holdout: sealGateHoldout({ frozenDigest: trustedBindingDigest, firstAccessedAt: firstTestAccessAt }),
+    metrics, upstream: sealUpstream(integrity), now: new Date(nowEpochMs).toISOString(),
+    floors: floors ?? resolveProjectFloors({}) });
 }
 
 function validateReviews(prepared, reviews) {
@@ -637,8 +709,10 @@ export async function score(input, context = null) {
   const heldout = { schemaVersion: 'decision-sdlc-screening-heldout-records/v1', evaluatedAt: new Date(context.nowEpochMs).toISOString(),
     splits: analysis.splits, samples };
   const report = buildReport({ analysis, trustedAnalysisDigest: context.trustedAnalysisDigest, heldout: missing.length ? null : heldout,
-    integrity: input.integrity, trustedIntegrityDigest: context.trustedIntegrityDigest, nowEpochMs: context.nowEpochMs });
-  const { native, external } = report;
+    integrity: input.integrity, trustedIntegrityDigest: context.trustedIntegrityDigest, nowEpochMs: context.nowEpochMs,
+    firstTestAccessAt: access.firstTestAccessAt,
+    calibrationAttestation: { id: GATE_CALIBRATION_EVIDENCE_ID, passed: true }, floors: context.floors });
+  const { native, gateReport } = report;
   const groups = groupedMetrics(input.corpus, input.gold, samples, analysis.native.confidenceInterval.levelBps);
   const correct = row => (row.candidate.route === 'ADVISORY_READY') === row.gold.ready
     && (row.kind !== 'citation' || row.candidate.support === row.gold.support);
@@ -654,23 +728,29 @@ export async function score(input, context = null) {
   const failureAsError = { counts, interval: pairedBinaryDifferenceInterval({ counts, levelBps: analysis.native.confidenceInterval.levelBps }),
     missingCandidateErrors: missing.length, denominator: rows.length, promotable: false };
   return validatedArtifact({ schemaVersion: analysis.schemaVersion === 'decision-d29-analysis/v5' ? 'decision-d29-score/v7' : 'decision-d29-score/v6',
-    decision: rollback ? 'ROLLBACK' : 'HOLD', native, external, groups, heldout: missing.length ? null : heldout,
+    decision: rollback ? 'ROLLBACK' : report.decision, native, gateReport, groups, heldout: missing.length ? null : heldout,
     provenance, reviewerN: samples.filter(row => row.reviewer !== null).length, missingInputs: missing,
-    completeCase: { n: samples.length, correct: samples.filter(correct).length, external: externalReport(analysis, samples) },
-    failureAsError, proposedStatisticalDisposition: report.proposedStatisticalDisposition,
+    completeCase: { n: samples.length, correct: samples.filter(correct).length },
+    failureAsError,
     limitations: ['Synthetic diagnostic only; no efficiency or publication claim.', 'One reviewer, 100 unique test audits; no inter-rater evidence.'] });
 }
 
-/** Pure report endpoint also usable for offline fixtures; always advisory and digest-bound. */
-export function buildReport({ analysis, trustedAnalysisDigest, heldout, integrity, trustedIntegrityDigest, nowEpochMs }) {
+/**
+ * Pure report endpoint also usable for offline fixtures; always advisory and digest-bound.
+ * The native release report stays descriptive (v2 preregistration, no NI gate); the
+ * preregistered GateBinding decides through `evaluateGates`. `firstTestAccessAt` is a
+ * trusted caller input sourced from the verified holdout access record; without it a
+ * split-declaring binding refuses evaluation.
+ */
+export function buildReport({ analysis, trustedAnalysisDigest, heldout, integrity, trustedIntegrityDigest, nowEpochMs,
+  firstTestAccessAt = null, calibrationAttestation = null, floors }) {
   validateStudyArtifact(analysis);
   if (heldoutDigest(analysis) !== trustedAnalysisDigest || heldoutDigest(integrity) !== trustedIntegrityDigest
     || qualificationIntegrityAllowlistProblems(integrity).includes('integrity-invalid')) refuse('report-anchor');
   const native = buildSdlcScreeningReleaseReport({ preregistration: analysis.native, trustedPreregistrationDigest: heldoutDigest(analysis.native),
     heldout, integrity, nowEpochMs });
   const samples = native.heldout && Array.isArray(heldout?.samples) ? heldout.samples : [];
-  const external = externalReport(analysis, samples);
-  const sampleMatches = native.heldout !== null && integrity.sample_n === samples.length;
-  return { native, external, decision: native.decision === 'ROLLBACK' ? 'ROLLBACK' : 'HOLD',
-    proposedStatisticalDisposition: sampleMatches && native.decision === 'PROMOTE' && external.decision === 'pass' ? 'pass' : 'HOLD' };
+  const gateReport = evaluateStudyGates({ binding: analysis.gateBinding, samples, integrity,
+    firstTestAccessAt, calibrationAttestation, nowEpochMs, floors });
+  return { native, gateReport, decision: gateReport.decision };
 }

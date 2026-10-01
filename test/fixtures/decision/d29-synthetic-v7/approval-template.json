@@ -14,8 +14,8 @@
   "region": null,
   "credentialRef": null,
   "credentialResolverDigest": null,
-  "corpusDigest": "sha256:5d09130d1327033dc00e7edb6e936fc3388036c3177aaef3ba20ae1a6ae38604",
-  "preregistrationDigest": "sha256:b8c548299b02ac0fc1c205b57d785353f6ff0f4b3fe3a6c28db2f07f5c78893a",
+  "corpusDigest": "sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855",
+  "preregistrationDigest": "sha256:92ba94892f11e039ca6cc48ea832cf00daa886f801d83923e713adf00591a511",
   "executionDigest": null,
   "calibration": {
     "mode": "staged",
