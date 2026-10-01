@@ -97,9 +97,34 @@ does not add native media support to Jev, and stores receipt/trace references
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.
 
+[D23 offline comparative replay](comparative-replay.md) provides an experimental,
+default-off synthetic report and 44-assessment operator audit scaffold. The
+refreshed report passes its diagnostic gates but remains HOLD; independent
+integrity and human review remain pending.
+
 The experimental, default-off [shared held-out collector](heldout-collector.md)
 provides source-only preparation, bounded synthetic collection and D11 recorded
 ledger verification for D17/D29 study modules. Explicit diagnostic, staged
 calibration/test, and pre-existing artifact bindings keep collection scope and
 scorer identity separate from D09 qualification. Live studies, calibration, human
 review and study-specific statistical reports remain pending.
+
+The experimental, default-off [gates capability phase 1 core](gates.md)
+adds declarative gate packs, a pure offline evaluator with digest-bound
+reports, an exact Clopper-Pearson interval, and canonical-JSON evidence
+digests with a versioned legacy mode. Packs are discoverable (`gate-pack`
+in `aiwg discover`/`aiwg show`), declared per bundle (`gatePacks` manifest
+field, `<bundle>/gate-packs/*.gatepack.yaml|json`) and exercised through
+the offline `aiwg gates validate|evaluate|show|list` CLI; the bundled
+`aiwg:decision-engine/integrity-ceiling` example pack validates. Project
+floors from `aiwg.config` `gates` (including the shipped default
+integrity-ceiling floor) are a required evaluator input; the opt-out is
+explicit and documented. There is no addon provider loading and no migrated
+
+digests with a versioned legacy mode. Project floors from `aiwg.config`
+`gates` (including the default integrity-ceiling floor) are enforced only
+when the caller passes them as trusted registry/evaluator input; without
+that input behavior is unchanged. Addon/extension [bundle
+providers](gate-providers.md) load only with an explicit opt-in and a
+verified code digest plus review attestation. There is no CLI and no migrated
+study; live criteria remain pending.

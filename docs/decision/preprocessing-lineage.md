@@ -115,7 +115,11 @@ and before receipt acquisition, credential resolution and adapter dispatch:
 - **Allowed**: the request continues on the normal projection and dispatch
   path.
 
-The verdict is recorded as `preprocessingLineage.dispatchGate`. A result cache
+The verdict is recorded as `preprocessingLineage.dispatchGate`. The gate and
+the recorded lineage share one immutable snapshot of the host-supplied
+`preprocessingLineage` and `preprocessingVerification` taken before the result
+is constructed, so caller-owned mutation during evaluation cannot change the
+verdict or the recorded lineage. A result cache
 is refused for requests that carry lineage, because a cache hit would bypass the
 gate. Input bindings come only from the host's `preprocessingVerification`. The
 lineage carries no pointer or text digest, and the evaluator never uses a stored
@@ -123,7 +127,10 @@ digest. Checks run on the decision input the evaluator projects and dispatches;
 D10 projection can drop or redact a field but cannot substitute it. Every string
 value and every object key is a text-bearing position. A bound pointer covers
 exactly its own string. A `nonLineagePointers` entry covers its whole subtree,
-keys included. Any other position is refused as `input-undeclared`.
+keys included. The root pointer (`''`) is rejected as malformed host
+verification (`unverified` review, nothing dispatched): it would otherwise mark
+every text-bearing position as covered. Any other position is refused as
+`input-undeclared`.
 
 When the host supplies `preprocessingVerification` but the lineage is empty or
 absent, the evaluator does not fall back to the text-native path. It returns a

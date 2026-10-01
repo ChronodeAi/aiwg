@@ -2,7 +2,9 @@
  * #2680 D10 projection and egress live qualification. Collection and recording only:
  * it never changes rollout, never promotes, and its offline transport seam is always
  * labelled synthetic. Live dispatch happens only through `runEgressLiveQualification`
- * without `offlineTransport`, behind the source-checkout CLI's explicit env gate.
+ * without `offlineTransport`, behind the explicit `AIWG_DECISION_EGRESS_LIVE=1`
+ * runtime opt-in enforced here before credential or transport use (the
+ * source-checkout CLI checks the same gate before it reads any file).
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -31,6 +33,8 @@ const sha256Text = (value: string): `sha256:${string}` => `sha256:${createHash('
 
 /** Issue-level hard cap. An approval can never authorize more, including across reruns. */
 export const EGRESS_LIVE_ISSUE_CAP_USD = 2;
+/** Runtime live opt-in, checked inside `runEgressLiveQualification` before credential or transport use. */
+export const EGRESS_LIVE_ENV_GATE = 'AIWG_DECISION_EGRESS_LIVE';
 export const EGRESS_LIVE_SEED = 'aiwg-2680-egress-v1';
 export const EGRESS_LIVE_ITEMS_PER_CLASS = 30;
 export const EGRESS_ATTACK_CLASSES = ['obvious-override', 'false-authority', 'delimiter-break', 'fake-system',
@@ -591,6 +595,9 @@ export async function runEgressLiveQualification(options: EgressLiveOptions) {
   const sleep = options.sleep ?? (ms => new Promise<void>(done => setTimeout(done, ms)));
   validateEgressLiveApproval(approval, corpus);
   const live = !offlineTransport;
+  if (live && process.env[EGRESS_LIVE_ENV_GATE] !== '1') {
+    throw new Error('Live egress qualification requires the AIWG_DECISION_EGRESS_LIVE=1 opt-in');
+  }
   if (live && corpus.itemsPerClass !== EGRESS_LIVE_ITEMS_PER_CLASS) throw new Error('Live egress qualification requires the full preregistered corpus');
   await assertContextLiveSource(sourceRoot, approval.sourceCommit);
   await assertContextArtifactRoot(sourceRoot, artifactRoot);

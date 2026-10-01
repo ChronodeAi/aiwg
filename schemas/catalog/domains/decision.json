@@ -1351,6 +1351,93 @@
       "publication": {
         "public": true
       }
+    },
+    {
+      "logicalName": "gates.pack",
+      "id": "https://aiwg.io/schemas/gates/GatePack.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/gates/GatePack.v1alpha1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "gates-runtime",
+          "boundary": "Declarative gate pack loading and monotone-tightening registry",
+          "path": "src/gates/registry.ts"
+        }
+      ],
+      "publication": {
+        "public": true
+      }
+    },
+    {
+      "logicalName": "gates.binding",
+      "id": "https://aiwg.io/schemas/gates/GateBinding.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/gates/GateBinding.v1alpha1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "gates-runtime",
+          "boundary": "Preregistered gate instantiation and pin resolution",
+          "path": "src/gates/registry.ts"
+        }
+      ],
+      "publication": {
+        "public": true
+      }
+    },
+    {
+      "logicalName": "gates.report",
+      "id": "https://aiwg.io/schemas/gates/GateReport.v1alpha1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "experimental",
+      "owner": {
+        "id": "decision-engine"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/gates/GateReport.v1alpha1.schema.json"
+      },
+      "compatibility": {
+        "mode": "backward"
+      },
+      "consumers": [
+        {
+          "id": "gates-runtime",
+          "boundary": "Deterministic gate evaluation and digest-bound reports",
+          "path": "src/gates/evaluate.ts"
+        }
+      ],
+      "publication": {
+        "public": true
+      }
     }
   ]
 }

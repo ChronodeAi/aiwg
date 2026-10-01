@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/gates/GateBinding.v1alpha1.schema.json",
+  "title": "GateBinding",
+  "description": "Experimental, default-off instantiation of gate packs for one study or run (epic #2824). The binding is what gets preregistered: pack pins, parameter values, slice inventory, references, metric-provider pins, outcome ceiling and preregistration timestamps.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "gates.aiwg.io/v1alpha1" },
+    "kind": { "const": "GateBinding" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["packs", "parameters", "slices", "references", "metricProviders", "registeredAt", "frozenAt"],
+      "properties": {
+        "packs": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/packPin" }
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Parameter values keyed by qualified name <packId>.<param>; every qualified pack parameter needs a value or a pack default.",
+          "additionalProperties": { "type": "number" }
+        },
+        "slices": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "sliceGroups": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "references": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reference" }
+        },
+        "metricProviders": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/metricProviderPin" }
+        },
+        "ceiling": {
+          "enum": ["PROMOTE", "HOLD", "ROLLBACK"],
+          "default": "PROMOTE",
+          "description": "Binding outcome ceiling. HOLD expresses diagnostic/shadow use that can never PROMOTE."
+        },
+        "registeredAt": { "type": "string", "format": "date-time" },
+        "frozenAt": { "type": "string", "format": "date-time" },
+        "holdoutAccessedAt": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "Deprecated and ignored by the evaluator. Holdout timing is a required trusted evaluator input, never a binding field."
+        },
+        "splitDigest": { "$ref": "#/$defs/digest" },
+        "corpusDigest": { "$ref": "#/$defs/digest" },
+        "goldDigest": { "$ref": "#/$defs/digest" }
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "description"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "artifactPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "packPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest", "resolvedDigest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "resolvedDigest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "metricProviderPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "sourceDigest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "sourceDigest": { "$ref": "#/$defs/digest" },
+        "codeDigest": { "$ref": "#/$defs/digest", "description": "Code digest for addon/extension bundle providers (#2831). Absent for core providers." },
+        "recordsDigest": { "$ref": "#/$defs/digest", "description": "Input-records digest the evaluator reproduces for bundle providers (records binding). Required on bundle pins, forbidden on core pins." }
+      }
+    },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["always-review", "always-predict", "pinned-baseline"] },
+        "baseline": { "$ref": "#/$defs/artifactPin" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "pinned-baseline" } } },
+          "then": { "properties": { "baseline": {} }, "required": [ "baseline" ] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["always-review", "always-predict"] } } },
+          "then": { "properties": { "baseline": false } }
+        }
+      ]
+    }
+  }
+}

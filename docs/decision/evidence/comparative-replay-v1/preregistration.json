@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "decision-comparative-replay-preregistration/v1",
+  "id": "d23-synthetic-policy-replay-v1",
+  "mode": "shadow",
+  "corpusDigest": "sha256:269f63253a899202d8a963e75b53a8ba4211bfaffe39f7d656974ddda90b6904",
+  "goldDigest": "sha256:78f197dfd61e72fb235f860a808a8125df6066da64363102203e9a88c01c8680",
+  "splitDigest": "sha256:84e927e6727cafb1f15e18e53aa4a20d6f889e88c2f17b2a66d148e6d328fce5",
+  "comparatorVersion": "policy-replay-reference-v1",
+  "frozenAt": "2026-09-30T19:24:40.929Z",
+  "minimumTestRoots": 400,
+  "minimumSliceRoots": 100,
+  "levelBps": 9500,
+  "pairedMethod": "newcombe-10",
+  "errorMethod": "wilson",
+  "nonInferiorityMarginBps": -100,
+  "maxErrorUpperBps": 100,
+  "maxSliceErrorUpperBps": 500,
+  "maxBackendCalls": 0,
+  "maxTokens": 0,
+  "maxCostMicros": 0,
+  "requireExactReproduction": true,
+  "digest": "sha256:54aaf7b55b2bc9c5e101860dca2b34862a6234a6cb4f49344cfeb8e1837cb798"
+}
