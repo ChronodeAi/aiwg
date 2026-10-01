@@ -9,6 +9,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 v8 review fixes: the binding decides (any
+  native fail/insufficient caps at HOLD; the carried native verdict is renamed
+  `descriptiveVerdict`), four held-out record/class pack gates
+  (evaluation-time order, split pin, registered slices, per-class support),
+  the staged-calibration attestation derived from D09 qualification of the
+  trusted artifact (absent/unqualified refuses), project floors loaded from
+  `aiwg.config` with opt-out refused, per-generator source digests (D29 pins
+  only d29 files, D17 only its own; no built-output fallback), new
+  `D29Study.v8` / analysis-v6 / score-v8 versions with v6/v7 schemas restored
+  byte-identical and the v8 binding frozen at 2026-10-01T14:00:47Z,
+  parameterized support minima and confidence level, and explicit
+  `gateBindingDigest`/`gatePackDigests` on the approval. Live Jev calls, real
+  held-out data, human reviewers and production rollout remain pending (#2781)
+
 - Experimental, default-off D29 adopts the gates capability as the first real
   GateBinding: the shipped `aiwg:decision-engine/absolute-screening` pack (ten
   absolute Wilson/support/count/evidence gates plus the integrity-ceiling

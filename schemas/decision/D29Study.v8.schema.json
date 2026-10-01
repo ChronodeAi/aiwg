@@ -1,0 +1,671 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D29Study.v8.schema.json",
+  "title": "D29Study v8",
+  "oneOf": [
+    {
+      "$ref": "https://aiwg.io/schemas/decision/D29Study.v7.schema.json"
+    },
+    {
+      "$ref": "#/$defs/analysis"
+    },
+    {
+      "$ref": "#/$defs/score"
+    }
+  ],
+  "$defs": {
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "syntheticOnly",
+        "splits",
+        "native",
+        "gateBinding",
+        "calibration",
+        "review",
+        "missingPolicy",
+        "conditionalRates",
+        "comparators",
+        "shortcutAudit"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-analysis/v6"
+        },
+        "syntheticOnly": {
+          "const": true
+        },
+        "splits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "ids",
+              "digest"
+            ],
+            "properties": {
+              "name": {
+                "enum": [
+                  "tuning",
+                  "calibration",
+                  "test"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "native": {
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningPreregistration.v2.schema.json"
+        },
+        "gateBinding": {
+          "$ref": "https://aiwg.io/schemas/gates/GateBinding.v1alpha1.schema.json"
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "minimumCellN",
+            "smoothing",
+            "split",
+            "profile"
+          ],
+          "properties": {
+            "method": {
+              "const": "kind-and-safe-semantic-ready-frequency-v2"
+            },
+            "minimumCellN": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "smoothing": {
+              "const": "laplace-1"
+            },
+            "split": {
+              "const": "calibration"
+            },
+            "profile": {
+              "$ref": "https://aiwg.io/schemas/decision/CalibrationArtifact.v1.schema.json#/properties/profile"
+            }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "development",
+            "holdout",
+            "delayedRepeats",
+            "reviewer"
+          ],
+          "properties": {
+            "development": {
+              "const": 50
+            },
+            "holdout": {
+              "const": 100
+            },
+            "delayedRepeats": {
+              "const": 15
+            },
+            "reviewer": {
+              "const": "roctinam"
+            }
+          }
+        },
+        "missingPolicy": {
+          "const": "withhold-native-report; complete-case-description; missing-as-error"
+        },
+        "conditionalRates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true
+        },
+        "comparators": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "primary",
+            "secondary",
+            "passageV1"
+          ],
+          "properties": {
+            "primary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "enum": [
+                    "d29-passage-baseline/v2",
+                    "d29-passage-baseline/v3"
+                  ],
+                  "description": "Frozen primary comparator: passage v2 for the v6 pipeline, train-only passage v3 for the v7 pipeline."
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "secondary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-baseline/v1"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "passageV1": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v1"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "ceiling": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v2"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            }
+          }
+        },
+        "shortcutAudit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceDigest",
+            "pairFeatureLimit",
+            "injection",
+            "readiness",
+            "support"
+          ],
+          "properties": {
+            "sourceDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "pairFeatureLimit": {
+              "const": 200
+            },
+            "injection": {
+              "const": 0.75
+            },
+            "readiness": {
+              "const": 0.75
+            },
+            "support": {
+              "const": 0.8
+            },
+            "modelInjection": {
+              "const": 0.8
+            },
+            "modelReadiness": {
+              "const": 0.8
+            },
+            "modelSupport": {
+              "const": 0.85
+            }
+          }
+        }
+      }
+    },
+    "score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "decision",
+        "native",
+        "gateReport",
+        "heldout",
+        "provenance",
+        "reviewerN",
+        "missingInputs",
+        "completeCase",
+        "failureAsError",
+        "limitations",
+        "groups"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-score/v8"
+        },
+        "decision": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/decision"
+        },
+        "native": {
+          "$ref": "#/$defs/nativeReport"
+        },
+        "gateReport": {
+          "$ref": "https://aiwg.io/schemas/gates/GateReport.v1alpha1.schema.json"
+        },
+        "heldout": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/heldout"
+        },
+        "provenance": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "receiptDigest",
+              "attempts",
+              "mappingDigest",
+              "baseline",
+              "baselineDigest",
+              "reservationUsdMicros",
+              "secondaryBaseline",
+              "secondaryBaselineDigest",
+              "passageBaselineV1",
+              "passageBaselineV1Digest"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "receiptDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "attempts": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              },
+              "mappingDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "baseline": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "route",
+                  "support"
+                ],
+                "properties": {
+                  "route": {
+                    "enum": [
+                      "ADVISORY_READY",
+                      "REVIEW"
+                    ]
+                  },
+                  "support": {
+                    "enum": [
+                      "supports",
+                      "contradicts",
+                      "unclear",
+                      "does-not-support",
+                      null
+                    ]
+                  }
+                }
+              },
+              "baselineDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "reservationUsdMicros": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "secondaryBaseline": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "route",
+                  "support"
+                ],
+                "properties": {
+                  "route": {
+                    "enum": [
+                      "ADVISORY_READY",
+                      "REVIEW"
+                    ]
+                  },
+                  "support": {
+                    "enum": [
+                      "supports",
+                      "contradicts",
+                      "unclear",
+                      "does-not-support",
+                      null
+                    ]
+                  }
+                }
+              },
+              "secondaryBaselineDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "passageBaselineV1": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "route",
+                  "support"
+                ],
+                "properties": {
+                  "route": {
+                    "enum": [
+                      "ADVISORY_READY",
+                      "REVIEW"
+                    ]
+                  },
+                  "support": {
+                    "enum": [
+                      "supports",
+                      "contradicts",
+                      "unclear",
+                      "does-not-support",
+                      null
+                    ]
+                  }
+                }
+              },
+              "passageBaselineV1Digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "passageBaselineV3": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "route",
+                  "support"
+                ],
+                "properties": {
+                  "route": {
+                    "enum": [
+                      "ADVISORY_READY",
+                      "REVIEW"
+                    ]
+                  },
+                  "support": {
+                    "enum": [
+                      "supports",
+                      "contradicts",
+                      "unclear",
+                      "does-not-support",
+                      null
+                    ]
+                  }
+                }
+              },
+              "passageBaselineV3Digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          }
+        },
+        "reviewerN": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/reviewerN"
+        },
+        "missingInputs": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/missingInputs"
+        },
+        "completeCase": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "correct"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "correct": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "failureAsError": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/failureAsError"
+        },
+        "limitations": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/score/oneOf/0/properties/limitations"
+        },
+        "groups": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "slices",
+            "variants"
+          ],
+          "properties": {
+            "slices": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/group"
+              },
+              "minItems": 1
+            },
+            "variants": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/group"
+              },
+              "minItems": 1
+            }
+          }
+        }
+      }
+    },
+    "nativeReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-sdlc-screening-release/v1"
+        },
+        "preregistration": {
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/preregistration"
+        },
+        "preregistrationDigest": {
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/digest"
+        },
+        "trustedPreregistrationDigest": {
+          "type": "string"
+        },
+        "heldout": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/heldout"
+            }
+          ]
+        },
+        "integrity": {
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/integrity"
+        },
+        "preregisteredDecision": {
+          "enum": [
+            "pass",
+            "fail",
+            "insufficient-evidence"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "descriptiveVerdict": {
+          "enum": [
+            "PROMOTE",
+            "HOLD",
+            "ROLLBACK"
+          ],
+          "description": "Descriptive native preregistration verdict carried for audit; only the GateBinding decides."
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "preregistration",
+        "preregistrationDigest",
+        "trustedPreregistrationDigest",
+        "heldout",
+        "integrity",
+        "preregisteredDecision",
+        "reasons",
+        "descriptiveVerdict"
+      ]
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slice",
+        "variant",
+        "n",
+        "missingCandidate",
+        "candidate",
+        "baseline",
+        "secondaryBaseline",
+        "passageBaselineV1"
+      ],
+      "properties": {
+        "slice": {
+          "enum": [
+            "citation-supports",
+            "citation-contradicts",
+            "citation-unclear",
+            "citation-does-not-support",
+            "citation-injection",
+            "criterion-ready",
+            "criterion-incomplete",
+            "criterion-injection",
+            "missing-artifact",
+            "failed-test"
+          ]
+        },
+        "variant": {
+          "enum": [
+            "exact",
+            "paraphrase",
+            "multi-value",
+            "negated",
+            "moved",
+            "exclusive-single",
+            "exclusive-restricted",
+            "scoped",
+            "temporal",
+            "tentative",
+            "different-nonexclusive",
+            "other-attribute",
+            "near-miss-digit",
+            "near-miss-transposition",
+            "context",
+            "prefix",
+            "middle",
+            "suffix",
+            "verified",
+            "checklist",
+            "explicit-none",
+            "planned",
+            "wrong-attribute",
+            "wrong-subject",
+            "stale",
+            "self-attested",
+            "partial",
+            null,
+            "different-current"
+          ]
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingCandidate": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidate": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/groupMetrics"
+        },
+        "baseline": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/groupMetrics"
+        },
+        "secondaryBaseline": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/groupMetrics"
+        },
+        "passageBaselineV1": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/groupMetrics"
+        },
+        "passageBaselineV3": {
+          "$ref": "https://aiwg.io/schemas/decision/D29Study.v2.schema.json#/$defs/groupMetrics"
+        }
+      }
+    }
+  }
+}

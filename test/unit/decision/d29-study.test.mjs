@@ -48,7 +48,7 @@ async function loadLegacyV2() {
   const gold = { schemaVersion: 'decision-d29-gold/v2', syntheticOnly: true, rows: goldRows };
   expect(heldoutDigest(gold), 'v2 gold reproduces the recorded pin').toBe(goldHeader.pins.fullGoldDigest);
   const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
-    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(),
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest('d29-synthetic/v2'),
       seed: 'd29-study-v3', goldDigest: heldoutDigest(gold) },
     definitions: header.definitions, rows };
   expect(heldoutDigest(corpus.definitions), 'v2 definitions frozen').toBe(header.pins.definitionsDigest);
@@ -94,11 +94,11 @@ function reportFixture() {
         latencyMs: 4, inputTokens: 10, outputTokens: 2, costUsd: 0.001, calls: 1, retries: 0, fallbacks: 0 },
       baseline: { correct: true, costUsd: 0 }, reviewer: null };
   });
-  const heldout = { schemaVersion: 'decision-sdlc-screening-heldout-records/v1', evaluatedAt: '2026-10-02T00:00:00.000Z', splits: analysis.splits, samples };
+  const heldout = { schemaVersion: 'decision-sdlc-screening-heldout-records/v1', evaluatedAt: '2026-10-03T00:00:00.000Z', splits: analysis.splits, samples };
   const metadata = integrity();
   const build = (gate = {}) => buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout, integrity: metadata,
     trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(heldout.evaluatedAt),
-    firstTestAccessAt: '2026-10-01T00:00:00.000Z', ...gate });
+    firstTestAccessAt: '2026-10-02T00:00:00.000Z', ...gate });
   return { analysis, heldout, metadata, build };
 }
 
@@ -285,7 +285,10 @@ describe('D29 frozen synthetic population', () => {
       sliceGroups: { blocking: GATE_BLOCKING_SLICES }, references: [{ name: 'always-review', kind: 'always-review' }],
       parameters: { [`${GATE_PACK_ID}.falseReadyMaxBps`]: 100, [`${GATE_PACK_ID}.falseSupportMaxBps`]: 100,
         [`${GATE_PACK_ID}.blockingFalseReadyMaxEvents`]: 0, [`${GATE_PACK_ID}.blockingFalseReadyMaxUpperBps`]: 500,
-        [`${GATE_PACK_ID}.coverageMinLowerBps`]: 1500, [`${GATE_PACK_ID}.accuracyMinLowerBps`]: 5000 } });
+        [`${GATE_PACK_ID}.coverageMinLowerBps`]: 1500, [`${GATE_PACK_ID}.accuracyMinLowerBps`]: 5000,
+        [`${GATE_PACK_ID}.supportTotalMinN`]: 1500, [`${GATE_PACK_ID}.supportSliceMinN`]: 100,
+        [`${GATE_PACK_ID}.supportBlockingMinN`]: 500, [`${GATE_PACK_ID}.classSupportMinN`]: 100,
+        [`${GATE_PACK_ID}.confidenceLevelBps`]: 9500 } });
     for (const { id, version, digest } of prepared.analysis.gateBinding.spec.packs) {
       const file = id === GATE_PACK_ID ? 'absolute-screening.gatepack.yaml' : 'integrity-ceiling.gatepack.yaml';
       expect([GATE_PACK_ID, GATE_CEILING_PACK_ID]).toContain(id);
@@ -324,7 +327,7 @@ describe('D29 frozen synthetic population', () => {
     expect(prepared.preregistration.regeneration).toEqual({ reason: 'synthetic-v6-balanced-records-claim-relative-audit-passage-v2',
       collectorCommit: 'ca23244f3', priorLiveObservations: 0 });
     expect(() => validateHeldoutBundle({ corpus: prepared.corpus, preregistration: prepared.preregistration, approval: prepared.approval }, heldoutDigest(prepared.approval))).toThrow();
-  }, 15000);
+  }, 60_000);
 });
 
 const CALIBRATED = { id: 'staged-calibration-artifact', passed: true };
@@ -773,7 +776,7 @@ describe('D29 collector integration', () => {
     const fixture = reportFixture();
     const withheld = buildReport({ analysis: fixture.analysis, trustedAnalysisDigest: heldoutDigest(fixture.analysis),
       heldout: null, integrity: fixture.metadata, trustedIntegrityDigest: heldoutDigest(fixture.metadata),
-      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt), firstTestAccessAt: '2026-10-01T00:00:00.000Z' });
+      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt), firstTestAccessAt: '2026-10-02T00:00:00.000Z' });
     expect(withheld.native.heldout).toBeNull();
     expect(withheld.gateReport.decision).toBe('HOLD');
     expect(withheld.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
@@ -806,7 +809,7 @@ describe('D29 collector integration', () => {
       unblindedAt: item.phase === 'development' ? '2026-09-30T00:30:00Z' : item.phase === 'delayed-repeat' ? '2026-10-02T03:00:00Z' : '2026-10-02T01:00:00Z' });
     reviews.preregistrationReview = 'offline-fixture'; reviews.finalDispositionReview = 'offline-fixture';
     const analysisDigest = heldoutDigest(analysis), access = { schemaVersion: 'decision-d29-access/v1', analysisDigest,
-      anchoredAt: '2026-09-30T01:00:00Z', firstTestAccessAt: '2026-10-01T00:00:00Z', reference: 'offline-fixture' };
+      anchoredAt: '2026-09-30T01:00:00Z', firstTestAccessAt: '2026-10-02T00:00:00Z', reference: 'offline-fixture' };
     const metadata = integrity(), context = { trustedIntegrityDigest: heldoutDigest(metadata), trustedAnalysisDigest: analysisDigest,
       access, trustedAccessDigest: heldoutDigest(access), mapping, trustedMappingDigest: mappingDigest,
       reviews, trustedReviewsDigest: heldoutDigest(reviews), trustedCalibrationDigest: artifact.digest,

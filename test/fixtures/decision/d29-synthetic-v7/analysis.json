@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "decision-d29-analysis/v5",
+  "schemaVersion": "decision-d29-analysis/v6",
   "syntheticOnly": true,
   "splits": [
     {
@@ -2100,8 +2100,8 @@
         {
           "id": "aiwg:decision-engine/absolute-screening",
           "version": "1.0.0",
-          "digest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295",
-          "resolvedDigest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295"
+          "digest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138",
+          "resolvedDigest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138"
         },
         {
           "id": "aiwg:decision-engine/integrity-ceiling",
@@ -2116,7 +2116,12 @@
         "aiwg:decision-engine/absolute-screening.blockingFalseReadyMaxEvents": 0,
         "aiwg:decision-engine/absolute-screening.blockingFalseReadyMaxUpperBps": 500,
         "aiwg:decision-engine/absolute-screening.coverageMinLowerBps": 1500,
-        "aiwg:decision-engine/absolute-screening.accuracyMinLowerBps": 5000
+        "aiwg:decision-engine/absolute-screening.accuracyMinLowerBps": 5000,
+        "aiwg:decision-engine/absolute-screening.supportTotalMinN": 1500,
+        "aiwg:decision-engine/absolute-screening.supportSliceMinN": 100,
+        "aiwg:decision-engine/absolute-screening.supportBlockingMinN": 500,
+        "aiwg:decision-engine/absolute-screening.classSupportMinN": 100,
+        "aiwg:decision-engine/absolute-screening.confidenceLevelBps": 9500
       },
       "slices": [
         "citation-supports",
@@ -2152,11 +2157,11 @@
         }
       ],
       "ceiling": "HOLD",
-      "registeredAt": "2026-09-30T00:00:00.000Z",
-      "frozenAt": "2026-09-30T00:00:00.000Z",
+      "registeredAt": "2026-10-01T14:00:47.000Z",
+      "frozenAt": "2026-10-01T14:00:47.000Z",
       "holdoutAccessedAt": null,
       "splitDigest": "sha256:9214cee6603dcba1b867e862b6a2710234943b1ef5b08c00f0cf3d9d0f34bbdf",
-      "corpusDigest": "sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855",
+      "corpusDigest": "sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de",
       "goldDigest": "sha256:b175f64db211e5710c3fff11efa479f4797cf631a96913f3a65da366bd70044e"
     }
   },

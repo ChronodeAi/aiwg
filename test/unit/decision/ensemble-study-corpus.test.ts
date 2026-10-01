@@ -98,7 +98,7 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(prepared.splitManifest.splits.test.digest).toBe(heldoutDigest(prepared.splitManifest.splits.test.members));
     validateHeldoutInputs(prepared.corpus, prepared.preregistration);
     expect(prepared.corpus.provenance.goldDigest).toBe(heldoutDigest(prepared.gold));
-    expect(prepared.corpus.provenance.generatorDigest).toBe(heldoutGeneratorDigest());
+    expect(prepared.corpus.provenance.generatorDigest).toBe(heldoutGeneratorDigest('d17-entailment/v1'));
     expect(prepared.preregistration.regeneration).toMatchObject({ liveObservationsAtRegeneration: false,
       previousCorpusDigest: 'sha256:546fb423c6f8e51baba2c4ac2f0f8e8750c478d4610d3f24dbe6e766f088eb91' });
     expect(prepared.corpus.rows[0]).toEqual(generateHeldoutRow('d17-entailment/v1', 'offline-development-v1:0:single'));
@@ -159,9 +159,9 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(report.maximumRequestEstimateTokens).toBeGreaterThan(0);
     expect(report.maximumRequestEstimateTokens).toBe(1179);
     // Data pins are fixed: corpus rows, frozen splits and gold do not depend on source bytes.
-    // The corpus digest moves only through provenance.generatorDigest, which pins the shared
-    // generator registry (merged D17/D29 implementations) independently of row bytes.
-    expect(report.corpusDigest).toBe('sha256:5af15c96869d09ab57bef405bff242d8b655e6b5d9a636c1ee6a697660221987');
+    // The corpus digest moves only through provenance.generatorDigest, which pins the D17
+    // study's own generator bytes (ensemble-study/corpus.ts) independently of row bytes.
+    expect(report.corpusDigest).toBe('sha256:e268bf40c8f03d3b2b30a9919520705535bce6104b9fd892412388d20d2216b7');
     expect(report.splitManifestDigest).toBe('sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f');
     expect(report.goldDigest).toBe('sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db');
     // Preregistration, approval template and analysis embed the digest of every source byte the

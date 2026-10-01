@@ -26,7 +26,7 @@ beforeAll(async () => {
   const gold = { schemaVersion: 'decision-d29-gold/v4', syntheticOnly: true, rows: goldRows };
   expect(heldoutDigest(gold), 'v4 gold reproduces the recorded pin').toBe(goldHeader.pins.fullGoldDigest);
   const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
-    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(),
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest('d29-synthetic/v4'),
       seed: 'd29-study-v5', goldDigest: heldoutDigest(gold) },
     definitions: header.definitions, rows };
   expect(heldoutDigest(corpus.definitions), 'v4 definitions frozen').toBe(header.pins.definitionsDigest);

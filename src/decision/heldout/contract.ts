@@ -35,6 +35,9 @@ const D29_PUBLIC_DEMO_CORPORA = new Set([
   'sha256:6f5834c418810e5d89ce37185b13063ce0c8922220becbb43ae7253678d2da23',
   'sha256:76186887d4753a8fd011b6abf438f467d19e3b11b15881522fc59d6f0c7cc7d6',
   'sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855',
+  // v8 per-generator pins: the same public v6/v7 corpora after the generator digest change.
+  'sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549',
+  'sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de',
 ]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };
@@ -61,7 +64,29 @@ export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approva
 }
 export function validateHeldoutInputs(corpus: HeldoutCorpus, plan: HeldoutPreregistration): void {
   checkHeldoutSchema('Corpus', corpus); checkHeldoutSchema('Preregistration', plan);
-  if (corpus.provenance.generatorDigest !== heldoutGeneratorDigest() || corpus.provenance.seed !== heldoutCorpusSeed(corpus.rows)) {
+  // Every row pins its own generator family: the corpus digest must equal the
+  // single family digest all rows resolve to, so no row rides on another study's pin.
+  // Null means unknown, so an unregistered generator or mixed families fail closed.
+  const familyDigests = new Map<string, `sha256:${string}`>();
+  const digestOf = (generatorId: string): `sha256:${string}` => {
+    const cached = familyDigests.get(generatorId);
+    if (cached !== undefined) return cached;
+    try {
+      const digest = heldoutGeneratorDigest(generatorId);
+      familyDigests.set(generatorId, digest);
+      return digest;
+    } catch {
+      throw new HeldoutError('corpus-provenance');
+    }
+  };
+  let familyDigest: string | null = null;
+  for (const row of corpus.rows) {
+    const digest = digestOf(row.provenance.generatorId);
+    if (familyDigest === null) familyDigest = digest;
+    else if (familyDigest !== digest) throw new HeldoutError('corpus-provenance');
+  }
+  if (familyDigest === null || corpus.provenance.generatorDigest !== familyDigest
+    || corpus.provenance.seed !== heldoutCorpusSeed(corpus.rows)) {
     throw new HeldoutError('corpus-provenance');
   }
   const ids = new Set<string>(), families = new Map<string, string>(), payloads = new Set<string>();

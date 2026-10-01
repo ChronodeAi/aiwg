@@ -81,7 +81,10 @@ pack, so a loosened parent always moves the child's composed digest and
 breaks old pins. A child may only tighten: thresholds move in their declared
 direction (a literal threshold may never be rewritten as a bindable
 parameter, and parameters may never be renamed), `minimumN` and `levelBps`
-only rise, `onFail` only HOLD-to-ROLLBACK while `onInsufficient` is always
+only rise (both accept a literal or a `{param}` reference to a `count` /
+`level` parameter; a literal may never be rewritten as a reference, references
+may never be renamed, and an unresolvable reference holds as
+`parameter-missing`), `onFail` only HOLD-to-ROLLBACK while `onInsufficient` is always
 HOLD (a ROLLBACK there is a load error), scope changes only when monotone
 per kind (`listed` may only widen, `pooled` sets are fixed, `listed -> each`
 widens to the inventory minus exceptions that must exclude none of the
@@ -178,16 +181,17 @@ also hold `providers`, the bundle-provider allowlist (P3 trust root; see
 validate against the closed GatePack schema at config load; pack-reference
 versions and authored digests are verified at resolution and composed
 through the pure `extends` chain, so a loosened parent moves the composed
-digest and breaks the pin. Every floor gate that binds a threshold
-parameter must declare a default for it: the default is the enforced
-minimum. An inline floor gate with id `integrity-ceiling` must be an
+digest and breaks the pin. Every floor gate that binds a threshold,
+`minimumN` or `levelBps` parameter must declare a default for it: the default
+is the enforced minimum. An inline floor gate with id `integrity-ceiling` must be an
 all-scoped `upstream-ceiling` gate, or config validation flags it.
 
 Resolution refuses a binding that omits a floor gate or loosens any floor
 gate's threshold, parameter value, scope or outcome, reusing the per-kind
-`assertGateTightens` validator and the scope-superset rule. Binding threshold
-parameters are resolved to their preregistered values before comparison, so
-the check is value-against-minimum in the gate's declared direction. A
+`assertGateTightens` validator and the scope-superset rule. Binding threshold,
+`minimumN` and `levelBps` parameters are resolved to their preregistered
+values before comparison, so the check is value-against-minimum in the gate's
+declared direction. A
 binding whose ceiling sits below its configured ceiling (per-study key, else
 the `'*'` default) is refused; tighter ceilings resolve.
 `resolveGateBinding` and `GateRegistry.resolveBinding` take floors as a

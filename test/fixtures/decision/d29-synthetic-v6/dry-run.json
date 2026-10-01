@@ -1343,13 +1343,13 @@
       }
     }
   },
-  "gateBindingDigest": "sha256:f18aae04e3b93543be4a73a82bc08b60a50842e87f18bbcdce8d2aab95f81791",
+  "gateBindingDigest": "sha256:6593895ca860b5bd1baeb9e2397303fe690554cce44b5cfdf2ef05360585ce79",
   "gatePackDigests": [
     {
       "id": "aiwg:decision-engine/absolute-screening",
       "version": "1.0.0",
-      "digest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295",
-      "resolvedDigest": "sha256:e5197fe5fb732912bb293ccec49f3a62bdaff090ce0f55ced0d8b0c905cf7295"
+      "digest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138",
+      "resolvedDigest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138"
     },
     {
       "id": "aiwg:decision-engine/integrity-ceiling",
@@ -5342,13 +5342,13 @@
   },
   "hardCapUsd": 6,
   "stopAtUsd": 4.8,
-  "preregistrationDigest": "sha256:2a8e3e2258824d83abc4ccff1f80e1d4da8d58f541c099aca1cce5ddfc2398e3",
-  "analysisDigest": "sha256:513f1abb1c7b5b9d1c0275a51d0f8b5905ff72ccb4ef108b33ce0ff958e2181a",
-  "corpusDigest": "sha256:76186887d4753a8fd011b6abf438f467d19e3b11b15881522fc59d6f0c7cc7d6",
+  "preregistrationDigest": "sha256:089a7ec4c71221b3e2da6a95e6398e0f568dd2e2496bf44001bb7ed993653c84",
+  "analysisDigest": "sha256:a16afa742fe3c2fb78a6087a65060782e8f130b2fd408c64ec2d5ad6ea1cad08",
+  "corpusDigest": "sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549",
   "goldDigest": "sha256:cc96a3359b53cab0b20d083fb9fba11ac8fd6d3c7e06c4e943e3b9925536443e",
-  "generatorDigest": "sha256:451abcd1960257e9fd4d7186736b4bf5780b6a8105e24269da543415235218d9",
-  "scorerDigest": "sha256:737bb523d95604898f72d14323359046a0dcf870b464acdb29920bf985f84188",
-  "approvalTemplateDigest": "sha256:4a01f039dbfa2b9a64a9c317192db0f04702e3b85e374634499485638bd08987",
+  "generatorDigest": "sha256:eb11b1ae0c91cb285c8ee2bde5a5cd3d08deace0b03d706185ffc6409f7df6a1",
+  "scorerDigest": "sha256:8b3a2076f08cc73b8469ff12409f71c20c3be3d48cf0598aaf28d3ace92fd27e",
+  "approvalTemplateDigest": "sha256:abbf4bf24f6160cae6d2cb1ba59b0b8c9280189da9c0bc8629c4529e222f8126",
   "splitDigests": [
     {
       "name": "tuning",

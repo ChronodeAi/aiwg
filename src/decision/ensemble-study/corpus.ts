@@ -149,7 +149,7 @@ export function prepareD17Study(seed: string, moduleDigest: Digest, sourceDigest
   const analysis = { schemaVersion: 'decision-d17-analysis/v1', protocol: D17_ANALYSIS, sourceDigests,
     splitManifestDigest: heldoutDigest(splitManifest), nativeTemplatesDigest: heldoutDigest(nativeTemplates) };
   const corpus: HeldoutCorpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D17', syntheticOnly: true,
-    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(), seed, goldDigest: heldoutDigest(gold) },
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest('d17-entailment/v1'), seed, goldDigest: heldoutDigest(gold) },
     definitions: [structuredClone(definition)], rows };
   const preregistration: HeldoutPreregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D17',
     frozenAt: FROZEN_AT, corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,

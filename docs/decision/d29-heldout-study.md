@@ -143,10 +143,14 @@ carry their historical source pins and are not current collection bundles.
 V6 adds a registry entry and closed `decision-d29-gold/v6` and
 `decision-d29-score/v6` contracts in `D29Study.v6.schema.json`. The closed
 `decision-d29-analysis/v4` contract pins all three comparator source digests,
-the audit implementation and thresholds, the v2 native preregistration (paired
-non-inferiority null) and the preregistered absolute GateBinding. The closed
+the audit implementation and thresholds and the v2 native preregistration
+(paired non-inferiority null). The closed
 `decision-d29-shortcut-audit/v3` report records single/pairwise rules,
-structural and claim-relative maxima and the informational model score.
+structural and claim-relative maxima and the informational model score. V8
+moves both pipelines to `decision-d29-analysis/v6` and
+`decision-d29-score/v8` in `D29Study.v8.schema.json` (preregistered absolute
+GateBinding, renamed `descriptiveVerdict`); the v6/v7 schemas are frozen
+byte-identical to their pre-gates bytes.
 Review and mapping contracts and the shared staged approval boundary remain
 in use. The preregistration analysis digest binds these pins before collection.
 
@@ -977,11 +981,25 @@ split/corpus/gold digests. The binding is preregistered inside the analysis
 (`analysis.gateBinding`), so the preregistration analysis digest pins it; the
 dry run reports `gateBindingDigest`, `gatePackDigests` and `gateProviderDigest`
 with zero provider calls. `buildReport` and `score` evaluate the binding through
-`evaluateGates` with the project floors, a holdout seal binding the frozen
-binding digest to the verified access record's first test-access time, and the
-sealed upstream integrity record. A binding frozen at or after holdout access,
-a forged integrity record, or a missing staged-calibration attestation refuses
-or holds without promotion.
+`evaluateGates` with the project floors loaded from the project `aiwg.config`
+(the same strict validation the gates CLI uses; an explicit floors opt-out is
+refused in D29), a holdout seal binding the frozen binding digest to the
+verified access record's first test-access time, and the sealed upstream
+integrity record. A binding frozen at or after holdout access, a forged
+integrity record, or a missing staged-calibration attestation refuses or holds
+without promotion. The staged-calibration attestation is derived from a
+successful `qualifyD29Calibration` of the trusted artifact at the evaluation
+clock (with its expiry); an absent or unqualified artifact refuses, never
+passes. The binding decides: any native fail/insufficient verdict caps the
+outcome at HOLD (a gate ROLLBACK still rolls back), and the carried native
+verdict is renamed `descriptiveVerdict` so no reader mistakes it for a
+decision. The v8 binding freezes at `2026-10-01T14:00:47.000Z` (the v8 merge);
+the v7 dataset stays frozen at `2026-09-30T00:00:00.000Z`. D29Study v8 carries
+`decision-d29-analysis/v6` and `decision-d29-score/v8`; the v6/v7 schemas are
+byte-identical to the pre-gates commit. Each study pins only its own generator
+bytes (`heldoutGeneratorDigest(generatorId)` over the TypeScript sources, no
+built-output fallback): D29 pins the d29 generator/renderer files, D17 only
+its own corpus module.
 
 Native preregistration (`decision-sdlc-screening-preregistration/v2`, paired
 non-inferiority null) freezes total N >= 1,500, each slice N >= 100, aggregate
@@ -996,7 +1014,11 @@ existing native net-baseline economics checks remain mandatory. A costlier
 candidate cannot pass an efficiency claim.
 
 False-support divides erroneous ready/support suggestions by all 1,000 citations.
-False-ready divides erroneous ready suggestions by all 1,500 subjects. The score
+False-ready divides erroneous ready suggestions by all 1,500 subjects. Only the
+1,200 not-ready subjects can generate a false-ready event (supports-gold
+citations likewise cannot generate false-support), so the pooled rates dilute
+the conditional risk ~1.25x; the per-slice and per-blocking upper gates are the
+undiluted checks. The score
 also includes `groups.slices` and `groups.variants`: separate candidate, primary
 baseline and both secondary baselines' readiness accuracy, joint readiness/support accuracy, conditional
 false-ready rates and support confusion counts. Variant membership is joined
@@ -1009,10 +1031,14 @@ gates and do not imply per-variant statistical power.
 | support-total | minimum-n, all slices | 1,500 | Full test split present; short support holds. |
 | support-slice | minimum-n, each slice | 100 | Representation per slice; a missing slice holds. |
 | support-blocking | minimum-n, pooled blocking slices | 500 | Aggregate blocking power; partial blocking data holds. |
+| heldout-evaluated-at | evidence, d29-heldout-evaluated-at | ordered timestamp | Evaluation at or after the binding freeze and not in the future; otherwise holds. |
+| heldout-split | evidence, d29-heldout-split | pinned digest | Test split digest matches the binding; mismatch holds. |
+| heldout-slices-registered | evidence, d29-heldout-slices-registered | registered slices | Every sample slice is registered; extras hold. |
+| class-support-minimum | evidence, d29-heldout-class-support | 100 per class | Every gold-support class (supports, contradicts, unclear) meets the preregistered minimum. |
 | false-ready-upper | Wilson upper, all slices | 100 bps | Absolute false-ready cap (~7 events per 1,500); a regressed rate holds. |
 | false-support-upper | Wilson upper, all slices | 100 bps | Absolute citation false-support cap (~3 events per 1,000); a regressed rate holds. |
 | blocking-false-ready-events | count-max, each blocking slice | 0, onFail ROLLBACK | Any false-ready on a blocking slice rolls back. |
-| blocking-false-ready-upper | Wilson upper, each blocking slice | 500 bps | Per-blocking-slice bound; zero events in 150 gives an outward-rounded ~252 bps upper bound, not a 1% slice certificate. |
+| blocking-false-ready-upper | Wilson upper, each blocking slice | 500 bps | Per-blocking-slice bound; 0/100 gives ~370 bps and 0/200 ~189 bps upper (never 0). Defence in depth behind the zero-event ROLLBACK count gate. |
 | coverage-lower | Wilson lower, all slices | 1,500 bps | Reviewer-load floor beating the always-review reference rate of 0; an all-review policy cannot pass. |
 | accuracy-floor | Wilson lower, each slice | 5,000 bps | Absolute majority-correct joint-correctness floor per slice; pending live calibration. |
 | calibration-artifact | evidence, staged-calibration-artifact | present and passed | The staged D09 artifact binding for the scored phase; missing evidence holds. |
@@ -1029,9 +1055,11 @@ the preregistered HOLD ceiling; passing gates are not production authorization.
 
 To approve a future run on these gates, the operator verifies the dry-run
 `gateBindingDigest` equals `artifactDigest` of the approved analysis's
-`gateBinding`, checks the six parameter values and the HOLD ceiling above, and
+`gateBinding`, checks the eleven parameter values and the HOLD ceiling above, and
 quotes the binding digest alongside the preregistration and analysis digests in
-the approval text, for example: `gate binding <GATE_BINDING_DIGEST> capping at
+the approval text (the approval template also pins `gateBindingDigest` and
+`gatePackDigests` explicitly next to the transitive preregistration pin),
+for example: `gate binding <GATE_BINDING_DIGEST> capping at
 HOLD with false-ready/false-support <= 100 bps, blocking zero-event rollback,
 coverage >= 15%, accuracy >= 50% and staged-calibration evidence`.
 

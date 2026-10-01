@@ -36,6 +36,31 @@ spec:
       direction: higher-is-stricter
       default: 5000
       description: Wilson lower bound floor on joint candidate correctness within each slice (basis points).
+    supportTotalMinN:
+      type: count
+      direction: higher-is-stricter
+      default: 1500
+      description: Minimum total held-out support across all slices.
+    supportSliceMinN:
+      type: count
+      direction: higher-is-stricter
+      default: 100
+      description: Minimum held-out support within each slice.
+    supportBlockingMinN:
+      type: count
+      direction: higher-is-stricter
+      default: 500
+      description: Minimum pooled held-out support across the gate-blocking slices.
+    classSupportMinN:
+      type: count
+      direction: higher-is-stricter
+      default: 100
+      description: Minimum held-out support within each gold-support class (supports, contradicts, unclear). The D29 study module enforces this value when it mints the class-support attestation from the held-out record.
+    confidenceLevelBps:
+      type: level
+      direction: higher-is-stricter
+      default: 9500
+      description: Two-sided Wilson confidence level (basis points) shared by every interval gate.
   metrics:
     false-ready:
       provider: decision.screening/v1
@@ -64,7 +89,8 @@ spec:
       metric:
         provider: decision.screening/v1
         name: false-ready
-      minimumN: 1500
+      minimumN:
+        param: supportTotalMinN
       scope:
         mode: all
       direction: higher-is-stricter
@@ -75,7 +101,8 @@ spec:
       metric:
         provider: decision.screening/v1
         name: false-ready
-      minimumN: 100
+      minimumN:
+        param: supportSliceMinN
       scope:
         mode: each
       direction: higher-is-stricter
@@ -86,7 +113,8 @@ spec:
       metric:
         provider: decision.screening/v1
         name: false-ready
-      minimumN: 500
+      minimumN:
+        param: supportBlockingMinN
       scope:
         mode: pooled
         slices:
@@ -94,6 +122,58 @@ spec:
           - criterion-injection
           - missing-artifact
           - failed-test
+      direction: higher-is-stricter
+      onFail: HOLD
+    - id: heldout-evaluated-at
+      kind: evidence
+      description: The held-out record carries a valid evaluation timestamp ordered at or after the binding freeze and at or before the evaluation clock.
+      metric:
+        provider: decision.screening/v1
+        name: calibration
+      evidence:
+        required:
+          - d29-heldout-evaluated-at
+      scope:
+        mode: all
+      direction: higher-is-stricter
+      onFail: HOLD
+    - id: heldout-split
+      kind: evidence
+      description: The held-out test split digest matches the split pinned in the binding.
+      metric:
+        provider: decision.screening/v1
+        name: calibration
+      evidence:
+        required:
+          - d29-heldout-split
+      scope:
+        mode: all
+      direction: higher-is-stricter
+      onFail: HOLD
+    - id: heldout-slices-registered
+      kind: evidence
+      description: Every held-out sample slice is registered in the binding inventory.
+      metric:
+        provider: decision.screening/v1
+        name: calibration
+      evidence:
+        required:
+          - d29-heldout-slices-registered
+      scope:
+        mode: all
+      direction: higher-is-stricter
+      onFail: HOLD
+    - id: class-support-minimum
+      kind: evidence
+      description: Every gold-support class (supports, contradicts, unclear) meets the preregistered class-support minimum.
+      metric:
+        provider: decision.screening/v1
+        name: calibration
+      evidence:
+        required:
+          - d29-heldout-class-support
+      scope:
+        mode: all
       direction: higher-is-stricter
       onFail: HOLD
     - id: false-ready-upper
@@ -106,7 +186,8 @@ spec:
         kind: interval-bound
         method: wilson
         bound: upper
-        levelBps: 9500
+        levelBps:
+          param: confidenceLevelBps
       threshold:
         op: lte
         param: falseReadyMaxBps
@@ -124,7 +205,8 @@ spec:
         kind: interval-bound
         method: wilson
         bound: upper
-        levelBps: 9500
+        levelBps:
+          param: confidenceLevelBps
       threshold:
         op: lte
         param: falseSupportMaxBps
@@ -160,7 +242,8 @@ spec:
         kind: interval-bound
         method: wilson
         bound: upper
-        levelBps: 9500
+        levelBps:
+          param: confidenceLevelBps
       threshold:
         op: lte
         param: blockingFalseReadyMaxUpperBps
@@ -183,7 +266,8 @@ spec:
         kind: interval-bound
         method: wilson
         bound: lower
-        levelBps: 9500
+        levelBps:
+          param: confidenceLevelBps
       threshold:
         op: gte
         param: coverageMinLowerBps
@@ -201,7 +285,8 @@ spec:
         kind: interval-bound
         method: wilson
         bound: lower
-        levelBps: 9500
+        levelBps:
+          param: confidenceLevelBps
       threshold:
         op: gte
         param: accuracyMinLowerBps

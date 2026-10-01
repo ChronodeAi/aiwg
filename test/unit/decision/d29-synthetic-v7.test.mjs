@@ -263,12 +263,12 @@ describe('D29 v7 held-out wording pools', () => {
     const { prepare } = studyModule(null);
     // v6 seeds still prepare through the frozen v6 pipeline.
     const frozen = await prepare('d29-study-v6');
-    expect(frozen.analysis.schemaVersion).toBe('decision-d29-analysis/v4');
+    expect(frozen.analysis.schemaVersion).toBe('decision-d29-analysis/v6');
     expect(frozen.gold.schemaVersion).toBe('decision-d29-gold/v6');
     expect(frozen.corpus.rows.every(row => row.localOutcome.passageBaselineV3 === undefined)).toBe(true);
     // The v7 seed prepares through the v7 pipeline only.
     const seventh = await prepare('d29-study-v7');
-    expect(seventh.analysis.schemaVersion).toBe('decision-d29-analysis/v5');
+    expect(seventh.analysis.schemaVersion).toBe('decision-d29-analysis/v6');
     expect(heldoutDigest(seventh.corpus)).toBe(heldoutDigest(prepared.corpus));
   }, 15000);
 });

@@ -14,8 +14,8 @@
   "region": null,
   "credentialRef": null,
   "credentialResolverDigest": null,
-  "corpusDigest": "sha256:65454a6a3c1dfd85b3c7e953d836309328a48442ec9ae931b9a907c8d91ff855",
-  "preregistrationDigest": "sha256:92ba94892f11e039ca6cc48ea832cf00daa886f801d83923e713adf00591a511",
+  "corpusDigest": "sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de",
+  "preregistrationDigest": "sha256:b3970c61b8f539a2466c760125b4136b61197298587ea4aebd63d9068ad1b3f1",
   "executionDigest": null,
   "calibration": {
     "mode": "staged",
@@ -39,5 +39,20 @@
     "usd": 6
   },
   "priorStudySpendUsd": null,
-  "priorPortfolioSpendUsd": null
+  "priorPortfolioSpendUsd": null,
+  "gateBindingDigest": "sha256:20c3042d3a1c555f1ff9fa8c6a0008cc7777cea3f24ec992b2d65253bf6ef2d6",
+  "gatePackDigests": [
+    {
+      "id": "aiwg:decision-engine/absolute-screening",
+      "version": "1.0.0",
+      "digest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138",
+      "resolvedDigest": "sha256:ada18c60383b1e1ebd7744e77fca3cc2eb4f7a9c73e4ce508afb71bffcacd138"
+    },
+    {
+      "id": "aiwg:decision-engine/integrity-ceiling",
+      "version": "1.0.0",
+      "digest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058",
+      "resolvedDigest": "sha256:dd943cf0b2c8116f14bfe31eb68a5498ae292b7f33c697306eb18492bcf70058"
+    }
+  ]
 }

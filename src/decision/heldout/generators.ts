@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { sha256 } from '../compile-cache/identity.js';
-import { d29WorldV6, d29V6RendererDigest } from './d29-v6.js';
-import { d29WorldV7, d29V7RendererDigest, D29_V7_GENERATOR_ID } from './d29-v7.js';
-import { d29PoolsDigest } from './d29-pools.js';
+import { d29WorldV6 } from './d29-v6.js';
+import { d29WorldV7, D29_V7_GENERATOR_ID } from './d29-v7.js';
 import { d29PassageBaselineV3 } from './d29-passage-baseline-v3.js';
 import { d29PassageBaselineV2 } from './d29-passage-baseline-v2.js';
 import { d29PassageBaseline } from './d29-passage-baseline.js';
@@ -619,13 +618,42 @@ export function reproducibleHeldoutRow(row: HeldoutRow): boolean {
   } catch { return false; }
 }
 
-/** The corpus pins the registered implementation, independently of its trusted study/scorer module. */
-export function heldoutGeneratorDigest(): `sha256:${string}` {
-  const source = new URL('../ensemble-study/corpus.ts', import.meta.url);
-  const implementation = existsSync(source) ? source : new URL('../ensemble-study/corpus.js', import.meta.url);
-  return sha256({ registry: readFileSync(new URL(import.meta.url), 'utf8'),
-    implementation: readFileSync(implementation, 'utf8'), renderer: d29V6RendererDigest(),
-    v7renderer: d29V7RendererDigest(), v7pools: d29PoolsDigest() });
+/**
+ * Source files hashed for each generator family, as package-root-relative
+ * TypeScript paths. Digests always hash these source bytes read from files
+ * alongside this module: there is no `.ts`/`.js` fallback, so source and
+ * built runs either hash identical bytes or refuse. D29 pins only its own
+ * generator/renderer files, the D17 study only its own corpus module, and the
+ * lamp toy only this registry module; D29 and D17 share no hashed bytes.
+ */
+const D29_GENERATOR_SOURCES = ['src/decision/heldout/generators.ts', 'src/decision/heldout/d29-v6.ts',
+  'src/decision/heldout/d29-v7.ts', 'src/decision/heldout/d29-pools.ts',
+  'src/decision/heldout/d29-passage-baseline.ts', 'src/decision/heldout/d29-passage-baseline-v2.ts',
+  'src/decision/heldout/d29-passage-baseline-v3.ts'] as const;
+const D29_GENERATOR_IDS = ['d29-synthetic/v1', 'd29-synthetic/v2', 'd29-synthetic/v3',
+  'd29-synthetic/v4', 'd29-synthetic/v6', 'd29-synthetic/v7'];
+const LAMP_GENERATOR_IDS = ['heldout-lamp/v1', 'heldout-lamp-splits/v1'];
+const D17_GENERATOR_ID = 'd17-entailment/v1';
+
+/** Package-root-relative TypeScript sources hashed for one generator id; unknown ids refuse. */
+export function heldoutGeneratorFiles(generatorId: string): string[] {
+  // The v7 id resolves lazily: this registry module and d29-v7.ts import each
+  // other, so the constant may be uninitialized while either module evaluates.
+  if (D29_GENERATOR_IDS.includes(generatorId) || generatorId === D29_V7_GENERATOR_ID) return [...D29_GENERATOR_SOURCES];
+  if (LAMP_GENERATOR_IDS.includes(generatorId)) return ['src/decision/heldout/generators.ts'];
+  if (generatorId === D17_GENERATOR_ID) return ['src/decision/ensemble-study/corpus.ts'];
+  throw new Error('unregistered-generator');
+}
+
+/** The corpus pins its own generator family's implementation, independently of other studies' files. */
+export function heldoutGeneratorDigest(generatorId: string): `sha256:${string}` {
+  const sources: Record<string, string> = {};
+  for (const file of heldoutGeneratorFiles(generatorId)) {
+    const sibling = file === 'src/decision/ensemble-study/corpus.ts' ? '../ensemble-study/corpus.ts'
+      : `./${file.slice('src/decision/heldout/'.length)}`;
+    sources[file] = readFileSync(new URL(sibling, import.meta.url), 'utf8');
+  }
+  return sha256(sources);
 }
 export function heldoutCorpusSeed(rows: readonly HeldoutRow[]): string | null {
   const seeds = new Set(rows.map(row => row.provenance.seed.split(':')[0]));

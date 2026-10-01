@@ -34,7 +34,7 @@ function packDigest(id) {
 
 const param = name => `${PACK_ID}.${name}`;
 
-function binding(specOverrides = {}) {
+function binding({ parameters: parameterOverrides = {}, ...specOverrides } = {}) {
   return {
     apiVersion: 'gates.aiwg.io/v1alpha1',
     kind: 'GateBinding',
@@ -48,6 +48,12 @@ function binding(specOverrides = {}) {
         [param('blockingFalseReadyMaxUpperBps')]: 500,
         [param('coverageMinLowerBps')]: 1500,
         [param('accuracyMinLowerBps')]: 5000,
+        [param('supportTotalMinN')]: 1500,
+        [param('supportSliceMinN')]: 100,
+        [param('supportBlockingMinN')]: 500,
+        [param('classSupportMinN')]: 100,
+        [param('confidenceLevelBps')]: 9500,
+        ...parameterOverrides,
       },
       slices: SLICES,
       sliceGroups: { blocking: BLOCKING },
@@ -65,8 +71,8 @@ function binding(specOverrides = {}) {
   };
 }
 
-/** Builds screening records: per-slice binary tallies plus one calibration attestation. */
-function records({ perSlice = {}, falseReady = {}, falseSupport = {}, coverage = {}, accuracy = {}, calibration = true }) {
+/** Builds screening records: per-slice binary tallies plus the calibration and held-out record attestations. */
+function records({ perSlice = {}, falseReady = {}, falseSupport = {}, coverage = {}, accuracy = {}, calibration = true, record = true }) {
   const rows = [];
   for (const slice of SLICES) {
     const n = perSlice[slice] ?? 200;
@@ -84,6 +90,12 @@ function records({ perSlice = {}, falseReady = {}, falseSupport = {}, coverage =
   rows.push({ slice: 'citation-supports', metric: 'false-ready', event: true });
   rows.push({ slice: 'citation-supports', metric: 'false-support', event: true });
   if (calibration) rows.push({ id: 'staged-calibration-artifact', passed: true });
+  if (record) {
+    rows.push({ id: 'd29-heldout-evaluated-at', passed: true });
+    rows.push({ id: 'd29-heldout-split', passed: true });
+    rows.push({ id: 'd29-heldout-slices-registered', passed: true });
+    rows.push({ id: 'd29-heldout-class-support', passed: true });
+  }
   return rows;
 }
 
@@ -120,6 +132,7 @@ describe('D29 absolute screening gates', () => {
     const pack = loadGatePackFile(new URL('absolute-screening.gatepack.yaml', ADDON).pathname);
     expect(pack.metadata).toMatchObject({ id: PACK_ID, version: '1.0.0' });
     expect(pack.spec.gates.map(gate => gate.id)).toEqual(['support-total', 'support-slice', 'support-blocking',
+      'heldout-evaluated-at', 'heldout-split', 'heldout-slices-registered', 'class-support-minimum',
       'false-ready-upper', 'false-support-upper', 'blocking-false-ready-events', 'blocking-false-ready-upper',
       'coverage-lower', 'accuracy-floor', 'calibration-artifact']);
     expect(pack.spec.gates.find(gate => gate.id === 'blocking-false-ready-events').onFail).toBe('ROLLBACK');
@@ -174,6 +187,50 @@ describe('D29 absolute screening gates', () => {
     expect(report.decision).toBe('HOLD');
     expect(report.gateEvidence.find(entry => entry.gateId === 'support-total'))
       .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
+  });
+
+  it('holds a failed held-out record attestation through its record gate', () => {
+    for (const [gateId, id] of [['heldout-evaluated-at', 'd29-heldout-evaluated-at'], ['heldout-split', 'd29-heldout-split'],
+      ['heldout-slices-registered', 'd29-heldout-slices-registered'], ['class-support-minimum', 'd29-heldout-class-support']]) {
+      const rows = records({});
+      rows.find(row => row.id === id).passed = false;
+      const report = evaluate({ rows, ceiling: 'PROMOTE' });
+      expect(report.decision, gateId).toBe('HOLD');
+      expect(report.gateEvidence.find(entry => entry.gateId === gateId), gateId)
+        .toMatchObject({ status: 'fail', outcome: 'HOLD' });
+      expect(report.gateEvidence.filter(entry => entry.gateId !== gateId && entry.gateId !== 'calibration-artifact'
+        && !['heldout-evaluated-at', 'heldout-split', 'heldout-slices-registered', 'class-support-minimum'].includes(entry.gateId))
+        .every(entry => entry.status === 'pass'), gateId).toBe(true);
+    }
+  });
+
+  it('holds a missing held-out record attestation as insufficient evidence', () => {
+    const rows = records({}).filter(row => row.id !== 'd29-heldout-split');
+    const report = evaluate({ rows, ceiling: 'PROMOTE' });
+    expect(report.decision).toBe('HOLD');
+    expect(report.gateEvidence.find(entry => entry.gateId === 'heldout-split'))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
+  });
+
+  it('drives minimum-n from the preregistered parameter value, not a literal', () => {
+    const rows = records({});
+    const support = rows.filter(row => row.metric === 'false-ready').length;
+    const report = evaluate({ rows, ceiling: 'PROMOTE',
+      spec: { parameters: { [param('supportTotalMinN')]: support + 1 } } });
+    expect(report.decision).toBe('HOLD');
+    expect(report.gateEvidence.find(entry => entry.gateId === 'support-total' && entry.slice === null))
+      .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
+  });
+
+  it('drives the interval level from the preregistered confidence parameter', () => {
+    const rows = records({ falseReady: { 'criterion-ready': 10 } });
+    const at9500 = evaluate({ rows, ceiling: 'PROMOTE' });
+    expect(at9500.gateEvidence.find(entry => entry.gateId === 'false-ready-upper' && entry.slice === null).status).toBe('pass');
+    const at9998 = evaluate({ rows, ceiling: 'PROMOTE',
+      spec: { parameters: { [param('confidenceLevelBps')]: 9998 } } });
+    expect(at9998.decision).toBe('HOLD');
+    expect(at9998.gateEvidence.find(entry => entry.gateId === 'false-ready-upper' && entry.slice === null))
+      .toMatchObject({ status: 'fail', outcome: 'HOLD' });
   });
 
   it('holds a missing staged-calibration attestation while every other gate passes', () => {

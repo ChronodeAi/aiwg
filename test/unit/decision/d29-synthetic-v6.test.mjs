@@ -91,7 +91,7 @@ describe('D29 v6 balanced inventory records', () => {
     expect(goldHeader.schemaVersion, 'gold slim header').toBe('decision-d29-gold-header/v1');
     expect(goldHeader.pins.fullGoldDigest, 'gold historical pin reproduces').toBe(goldDigest);
     const { heldoutGeneratorDigest } = await import('../../../src/decision/heldout/generators.js');
-    expect(prepared.corpus.provenance.generatorDigest, 'registry digest').toBe(heldoutGeneratorDigest());
+    expect(prepared.corpus.provenance.generatorDigest, 'registry digest').toBe(heldoutGeneratorDigest('d29-synthetic/v6'));
     expect(prepared.preregistration.regeneration).toMatchObject({ priorLiveObservations: 0, collectorCommit: 'ca23244f3' });
     expect(prepared.reviews.assessments.filter(item => item.phase === 'development')).toHaveLength(50);
     for (const artifact of [prepared.gold, prepared.analysis, prepared.reviews]) {
