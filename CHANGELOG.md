@@ -190,6 +190,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Redact unterminated private-key blocks with a bounded fallback (header plus
+  up to 100 complete base64 body lines, so following prose is preserved) and
+  recognize standalone `whsec_` and `glpat-` provider tokens, including inside
+  base64-encoded blobs. Terminated blocks and all other token classes are
+  unchanged (#2793)
+
 - Bind experimental, default-off held-out collector baselines to the independent
   durable spend head. Changed or missing baselines fail before credential access
   even after run deletion; legacy heads require operator reconciliation (#2778)
