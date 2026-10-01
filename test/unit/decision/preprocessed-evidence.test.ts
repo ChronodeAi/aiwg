@@ -1115,6 +1115,44 @@ describe('D24 round-2 review regressions', () => {
     expect(declared.evaluate).toHaveBeenCalledTimes(3);
   });
 
+  it('MML-BIND-SCALARS-01 leaves numeric, boolean and null values outside text-leaf binding', async () => {
+    const value = verified('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination });
+    const run = async (input: Record<string, unknown>, verification: unknown = hostVerification([value])) => {
+      const spy = spies();
+      const result = await evaluateDecisionRuleset(addonRequest({
+        input, invocationId: 'mml-bind-scalars',
+        ...notesArtifacts({ count: { type: 'number' }, flag: { type: 'boolean' }, nothing: { type: 'null' }, note: { type: 'string' } }),
+        adapters: { jev: spy.adapter }, resolveCredential: spy.resolveCredential,
+        preprocessingLineage: resolved.receiptEvidence, preprocessingVerification: verification }) as never);
+      return { result, ...spy };
+    };
+    const scalars = { count: 42, flag: true, nothing: null };
+
+    // Scalar values carry no text and are never compared against lineage text: with their
+    // key positions declared non-lineage, the bound string dispatches alongside them.
+    const declared = await run({ message: resolved.state.text, ...scalars },
+      hostVerification([value], { nonLineagePointers: ['/count', '/flag', '/nothing'] }));
+    expect(declared.result.spec.status).toBe('completed');
+    expect(declared.evaluate).toHaveBeenCalledTimes(3);
+
+    // The scalar keys are still text-bearing member positions: without coverage they are refused.
+    const uncovered = await run({ message: resolved.state.text, ...scalars });
+    expect(uncovered.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-undeclared'] });
+    expect(uncovered.evaluate).not.toHaveBeenCalled();
+    expect(uncovered.resolveCredential).not.toHaveBeenCalled();
+
+    // A scalar value can never satisfy a lineage binding: it never equals the verified text.
+    const misbound = await run({ message: resolved.state.text, count: 42 },
+      hostVerification([value], { inputBindings: [
+        { pointer: '/message', manifestIds: [value.metadata.id] },
+        { pointer: '/count', manifestIds: [value.metadata.id] },
+      ] }));
+    expect(misbound.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-mismatch'] });
+    expect(misbound.evaluate).not.toHaveBeenCalled();
+    expect(misbound.resolveCredential).not.toHaveBeenCalled();
+  });
+
   it('MML-LINEAGE-MISSING-01 routes to review when the host expects lineage but it is empty or absent', async () => {
     const value = verified('scanned-document-ocr');
     const empty = resolvePreprocessedEvidence([], { destination: jevDestination }).receiptEvidence;
