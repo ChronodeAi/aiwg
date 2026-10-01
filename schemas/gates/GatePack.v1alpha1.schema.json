@@ -16,9 +16,8 @@
       "required": ["metrics", "gates"],
       "properties": {
         "extends": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Parent pack id. A child may only tighten: thresholds move in their declared direction, minimumN only rises, severity only standard-to-blocking, scope only narrows, floor:true gates cannot be removed."
+          "$ref": "#/$defs/parentPin",
+          "description": "Full pin over the parent pack (id, version, authored digest). A child may only tighten: thresholds move in their declared direction, minimumN only rises, onFail/onInsufficient only HOLD-to-ROLLBACK, scope only narrows per kind, floor:true gates cannot be removed."
         },
         "parameters": {
           "type": "object",
@@ -61,6 +60,16 @@
       }
     },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "parentPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
     "parameter": {
       "type": "object",
       "additionalProperties": false,
@@ -171,7 +180,7 @@
     "gate": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "severity", "direction", "scope"],
+      "required": ["id", "kind", "onFail", "direction", "scope"],
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
         "kind": {
@@ -184,7 +193,8 @@
         "threshold": { "$ref": "#/$defs/threshold" },
         "minimumN": { "type": "integer", "minimum": 0 },
         "scope": { "$ref": "#/$defs/scope" },
-        "severity": { "enum": ["standard", "blocking"] },
+        "onFail": { "enum": ["HOLD", "ROLLBACK"] },
+        "onInsufficient": { "enum": ["HOLD", "ROLLBACK"] },
         "direction": { "enum": ["lower-is-stricter", "higher-is-stricter"] },
         "floor": { "type": "boolean" },
         "evidence": {

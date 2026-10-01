@@ -4,11 +4,14 @@ import * as release from '../../../src/decision/qualification/release.js';
 import * as gates from '../../../src/gates/index.js';
 
 /**
- * The gates capability is disabled by default: nothing in the decision runtime
- * imports it, so existing behavior must be byte-identical. This locks the
- * decision surface the migration touched (exact export sets, so consumer churn
- * is always deliberate) and spot-checks benchmark behavior through the new
- * canonical digest path.
+ * The gates evaluator is disabled by default: no decision-runtime path evaluates
+ * gate packs, so existing behavior must be byte-identical. The decision runtime
+ * reuses only the moved statistics and digest helpers from `src/gates/stats`
+ * (quality.ts, release.ts, gate-evidence.ts); the evaluator, registry and report
+ * modules have no decision-runtime importers. This locks the decision surface
+ * the migration touched (exact export sets, so consumer churn is always
+ * deliberate) and spot-checks benchmark behavior through the canonical digest
+ * path.
  */
 describe('gates disabled-by-default regression', () => {
   it('keeps the exact pre-move export surface, plus the two migration additions', () => {

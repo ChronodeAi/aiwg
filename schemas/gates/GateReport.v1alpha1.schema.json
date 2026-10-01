@@ -15,7 +15,7 @@
     "packs": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/artifactPin" }
+      "items": { "$ref": "#/$defs/packPin" }
     },
     "metricProviders": {
       "type": "array",
@@ -76,6 +76,17 @@
         "id": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
         "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "packPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest", "resolvedDigest"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "resolvedDigest": { "$ref": "#/$defs/digest" }
       }
     },
     "metricProviderPin": {

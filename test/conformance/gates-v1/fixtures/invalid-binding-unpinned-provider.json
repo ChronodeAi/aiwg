@@ -2,9 +2,9 @@
   "apiVersion": "gates.aiwg.io/v1alpha1",
   "kind": "GateBinding",
   "metadata": {
-    "id": "test-gates/conformance-run",
+    "id": "test-gates/invalid-unpinned",
     "version": "1.0.0",
-    "description": "Conformance binding over the fixture pack."
+    "description": "Binding that pins only the proportion provider while its gates use four providers."
   },
   "spec": {
     "packs": [
@@ -37,21 +37,6 @@
         "id": "test.proportion/v1",
         "version": "1.0.0",
         "sourceDigest": "sha256:8e533b21822c74d7eded47528bd1c65d4ea2466e157e63fca5093ca0f412e737"
-      },
-      {
-        "id": "test.paired/v1",
-        "version": "1.0.0",
-        "sourceDigest": "sha256:f9ec7b3f4c3bb42967e2ce6ab7d1f371c89100a5d08f573004a6fda9a3265b58"
-      },
-      {
-        "id": "test.scalar/v1",
-        "version": "1.0.0",
-        "sourceDigest": "sha256:860560783009be16b08b079dfb3dfadd732bb4d93bf27f3b372772212bc96391"
-      },
-      {
-        "id": "test.evidence/v1",
-        "version": "1.0.0",
-        "sourceDigest": "sha256:4c8b2c0ba53d60f6a53ce97d7a3a8909a9df6295a01e0f07d51eed6a9d704271"
       }
     ],
     "ceiling": "PROMOTE",

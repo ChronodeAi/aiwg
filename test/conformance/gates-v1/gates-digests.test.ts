@@ -43,16 +43,20 @@ describe('qualification digest migration', () => {
       `sha256:${createHash('sha256').update(JSON.stringify(['test-1', 'test-2'])).digest('hex')}`);
   });
 
-  it('still verifies legacy plans by default and rejects them in canonical-only mode', () => {
+  it('rejects legacy plans by default and verifies them only under an explicit allowlist', () => {
     const plan = legacyPlan();
-    expect(verifyBinaryBenchmarkPlanDigest(plan, labels)).toBe('legacy');
-    expect(verifyBinaryBenchmarkPlanDigest(plan, labels, { digestModes: ['legacy'] })).toBe('legacy');
+    // Fail closed: a legacy digest on plan fields never verifies by default.
+    expect(verifyBinaryBenchmarkPlanDigest(plan, labels)).toBeNull();
     expect(verifyBinaryBenchmarkPlanDigest(plan, labels, { digestModes: ['canonical'] })).toBeNull();
+    expect(verifyBinaryBenchmarkPlanDigest(plan, labels, { digestModes: ['legacy'] })).toBe('legacy');
+    expect(verifyBinaryBenchmarkPlanDigest(plan, labels, { digestModes: ['canonical', 'legacy'] })).toBe('legacy');
     const rows = [sample('test-1'), sample('test-2')];
-    expect(evaluatePreregisteredBinaryBenchmark(plan, plan.digest, labels, rows).decision).toBe('pass');
-    expect(() => evaluatePreregisteredBinaryBenchmark(plan, plan.digest, labels, rows, { digestModes: ['canonical'] }))
+    expect(() => evaluatePreregisteredBinaryBenchmark(plan, plan.digest, labels, rows))
       .toThrow('preregistration');
-    expect(verifyBinaryBenchmarkPlanDigest({ ...plan, minimumOverallN: 99 }, labels)).toBeNull();
+    expect(evaluatePreregisteredBinaryBenchmark(plan, plan.digest, labels, rows, { digestModes: ['canonical', 'legacy'] }).decision)
+      .toBe('pass');
+    expect(verifyBinaryBenchmarkPlanDigest({ ...plan, minimumOverallN: 99 }, labels, { digestModes: ['canonical', 'legacy'] }))
+      .toBeNull();
   });
 
   it('scores held-out samples identically before and after the move', () => {
@@ -66,7 +70,7 @@ describe('qualification digest migration', () => {
     expect(metrics.overall.brier).toBeCloseTo(0.04);
   });
 
-  it('writes canonical release digests and verifies both modes', () => {
+  it('writes canonical release digests and rejects legacy digests by default', () => {
     const { executed, input } = syntheticReleaseInput();
     const record = buildQualificationReleaseRecord(executed, input);
     expect(verifyQualificationReleaseDigest(record)).toBe('canonical');
@@ -74,8 +78,12 @@ describe('qualification digest migration', () => {
     const { digest: _dropped, ...fields } = record;
     void _dropped;
     const legacy = { ...fields, digest: legacySha256(fields) };
-    expect(verifyQualificationReleaseDigest(legacy)).toBe('legacy');
+    // Fail closed in both directions: legacy on new fields is rejected unless
+    // the caller allowlists the pre-migration mode explicitly.
+    expect(verifyQualificationReleaseDigest(legacy)).toBeNull();
     expect(verifyQualificationReleaseDigest(legacy, { digestModes: ['canonical'] })).toBeNull();
-    expect(verifyQualificationReleaseDigest({ ...legacy, decision: 'PROMOTE' as const })).toBeNull();
+    expect(verifyQualificationReleaseDigest(legacy, { digestModes: ['canonical', 'legacy'] })).toBe('legacy');
+    expect(verifyQualificationReleaseDigest({ ...legacy, decision: 'PROMOTE' as const }, { digestModes: ['canonical', 'legacy'] }))
+      .toBeNull();
   });
 });

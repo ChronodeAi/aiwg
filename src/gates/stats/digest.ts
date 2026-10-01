@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../../security/artifact-trust.js';
 
-/** Digest modes for qualification evidence. Canonical is written for new evidence; legacy verifies pre-migration digests. */
+/**
+ * Digest modes for qualification evidence. Canonical is written for new evidence
+ * and is the only default. Legacy (`JSON.stringify`) digests verify only when a
+ * caller explicitly allowlists them for a pre-migration record: a legacy digest
+ * on newly written evidence never verifies by default (fail closed on unknown).
+ */
 export type EvidenceDigestMode = 'canonical' | 'legacy';
 
 export const evidenceDigestModes = (modes: readonly EvidenceDigestMode[] | undefined): readonly EvidenceDigestMode[] =>
-  modes ?? ['canonical', 'legacy'];
+  modes ?? ['canonical'];
 
 /** Canonical-JSON sha256 digest. All new gates and qualification evidence uses this. */
 export function canonicalSha256(value: unknown): `sha256:${string}` {
@@ -21,8 +26,8 @@ export function legacySha256(value: unknown): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`;
 }
 
-/** Returns the first matching mode, or null when neither digest matches. Null digests never match. */
-export function matchEvidenceDigest(value: unknown, digest: unknown, modes: readonly EvidenceDigestMode[] = ['canonical', 'legacy'],
+/** Returns the first matching mode, or null when neither digest matches. Null digests never match. Canonical-only by default; legacy requires an explicit allowlist. */
+export function matchEvidenceDigest(value: unknown, digest: unknown, modes: readonly EvidenceDigestMode[] = ['canonical'],
 ): EvidenceDigestMode | null {
   if (typeof digest !== 'string') return null;
   for (const mode of evidenceDigestModes(modes)) {

@@ -6,10 +6,11 @@ import { wilsonScoreInterval } from './stats/binomial.js';
 import { pairedMeanDifferenceBootstrap } from './stats/bootstrap.js';
 import { PairedDifferenceError } from './stats/error.js';
 import { pairedBinaryDifferenceInterval, pairedNonInferiority } from './stats/paired.js';
-import type { ResolvedBinding } from './registry.js';
+import type { GateRegistry, ResolvedBinding } from './registry.js';
+import { qualifyGateParameter } from './types.js';
 import type {
-  GateDefinition, GateEvidence, GateMetricsDocument, GateOutcome, GateReport, GateStatus,
-  MetricObservation, MetricSeries, Sha256Digest, UpstreamCeiling,
+  GateBinding, GateDefinition, GateEvidence, GateHoldoutInputs, GateMetricsDocument, GateOutcome, GateReport,
+  GateStatus, MetricObservation, MetricSeries, Sha256Digest, UpstreamCeiling,
 } from './types.js';
 
 export class GateEvaluationError extends Error {
@@ -23,19 +24,35 @@ export function maxOutcome(...outcomes: GateOutcome[]): GateOutcome {
   return outcomes.reduce((worst, outcome) => (RANK[outcome] > RANK[worst] ? outcome : worst), 'PROMOTE' as GateOutcome);
 }
 
-/** Severity floor: blocking gates ROLLBACK on breach or insufficient evidence, standard gates HOLD. */
-export function severityOutcome(status: GateStatus, severity: GateDefinition['severity']): GateOutcome {
+/**
+ * Per-gate outcome from its own status: `pass` promotes, `fail` takes the
+ * gate's `onFail`, `insufficient` takes `onInsufficient` (default HOLD).
+ * Shortfalls never PROMOTE.
+ */
+export function gateStatusOutcome(status: GateStatus, gate: Pick<GateDefinition, 'onFail' | 'onInsufficient'>): GateOutcome {
   if (status === 'pass') return 'PROMOTE';
-  return severity === 'blocking' ? 'ROLLBACK' : 'HOLD';
+  if (status === 'fail') return gate.onFail;
+  return gate.onInsufficient ?? 'HOLD';
 }
 
 export interface EvaluateGatesInput {
-  resolved: ResolvedBinding;
+  /** The binding under evaluation. Resolved internally against `registry`; never trusted from the caller. */
+  binding: GateBinding;
+  /** Registry holding every pinned pack and provider. Resolution re-derives packs, digests and parameters. */
+  registry: GateRegistry;
   trustedBindingDigest: Sha256Digest;
+  /** Required trusted holdout record (first-access time + frozen-record digest). Absent refuses. */
+  holdout: GateHoldoutInputs;
   metrics: GateMetricsDocument;
   upstream: UpstreamCeiling | null;
   /** Fake-clock timestamp (ISO date-time). Recorded as evaluatedAt, so identical inputs give identical bytes. */
   now: string;
+  /**
+   * Removed: caller-supplied resolution is never accepted (it let callers drop
+   * packs, empty gates or loosen parameters under a pinned digest). Present only
+   * so old call sites fail with a clear refusal instead of a type error.
+   */
+  resolved?: never;
 }
 
 /** Binds an integrity report for evaluation. The digest is re-derived on every use; a forged copy is refused. */
@@ -61,6 +78,7 @@ function poolObservations(kind: string, observations: MetricObservation[]): Metr
     for (const observation of observations) {
       if (supportOf(observation) === null || typeof observation.events !== 'number'
         || !Number.isSafeInteger(observation.events) || observation.events < 0) return null;
+      if ((observation.events as number) > (observation.n as number)) return null;
       n += observation.n as number;
       events += observation.events;
     }
@@ -79,6 +97,8 @@ function poolObservations(kind: string, observations: MetricObservation[]): Metr
         return null;
       }
       const [both, candidateOnly, baselineOnly, neither] = cells as [number, number, number, number];
+      // The counted support must equal the cell sums; a disagreement is unknown, fail closed.
+      if ((observation.n as number) !== both + candidateOnly + baselineOnly + neither) return null;
       n += observation.n as number;
       total.both += both;
       total.candidateOnly += candidateOnly;
@@ -103,6 +123,7 @@ function poolObservations(kind: string, observations: MetricObservation[]): Metr
     for (const observation of observations) {
       if (supportOf(observation) === null || !Array.isArray(observation.differences)
         || observation.differences.some(value => typeof value !== 'number' || !Number.isFinite(value))) return null;
+      if ((observation.n as number) !== (observation.differences as number[]).length) return null;
       n += observation.n as number;
       differences.push(...(observation.differences as number[]));
     }
@@ -155,10 +176,21 @@ function expandScope(gate: GateDefinition, kind: string, series: MetricSeries | 
   return names.map(slice => ({ slice, observation: series?.bySlice[slice] ?? null }));
 }
 
+function pairedCells(observation: MetricObservation | null | undefined): {
+  both: number; candidateOnly: number; baselineOnly: number; neither: number;
+} | null {
+  if (!isRecord(observation?.paired)) return null;
+  const cells = ['both', 'candidateOnly', 'baselineOnly', 'neither'].map(key =>
+    (observation.paired as Record<string, unknown>)[key]);
+  if (cells.some(cell => !Number.isSafeInteger(cell) || (cell as number) < 0)) return null;
+  const [both, candidateOnly, baselineOnly, neither] = cells as [number, number, number, number];
+  return { both, candidateOnly, baselineOnly, neither };
+}
+
 function evaluateObservation(gate: GateDefinition, observation: MetricObservation | null,
-  context: { parameters: Record<string, number>; metrics: GateMetricsDocument; upstream: UpstreamCeiling | null;
-    nowMs: number; slice: string | null; slices: string[] }): SliceEvaluation {
-  const { parameters, metrics, upstream, nowMs, slice, slices } = context;
+  context: { packId: string; parameters: Record<string, number>; metrics: GateMetricsDocument;
+    upstream: UpstreamCeiling | null; nowMs: number; slice: string | null; slices: string[] }): SliceEvaluation {
+  const { packId, parameters, metrics, upstream, nowMs, slice, slices } = context;
   const base = { slice, n: supportOf(observation) };
   const minimumN = gate.minimumN ?? 0;
   // Evidence gates observe attestations, not counted support; upstream and predicate
@@ -171,7 +203,7 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
   const thresholdValue = (): number | null => {
     if (gate.threshold?.value !== undefined) return gate.threshold.value;
     if (gate.threshold?.param !== undefined) {
-      const value = parameters[gate.threshold.param];
+      const value = parameters[qualifyGateParameter(packId, gate.threshold.param)];
       return typeof value === 'number' ? value : null;
     }
     return null;
@@ -216,13 +248,16 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
           ? { value: gate.threshold.value } : { param: gate.threshold?.param as string }), resolved: target } };
     }
     case 'paired-difference': {
-      const paired = observation?.paired;
-      if (paired === null || paired === undefined) return { ...base, status: 'insufficient', reason: 'paired-unknown' };
+      const cells = pairedCells(observation);
+      if (cells === null) return { ...base, status: 'insufficient', reason: 'paired-unknown' };
+      if ((base.n as number) !== cells.both + cells.candidateOnly + cells.baselineOnly + cells.neither) {
+        return { ...base, status: 'insufficient', reason: 'observation-mismatch' };
+      }
       const method = gate.statistic?.method ?? 'newcombe';
       const levelBps = gate.statistic?.levelBps as number;
       let interval;
       try {
-        interval = pairedBinaryDifferenceInterval({ counts: paired, levelBps, method: method === 'tango' ? 'tango' : 'newcombe-10' });
+        interval = pairedBinaryDifferenceInterval({ counts: cells, levelBps, method: method === 'tango' ? 'tango' : 'newcombe-10' });
       } catch (error) {
         if (error instanceof PairedDifferenceError) return { ...base, status: 'insufficient', reason: 'paired-invalid' };
         throw error;
@@ -271,6 +306,7 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
       if (typeof events !== 'number' || !Number.isSafeInteger(events) || events < 0) {
         return { ...base, status: 'insufficient', reason: 'events-unknown', events: null };
       }
+      if (events > (base.n as number)) return { ...base, status: 'insufficient', reason: 'events-exceed-n', events };
       const target = thresholdValue();
       if (target === null) return { ...base, status: 'insufficient', reason: 'parameter-missing', events };
       const passed = gate.kind === 'count-max' ? events <= target : events >= target;
@@ -350,38 +386,74 @@ function upstreamOutcome(upstream: UpstreamCeiling | null): { ceiling: GateOutco
 }
 
 /**
- * Pure, deterministic gate evaluation. Precondition violations (untrusted digests,
- * provider pin mismatches, frozen-after-holdout bindings) throw before any gate runs,
- * so failure paths never discard completed results. Per-gate shortfalls report
- * `insufficient`, which never promotes.
+ * Pure, deterministic gate evaluation. The binding is resolved internally
+ * against the registry: pack pins (authored + composed digests), provider pins
+ * and parameters are re-derived, so no caller-supplied resolution is accepted.
+ * Precondition violations (untrusted digests, provider pin mismatches,
+ * missing trusted holdout inputs, frozen-after-holdout bindings) throw before
+ * any gate runs, so failure paths never discard completed results. Per-gate
+ * shortfalls report `insufficient`, which never promotes.
+ *
+ * Interval levels are two-sided confidence levels applied to one-sided bounds:
+ * the reported bound is the one-sided edge of a two-sided interval, which is
+ * conservative (wider) relative to a one-sided interval at the same level.
  */
 export function evaluateGates(input: EvaluateGatesInput): GateReport {
-  const { resolved, trustedBindingDigest, metrics, upstream, now } = input;
-  const { binding, packs, parameters } = resolved;
-  const nowMs = Date.parse(now);
-  if (!Number.isFinite(nowMs)) fail('evaluation timestamp is not a valid date-time');
-  if (artifactDigest(binding) !== trustedBindingDigest) fail('binding digest does not match its trusted pin');
+  const { binding, registry, trustedBindingDigest, holdout, metrics, upstream, now } = input;
+  if ('resolved' in (input as unknown as Record<string, unknown>)
+    && (input as unknown as Record<string, unknown>).resolved !== undefined) {
+    fail('caller-supplied gate resolution is not accepted: pass the binding and registry');
+  }
+  if (registry === undefined || registry === null) fail('a gate registry is required for internal resolution');
+  // Reserve before dispatch: resolve and fully validate the binding (pins,
+  // providers, parameters, slices) before any gate observes any metric.
+  const resolved = registry.resolveBinding(binding);
+  const { packs, parameters } = resolved;
+  // 1:1 pins<->packs: the pin list and the resolved packs must match exactly.
+  if (packs.length !== binding.spec.packs.length) fail('binding pins do not match resolved packs 1:1');
   for (const pack of packs) {
+    // Recompute the authored digest: the stored pin is never trusted on its own.
+    if ((artifactDigest(pack.authored) as Sha256Digest) !== pack.digest) {
+      fail(`pack digest mismatch for ${pack.authored.metadata.id}`);
+    }
     const pin = binding.spec.packs.find(candidate => candidate.id === pack.authored.metadata.id);
-    if (pin === undefined || pin.version !== pack.authored.metadata.version || pin.digest !== pack.digest) {
+    if (pin === undefined || pin.version !== pack.authored.metadata.version
+      || pin.digest !== pack.digest || pin.resolvedDigest !== pack.resolvedDigest) {
       fail(`pack pin mismatch for ${pack.authored.metadata.id}`);
     }
   }
+  // Every metric section consumed must be pinned; an unpinned section is
+  // refused rather than evaluated. Null version/digests never match.
   for (const pin of binding.spec.metricProviders) {
     const section = metrics.providers[pin.id];
     if (section === undefined || section.version !== pin.version || section.sourceDigest !== pin.sourceDigest) {
       fail(`metric provider pin mismatch for ${pin.id}`);
     }
   }
+  for (const id of Object.keys(metrics.providers)) {
+    if (!binding.spec.metricProviders.some(pin => pin.id === id)) {
+      fail(`metric provider ${id} is not pinned by the binding`);
+    }
+  }
   if (upstream !== null && artifactDigest(upstream.metadata) !== upstream.digest) {
     fail('upstream integrity digest does not match its report');
   }
+  const nowMs = Date.parse(now);
+  if (!Number.isFinite(nowMs)) fail('evaluation timestamp is not a valid date-time');
+  if (artifactDigest(binding) !== trustedBindingDigest) fail('binding digest does not match its trusted pin');
+  // Holdout freeze is enforced from the REQUIRED trusted holdout record, never
+  // from binding fields (which the study author controls).
+  if (holdout === undefined || holdout === null) fail('trusted holdout inputs are required for evaluation');
+  if (holdout.frozenDigest !== trustedBindingDigest) fail('binding digest does not match the frozen record digest');
   const frozenAt = Date.parse(binding.spec.frozenAt);
+  if (!Number.isFinite(frozenAt)) fail('binding freeze timestamp is not a valid date-time');
   if (frozenAt > nowMs) fail('binding freezes after the evaluation timestamp');
-  if (binding.spec.holdoutAccessedAt !== undefined && binding.spec.holdoutAccessedAt !== null) {
-    const accessedAt = Date.parse(binding.spec.holdoutAccessedAt);
+  if (holdout.firstAccessedAt !== undefined && holdout.firstAccessedAt !== null) {
+    const accessedAt = Date.parse(holdout.firstAccessedAt);
     if (!Number.isFinite(accessedAt)) fail('holdout access timestamp is not a valid date-time');
     if (frozenAt >= accessedAt) fail('binding froze at or after holdout access: evaluation refused');
+  } else if (holdout.firstAccessedAt !== null) {
+    fail('trusted holdout first-access time must be a date-time or null');
   }
   const gateEvidence: GateEvidence[] = [];
   for (const pack of packs) {
@@ -391,9 +463,27 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
       const targets = gate.kind === 'upstream-ceiling' || gate.kind === 'predicate'
         ? [{ slice: null as string | null, observation: null }]
         : expandScope(gate, kind, series, binding.spec.slices);
+      if (!targets.length) {
+        // Unreachable through resolveBinding (vacuous scopes are load errors),
+        // but a zero-target gate must never PROMOTE vacuously.
+        gateEvidence.push({
+          gateId: gate.id, kind: gate.kind,
+          scope: { mode: gate.scope.mode, ...(gate.scope.slices === undefined ? {} : { slices: [...gate.scope.slices] }) },
+          slice: null, n: null, status: 'insufficient', outcome: gate.onInsufficient ?? 'HOLD',
+          reasons: [`${gate.id}:no-evaluation-targets`],
+        });
+        continue;
+      }
       for (const target of targets) {
         const evaluation = evaluateObservation(gate, target.observation,
-          { parameters, metrics, upstream, nowMs, slice: target.slice, slices: binding.spec.slices });
+          { packId: pack.authored.metadata.id, parameters, metrics, upstream, nowMs,
+            slice: target.slice, slices: binding.spec.slices });
+        // Upstream-ceiling gates mirror the upstream verdict exactly: compromise
+        // rolls back, allowlist problems hold, clean promotes. The gate's own
+        // onFail never escalates (or softens) the trusted verdict.
+        const outcome = gate.kind === 'upstream-ceiling' && evaluation.status === 'fail'
+          ? upstreamOutcome(upstream).ceiling
+          : gateStatusOutcome(evaluation.status, gate);
         gateEvidence.push({
           gateId: gate.id, kind: gate.kind,
           scope: { mode: gate.scope.mode, ...(gate.scope.slices === undefined ? {} : { slices: [...gate.scope.slices] }) },
@@ -402,9 +492,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
           ...(evaluation.statistic === undefined ? {} : { statistic: evaluation.statistic }),
           ...(evaluation.threshold === undefined ? {} : { threshold: evaluation.threshold }),
           status: evaluation.status,
-          outcome: gate.kind === 'upstream-ceiling' && evaluation.status === 'fail'
-            ? upstreamFailOutcome(upstream, gate.severity)
-            : severityOutcome(evaluation.status, gate.severity),
+          outcome,
           reasons: [`${gate.id}:${evaluation.reason}`],
         });
       }
@@ -420,7 +508,8 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     metadata: { id: binding.metadata.id, version: binding.metadata.version,
       description: `GateReport for ${binding.metadata.id}` },
     binding: { id: binding.metadata.id, version: binding.metadata.version, digest: trustedBindingDigest },
-    packs: packs.map(pack => ({ id: pack.authored.metadata.id, version: pack.authored.metadata.version, digest: pack.digest })),
+    packs: packs.map(pack => ({ id: pack.authored.metadata.id, version: pack.authored.metadata.version,
+      digest: pack.digest, resolvedDigest: pack.resolvedDigest })),
     metricProviders: binding.spec.metricProviders.map(pin => ({ ...pin })),
     metricsDigest: artifactDigest(metrics),
     gateEvidence,
@@ -437,12 +526,4 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     evaluatedAt: now,
   };
   return { ...body, digest: artifactDigest(body) };
-}
-
-/** An upstream-ceiling breach mirrors the upstream verdict: compromise forces ROLLBACK, otherwise at least HOLD. */
-function upstreamFailOutcome(upstream: UpstreamCeiling | null, severity: GateDefinition['severity']): GateOutcome {
-  const floor = severityOutcome('fail', severity);
-  if (upstream === null) return floor;
-  const { ceiling } = upstreamOutcome(upstream);
-  return maxOutcome(floor, ceiling);
 }

@@ -13,7 +13,7 @@ export type {
   PairedBinaryCounts, PairedDifferenceInterval, QualificationSplit,
 } from '../../gates/stats/index.js';
 
-/** Digest modes accepted when verifying a frozen benchmark plan. The operator default accepts the versioned legacy mode so pre-migration evidence still verifies. */
+/** Digest modes accepted when verifying a frozen benchmark plan. Canonical-only by default; pass an explicit legacy allowlist to verify pre-migration evidence. */
 export type BenchmarkDigestModes = readonly EvidenceDigestMode[];
 
 export interface FrozenBinaryBenchmarkPlan {
@@ -63,9 +63,9 @@ function buildBinaryBenchmarkPlanFields(
 }
 
 /**
- * Verifies a frozen plan digest without scoring. Accepts the canonical digest and, by
- * default, the versioned legacy (`JSON.stringify`) digest so pre-migration evidence still
- * verifies. Pass `{ digestModes: ['canonical'] }` to reject legacy digests.
+ * Verifies a frozen plan digest without scoring. Canonical-only by default; pass
+ * `{ digestModes: ['canonical', 'legacy'] }` to allowlist the versioned legacy
+ * (`JSON.stringify`) digest for pre-migration evidence.
  */
 export function verifyBinaryBenchmarkPlanDigest(
   plan: FrozenBinaryBenchmarkPlan, labels: readonly BinaryBenchmarkLabel[],

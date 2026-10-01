@@ -238,9 +238,10 @@ export function buildQualificationReleaseRecord(
 }
 
 /**
- * Verifies a release record digest without rebuilding it. Accepts the canonical digest
- * and, by default, the versioned legacy (`JSON.stringify`) digest so pre-migration
- * evidence still verifies. Returns the matching mode, or null when neither matches.
+ * Verifies a release record digest without rebuilding it. Canonical-only by default;
+ * pass `{ digestModes: ['canonical', 'legacy'] }` to allowlist the versioned legacy
+ * (`JSON.stringify`) digest for pre-migration evidence. Returns the matching mode,
+ * or null when neither matches.
  */
 export function verifyQualificationReleaseDigest(
   record: QualificationReleaseRecord, options?: { digestModes?: readonly EvidenceDigestMode[] },

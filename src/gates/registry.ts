@@ -5,6 +5,7 @@ import { validateGateDocument } from './schema.js';
 import type {
   ArtifactPinLike, GateBinding, GateDefinition, GatePack, GateParameter, Sha256Digest,
 } from './types.js';
+import { qualifyGateParameter } from './types.js';
 
 export class GateRegistryError extends Error {
   constructor(message: string) { super(message); this.name = 'GateRegistryError'; }
@@ -160,6 +161,12 @@ export function validateResolvedPack(pack: GatePack, providers: MetricProviderRe
     }
   }
   for (const gate of pack.spec.gates) {
+    if (gate.onFail !== 'HOLD' && gate.onFail !== 'ROLLBACK') {
+      fail(`gate ${gate.id} onFail must be HOLD or ROLLBACK, never PROMOTE`);
+    }
+    if (gate.onInsufficient !== undefined && gate.onInsufficient !== 'HOLD' && gate.onInsufficient !== 'ROLLBACK') {
+      fail(`gate ${gate.id} onInsufficient must be HOLD or ROLLBACK, never PROMOTE`);
+    }
     if (gate.metric !== undefined) {
       const declared = pack.spec.metrics[gate.metric.name];
       if (declared === undefined || declared.provider !== gate.metric.provider) {
@@ -190,8 +197,10 @@ export function validateResolvedPack(pack: GatePack, providers: MetricProviderRe
       && (gate.scope.slices === undefined || !gate.scope.slices.length)) {
       fail(`gate ${gate.id} scope ${gate.scope.mode} requires a nonempty slices list`);
     }
-    if (gate.scope.except !== undefined && gate.scope.mode !== 'all' && gate.scope.mode !== 'each') {
-      fail(`gate ${gate.id} scope except is only allowed with mode all|each`);
+    // `except` is honoured only by `each` (per-slice minus exclusions). Any other
+    // mode silently ignoring it would be a fail-open scoping bug, so it is a load error.
+    if (gate.scope.except !== undefined && gate.scope.mode !== 'each') {
+      fail(`gate ${gate.id} scope except is only allowed with mode each`);
     }
   }
 }
@@ -204,6 +213,18 @@ export function resolveThresholdDefault(gate: GateDefinition, params: Record<str
   return params[gate.threshold.param]?.default ?? null;
 }
 
+/**
+ * Scope-tightening rules per gate kind. A scope change is a tightening only when
+ * every world that fails the child also fails the parent:
+ * - `listed` may only widen (more slices fail in a superset of worlds);
+ * - `pooled` sets are fixed;
+ * - `listed -> each` widens coverage to the whole binding inventory;
+ * - `all -> each` is a tightening only when per-slice checks are strictly harder
+ *   than the pooled check (`count-min`, `minimum-n`); for `count-max` the pooled
+ *   bound is strictly harder (pooled<=2 implies per-slice<=2, not vice versa),
+ *   and for interval/paired/bootstrap/value gates pooled and per-slice bounds
+ *   are incomparable — so the change is rejected for every other kind.
+ */
 function assertScopeTightens(parent: GateDefinition, child: GateDefinition): void {
   const from = parent.scope;
   const to = child.scope;
@@ -226,15 +247,16 @@ function assertScopeTightens(parent: GateDefinition, child: GateDefinition): voi
     }
     return;
   }
-  // all -> each checks every slice instead of one pool; listed -> each widens
-  // coverage to the whole binding inventory, which always includes the listed set.
-  if ((from.mode === 'all' || from.mode === 'listed') && to.mode === 'each') return;
+  if (from.mode === 'listed' && to.mode === 'each') return;
+  if (from.mode === 'all' && to.mode === 'each'
+    && (child.kind === 'count-min' || child.kind === 'minimum-n')) return;
   fail(`gate ${child.id} scope change ${from.mode} -> ${to.mode} is not a monotone tightening`);
 }
 
 /**
  * Proves monotone tightening of a child gate over its parent. Any loosening —
- * a relaxed threshold, a lowered minimumN, a demoted severity, a widened scope
+ * a relaxed threshold, a literal rewritten as a bindable parameter, a renamed
+ * parameter, a lowered minimumN, a demoted outcome, a widened scope
  * or a changed statistic — is a load error.
  */
 export function assertGateTightens(parent: GateDefinition, child: GateDefinition,
@@ -261,6 +283,18 @@ export function assertGateTightens(parent: GateDefinition, child: GateDefinition
   if (marginBefore !== undefined && marginAfter !== undefined && marginAfter < marginBefore) {
     fail(`gate ${child.id} may only raise marginBps`);
   }
+  // A literal threshold is a pinned bound. Rewriting it as a parameter hands the
+  // bound to the binding, whose allowed range (e.g. 0..10000 bps) is wider than
+  // the literal — a loosening no default-equality check can see. Forbid it.
+  if (parent.threshold?.value !== undefined && child.threshold?.param !== undefined) {
+    fail(`gate ${child.id} may not convert a literal threshold into a parameter`);
+  }
+  // Renaming a parameter rebinds the gate to a fresh default and range. Params
+  // may only keep their name with a tighter-or-equal default.
+  if (parent.threshold?.param !== undefined && child.threshold?.param !== undefined
+    && parent.threshold.param !== child.threshold.param) {
+    fail(`gate ${child.id} may not rename its threshold parameter`);
+  }
   const before = resolveThresholdDefault(parent, params);
   const after = resolveThresholdDefault(child, params);
   if (before === null || after === null) {
@@ -271,8 +305,13 @@ export function assertGateTightens(parent: GateDefinition, child: GateDefinition
     fail(`gate ${child.id} threshold ${before} -> ${after} loosens direction ${child.direction}`);
   }
   if ((child.minimumN ?? 0) < (parent.minimumN ?? 0)) fail(`gate ${child.id} may only raise minimumN`);
-  if (parent.severity === 'blocking' && child.severity !== 'blocking') {
-    fail(`gate ${child.id} may not demote severity blocking -> standard`);
+  if (parent.onFail === 'ROLLBACK' && child.onFail !== 'ROLLBACK') {
+    fail(`gate ${child.id} may not demote onFail ROLLBACK -> HOLD`);
+  }
+  const insufficientBefore = parent.onInsufficient ?? 'HOLD';
+  const insufficientAfter = child.onInsufficient ?? 'HOLD';
+  if (insufficientBefore === 'ROLLBACK' && insufficientAfter !== 'ROLLBACK') {
+    fail(`gate ${child.id} may not demote onInsufficient ROLLBACK -> HOLD`);
   }
   if (parent.floor === true && child.floor !== true) fail(`gate ${child.id} is a floor gate and cannot be un-floored`);
   assertScopeTightens(parent, child);
@@ -288,12 +327,15 @@ export function assertGateTightens(parent: GateDefinition, child: GateDefinition
 export interface ResolvedPack {
   authored: GatePack;
   digest: Sha256Digest;
+  /** Digest of the composed (extends-resolved) pack. Pinned in bindings and reports. */
+  resolvedDigest: Sha256Digest;
   resolved: GatePack;
 }
 
 export interface ResolvedBinding {
   binding: GateBinding;
   packs: ResolvedPack[];
+  /** Parameter values keyed by qualified name `<packId>.<param>`. */
   parameters: Record<string, number>;
 }
 
@@ -318,20 +360,23 @@ export class GateRegistry {
       }
     }
     if (this.packs.has(pack.metadata.id)) throw new GateRegistryError(`duplicate gate pack: ${pack.metadata.id}`);
-    if (!pack.metadata.id.startsWith('aiwg:')) {
-      const rest = splitPackId(pack.metadata.id).rest;
-      for (const id of this.packs.keys()) {
-        if (id.startsWith('aiwg:') && splitPackId(id).rest === rest) {
-          throw new GateRegistryError(`pack ${pack.metadata.id} shadows shipped pack ${id}`);
-        }
+    // Shipped-name protection, order-independent: an aiwg: rest-path can never
+    // coexist with the same rest-path from any other namespace, whichever
+    // registers first.
+    for (const id of this.packs.keys()) {
+      if (splitPackId(id).rest !== rest) continue;
+      const otherShipped = id.startsWith('aiwg:');
+      const nextShipped = pack.metadata.id.startsWith('aiwg:');
+      if (otherShipped || nextShipped) {
+        const shipped = nextShipped ? pack.metadata.id : id;
+        const shadow = nextShipped ? id : pack.metadata.id;
+        throw new GateRegistryError(`pack ${shadow} shadows shipped pack ${shipped}`);
       }
     }
-    let resolved = pack;
     if (pack.spec.extends !== undefined) {
-      const parent = this.packs.get(pack.spec.extends);
-      if (parent === undefined) throw new GateRegistryError(`pack ${pack.metadata.id} extends unknown pack ${pack.spec.extends}`);
-      resolved = this.applyExtends(parent, pack);
+      this.requireParent(pack.metadata.id, pack.spec.extends);
     }
+    const resolved = this.composeAuthored(pack);
     validateResolvedPack(resolved, this.providers);
     const { digest } = { digest: artifactDigest(pack) as Sha256Digest };
     this.packs.set(pack.metadata.id, { authored: pack, digest, namespace });
@@ -339,26 +384,57 @@ export class GateRegistry {
   }
 
   getPack(id: string): GatePack {
-    const entry = this.packs.get(id);
-    if (entry === undefined) throw new GateRegistryError(`unknown gate pack: ${id}`);
-    return entry.authored;
+    return this.lookupPack(id).authored;
   }
 
   resolvePack(id: string): ResolvedPack {
-    const entry = this.packs.get(id);
-    if (entry === undefined) throw new GateRegistryError(`unknown gate pack: ${id}`);
-    return { authored: entry.authored, digest: entry.digest, resolved: this.resolveAuthored(entry.authored) };
+    const entry = this.lookupPack(id);
+    const resolved = this.composeAuthored(entry.authored);
+    return {
+      authored: entry.authored, digest: entry.digest,
+      resolvedDigest: artifactDigest(resolved) as Sha256Digest, resolved,
+    };
   }
 
-  private resolveAuthored(pack: GatePack): GatePack {
+  /**
+   * Full-id lookup, or rest-path lookup when the id carries no namespace.
+   * A rest-path shared by two namespaces is `ambiguous`: callers must pin the
+   * full id. Bindings always pin full ids, so they never hit ambiguity.
+   */
+  private lookupPack(id: string): { authored: GatePack; digest: Sha256Digest; namespace: GateNamespace } {
+    if (id.includes(':')) {
+      const entry = this.packs.get(id);
+      if (entry === undefined) throw new GateRegistryError(`unknown gate pack: ${id}`);
+      return entry;
+    }
+    const matches = [...this.packs.keys()].filter(key => splitPackId(key).rest === id);
+    if (!matches.length) throw new GateRegistryError(`unknown gate pack: ${id}`);
+    if (matches.length > 1) {
+      throw new GateRegistryError(`ambiguous gate pack '${id}': ${matches.sort().join(', ')} (pin the full id)`);
+    }
+    return this.packs.get(matches[0] as string)!;
+  }
+
+  private requireParent(childId: string, pin: GatePack['spec']['extends'] & object): {
+    authored: GatePack; digest: Sha256Digest;
+  } {
+    const entry = this.packs.get(pin.id);
+    if (entry === undefined) throw new GateRegistryError(`pack ${childId} extends unknown pack ${pin.id}`);
+    if (entry.authored.metadata.version !== pin.version || entry.digest !== pin.digest) {
+      throw new GateRegistryError(`pack ${childId} parent pin mismatch for ${pinLabel(pin)}`);
+    }
+    return entry;
+  }
+
+  private composeAuthored(pack: GatePack): GatePack {
     if (pack.spec.extends === undefined) return pack;
-    const parent = this.packs.get(pack.spec.extends);
-    if (parent === undefined) throw new GateRegistryError(`pack ${pack.metadata.id} extends unknown pack ${pack.spec.extends}`);
+    const parent = this.packs.get(pack.spec.extends.id);
+    if (parent === undefined) throw new GateRegistryError(`pack ${pack.metadata.id} extends unknown pack ${pack.spec.extends.id}`);
     return this.applyExtends(parent, pack);
   }
 
   private applyExtends(parent: { authored: GatePack }, child: GatePack): GatePack {
-    const parentResolved = this.resolveAuthored(parent.authored);
+    const parentResolved = this.composeAuthored(parent.authored);
     const mergedParams: Record<string, GateParameter> = { ...(parentResolved.spec.parameters ?? {}) };
     for (const [name, parameter] of Object.entries(child.spec.parameters ?? {})) {
       const before = mergedParams[name];
@@ -389,6 +465,7 @@ export class GateRegistry {
     for (const gate of parentResolved.spec.gates) {
       const override = (child.spec.gates ?? []).find(candidate => candidate.id === gate.id);
       if (override === undefined) {
+        // Removing a non-floor gate is allowed; floor gates pin the minimum.
         if (gate.floor === true) throw new GateRegistryError(`pack ${child.metadata.id} may not remove floor gate ${gate.id}`);
         continue;
       }
@@ -412,7 +489,9 @@ export class GateRegistry {
       apiVersion: child.apiVersion, kind: child.kind, metadata: child.metadata,
       spec: {
         extends: child.spec.extends, parameters: mergedParams, metrics: mergedMetrics, gates: merged,
-        combine: child.spec.combine,
+        // Omit `combine` when the child leaves it unset: a present-but-undefined
+        // key is not JSON and would poison the composed-pack digest.
+        ...(child.spec.combine === undefined ? {} : { combine: child.spec.combine }),
       },
     };
   }
@@ -420,13 +499,30 @@ export class GateRegistry {
   resolveBinding(doc: unknown): ResolvedBinding {
     const binding = validateGateDocument<GateBinding>(doc);
     if (binding.kind !== 'GateBinding') throw new GateRegistryError('resolveBinding requires a GateBinding document');
+    // 1:1 pins<->packs: no duplicate pins, every pin resolves to exactly one pack.
+    const seenPins = new Set<string>();
+    for (const pin of binding.spec.packs) {
+      if (seenPins.has(pin.id)) throw new GateRegistryError(`binding ${binding.metadata.id} pins pack ${pin.id} twice`);
+      seenPins.add(pin.id);
+    }
     const packs = binding.spec.packs.map(pin => {
-      const entry = this.packs.get(pin.id);
-      if (entry === undefined) throw new GateRegistryError(`binding ${binding.metadata.id} pins unknown pack ${pinLabel(pin)}`);
-      if (entry.authored.metadata.version !== pin.version || entry.digest !== pin.digest) {
+      const entry = this.lookupPack(pin.id);
+      if (entry.authored.metadata.id !== pin.id) {
+        throw new GateRegistryError(`binding ${binding.metadata.id} must pin the full pack id (got '${pin.id}')`);
+      }
+      // Recompute the authored digest: the registry's stored pin is never trusted on its own.
+      if ((artifactDigest(entry.authored) as Sha256Digest) !== entry.digest
+        || entry.authored.metadata.version !== pin.version || entry.digest !== pin.digest) {
         throw new GateRegistryError(`binding ${binding.metadata.id} pack pin mismatch for ${pinLabel(pin)}`);
       }
-      return { authored: entry.authored, digest: entry.digest, resolved: this.resolveAuthored(entry.authored) };
+      const resolved = this.composeAuthored(entry.authored);
+      if ((artifactDigest(resolved) as Sha256Digest) !== pin.resolvedDigest) {
+        throw new GateRegistryError(`binding ${binding.metadata.id} composed-pack pin mismatch for ${pinLabel(pin)}`);
+      }
+      return {
+        authored: entry.authored, digest: entry.digest,
+        resolvedDigest: pin.resolvedDigest, resolved,
+      };
     });
     for (const pin of binding.spec.metricProviders) {
       if (!this.providers.has(pin.id)) throw new GateRegistryError(`binding ${binding.metadata.id} pins unknown provider ${pin.id}`);
@@ -435,19 +531,49 @@ export class GateRegistry {
         throw new GateRegistryError(`binding ${binding.metadata.id} provider pin mismatch for ${pin.id}`);
       }
     }
-    const declared: Record<string, GateParameter> = {};
-    for (const pack of packs) Object.assign(declared, pack.resolved.spec.parameters ?? {});
+    // Every provider used by any gate metric must be pinned, else evaluation
+    // would consume unpinned code.
+    const requiredProviders = new Set<string>();
+    for (const pack of packs) {
+      for (const gate of pack.resolved.spec.gates) {
+        if (gate.metric !== undefined) requiredProviders.add(gate.metric.provider);
+      }
+    }
+    const pinnedProviders = new Set(binding.spec.metricProviders.map(pin => pin.id));
+    for (const id of requiredProviders) {
+      if (!pinnedProviders.has(id)) {
+        throw new GateRegistryError(`binding ${binding.metadata.id} leaves provider ${id} used by a gate unpinned`);
+      }
+    }
+    // Parameters are namespaced per pack (<packId>.<param>): colliding short
+    // names across packs can never merge.
+    const declared = new Map<string, GateParameter>();
+    for (const pack of packs) {
+      for (const [name, parameter] of Object.entries(pack.resolved.spec.parameters ?? {})) {
+        declared.set(qualifyGateParameter(pack.authored.metadata.id, name), parameter);
+      }
+    }
     const parameters: Record<string, number> = {};
-    for (const [name, parameter] of Object.entries(declared)) {
-      const value = binding.spec.parameters[name] ?? parameter.default;
-      if (value === undefined) throw new GateRegistryError(`binding ${binding.metadata.id} is missing required parameter ${name}`);
-      checkBindingValue(name, parameter, value);
-      parameters[name] = value;
+    for (const [qualified, parameter] of declared) {
+      const value = binding.spec.parameters[qualified] ?? parameter.default;
+      if (value === undefined) throw new GateRegistryError(`binding ${binding.metadata.id} is missing required parameter ${qualified}`);
+      checkBindingValue(qualified, parameter, value);
+      parameters[qualified] = value;
     }
     for (const name of Object.keys(binding.spec.parameters)) {
-      if (declared[name] === undefined) throw new GateRegistryError(`binding ${binding.metadata.id} sets undeclared parameter ${name}`);
+      if (!declared.has(name)) throw new GateRegistryError(`binding ${binding.metadata.id} sets undeclared parameter ${name}`);
     }
     const slices = new Set(binding.spec.slices);
+    // sliceGroups are validated against the inventory but never gate: pooled-of
+    // group references are deferred, so an unknown grouped slice is a load error
+    // rather than a silently ignored deviation.
+    for (const [group, members] of Object.entries(binding.spec.sliceGroups ?? {})) {
+      for (const slice of members) {
+        if (!slices.has(slice)) {
+          throw new GateRegistryError(`binding ${binding.metadata.id} sliceGroup '${group}' names slice '${slice}' outside the binding inventory`);
+        }
+      }
+    }
     const references = new Set(binding.spec.references.map(reference => reference.name));
     for (const pack of packs) {
       for (const gate of pack.resolved.spec.gates) {
@@ -456,6 +582,15 @@ export class GateRegistry {
         }
         if (gate.statistic?.vs !== undefined && !references.has(gate.statistic.vs)) {
           throw new GateRegistryError(`gate ${gate.id} contrasts undeclared reference '${gate.statistic.vs}'`);
+        }
+        // Vacuous scopes are a load error when statically determinable: an
+        // `each` gate whose exclusions cover the whole inventory evaluates zero
+        // targets and must never PROMOTE vacuously.
+        if (gate.scope.mode === 'each') {
+          const excluded = new Set(gate.scope.except ?? []);
+          if (binding.spec.slices.every(slice => excluded.has(slice))) {
+            throw new GateRegistryError(`gate ${gate.id} each-scope excludes every binding slice`);
+          }
         }
       }
     }

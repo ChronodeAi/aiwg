@@ -17,6 +17,21 @@ export interface ArtifactPinLike {
   digest: Sha256Digest;
 }
 
+/** A binding/report pin over one gate pack: the authored digest plus the digest of the composed (extends-resolved) pack. */
+export interface GatePackPin {
+  id: string;
+  version: string;
+  digest: Sha256Digest;
+  resolvedDigest: Sha256Digest;
+}
+
+/** A full pin over a parent pack, used for `extends`. The digest covers the parent's authored bytes. */
+export interface GateParentPin {
+  id: string;
+  version: string;
+  digest: Sha256Digest;
+}
+
 export type GateKind =
   | 'interval-bound' | 'paired-difference' | 'bootstrap-bound' | 'count-max' | 'count-min'
   | 'value-threshold' | 'minimum-n' | 'evidence' | 'predicate' | 'upstream-ceiling';
@@ -52,7 +67,7 @@ export interface GateScope {
   except?: string[];
 }
 
-export type GateSeverity = 'standard' | 'blocking';
+export type GateFailOutcome = 'HOLD' | 'ROLLBACK';
 
 export type TighteningDirection = 'lower-is-stricter' | 'higher-is-stricter';
 
@@ -65,7 +80,10 @@ export interface GateDefinition {
   threshold?: GateThreshold;
   minimumN?: number;
   scope: GateScope;
-  severity: GateSeverity;
+  /** Outcome when the gate fails. Never PROMOTE. */
+  onFail: GateFailOutcome;
+  /** Outcome when evidence is insufficient. Never PROMOTE; defaults to HOLD. */
+  onInsufficient?: GateFailOutcome;
   direction: TighteningDirection;
   floor?: boolean;
   evidence?: { required: string[] };
@@ -88,7 +106,7 @@ export interface GatePack {
   kind: 'GatePack';
   metadata: GateMetadata;
   spec: {
-    extends?: string;
+    extends?: GateParentPin;
     parameters?: Record<string, GateParameter>;
     metrics: Record<string, { provider: string; kind: MetricKind; description?: string }>;
     gates: GateDefinition[];
@@ -104,12 +122,20 @@ export interface GateReference {
   baseline?: ArtifactPinLike;
 }
 
+/**
+ * Qualifies a pack parameter for a binding: `<packId>.<param>`. Parameters are
+ * namespaced per pack so two packs declaring the same short name can never
+ * collide or silently merge in a binding.
+ */
+export const qualifyGateParameter = (packId: string, name: string): string => `${packId}.${name}`;
+
 export interface GateBinding {
   apiVersion: typeof GATES_API_VERSION;
   kind: 'GateBinding';
   metadata: GateMetadata;
   spec: {
-    packs: ArtifactPinLike[];
+    packs: GatePackPin[];
+    /** Parameter values keyed by qualified name (`<packId>.<param>`). */
     parameters: Record<string, number>;
     slices: string[];
     sliceGroups?: Record<string, string[]>;
@@ -118,11 +144,28 @@ export interface GateBinding {
     ceiling?: GateOutcome;
     registeredAt: string;
     frozenAt: string;
+    /**
+     * Deprecated and ignored by the evaluator. Holdout timing comes only from
+     * the trusted holdout record passed to `evaluateGates`, never from the
+     * binding under evaluation.
+     */
     holdoutAccessedAt?: string | null;
     splitDigest?: Sha256Digest;
     corpusDigest?: Sha256Digest;
     goldDigest?: Sha256Digest;
   };
+}
+
+/**
+ * Trusted holdout inputs for one evaluation, taken from the HeldoutFrozen /
+ * first-access record — never from the binding. Both fields are required:
+ * a missing record refuses evaluation.
+ */
+export interface GateHoldoutInputs {
+  /** First test-access timestamp, or null when no access has been recorded. */
+  firstAccessedAt: string | null;
+  /** Binding digest in the frozen record; must match the trusted binding digest. */
+  frozenDigest: Sha256Digest;
 }
 
 export type GateOutcome = 'PROMOTE' | 'HOLD' | 'ROLLBACK';
@@ -195,7 +238,7 @@ export interface GateReport {
   kind: 'GateReport';
   metadata: GateMetadata;
   binding: ArtifactPinLike;
-  packs: ArtifactPinLike[];
+  packs: GatePackPin[];
   metricProviders: { id: string; version: string; sourceDigest: Sha256Digest }[];
   metricsDigest: Sha256Digest;
   gateEvidence: GateEvidence[];

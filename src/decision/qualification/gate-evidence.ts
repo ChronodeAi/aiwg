@@ -136,8 +136,12 @@ function validSplitPlan(value: unknown): value is FrozenBinaryBenchmarkPlan {
   if (!record(value) || value.schemaVersion !== GATE_ARTIFACT_SCHEMAS['immutable-splits']) return false;
   const { digest, ...fields } = value as unknown as FrozenBinaryBenchmarkPlan;
   try { verifyQualificationSplits(fields.splits); } catch { return false; }
-  // Versioned legacy mode: pre-migration plans hashed JSON.stringify output. Both modes verify by default.
-  return typeof digest === 'string' && sha256Pattern.test(digest) && matchEvidenceDigest(fields, digest) !== null
+  // Versioned legacy allowlist: pre-migration plans hashed JSON.stringify output.
+  // The v1 schema version is the pre-migration lineage, so it alone allowlists
+  // legacy; any newer schema version verifies canonical-only.
+  const modes = value.schemaVersion === 'decision-binary-benchmark-plan/v1'
+    ? ['canonical', 'legacy'] as const : ['canonical'] as const;
+  return typeof digest === 'string' && sha256Pattern.test(digest) && matchEvidenceDigest(fields, digest, [...modes]) !== null
     && sha256Pattern.test(String(fields.datasetDigest));
 }
 

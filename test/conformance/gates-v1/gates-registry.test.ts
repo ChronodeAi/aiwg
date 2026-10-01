@@ -2,16 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { artifactDigest } from '../../../src/decision/validate.js';
 import { GateRegistry, GateRegistryError, splitPackId } from '../../../src/gates/registry.js';
 import type { GateDefinition, GatePack } from '../../../src/gates/types.js';
-import { loadPack, makeBinding, testRegistry } from './helper.js';
+import { createCoreProviderRegistry } from '../../../src/gates/providers/index.js';
+import { loadPack, makeBinding, packParam, testRegistry } from './helper.js';
 
 const origin = { namespace: 'aiwg', bundle: 'test-gates' } as const;
+
+const parentPin = (pack: GatePack = loadPack()) => ({
+  id: pack.metadata.id, version: pack.metadata.version, digest: artifactDigest(pack),
+});
 
 const childPack = (gates: GateDefinition[], extra?: Partial<GatePack['spec']>): GatePack => {
   const parent = loadPack();
   return {
     apiVersion: 'gates.aiwg.io/v1alpha1', kind: 'GatePack',
     metadata: { id: 'aiwg:test-gates/conformance-child', version: '1.0.0', description: 'Tightening child.' },
-    spec: { extends: parent.metadata.id, metrics: {}, gates, ...extra },
+    spec: { extends: parentPin(parent), metrics: {}, gates, ...extra },
   };
 };
 
@@ -55,6 +60,22 @@ describe('gates registry namespaces', () => {
       .toThrow(/shadows shipped pack/);
   });
 
+  it('refuses shipped packs that shadow an already registered non-aiwg name', () => {
+    const registry = new GateRegistry(createCoreProviderRegistry());
+    const addon = topPack('addon:test-gates/conformance-v1');
+    registry.registerPack(addon, { namespace: 'addon', bundle: 'test-gates' });
+    expect(() => registry.registerPack(loadPack(), origin)).toThrow(/shadows shipped pack/);
+  });
+
+  it('reports ambiguous rest-paths unless the full id is pinned', () => {
+    const registry = new GateRegistry(createCoreProviderRegistry());
+    registry.registerPack(topPack('addon:test-gates/shared-name'), { namespace: 'addon', bundle: 'test-gates' });
+    registry.registerPack(topPack('extension:test-gates/shared-name'), { namespace: 'extension', bundle: 'test-gates' });
+    expect(() => registry.resolvePack('test-gates/shared-name')).toThrow(/ambiguous/);
+    expect(registry.resolvePack('addon:test-gates/shared-name').authored.metadata.id)
+      .toBe('addon:test-gates/shared-name');
+  });
+
   it('registers project packs that do not collide', () => {
     const { registry } = testRegistry();
     const project = topPack('project:conformance-floor');
@@ -63,29 +84,33 @@ describe('gates registry namespaces', () => {
 });
 
 describe('gates extends tightening', () => {
-  it('accepts threshold, support, severity and scope tightenings', () => {
+  it('accepts threshold, support, outcome and scope tightenings', () => {
     const { registry } = testRegistry();
     const upper = { ...findGate('false-ready-upper'), threshold: { op: 'lte' as const, value: 80 } };
     const support = { ...findGate('support-total'), minimumN: 100 };
-    const promoted = { ...findGate('coverage-lower'), severity: 'blocking' as const };
+    const promoted = { ...findGate('coverage-lower'), onFail: 'ROLLBACK' as const };
     const widened = { ...findGate('blocking-events'), scope: { mode: 'listed' as const, slices: ['a', 'b'] } };
-    const perSlice = { ...findGate('latency-cap'), scope: { mode: 'each' as const } };
-    const dropped = ['false-ready-upper', 'support-total', 'coverage-lower', 'blocking-events', 'latency-cap'];
-    const remaining = loadPack().spec.gates.filter(gate => gate.id !== 'coverage-events' && !dropped.includes(gate.id));
+    const perSlice = { ...findGate('coverage-events'), scope: { mode: 'each' as const } };
+    const dropped = ['false-ready-upper', 'support-total', 'coverage-lower', 'blocking-events', 'coverage-events'];
+    const remaining = loadPack().spec.gates.filter(gate => gate.id !== 'latency-cap' && !dropped.includes(gate.id));
     const child = childPack([upper, support, promoted, widened, perSlice, ...remaining]);
     expect(() => registry.registerPack(child, origin)).not.toThrow();
     const resolved = registry.resolvePack(child.metadata.id).resolved;
     expect(resolved.spec.gates.find(gate => gate.id === 'false-ready-upper')?.threshold).toEqual({ op: 'lte', value: 80 });
     // Removing a non-floor gate is allowed.
-    expect(resolved.spec.gates.some(gate => gate.id === 'coverage-events')).toBe(false);
+    expect(resolved.spec.gates.some(gate => gate.id === 'latency-cap')).toBe(false);
+    // count-min all -> each is a monotone tightening (per-slice floors imply the pooled floor).
+    expect(resolved.spec.gates.find(gate => gate.id === 'coverage-events')?.scope).toEqual({ mode: 'each' });
   });
 
   it('rejects every loosening with a load error', () => {
     const cases: Array<[string, (gate: GateDefinition) => GateDefinition]> = [
       ['threshold', gate => gate.id === 'false-ready-upper'
         ? { ...gate, threshold: { op: 'lte' as const, value: 120 } } : gate],
+      ['literal-to-param', gate => gate.id === 'false-ready-exact'
+        ? { ...gate, threshold: { op: 'lte' as const, param: 'looseCap' } } : gate],
       ['minimumN', gate => gate.id === 'support-total' ? { ...gate, minimumN: 10 } : gate],
-      ['severity', gate => gate.id === 'contrast-ni' ? { ...gate, severity: 'standard' as const } : gate],
+      ['onFail', gate => gate.id === 'contrast-ni' ? { ...gate, onFail: 'HOLD' as const } : gate],
       ['unfloor', gate => gate.id === 'false-ready-upper' ? { ...gate, floor: false } : gate],
       ['method', gate => gate.id === 'false-ready-upper'
         ? { ...gate, statistic: { ...gate.statistic!, kind: 'interval-bound' as const, method: 'clopper-pearson' as const } } : gate],
@@ -98,13 +123,20 @@ describe('gates extends tightening', () => {
         ? { ...gate, scope: { mode: 'listed' as const, slices: ['a'] } } : gate],
       ['scope-each-each', gate => gate.id === 'false-ready-exact'
         ? { ...gate, scope: { mode: 'each' as const, except: ['a'] } } : gate],
+      ['all-to-listed', gate => gate.id === 'false-ready-upper'
+        ? { ...gate, scope: { mode: 'listed' as const, slices: ['a'] } } : gate],
+      ['value-all-each', gate => gate.id === 'latency-cap'
+        ? { ...gate, scope: { mode: 'each' as const } } : gate],
       ['margin', gate => gate.id === 'contrast-ni'
         ? { ...gate, statistic: { ...gate.statistic!, kind: 'paired-difference' as const, marginBps: -500 } } : gate],
     ];
     for (const [label, rewrite] of cases) {
       const { registry } = testRegistry();
       const gates = loadPack().spec.gates.map(rewrite);
-      expect(() => registry.registerPack(childPack(gates), origin), label).toThrow(GateRegistryError);
+      const extra = label === 'literal-to-param'
+        ? { parameters: { looseCap: { type: 'bps' as const, direction: 'lower-is-stricter' as const, default: 200 } } }
+        : undefined;
+      expect(() => registry.registerPack(childPack(gates, extra), origin), label).toThrow(GateRegistryError);
     }
   });
 
@@ -112,7 +144,9 @@ describe('gates extends tightening', () => {
     const { registry } = testRegistry();
     const gates = loadPack().spec.gates.filter(gate => gate.id !== 'false-ready-upper');
     expect(() => registry.registerPack(childPack(gates), origin)).toThrow(/floor gate/);
-    const orphan = childPack(loadPack().spec.gates, { extends: 'aiwg:test-gates/missing' });
+    const orphan = childPack(loadPack().spec.gates, {
+      extends: { id: 'aiwg:test-gates/missing', version: '1.0.0', digest: `sha256:${'0'.repeat(64)}` },
+    });
     expect(() => registry.registerPack(orphan, origin)).toThrow(/unknown pack/);
   });
 
@@ -135,11 +169,12 @@ describe('gates extends tightening', () => {
 });
 
 describe('gates binding resolution', () => {
-  it('resolves pins, parameters and slice inventory', () => {
+  it('resolves pins, namespaced parameters and slice inventory', () => {
     const { registry } = testRegistry();
     const resolved = registry.resolveBinding(makeBinding());
     expect(resolved.packs).toHaveLength(1);
-    expect(resolved.parameters.falseReadyMaxBps).toBe(100);
+    expect(resolved.packs[0]!.resolvedDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(resolved.parameters[packParam('falseReadyMaxBps')]).toBe(100);
     expect(resolved.binding.spec.slices).toEqual(['a', 'b']);
   });
 
@@ -148,24 +183,41 @@ describe('gates binding resolution', () => {
     const digest = artifactDigest(pack);
     const binding = makeBinding();
     const cases: Array<[string, () => unknown]> = [
-      ['unknown pack', () => makeBinding({ spec: { packs: [{ id: 'aiwg:test-gates/missing', version: '1.0.0', digest }] } })],
+      ['unknown pack', () => makeBinding({ spec: { packs: [{ id: 'aiwg:test-gates/missing', version: '1.0.0', digest, resolvedDigest: digest }] } })],
       ['digest mismatch', () => makeBinding({
-        spec: { packs: [{ id: pack.metadata.id, version: pack.metadata.version, digest: `sha256:${'0'.repeat(64)}` }] } })],
+        spec: { packs: [{ id: pack.metadata.id, version: pack.metadata.version,
+          digest: `sha256:${'0'.repeat(64)}`, resolvedDigest: digest }] } })],
+      ['composed digest mismatch', () => makeBinding({
+        spec: { packs: [{ id: pack.metadata.id, version: pack.metadata.version,
+          digest, resolvedDigest: `sha256:${'0'.repeat(64)}` }] } })],
       ['unknown provider', () => makeBinding({
         spec: { metricProviders: [...binding.spec.metricProviders, { id: 'test.nope/v1', version: '1.0.0', sourceDigest: `sha256:${'0'.repeat(64)}` }] } })],
       ['provider digest', () => makeBinding({
         spec: { metricProviders: binding.spec.metricProviders.map(pin => ({ ...pin, sourceDigest: `sha256:${'0'.repeat(64)}` })) } })],
+      ['unpinned provider', () => makeBinding({
+        spec: { metricProviders: binding.spec.metricProviders.filter(pin => pin.id === 'test.proportion/v1') } })],
       ['undeclared parameter', () => makeBinding({ spec: { parameters: { ...binding.spec.parameters, nope: 1 } } })],
-      ['out-of-range parameter', () => makeBinding({ spec: { parameters: { ...binding.spec.parameters, falseReadyMaxBps: 20000 } } })],
+      ['out-of-range parameter', () => makeBinding({
+        spec: { parameters: { ...binding.spec.parameters, [packParam('falseReadyMaxBps')]: 20000 } } })],
       ['undeclared reference', () => {
         const altered = loadPack();
         const gates = altered.spec.gates.map(gate => gate.id === 'contrast-ni'
           ? { ...gate, statistic: { ...gate.statistic!, kind: 'paired-difference' as const, vs: 'missing-baseline' } } : gate);
         const { registry: fresh } = testRegistry();
-        fresh.registerPack({ ...altered, metadata: { ...altered.metadata, id: 'aiwg:test-gates/vs-child' },
-          spec: { ...altered.spec, extends: altered.metadata.id, gates } }, origin);
+        const parent = { ...altered, metadata: { ...altered.metadata, id: 'aiwg:test-gates/vs-child' },
+          spec: { ...altered.spec, extends: parentPin(altered), gates } };
+        fresh.registerPack(parent, origin);
+        const childDigest = artifactDigest(parent);
+        const composed = fresh.resolvePack(parent.metadata.id).resolvedDigest;
         return makeBinding({ spec: { packs: [{ id: 'aiwg:test-gates/vs-child', version: '1.0.0',
-          digest: artifactDigest(fresh.getPack('aiwg:test-gates/vs-child')) }] } });
+          digest: childDigest, resolvedDigest: composed }],
+        parameters: {
+          'aiwg:test-gates/vs-child.falseReadyMaxBps': 100,
+          'aiwg:test-gates/vs-child.coverageMinBps': 1500,
+          'aiwg:test-gates/vs-child.minTotalN': 50,
+          'aiwg:test-gates/vs-child.maxBlockingEvents': 0,
+          'aiwg:test-gates/vs-child.maxLatency': 500,
+        } } });
       }],
     ];
     for (const [label, build] of cases) {
@@ -181,7 +233,9 @@ describe('gates binding resolution', () => {
     required.spec.gates = [{ ...findGate('false-ready-upper'), threshold: { op: 'lte', param: 'strictCap' } }];
     registry.registerPack(required, origin);
     const binding = makeBinding({
-      spec: { packs: [{ id: required.metadata.id, version: '1.0.0', digest: artifactDigest(required) }] },
+      spec: { packs: [{ id: required.metadata.id, version: '1.0.0',
+        digest: artifactDigest(required), resolvedDigest: artifactDigest(required) }],
+      parameters: {} },
     });
     expect(() => registry.resolveBinding(binding)).toThrow(/missing required parameter/);
     expect(() => registry.resolveBinding(makeBinding({ spec: { registeredAt: '2026-09-05T00:00:00.000Z' } })))

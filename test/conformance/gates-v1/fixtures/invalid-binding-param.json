@@ -2,9 +2,9 @@
   "apiVersion": "gates.aiwg.io/v1alpha1",
   "kind": "GateBinding",
   "metadata": {
-    "id": "test-gates/conformance-run",
+    "id": "test-gates/invalid-param",
     "version": "1.0.0",
-    "description": "Conformance binding over the fixture pack."
+    "description": "Binding that sets an unqualified parameter name instead of the namespaced pack parameter."
   },
   "spec": {
     "packs": [
@@ -16,11 +16,7 @@
       }
     ],
     "parameters": {
-      "aiwg:test-gates/conformance-v1.falseReadyMaxBps": 100,
-      "aiwg:test-gates/conformance-v1.coverageMinBps": 1500,
-      "aiwg:test-gates/conformance-v1.minTotalN": 50,
-      "aiwg:test-gates/conformance-v1.maxBlockingEvents": 0,
-      "aiwg:test-gates/conformance-v1.maxLatency": 500
+      "falseReadyMaxBps": 100
     },
     "slices": [
       "a",

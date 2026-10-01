@@ -8,10 +8,17 @@ import {
 } from '../../../src/gates/providers/index.js';
 import {
   NOW, evaluateFixture, makeBinding, makeUpstream, pairedRecords, passingMetrics,
-  proportionRecords, resolveTestBinding, scalarRecords, trustedDigest,
+  proportionRecords, scalarRecords, testHoldout, testRegistry, trustedDigest,
 } from './helper.js';
 
 const breached = (metrics: GateMetricsDocument) => evaluateFixture({ metrics });
+
+const evaluateContext = (binding = makeBinding()) => {
+  const { registry } = testRegistry();
+  return {
+    binding, registry, trustedBindingDigest: trustedDigest(binding), holdout: testHoldout(binding),
+  };
+};
 
 describe('gates evaluator oracle', () => {
   it('promotes when every gate passes and reports byte-identical digests', () => {
@@ -23,8 +30,9 @@ describe('gates evaluator oracle', () => {
     const second = evaluateFixture();
     expect(second.digest).toBe(first.digest);
     expect(second).toEqual(first);
+    const binding = makeBinding();
     expect(validateGateReport(first, {
-      resolved: resolveTestBinding(), trustedBindingDigest: trustedDigest(makeBinding()),
+      ...evaluateContext(binding),
       metrics: passingMetrics(), upstream: makeUpstream('promote'), now: NOW,
     })).toEqual({ valid: true, reasons: [] });
   });
@@ -118,28 +126,37 @@ describe('gates fail-closed paths', () => {
     const perSlice = report.gateEvidence.filter(entry => entry.gateId === 'false-ready-exact');
     expect(perSlice).toHaveLength(2);
     expect(perSlice.every(entry => entry.status === 'insufficient' && entry.outcome === 'HOLD')).toBe(true);
-    // The blocking listed gate is also starved, and blocking insufficient escalates.
+    // The blocking listed gate is also starved; insufficient evidence holds, never rolls back.
     expect(report.gateEvidence.find(entry => entry.gateId === 'blocking-events')).toMatchObject({
-      status: 'insufficient', outcome: 'ROLLBACK',
+      status: 'insufficient', outcome: 'HOLD',
     });
-    expect(report.decision).toBe('ROLLBACK');
+    expect(report.decision).toBe('HOLD');
   });
 
   it('refuses untrusted binding digests, forged upstream and post-holdout freezes', () => {
     const binding = makeBinding();
-    const resolved = resolveTestBinding(binding);
-    const input = { resolved, metrics: passingMetrics(), upstream: makeUpstream('promote'), now: NOW };
+    const input = {
+      ...evaluateContext(binding), metrics: passingMetrics(), upstream: makeUpstream('promote'), now: NOW,
+    };
     expect(() => evaluateGates({ ...input, trustedBindingDigest: `sha256:${'0'.repeat(64)}` }))
       .toThrow(GateEvaluationError);
     const forged = { ...makeUpstream('promote') };
     forged.metadata = { ...forged.metadata, sample_n: 9999 };
-    expect(() => evaluateGates({ ...input, trustedBindingDigest: trustedDigest(binding), upstream: forged }))
+    expect(() => evaluateGates({ ...input, upstream: forged }))
       .toThrow(/upstream integrity digest/);
-    const late = makeBinding({ spec: { holdoutAccessedAt: '2026-09-02T00:00:00.000Z' } });
-    expect(() => evaluateGates({ ...input, resolved: resolveTestBinding(late), trustedBindingDigest: trustedDigest(late) }))
+    const late = makeBinding();
+    const lateHoldout = { firstAccessedAt: '2026-09-02T00:00:00.000Z', frozenDigest: trustedDigest(late) };
+    expect(() => evaluateGates({ ...input, binding: late, trustedBindingDigest: trustedDigest(late), holdout: lateHoldout }))
       .toThrow(/at or after holdout access/);
+    // The binding's own self-reported field is ignored: a null self-report with a
+    // trusted access before the freeze still refuses.
+    expect(() => evaluateGates({ ...input, holdout: lateHoldout }))
+      .toThrow(/at or after holdout access/);
+    expect(() => evaluateGates({ ...input, holdout: undefined as never }))
+      .toThrow(/trusted holdout inputs are required/);
     const future = makeBinding({ spec: { frozenAt: '2026-09-10T00:00:00.000Z' } });
-    expect(() => evaluateGates({ ...input, resolved: resolveTestBinding(future), trustedBindingDigest: trustedDigest(future) }))
+    expect(() => evaluateGates({ ...input, binding: future, trustedBindingDigest: trustedDigest(future),
+      holdout: { firstAccessedAt: null, frozenDigest: trustedDigest(future) } }))
       .toThrow(/freezes after the evaluation/);
   });
 
@@ -155,7 +172,7 @@ describe('gates fail-closed paths', () => {
     const compromised = evaluateFixture({ upstream: makeUpstream('compromised') });
     expect(compromised.decision).toBe('ROLLBACK');
     expect(compromised.ceilings.upstreamCeiling).toBe('ROLLBACK');
-    // Compromise escalates the gate through the ceiling; plain allowlist problems only hold.
+    // The ceiling gate mirrors the trusted verdict: compromise rolls back, plain allowlist problems only hold.
     expect(compromised.gateEvidence.find(entry => entry.gateId === 'integrity-ceiling')).toMatchObject({
       status: 'fail', outcome: 'ROLLBACK',
     });
@@ -188,7 +205,7 @@ describe('gates fail-closed paths', () => {
 describe('gates report validation', () => {
   it('rejects upgraded decisions and tampered evidence', () => {
     const binding = makeBinding();
-    const context = { resolved: resolveTestBinding(binding), trustedBindingDigest: trustedDigest(binding),
+    const context = { ...evaluateContext(binding),
       metrics: passingMetrics(), upstream: makeUpstream('promote'), now: NOW };
     const report = evaluateGates(context);
     expect(validateGateReport(report, context)).toEqual({ valid: true, reasons: [] });
@@ -219,7 +236,7 @@ describe('gates report validation', () => {
     const conflicted = validateGateReport(resealed, breachedContext);
     expect(conflicted.valid).toBe(false);
     expect(conflicted.reasons).toContain('report-upgrades-component');
-    // Flipping the breached evidence to pass breaks the digest even though the decision still matches re-derivation.
+    // Flipping the breached evidence to pass breaks byte-identical re-derivation even with a resealed digest.
     const whitewashed = {
       ...breachedReport,
       gateEvidence: breachedReport.gateEvidence.map(entry => entry.gateId === 'false-ready-upper'
@@ -228,6 +245,6 @@ describe('gates report validation', () => {
     };
     const washed = validateGateReport(whitewashed, breachedContext);
     expect(washed.valid).toBe(false);
-    expect(washed.reasons).toContain('report-digest-mismatch');
+    expect(washed.reasons).toContain('report-reevaluation-mismatch');
   });
 });

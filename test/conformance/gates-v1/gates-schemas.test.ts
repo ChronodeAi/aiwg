@@ -2,9 +2,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { GateRegistryError } from '../../../src/gates/registry.js';
 import { GateSchemaError, validateGateDocument } from '../../../src/gates/schema.js';
 import type { GateBinding, GatePack, GateReport } from '../../../src/gates/types.js';
-import { evaluateFixture } from './helper.js';
+import { evaluateFixture, testRegistry } from './helper.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string): unknown =>
@@ -20,6 +21,9 @@ describe('gates schemas', () => {
     ]);
     const binding = validateGateDocument<GateBinding>(fixture('valid-binding.json'));
     expect(binding.spec.packs).toHaveLength(1);
+    expect(binding.spec.packs[0]).toMatchObject({ id: 'aiwg:test-gates/conformance-v1', version: '1.0.0' });
+    expect(binding.spec.packs[0]!.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(binding.spec.packs[0]!.resolvedDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(binding.spec.metricProviders).toHaveLength(4);
   });
 
@@ -50,6 +54,22 @@ describe('gates schemas', () => {
     expect(() => validateGateDocument({ ...parsed, decision: 'MAYBE' })).toThrow(GateSchemaError);
     expect(() => validateGateDocument({ ...parsed, digest: `sha256:${'0'.repeat(64)}`, extra: true } as unknown))
       .toThrow(GateSchemaError);
+  });
+
+  it('rejects invalid bindings at resolution while their schemas stay valid', () => {
+    // Both bindings are schema-valid but must fail registry resolution: the
+    // first leaves gate providers unpinned, the second uses an unqualified
+    // parameter name instead of the namespaced pack parameter.
+    for (const name of ['invalid-binding-unpinned-provider.json', 'invalid-binding-param.json']) {
+      const binding = validateGateDocument<GateBinding>(fixture(name));
+      expect(binding.kind).toBe('GateBinding');
+      expect(() => testRegistry().registry.resolveBinding(binding), name).toThrow(GateRegistryError);
+    }
+    // The upgraded report is schema-valid (self-consistent digest) but promotes
+    // past a ROLLBACK component, so report validation must refuse it.
+    const upgraded = validateGateDocument<GateReport>(fixture('invalid-report-upgraded.json'));
+    expect(upgraded.decision).toBe('PROMOTE');
+    expect(upgraded.ceilings.packOutcome).toBe('ROLLBACK');
   });
 
   it('rejects pinned-baseline references without a baseline pin', () => {

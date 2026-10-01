@@ -3,10 +3,11 @@
  * evaluator and digest-bound reports. Experimental and default-off: nothing in the
  * decision runtime imports this module, so existing behavior is unchanged.
  */
-export { GATES_API_VERSION } from './types.js';
+export { GATES_API_VERSION, qualifyGateParameter } from './types.js';
 export type {
-  ArtifactPinLike, GateBinding, GateDefinition, GateEvidence, GateKind, GateMetadata, GateMetricsDocument,
-  GateOutcome, GatePack, GateParameter, GateReference, GateReport, GateScope, GateScopeMode, GateSeverity,
+  ArtifactPinLike, GateBinding, GateDefinition, GateEvidence, GateFailOutcome, GateHoldoutInputs,
+  GateKind, GateMetadata, GateMetricsDocument, GateOutcome, GatePack, GatePackPin, GateParameter,
+  GateParentPin, GateReference, GateReport, GateScope, GateScopeMode,
   GateStatistic, GateStatus, GateThreshold, MetricKind, MetricObservation, MetricSeries, ParameterType,
   ProviderMetrics, ReferenceKind, Sha256Digest, StatisticEvidenceMethod, StatisticKind, StatisticMethod,
   TighteningDirection, UpstreamCeiling, UpstreamRecord,
@@ -17,7 +18,7 @@ export {
   assertGateTightens, GateRegistry, type GateNamespace, type ResolvedBinding, type ResolvedPack,
 } from './registry.js';
 export {
-  GateEvaluationError, maxOutcome, severityOutcome, sealUpstream, evaluateGates, type EvaluateGatesInput,
+  GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream, evaluateGates, type EvaluateGatesInput,
 } from './evaluate.js';
 export { validateGateReport, type GateReportValidation } from './report.js';
 export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider } from './providers/index.js';

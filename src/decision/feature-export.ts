@@ -1206,8 +1206,10 @@ function validateQualificationRelease(record: QualificationReleaseRecord): void 
     || !['PROMOTE', 'HOLD', 'ROLLBACK'].includes(record.decision) || !/^sha256:[0-9a-f]{64}$/.test(record.digest)) {
     throw new DecisionFeatureExportError('Feature export qualification release is invalid');
   }
-  // Versioned legacy mode: pre-migration release records hashed JSON.stringify output. Both modes verify by default.
-  if (verifyQualificationReleaseDigest(record) === null) {
+  // Versioned legacy allowlist: pre-migration release records hashed JSON.stringify
+  // output. The v1 schema version is the pre-migration lineage, so it alone
+  // allowlists legacy; verification defaults to canonical-only everywhere else.
+  if (verifyQualificationReleaseDigest(record, { digestModes: ['canonical', 'legacy'] }) === null) {
     throw new DecisionFeatureExportError('Feature export qualification release digest does not match its content');
   }
   validateQualificationIntegrity(record.integrity);

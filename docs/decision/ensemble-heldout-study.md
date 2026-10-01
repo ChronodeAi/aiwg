@@ -204,7 +204,7 @@ The second command is an operator handoff, not authorization from this document.
 Approval must precede any spend. The public-seed dry-run emits this placeholder
 approval text; a paid run needs the form generated from its fresh pins:
 
-> I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration sha256:986a516d8baa86d0385cf1e53f8db685031b56edd7d21b42e4595327afdbadc6 and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.
+> I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration sha256:4ee423101dbff5c5e8c2be8e14824627a245f8529d9849cc177988ac6d0742c2 and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.
 
 ## Operator review and remaining evidence
 
@@ -241,10 +241,10 @@ operator approval, durable freeze or collected evaluation:
 | Artifact | Digest |
 | --- | --- |
 | Corpus | `sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804` |
-| Preregistration | `sha256:986a516d8baa86d0385cf1e53f8db685031b56edd7d21b42e4595327afdbadc6` |
-| Unapproved priced template | `sha256:c5b9853db78b2bc19c3ad2a2ccee347c1fce754227f8ac340654900afa3cf1c8` |
+| Preregistration | `sha256:4ee423101dbff5c5e8c2be8e14824627a245f8529d9849cc177988ac6d0742c2` |
+| Unapproved priced template | `sha256:6ddd42100d85c576f0c9f7bce28c10c7d2e417819f87bb874c45fdb467f1de72` |
 | Split manifest | `sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f` |
-| Analysis | `sha256:a5c270006d648651d0e4abf4bfc200a8f75fde50247f2b4859f7e0f5a01605cc` |
+| Analysis | `sha256:0093c4cf7a6814ba9b8635ee43704546f9a4d23c2940d5aaab65eed1b209bb73` |
 | Private gold | `sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db` |
 
 The source pin changed after the shared acceptance comparison began checking
