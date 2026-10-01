@@ -87,7 +87,8 @@ access:
 - the scale of every quality metric (`binary` 0/1 outcomes or `bounded` scores
   in [0, 1]) for downstream task success, requirement coverage, factual
   coverage, citation accuracy and human preference;
-- the slice list, minimum overall n, minimum per-slice n, and an optional power
+- the slice list, minimum overall n, minimum per-slice n, the minimum n for a
+  zero-variance bounded read (`minimumZeroVarianceN`), and an optional power
   rule;
 - an integer quality non-inferiority margin in bps (`-500` lets the candidate
   be at most 5 points worse);
@@ -168,7 +169,12 @@ fails non-inferiority (`quality-non-inferiority-failed:<metric>`); it is
 bound is below 0 or its point estimate is below the margin. Otherwise the
 result is inconclusive (`quality-non-inferiority-inconclusive:<metric>`), for
 example identical arms at a small n, and yields `HOLD` with
-`INSUFFICIENT EVIDENCE`. Positive economics below the preregistered target,
+`INSUFFICIENT EVIDENCE`. A bounded metric whose per-pair differences are all
+identical reads a zero-width bootstrap interval, which carries no variability
+evidence: below the preregistered `minimumZeroVarianceN` it is
+`INSUFFICIENT EVIDENCE` (`insufficient-quality-support:<metric>`), even when
+its lower bound is at or above the margin. At or above that n an adequate
+identical sample remains eligible for `PROMOTE`. Positive economics below the preregistered target,
 unknown cost, unverified integrity or insufficient support yield `HOLD`; missing held-out
 data, human review, holdout access, live provider evidence or sample support
 also sets advisory-only `INSUFFICIENT EVIDENCE`.

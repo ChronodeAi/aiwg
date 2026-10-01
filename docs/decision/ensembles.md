@@ -290,6 +290,15 @@ After `npm run build:cli`, it runs the ensemble runtime against synthetic member
 objects and prints only aggregate metadata. It is executable offline and carries no live quality,
 calibration or Jev claim.
 
+## Synthetic held-out study
+
+The [D17 study module](ensemble-heldout-study.md) prepares 1,800 fresh synthetic
+subjects, frozen 200/400/1,200 splits, native policy/comparison templates and
+preregistered statistical gates on top of the shared collector. Its source-only
+dry run reports USD 5.4 worst-case reservation within the USD 8 study cap.
+The 88-assessment operator audit, compatible calibration and live observations
+remain pending; study reports cannot promote an ensemble.
+
 ## Still pending live rollout evidence
 
 The offline runtime now implements bounded ensemble dispatch, paired shadow plumbing, promotion and

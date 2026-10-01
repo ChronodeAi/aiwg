@@ -250,6 +250,8 @@ export interface ContextPruningPreregistration {
     slices: string[];
     minimumOverallN: number;
     minimumSliceN: number;
+    /** Minimum pairs for a zero-variance bounded read (every per-pair difference identical) to support non-inferiority. */
+    minimumZeroVarianceN: number;
     powerRule: string | null;
     /** Non-positive integer bps: -250 lets the candidate be at most 2.5 points worse. */
     qualityNonInferiorityMarginBps: number;
@@ -676,6 +678,7 @@ export function validateContextPruningPreregistration(value: ContextPruningPrere
     || slices.some(slice => typeof slice !== 'string' || !slice.trim())
     || !Number.isSafeInteger(t.minimumOverallN) || t.minimumOverallN < 2
     || !Number.isSafeInteger(t.minimumSliceN) || t.minimumSliceN < 1
+    || !Number.isSafeInteger(t.minimumZeroVarianceN) || t.minimumZeroVarianceN < 2
     || (t.powerRule !== null && (typeof t.powerRule !== 'string' || !t.powerRule.trim()))
     || !Number.isSafeInteger(t.qualityNonInferiorityMarginBps) || t.qualityNonInferiorityMarginBps > 0
     || t.qualityNonInferiorityMarginBps < -10_000
@@ -776,6 +779,10 @@ export function buildContextPruningEvaluationReport(input: {
       findings.add(`quality-metric-missing:${result.metric}`);
     } else if (result.decision === 'insufficient' && result.n < thresholds.minimumOverallN) {
       findings.add(`insufficient-quality-sample:${result.metric}`);
+    } else if (result.decision === 'insufficient' && result.missingPairs === 0) {
+      // A conclusive-sized read withheld for lack of variability evidence: a zero-width bounded
+      // interval below the preregistered zero-variance support. Omitted pairs are reported above.
+      findings.add(`insufficient-quality-support:${result.metric}`);
     }
   }
 
@@ -829,7 +836,8 @@ function evaluateQualityMetric(
   recordedPairs: readonly ContextPruningPairRecord[],
   preregistration: ContextPruningPreregistration,
 ): ContextPruningQualityResult {
-  const { confidenceInterval: ci, minimumOverallN, qualityNonInferiorityMarginBps, slices } = preregistration.thresholds;
+  const { confidenceInterval: ci, minimumOverallN, minimumZeroVarianceN, qualityNonInferiorityMarginBps, slices } =
+    preregistration.thresholds;
   const pairs = outcomes?.pairs ?? [];
   const sliceOf = new Map(recordedPairs.map(pair => [pair.pairId, pair.slice]));
   const sliceSupport = Object.fromEntries(slices.map(slice => [slice, 0]));
@@ -867,6 +875,13 @@ function evaluateQualityMetric(
   const verdict = pairedNonInferiority({ interval, marginBps: qualityNonInferiorityMarginBps });
   // A regression visible in the reported outcomes still fails; omitted pairs can only withhold a pass.
   if (verdict.decision === 'non-inferior' && missingPairs > 0) return result(interval, 'insufficient');
+  // A zero-width bounded interval carries no variability evidence: identical pairs at a small n are
+  // inconclusive, so a would-be pass needs the preregistered zero-variance support first. Only passes
+  // are withheld here; demonstrated harm still rolls back through the verdict below.
+  if (verdict.decision === 'non-inferior' && scale === 'bounded'
+    && interval.lowerBps === interval.upperBps && pairs.length < minimumZeroVarianceN) {
+    return result(interval, 'insufficient');
+  }
   return result(interval, verdict.decision);
 }
 

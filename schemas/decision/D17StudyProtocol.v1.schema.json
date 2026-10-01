@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyProtocol.v1.schema.json",
+  "title": "D17StudyProtocol",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "minimumPairs",
+    "slices",
+    "minimumPerSlice",
+    "interval",
+    "brier",
+    "risk",
+    "abstention",
+    "maximumP95LatencyIncreaseMs",
+    "acceptance",
+    "economics",
+    "native"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-protocol/v1"
+    },
+    "minimumPairs": {
+      "const": 1200
+    },
+    "slices": {
+      "type": "array",
+      "const": [
+        "direct-facts",
+        "multi-fact",
+        "negation",
+        "authority"
+      ]
+    },
+    "minimumPerSlice": {
+      "const": 300
+    },
+    "interval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "levelBps",
+        "nonInferiorityMarginBps",
+        "benefitLowerExclusiveBps"
+      ],
+      "properties": {
+        "method": {
+          "const": "newcombe-10"
+        },
+        "levelBps": {
+          "const": 9500
+        },
+        "nonInferiorityMarginBps": {
+          "const": -300
+        },
+        "benefitLowerExclusiveBps": {
+          "const": 0
+        }
+      }
+    },
+    "brier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "levelBps",
+        "seed",
+        "resamples",
+        "maximumUpperBps"
+      ],
+      "properties": {
+        "method": {
+          "const": "percentile-bootstrap"
+        },
+        "levelBps": {
+          "const": 9500
+        },
+        "seed": {
+          "const": 2611
+        },
+        "resamples": {
+          "const": 20000
+        },
+        "maximumUpperBps": {
+          "const": 200
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "levelBps",
+        "maximumAcceptedErrorUpperBps",
+        "minimumCoverageLowerBps"
+      ],
+      "properties": {
+        "method": {
+          "const": "wilson"
+        },
+        "levelBps": {
+          "const": 9500
+        },
+        "maximumAcceptedErrorUpperBps": {
+          "const": 500
+        },
+        "minimumCoverageLowerBps": {
+          "const": 6000
+        }
+      }
+    },
+    "abstention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "levelBps",
+        "maximumUpperBps"
+      ],
+      "properties": {
+        "method": {
+          "const": "newcombe-10"
+        },
+        "levelBps": {
+          "const": 9500
+        },
+        "maximumUpperBps": {
+          "const": 500
+        }
+      }
+    },
+    "maximumP95LatencyIncreaseMs": {
+      "const": 15000
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tieRule",
+        "disagreementMetric",
+        "maximumDisagreementBps",
+        "minimumSuccessfulMembers",
+        "highAgreementWarningBps"
+      ],
+      "properties": {
+        "tieRule": {
+          "const": "defer"
+        },
+        "disagreementMetric": {
+          "const": "jensen-shannon-v1"
+        },
+        "maximumDisagreementBps": {
+          "const": 1000
+        },
+        "minimumSuccessfulMembers": {
+          "const": 3
+        },
+        "highAgreementWarningBps": {
+          "const": 100
+        }
+      }
+    },
+    "economics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "positiveNetSavingsRequired",
+        "separateTradeoffApprovalRequired"
+      ],
+      "properties": {
+        "kind": {
+          "const": "additional-cost-tolerance"
+        },
+        "positiveNetSavingsRequired": {
+          "const": false
+        },
+        "separateTradeoffApprovalRequired": {
+          "const": true
+        }
+      }
+    },
+    "native": {
+      "type": "array",
+      "const": [
+        {
+          "metric": "quality",
+          "comparison": "delta-at-least",
+          "bound": -0.03,
+          "minimumPairs": 1200
+        },
+        {
+          "metric": "calibration",
+          "comparison": "delta-at-most",
+          "bound": 0.02,
+          "minimumPairs": 1200
+        },
+        {
+          "metric": "risk-coverage",
+          "comparison": "delta-at-most",
+          "bound": 0.01,
+          "minimumPairs": 1200
+        },
+        {
+          "metric": "abstention",
+          "comparison": "delta-at-most",
+          "bound": 0.05,
+          "minimumPairs": 1200
+        },
+        {
+          "metric": "latency",
+          "comparison": "delta-at-most",
+          "bound": 10000,
+          "minimumPairs": 1200
+        },
+        {
+          "metric": "tokens",
+          "comparison": "delta-at-most",
+          "bound": 8000,
+          "minimumPairs": 1200
+        },
+        {
+          "metric": "cost",
+          "comparison": "delta-at-most",
+          "bound": 800,
+          "minimumPairs": 1200
+        },
+        {
+          "metric": "slice",
+          "comparison": "delta-at-least",
+          "bound": -0.03,
+          "minimumPairs": 1200
+        }
+      ]
+    }
+  }
+}
