@@ -181,6 +181,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- The routing control drill reports an active-run-pin mismatch through
+  `RoutingControlDrillError` with the before and after pins beside the current
+  circuit, policy and rollback state, instead of a stateless contract error.
+  Successful drill behavior is unchanged (#2791).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

@@ -184,7 +184,9 @@ rejected.
   false` when the policy and the alias disagree (for example when compensation
   itself fails).
 - Active-run pins are read again after the response and must equal the pins
-  read before it; otherwise the drill throws.
+  read before it; a mismatch throws `RoutingControlDrillError` whose `state`
+  carries the before (`activeRunPinsBefore`) and after (`activeRunPinsAfter`)
+  pins beside the circuit, policy and rollback state.
 
 ## Pending external inputs
 
