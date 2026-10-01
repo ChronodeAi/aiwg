@@ -23,7 +23,7 @@ export {
 } from './registry.js';
 export {
   INTEGRITY_CEILING_FLOOR_PACK_ID, INTEGRITY_CEILING_FLOOR_PACK_VERSION,
-  projectCeilingSatisfied, resolveProjectFloors, validateGatesConfig,
+  assertCeilingDefaults, projectCeilingSatisfied, resolveProjectFloors, validateGatesConfig,
 } from './floors.js';
 export type { ProjectFloors, ProjectFloorSource } from './floors.js';
 export {

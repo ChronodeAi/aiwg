@@ -98,11 +98,37 @@ export function projectCeilingSatisfied(
  * fails closed at resolution.
  */
 export function resolveProjectFloors(gates?: ProjectFloors): ProjectFloors {
+  assertCeilingDefaults(gates?.ceilings);
   return {
     floors: [...(gates?.floors ?? [])],
     ceilings: { ...(gates?.ceilings ?? {}) },
     ...(gates?.providers === undefined ? {} : { providers: [...gates.providers] }),
   };
+}
+
+/**
+ * The star-ceiling rule (R1/C6), enforced wherever ceilings are consumed —
+ * `resolveProjectFloors` and binding resolution — not only by
+ * `validateGatesConfig`: any per-study ceiling requires a valid `'*'`
+ * default, and no per-study ceiling may loosen it. Throws on violation.
+ */
+export function assertCeilingDefaults(ceilings: Record<string, unknown> | undefined): void {
+  if (ceilings === undefined) return;
+  if (!ceilings || typeof ceilings !== 'object' || Array.isArray(ceilings)) {
+    throw new Error('gates.ceilings: must be an object mapping study ids to outcome ceilings');
+  }
+  const star = ceilings['*'];
+  const starValid = typeof star === 'string' && (OUTCOMES as readonly string[]).includes(star);
+  for (const [study, ceiling] of Object.entries(ceilings)) {
+    if (typeof ceiling !== 'string' || !(OUTCOMES as readonly string[]).includes(ceiling)) {
+      throw new Error(`gates.ceilings.${study}: must be PROMOTE, HOLD or ROLLBACK`);
+    }
+    if (study === '*') continue;
+    if (!starValid) throw new Error(`gates.ceilings: per-study ceilings require the project-wide '*' default ceiling`);
+    if (OUTCOME_RANK[ceiling as GateOutcome] < OUTCOME_RANK[star as GateOutcome]) {
+      throw new Error(`gates.ceilings.${study}: must tighten the project default ceiling ${String(star)}, not loosen it`);
+    }
+  }
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>

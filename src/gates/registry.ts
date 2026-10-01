@@ -6,7 +6,7 @@ import type {
   ArtifactPinLike, GateBinding, GateDefinition, GateOutcome, GatePack, GateParameter, Sha256Digest,
 } from './types.js';
 import { qualifyGateParameter } from './types.js';
-import { INTEGRITY_CEILING_FLOOR_PACK_ID, projectCeilingSatisfied } from './floors.js';
+import { INTEGRITY_CEILING_FLOOR_PACK_ID, assertCeilingDefaults, projectCeilingSatisfied } from './floors.js';
 import type { ProjectFloors } from './floors.js';
 
 export class GateRegistryError extends Error {
@@ -588,8 +588,14 @@ export function enforceProjectFloors(
 ): void {
   // The '*' key is the project-wide default ceiling for every binding; a
   // per-study key overrides it for that study only (exact match — renames
-  // never inherit). `validateGatesConfig` already forbids per-study keys that
-  // loosen the default.
+  // never inherit). The star rule is re-checked here (C6): floors handed in
+  // directly, bypassing `validateGatesConfig`/`resolveProjectFloors`, still
+  // cannot carry starless or loosening per-study ceilings.
+  try {
+    assertCeilingDefaults(ceilings);
+  } catch (error) {
+    throw new GateRegistryError(error instanceof Error ? error.message : 'invalid project ceilings');
+  }
   const configured = ceilings[binding.metadata.id] ?? ceilings['*'];
   if (!projectCeilingSatisfied(binding.spec.ceiling, configured)) {
     throw new GateRegistryError(

@@ -172,12 +172,14 @@ describe('project floors default resolution', () => {
   };
 
   it('returns configured floors verbatim; the default applies at expansion', () => {
-    const inputs: Array<ProjectFloors | undefined> = [undefined, {}, { floors: [] }, { ceilings: { study: 'HOLD' } }];
+    const inputs: Array<ProjectFloors | undefined> = [undefined, {}, { floors: [] }, { ceilings: { '*': 'PROMOTE', study: 'HOLD' } }];
     for (const input of inputs) {
       const resolved = resolveProjectFloors(input);
       expect(resolved.floors ?? []).toEqual(input?.floors ?? []);
     }
-    expect(resolveProjectFloors({ ceilings: { study: 'HOLD' } }).ceilings).toEqual({ study: 'HOLD' });
+    expect(resolveProjectFloors({ ceilings: { '*': 'PROMOTE', study: 'HOLD' } }).ceilings).toEqual({ '*': 'PROMOTE', study: 'HOLD' });
+    // The star rule holds at resolution too (C6), not only in validateGatesConfig.
+    expect(() => resolveProjectFloors({ ceilings: { study: 'HOLD' } })).toThrow(/'\*'/);
     // With nothing configured, expansion appends the shipped default floor.
     const expanded = expandedFloorsOf(undefined);
     expect(expanded).toHaveLength(1);
@@ -453,13 +455,13 @@ describe('project floors pack references and ceilings', () => {
   it('refuses bindings below their per-study ceiling and accepts tighter ones', () => {
     const pack = variantPack('aiwg:test-gates/floor-ceiling-case', gate => gate);
     const registry = registryWith(pack);
-    const floors: ProjectFloors = { ...floorsOf(), ceilings: { [BINDING_ID]: 'HOLD' } };
+    const floors: ProjectFloors = { ...floorsOf(), ceilings: { '*': 'PROMOTE', [BINDING_ID]: 'HOLD' } };
     expect(() => registry.resolveBinding(variantBinding(pack), floors))
       .toThrow(/declares ceiling PROMOTE below the project ceiling HOLD/);
     expect(() => registry.resolveBinding(variantBinding(pack, { ceiling: 'HOLD' }), floors)).not.toThrow();
     expect(() => registry.resolveBinding(variantBinding(pack, { ceiling: 'ROLLBACK' }), floors)).not.toThrow();
     // Studies without a configured ceiling resolve under the same floors.
-    const other: ProjectFloors = { ...floorsOf(), ceilings: { 'other-study': 'HOLD' } };
+    const other: ProjectFloors = { ...floorsOf(), ceilings: { '*': 'PROMOTE', 'other-study': 'HOLD' } };
     expect(() => registry.resolveBinding(variantBinding(pack), other)).not.toThrow();
   });
 

@@ -162,7 +162,10 @@ and `ceilings`: exact binding `metadata.id` keys plus `'*'` as the
 project-wide default applied to every binding (a per-study key may only
 tighten the `'*'` default; renames never inherit). Any per-study key
 requires the `'*'` default: without it a renamed study would silently
-escape every ceiling, so config validation flags it (R1). The section may
+escape every ceiling, so config validation flags it (R1), and
+`resolveProjectFloors` and binding resolution refuse it too, so floors
+handed in without validation cannot carry a starless or loosening
+per-study ceiling. The section may
 also hold `providers`, the bundle-provider allowlist (P3 trust root; see
 [bundle providers](gate-providers.md)). Inline floor packs
 validate against the closed GatePack schema at config load; pack-reference
