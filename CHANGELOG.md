@@ -7,8 +7,51 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Fixed
+
+- The Fortemi prebuilt-package gate (`npm run lint:fortemi-prebuilt-package`)
+  ran `npm pack` with no timeout, so a wedged pack held the CI job until the
+  runner timeout. The call is now bounded at 5 minutes, overridable with
+  `AIWG_FORTEMI_PACK_TIMEOUT_MS` (a positive integer of milliseconds), and a
+  timed-out pack fails the gate with an error naming the bound (#2802)
+- Refreshed experimental, default-off D17 source dry-run pins after the shared
+  acceptance threshold fix entered the source digest; the corpus and split/gold
+  pins are unchanged. Live evidence and approval remain pending (#2611)
+
+- Experimental, default-off D17 schema loading now resolves source and compiled
+  layouts, so building the CLI no longer breaks the mandatory SQLite session
+  regression suite. Refreshed uncollected source pins; live evidence remains
+  pending (#2611)
+
+- Experimental, default-off D17 held-out study now permits only the explicit
+  uncalibrated-diagnostic calibration scope. Scoring consumes the approved mode,
+  rejects calibrated approvals and forbids D09 qualification, calibrated gates
+  or promotion claims; AC7/AC14 remain pending genuine D09 evidence (#2611)
+
+- Experimental, default-off D17 synthetic study no longer leaks gold through
+  ordinal record IDs, label parity, authority notes or payload lengths.
+  Regenerated uncollected corpus, preregistration and approval-template pins;
+  live evidence and operator approval remain pending (#2611)
+
 ### Added
 
+- Experimental, default-off D23 offline comparative policy replay: closed schemas,
+  a frozen 600-root synthetic corpus, digest-bound eval-integrity reports, and
+  a 44-assessment operator audit template. Zero provider calls; the retained
+  report now passes the preregistered diagnostic gates after the confidence
+  threshold fix, while its final decision stays HOLD pending independent
+  integrity and human review (#2616)
+- Experimental, default-off D17 study regeneration for the shared collector's
+  registered generator, closed seeds, free-output approval, byte-based input
+  reservations and durable spend baseline. The uncollected corpus,
+  preregistration and approval-template pins were refreshed; live evidence
+  and promotion remain pending (#2611)
+
+- Experimental, default-off D17 synthetic ensemble held-out study with seeded
+  1,800-subject corpus, frozen splits, preregistered paired gates, source-only
+  dry run, priced approval and 88-assessment review templates. Reuses the
+  shared collector and native ensemble reports; live observations, compatible
+  calibration, human review and promotion remain pending (#2611)
 - Experimental, default-off held-out calibration scopes for both D17 and D29:
   explicit uncalibrated diagnostics, staged calibration/test approvals bound to
   sealed attempt lineage, and independent artifact bindings. Phase collection
@@ -187,6 +230,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Stop the experimental, default-off D12 live qualification on a per-call
+  usage-bound breach: a call reporting more than its approved 4000-token bound
+  is charged in full and records a budget breach that refuses every later
+  reservation. Usage exactly at the bound still settles normally. The Jev
+  transport offers no provider-side output cap, so the reservation, the breach
+  refusal and the run stop are the per-call enforcement; ordinary decision
+  behavior is unchanged (#2800).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

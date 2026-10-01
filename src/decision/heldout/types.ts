@@ -34,6 +34,8 @@ export interface HeldoutPreregistration {
   providerFailurePolicy: { maxRetries: 0 | 1; maximumSliceFailureBps: number; retryOnlyTerminal: true };
   perRequestTokenBound: number; providerOverheadTokens?: number; outputAndHiddenTokenAllowance: number;
   requestTimeoutMs: number; minDispatchIntervalMs: number; sessionLimitMs: number;
+  regeneration?: { reason: string; previousCorpusDigest: Digest; previousPreregistrationDigest: Digest;
+    previousApprovalTemplateDigest: Digest; liveObservationsAtRegeneration: false };
 }
 export interface HeldoutApproval {
   schemaVersion: 'decision-heldout-approval/v1'; approved: true; study: Study; runId: string;
