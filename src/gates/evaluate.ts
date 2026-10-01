@@ -64,8 +64,11 @@ export function sealUpstream(metadata: QualificationIntegrityMetadata): Upstream
  * Seals trusted holdout inputs for evaluation. The seal covers
  * `{frozenDigest, firstAccessedAt}` and is re-derived by `evaluateGates` on
  * every use, following the HeldoutFrozen seal (`readHeldoutFrozen` checks
- * `frozen.digest === heldoutDigest(frozen.bundle)`): a spread-copied or forged
- * record is refused. `frozenDigest` is the binding digest in the frozen record.
+ * `frozen.digest === heldoutDigest(frozen.bundle)`): a spread-copied or edited
+ * record is refused. The seal is an unkeyed integrity digest, not an
+ * authenticity proof, so the holdout inputs are trusted caller inputs built from
+ * verified HeldoutFrozen and access records (verification of the frozen record
+ * itself is tracked in #2833). `frozenDigest` is the binding digest in the frozen record.
  */
 export function sealGateHoldout(input: {
   frozenDigest: Sha256Digest; firstAccessedAt: string | null;
@@ -496,6 +499,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     const accessedAt = Date.parse(firstAccessedAt);
     if (!Number.isFinite(accessedAt)) fail('holdout access timestamp is not a valid date-time');
     if (frozenAt >= accessedAt) fail('binding froze at or after holdout access: evaluation refused');
+    if (accessedAt > nowMs) fail('holdout access timestamp is after the evaluation timestamp');
   }
   const gateEvidence: GateEvidence[] = [];
   for (const pack of packs) {

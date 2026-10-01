@@ -156,9 +156,9 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(report.maximumRequestEstimateTokens).toBeGreaterThan(0);
     expect(report.maximumRequestEstimateTokens).toBe(1179);
     expect(report.corpusDigest).toBe('sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804');
-    expect(report.preregistrationDigest).toBe('sha256:8c41942c46c63472f1a6b47efa8b10a0c538841e451e31775ba584308c20ad80');
-    expect(report.approvalTemplateDigest).toBe('sha256:2eafd1120738eca4e328e1e8f8b8662928261bea3baac9ae21bf6a612a3ee557');
-    expect(report.analysisDigest).toBe('sha256:55a45ee5c787b9128cdadc17a89926d484e4662f60288a51c82cd5846c351380');
+    expect(report.preregistrationDigest).toBe('sha256:e3a158a67d9099d0e7fa03425608f76aa9ee6b3b57d2dc59db00ec9ffaa00b2b');
+    expect(report.approvalTemplateDigest).toBe('sha256:62349ef3cf5c2cfd4b739d2183263b219936902f2c3960137fd514943a39ca4f');
+    expect(report.analysisDigest).toBe('sha256:9daa9b2f6b3c75cf5eecf89632f1849d2f857f6a511f2ea5ba928e92c4583184');
     expect(report.splitManifestDigest).toBe('sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f');
     expect(report.goldDigest).toBe('sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db');
   }, 65000);

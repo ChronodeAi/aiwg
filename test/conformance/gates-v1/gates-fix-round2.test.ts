@@ -6,7 +6,7 @@ import {
 import {
   freezeBinaryBenchmarkPlan, freezeQualificationSplit, verifyBinaryBenchmarkPlanDigest,
 } from '../../../src/decision/qualification/quality.js';
-import { evaluateGates } from '../../../src/gates/evaluate.js';
+import { evaluateGates, sealGateHoldout } from '../../../src/gates/evaluate.js';
 import { validateGateReport } from '../../../src/gates/report.js';
 import { GateRegistry } from '../../../src/gates/registry.js';
 import { legacySha256 } from '../../../src/gates/stats/digest.js';
@@ -157,6 +157,20 @@ describe('gates fix round 2 regressions', () => {
       upstream: makeUpstream('promote'),
       now: NOW,
     })).toThrow(/holdout/);
+  });
+
+  it('R3: a sealed holdout record with a first-access time after the evaluation timestamp is refused', () => {
+    const binding = makeBinding({ spec: { splitDigest: artifactDigest({ split: 'test' }) } });
+    const future = new Date(Date.parse(NOW) + 60_000).toISOString();
+    expect(() => evaluateGates({
+      binding,
+      registry: testRegistry().registry,
+      trustedBindingDigest: trustedDigest(binding),
+      holdout: sealGateHoldout({ frozenDigest: trustedDigest(binding), firstAccessedAt: future }),
+      metrics: passingMetrics(),
+      upstream: makeUpstream('promote'),
+      now: NOW,
+    })).toThrow(/after the evaluation timestamp/);
   });
 
   it('HIGH3: legacy digest on a freshly built release record must be rejected even under allowlist', () => {
