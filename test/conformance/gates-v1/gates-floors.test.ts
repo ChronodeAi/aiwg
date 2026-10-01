@@ -118,7 +118,7 @@ describe('project floors config validation', () => {
         { pack: floorPack() },
         { packRef: { id: 'aiwg:test-gates/conformance-v1', version: '1.0.0', digest: `sha256:${'ab'.repeat(32)}` } },
       ],
-      ceilings: { 'some-study': 'HOLD' },
+      ceilings: { '*': 'HOLD', 'some-study': 'HOLD' },
     })).toEqual([]);
   });
 
@@ -145,7 +145,13 @@ describe('project floors config validation', () => {
     expect(validateGatesConfig({ floors: [{ packRef: { id: 'no-namespace', version: '1.0.0', digest: `sha256:${'ab'.repeat(32)}` } }] })[0])
       .toMatch(/^gates\.floors\[0\]\.packRef\.id: /);
     expect(validateGatesConfig({ ceilings: { study: 'MAYBE' } }))
-      .toEqual(['gates.ceilings.study: must be PROMOTE, HOLD or ROLLBACK']);
+      .toEqual([
+        'gates.ceilings.study: must be PROMOTE, HOLD or ROLLBACK',
+        `gates.ceilings: per-study ceilings require the project-wide '*' default ceiling`,
+      ]);
+    // A per-study ceiling without the project-wide default is a rename escape.
+    expect(validateGatesConfig({ ceilings: { study: 'HOLD' } }))
+      .toEqual([`gates.ceilings: per-study ceilings require the project-wide '*' default ceiling`]);
     expect(validateGatesConfig({ ceilings: [] }))
       .toEqual(['gates.ceilings: must be an object mapping study ids to outcome ceilings']);
   });
@@ -588,11 +594,11 @@ describe('project floors aiwg.config parsing', () => {
     const cfg = emptyConfig();
     cfg.gates = resolveProjectFloors({
       floors: [{ pack: floorPack() }],
-      ceilings: { [BINDING_ID]: 'HOLD' },
+      ceilings: { '*': 'HOLD', [BINDING_ID]: 'HOLD' },
     });
     await writeAiwgConfig(tmpDir, cfg);
     const read = await readAiwgConfig(tmpDir);
-    expect(read?.gates?.ceilings).toEqual({ [BINDING_ID]: 'HOLD' });
+    expect(read?.gates?.ceilings).toEqual({ '*': 'HOLD', [BINDING_ID]: 'HOLD' });
     expect(validateGatesConfig(read?.gates)).toEqual([]);
     const floors = resolveProjectFloors(read?.gates);
     expect(floors.floors).toHaveLength(1);

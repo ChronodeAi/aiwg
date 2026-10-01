@@ -1,3 +1,4 @@
+import { lstatSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { dirname } from 'node:path';
@@ -63,10 +64,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Trust rules: `aiwg:` is reserved for the installed tree (an `--aiwg-root`
  * override is marked `untrusted-override` and can never feed evaluation);
  * single files loaded via `packDirs` are always `project:` packs regardless
- * of the id they declare; `addon:`/`framework:`/`extension:` packs load only
- * from manifest-declared bundles via `originForPackDir` (never path
- * sniffing). Read-only inspection (`list`/`show`/`validate`) works on any
- * root; `evaluateGatesFromFiles` refuses untrusted roots.
+ * of the id they declare; `--pack-dir` bundle directories are always
+ * project-scoped too (`originForPackDir` refuses manifests claiming a
+ * shipped or installed bundle id, and symlinked bundle dirs refuse), so
+ * `addon:`/`framework:`/`extension:` packs never enter through an unverified
+ * path (never path sniffing). Read-only inspection (`list`/`show`/`validate`)
+ * works on any root; `evaluateGatesFromFiles` refuses untrusted roots.
  */
 export function buildGatesRegistry(options: GatesDriverOptions = {}): {
   registry: GateRegistry; loaded: string[]; shippedTrust: ShippedRootTrust;
@@ -85,6 +88,18 @@ export function buildGatesRegistry(options: GatesDriverOptions = {}): {
   }
   for (const dir of options.packDirs ?? []) {
     const resolved = resolvePath(dir, baseDir(options));
+    // A symlinked --pack-dir bundle directory refuses: it could point at the
+    // installed tree (or anywhere else) while claiming to be project-local.
+    try {
+      const status = lstatSync(resolved);
+      if (status.isSymbolicLink()) throw new Error(`pack-dir bundle must not be a symlink: ${resolved}`);
+      if (!status.isDirectory() && !status.isFile()) {
+        throw new Error(`pack-dir path is not a file or directory: ${resolved}`);
+      }
+    } catch (error) {
+      if (error instanceof Error && /symlink|not a file or directory/.test(error.message)) throw error;
+      throw new Error(`pack-dir path is unavailable: ${resolved}`);
+    }
     const lower = resolved.toLowerCase();
     if (lower.endsWith('.gatepack.yaml') || lower.endsWith('.gatepack.yml') || lower.endsWith('.gatepack.json')
       || lower.endsWith('.json') || lower.endsWith('.yaml') || lower.endsWith('.yml')) {
@@ -103,7 +118,8 @@ export function buildGatesRegistry(options: GatesDriverOptions = {}): {
       loaded.push(pack.metadata.id);
       continue;
     }
-    loaded.push(...registerBundleGatePacks(registry, resolved, originForPackDir(resolved)));
+    loaded.push(...registerBundleGatePacks(registry, resolved,
+      originForPackDir(resolved, { cwd: baseDir(options), aiwgRoot: root })));
   }
   return { registry, loaded, shippedTrust };
 }
@@ -156,7 +172,16 @@ export async function validateGateFile(
       validateResolvedPack(pack, providers);
     } else if (detected === 'binding') {
       const { registry } = buildGatesRegistry(options);
-      registry.resolveBinding(document);
+      // Binding validation resolves with the config floors, exactly like
+      // evaluation (R3): a binding that loosens project policy is invalid.
+      // Floors load failures are validation errors, never throws.
+      let floors: ProjectFloors;
+      try {
+        floors = await loadProjectFloorsForEvaluate(baseDir(options));
+      } catch (error) {
+        throw new Error(`invalid gates section in aiwg.config: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      registry.resolveBinding(document, floors);
     } else {
       // Full report validation needs the trusted evaluation context
       // (`validateGateReport` re-derives the report byte-identically).

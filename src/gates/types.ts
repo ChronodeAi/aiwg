@@ -129,6 +129,21 @@ export interface GateReference {
  */
 export const qualifyGateParameter = (packId: string, name: string): string => `${packId}.${name}`;
 
+/**
+ * Trust-root record for one addon/extension bundle provider, stored in the
+ * project config (`aiwg.config` `gates.providers`). Registration requires a
+ * matching entry: the bundle id, provider id, isolated code digest and the
+ * reviewer identity/timestamp must all match. In-bundle review files are
+ * informational only; this allowlist is the authorization.
+ */
+export interface ProviderAllowlistEntry {
+  bundleId: string;
+  providerId: string;
+  codeDigest: Sha256Digest;
+  reviewer: string;
+  reviewedAt: string;
+}
+
 /** Pin over one metric provider: descriptor digest plus, for bundle providers, the code digest. */
 export interface GateProviderPin {
   id: string;
@@ -140,6 +155,14 @@ export interface GateProviderPin {
    * a byte change moves the digest, so an old pin refuses until re-pinned.
    */
   codeDigest?: Sha256Digest;
+  /**
+   * Digest of the input records the provider section is reproduced from
+   * (records binding, P4). Required on bundle-provider pins, forbidden on
+   * core-provider pins. Evaluation re-runs the pinned provider over records
+   * digesting to this value and uses the re-run output; caller-asserted
+   * metrics for provider-backed gates are never accepted.
+   */
+  recordsDigest?: Sha256Digest;
 }
 
 export interface GateBinding {
@@ -270,6 +293,17 @@ export interface GateHoldoutRecord {
   firstAccessedAt: string | null;
 }
 
+/**
+ * Which project floors an evaluation applied (R2). Either the canonical
+ * digest of the applied `ProjectFloors` input, or an explicit opt-out marker
+ * (only for tests or legacy callers with a documented reason). There is no
+ * absent state: reports always say which one governed them, and report
+ * validation re-derives the distinction.
+ */
+export type GateFloorsRecord =
+  | { mode: 'applied'; digest: Sha256Digest }
+  | { mode: 'opt-out' };
+
 export interface GateReport {
   apiVersion: typeof GATES_API_VERSION;
   kind: 'GateReport';
@@ -278,6 +312,7 @@ export interface GateReport {
   packs: GatePackPin[];
   metricProviders: GateProviderPin[];
   metricsDigest: Sha256Digest;
+  floors: GateFloorsRecord;
   holdout: GateHoldoutRecord;
   gateEvidence: GateEvidence[];
   references: { name: string; kind: ReferenceKind; observed: boolean }[];

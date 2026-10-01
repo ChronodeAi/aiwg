@@ -1,6 +1,8 @@
 import { validateGateDocument } from './schema.js';
 import { splitPackId } from './registry.js';
-import type { GateOutcome, GatePack, GateParentPin } from './types.js';
+import type { GateOutcome, GatePack, GateParentPin, ProviderAllowlistEntry } from './types.js';
+
+export type { ProviderAllowlistEntry };
 
 /**
  * Project gate floors (`aiwg.config` `gates`, #2832).
@@ -40,9 +42,18 @@ export interface ProjectFloors {
    * Outcome ceilings: exact binding `metadata.id` keys, plus the `'*'` key
    * as the project-wide default applied to every binding. A per-study key
    * may only tighten the `'*'` default, never loosen it (rename escapes:
-   * `study-a-v2` never inherits `study-a`'s ceiling).
+   * `study-a-v2` never inherits `study-a`'s ceiling). Any per-study key
+   * requires the `'*'` default: without it a renamed study would silently
+   * escape every ceiling.
    */
   ceilings?: Record<string, GateOutcome>;
+  /**
+   * Bundle metric-provider allowlist (P3 trust root). A bundle provider
+   * registers only with a matching entry (bundle id, provider id, isolated
+   * code digest, reviewer, review timestamp); in-bundle review files are
+   * informational only. Unknown or mismatched entries refuse registration.
+   */
+  providers?: ProviderAllowlistEntry[];
 }
 
 const OUTCOME_RANK: Record<GateOutcome, number> = { PROMOTE: 0, HOLD: 1, ROLLBACK: 2 };
@@ -87,7 +98,11 @@ export function projectCeilingSatisfied(
  * fails closed at resolution.
  */
 export function resolveProjectFloors(gates?: ProjectFloors): ProjectFloors {
-  return { floors: [...(gates?.floors ?? [])], ceilings: { ...(gates?.ceilings ?? {}) } };
+  return {
+    floors: [...(gates?.floors ?? [])],
+    ceilings: { ...(gates?.ceilings ?? {}) },
+    ...(gates?.providers === undefined ? {} : { providers: [...gates.providers] }),
+  };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -108,7 +123,9 @@ export function validateGatesConfig(gates: unknown): string[] {
   if (!isRecord(gates)) return ['gates: must be an object'];
   const errors: string[] = [];
   for (const field of Object.keys(gates)) {
-    if (field !== 'floors' && field !== 'ceilings') errors.push(`gates.${field}: unknown field`);
+    if (field !== 'floors' && field !== 'ceilings' && field !== 'providers') {
+      errors.push(`gates.${field}: unknown field`);
+    }
   }
   if (gates.floors !== undefined) {
     if (!Array.isArray(gates.floors)) {
@@ -130,6 +147,12 @@ export function validateGatesConfig(gates: unknown): string[] {
         }
       }
       const star = (gates.ceilings as Record<string, unknown>)['*'];
+      const studies = Object.entries(gates.ceilings).filter(([study]) => study !== '*');
+      // A per-study ceiling without the project-wide default is a rename
+      // escape: `study-a-v2` would silently inherit no ceiling. Require '*'.
+      if (studies.length > 0 && !(typeof star === 'string' && (OUTCOMES as readonly string[]).includes(star))) {
+        errors.push(`gates.ceilings: per-study ceilings require the project-wide '*' default ceiling`);
+      }
       if (typeof star === 'string' && (OUTCOMES as readonly string[]).includes(star)) {
         for (const [study, ceiling] of Object.entries(gates.ceilings)) {
           if (study !== '*' && typeof ceiling === 'string'
@@ -140,6 +163,48 @@ export function validateGatesConfig(gates: unknown): string[] {
         }
       }
     }
+  }
+  if (gates.providers !== undefined) {
+    if (!Array.isArray(gates.providers)) {
+      errors.push('gates.providers: must be an array');
+    } else {
+      const seen = new Set<string>();
+      gates.providers.forEach((entry, index) => {
+        errors.push(...validateProviderAllowlistEntry(entry, `gates.providers[${index}]`, seen));
+      });
+    }
+  }
+  return errors;
+}
+
+function validateProviderAllowlistEntry(entry: unknown, where: string, seen: Set<string>): string[] {
+  if (!isRecord(entry)) return [`${where}: must be an object`];
+  const errors: string[] = [];
+  for (const field of Object.keys(entry)) {
+    if (field !== 'bundleId' && field !== 'providerId' && field !== 'codeDigest'
+      && field !== 'reviewer' && field !== 'reviewedAt') {
+      errors.push(`${where}.${field}: unknown field`);
+    }
+  }
+  if (typeof entry.bundleId !== 'string' || !entry.bundleId.trim()) {
+    errors.push(`${where}.bundleId: required, must be a non-empty string`);
+  }
+  if (typeof entry.providerId !== 'string' || !entry.providerId.trim()) {
+    errors.push(`${where}.providerId: required, must be a non-empty string`);
+  }
+  if (typeof entry.codeDigest !== 'string' || !DIGEST_PATTERN.test(entry.codeDigest)) {
+    errors.push(`${where}.codeDigest: required, must be a sha256 digest`);
+  }
+  if (typeof entry.reviewer !== 'string' || !entry.reviewer.trim() || entry.reviewer.length > 128) {
+    errors.push(`${where}.reviewer: required, must be a non-empty string`);
+  }
+  if (typeof entry.reviewedAt !== 'string' || !Number.isFinite(Date.parse(entry.reviewedAt))) {
+    errors.push(`${where}.reviewedAt: required, must be a date-time`);
+  }
+  if (typeof entry.bundleId === 'string' && typeof entry.providerId === 'string') {
+    const key = `${entry.bundleId}\0${entry.providerId}`;
+    if (seen.has(key)) errors.push(`${where}: duplicate allowlist entry for ${entry.bundleId} ${entry.providerId}`);
+    else seen.add(key);
   }
   return errors;
 }

@@ -9,6 +9,24 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Reworked the experimental, default-off gates bundle-provider loader into an
+  isolated runner with config-allowlist trust and records reproduction
+  (#2831): providers execute only in a permission-restricted child Node
+  process over a pinned snapshot of the whole provider directory (static
+  relative `.mjs` only; dynamic `import()`, `require`, bare/external imports
+  and symlinks refuse; bare imports stay forbidden in phase 1), authorized by
+  a matching `aiwg.config` `gates.providers` allowlist entry (in-bundle
+  reviews are informational only) with an explicit `allowBundleProviders`
+  opt-in and no environment activation. Bindings pin the input-records digest
+  per provider section; evaluation re-runs the pinned provider over the
+  pinned records and uses the re-run output, refusing sections it cannot
+  reproduce. Reports record the applied project-floors digest or an explicit
+  opt-out marker; per-study ceilings require the `'*'` default; `validate
+  binding` resolves with the config floors; `--pack-dir` bundles are
+  project-scoped and cannot claim shipped or installed bundle ids. Core-only
+  behavior is unchanged when the feature is disabled. CLI re-runs from a
+  records file and vendored provider dependencies remain pending (#{{N}})
+
 - Experimental, default-off gate-pack discovery, manifest and CLI (#2830):
   `gate-pack` joins the `aiwg discover`/`aiwg show` operational surface with
   a `.gatepack.` extension boundary (HITL `gates/` files never classify),

@@ -705,17 +705,28 @@ export function resolveGateBinding(
     if (provider.version !== pin.version || provider.sourceDigest !== pin.sourceDigest) {
       throw new GateRegistryError(`binding ${binding.metadata.id} provider pin mismatch for ${pin.id}`);
     }
-    // Bundle providers (#2831): the pin must carry the loader-computed code
-    // digest, verified here against the loaded provider. A byte change moves
-    // the digest, so an old pin refuses until re-pinned. Null never verifies.
+    // Bundle providers (#2831 rework): the pin must carry the loader-computed
+    // code digest, verified here against the loaded provider, plus the
+    // records digest the evaluator reproduces (records binding, P4). A byte
+    // change moves the code digest, so an old pin refuses until re-pinned.
+    // Null never verifies. Core pins carry neither digest.
     const expectedCode = (provider as { codeDigest?: unknown }).codeDigest;
     const pinnedCode = (pin as { codeDigest?: unknown }).codeDigest;
+    const pinnedRecords = (pin as { recordsDigest?: unknown }).recordsDigest;
     if (typeof expectedCode === 'string') {
       if (typeof pinnedCode !== 'string' || pinnedCode !== expectedCode) {
         throw new GateRegistryError(`binding ${binding.metadata.id} provider code pin mismatch for ${pin.id}`);
       }
-    } else if (pinnedCode !== undefined) {
-      throw new GateRegistryError(`binding ${binding.metadata.id} provider code pin mismatch for ${pin.id}`);
+      if (typeof pinnedRecords !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(pinnedRecords)) {
+        throw new GateRegistryError(`binding ${binding.metadata.id} provider records pin mismatch for ${pin.id}`);
+      }
+    } else {
+      if (pinnedCode !== undefined) {
+        throw new GateRegistryError(`binding ${binding.metadata.id} provider code pin mismatch for ${pin.id}`);
+      }
+      if (pinnedRecords !== undefined) {
+        throw new GateRegistryError(`binding ${binding.metadata.id} provider records pin mismatch for ${pin.id}`);
+      }
     }
   }
   const requiredProviders = new Set<string>();

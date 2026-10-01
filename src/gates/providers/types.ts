@@ -29,6 +29,34 @@ export function providerSourceDigest(descriptor: { id: string; version: string; 
   return artifactDigest(descriptor);
 }
 
+/**
+ * An addon/extension bundle provider loaded through the isolated runner
+ * (#2831 rework). The provider NEVER executes in-process: `compute` throws
+ * and every invocation spawns the permission-restricted child over the
+ * private `snapshotDir`. The snapshot holds the pinned provider bytes; the
+ * child loads only from it.
+ */
+export interface BundleMetricProvider<TRecord = unknown> extends MetricProvider<TRecord> {
+  codeDigest: Sha256Digest;
+  review: { reviewer: string; reviewedAt: string; codeDigest: Sha256Digest };
+  bundleId: string;
+  modulePath: string;
+  /** Private snapshot dir holding the pinned provider bytes (plus harness files). */
+  snapshotDir: string;
+  /** Bundle-relative posix paths of the snapshotted provider modules. */
+  snapshotFiles: string[];
+}
+
+/** Isolated re-run inputs for bundle-provider bindings (records binding, P4). */
+export interface ProviderRuntime {
+  /** Loaded bundle providers (snapshots) available for re-runs. */
+  providers: BundleMetricProvider[];
+  /** Input records per provider id; each must digest to the binding's records pin. */
+  records: Record<string, readonly unknown[]>;
+  /** Wall-clock ceiling per re-run spawn (default in loader). */
+  timeoutMs?: number;
+}
+
 /** Fail-closed record guard shared by core providers. */
 export function requireRecords<TRecord>(records: readonly TRecord[], label: string): readonly TRecord[] {
   if (!Array.isArray(records)) throw new Error(`${label} records must be an array`);

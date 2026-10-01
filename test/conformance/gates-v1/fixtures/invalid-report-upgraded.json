@@ -69,5 +69,9 @@
   },
   "decision": "PROMOTE",
   "evaluatedAt": "2026-09-03T00:00:00.000Z",
-  "digest": "sha256:b18d17263db0e574b8c25d87152092f7d9f8cee0fce53e140b272cecdab99361"
+  "floors": {
+    "mode": "applied",
+    "digest": "sha256:27219d2e415e6d6904d372444d83f4e3e62b823fbe2d504a5fa265a4d0dc56b3"
+  },
+  "digest": "sha256:8af3463105ffc7248c322365688ab90124b7c6038a12ffcb7cf4327c6eafdb14"
 }

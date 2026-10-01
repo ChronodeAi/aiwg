@@ -194,6 +194,18 @@ export function registerBundleGatePacks(
   origin: GatePackOrigin,
 ): string[] {
   const declaration = readBundleGatePacksDeclaration(bundleDir);
+  // The declared gate-packs dir itself must be a real directory (checked
+  // before realpath resolution): a symlinked dir would load packs from
+  // outside the bundle under the bundle's origin.
+  try {
+    if (lstatSync(join(resolve(bundleDir), declaration.dir ?? GATE_PACKS_DIR)).isSymbolicLink()) {
+      throw new Error(`bundle gate-packs dir must not be a symlink: ${bundleDir}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && /symlink/.test(error.message)) throw error;
+    /* absent dir: listGatePackFiles reports nothing */
+  }
+  // Containment validation (throws on traversal escapes).
   const gatePacksDir = resolveGatePacksDir(bundleDir, declaration.dir);
   const files = listGatePackFiles(bundleDir, declaration.dir ?? GATE_PACKS_DIR);
   const wanted = declaration.names ? new Set(declaration.names) : null;
@@ -221,23 +233,42 @@ export function registerBundleGatePacks(
 
 /**
  * Derive a `--pack-dir` bundle's contribution origin from its manifest, never
- * from its path. A directory whose `manifest.json` declares a framework,
- * addon or extension `{id, type}` contributes under that namespace and bundle
- * id; anything else (missing, unreadable, oversized or undeclared manifest)
- * is project-local. Path substrings such as `/addons/` are not consulted.
+ * from its path. Unverified `--pack-dir` bundles are ALWAYS project-scoped:
+ * only the installed tree (via `discoverShippedGatePacks`) contributes
+ * `aiwg:` packs. A manifest whose `{id, type}` claims a shipped bundle
+ * (under `<aiwgRoot>/agentic/code/...`) or an installed project bundle
+ * (under `<cwd>/.aiwg/...`) that is not its own directory refuses:
+ * impersonating a trusted bundle id through an unverified path is a load
+ * error. Path substrings such as `/addons/` are never consulted.
  */
-export function originForPackDir(bundleDir: string): GatePackOrigin {
+export function originForPackDir(bundleDir: string, options?: { cwd?: string; aiwgRoot?: string }): GatePackOrigin {
   const manifestPath = join(resolve(bundleDir), 'manifest.json');
+  let claimed: { id: string; type: 'framework' | 'addon' | 'extension' } | null = null;
   try {
     const status = statSync(manifestPath);
     if (!status.isFile() || status.size > MANIFEST_MAX_BYTES) return { namespace: 'project' };
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { id?: unknown; type?: unknown };
     if (typeof manifest?.id === 'string' && manifest.id.trim() !== ''
       && (manifest.type === 'framework' || manifest.type === 'addon' || manifest.type === 'extension')) {
-      return { namespace: manifest.type, bundle: manifest.id };
+      claimed = { id: manifest.id, type: manifest.type };
     }
   } catch {
-    /* fall through to project-local */
+    return { namespace: 'project' };
+  }
+  if (claimed !== null) {
+    const plural = claimed.type === 'framework' ? 'frameworks' : claimed.type === 'addon' ? 'addons' : 'extensions';
+    const candidates: Array<{ root: string; label: string }> = [];
+    if (options?.aiwgRoot) candidates.push({ root: join(resolve(options.aiwgRoot), 'agentic/code', plural, claimed.id), label: 'shipped' });
+    if (options?.cwd) candidates.push({ root: join(resolve(options.cwd), '.aiwg', plural, claimed.id), label: 'installed' });
+    const own = realpathIfExists(resolve(bundleDir));
+    for (const candidate of candidates) {
+      const trusted = realpathIfExists(candidate.root);
+      if (trusted === null) continue;
+      if (own === null || own !== trusted) {
+        throw new Error(`pack-dir bundle claims a ${candidate.label} bundle id '${claimed.id}'`
+          + ` that is not its own directory: ${bundleDir}`);
+      }
+    }
   }
   return { namespace: 'project' };
 }

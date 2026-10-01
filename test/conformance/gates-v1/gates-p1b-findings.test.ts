@@ -78,26 +78,35 @@ describe('p1b A1: --pack-dir files cannot self-attest namespaces', () => {
     expect(() => buildGatesRegistry({ cwd: dir, packDirs: [file] })).toThrow(/project:/);
   });
 
-  it('registers manifest-declared addon packs from a neutral directory without path sniffing', () => {
+  it('scopes manifest-declared packs from an unverified directory to project: (R4)', () => {
     const dir = tmpbox('a1');
     const bundleDir = join(dir, 'bundle-mine');
     mkdirSync(join(bundleDir, 'gate-packs'), { recursive: true });
     writeFileSync(join(bundleDir, 'manifest.json'), JSON.stringify({ id: 'mine', type: 'addon' }));
+    // An addon:-namespaced pack through an unverified --pack-dir refuses: the
+    // path cannot prove the bundle it names.
     writeJson(join(bundleDir, 'gate-packs'), 'mine.gatepack.json', minimalPack('addon:mine/pack'));
+    expect(() => buildGatesRegistry({ cwd: dir, packDirs: [bundleDir] })).toThrow(/namespace|project/);
+    // A project:-namespaced pack in the same bundle loads as project-local.
+    writeJson(join(bundleDir, 'gate-packs'), 'mine.gatepack.json', minimalPack('project:mine'));
     const { loaded } = buildGatesRegistry({ cwd: dir, packDirs: [bundleDir] });
-    expect(loaded).toContain('addon:mine/pack');
+    expect(loaded).toContain('project:mine');
   });
 });
 
-describe('p1b A8: pack origin comes from the manifest, not the path', () => {
-  it('honours a framework manifest even under a misleading /addons/ path', () => {
+describe('p1b A8: pack origin comes from verification, not the path or manifest', () => {
+  it('scopes even a manifest-declared framework bundle under a misleading path to project: (R4)', () => {
     const dir = tmpbox('a8');
     const bundleDir = join(dir, 'addons', 'legacy');
     mkdirSync(join(bundleDir, 'gate-packs'), { recursive: true });
     writeFileSync(join(bundleDir, 'manifest.json'), JSON.stringify({ id: 'fw', type: 'framework' }));
+    // Path substrings such as /addons/ are never consulted, and the manifest
+    // type no longer promotes an unverified directory: framework: refuses.
     writeJson(join(bundleDir, 'gate-packs'), 'fw.gatepack.json', minimalPack('framework:fw/pack'));
+    expect(() => buildGatesRegistry({ cwd: dir, packDirs: [bundleDir] })).toThrow(/namespace|project/);
+    writeJson(join(bundleDir, 'gate-packs'), 'fw.gatepack.json', minimalPack('project:legacy'));
     const { loaded } = buildGatesRegistry({ cwd: dir, packDirs: [bundleDir] });
-    expect(loaded).toContain('framework:fw/pack');
+    expect(loaded).toContain('project:legacy');
   });
 });
 

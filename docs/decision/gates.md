@@ -18,14 +18,17 @@ are numerically identical to the pre-move implementations.
   `extends` monotone-tightening proofs and binding resolution (`registry.ts`),
   a pure deterministic evaluator (`evaluate.ts`), digest-bound report
   validation (`report.ts`) and four core metric providers (`providers/`).
-- `src/gates/providers/loader.ts` (#2831, experimental default-off):
+- `src/gates/providers/loader.ts` (#2831 rework, experimental default-off):
   addon/extension bundle providers declared in the bundle manifest
-  (`gateProviders`, Zod in `src/extensions/manifest.ts`), loaded only through
-  the gates registry from bundle-relative `.mjs` paths. The loader pins
-  provider CODE (module bytes plus resolved local imports, bare externals by
-  bundle lockfile integrity), verifies a mandatory review attestation, seals
-  metric sections with the trusted code and records digests, and invokes
-  providers with a reserve-before-dispatch timeout. See
+  (`gateProviders`, Zod in `src/extensions/manifest.ts`) run ONLY in a
+  permission-restricted child process over a pinned snapshot of the whole
+  provider directory (static relative `.mjs` only; bare/external imports
+  forbidden in phase 1), authorized by the project-config `gates.providers`
+  allowlist — in-bundle reviews are informational only — with an explicit
+  `allowBundleProviders` opt-in and no environment activation. Bindings pin
+  the input-records digest per provider section; evaluation re-runs the
+  pinned provider over the pinned records and uses the re-run output
+  (caller-asserted provider metrics are never accepted). See
   [bundle providers](gate-providers.md). The fixture extension
   `test/fixtures/gates-example-extension/` ships one reviewed example.
 - `src/gates/stats/`: the statistics moved out of
@@ -86,11 +89,16 @@ is a load error with any other mode.
 ## Evaluation contract
 
 `evaluateGates({ binding, registry, trustedBindingDigest, holdout, metrics,
-upstream, now, floors, attestation })` is pure: no I/O, injected clock,
-seeded bootstrap only. `floors` is required: pass
+upstream, now, floors, attestation })` is deterministic with an injected
+clock; for core-only bindings it performs no I/O. `floors` is required: pass
 `resolveProjectFloors(config)` or `'none-explicit-opt-out'` (tests/legacy
 only, with a documented reason); an `undefined` floors input refuses
-evaluation. When the resolved binding observes any `upstream-ceiling` gate
+evaluation. The report records the applied floors digest, or the explicit
+opt-out marker, and report validation re-derives the distinction. Bindings
+with bundle-provider pins additionally trigger one synchronous isolated
+re-run per provider (`providerRuntime` input, records digesting to the pin;
+the re-run output replaces caller-asserted sections, absent coverage
+refuses). When the resolved binding observes any `upstream-ceiling` gate
 (including the default floor's), a null `upstream` refuses evaluation
 instead of downgrading to HOLD. `attestation: 'offline-cli'` labels
 CLI-produced reports; library reports omit it and stay byte-identical.
@@ -152,7 +160,11 @@ section of `.aiwg/aiwg.config` holds `floors` (inline `project:` GatePacks
 and/or pins over registered packs whose composed gates all become floors)
 and `ceilings`: exact binding `metadata.id` keys plus `'*'` as the
 project-wide default applied to every binding (a per-study key may only
-tighten the `'*'` default; renames never inherit). Inline floor packs
+tighten the `'*'` default; renames never inherit). Any per-study key
+requires the `'*'` default: without it a renamed study would silently
+escape every ceiling, so config validation flags it (R1). The section may
+also hold `providers`, the bundle-provider allowlist (P3 trust root; see
+[bundle providers](gate-providers.md)). Inline floor packs
 validate against the closed GatePack schema at config load; pack-reference
 versions and authored digests are verified at resolution and composed
 through the pure `extends` chain, so a loosened parent moves the composed
@@ -254,17 +266,22 @@ diagnostic and never enter the `GateRegistry`.
 `aiwg gates` (`src/cli/handlers/gates.ts`, `src/gates/driver.ts`) is pure
 and offline, with explicit trust boundaries:
 
-- Single files passed via `--pack-dir` are always `project:` packs: an
-  `aiwg:` (or `addon:`/`framework:`/`extension:`) id claimed by a file is
-  rejected. Those namespaces load only from the installed tree
-  (`aiwg:`, resolved from the package location, never the cwd) or from
-  manifest-declared bundles (directory `--pack-dir` with a matching
-  `manifest.json` `{id, type}`; the origin never comes from path sniffing).
+- Single files and bundle directories passed via `--pack-dir` are always
+  `project:` packs: an `aiwg:` (or `addon:`/`framework:`/`extension:`) id
+  claimed through an unverified path is rejected, and a `--pack-dir`
+  manifest claiming a shipped (`<aiwgRoot>/agentic/code/…`) or installed
+  project (`.aiwg/…`) bundle id that is not its own directory refuses
+  (impersonation). Symlinked `--pack-dir` bundle directories refuse.
+  Those namespaces load only from the installed tree (`aiwg:`, resolved
+  from the package location, never the cwd). Path substrings are never
+  consulted.
 - An explicit `--aiwg-root` override is untrusted: `list`/`show`/`validate`
   still inspect it, but `evaluate` refuses it.
 - `validate <pack|binding|report> <path>` schema-checks plus pack semantics
   (`validateResolvedPack`) and binding resolution; invalid files report
-  `valid: false` (exit 2) instead of throwing.
+  `valid: false` (exit 2) instead of throwing. Binding validation resolves
+  with the config floors from the cwd, exactly like evaluation: a binding
+  that loosens project policy is invalid.
 - `evaluate --binding <file> --metrics <file> --holdout <file>
   [--upstream <file>] --now <iso> --trusted-binding-digest <sha256>`
   re-derives pack, provider, binding and seal digests inside the evaluator
@@ -290,9 +307,10 @@ so discovery has a real entry; it validates and registers.
 ## Pending (not in this phase)
 
 Live Jev calls, real held-out data, human reviewers and production rollout:
-no addon/extension provider loading — providers register only through core
-modules and `sourceDigest` binds the provider descriptor, not a code hash
-(#2831) — and no study migrates to bindings (#2833+). Rule `enforcedBy`
+addon/extension provider loading exists only as the experimental,
+default-off isolated runner with config-allowlist trust and records
+reproduction (#2831 rework; CLI re-runs from a records file are still
+pending) — and no study migrates to bindings (#2833+). Rule `enforcedBy`
 coverage stays a stub (#2839). The discovery relevance fixture covers the
 shipped integrity-ceiling pack plus the `coverage-floor` conformance fixture
 pack (`test/conformance/gates-v1/fixtures/`); live discovery ranking against

@@ -5,11 +5,11 @@
  */
 export { GATES_API_VERSION, qualifyGateParameter } from './types.js';
 export type {
-  ArtifactPinLike, GateBinding, GateDefinition, GateEvidence, GateFailOutcome, GateHoldoutInputs,
+  ArtifactPinLike, GateBinding, GateDefinition, GateEvidence, GateFailOutcome, GateFloorsRecord, GateHoldoutInputs,
   GateHoldoutRecord, GateKind, GateMetadata, GateMetricsDocument, GateOutcome, GatePack, GatePackPin, GateParameter,
   GateParentPin, GateProviderPin, GateReference, GateReport, GateScope, GateScopeMode,
   GateStatistic, GateStatus, GateThreshold, MetricKind, MetricObservation, MetricSeries, ParameterType,
-  ProviderMetrics, ReferenceKind, Sha256Digest, StatisticEvidenceMethod, StatisticKind, StatisticMethod,
+  ProviderAllowlistEntry, ProviderMetrics, ReferenceKind, Sha256Digest, StatisticEvidenceMethod, StatisticKind, StatisticMethod,
   TighteningDirection, UpstreamCeiling, UpstreamRecord,
 } from './types.js';
 export { GateSchemaError, validateGateDocument, type GateDocumentKind } from './schema.js';
@@ -45,8 +45,11 @@ export {
 } from './driver.js';
 export type { GatesDriverOptions, GateValidateKind, GateValidateResult, GatesEvaluateFiles, GatePackSummary, ShippedRootTrust } from './driver.js';
 export {
-  GateProviderError, computeProviderCodeDigest, loadGateBundleProviders, invokeBundleProvider, sealProviderSection,
+  GateProviderError, computeProviderCodeDigest, deriveIsolatedSeed, loadGateBundleProviders, invokeBundleProvider,
+  providerBindingPin, runIsolatedProvider, runIsolatedProviderSync, sealProviderSection, snapshotProviderDir,
   isBundleProvidersEnabled, GATE_PROVIDER_MAX_FILE_BYTES, GATE_PROVIDER_MAX_FILES, GATE_PROVIDER_MAX_TOTAL_BYTES,
   GATE_PROVIDER_DEFAULT_TIMEOUT_MS, GATE_PROVIDER_MAX_TIMEOUT_MS, GATE_PROVIDER_DEFAULT_MAX_RECORDS,
+  GATE_PROVIDER_MAX_OUTPUT_BYTES,
 } from './providers/loader.js';
-export type { BundleMetricProvider, BundleProviderOptions, ProviderCodeDigest, ProviderExternalPin, ProviderFileDigest } from './providers/loader.js';
+export type { BundleProviderOptions, ProviderCodeDigest, ProviderExternalPin, ProviderFileDigest } from './providers/loader.js';
+export type { BundleMetricProvider, ProviderRuntime } from './providers/types.js';

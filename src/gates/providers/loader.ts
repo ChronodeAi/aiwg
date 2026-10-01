@@ -1,22 +1,47 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, realpathSync, statSync } from 'node:fs';
-import { isBuiltin } from 'node:module';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import {
+  lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { GateProviderEntrySchema, type GateProviderEntry } from '../../extensions/manifest.js';
 import { artifactDigest } from '../../decision/validate.js';
-import { providerSourceDigest, type MetricProvider } from './types.js';
-import type { GateMetricsDocument, Sha256Digest } from '../types.js';
+import { providerSourceDigest } from './types.js';
+import type { BundleMetricProvider } from './types.js';
+import type { GateMetricsDocument, ProviderAllowlistEntry, Sha256Digest } from '../types.js';
+import { ISOLATED_CHILD_SOURCE } from './isolated-child-source.js';
+
+export type { BundleMetricProvider } from './types.js';
 
 /**
- * Addon/extension metric-provider loading (#2831).
+ * Addon/extension metric-provider loading, isolated rework (P1-P5).
  *
- * Providers load ONLY through the gates registry from paths declared in the
- * bundle manifest (`gateProviders`), inside the bundle root, never by
- * arbitrary import. Core providers remain the default: this module is
- * disabled unless the caller passes `allowBundleProviders: true` (or sets
- * `AIWG_GATES_BUNDLE_PROVIDERS=1`). An absent opt-in keeps resolution and
- * evaluation byte-identical to the core-only path.
+ * Providers run ONLY in a separate child Node process started with the Node
+ * permission model (`--permission`: fs-read allowed only for the provider
+ * snapshot dir; no fs-write, no worker, no addons/wasi; child-process spawn
+ * denied) with provider code evaluated in a `vm` context exposing only frozen
+ * records, a frozen clock, a seeded RNG and a minimal pure standard library.
+ * The `vm` context alone is NOT the boundary; the permission-restricted child
+ * process (plus the parent's SIGKILL timeout and output caps) is.
+ *
+ * Provider code is the entire declared provider directory, copied into a
+ * fresh private snapshot dir (no symlinks: lstat-checked, symlinks and
+ * non-regular files refuse); the code digest covers the snapshot's sorted
+ * module paths and bytes; the child loads only from that snapshot. Modules
+ * must be self-contained relative `.mjs` with static string specifiers only:
+ * dynamic `import()`, `require`, bare/external imports and non-`.mjs`
+ * relatives refuse at load. Bare package imports are FORBIDDEN in phase 1.
+ *
+ * The trust root is the project config (`aiwg.config` `gates.providers`
+ * allowlist): a provider registers only with a matching entry (bundle id,
+ * provider id, code digest, reviewer, review timestamp). In-bundle review
+ * files are informational (integrity-checked for consistency) only.
+ * Unknown or mismatched entries refuse.
+ *
+ * Loading requires BOTH an explicit `allowBundleProviders: true` option AND
+ * an allowlist entry. No environment variable activates it. With no opt-in,
+ * resolution and evaluation stay byte-identical to the core-only path.
  */
 
 export const GATE_PROVIDER_MAX_FILE_BYTES = 256 * 1024;
@@ -26,13 +51,15 @@ export const GATE_PROVIDER_MAX_REVIEW_BYTES = 8 * 1024;
 export const GATE_PROVIDER_DEFAULT_TIMEOUT_MS = 5000;
 export const GATE_PROVIDER_MAX_TIMEOUT_MS = 30000;
 export const GATE_PROVIDER_DEFAULT_MAX_RECORDS = 50000;
+/** Largest accepted isolated-run stdout body (single JSON message). */
+export const GATE_PROVIDER_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export class GateProviderError extends Error {
   constructor(
     message: string,
     readonly code:
       | 'disabled' | 'path-escape' | 'oversize' | 'missing-attestation' | 'attestation-mismatch'
-      | 'invalid-module' | 'external-unpinned' | 'timeout' | 'cancelled' | 'rejected'
+      | 'invalid-module' | 'external-forbidden' | 'unregistered' | 'timeout' | 'cancelled' | 'rejected'
       | 'budget-exceeded' | 'invalid-records' | 'duplicate',
   ) {
     super(message);
@@ -46,7 +73,7 @@ export interface ProviderFileDigest {
   sha256: string;
 }
 
-/** One bare external import pinned by the bundle lockfile integrity hash. */
+/** Phase-1 providers cannot have externals; the field stays for shape stability. */
 export interface ProviderExternalPin {
   specifier: string;
   version: string;
@@ -57,37 +84,30 @@ export interface ProviderCodeDigest {
   codeDigest: Sha256Digest;
   files: ProviderFileDigest[];
   externals: ProviderExternalPin[];
+  /** Private snapshot dir the digest was computed over (and the child loads). */
+  snapshotDir: string;
 }
-
-/** A bundle provider with its trusted code digest and review attestation. */
-export type BundleMetricProvider = MetricProvider & {
-  codeDigest: Sha256Digest;
-  review: { reviewer: string; reviewedAt: string; codeDigest: Sha256Digest };
-  bundleId: string;
-  modulePath: string;
-};
 
 export interface BundleProviderOptions {
   allowBundleProviders?: boolean;
+  /** P3 trust root: project-config `gates.providers` allowlist. Required to register. */
+  allowlist?: ProviderAllowlistEntry[];
   now?: string;
   timeoutMs?: number;
   maxRecords?: number;
+  maxOutputBytes?: number;
+  /** Frozen clock (epoch ms) injected into the isolated context. Defaults to the real clock. */
+  clockMs?: number;
   signal?: AbortSignal;
 }
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const MODULE_PATTERN = /^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*\.mjs$/;
 const REVIEW_PATTERN = /^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*\.json$/;
-
-/** Determinism denylist: filesystem, process and network access (#2831). */
-const FORBIDDEN_BUILTINS = new Set([
-  'fs', 'fs/promises', 'child_process', 'cluster', 'net', 'http', 'https', 'http2',
-  'dgram', 'dns', 'tls', 'worker_threads',
-]);
+const HARNESS_PREFIX = '__aiwg_';
 
 export function isBundleProvidersEnabled(options?: Pick<BundleProviderOptions, 'allowBundleProviders'>): boolean {
-  if (options?.allowBundleProviders === true) return true;
-  return process.env.AIWG_GATES_BUNDLE_PROVIDERS === '1';
+  return options?.allowBundleProviders === true;
 }
 
 function bundleRootReal(bundleRoot: string): string {
@@ -107,139 +127,135 @@ function assertDeclaredPath(value: unknown, pattern: RegExp, label: string): str
   return value;
 }
 
-function resolveInsideBundle(rootReal: string, rel: string, label: string): string {
-  const abs = resolve(rootReal, rel);
-  let real: string;
-  try {
-    real = realpathSync(abs);
-  } catch {
-    throw new GateProviderError(`${label} is missing inside the bundle: ${rel}`, 'path-escape');
-  }
-  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
-    throw new GateProviderError(`${label} escapes the bundle root: ${rel}`, 'path-escape');
-  }
-  return real;
+/** Deterministic seed for the isolated RNG: pinned by code and records digests. */
+export function deriveIsolatedSeed(codeDigest: string, recordsDigest: string): number {
+  return parseInt(createHash('sha256').update(`${codeDigest}${recordsDigest}`).digest('hex').slice(0, 8), 16);
 }
 
-const IMPORT_PATTERN = /(?:import\s+[^'"]*?from\s*|export\s+[^'"]*?from\s*|import\s*\(\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
-
-function parseSpecifiers(source: string): string[] {
-  const found = new Set<string>();
-  IMPORT_PATTERN.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = IMPORT_PATTERN.exec(source)) !== null) {
-    if (match[1] !== undefined) found.add(match[1]);
-  }
-  return [...found];
-}
-
-function builtinName(specifier: string): string | null {
-  const bare = specifier.startsWith('node:') ? specifier.slice(5) : specifier;
-  if (specifier.startsWith('node:') || isBuiltin(specifier) || isBuiltin(`node:${bare}`)) return bare;
-  return null;
-}
-
-function packageNameOf(specifier: string): string {
-  if (specifier.startsWith('@')) {
-    const parts = specifier.split('/');
-    return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : specifier;
-  }
-  return specifier.split('/')[0] as string;
-}
-
-function lockfileIntegrity(rootReal: string, name: string): { version: string; integrity: string } {
-  let lock: unknown;
-  try {
-    lock = JSON.parse(readFileSync(resolve(rootReal, 'package-lock.json'), 'utf8')) as unknown;
-  } catch {
-    throw new GateProviderError(`external import '${name}' requires a bundle package-lock.json integrity pin`, 'external-unpinned');
-  }
-  const packages = (lock as { packages?: Record<string, { version?: unknown; integrity?: unknown }> }).packages;
-  const entry = packages?.[`node_modules/${name}`];
-  const version = entry?.version;
-  const integrity = entry?.integrity;
-  if (typeof version !== 'string' || !version || typeof integrity !== 'string' || !integrity) {
-    throw new GateProviderError(`external import '${name}' has no lockfile integrity pin`, 'external-unpinned');
-  }
-  return { version, integrity };
+interface SnapshotWalk {
+  /** Bundle-relative posix path -> bytes, sorted by path. */
+  modules: Array<{ path: string; bytes: Buffer }>;
 }
 
 /**
- * Digest of provider CODE: the entry module bytes plus every resolved local
- * import within the bundle. Bare externals contribute only their lockfile
- * `{version, integrity}` pin. Any byte change moves the digest, so a binding
- * pinned to the old digest refuses until re-pinned.
+ * Copies the provider directory (the directory containing the entry module)
+ * into a fresh private snapshot dir. Every entry is lstat-checked: symlinks
+ * (files or dirs) and non-regular files refuse; only regular `.mjs` files are
+ * copied (other regular files are inert: the loader never serves them, so
+ * they are neither copied nor digested). The walk is sorted, so the snapshot
+ * (and its digest) is deterministic.
  */
-export function computeProviderCodeDigest(bundleRoot: string, entryModule: string): ProviderCodeDigest {
+export function snapshotProviderDir(bundleRoot: string, entryModule: string): {
+  snapshotDir: string; files: ProviderFileDigest[]; codeDigest: Sha256Digest; entryRel: string;
+} {
   const rel = assertDeclaredPath(entryModule, MODULE_PATTERN, 'provider module');
   const rootReal = bundleRootReal(bundleRoot);
-  const entryReal = resolveInsideBundle(rootReal, rel, 'provider module');
-  const files: ProviderFileDigest[] = [];
-  const externals = new Map<string, ProviderExternalPin>();
-  const visited = new Set<string>();
-  const queue: string[] = [entryReal];
+  const entryAbs = resolve(rootReal, rel);
+  let entryReal: string;
+  try {
+    entryReal = realpathSync(entryAbs);
+  } catch {
+    throw new GateProviderError(`provider module is missing inside the bundle: ${rel}`, 'path-escape');
+  }
+  if (entryReal !== rootReal && !entryReal.startsWith(rootReal + sep)) {
+    throw new GateProviderError(`provider module escapes the bundle root: ${rel}`, 'path-escape');
+  }
+  let entryStatus;
+  try {
+    entryStatus = lstatSync(entryReal);
+  } catch {
+    throw new GateProviderError(`provider module is missing inside the bundle: ${rel}`, 'path-escape');
+  }
+  if (entryStatus.isSymbolicLink() || !entryStatus.isFile()) {
+    throw new GateProviderError(`provider module must be a regular file: ${rel}`, 'path-escape');
+  }
+  const providerDir = dirname(entryReal);
+  const walk: SnapshotWalk = { modules: [] };
   let total = 0;
-  while (queue.length) {
-    const abs = queue.shift() as string;
-    if (visited.has(abs)) continue;
-    visited.add(abs);
-    if (visited.size > GATE_PROVIDER_MAX_FILES) {
-      throw new GateProviderError(`provider exceeds ${GATE_PROVIDER_MAX_FILES} files`, 'oversize');
-    }
-    let bytes: Buffer;
+  const visit = (dirAbs: string): void => {
+    let names: string[];
     try {
-      const size = statSync(abs).size;
-      if (size > GATE_PROVIDER_MAX_FILE_BYTES) {
+      names = readdirSync(dirAbs).sort();
+    } catch {
+      throw new GateProviderError(`provider directory is unreadable: ${relative(rootReal, dirAbs)}`, 'path-escape');
+    }
+    for (const name of names) {
+      if (name.startsWith(HARNESS_PREFIX)) {
+        throw new GateProviderError(`provider file uses the reserved prefix: ${name}`, 'invalid-module');
+      }
+      const abs = join(dirAbs, name);
+      let status;
+      try {
+        status = lstatSync(abs);
+      } catch {
+        throw new GateProviderError(`provider file is unreadable: ${relative(rootReal, abs)}`, 'path-escape');
+      }
+      if (status.isSymbolicLink()) {
+        throw new GateProviderError(`provider file must not be a symlink: ${relative(rootReal, abs)}`, 'path-escape');
+      }
+      if (status.isDirectory()) {
+        if (name.endsWith('.mjs')) {
+          throw new GateProviderError(`provider module must be a regular file: ${relative(rootReal, abs)}`, 'invalid-module');
+        }
+        visit(abs);
+        continue;
+      }
+      if (!status.isFile()) {
+        throw new GateProviderError(`provider file is not a regular file: ${relative(rootReal, abs)}`, 'path-escape');
+      }
+      if (!name.endsWith('.mjs')) continue;
+      if (walk.modules.length >= GATE_PROVIDER_MAX_FILES) {
+        throw new GateProviderError(`provider exceeds ${GATE_PROVIDER_MAX_FILES} files`, 'oversize');
+      }
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(abs);
+      } catch {
+        throw new GateProviderError(`provider file is unreadable: ${relative(rootReal, abs)}`, 'path-escape');
+      }
+      if (bytes.length > GATE_PROVIDER_MAX_FILE_BYTES) {
         throw new GateProviderError(`provider file exceeds size limit: ${relative(rootReal, abs)}`, 'oversize');
       }
-      total += size;
-      if (total > GATE_PROVIDER_MAX_TOTAL_BYTES) throw new GateProviderError('provider exceeds total size limit', 'oversize');
-      bytes = readFileSync(abs);
-    } catch (error) {
-      if (error instanceof GateProviderError) throw error;
-      throw new GateProviderError(`provider file is unreadable: ${relative(rootReal, abs)}`, 'path-escape');
+      total += bytes.length;
+      if (total > GATE_PROVIDER_MAX_TOTAL_BYTES) {
+        throw new GateProviderError('provider exceeds total size limit', 'oversize');
+      }
+      walk.modules.push({ path: relative(rootReal, abs).split(sep).join('/'), bytes });
     }
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const posix = relative(rootReal, abs).split(sep).join('/');
-    files.push({ path: posix, sha256 });
-    if (!abs.endsWith('.mjs')) continue;
-    for (const specifier of parseSpecifiers(bytes.toString('utf8'))) {
-      const builtin = builtinName(specifier);
-      if (builtin !== null) {
-        if (FORBIDDEN_BUILTINS.has(builtin)) {
-          throw new GateProviderError(
-            `provider must be deterministic: '${specifier}' filesystem/network access is not allowed`, 'invalid-module');
-        }
-        continue;
-      }
-      if (specifier.startsWith('./') || specifier.startsWith('../')) {
-        const next = resolve(dirname(abs), specifier);
-        let nextReal: string;
-        try {
-          nextReal = realpathSync(next);
-        } catch {
-          throw new GateProviderError(`provider import escapes or is missing: ${specifier}`, 'path-escape');
-        }
-        if (nextReal !== rootReal && !nextReal.startsWith(rootReal + sep)) {
-          throw new GateProviderError(`provider import escapes the bundle root: ${specifier}`, 'path-escape');
-        }
-        queue.push(nextReal);
-        continue;
-      }
-      if (specifier.startsWith('/') || specifier.includes('..')) {
-        throw new GateProviderError(`provider import escapes the bundle: ${specifier}`, 'path-escape');
-      }
-      const name = packageNameOf(specifier);
-      if (!externals.has(name)) {
-        const pin = lockfileIntegrity(rootReal, name);
-        externals.set(name, { specifier: name, version: pin.version, integrity: pin.integrity });
-      }
-    }
+  };
+  visit(providerDir);
+  walk.modules.sort((a, b) => (a.path < b.path ? -1 : 1));
+  if (!walk.modules.some(file => file.path === relative(rootReal, entryReal).split(sep).join('/'))) {
+    throw new GateProviderError(`provider module is missing from its snapshot: ${rel}`, 'path-escape');
   }
-  files.sort((a, b) => (a.path < b.path ? -1 : 1));
-  const sortedExternals = [...externals.values()].sort((a, b) => (a.specifier < b.specifier ? -1 : 1));
-  const codeDigest = artifactDigest({ externals: sortedExternals, files }) as Sha256Digest;
-  return { codeDigest, files, externals: sortedExternals };
+  const snapshotDir = mkdtempSync(join(tmpdir(), 'aiwg-gates-provider-'));
+  const files: ProviderFileDigest[] = [];
+  for (const file of walk.modules) {
+    const target = join(snapshotDir, file.path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, file.bytes);
+    files.push({ path: file.path, sha256: createHash('sha256').update(file.bytes).digest('hex') });
+  }
+  writeFileSync(join(snapshotDir, `${HARNESS_PREFIX}child.mjs`), ISOLATED_CHILD_SOURCE, 'utf8');
+  const codeDigest = artifactDigest({ externals: [], files }) as Sha256Digest;
+  return { snapshotDir, files, codeDigest, entryRel: relative(rootReal, entryReal).split(sep).join('/') };
+}
+
+/**
+ * Digest of provider CODE: the snapshot bytes (sorted module paths plus
+ * content hashes) of the entire provider directory. Any byte change anywhere
+ * in the directory moves the digest, so a binding pinned to the old digest
+ * refuses until re-pinned. Bare/external imports are forbidden in phase 1;
+ * the child linker is authoritative at load/invoke. Side effect: creates a
+ * fresh private snapshot dir (mode 0700, OS-tmp reclamation) and returns it
+ * for loading; digest-only callers may ignore it.
+ */
+export function computeProviderCodeDigest(bundleRoot: string, entryModule: string): ProviderCodeDigest {
+  const snapshot = snapshotProviderDir(bundleRoot, entryModule);
+  return {
+    codeDigest: snapshot.codeDigest, files: snapshot.files, externals: [],
+    snapshotDir: snapshot.snapshotDir,
+  };
 }
 
 const METRIC_KINDS = new Set(['proportion', 'paired', 'scalar', 'differences', 'evidence']);
@@ -256,13 +272,22 @@ function readReview(rootReal: string, entry: GateProviderEntry): { reviewer: str
     };
   }
   const rel = assertDeclaredPath(entry.reviewFile, REVIEW_PATTERN, 'provider review');
-  const abs = resolveInsideBundle(rootReal, rel, 'provider review');
+  const abs = resolve(rootReal, rel);
+  let real: string;
+  try {
+    real = realpathSync(abs);
+  } catch {
+    throw new GateProviderError(`provider ${entry.id} review file is unreadable: ${rel}`, 'missing-attestation');
+  }
+  if (real !== rootReal && !real.startsWith(rootReal + sep)) {
+    throw new GateProviderError(`provider review escapes the bundle root: ${rel}`, 'path-escape');
+  }
   let raw: string;
   try {
-    if (statSync(abs).size > GATE_PROVIDER_MAX_REVIEW_BYTES) {
+    if (statSync(real).size > GATE_PROVIDER_MAX_REVIEW_BYTES) {
       throw new GateProviderError(`provider review exceeds size limit: ${rel}`, 'oversize');
     }
-    raw = readFileSync(abs, 'utf8');
+    raw = readFileSync(real, 'utf8');
   } catch (error) {
     if (error instanceof GateProviderError) throw error;
     throw new GateProviderError(`provider ${entry.id} review file is unreadable: ${rel}`, 'missing-attestation');
@@ -287,13 +312,213 @@ function readReview(rootReal: string, entry: GateProviderEntry): { reviewer: str
   };
 }
 
+interface IsolatedRunArgs {
+  snapshotDir: string;
+  entryRel: string;
+  files: string[];
+  expectedId: string;
+  expectedVersion: string;
+  mode: 'inspect' | 'invoke';
+  recordsJson?: string;
+  clockMs: number;
+  seed: number;
+}
+
+interface IsolatedRunLimits {
+  timeoutMs: number;
+  maxOutputBytes: number;
+  signal?: AbortSignal;
+}
+
+function childArgs(snapshotDir: string): string[] {
+  return [
+    '--experimental-vm-modules',
+    '--permission',
+    `--allow-fs-read=${snapshotDir}`,
+    join(snapshotDir, `${HARNESS_PREFIX}child.mjs`),
+  ];
+}
+
+function writeIsolatedRequest(snapshotDir: string, args: IsolatedRunArgs): void {
+  writeFileSync(join(snapshotDir, `${HARNESS_PREFIX}request.json`), JSON.stringify({
+    entry: args.entryRel,
+    files: args.files,
+    mode: args.mode,
+    ...(args.recordsJson === undefined ? {} : { recordsJson: args.recordsJson }),
+    clockMs: args.clockMs,
+    seed: args.seed,
+    expectedId: args.expectedId,
+    expectedVersion: args.expectedVersion,
+  }), 'utf8');
+}
+
+function parseIsolatedResponse(stdout: string, stderr: string, providerId: string): { descriptor?: Record<string, unknown>; result?: unknown } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim()) as unknown;
+  } catch {
+    throw new GateProviderError(
+      `provider ${providerId} returned an unreadable message${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new GateProviderError(`provider ${providerId} returned an unreadable message`, 'rejected');
+  }
+  const body = parsed as { ok?: unknown; error?: unknown; descriptor?: unknown; result?: unknown };
+  if (body.ok !== true) {
+    throw new GateProviderError(
+      `provider ${providerId} rejected: ${typeof body.error === 'string' && body.error ? body.error.slice(0, 300) : 'unknown'}`,
+      'rejected');
+  }
+  return { descriptor: body.descriptor as Record<string, unknown> | undefined, result: body.result };
+}
+
+/** Synchronous isolated run (evaluator re-runs): SIGKILL timeout, output cap. */
+export function runIsolatedProviderSync(
+  provider: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'>,
+  args: { mode: 'inspect' | 'invoke'; recordsJson?: string; clockMs: number; seed: number },
+  limits: IsolatedRunLimits,
+): { descriptor?: Record<string, unknown>; result?: unknown } {
+  if (!provider.snapshotDir || !provider.modulePath || !provider.snapshotFiles) {
+    throw new GateProviderError(`provider ${provider.id} snapshot is unavailable`, 'invalid-module');
+  }
+  writeIsolatedRequest(provider.snapshotDir, {
+    snapshotDir: provider.snapshotDir,
+    entryRel: provider.modulePath,
+    files: [...provider.snapshotFiles],
+    expectedId: provider.id,
+    expectedVersion: provider.version,
+    mode: args.mode,
+    ...(args.recordsJson === undefined ? {} : { recordsJson: args.recordsJson }),
+    clockMs: args.clockMs,
+    seed: args.seed,
+  });
+  const completed = spawnSync(process.execPath, childArgs(provider.snapshotDir), {
+    timeout: limits.timeoutMs,
+    killSignal: 'SIGKILL',
+    maxBuffer: limits.maxOutputBytes,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const stderr = typeof completed.stderr === 'string' ? completed.stderr : '';
+  if (completed.error !== undefined) {
+    const code = (completed.error as NodeJS.ErrnoException).code;
+    if (code === 'ETIMEDOUT' || completed.signal === 'SIGKILL') {
+      throw new GateProviderError(`provider ${provider.id} timed out`, 'timeout');
+    }
+    if (code === 'ENOBUFS') {
+      throw new GateProviderError(`provider ${provider.id} exceeds its output cap`, 'rejected');
+    }
+    throw new GateProviderError(`provider ${provider.id} failed to start: ${completed.error.message}`, 'rejected');
+  }
+  if (completed.status !== 0) {
+    throw new GateProviderError(
+      `provider ${provider.id} rejected${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected');
+  }
+  return parseIsolatedResponse(completed.stdout as string, stderr, provider.id);
+}
+
+/** Asynchronous isolated run (loader + interactive invoke): abortable, SIGKILL timeout, output cap. */
+export function runIsolatedProvider(
+  provider: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'>,
+  args: { mode: 'inspect' | 'invoke'; recordsJson?: string; clockMs: number; seed: number },
+  limits: IsolatedRunLimits,
+): Promise<{ descriptor?: Record<string, unknown>; result?: unknown }> {
+  if (!provider.snapshotDir || !provider.modulePath || !provider.snapshotFiles) {
+    return Promise.reject(new GateProviderError(`provider ${provider.id} snapshot is unavailable`, 'invalid-module'));
+  }
+  if (limits.signal?.aborted === true) {
+    return Promise.reject(new GateProviderError(`provider ${provider.id} was cancelled before dispatch`, 'cancelled'));
+  }
+  writeIsolatedRequest(provider.snapshotDir, {
+    snapshotDir: provider.snapshotDir,
+    entryRel: provider.modulePath,
+    files: [...provider.snapshotFiles],
+    expectedId: provider.id,
+    expectedVersion: provider.version,
+    mode: args.mode,
+    ...(args.recordsJson === undefined ? {} : { recordsJson: args.recordsJson }),
+    clockMs: args.clockMs,
+    seed: args.seed,
+  });
+  return new Promise((resolvePromise, rejectPromise) => {
+    let settled = false;
+    const settle = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      limits.signal?.removeEventListener('abort', onAbort);
+      action();
+    };
+    let child: ChildProcess;
+    try {
+      child = spawn(process.execPath, childArgs(provider.snapshotDir), { stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      rejectPromise(new GateProviderError(
+        `provider ${provider.id} failed to start: ${error instanceof Error ? error.message : 'unknown'}`, 'rejected'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+      settle(() => rejectPromise(new GateProviderError(`provider ${provider.id} timed out`, 'timeout')));
+    }, limits.timeoutMs);
+    const onAbort = (): void => {
+      try { child.kill('SIGKILL'); } catch { /* already exited */ }
+      settle(() => rejectPromise(new GateProviderError(`provider ${provider.id} was cancelled`, 'cancelled')));
+    };
+    limits.signal?.addEventListener('abort', onAbort, { once: true });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let capped = false;
+    child.stdout?.on('data', (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > limits.maxOutputBytes) {
+        capped = true;
+        try { child.kill('SIGKILL'); } catch { /* already exited */ }
+        settle(() => rejectPromise(new GateProviderError(`provider ${provider.id} exceeds its output cap`, 'rejected')));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    const errors: Buffer[] = [];
+    child.stderr?.on('data', (chunk: Buffer) => {
+      if (Buffer.concat([...errors, chunk]).length <= 4096) errors.push(chunk);
+    });
+    child.on('error', (error) => {
+      settle(() => rejectPromise(new GateProviderError(
+        `provider ${provider.id} failed to start: ${error.message}`, 'rejected')));
+    });
+    child.on('close', (code) => {
+      if (capped) return;
+      if (code !== 0) {
+        const stderr = Buffer.concat(errors).toString('utf8');
+        settle(() => rejectPromise(new GateProviderError(
+          `provider ${provider.id} rejected${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected')));
+        return;
+      }
+      // Parse BEFORE settling: a throwing parse must still reach the
+      // rejection below (settling first would swallow the settlement).
+      const stderr = Buffer.concat(errors).toString('utf8');
+      let parsed: { descriptor?: Record<string, unknown>; result?: unknown };
+      try {
+        parsed = parseIsolatedResponse(Buffer.concat(chunks).toString('utf8'), stderr, provider.id);
+      } catch (error) {
+        settle(() => rejectPromise(error));
+        return;
+      }
+      settle(() => resolvePromise(parsed));
+    });
+  });
+}
+
 /**
  * Load and register every `gateProviders` entry from a bundle manifest. The
- * manifest entry is re-validated here so direct callers cannot bypass Zod;
- * modules import ONLY from declared bundle-relative paths. Registration
- * refuses absent attestations, digest mismatches, undeclared providers and
- * any byte change until re-pinned. Disabled by default: pass
- * `allowBundleProviders: true` (or `AIWG_GATES_BUNDLE_PROVIDERS=1`).
+ * manifest entry is re-validated here so direct callers cannot bypass Zod.
+ * Registration requires BOTH an explicit `allowBundleProviders: true` option
+ * AND a matching project-config allowlist entry (bundle id, provider id,
+ * isolated code digest, reviewer, review timestamp); in-bundle reviews are
+ * integrity-checked for consistency but are informational only. The provider
+ * module graph is validated by the isolated child (parse + link over the
+ * snapshot) before anything registers — nothing executes in-process, ever.
  */
 export async function loadGateBundleProviders(
   bundleRoot: string,
@@ -310,7 +535,16 @@ export async function loadGateBundleProviders(
   if (!entries.length) return [];
   const nowMs = Date.parse(options?.now ?? new Date().toISOString());
   if (!Number.isFinite(nowMs)) throw new GateProviderError('provider review clock is not a valid date-time', 'invalid-records');
+  const timeoutMs = options?.timeoutMs ?? GATE_PROVIDER_DEFAULT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > GATE_PROVIDER_MAX_TIMEOUT_MS) {
+    throw new GateProviderError('provider timeout must be a positive integer within bounds', 'invalid-records');
+  }
+  const maxOutputBytes = options?.maxOutputBytes ?? GATE_PROVIDER_MAX_OUTPUT_BYTES;
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0 || maxOutputBytes > 8 * 1024 * 1024) {
+    throw new GateProviderError('provider output cap is invalid', 'invalid-records');
+  }
   const rootReal = bundleRootReal(bundleRoot);
+  const allowlist = options?.allowlist ?? [];
   const seen = new Set<string>();
   const loaded: BundleMetricProvider[] = [];
   for (const raw of entries) {
@@ -322,90 +556,156 @@ export async function loadGateBundleProviders(
     const entry = parsed.data;
     if (seen.has(entry.id)) throw new GateProviderError(`duplicate bundle provider: ${entry.id}`, 'duplicate');
     seen.add(entry.id);
-    const { codeDigest } = computeProviderCodeDigest(rootReal, entry.module);
+    const snapshot = snapshotProviderDir(rootReal, entry.module);
     const review = readReview(rootReal, entry);
-    if (review.codeDigest !== codeDigest) {
+    if (review.codeDigest !== snapshot.codeDigest) {
       throw new GateProviderError(`provider ${entry.id} review digest does not match its code digest`, 'attestation-mismatch');
     }
     const reviewedMs = Date.parse(review.reviewedAt);
     if (!Number.isFinite(reviewedMs)) throw new GateProviderError(`provider ${entry.id} review date is invalid`, 'missing-attestation');
     if (reviewedMs > nowMs) throw new GateProviderError(`provider ${entry.id} review is dated in the future`, 'missing-attestation');
-    const moduleAbs = resolveInsideBundle(rootReal, entry.module, 'provider module');
-    let exported: Record<string, unknown>;
+    // P3 trust root: the project-config allowlist authorizes registration.
+    const trusted = allowlist.find(candidate =>
+      candidate.bundleId === manifest.id && candidate.providerId === entry.id);
+    if (trusted === undefined) {
+      throw new GateProviderError(
+        `provider ${entry.id} is not allowlisted for bundle ${manifest.id}: refusing registration`, 'unregistered');
+    }
+    if (trusted.codeDigest !== snapshot.codeDigest) {
+      throw new GateProviderError(`provider ${entry.id} code digest does not match its allowlist entry`, 'attestation-mismatch');
+    }
+    if (trusted.reviewer !== review.reviewer || trusted.reviewedAt !== review.reviewedAt) {
+      throw new GateProviderError(`provider ${entry.id} review does not match its allowlist entry`, 'attestation-mismatch');
+    }
+    if (!DIGEST_PATTERN.test(snapshot.codeDigest)) {
+      throw new GateProviderError(`provider ${entry.id} code digest is unknown`, 'attestation-mismatch');
+    }
+    // Validate the module graph in the isolated child (parse + link over the
+    // snapshot, identity-checked against the manifest). Dynamic import(),
+    // require, bare/absolute/escaping/non-.mjs specifiers refuse here.
+    const provisional: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'> = {
+      id: entry.id, version: entry.version,
+      snapshotDir: snapshot.snapshotDir, modulePath: entry.module,
+      snapshotFiles: snapshot.files.map(file => file.path),
+    };
+    let descriptor: Record<string, unknown>;
     try {
-      exported = (await import(pathToFileURL(moduleAbs).href)) as Record<string, unknown>;
-    } catch {
-      throw new GateProviderError(`provider ${entry.id} module cannot be imported: ${entry.module}`, 'invalid-module');
+      const inspected = await runIsolatedProvider(provisional, {
+        mode: 'inspect', clockMs: nowMs, seed: 1,
+      }, { timeoutMs, maxOutputBytes, signal: options?.signal });
+      if (!inspected.descriptor || typeof inspected.descriptor !== 'object') {
+        throw new GateProviderError(`provider ${entry.id} module has no provider export`, 'invalid-module');
+      }
+      descriptor = inspected.descriptor;
+    } catch (error) {
+      if (error instanceof GateProviderError
+        && (error.code === 'timeout' || error.code === 'cancelled')) throw error;
+      throw new GateProviderError(
+        `provider ${entry.id} module is invalid: ${error instanceof Error ? error.message : 'unknown'}`, 'invalid-module');
     }
-    const candidate = (exported as { provider?: unknown; default?: unknown }).provider
-      ?? (exported as { default?: unknown }).default ?? exported;
-    const module = candidate as { id?: unknown; version?: unknown; description?: unknown; metrics?: unknown; compute?: unknown };
-    if (module.id !== entry.id || module.version !== entry.version) {
-      throw new GateProviderError(`provider ${entry.id} module identity does not match its manifest declaration`, 'invalid-module');
-    }
-    if (typeof module.description !== 'string' || !module.description) {
-      throw new GateProviderError(`provider ${entry.id} description is invalid`, 'invalid-module');
-    }
-    if (!module.metrics || typeof module.metrics !== 'object' || Array.isArray(module.metrics)) {
+    const metrics = descriptor.metrics;
+    if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics)) {
       throw new GateProviderError(`provider ${entry.id} metrics declaration is invalid`, 'invalid-module');
     }
-    for (const [name, declared] of Object.entries(module.metrics as Record<string, unknown>)) {
+    for (const [name, declared] of Object.entries(metrics as Record<string, unknown>)) {
       const kind = (declared as { kind?: unknown }).kind;
       if (typeof name !== 'string' || !name || !METRIC_KINDS.has(kind as string)) {
         throw new GateProviderError(`provider ${entry.id} metric ${name} has an unknown kind`, 'invalid-module');
       }
     }
-    if (typeof module.compute !== 'function') {
-      throw new GateProviderError(`provider ${entry.id} compute is not a function`, 'invalid-module');
-    }
-    if (!DIGEST_PATTERN.test(codeDigest)) {
-      throw new GateProviderError(`provider ${entry.id} code digest is unknown`, 'attestation-mismatch');
-    }
-    const metrics = module.metrics as BundleMetricProvider['metrics'];
     const sourceDigest = providerSourceDigest({ id: entry.id, version: entry.version, metrics });
     loaded.push({
-      id: entry.id, version: entry.version, description: module.description,
-      metrics, sourceDigest, codeDigest, review, bundleId: manifest.id, modulePath: entry.module,
-      compute: module.compute as BundleMetricProvider['compute'],
+      id: entry.id, version: entry.version, description: descriptor.description as string,
+      metrics: metrics as BundleMetricProvider['metrics'], sourceDigest,
+      codeDigest: snapshot.codeDigest,
+      review: { reviewer: trusted.reviewer, reviewedAt: trusted.reviewedAt, codeDigest: snapshot.codeDigest },
+      bundleId: manifest.id, modulePath: entry.module,
+      snapshotDir: snapshot.snapshotDir, snapshotFiles: snapshot.files.map(file => file.path),
+      compute: () => {
+        throw new GateProviderError(
+          `provider ${entry.id} cannot run in-process: use invokeBundleProvider (isolated child)`, 'invalid-module');
+      },
     });
   }
   return loaded;
 }
 
-/** Reserve-then-dispatch provider invocation with a timeout (#2831). */
+/** Reserve-then-dispatch isolated provider invocation with a SIGKILL timeout. */
 export async function invokeBundleProvider(
-  provider: Pick<BundleMetricProvider, 'id' | 'compute'>,
+  provider: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'>,
   records: readonly unknown[],
   options?: BundleProviderOptions,
 ): Promise<unknown> {
   const timeoutMs = options?.timeoutMs ?? GATE_PROVIDER_DEFAULT_TIMEOUT_MS;
   const maxRecords = options?.maxRecords ?? GATE_PROVIDER_DEFAULT_MAX_RECORDS;
+  const maxOutputBytes = options?.maxOutputBytes ?? GATE_PROVIDER_MAX_OUTPUT_BYTES;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > GATE_PROVIDER_MAX_TIMEOUT_MS) {
     throw new GateProviderError('provider timeout must be a positive integer within bounds', 'invalid-records');
   }
   if (!Number.isSafeInteger(maxRecords) || maxRecords <= 0) {
     throw new GateProviderError('provider record budget is invalid', 'invalid-records');
   }
+  if (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes <= 0 || maxOutputBytes > 8 * 1024 * 1024) {
+    throw new GateProviderError('provider output cap is invalid', 'invalid-records');
+  }
   if (!Array.isArray(records)) throw new GateProviderError('provider records must be an array', 'invalid-records');
   if (records.length > maxRecords) throw new GateProviderError(`provider ${provider.id} exceeds its record budget`, 'budget-exceeded');
   if (options?.signal?.aborted === true) throw new GateProviderError(`provider ${provider.id} was cancelled before dispatch`, 'cancelled');
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new GateProviderError(`provider ${provider.id} timed out`, 'timeout')), timeoutMs);
-  });
-  const aborted = options?.signal === undefined ? null : new Promise<never>((_resolve, reject) => {
-    options.signal?.addEventListener('abort', () => reject(new GateProviderError(`provider ${provider.id} was cancelled`, 'cancelled')), { once: true });
-  });
+  let recordsJson: string;
   try {
-    const pending = Promise.resolve().then(() => (provider.compute as (rows: readonly unknown[]) => unknown)(records));
-    return await (aborted === null ? Promise.race([pending, timeout]) : Promise.race([pending, timeout, aborted]));
+    const serialized = JSON.stringify(records);
+    if (typeof serialized !== 'string') throw new Error('unserializable');
+    recordsJson = serialized;
+  } catch {
+    throw new GateProviderError(`provider ${provider.id} records are not JSON-serializable`, 'invalid-records');
+  }
+  let recordsDigest: Sha256Digest;
+  try {
+    recordsDigest = artifactDigest(records) as Sha256Digest;
+  } catch {
+    throw new GateProviderError(`provider ${provider.id} records are not digestible`, 'invalid-records');
+  }
+  const clockMs = options?.clockMs ?? Date.now();
+  if (!Number.isSafeInteger(clockMs)) throw new GateProviderError('provider clock is not an integer', 'invalid-records');
+  const codeDigest = (provider as { codeDigest?: unknown }).codeDigest;
+  if (typeof codeDigest !== 'string' || !DIGEST_PATTERN.test(codeDigest)) {
+    throw new GateProviderError(`provider ${provider.id} code digest is unknown`, 'attestation-mismatch');
+  }
+  try {
+    const ran = await runIsolatedProvider(provider, {
+      mode: 'invoke', recordsJson, clockMs, seed: deriveIsolatedSeed(codeDigest, recordsDigest),
+    }, { timeoutMs, maxOutputBytes, signal: options?.signal });
+    if (ran.result === undefined) throw new GateProviderError(`provider ${provider.id} returned no metrics`, 'rejected');
+    return ran.result;
   } catch (error) {
     if (error instanceof GateProviderError) throw error;
     throw new GateProviderError(
       `provider ${provider.id} rejected: ${error instanceof Error ? error.message : 'unknown'}`, 'rejected');
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
+}
+
+/**
+ * Builds the binding pin for a bundle provider over caller-supplied records,
+ * including the records digest the evaluator reproduces (records binding).
+ */
+export function providerBindingPin(
+  provider: Pick<BundleMetricProvider, 'id' | 'version' | 'sourceDigest' | 'codeDigest'>,
+  records: readonly unknown[],
+): { id: string; version: string; sourceDigest: Sha256Digest; codeDigest: Sha256Digest; recordsDigest: Sha256Digest } {
+  if (typeof provider.codeDigest !== 'string' || !DIGEST_PATTERN.test(provider.codeDigest)) {
+    throw new GateProviderError(`provider ${provider.id} code digest is unknown`, 'attestation-mismatch');
+  }
+  if (!Array.isArray(records)) throw new GateProviderError('provider records must be an array', 'invalid-records');
+  let recordsDigest: Sha256Digest;
+  try {
+    recordsDigest = artifactDigest(records) as Sha256Digest;
+  } catch {
+    throw new GateProviderError(`provider ${provider.id} records are not digestible`, 'invalid-records');
+  }
+  return {
+    id: provider.id, version: provider.version,
+    sourceDigest: provider.sourceDigest, codeDigest: provider.codeDigest, recordsDigest,
+  };
 }
 
 /**

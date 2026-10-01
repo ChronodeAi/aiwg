@@ -52,7 +52,22 @@ export function validateGateReport(report: unknown, input: EvaluateGatesInput): 
       reasons.push(`report-pack-mismatch:${pin.id}`);
     }
   }
-  if (artifactDigest(input.metrics) !== parsed.metricsDigest) reasons.push('report-metrics-mismatch');
+  if (artifactDigest(input.metrics) !== parsed.metricsDigest
+    // Bundle-provider sections are reproduced by isolated re-run, so the
+    // caller-asserted document is not the evaluated one; re-derivation below
+    // is authoritative for those bindings.
+    && (input.providerRuntime === undefined
+      || !input.binding.spec.metricProviders.some(pin =>
+        typeof (pin as { codeDigest?: unknown }).codeDigest === 'string'))) {
+    reasons.push('report-metrics-mismatch');
+  }
+  // The report records which floors governed it (R2): an applied digest or an
+  // explicit opt-out marker. The input must say the same; re-derivation below
+  // additionally reproduces the distinction byte-identically.
+  const expectedFloors = input.floors === 'none-explicit-opt-out'
+    ? 'opt-out' : `applied:${artifactDigest(input.floors)}`;
+  const reportedFloors = parsed.floors.mode === 'applied' ? `applied:${parsed.floors.digest}` : 'opt-out';
+  if (reportedFloors !== expectedFloors) reasons.push('report-floors-mismatch');
   if ((input.upstream?.digest ?? null) !== (parsed.upstream?.digest ?? null)) {
     reasons.push('report-upstream-mismatch');
   }
