@@ -104,7 +104,12 @@ pinned; unpinned sections are refused. `holdout` is a sealed
 HeldoutFrozen / first-access record, never a binding field (the binding's
 `holdoutAccessedAt`, where present, is ignored): the seal (`digest` over
 `{frozenDigest, firstAccessedAt}`) is re-derived on every use, following
-`readHeldoutFrozen`, so a spread-copied or forged record is refused. A
+`readHeldoutFrozen`, so a spread-copied or edited record is refused. The
+seal is an unkeyed integrity digest, not an authenticity proof: any caller
+can compute one, so `holdout` is a trusted caller input in the same trust
+class as `trustedBindingDigest`. Callers must build it from the held-out
+collector's verified HeldoutFrozen and access records; an entry point that
+accepts and verifies the HeldoutFrozen record itself is tracked in #2833. A
 missing or unsealed record, a seal mismatch, a frozen-record digest mismatch,
 or a freeze at or after first access refuses evaluation. `firstAccessedAt`
 may be null only when the binding declares no held-out split (no
