@@ -115,7 +115,11 @@ and before receipt acquisition, credential resolution and adapter dispatch:
 - **Allowed**: the request continues on the normal projection and dispatch
   path.
 
-The verdict is recorded as `preprocessingLineage.dispatchGate`. A result cache
+The verdict is recorded as `preprocessingLineage.dispatchGate`. The gate and
+the recorded lineage share one immutable snapshot of the host-supplied
+`preprocessingLineage` and `preprocessingVerification` taken before the result
+is constructed, so caller-owned mutation during evaluation cannot change the
+verdict or the recorded lineage. A result cache
 is refused for requests that carry lineage, because a cache hit would bypass the
 gate. Input bindings come only from the host's `preprocessingVerification`. The
 lineage carries no pointer or text digest, and the evaluator never uses a stored
