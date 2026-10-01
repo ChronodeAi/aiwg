@@ -16,6 +16,12 @@ export const CONTEXT_PRUNING_CANDIDATE_SCHEMA = 'decision-context-candidate/v1' 
 export const CONTEXT_PRUNING_RECEIPT_SCHEMA = 'decision-context-pruning-receipt/v1' as const;
 export const CONTEXT_PRUNING_PREREGISTRATION_SCHEMA = 'decision-context-pruning-preregistration/v1' as const;
 export const CONTEXT_PRUNING_EVALUATION_REPORT_SCHEMA = 'decision-context-pruning-evaluation-report/v1' as const;
+/**
+ * Clock-skew allowance for `holdoutAccessedAt` attestations: the recorder that stamps holdout access and the
+ * evaluator that builds the report may disagree by up to five minutes. An attestation later than the
+ * evaluation clock plus this allowance is a future attestation and is rejected.
+ */
+export const CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
 export type ContextPruningSourceKind =
   | 'system'
@@ -244,6 +250,10 @@ export interface ContextPruningPreregistration {
     slices: string[];
     minimumOverallN: number;
     minimumSliceN: number;
+    /** Minimum pairs for a zero-variance bounded read (every per-pair difference identical) to support non-inferiority. */
+    minimumZeroVarianceN: number;
+    /** Protected receipts below this count cannot PROMOTE, even at 100% retention. */
+    minimumProtectedN: number;
     powerRule: string | null;
     /** Non-positive integer bps: -250 lets the candidate be at most 2.5 points worse. */
     qualityNonInferiorityMarginBps: number;
@@ -670,6 +680,8 @@ export function validateContextPruningPreregistration(value: ContextPruningPrere
     || slices.some(slice => typeof slice !== 'string' || !slice.trim())
     || !Number.isSafeInteger(t.minimumOverallN) || t.minimumOverallN < 2
     || !Number.isSafeInteger(t.minimumSliceN) || t.minimumSliceN < 1
+    || !Number.isSafeInteger(t.minimumZeroVarianceN) || t.minimumZeroVarianceN < 2
+    || !Number.isSafeInteger(t.minimumProtectedN) || t.minimumProtectedN < 2
     || (t.powerRule !== null && (typeof t.powerRule !== 'string' || !t.powerRule.trim()))
     || !Number.isSafeInteger(t.qualityNonInferiorityMarginBps) || t.qualityNonInferiorityMarginBps > 0
     || t.qualityNonInferiorityMarginBps < -10_000
@@ -686,6 +698,8 @@ export function validateContextPruningPreregistration(value: ContextPruningPrere
  * Builds the paired evaluation report. `trustedPreregistrationDigest` must come from a separately anchored
  * record made before holdout access (as evaluatePreregisteredBinaryBenchmark requires): a caller-created
  * preregistration cannot attest itself. A report without a recorded holdout access time cannot PROMOTE.
+ * A holdout access attested later than the evaluation clock plus CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS
+ * is rejected as a future attestation.
  */
 export function buildContextPruningEvaluationReport(input: {
   preregistration: ContextPruningPreregistration;
@@ -698,6 +712,11 @@ export function buildContextPruningEvaluationReport(input: {
   /** contextPruningReceiptSetDigest of every evaluated receipt, anchored separately from the report input. */
   trustedReceiptSetDigest: `sha256:${string}`;
   missingInputs?: readonly string[];
+  /**
+   * Injectable evaluation clock (epoch ms) the holdout-access attestation is compared against. Defaults to
+   * Date.now; tests pass a fake clock.
+   */
+  evaluationNow?: () => number;
 }): ContextPruningEvaluationReport {
   const preregistration = validateContextPruningPreregistration(input.preregistration);
   if (typeof input.trustedPreregistrationDigest !== 'string' || !SHA.test(input.trustedPreregistrationDigest)
@@ -705,9 +724,17 @@ export function buildContextPruningEvaluationReport(input: {
     throw new ContextPruningError('preregistration is not anchored to the trusted digest', 'semantic');
   }
   const holdoutAccessedAt = input.holdoutAccessedAt;
-  if (holdoutAccessedAt !== null && (typeof holdoutAccessedAt !== 'string' || !Number.isFinite(Date.parse(holdoutAccessedAt))
-    || Date.parse(holdoutAccessedAt) <= Date.parse(preregistration.registeredAt))) {
+  const holdoutAtMs = holdoutAccessedAt === null ? NaN : Date.parse(holdoutAccessedAt);
+  if (holdoutAccessedAt !== null && (typeof holdoutAccessedAt !== 'string' || !Number.isFinite(holdoutAtMs)
+    || holdoutAtMs <= Date.parse(preregistration.registeredAt))) {
     throw new ContextPruningError('holdout access must be recorded after preregistration', 'semantic');
+  }
+  if (Number.isFinite(holdoutAtMs)) {
+    const evaluationNowMs = (input.evaluationNow ?? Date.now)();
+    // Fail closed: an unknown evaluation time cannot vouch for the attestation.
+    if (!Number.isFinite(evaluationNowMs) || holdoutAtMs - evaluationNowMs > CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS) {
+      throw new ContextPruningError('future holdout access attestation is rejected', 'semantic');
+    }
   }
   validateIntegrity(input.integrity);
   const thresholds = preregistration.thresholds;
@@ -734,6 +761,8 @@ export function buildContextPruningEvaluationReport(input: {
   if (metrics.protectedRetentionBps < 10_000 || (protectedRetention.bps !== null && protectedRetention.bps < 10_000)) {
     findings.add('protected-retention-breach');
   }
+  // A full retention rate on too few protected items is not evidence: the count comes from validated receipts.
+  if (protectedRetention.protectedItems < thresholds.minimumProtectedN) findings.add('insufficient-protected-sample');
 
   const quality = thresholds.qualityMetrics.map(({ metric, scale }) =>
     evaluateQualityMetric(metric, scale, metrics.quality.find(item => item.metric === metric), metrics.pairs, preregistration));
@@ -755,6 +784,16 @@ export function buildContextPruningEvaluationReport(input: {
       findings.add(`quality-metric-missing:${result.metric}`);
     } else if (result.decision === 'insufficient' && result.n < thresholds.minimumOverallN) {
       findings.add(`insufficient-quality-sample:${result.metric}`);
+    } else if (result.decision === 'insufficient' && result.missingPairs === 0 && result.scale === 'bounded'
+      && result.interval !== null && result.interval.lowerBps === result.interval.upperBps
+      && result.n < thresholds.minimumZeroVarianceN) {
+      // A conclusive-sized read withheld for lack of variability evidence: a zero-width bounded
+      // interval below the preregistered zero-variance support.
+      findings.add(`insufficient-quality-support:${result.metric}`);
+    } else if (result.decision === 'insufficient') {
+      // Interval construction failed, the verdict was unreadable, or a passing
+      // verdict was withheld for omitted pairs: adequate n is not evidence.
+      findings.add(`insufficient-quality-evidence:${result.metric}`);
     }
   }
 
@@ -808,7 +847,8 @@ function evaluateQualityMetric(
   recordedPairs: readonly ContextPruningPairRecord[],
   preregistration: ContextPruningPreregistration,
 ): ContextPruningQualityResult {
-  const { confidenceInterval: ci, minimumOverallN, qualityNonInferiorityMarginBps, slices } = preregistration.thresholds;
+  const { confidenceInterval: ci, minimumOverallN, minimumZeroVarianceN, qualityNonInferiorityMarginBps, slices } =
+    preregistration.thresholds;
   const pairs = outcomes?.pairs ?? [];
   const sliceOf = new Map(recordedPairs.map(pair => [pair.pairId, pair.slice]));
   const sliceSupport = Object.fromEntries(slices.map(slice => [slice, 0]));
@@ -846,6 +886,13 @@ function evaluateQualityMetric(
   const verdict = pairedNonInferiority({ interval, marginBps: qualityNonInferiorityMarginBps });
   // A regression visible in the reported outcomes still fails; omitted pairs can only withhold a pass.
   if (verdict.decision === 'non-inferior' && missingPairs > 0) return result(interval, 'insufficient');
+  // A zero-width bounded interval carries no variability evidence: identical pairs at a small n are
+  // inconclusive, so a would-be pass needs the preregistered zero-variance support first. Only passes
+  // are withheld here; demonstrated harm still rolls back through the verdict below.
+  if (verdict.decision === 'non-inferior' && scale === 'bounded'
+    && interval.lowerBps === interval.upperBps && pairs.length < minimumZeroVarianceN) {
+    return result(interval, 'insufficient');
+  }
   return result(interval, verdict.decision);
 }
 

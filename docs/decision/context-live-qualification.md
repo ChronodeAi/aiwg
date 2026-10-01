@@ -153,8 +153,16 @@ These steps are implemented and tested offline only. None has run against Jev.
    the first failed check, or on an evaluation error. A case passes when:
    - every dispatched partition is within the effective limits;
    - every reported input is within the documented aggregate limit and the approved bound;
+   - every per-call reported output is known and within the approved per-call output
+     ceiling (`perRequestBound.outputTokens`, a sub-ceiling of `totalTokens`);
    - an oversized case produces a context rejection with no dispatch;
    - the rollback sends no native batch.
+
+   Jev exposes no request-level output cap, so the output ceiling cannot be enforced
+   before dispatch: it is enforced after dispatch by failing the canary on unknown
+   or over-bound reported output, which stops further dispatch. A canary plan without
+   the ceiling, or with a ceiling above the total bound, is rejected before any
+   credential use or dispatch. Nothing here has run against Jev.
 
    Per-case rows and the summary are metadata only.
 

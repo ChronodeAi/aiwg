@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../../security/artifact-trust.js';
+import { matchEvidenceDigest } from '../../gates/stats/index.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../calibration/registry.js';
 import type { CalibrationArtifact } from '../calibration/types.js';
 import { validateCaseInventory } from './manifest.js';
@@ -52,7 +53,7 @@ export const DECISION_GATE_SUITES: Readonly<Record<string, QualificationSuiteDef
 
 /** Flags backed by a checked, digest-pinned artifact copied into the run directory. */
 export const GATE_ARTIFACT_SCHEMAS = {
-  'immutable-splits': 'decision-binary-benchmark-plan/v1',
+  'immutable-splits': 'decision-binary-benchmark-plan/v2',
   'calibration-qualified': 'decision-calibration-artifact/v1',
   'load-manifest-qualified': 'decision-load-result/v1',
   'review-decision-recorded': 'decision-qualification-review/v1',
@@ -131,11 +132,23 @@ export interface GateArtifactContext {
   accepted: Partial<Record<QualificationGateArtifactFlag, unknown>>;
 }
 
+/** Split-plan versions with retained evidence: v1 is the pre-migration lineage (legacy allowlisted), v2 is canonical-only. */
+export const IMMUTABLE_SPLIT_VERSIONS = [
+  'decision-binary-benchmark-plan/v1',
+  'decision-binary-benchmark-plan/v2',
+] as const;
+
 function validSplitPlan(value: unknown): value is FrozenBinaryBenchmarkPlan {
-  if (!record(value) || value.schemaVersion !== GATE_ARTIFACT_SCHEMAS['immutable-splits']) return false;
+  if (!record(value) || (value.schemaVersion !== 'decision-binary-benchmark-plan/v1'
+    && value.schemaVersion !== 'decision-binary-benchmark-plan/v2')) return false;
   const { digest, ...fields } = value as unknown as FrozenBinaryBenchmarkPlan;
   try { verifyQualificationSplits(fields.splits); } catch { return false; }
-  return typeof digest === 'string' && sha256Pattern.test(digest) && digest === sha256(JSON.stringify(fields))
+  // Versioned legacy allowlist: pre-migration plans hashed JSON.stringify output.
+  // The v1 schema version is the pre-migration lineage, so it alone allowlists
+  // legacy; v2 verifies canonical-only even under an explicit allowlist.
+  const modes = value.schemaVersion === 'decision-binary-benchmark-plan/v1'
+    ? ['canonical', 'legacy'] as const : ['canonical'] as const;
+  return typeof digest === 'string' && sha256Pattern.test(digest) && matchEvidenceDigest(fields, digest, [...modes]) !== null
     && sha256Pattern.test(String(fields.datasetDigest));
 }
 
@@ -208,7 +221,10 @@ export function deriveGateEvidence(manifest: QualificationRunManifest, proof: Qu
   for (const [name, suite] of Object.entries(DECISION_GATE_SUITES)) flags[name] = suiteSatisfied(manifest, suite);
   for (const flag of GATE_ARTIFACT_FLAGS) {
     const ref: QualificationGateArtifactRef | undefined = manifest.gateArtifacts?.[flag];
-    flags[flag] = ref !== undefined && ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag]
+    const versionOk = flag === 'immutable-splits'
+      ? ref !== undefined && (IMMUTABLE_SPLIT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
+      : ref !== undefined && ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
+    flags[flag] = versionOk && ref !== undefined
       && typeof ref.artifact === 'string' && ref.artifact.length > 0 && sha256Pattern.test(ref.digest);
   }
   return flags;

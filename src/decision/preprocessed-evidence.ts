@@ -241,7 +241,7 @@ export interface PreprocessingVerification {
    * value is recomputed from the verified manifests' selected output slices and compared exactly.
    */
   inputBindings: Array<{ pointer: string; manifestIds: string[] }>;
-  /** Every other string field in the decision input must be declared here as non-lineage text. */
+  /** Every other string field in the decision input must be declared here as non-lineage text (scoped subtree pointers; the root pointer is rejected as malformed). */
   nonLineagePointers?: string[];
 }
 
@@ -558,13 +558,14 @@ function validLifecycle(value: unknown): value is PreprocessingLifecycleState {
  * Binding reasons (empty when every check passes), or null when the host bindings are malformed.
  * Every lineage reference must be bound; every bound pointer must be inside a dispatched evaluation
  * input and hold exactly the recomputed verified text; every other string field must be declared
- * non-lineage by the host.
+ * non-lineage by the host. The root pointer is malformed in both lists: a root non-lineage
+ * declaration would cover every text-bearing position, so it is rejected instead.
  */
 function inputBindingReasons(verification: PreprocessingVerification, current: Map<string, PreprocessedEvidence>,
   input: unknown, dispatchPointers: readonly string[]): PreprocessingDispatchGateReason[] | null {
   const bindings = verification.inputBindings as unknown;
   const declared = verification.nonLineagePointers ?? [];
-  if (!Array.isArray(bindings) || !Array.isArray(declared) || !declared.every(isJsonPointer)
+  if (!Array.isArray(bindings) || !Array.isArray(declared) || !declared.every(isJsonPointer) || declared.includes('')
     || bindings.some(binding => !isRecord(binding) || !isJsonPointer(binding.pointer) || binding.pointer === ''
       || !Array.isArray(binding.manifestIds) || !binding.manifestIds.length
       || new Set(binding.manifestIds).size !== binding.manifestIds.length
@@ -586,7 +587,7 @@ function inputBindingReasons(verification: PreprocessingVerification, current: M
   // A bound pointer covers exactly its string; a non-lineage declaration covers its whole subtree.
   const bound = new Set(typed.map(binding => binding.pointer));
   const covered = (pointer: string) => bound.has(pointer)
-    || declared.some(prefix => prefix === '' || pointer === prefix || pointer.startsWith(`${prefix}/`));
+    || declared.some(prefix => pointer === prefix || pointer.startsWith(`${prefix}/`));
   if (textLeafPointers(input).some(pointer => !covered(pointer))) reasons.add('input-undeclared');
   return [...reasons];
 }

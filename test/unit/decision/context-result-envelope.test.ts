@@ -135,7 +135,7 @@ describe('TV-12 result-envelope preflight (#2797, offline guards)', () => {
     const record = await recordContextQualification({ approval: s.approval, corpus: s.corpus, records: s.declared, review: s.review });
     const plan = { schemaVersion: 'context-canary-plan/v1', caseIds: ['many-short'], rollback: 'observe-only',
       budget: { requests: 200, tokens: 100_000_000, usd: 2, wallClockMs: 600_000 },
-      perRequestBound: { totalTokens: 72_000, usd: 0.0072, approvalReference: 'offline-bound' } } as const;
+      perRequestBound: { totalTokens: 72_000, outputTokens: 128, usd: 0.0072, approvalReference: 'offline-bound' } } as const;
     const approval: ContextCanaryApproval = { schemaVersion: 'context-canary-approval/v1', approved: true, reviewer: 'offline-reviewer', stagingWorkspace: 'offline-only',
       runId: 'offline-canary', sourceCommit: 'a'.repeat(40), exactHeadCi: 'offline-fixture', model: MODEL, apiRevision: 'v1', region: REGION,
       secretServiceReference: 'openbao-approle.fixture-jev-reader.typesafe-jev', credentialResolverDigest: `sha256:${'b'.repeat(64)}`, corpusDigest: contextLiveDigest(s.corpus),

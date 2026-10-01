@@ -9,6 +9,190 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Reworked the experimental, default-off gates bundle-provider loader into an
+  isolated runner with config-allowlist trust and records reproduction
+  (#2831): providers execute only in a permission-restricted child Node
+  process over a pinned snapshot of the whole provider directory (static
+  relative `.mjs` only; dynamic `import()`, `require`, bare/external imports
+  and symlinks refuse; bare imports stay forbidden in phase 1), authorized by
+  a matching `aiwg.config` `gates.providers` allowlist entry (in-bundle
+  reviews are informational only) with an explicit `allowBundleProviders`
+  opt-in and no environment activation. Bindings pin the input-records digest
+  per provider section; evaluation re-runs the pinned provider over the
+  pinned records and uses the re-run output, refusing sections it cannot
+  reproduce. Reports record the applied project-floors digest or an explicit
+  opt-out marker; per-study ceilings require the `'*'` default; `validate
+  binding` resolves with the config floors; `--pack-dir` bundles are
+  project-scoped and cannot claim shipped or installed bundle ids. Core-only
+  behavior is unchanged when the feature is disabled. CLI re-runs from a
+  records file and vendored provider dependencies remain pending (#{{N}})
+
+- Experimental, default-off gate-pack discovery, manifest and CLI (#2830):
+  `gate-pack` joins the `aiwg discover`/`aiwg show` operational surface with
+  a `.gatepack.` extension boundary (HITL `gates/` files never classify),
+  `gatePacks`/`entry.gatePacks` manifest fields for frameworks, addons and
+  extensions, a bundle loader that registers shipped packs as
+  `aiwg:<bundle>/<name>` and rejects invalid packs with file-pathed
+  diagnostics, an offline `aiwg gates`
+  `validate|evaluate|show|list` CLI (fake-clock `--now`, sealed holdout and
+  upstream digests re-derived on every use, `--rule` enforcedBy coverage stays
+  a stub for #2839), and a validating bundled
+  `aiwg:decision-engine/integrity-ceiling` example pack. The decision runtime
+  stays disabled by default and byte-identical. Project floors (#2832),
+  addon/extension provider loading (#2831), study adoption (#2833+) and any
+  live, held-out, human-review or production evidence remain pending (#2830)
+
+### Fixed
+
+- Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
+  per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
+  bound) and fails the canary on unknown or over-bound reported output, stopping
+  further dispatch. Jev exposes no request-level output cap, so enforcement is
+  after dispatch, fail-closed. Offline coverage only; live evidence remains
+  pending (#2799)
+- Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
+  implementation in `tools/decision/jev-openbao-credential.mjs`, with
+  `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
+  live-run paths keep their logical-reference and approval-pin checks, the D12
+  resolver file stays loadable through its digest-pinned import, and the TV-12
+  resolver is unchanged. Live qualification remains approval-gated and no live
+  run was performed (#2798)
+
+- Tightened the experimental, default-off gates core addendum: every scope
+  transition now requires the child to cover a superset of the parent's
+  slices under every slice universe (`listed -> each` must except none of
+  the parent's listed slices, `all -> each` allows no exceptions),
+  `onInsufficient` is HOLD-only in schema and runtime (ROLLBACK needs an
+  observed blocking failure), and the D17 source dry-run pins are refreshed
+  for the resulting source digest while the corpus and split/gold pins are
+  unchanged. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
+- Hardened the experimental, default-off gates core fix round 2: the
+  evaluator re-resolves through pure `resolveGateBinding`/`composeGatePack`/
+  `applyGateExtends` over a standalone authored-pack snapshot and rejects
+  non-`GateRegistry` registries, so subclassed or duck-typed registries cannot
+  empty gates or loosen parameters; holdout inputs are sealed
+  `sealGateHoldout` records with re-derived digests, null allowed only when
+  the binding declares no held-out split, and the report records the sealed
+  holdout; benchmark and release builders emit canonical-only `/v2` records
+  with legacy allowlisted only for `/v1` pre-migration evidence; child-drops-
+  default is documented as P7 binding freedom with project floors as the
+  future check. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
+- Hardened the experimental, default-off gates core against independent review
+  findings: the evaluator resolves the binding internally and refuses
+  caller-supplied resolution, `extends` is a full parent pin with the composed
+  pack digest pinned in bindings and reports, holdout freeze comes only from
+  required trusted inputs, reports must re-derive byte-identically, per-gate
+  `onFail`/`onInsufficient` replace severity with insufficient defaulting to
+  HOLD and ceiling gates mirroring upstream, parameters are namespaced per
+  pack, unpinned providers and vacuous scopes fail closed, and evidence
+  digests verify canonical-only by default with an explicit pre-migration
+  legacy allowlist. Live CLI, project floors, provider loading and study
+  adoption remain pending (#2824)
+
+- Hardened the experimental, default-off gates discovery, CLI and floors
+  against review findings: `--pack-dir` files are always `project:` packs
+  (`aiwg:` stays reserved for the installed tree, never the cwd;
+  `addon:`/`framework:`/`extension:` load only from manifest-declared
+  bundles), manifest `gatePacks` dirs are contained by realpath with symlinks
+  rejected and a 256 KiB pre-read cap, CLI evaluation requires a
+  caller-asserted `--trusted-binding-digest` plus already-sealed holdout and
+  upstream files (no auto-sealing), a missing upstream refuses instead of
+  downgrading to HOLD, CLI reports carry `attestation: 'offline-cli'`,
+  project floors are a required evaluator input loaded from `aiwg.config`
+  (unreadable or invalid config refuses evaluation; reads only warn), the
+  default floor is the shipped integrity-ceiling pack itself (suppressed only
+  by a tightening all-scoped upstream-ceiling floor gate), ceilings gain a
+  project-wide `'*'` default that per-study keys may only tighten, and the
+  discovery fixture gains a second pack with same-type hard negatives and
+  paraphrase queries. Provider loading, study adoption and any live,
+  held-out, human-review or production evidence remain pending (#2830)
+
+- Refreshed experimental, default-off D17 source dry-run pins after the gates
+  phase 1 core moved the qualification statistics and canonicalised evidence
+  digests; the corpus and split/gold pins are unchanged. Live evidence and
+  approval remain pending (#2824)
+
+- The Fortemi prebuilt-package gate (`npm run lint:fortemi-prebuilt-package`)
+  ran `npm pack` with no timeout, so a wedged pack held the CI job until the
+  runner timeout. The call is now bounded at 5 minutes, overridable with
+  `AIWG_FORTEMI_PACK_TIMEOUT_MS` (a positive integer of milliseconds), and a
+  timed-out pack fails the gate with an error naming the bound (#2802)
+
+- Documented the text-only scope of experimental, default-off D24 input
+  binding: numeric, boolean, and null values sit outside text-leaf binding and
+  are never compared against lineage text, while their object keys remain
+  text-bearing member positions that still need binding or
+  `nonLineagePointers` coverage. No runtime behavior changes (#2784)
+
+- Refreshed experimental, default-off D17 source dry-run pins after the shared
+  acceptance threshold fix entered the source digest; the corpus and split/gold
+  pins are unchanged. Live evidence and approval remain pending (#2611)
+
+- Experimental, default-off D17 schema loading now resolves source and compiled
+  layouts, so building the CLI no longer breaks the mandatory SQLite session
+  regression suite. Refreshed uncollected source pins; live evidence remains
+  pending (#2611)
+
+- Experimental, default-off D17 held-out study now permits only the explicit
+  uncalibrated-diagnostic calibration scope. Scoring consumes the approved mode,
+  rejects calibrated approvals and forbids D09 qualification, calibrated gates
+  or promotion claims; AC7/AC14 remain pending genuine D09 evidence (#2611)
+
+- Experimental, default-off D17 synthetic study no longer leaks gold through
+  ordinal record IDs, label parity, authority notes or payload lengths.
+  Regenerated uncollected corpus, preregistration and approval-template pins;
+  live evidence and operator approval remain pending (#2611)
+
+### Added
+
+- Experimental, default-off addon/extension bundle metric providers for gates:
+  `gateProviders` bundle-manifest declarations (Zod plus TS) loaded only
+  through the gates registry from bundle-relative paths, code digests over
+  module bytes plus resolved local imports (bare externals by bundle lockfile
+  integrity), mandatory review attestations verified at load, sealed metric
+  sections bound to the trusted code and records digests, and
+  reserve-before-dispatch timeouts with fail-closed timeout, budget,
+  rejection and cancellation paths. Bindings carry an optional `codeDigest`
+  pin verified against the loaded provider; core-only evaluation stays
+  byte-identical when the opt-in is absent. Ships one reviewed fixture
+  extension example with offline conformance vectors. The D17 source dry-run
+  pins are refreshed for the new provider sources; the corpus and split/gold
+  pins are unchanged. Live qualification, real held-out data, human sign-off
+  and production rollout remain pending (#2831)
+
+- Experimental, default-off project gate floors in `aiwg.config` `gates`:
+  inline `project:` floor packs and/or pins over registered packs whose
+  composed gates every binding must include and tighten (reusing the per-kind
+  tightening validator and scope-superset rule), optional per-study outcome
+  ceilings, and the operator default integrity-ceiling floor when no floors
+  are configured. Floors are a trusted registry/evaluator input loaded by the
+  caller; an absent input keeps resolution and evaluation byte-identical.
+  Config parsing errors fail closed. The D17 source dry-run pins are refreshed
+  for the new and changed gates sources; the corpus and split/gold pins are
+  unchanged. No CLI, no shipped floor pack and no
+  migrated study; live criteria remain pending (#2832)
+
+- Experimental, default-off D23 offline comparative policy replay: closed schemas,
+  a frozen 600-root synthetic corpus, digest-bound eval-integrity reports, and
+  a 44-assessment operator audit template. Zero provider calls; the retained
+  report now passes the preregistered diagnostic gates after the confidence
+  threshold fix, while its final decision stays HOLD pending independent
+  integrity and human review (#2616)
+- Experimental, default-off D17 study regeneration for the shared collector's
+  registered generator, closed seeds, free-output approval, byte-based input
+  reservations and durable spend baseline. The uncollected corpus,
+  preregistration and approval-template pins were refreshed; live evidence
+  and promotion remain pending (#2611)
+
+- Experimental, default-off D17 synthetic ensemble held-out study with seeded
+  1,800-subject corpus, frozen splits, preregistered paired gates, source-only
+  dry run, priced approval and 88-assessment review templates. Reuses the
+  shared collector and native ensemble reports; live observations, compatible
+  calibration, human review and promotion remain pending (#2611)
 - Experimental, default-off held-out calibration scopes for both D17 and D29:
   explicit uncalibrated diagnostics, staged calibration/test approvals bound to
   sealed attempt lineage, and independent artifact bindings. Phase collection
@@ -147,6 +331,34 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D26 context-pruning reports hold bounded
+  zero-variance reads at small n: a bounded quality metric whose per-pair
+  differences are all identical (a zero-width bootstrap interval) is
+  insufficient below the new preregistered `minimumZeroVarianceN`, even with
+  passing economics and integrity, while an adequate identical sample remains
+  eligible for PROMOTE. Ordinary decision behavior is unchanged (#2785)
+- The D24 preprocessing gate and the recorded `RulesetResult` now share one
+  immutable snapshot of the host-supplied lineage and verification, taken before
+  the result is constructed. Caller-owned mutation during evaluation can no
+  longer change the gate verdict or the recorded lineage; malformed lineage is
+  still refused without dispatch. Experimental, default-off (#2783)
+- Anchor experimental, default-off sensitivity probe subjects to canonical host
+  artifact content (`apiVersion`, `kind`, `spec`) instead of caller-chosen
+  artifact IDs: renaming an otherwise identical ruleset or binding shares the
+  existing subject budget, while a genuinely new version mints a distinct
+  subject only through a spec change. Ordinary decision behavior is unchanged (#2796)
+- Redact unterminated private-key blocks with a bounded fallback (header plus
+  up to 100 complete base64 body lines, so following prose is preserved) and
+  recognize standalone `whsec_` and `glpat-` provider tokens, including inside
+  base64-encoded blobs. Terminated blocks and all other token classes are
+  unchanged (#2793)
+- Experimental, default-off decision-assisted context pruning now preregisters
+  a minimum protected-item count (`minimumProtectedN`, at least 2) in
+  `ContextPruningPreregistration.v1`. Reports with fewer validated protected
+  receipts HOLD with `insufficient-protected-sample` and
+  `INSUFFICIENT EVIDENCE`, even at 100% retention; the shadow pilot is
+  unchanged and live held-out quality/economics evidence remains pending (#2786)
+
 - Bind experimental, default-off held-out collector baselines to the independent
   durable spend head. Changed or missing baselines fail before credential access
   even after run deletion; legacy heads require operator reconciliation (#2778)
@@ -181,6 +393,64 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Reject the root pointer in decision `nonLineagePointers` as malformed host
+  verification (`unverified` review, nothing dispatched) instead of treating it
+  as covering every text-bearing input position. Scoped subtree declarations are
+  unchanged (#2795).
+- Caller cancellation during experimental, default-off routing dispatch now
+  records the `cancelled` terminal reason while keeping unknown-cost accounting
+  (null spend and usage) in the receipt; non-cancellation unknown-cost failures
+  still record `cost-unknown` (#2792).
+- The routing control drill reports an active-run-pin mismatch through
+  `RoutingControlDrillError` with the before and after pins beside the current
+  circuit, policy and rollback state, instead of a stateless contract error.
+  Successful drill behavior is unchanged (#2791).
+- The experimental, default-off D26 context-pruning evaluation report rejects a
+  `holdoutAccessedAt` attested after the evaluation clock beyond a five-minute
+  skew allowance (`CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS`, injectable via
+  `evaluationNow` for deterministic tests), so a future timestamp can no longer
+  satisfy the preregistration ordering check. Ordinary decision behavior is
+  unchanged (#2787).
+- The experimental, default-off routing control drill re-reads policy history
+  when a policy restore throws, so a throw-after-install reports the installed
+  policy as inconsistent instead of the stale pre-restore state (#2790).
+- The experimental, default-off egress live qualification runner now requires
+  the `AIWG_DECISION_EGRESS_LIVE=1` opt-in inside `runEgressLiveQualification`
+  before credential or transport use; in-process live calls without it are
+  refused, while the synthetic offline-transport path needs no opt-in (#2801).
+- Pin experimental, default-off D25 issue-triage held-out scoring to preregistered
+  calibration evidence: the evaluation manifest now freezes the calibration registry
+  and compatibility policy digests plus a per-sample request rule (requested alias,
+  sample-bound runId, calibration artifact, not-before instant), and the report
+  builder rejects swapped registry, policy or request inputs before scoring.
+  Manifests without a pin still score without a registry; live Jev evidence and
+  held-out labels remain pending (#2794).
+- The experimental, default-off routing pilot now carries the remaining-cost cap
+  into every reservation and dispatch, so a fallback admitted under its estimate
+  cannot authorize spend above the remaining run budget; attempts without known
+  charged spend stop before dispatch instead of counting unknown cost as zero.
+  Post-dispatch overrun detection is retained as a safety check (#2789).
+- Stop the experimental, default-off D12 live qualification on a per-call
+  usage-bound breach: a call reporting more than its approved 4000-token bound
+  is charged in full and records a budget breach that refuses every later
+  reservation. Usage exactly at the bound still settles normally. The Jev
+  transport offers no provider-side output cap, so the reservation, the breach
+  refusal and the run stop are the per-call enforcement; ordinary decision
+  behavior is unchanged (#2800).
+
+- Experimental, default-off gates capability phase 1 core: closed versioned
+  GatePack/GateBinding/GateReport schemas with catalog entries, a namespaced
+  registry with monotone-tightening `extends` proofs, a pure deterministic
+  offline evaluator with digest-bound never-upgrade reports, four pinned core
+  metric providers, an exact Clopper-Pearson interval, and canonical-JSON
+  qualification evidence digests with a versioned legacy mode. There is no
+  CLI, no project floor enforcement, no addon provider loading and no
+  migrated study; live criteria remain pending (#2824)
+- The experimental, default-off D26 context pruning report records
+  `insufficient-quality-evidence:<metric>` for every remaining insufficient
+  quality decision at or above the overall minimum n, so it yields HOLD with
+  `INSUFFICIENT EVIDENCE` instead of omitting the decision from the findings (#2788).
+
 - Context-planned decision invocations preflight the worst-case completion result
   envelope before dispatch: every evaluation is assumed to carry every usage
   entry with the binding's full retry attempts and answer-domain distributions,

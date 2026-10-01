@@ -25,7 +25,10 @@ attested price from an optional approval file, or else from the committed templa
 | `--collect-approved APPROVAL CORPUS ARTIFACT_ROOT RESOLVER_CONFIG` with `AIWG_DECISION_EGRESS_LIVE=1` | yes | yes |
 
 Without `AIWG_DECISION_EGRESS_LIVE=1`, `--collect-approved` exits with code 2 before it
-reads any file or credential. `--prepare` writes `corpus.json` only beneath the canonical
+reads any file or credential. The library entry point enforces the same gate itself:
+`runEgressLiveQualification` without `offlineTransport` throws before credential or
+transport use unless the variable is `1`. Calls with an injected `offlineTransport`
+stay synthetic and need no opt-in. `--prepare` writes `corpus.json` only beneath the canonical
 root from `aiwg artifacts path --json --check-write`, and never overwrites a file.
 
 ```sh
@@ -184,7 +187,10 @@ The sanitized audit records the operation, logical ref, outcome and HTTP status.
 values are cached for the run and zeroed on dispose, and dispose revokes the AppRole token
 with `auth/token/revoke-self`. Every request sets `rejectUnauthorized: true`; a configured
 CA file can add trust but never disable verification. The resolver refuses to start when
-`NODE_TLS_REJECT_UNAUTHORIZED=0`.
+`NODE_TLS_REJECT_UNAUTHORIZED=0`. Token acquisition, TLS refusal, request options, the
+bounded HTTPS GET and the KV v2 envelope reader are the single shared implementation in
+`tools/decision/jev-openbao-credential.mjs` (#2798); this file keeps only the host-only
+config schema, logical-ref mapping, caching, audit and dispose.
 
 The decoy is evaluated first, through the same evaluator path. A granted decoy value is
 zeroed and never reaches the adapter.
