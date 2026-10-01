@@ -90,6 +90,7 @@ import {
   parseFrontmatter,
   pruneStaleAiwgFiles,
   resolveAiwgRoot,
+  setImplicitAddonSweep,
   updateSidecarManifest,
 } from './providers/base.mjs';
 const modelCatalog = loadRuntimeModelCatalog(staticModelCatalog);
@@ -496,6 +497,7 @@ function parseArgs() {
     skillsOnly: false,
     rulesOnly: false,
     kernelOnly: false,
+    addonSweep: true,       // true: sdlc/general/both/all modes also deploy every addon; false: none; string[]: only those
     filter: null,           // Glob pattern for agent names
     filterRole: null,       // Filter by role: reasoning|coding|efficiency
     save: false,            // Save model config to project models.json
@@ -539,6 +541,8 @@ function parseArgs() {
     else if (a === '--skills-only') cfg.skillsOnly = true;
     else if (a === '--rules-only') cfg.rulesOnly = true;
     else if (a === '--kernel-only') cfg.kernelOnly = true;
+    else if (a === '--no-addon-sweep') cfg.addonSweep = false;
+    else if (a === '--sweep-addons' && args[i + 1]) cfg.addonSweep = String(args[++i]).split(',').map(name => name.trim()).filter(Boolean);
     else if (a === '--deploy-behaviors') cfg.deployBehaviors = true;
     else if (a === '--filter' && args[i + 1]) cfg.filter = args[++i];
     else if (a === '--filter-role' && args[i + 1]) cfg.filterRole = args[++i];
@@ -585,6 +589,10 @@ Options:
   --skills-only            Deploy only skills (skip agents)
   --rules-only             Deploy only rules (skip agents)
   --kernel-only            Deploy kernel skills only and prune managed bulk artifacts
+  --no-addon-sweep         Skip the all-addons sweep that the sdlc, general, both and all
+                           modes add next to the framework
+  --sweep-addons <list>    Narrow that sweep to these comma-separated addons. aiwg use
+                           <framework> passes its own companions (e.g. aiwg-utils)
   --dry-run                Show what would be deployed without writing
   --force                  Overwrite existing files
   --provider <name>        Target provider (see below)
@@ -1064,6 +1072,10 @@ export async function main() {
       migrateCommandsDirectory(path.join(cfg.target, commandsRelPath), opts);
     }
   }
+
+  // Mode-based deploys collect every addon next to the framework unless told
+  // otherwise. Set before the provider runs; the prune safety set ignores it.
+  setImplicitAddonSweep(cfg.addonSweep);
 
   // Delegate to provider
   try {

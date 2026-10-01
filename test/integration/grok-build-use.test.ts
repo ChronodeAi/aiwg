@@ -210,12 +210,13 @@ describe('aiwg use grok-build e2e (#2575)', () => {
       })],
     });
 
-    const managedSkill = path.join(project, '.grok', 'skills', 'aiwg-help', 'SKILL.md');
+    // --no-utils deploys the framework alone, so the managed skill is one sdlc ships itself.
+    const managedSkill = path.join(project, '.grok', 'skills', 'sdlc-quickref', 'SKILL.md');
     const originalSkill = readFileSync(managedSkill, 'utf8');
     writeFileSync(managedSkill, `${originalSkill}\nOperator modification.\n`);
     const modifiedPreview = runRemoval(['remove', 'grok-build', '--provider', 'grok-build', '--dry-run'], useEnv, project);
     expect(modifiedPreview.status).toBe(1);
-    expect(modifiedPreview.stdout + modifiedPreview.stderr).toContain('Preserved modified or unverifiable: .grok/skills/aiwg-help');
+    expect(modifiedPreview.stdout + modifiedPreview.stderr).toContain('Preserved modified or unverifiable: .grok/skills/sdlc-quickref');
     expect(readFileSync(managedSkill, 'utf8')).toContain('Operator modification.');
     writeFileSync(managedSkill, originalSkill);
 

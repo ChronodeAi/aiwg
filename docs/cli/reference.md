@@ -584,7 +584,8 @@ are reported as inherited, global-only, informational, or unsupported rather tha
 being falsely described as pinned.
 
 - `--save-user` - Save model overrides to `~/.config/aiwg/models.json`
-- `--no-utils` - Skip aiwg-utils addon installation (frameworks only)
+- `--no-utils` - Skip `aiwg-utils`, the addon every framework deploy brings along.
+  A named framework then deploys by itself, plus any addon its manifest requires.
 - `--force` - Overwrite existing deployments, including artifacts AIWG does not
   currently manage. This is the supported way to reclaim a provider directory
   left behind by an older AIWG install.
@@ -627,16 +628,30 @@ currently manage. Deleting files someone committed, in a provider tree the run
 was not asked to touch, is a different decision, so habitual `--force` use can
 never authorise it.
 
-`aiwg use all` deploys the kernel surface — kernel skills, rules, and behaviors —
-and does not deploy agents or commands. It leaves the artifacts other bundles
-deployed alone: running it after `aiwg use sdlc` does not remove the SDLC agent
-surface. In a project whose only recorded deployment is the bulk install itself,
-it still clears flat artifacts left by the pre-kernel bulk default.
+`aiwg use <framework>` (`sdlc`, `marketing`, `film-production`, `ops`, and the
+other named frameworks) deploys that framework, `aiwg-utils` unless `--no-utils`,
+and any addon the framework's manifest lists under `dependencies.required`
+(no shipped framework declares any). It does not sweep in other addons or any
+extension, and it registers no addon CLI namespaces. Add one by name
+(`aiwg use rlm`, `aiwg use sys`), or run `aiwg use all`.
 
-Bulk deploys skip addons whose manifest sets `"devOnly": true` (`aiwg-dev`) or
-`"explicitInstall": true` (`decision-engine`). These are deployed only when
-named, for example `aiwg use decision-engine`. `autoInstall: false` is not an
-exclusion: most addons declare it and are still part of `aiwg use all`.
+`aiwg use all` deploys every framework, every non-explicit addon, and every
+extension. On providers other than `pi` and `omp` that is the kernel surface —
+kernel skills and behaviors — and no agents, commands, or rules. `pi` and `omp`
+keep the full surface: agents, prompts, skills, and rules. It leaves the
+artifacts other bundles deployed alone: running it after `aiwg use sdlc` does
+not remove the SDLC agent surface. In a project whose only recorded deployment
+is the bulk install itself, it still clears flat artifacts left by the
+pre-kernel bulk default.
+
+`writing` and `general` are addon-only modes with no framework behind them. They
+keep the full addon sweep that `all` performs.
+
+Bulk deploys (`all`, `writing`, `general`) skip addons whose manifest sets
+`"devOnly": true` (`aiwg-dev`) or `"explicitInstall": true` (`decision-engine`).
+These are deployed only when named, for example `aiwg use decision-engine`.
+`autoInstall: false` is not an exclusion: most addons declare it and are still
+part of `aiwg use all`.
 
 **Capabilities:** cli, framework, deployment, addon
 **Platforms:** All

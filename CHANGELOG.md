@@ -52,6 +52,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   `governance-boundary-sentinel`, `memory-proof-guard`, `provider-bridge-watch`,
   `verdict-binding-check`). The shipped-component discovery count is now 64.
 
+### Fixed
+
+- **`aiwg use <framework>` no longer deploys the whole addon pack** - A named
+  framework (`sdlc`, `marketing`, `film-production`, `ops`, ...) now deploys the
+  framework, `aiwg-utils` unless `--no-utils`, and any addon its manifest lists
+  under `dependencies.required`. It no longer sweeps every other addon and every
+  extension, or registers their CLI namespaces, which `aiwg refresh` replayed on
+  each run. On omp, `film-production` drops from 62 agents, 81 rules, 75 prompts
+  and 13 addon CLI namespaces to 16, 38, 47 and none. `sdlc` is covered too:
+  `deploy-agents.mjs` gains `--sweep-addons <list>` and `--no-addon-sweep` to
+  narrow the all-addons sweep its `sdlc`, `general`, `both` and `all` modes add
+  in every provider, and `aiwg use sdlc --no-utils` now really deploys no addon
+  (the sweep used to bring aiwg-utils back). `aiwg use all`, `writing`,
+  `general` and `aiwg use <addon>` are unchanged. Extensions deploy by name
+  (`aiwg use sys`) or through `all`.
+
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed

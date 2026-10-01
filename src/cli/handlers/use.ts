@@ -536,6 +536,90 @@ export async function resolveRequiredAddonActivationOrder(
   return order;
 }
 
+/** The addon every framework deploy brings along unless --no-utils. */
+const FRAMEWORK_BASE_ADDON = 'aiwg-utils';
+
+/**
+ * Addons a framework manifest lists in `dependencies.required`, the same
+ * declaration addon manifests use. No shipped framework declares any today.
+ */
+async function readFrameworkRequiredAddons(frameworkRoot: string, framework: string): Promise<string[]> {
+  const frameworkDir = resolveFrameworkDir(framework);
+  if (!frameworkDir) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await fs.readFile(
+      path.join(frameworkRoot, 'agentic/code/frameworks', frameworkDir, 'manifest.json'),
+      'utf8',
+    ));
+  } catch {
+    return [];
+  }
+  const manifest = (parsed && typeof parsed === 'object' ? parsed : {}) as { dependencies?: { required?: unknown } };
+  const required = manifest.dependencies?.required ?? [];
+  if (!Array.isArray(required) || required.some(item => typeof item !== 'string')) {
+    throw new Error(`Framework '${framework}' has an invalid dependencies.required declaration`);
+  }
+  return required as string[];
+}
+
+/** Addons and extensions that deploy alongside a `use` target. */
+export interface CompanionBundles {
+  /** Addon directory names, dependency-first. */
+  addons: string[];
+  /** Extension directory names. */
+  extensions: string[];
+  /**
+   * True for targets that sweep addons by design (`all`, plus the framework-less
+   * `writing` and `general` modes), false for a named framework. The deployer's
+   * own sdlc/general/both/all mode sweep has to stay off for a named framework or
+   * it would pull every addon back in.
+   */
+  bundleMode: boolean;
+}
+
+/**
+ * Pick the addons and extensions that ride along with a `use` target.
+ *
+ * `all` and the framework-less `writing`/`general` modes sweep every
+ * non-explicit addon and every extension. A named framework (anything with a
+ * backing framework directory) brings aiwg-utils unless --no-utils, plus the
+ * addons its manifests require, and no extensions: those deploy by name
+ * (`aiwg use sys`) or through `all`. `--no-utils` drops the whole sweep of a
+ * bundle mode, and only aiwg-utils for a framework.
+ */
+export async function resolveCompanionBundles(opts: {
+  frameworkRoot: string;
+  framework: string;
+  skipUtils: boolean;
+}): Promise<CompanionBundles> {
+  const { frameworkRoot, framework, skipUtils } = opts;
+
+  // FRAMEWORK_DIR_MAP maps `all` onto sdlc-complete for manifest purposes, so
+  // name it explicitly. `writing` and `general` have no framework directory.
+  const bundleMode = framework === 'all' || resolveFrameworkDir(framework) === undefined;
+  if (bundleMode) {
+    if (skipUtils) return { addons: [], extensions: [], bundleMode };
+    return {
+      addons: await getAllAddons(frameworkRoot),
+      extensions: await getAllExtensions(frameworkRoot),
+      bundleMode,
+    };
+  }
+
+  const roots: string[] = [];
+  if (!skipUtils && await isValidAddon(frameworkRoot, FRAMEWORK_BASE_ADDON)) roots.push(FRAMEWORK_BASE_ADDON);
+  roots.push(...await readFrameworkRequiredAddons(frameworkRoot, framework));
+
+  const addons: string[] = [];
+  for (const root of roots) {
+    for (const name of await resolveRequiredAddonActivationOrder(frameworkRoot, root)) {
+      if (!addons.includes(name)) addons.push(name);
+    }
+  }
+  return { addons, extensions: [], bundleMode };
+}
+
 async function registerSourceCliCommands(opts: {
   source: string;
   target: string;
@@ -3702,6 +3786,24 @@ export class UseHandler implements CommandHandler {
       && !remainingArgs.includes('--copy-all')
       && !remainingArgs.includes('--copy-standard-skills');
     if (bulkKernelOnly) providerDeployArgs.push('--kernel-only');
+    // Pick what rides along with this target before any file is written, so an
+    // invalid dependency declaration stops the run instead of half-deploying.
+    let companions: CompanionBundles;
+    try {
+      companions = await resolveCompanionBundles({ frameworkRoot, framework, skipUtils });
+    } catch (error) {
+      return { exitCode: 1, message: `Error: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    // A named framework deploys itself plus those companions. The deployer's own
+    // sdlc/general/both/all mode sweep would pull every addon in again, so narrow
+    // it to the companions. It cannot simply be switched off: some providers only
+    // receive aiwg-utils agents and rules through that sweep, not through the
+    // `--source` addon run below.
+    if (!companions.bundleMode) {
+      providerDeployArgs.push(...(companions.addons.length > 0
+        ? ['--sweep-addons', companions.addons.join(',')]
+        : ['--no-addon-sweep']));
+    }
     const targetIdx = remainingArgs.findIndex(a => a === '--target');
     const target = targetIdx >= 0 && remainingArgs[targetIdx + 1] ? remainingArgs[targetIdx + 1] : process.cwd();
 
@@ -3840,65 +3942,62 @@ export class UseHandler implements CommandHandler {
       addonBaseArgs.push('--copy-all');
     }
 
-    // Deploy all addons (excluding disallow list) unless --no-utils
-    if (!skipUtils) {
-      const allAddons = await getAllAddons(frameworkRoot);
-      for (const addon of allAddons) {
-        if (verbose) {
-          console.log('');
-          console.log(`Deploying ${addon} addon...`);
-        }
-        const source = addonPath(frameworkRoot, addon);
-        const addonArgs = quiet
-          ? ['--quiet', '--source', source, ...addonBaseArgs]
-          : ['--source', source, ...addonBaseArgs];
-        const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
-        if (result.exitCode !== 0) {
-          return result;
-        }
-        try {
-          await registerSourceCliCommands({
-            source,
-            target,
-            provider,
-            dryRun,
-            fallbackDescription: `${addon} addon commands`,
-          });
-        } catch (error) {
-          ui.warn(`Failed to register CLI commands for '${addon}': ${(error as Error).message}`);
-        }
+    // Deploy the companions picked above: everything for a bundle mode, or for a
+    // named framework just aiwg-utils (unless --no-utils) and the addons its
+    // manifests require.
+    for (const addon of companions.addons) {
+      if (verbose) {
+        console.log('');
+        console.log(`Deploying ${addon} addon...`);
       }
+      const source = addonPath(frameworkRoot, addon);
+      const addonArgs = quiet
+        ? ['--quiet', '--source', source, ...addonBaseArgs]
+        : ['--source', source, ...addonBaseArgs];
+      const result = await runner.run('tools/agents/deploy-agents.mjs', addonArgs, captureOpts);
+      if (result.exitCode !== 0) {
+        return result;
+      }
+      try {
+        await registerSourceCliCommands({
+          source,
+          target,
+          provider,
+          dryRun,
+          fallbackDescription: `${addon} addon commands`,
+        });
+      } catch (error) {
+        ui.warn(`Failed to register CLI commands for '${addon}': ${(error as Error).message}`);
+      }
+    }
 
-      // Deploy all extensions from agentic/code/extensions/* (#1222).
-      // Extensions are addon-shaped bundles (manifest type: "addon") that live
-      // in a separate top-level dir to keep ops/sysops/itops/devops grouped.
-      // `aiwg use all` was previously silent about them, leaving 6 extension
-      // bundles undeployed even when the user explicitly asked for everything.
-      const allExtensions = await getAllExtensions(frameworkRoot);
-      for (const ext of allExtensions) {
-        if (verbose) {
-          console.log('');
-          console.log(`Deploying ${ext} extension...`);
-        }
-        const source = extensionPath(frameworkRoot, ext);
-        const extArgs = quiet
-          ? ['--quiet', '--source', source, ...addonBaseArgs]
-          : ['--source', source, ...addonBaseArgs];
-        const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
-        if (result.exitCode !== 0) {
-          return result;
-        }
-        try {
-          await registerSourceCliCommands({
-            source,
-            target,
-            provider,
-            dryRun,
-            fallbackDescription: `${ext} extension commands`,
-          });
-        } catch (error) {
-          ui.warn(`Failed to register CLI commands for '${ext}': ${(error as Error).message}`);
-        }
+    // Deploy extensions from agentic/code/extensions/* (#1222) — `all` only.
+    // Extensions are addon-shaped bundles (manifest type: "addon") that live
+    // in a separate top-level dir to keep ops/sysops/itops/devops grouped.
+    // Frameworks no longer sweep them in; they deploy by name (`aiwg use sys`).
+    for (const ext of companions.extensions) {
+      if (verbose) {
+        console.log('');
+        console.log(`Deploying ${ext} extension...`);
+      }
+      const source = extensionPath(frameworkRoot, ext);
+      const extArgs = quiet
+        ? ['--quiet', '--source', source, ...addonBaseArgs]
+        : ['--source', source, ...addonBaseArgs];
+      const result = await runner.run('tools/agents/deploy-agents.mjs', extArgs, captureOpts);
+      if (result.exitCode !== 0) {
+        return result;
+      }
+      try {
+        await registerSourceCliCommands({
+          source,
+          target,
+          provider,
+          dryRun,
+          fallbackDescription: `${ext} extension commands`,
+        });
+      } catch (error) {
+        ui.warn(`Failed to register CLI commands for '${ext}': ${(error as Error).message}`);
       }
     }
 
