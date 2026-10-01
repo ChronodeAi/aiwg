@@ -244,6 +244,8 @@ export interface ContextPruningPreregistration {
     slices: string[];
     minimumOverallN: number;
     minimumSliceN: number;
+    /** Protected receipts below this count cannot PROMOTE, even at 100% retention. */
+    minimumProtectedN: number;
     powerRule: string | null;
     /** Non-positive integer bps: -250 lets the candidate be at most 2.5 points worse. */
     qualityNonInferiorityMarginBps: number;
@@ -670,6 +672,7 @@ export function validateContextPruningPreregistration(value: ContextPruningPrere
     || slices.some(slice => typeof slice !== 'string' || !slice.trim())
     || !Number.isSafeInteger(t.minimumOverallN) || t.minimumOverallN < 2
     || !Number.isSafeInteger(t.minimumSliceN) || t.minimumSliceN < 1
+    || !Number.isSafeInteger(t.minimumProtectedN) || t.minimumProtectedN < 2
     || (t.powerRule !== null && (typeof t.powerRule !== 'string' || !t.powerRule.trim()))
     || !Number.isSafeInteger(t.qualityNonInferiorityMarginBps) || t.qualityNonInferiorityMarginBps > 0
     || t.qualityNonInferiorityMarginBps < -10_000
@@ -734,6 +737,8 @@ export function buildContextPruningEvaluationReport(input: {
   if (metrics.protectedRetentionBps < 10_000 || (protectedRetention.bps !== null && protectedRetention.bps < 10_000)) {
     findings.add('protected-retention-breach');
   }
+  // A full retention rate on too few protected items is not evidence: the count comes from validated receipts.
+  if (protectedRetention.protectedItems < thresholds.minimumProtectedN) findings.add('insufficient-protected-sample');
 
   const quality = thresholds.qualityMetrics.map(({ metric, scale }) =>
     evaluateQualityMetric(metric, scale, metrics.quality.find(item => item.metric === metric), metrics.pairs, preregistration));
