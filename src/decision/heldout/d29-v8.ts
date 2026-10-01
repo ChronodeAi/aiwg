@@ -47,8 +47,8 @@ const options: Record<string, string[]> = { protocol: ['QUIC', 'TCP', 'UDP', 'SC
 const COMPATIBLE_CRITERION_MODES = new Set(['checklist|exact', 'checklist|verified', 'exact|verified',
   'explicit-none|planned', 'planned|stale', 'planned|self-attested', 'partial|planned', 'self-attested|stale']);
 export function d29V8CompatibleCriterionModes(a: string, b: string): boolean {
-  // Two records in the same mode agree (partial coverage counts may differ, so not partial).
-  return (a === b && a !== 'partial') || COMPATIBLE_CRITERION_MODES.has([a, b].sort().join('|'));
+  // Identical modes would render the identical sentence twice, so they never pair.
+  return COMPATIBLE_CRITERION_MODES.has([a, b].sort().join('|'));
 }
 
 function drawPort(random: (bound: number) => number): string {
@@ -102,6 +102,12 @@ function coreference(module: string, sentence: string, lead: string, pronoun: st
 }
 
 const coreferenceLeads = ['completed its scheduled migration last week', 'finished its planned maintenance window yesterday', 'closed its rollout review this morning'];
+
+/** Mode families whose per-row counts are drawn independently of the variant. */
+const CITATION_MODE_FAMILIES: Record<string, readonly string[]> = { exact: ['exact'], negated: ['negated'], moved: ['moved'],
+  exclusive: ['exclusive-single', 'exclusive-restricted'], qualified: ['scoped', 'temporal', 'tentative'] };
+const CRITERION_MODE_FAMILIES: Record<string, readonly string[]> = { verified: ['exact', 'verified', 'checklist'],
+  'explicit-none': ['explicit-none'], planned: ['planned'], stale: ['stale'], 'self-attested': ['self-attested'], partial: ['partial'] };
 
 /** Distractor modes that may render as a paraphrase, and as a two-value list. */
 const PARAPHRASE_MODES = ['exact', 'scoped', 'temporal', 'tentative'];
@@ -161,23 +167,43 @@ export function d29WorldV8(seed: string, ordinal: number) {
   // Distractor modes are drawn independently of the variant (with
   // replacement), so the distractor layer never encodes the relevant mode by
   // its absence (v7 rendered each mode exactly once per row).
-  // A length budget keeps every request inside the preregistered token bound:
-  // the distractor modes' template lengths may not exceed the seven longest
-  // distinct modes (the v7 worst case). It reads only the drawn distractor
-  // modes, never the variant.
+  // Mode families: the row's eight records draw their families i.i.d. and
+  // uniformly, conditioned only on the relevant record's family occurring
+  // once; the relevant record takes one slot of its family and the
+  // distractors fill the rest, each with a drawn mode inside its family. So a
+  // family's per-row count (qualified records, exact facts, negations, ...)
+  // shifts with the label only by that conditioning (P(count >= 1) is about
+  // 0.83 unconditioned), not by a whole record, and no family is ever
+  // guaranteed to distractors. A length budget on the drawn counts (each
+  // family at its longest mode) keeps every request inside the preregistered
+  // token bound; it reads only the drawn counts.
   const modeDraw = drawD29Stream(base.split, `v8:${base.familyId}:modes`);
+  const families = citation ? CITATION_MODE_FAMILIES : CRITERION_MODE_FAMILIES;
+  const familyNames = Object.keys(families);
+  const familyOf = (mode: string) => familyNames.find(name => families[name].includes(mode))!;
   const modeLength = (mode: string) => citation
     ? (['scoped', 'temporal', 'tentative'].includes(mode) ? qualify(pool, train, fact(pool, train, 'X', 'protocol', 'QUIC', 'TCP', 'exact'), mode, 8)
       : fact(pool, train, 'X', 'protocol', 'QUIC', 'TCP', mode)).length
     : pool.criterion[mode]('X', 'security review sign-off', '2').length;
-  const modeBudget = modes.map(modeLength).sort((a, b) => a - b).slice(1).reduce((a, b) => a + b, 0);
+  const familyLength = Object.fromEntries(familyNames.map(name => [name, Math.max(...families[name].map(modeLength))]));
+  // Citation requests are far below the bound, so their budget allows one more
+  // record of the longest family; criterion requests are the long ones.
+  const modeBudget = modes.map(modeLength).reduce((a, b) => a + b, 0) + (citation ? Math.max(...Object.values(familyLength)) : 0);
   const drawDistractorModes = () => {
     for (let attempt = 0; attempt < 256; attempt++) {
-      const drawn = records.map((_, i) => i === relevantIndex ? '' : modes[modeDraw(modes.length)]);
-      if (drawn.reduce((n, mode) => n + (mode ? modeLength(mode) : 0), 0) <= modeBudget) {
-        drawn.forEach((mode, i) => { if (mode) records[i].mode = mode; });
-        return;
-      }
+      const counts: Record<string, number> = Object.fromEntries(familyNames.map(name => [name, 0]));
+      for (let slot = 0; slot < records.length; slot++) counts[familyNames[modeDraw(familyNames.length)]]++;
+      if (!counts[familyOf(relevantMode)]) continue;
+      if (familyNames.reduce((n, name) => n + counts[name] * familyLength[name], 0) > modeBudget) continue;
+      counts[familyOf(relevantMode)]--;
+      const slots = familyNames.flatMap(name => Array.from({ length: counts[name] }, () => name));
+      for (let i = slots.length - 1; i > 0; i--) { const at = modeDraw(i + 1); [slots[i], slots[at]] = [slots[at], slots[i]]; }
+      records.forEach((record, i) => {
+        if (i === relevantIndex) return;
+        const family = families[slots.shift()!];
+        record.mode = family[modeDraw(family.length)];
+      });
+      return;
     }
     throw new Error('generator-mode-budget');
   };

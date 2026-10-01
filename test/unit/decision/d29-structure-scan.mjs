@@ -184,3 +184,37 @@ export function exclusiveFeatures(rows, featuresOf, targets, { minSupport = 5, m
   }
   return found;
 }
+
+/**
+ * Per-row counts over every record unit (all roles, as a reader sees them): one
+ * count per form or mode tag (qualified, exact, negated, moved, exclusive,
+ * paraphrase, two-value, coreference, and each criterion mode).
+ */
+export function countFeatures(units) {
+  const counts = {};
+  for (const tag of [...SURFACE_FORMS, ...MODE_FORMS]) counts[`count:${tag}`] = units.filter(unit => unit.forms.includes(tag)).length;
+  counts['count:verified-family'] = units.filter(unit => ['exact', 'verified', 'checklist'].some(tag => unit.forms.includes(tag))).length;
+  return counts;
+}
+
+/**
+ * Best single-threshold rule (`count >= t` or `count < t`) per count feature and
+ * one-vs-rest label, by balanced accuracy.
+ */
+export function countRuleBalancedAccuracy(rows, countsOf, labelOf) {
+  const table = rows.map(countsOf), labels = rows.map(labelOf), best = [];
+  for (const label of new Set(labels)) {
+    const truth = labels.map(value => value === label), positives = truth.filter(Boolean).length, negatives = truth.length - positives;
+    if (!positives || !negatives) continue;
+    for (const name of Object.keys(table[0])) {
+      const values = table.map(features => features[name]);
+      for (const threshold of new Set(values)) {
+        let tp = 0, fp = 0;
+        values.forEach((value, i) => { if (value >= threshold) { if (truth[i]) tp++; else fp++; } });
+        const score = (tp / positives + (negatives - fp) / negatives) / 2;
+        best.push({ label, feature: name, threshold, balancedAccuracy: Math.max(score, 1 - score) });
+      }
+    }
+  }
+  return best.sort((a, b) => b.balancedAccuracy - a.balancedAccuracy);
+}

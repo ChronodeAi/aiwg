@@ -170,7 +170,8 @@ describe('D29 v8 operator-note templates', () => {
     expect(d29V8CompatibleCriterionModes('exact', 'explicit-none')).toBe(false);
     expect(d29V8CompatibleCriterionModes('partial', 'self-attested')).toBe(false);
     expect(d29V8CompatibleCriterionModes('verified', 'exact')).toBe(true);
-    expect(d29V8CompatibleCriterionModes('planned', 'planned')).toBe(true);
+    // Identical modes would repeat the identical sentence, so they never pair.
+    expect(d29V8CompatibleCriterionModes('planned', 'planned')).toBe(false);
     expect(d29V8CompatibleCriterionModes('partial', 'partial')).toBe(false);
   });
 
@@ -552,8 +553,19 @@ describe('D29 v8 review round 5', () => {
           }
         }
       }
-      const exclusive = map => [...map].filter(([, where]) => where.size === 1 && [...where.values()][0] >= 5)
-        .map(([feature, where]) => `${feature} -> ${[...where.keys()][0]}`);
+      // Precision 1.0 with support >= 5 that chance alone explains with probability below 1e-3
+      // (the base rate of the key among rows of the same kind, raised to the support).
+      const totals = new Map();
+      for (const row of worlds(d29WorldV8, seed)) {
+        const label = row.world.kind === 'citation' ? oracle(row.world).support : oracle(row.world).ready ? 'ready' : 'not-ready';
+        const variant = `${row.world.kind}:${row.slice.endsWith('-injection') ? 'injection' : row.world.variant}`;
+        for (const key of [variant, `${row.world.kind}:${label}`, `kind:${row.world.kind}`]) totals.set(key, (totals.get(key) ?? 0) + 1);
+      }
+      const exclusive = map => [...map].filter(([, where]) => {
+        if (where.size !== 1) return false;
+        const [[key, n]] = [...where];
+        return n >= 5 && (totals.get(key) / totals.get(`kind:${key.split(':')[0]}`)) ** n < 1e-3;
+      }).map(([feature, where]) => `${feature} -> ${[...where.keys()][0]}`);
       expect(exclusive(byVariant), `${seed} variant`).toEqual([]);
       expect(exclusive(byLabel), `${seed} label`).toEqual([]);
       // A same-criterion pair on the claimed module occurs in ready rows too, not only wrong-attribute/wrong-subject.
@@ -564,7 +576,7 @@ describe('D29 v8 review round 5', () => {
 
 describe('D29 v8 review round 6', () => {
   it('V8-19 keeps every (record role × surface form) feature off any single label or variant on three seeds and both pools', async () => {
-    const { recordUnits, unitFeatures, exclusiveFeatures, ROLES } = await import('./d29-structure-scan.mjs');
+    const { recordUnits, unitFeatures, exclusiveFeatures, ROLES, countFeatures, countRuleBalancedAccuracy } = await import('./d29-structure-scan.mjs');
     const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
     for (const seed of [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b']) {
       const rows = worlds(d29WorldV8, seed);
@@ -586,6 +598,11 @@ describe('D29 v8 review round 6', () => {
           byRelevantRole.get(relevantRole).add(counts);
         }
         for (const [role, counts] of byRelevantRole) expect([...counts], `${seed}/${kind}/${pool}/${role}`).toHaveLength(1);
+        // Per-row counts of every form and mode family (all records) carry no single-threshold label rule >= 0.70.
+        for (const targetOf of [labelOf, row => String(row.world.injected)]) {
+          const [best] = countRuleBalancedAccuracy(members, row => countFeatures(parsed.get(row).units), targetOf);
+          expect(best.balancedAccuracy, `${seed}/${kind}/${pool} ${best.feature}>=${best.threshold} ${best.label}`).toBeLessThan(0.7);
+        }
       }
       // Every unit parses, apart from a handful of rendering forms the scan's parser does not cover.
       expect([...parsed.values()].reduce((n, item) => n + item.unparsed, 0), seed).toBeLessThan(20);
@@ -607,6 +624,18 @@ describe('D29 v8 review round 6', () => {
       const shares = Object.values(rate).map(([n, hits]) => hits / n);
       expect(Math.min(...shares), `${pool} ${JSON.stringify(rate)}`).toBeGreaterThan(0.5);
       expect(Math.max(...shares) - Math.min(...shares), `${pool} ${JSON.stringify(rate)}`).toBeLessThan(0.2);
+    }
+  }, 120_000);
+});
+
+describe('D29 v8 review round 7', () => {
+  it('V8-21 never repeats a sentence inside one passage', () => {
+    for (const seed of [D29_V8_SEED, 'zz-repeat-a', 'zz-repeat-b']) {
+      for (const row of worlds(d29WorldV8, seed)) {
+        const text = (row.payload.source ?? row.payload.evidence).split('\n').slice(1).join(' ');
+        const sentences = text.split(/(?<=[.;])\s+/).map(part => part.trim().replace(/[.;]$/, '')).filter(part => /Module \d/.test(part));
+        expect(sentences.length - new Set(sentences).size, `${seed}/${row.id}`).toBe(0);
+      }
     }
   }, 120_000);
 });

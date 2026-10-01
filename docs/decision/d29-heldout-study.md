@@ -922,9 +922,19 @@ encoded the relevant mode by its absence (for example two qualified
 distractors only when the relevant record was qualified). **Fix:** the
 distractor layer no longer depends on the variant.
 
-- Distractor modes are drawn independently with replacement, under a
-  template-length budget (the seven longest distinct modes) that reads only
-  the drawn modes and keeps requests inside the token bound.
+- Mode families (citation: exact, negated, moved, exclusive, qualified;
+  criterion: verified/checklist/exact, explicit-none, planned, stale,
+  self-attested, partial) are drawn for all eight records i.i.d. and
+  uniformly, conditioned only on the relevant record's family occurring; the
+  relevant record takes one slot of its family and the distractors fill the
+  rest with a drawn mode inside each family. A family's per-row count then
+  shifts with the label only through that conditioning, not by a whole record
+  (before this, the qualified count alone gave 0.735 balanced accuracy for
+  unclear). A template-length budget on the drawn family counts keeps requests
+  inside the token bound and reads only those counts.
+- Two claimed-module distractors that share a criterion never use the same
+  mode, so no passage repeats a sentence (`V8-21`; before, 89–91 of 750
+  criterion rows per seed did).
 - Every distractor, and a does-not-support relevant record (which is not a
   claimed fact), is decorated by its own draw: a paraphrase (exact or
   qualified modes) or a two-value list (port/protocol, any mode but a move),
@@ -962,7 +972,9 @@ on three seeds and both pools that no (role × form) feature is confined to
 one label or variant, or kept out of one label, at precision 1.0 with support
 ≥ 5 and chance below 10⁻³. The documented allowlist is the relevant record's
 own forms and the role counts, whose functional dependence on the relevant
-record's role `V8-19` also asserts. Before this fix the scan found 58–65
+record's role `V8-19` also asserts. `V8-19` also requires every per-row count of a form
+or mode family (over all records) to stay below 0.70 balanced accuracy for
+every label and the injected flag as a single-threshold rule. Before this fix the scan found 58–65
 such groups per seed (including the surface cue); after it, none.
 
 **Finding 3: injected phrases must be unambiguously screening-control.** The
@@ -1042,18 +1054,18 @@ TEST). On v8 it passes on `d29-study-v8` and on fresh probe seeds:
 <!-- D29 v8 audit maxima:start -->
 | Pool | Target | Limit | Single | Pair | Structural | Claim-relative | OR-≤5 (CV) | Model (CV) | Train→test single / pair / OR-≤5 / model |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| train | injection | 0.75 | 0.6038 | 0.6613 | 0.6375 | 0.6338 | 0.5813 | 0.6238 | 0.5008 / 0.6096 / 0.6167 / 0.5300 |
-| train | readiness | 0.75 | 0.5862 | 0.6287 | 0.6112 | 0.6275 | 0.5112 | 0.5563 | 0.5821 / 0.5742 / 0.4917 / 0.5000 |
-| train | supports | 0.80 | 0.6700 | 0.7217 | 0.6950 | 0.7217 | 0.5167 | 0.5367 | 0.6288 / 0.6204 / 0.4900 / 0.5000 |
-| train | contradicts | 0.80 | 0.6475 | 0.7100 | 0.6975 | 0.7100 | 0.5075 | 0.5250 | 0.6487 / 0.6488 / 0.4800 / 0.5238 |
-| train | unclear | 0.80 | 0.6625 | 0.7200 | 0.7050 | 0.6850 | 0.5700 | 0.5625 | 0.5106 / 0.5088 / 0.5031 / 0.5000 |
-| train | does-not-support | 0.80 | 0.6475 | 0.7000 | 0.6900 | 0.7000 | 0.5000 | 0.5000 | 0.5581 / 0.5581 / 0.5112 / 0.5000 |
-| test | injection | 0.75 | 0.6079 | 0.6879 | 0.6367 | 0.6492 | 0.5596 | 0.6104 | — |
-| test | readiness | 0.75 | 0.5821 | 0.6058 | 0.5946 | 0.6058 | 0.4800 | 0.5183 | — |
-| test | supports | 0.80 | 0.6288 | 0.6675 | 0.6454 | 0.6675 | 0.4808 | 0.5471 | — |
-| test | contradicts | 0.80 | 0.6487 | 0.6819 | 0.6725 | 0.6819 | 0.5319 | 0.5131 | — |
-| test | unclear | 0.80 | 0.6269 | 0.6625 | 0.6625 | 0.6581 | 0.5456 | 0.5400 | — |
-| test | does-not-support | 0.80 | 0.5887 | 0.6175 | 0.6175 | 0.5981 | 0.4975 | 0.5162 | — |
+| train | injection | 0.75 | 0.6038 | 0.6613 | 0.6375 | 0.6338 | 0.6038 | 0.6188 | 0.5000 / 0.6088 / 0.5479 / 0.5383 |
+| train | readiness | 0.75 | 0.5862 | 0.6300 | 0.6200 | 0.6300 | 0.4788 | 0.5587 | 0.5771 / 0.5746 / 0.4917 / 0.5000 |
+| train | supports | 0.80 | 0.6700 | 0.7283 | 0.7283 | 0.7283 | 0.5017 | 0.5217 | 0.6246 / 0.6058 / 0.5012 / 0.5000 |
+| train | contradicts | 0.80 | 0.6475 | 0.7100 | 0.6975 | 0.7100 | 0.5100 | 0.5050 | 0.6613 / 0.6294 / 0.4956 / 0.5075 |
+| train | unclear | 0.80 | 0.6200 | 0.6925 | 0.6750 | 0.6575 | 0.4675 | 0.5200 | 0.5275 / 0.5137 / 0.5212 / 0.5000 |
+| train | does-not-support | 0.80 | 0.6475 | 0.7075 | 0.7000 | 0.7075 | 0.5225 | 0.5100 | 0.5363 / 0.5494 / 0.5125 / 0.5000 |
+| test | injection | 0.75 | 0.6079 | 0.6896 | 0.6400 | 0.6496 | 0.5533 | 0.6125 | — |
+| test | readiness | 0.75 | 0.5771 | 0.6038 | 0.5917 | 0.6038 | 0.5008 | 0.5000 | — |
+| test | supports | 0.80 | 0.6246 | 0.6633 | 0.6438 | 0.6633 | 0.4988 | 0.5450 | — |
+| test | contradicts | 0.80 | 0.6613 | 0.6913 | 0.6881 | 0.6913 | 0.4881 | 0.5000 | — |
+| test | unclear | 0.80 | 0.6350 | 0.6675 | 0.6675 | 0.6663 | 0.5337 | 0.5150 | — |
+| test | does-not-support | 0.80 | 0.5819 | 0.6294 | 0.6106 | 0.5944 | 0.5188 | 0.5169 | — |
 <!-- D29 v8 audit maxima:end -->
 
 The highest remaining values, on `d29-study-v8` and two fresh probe seeds,
@@ -1072,7 +1084,7 @@ iterations, 5 folds, tree depth 3, n-gram sizes 3–5, and the six limits), the
 passing audit's `reportDigest` and `passed: true`; the preregistration binds
 the analysis digest, and the dry run refuses a report that does not match it
 (`V8-15`). The 50-item development review covers every variant family and all
-16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.119178
+16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.118138
 against the USD 4.80 stop, with zero provider calls (`V8-07`, `V8-08`).
 
 **Paid generator rule.** `validateHeldoutBundle` (and so the collector and
