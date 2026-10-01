@@ -9,6 +9,23 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 generator `d29-synthetic/v8` (public
+  development seed `d29-study-v8`, refused for paid collection like v1–v7)
+  fixes three defects found on the public v7 seed: injected operator notes
+  carried one extra comma clause (94/100 injected train rows, 300/300 injected
+  test rows, 0 benign rows), some moves kept the same value, and claimed-module
+  distractors contradicted each other. Every v8 note renders from one two-slot
+  template where an injection replaces a benign counterpart clause; moves always
+  change the value; claimed-module distractors never repeat an attribute or
+  pair incompatible criterion modes. The new v5 shortcut audit adds per-field
+  and per-note punctuation, clause, length and character 3–5-gram features,
+  runs per wording pool and target with train-to-test transfer, fails the v7
+  corpus and passes v8 (`D29Study.v9`). Preparation routes by explicit
+  generator version: fresh private seeds use the latest generator (v8), and
+  scoring and calibration regenerate with the generator recorded in the corpus
+  rows. v6/v7 rows, gold and generator pins are unchanged; v8 registers in a
+  separate registry module with its own source digest (#2622)
+
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed
   `descriptiveVerdict`), four held-out record/class pack gates

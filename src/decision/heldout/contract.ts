@@ -11,7 +11,8 @@ import { JEV_ENDPOINT, compileJevQuestion } from '../adapters/jev.js';
 import { projectDecisionState, partitionProjectedState } from '../projection.js';
 import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
-import { heldoutGeneratorDigest, heldoutCorpusSeed, reproducibleHeldoutRow } from './generators.js';
+import { heldoutCorpusSeed } from './generators.js';
+import { registeredHeldoutGeneratorDigest, reproducibleRegisteredHeldoutRow } from './generator-registry.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
   HeldoutPreregistration, HeldoutRequest, HeldoutRow, Study } from './types.js';
 
@@ -19,7 +20,7 @@ export { sha256 as heldoutDigest };
 export const HELDOUT_CAP_USD: Readonly<Record<Study, number>> = Object.freeze({ D17: 8, D29: 6 });
 export const HELDOUT_PORTFOLIO_CAP_USD = 48;
 export const HELDOUT_ENV_GATE = 'AIWG_DECISION_HELDOUT_LIVE';
-const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6', 'd29-study-v7']);
+const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6', 'd29-study-v7', 'd29-study-v8']);
 // Canonical corpus digests, including the public version before the wording correction.
 // Slim corpus headers stay refused alongside the full corpora they pin: both are committed demo bytes.
 const D29_PUBLIC_DEMO_CORPORA = new Set([
@@ -38,6 +39,8 @@ const D29_PUBLIC_DEMO_CORPORA = new Set([
   // v8 per-generator pins: the same public v6/v7 corpora after the generator digest change.
   'sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549',
   'sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de',
+  // Generator d29-synthetic/v8 public development corpus (seed d29-study-v8); refused preemptively.
+  'sha256:841ee6a3538815117f45a4fcb5db63c2c9a9db8c265e5f141121cba23439d1de',
 ]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };
@@ -72,7 +75,7 @@ export function validateHeldoutInputs(corpus: HeldoutCorpus, plan: HeldoutPrereg
     const cached = familyDigests.get(generatorId);
     if (cached !== undefined) return cached;
     try {
-      const digest = heldoutGeneratorDigest(generatorId);
+      const digest = registeredHeldoutGeneratorDigest(generatorId);
       familyDigests.set(generatorId, digest);
       return digest;
     } catch {
@@ -95,7 +98,7 @@ export function validateHeldoutInputs(corpus: HeldoutCorpus, plan: HeldoutPrereg
   if (definitions.size !== corpus.definitions.length || plan.study !== corpus.study || plan.corpusDigest !== sha256(corpus)
     || plan.outputAndHiddenTokenAllowance >= plan.perRequestTokenBound) throw new HeldoutError('input-pins');
   for (const row of corpus.rows) {
-    if (!reproducibleHeldoutRow(row)) throw new HeldoutError('generator-output');
+    if (!reproducibleRegisteredHeldoutRow(row)) throw new HeldoutError('generator-output');
     if (ids.has(row.id) || families.has(row.familyId) && families.get(row.familyId) !== row.split
       || payloads.has(sha256(row.input)) || new Set(row.requests.map(r => r.id)).size !== row.requests.length
       || row.requests.some(r => !definitions.has(r.definitionId)) || !row.requests.length && row.localOutcome === null) {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { prepare, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
+import { prepare, prepareV6, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
   validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
   analysisPlan, approvalTemplate, LABELING_CONVENTIONS,
   GATE_PACK_ID, GATE_CEILING_PACK_ID, GATE_BLOCKING_SLICES } from '../../../tools/decision/studies/d29.mjs';
@@ -36,7 +36,9 @@ let prepared, legacy;
 let small;
 const fixtureLabels = new Map();
 beforeAll(async () => {
-  prepared = await prepare('offline-d29-conformance');
+  // These conformance tests exercise the frozen v6 pipeline explicitly; a bare
+  // fresh seed now prepares with the latest generator (see d29-synthetic-v8).
+  prepared = await prepareV6('offline-d29-conformance');
   legacy = await loadLegacyV2();
 async function loadLegacyV2() {
   // R9: v2 commits only slim headers plus digest pins for corpus/gold; rows regenerate deterministically
@@ -564,7 +566,7 @@ function response(init) {
 }
 
 describe('D29 collector integration', () => {
-  it.each(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6', 'd29-study-v7'])('PUBLIC-01 refuses public demo seed %s before credentials or dispatch', async seed => {
+  it.each(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6', 'd29-study-v7', 'd29-study-v8'])('PUBLIC-01 refuses public demo seed %s before credentials or dispatch', async seed => {
     const c = await setup(), demo = await prepare(seed);
     // A valid subset changes the corpus digest, so this must exercise the seed exclusion.
     demo.corpus.rows = demo.corpus.rows.slice(0, 1);

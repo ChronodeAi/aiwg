@@ -2386,7 +2386,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-approval/v1",
-      "digest": "sha256:c813ac69940b7deb1c50e59d66a3282c593c954068ab8ed495db87b3586a05a2",
+      "digest": "sha256:bffa8b78c911cccc7ddd7bc8081462a88ccda4ec05cc915b3b85676bcafb9be9",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2418,7 +2418,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:6197197669a34048620135665c57e2a265cdf3a3cc261ed62de299fee0ae4b0b",
+      "digest": "sha256:e50bf3cadab12018c9ca3bc2ffca6b50b10b137d698f0aededc35f4e701a5b65",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2450,7 +2450,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-preregistration/v1",
-      "digest": "sha256:9c814042c751861b68d89ce3dfe1e74824702aef9729dcec474de4edfbc70002",
+      "digest": "sha256:ef8ad2a831f11748f84911f251bfd891d35399334a0dbb319b5bcb254023b5f5",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2498,7 +2498,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-approval/v1",
-      "digest": "sha256:654063ba178e1a13f1bf4b1662600b8aceaad2c2aca005f5f22b93f43e1a1c92",
+      "digest": "sha256:eda0f6956fb41f4435851bffcbb0eddb83e0b2efe115031f15497175a49f849a",
       "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2514,7 +2514,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:fe5908f79d6c0d26f326209eeeb4f2925042059ddd4f166f006cea72846f7224",
+      "digest": "sha256:d06687cea0f94bdae5d67a199e065b965a4365b6805d7b0d6124349fce98a13d",
       "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2530,7 +2530,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-preregistration/v1",
-      "digest": "sha256:041992c285588ccc91fc302bc5378be222a039900dee8c0274ef19e9d21b8c87",
+      "digest": "sha256:47843bc86d8b44f9fd8e1343f8fada1acd308aeab52062a5e40f8974bd83b478",
       "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2548,6 +2548,86 @@
       "schemaVersion": "decision-d29-review/v2",
       "digest": "sha256:9b5abd4311cb0aaf62e0691958d194516542310bab72944e9fa43fc2af57ef5f",
       "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVEIGHT-01",
+      "path": "test/fixtures/decision/d29-synthetic-v8/analysis.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-analysis/v6",
+      "digest": "sha256:04defc5472790074f140eb18ef52c16e52fd32324270924c4378710cabd91055",
+      "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVEIGHT-02",
+      "path": "test/fixtures/decision/d29-synthetic-v8/approval-template.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-heldout-approval/v1",
+      "digest": "sha256:e5220e10ac9f59369acf7fdacb9e01829e18f01b26844254a728d598bad86ffe",
+      "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVEIGHT-03",
+      "path": "test/fixtures/decision/d29-synthetic-v8/dry-run.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:e9f11c99da7dc65c91e810d1ce033b152550094d8657abc702cce6394ef62f58",
+      "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVEIGHT-04",
+      "path": "test/fixtures/decision/d29-synthetic-v8/preregistration.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-heldout-preregistration/v1",
+      "digest": "sha256:8fed119692c1d0b6919e3e5736ea4a6ae5ea338ae85118a5d5ab4fb65e9ce404",
+      "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVEIGHT-05",
+      "path": "test/fixtures/decision/d29-synthetic-v8/reviews.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-review/v2",
+      "digest": "sha256:f2a87ccbd757942569e739015a62067891a6acfb01205411eeffbb7d7d69a89d",
+      "expectedOutcome": "Public synthetic development demo only; generator d29-synthetic/v8 uniform note templates, offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"

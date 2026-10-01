@@ -1,0 +1,428 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D29Study.v9.schema.json",
+  "title": "D29Study v9",
+  "description": "D29 study artifacts for generator d29-synthetic/v8: every v8 artifact plus the v5 shortcut audit (per-pool, per-target structural, surface, character n-gram, lexicon and model rules with train-to-test transfer).",
+  "oneOf": [
+    {
+      "$ref": "https://aiwg.io/schemas/decision/D29Study.v8.schema.json"
+    },
+    {
+      "$ref": "#/$defs/audit"
+    }
+  ],
+  "$defs": {
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "pools",
+        "pairFeatureLimit",
+        "structuralPairLimit",
+        "pairSelection",
+        "lexiconSelection",
+        "modelLeakage",
+        "featureFamilies",
+        "topRules",
+        "passed"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-shortcut-audit/v5"
+        },
+        "pools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pool"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "pairFeatureLimit": {
+          "const": 200
+        },
+        "structuralPairLimit": {
+          "const": 400
+        },
+        "pairSelection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lexiconSelection": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelLeakage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "featureFamilies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "topRules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          },
+          "maxItems": 10
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pool",
+        "splits",
+        "n",
+        "targets",
+        "lexicon",
+        "models",
+        "transfer",
+        "passed"
+      ],
+      "properties": {
+        "pool": {
+          "enum": [
+            "train",
+            "test"
+          ]
+        },
+        "splits": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "tuning",
+              "calibration",
+              "test"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
+        "n": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/targetEntry"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "lexicon": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lexicon"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "transfer": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "toPool",
+                "targets"
+              ],
+              "properties": {
+                "toPool": {
+                  "const": "test"
+                },
+                "targets": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/transferTarget"
+                  },
+                  "minItems": 6,
+                  "maxItems": 6
+                }
+              }
+            }
+          ]
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "targetEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "positives",
+        "negatives",
+        "limit",
+        "featureCount",
+        "pairFeatureCount",
+        "pairRuleCount",
+        "maximumSingleBalancedAccuracy",
+        "maximumPairBalancedAccuracy",
+        "maximumStructuralBalancedAccuracy",
+        "maximumClaimRelativeBalancedAccuracy",
+        "maximumLexicalBalancedAccuracy",
+        "maximumBalancedAccuracy",
+        "topSingleRules",
+        "topPairRules",
+        "passed"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "positives": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "negatives": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "limit": {
+          "$ref": "#/$defs/limit"
+        },
+        "featureCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pairFeatureCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pairRuleCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maximumSingleBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumPairBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumStructuralBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumClaimRelativeBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumLexicalBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "maximumBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "topSingleRules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          },
+          "maxItems": 10
+        },
+        "topPairRules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/rule"
+          },
+          "maxItems": 10
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "lexicon": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "limit",
+        "balancedAccuracy",
+        "rule"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "limit": {
+          "$ref": "#/$defs/limit"
+        },
+        "balancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "transferBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "rule": {
+          "type": "string",
+          "pattern": "^OR\\(.*\\)$"
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "limit",
+        "treeBalancedAccuracy",
+        "logisticBalancedAccuracy"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "limit": {
+          "$ref": "#/$defs/modelLimit"
+        },
+        "treeBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "logisticBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "treeTransferBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "logisticTransferBalancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        }
+      }
+    },
+    "transferTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "limit",
+        "modelLimit",
+        "single",
+        "pair",
+        "lexicon",
+        "model",
+        "passed"
+      ],
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "limit": {
+          "$ref": "#/$defs/limit"
+        },
+        "modelLimit": {
+          "$ref": "#/$defs/modelLimit"
+        },
+        "single": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "pair": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "lexicon": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "model": {
+          "$ref": "#/$defs/balancedAccuracy"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target",
+        "feature",
+        "operator",
+        "polarity",
+        "balancedAccuracy"
+      ],
+      "properties": {
+        "pool": {
+          "enum": [
+            "train",
+            "test"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "feature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operator": {
+          "enum": [
+            "single",
+            "AND",
+            "OR"
+          ]
+        },
+        "polarity": {
+          "enum": [
+            "present",
+            "absent"
+          ]
+        },
+        "balancedAccuracy": {
+          "$ref": "#/$defs/balancedAccuracy"
+        }
+      }
+    },
+    "target": {
+      "enum": [
+        "injection",
+        "readiness",
+        "supports",
+        "contradicts",
+        "unclear",
+        "does-not-support"
+      ]
+    },
+    "balancedAccuracy": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "limit": {
+      "enum": [
+        0.75,
+        0.8
+      ]
+    },
+    "modelLimit": {
+      "enum": [
+        0.8,
+        0.85
+      ]
+    }
+  }
+}

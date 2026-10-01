@@ -5,7 +5,7 @@ import { heldoutDigest } from '../../../src/decision/heldout/contract.ts';
 import { readHeldoutCalibrationPhase } from '../../../src/decision/heldout/calibration.ts';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../../../src/decision/calibration/registry.ts';
 import { evaluateBinaryCalibration, wilsonScoreInterval } from '../../../src/decision/qualification/quality.ts';
-import { prepare, fitReadinessMapping, observationFromAttempts, readinessCell, validateStudyArtifact } from './d29.mjs';
+import { prepareWithGenerator, d29CorpusGeneratorId, fitReadinessMapping, observationFromAttempts, readinessCell, validateStudyArtifact } from './d29.mjs';
 
 const ajv = new Ajv2020({ strict: true }); addFormats(ajv);
 const validateArtifact = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/CalibrationArtifact.v1.schema.json', import.meta.url), 'utf8')));
@@ -15,7 +15,8 @@ const policy = { unknown: 'defer', incompatible: 'fail', shadowRequired: 'shadow
 /** Read verified sealed journals, then fit and measure only the calibration membership. No approval is inferred. */
 export async function prepareCalibrationHandoff({ run, trustedApprovalDigest, trustedCalibrationPhaseRecordDigest }) {
   const sealed = await readHeldoutCalibrationPhase(run, trustedApprovalDigest, trustedCalibrationPhaseRecordDigest);
-  const prepared = await prepare(sealed.bundle.corpus.provenance.seed);
+  // Regenerate with the generator version recorded in the sealed corpus rows, never by seed.
+  const prepared = await prepareWithGenerator(d29CorpusGeneratorId(sealed.bundle.corpus), sealed.bundle.corpus.provenance.seed);
   return calibrationHandoffFromSealed(sealed, prepared, trustedApprovalDigest, trustedCalibrationPhaseRecordDigest);
 }
 

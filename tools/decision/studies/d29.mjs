@@ -21,11 +21,14 @@ import { createCoreProviderRegistry, screeningProvider } from '../../../src/gate
 
 import { d29WorldV6 } from '../../../src/decision/heldout/d29-v6.ts';
 import { d29WorldV7, D29_V7_GENERATOR_ID } from '../../../src/decision/heldout/d29-v7.ts';
+import { d29WorldV8, D29_V8_GENERATOR_ID } from '../../../src/decision/heldout/d29-v8.ts';
+import { generateRegisteredHeldoutRow, registeredHeldoutGeneratorDigest, D29_LATEST_GENERATOR_ID } from '../../../src/decision/heldout/generator-registry.ts';
 import { d29PassageBaselineV2, d29PassageBaselineV2Digest } from '../../../src/decision/heldout/d29-passage-baseline-v2.ts';
 import { d29PassageBaselineV3, d29PassageBaselineV3Digest } from '../../../src/decision/heldout/d29-passage-baseline-v3.ts';
 import { d29PassageBaseline, d29PassageBaselineDigest } from '../../../src/decision/heldout/d29-passage-baseline.ts';
 import { shortcutAudit } from './d29-shortcuts.mjs';
 import { shortcutAuditV7 } from './d29-shortcuts-v7.mjs';
+import { shortcutAuditV8 } from './d29-shortcuts-v8.mjs';
 
 export const LABELS = ['supports', 'contradicts', 'unclear', 'does-not-support'];
 export const SLICES = Object.keys(D29_VARIANTS);
@@ -37,6 +40,14 @@ export const FROZEN_AT = '2026-09-30T00:00:00.000Z';
  * docs/decision/d29-heldout-study.md alongside the binding digest pins.
  */
 export const V8_BINDING_FROZEN_AT = '2026-10-01T14:00:47.000Z';
+/**
+ * The generator-v8 dataset freeze (`d29-synthetic/v8`): the v8 corpus,
+ * preregistration, native plan and GateBinding all claim this time, which is
+ * no earlier than the commit that freezes the v8 generator and audit. Test
+ * access must be anchored at or after it. Recorded in
+ * docs/decision/d29-heldout-study.md.
+ */
+export const V8_DATASET_FROZEN_AT = '2026-10-02T00:00:00.000Z';
 const MODEL = 'jev-1.13.0';
 export const GATE_PACK_ID = 'aiwg:decision-engine/absolute-screening';
 export const GATE_CEILING_PACK_ID = 'aiwg:decision-engine/integrity-ceiling';
@@ -66,7 +77,7 @@ const gatePackPin = registry => {
  * Passage baselines are reported diagnostics and never gate. The HOLD ceiling keeps the
  * synthetic diagnostic from promoting; a future study version raises it explicitly.
  */
-export function absoluteGateBinding({ planId, bindingId, splitDigest, corpusDigest, goldDigest }) {
+export function absoluteGateBinding({ planId, bindingId, splitDigest, corpusDigest, goldDigest, frozenAt = V8_BINDING_FROZEN_AT }) {
   const registry = gateRegistry();
   const parameter = name => `${GATE_PACK_ID}.${name}`;
   return {
@@ -85,7 +96,7 @@ export function absoluteGateBinding({ planId, bindingId, splitDigest, corpusDige
       slices: [...SLICES], sliceGroups: { blocking: [...GATE_BLOCKING_SLICES] },
       references: [{ name: 'always-review', kind: 'always-review' }],
       metricProviders: [{ id: screeningProvider.id, version: screeningProvider.version, sourceDigest: screeningProvider.sourceDigest }],
-      ceiling: 'HOLD', registeredAt: V8_BINDING_FROZEN_AT, frozenAt: V8_BINDING_FROZEN_AT, holdoutAccessedAt: null,
+      ceiling: 'HOLD', registeredAt: frozenAt, frozenAt, holdoutAccessedAt: null,
       splitDigest, corpusDigest, goldDigest,
     },
   };
@@ -141,11 +152,13 @@ ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Stud
 const artifactValidator = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v6.schema.json', import.meta.url), 'utf8')));
 const artifactValidatorV7 = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v7.schema.json', import.meta.url), 'utf8')));
 const artifactValidatorV8 = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v8.schema.json', import.meta.url), 'utf8')));
+const artifactValidatorV9 = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v9.schema.json', import.meta.url), 'utf8')));
 const V7_VERSIONS = new Set(['decision-d29-gold/v7', 'decision-d29-shortcut-audit/v4', 'decision-d29-analysis/v5', 'decision-d29-score/v7']);
 const V8_VERSIONS = new Set(['decision-d29-analysis/v6', 'decision-d29-score/v8']);
+const V9_VERSIONS = new Set(['decision-d29-shortcut-audit/v5']);
 export function validateStudyArtifact(value) {
   const version = value && typeof value === 'object' ? value.schemaVersion : null;
-  const validator = V8_VERSIONS.has(version) ? artifactValidatorV8
+  const validator = V9_VERSIONS.has(version) ? artifactValidatorV9 : V8_VERSIONS.has(version) ? artifactValidatorV8
     : V7_VERSIONS.has(version) ? artifactValidatorV7 : artifactValidator;
   if (!validator(value)) refuse('study-schema');
 }
@@ -240,7 +253,56 @@ export function hostContext(row) {
   return { subject, policy, inventory, gatePolicyPin: artifactPin(policy) };
 }
 
+/**
+ * Public development seeds and the generator their committed fixtures use.
+ * Every other seed is a fresh private seed and prepares with the latest
+ * generator. Historical public seeds v1–v5 regenerate through the v6
+ * pipeline; all of them stay refused for paid collection by the contract.
+ */
+export const D29_PUBLIC_SEED_GENERATORS = Object.freeze({
+  'd29-study-v1': 'd29-synthetic/v6', 'd29-study-v2': 'd29-synthetic/v6', 'd29-study-v3': 'd29-synthetic/v6',
+  'd29-study-v4': 'd29-synthetic/v6', 'd29-study-v5': 'd29-synthetic/v6', 'd29-study-v6': 'd29-synthetic/v6',
+  'd29-study-v7': D29_V7_GENERATOR_ID, 'd29-study-v8': D29_V8_GENERATOR_ID,
+});
+
+/** Generator a seed prepares with: its pinned public generator, else the latest generator. */
+export function d29GeneratorForSeed(seed) {
+  const pinned = Object.hasOwn(D29_PUBLIC_SEED_GENERATORS, seed) ? D29_PUBLIC_SEED_GENERATORS[seed] : undefined;
+  return pinned ?? D29_LATEST_GENERATOR_ID;
+}
+
+/** The single generator id recorded in every row's provenance; mixed or unknown ids refuse. */
+export function d29CorpusGeneratorId(corpus) {
+  const ids = new Set((Array.isArray(corpus?.rows) ? corpus.rows : [null]).map(row => row?.provenance?.generatorId));
+  const [id] = ids;
+  if (ids.size !== 1 || !Object.hasOwn(D29_PIPELINES, id)) refuse('corpus-generator');
+  return id;
+}
+
+/** Explicit generator-version pipelines: preparation and offline dry run. */
+const D29_PIPELINES = Object.freeze({
+  'd29-synthetic/v6': { prepare: seed => prepareV6(seed), dryRun: prepared => dryRunV6(prepared) },
+  [D29_V7_GENERATOR_ID]: { prepare: seed => prepareV7(seed), dryRun: prepared => dryRunV7(prepared) },
+  [D29_V8_GENERATOR_ID]: { prepare: seed => prepareV8(seed), dryRun: prepared => dryRunV8(prepared) },
+});
+
+/** Prepares `seed` with an explicit generator version. */
+export async function prepareWithGenerator(generatorId, seed) {
+  if (!Object.hasOwn(D29_PIPELINES, generatorId)) refuse('generator');
+  return D29_PIPELINES[generatorId].prepare(seed);
+}
+
+/** Study-module entry: a fresh (non-public) seed always prepares with the latest generator. */
 export async function prepare(seed) {
+  return prepareWithGenerator(d29GeneratorForSeed(seed), seed);
+}
+
+/** Offline dry run routed by the corpus's recorded generator version. */
+export async function dryRun(prepared) {
+  return D29_PIPELINES[d29CorpusGeneratorId(prepared?.corpus)].dryRun(prepared);
+}
+
+export async function prepareV6(seed) {
   if (typeof seed !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed)) refuse('seed');
   const moduleDigest = byteDigest(await readFile(new URL(import.meta.url)));
   const rows = [], goldRows = [];
@@ -295,6 +357,49 @@ export async function prepareV7(seed) {
   validateStudyArtifact(gold); validateStudyArtifact(analysis);
   return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus, gold),
     approval: approvalWithGatePins(approvalTemplate(corpus, preregistration), analysis) };
+}
+
+/**
+ * Generator-v8 dataset: same population, oracle, comparators and gates as
+ * v7, with uniform operator-note templates, value-changing moves and
+ * non-contradicting claimed-module distractors (d29-v8.ts), the v5 shortcut
+ * audit, and its own freeze time and GateBinding. Gold keeps the v7 format.
+ */
+export async function prepareV8(seed) {
+  if (typeof seed !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed)) refuse('seed');
+  const moduleDigest = byteDigest(await readFile(new URL(import.meta.url)));
+  const rows = [], goldRows = [];
+  for (let ordinal = 0; ordinal < 2000; ordinal++) {
+    const { world } = d29WorldV8(seed, ordinal);
+    const row = generateRegisteredHeldoutRow(D29_V8_GENERATOR_ID, `${seed}:${ordinal}:${world.artifactPresent && world.testPassed ? 'single' : 'local'}`);
+    const { subject, policy } = buildHost(row.id, row.input.payload, world.artifactPresent, world.testPassed);
+    if ((sdlcScreeningPreflight(subject, Date.parse(V8_DATASET_FROZEN_AT), policy).length === 0) !== (row.requests.length > 0)) refuse('preflight-generator');
+    if ((world.pool === 'train') !== (row.split !== 'test')) refuse('pool-split');
+    rows.push(row); goldRows.push({ id: row.id, variant: world.variant, world, gold: oracle(world) });
+  }
+  const gold = { schemaVersion: 'decision-d29-gold/v7', syntheticOnly: true, rows: goldRows };
+  const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
+    provenance: { kind: 'authored-synthetic', generatorDigest: registeredHeldoutGeneratorDigest(D29_V8_GENERATOR_ID), seed, goldDigest: heldoutDigest(gold) }, definitions: definitions(), rows };
+  const analysis = analysisPlanV8(corpus);
+  const preregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D29', frozenAt: V8_DATASET_FROZEN_AT,
+    corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
+    calibration: { scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration'] },
+    regeneration: { reason: 'synthetic-v8-uniform-note-templates-value-changing-moves-consistent-claim-distractors', collectorCommit: 'f71843222', priorLiveObservations: 0 },
+    providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },
+    perRequestTokenBound: 4500, providerOverheadTokens: 512, outputAndHiddenTokenAllowance: 256,
+    requestTimeoutMs: 30000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000 };
+  validateHeldoutInputs(corpus, preregistration);
+  validateStudyArtifact(gold); validateStudyArtifact(analysis);
+  return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus, gold),
+    approval: approvalWithGatePins(approvalTemplate(corpus, preregistration), analysis) };
+}
+
+export function analysisPlanV8(corpus) {
+  const v7 = analysisPlanV7(corpus), splits = v7.splits;
+  return { ...v7, native: { ...v7.native, planId: 'd29-synthetic-v8', frozenAt: V8_DATASET_FROZEN_AT },
+    shortcutAudit: { ...v7.shortcutAudit, sourceDigest: byteDigest(readFileSync(new URL('./d29-shortcuts-v8.mjs', import.meta.url))) },
+    gateBinding: absoluteGateBinding({ planId: 'd29-synthetic-v8', bindingId: 'd29-synthetic-v8-absolute-gates',
+      splitDigest: splits[2].digest, corpusDigest: heldoutDigest(corpus), goldDigest: corpus.provenance.goldDigest, frozenAt: V8_DATASET_FROZEN_AT }) };
 }
 
 export function analysisPlanV7(corpus) {
@@ -395,6 +500,20 @@ export function reviewTemplate(corpus, gold) {
 }
 
 export async function dryRunV7(prepared) {
+  // The v4 audit learns on train-pool rows and evaluates the same rules on the
+  // held-out test split internally, so no separate public-test audit call is needed.
+  const audit = shortcutAuditV7(prepared.corpus, prepared.gold); validateStudyArtifact(audit);
+  return plannedDryRun(prepared, audit);
+}
+
+/** Generator v8: the v5 audit runs per wording pool and transfers train rules to the test pool. */
+export async function dryRunV8(prepared) {
+  const audit = shortcutAuditV8(prepared.corpus, prepared.gold); validateStudyArtifact(audit);
+  return plannedDryRun(prepared, audit);
+}
+
+/** Zero-call budget plan shared by the v7 and v8 dry runs; the audit is computed by the caller. */
+async function plannedDryRun(prepared, audit) {
   const phases = Object.fromEntries(['calibration', 'test'].map(phase => {
     const rows = prepared.corpus.rows.filter(row => phase === 'test' ? row.split === 'test' : row.split !== 'test');
     return [phase, { subjects: rows.length, initialCalls: rows.reduce((n, row) => n + row.requests.length, 0) }];
@@ -411,9 +530,6 @@ export async function dryRunV7(prepared) {
     reservedUsdMicros += heldoutReservationMicros(planningApproval, planned.estimatedTokens);
     maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
   }
-  // The v4 audit learns on train-pool rows and evaluates the same rules on the
-  // held-out test split internally, so no separate public-test audit call is needed.
-  const audit = shortcutAuditV7(prepared.corpus, prepared.gold); validateStudyArtifact(audit);
   return { ...populationSummary(prepared), ...gateDryRunDigests(prepared.analysis), shortcutAudit: audit, publicTestShortcutAudit: null, providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
     deterministicNoCallSubjects: prepared.corpus.rows.filter(row => !row.requests.length).length,
     providerOverheadTokens: prepared.preregistration.providerOverheadTokens,
@@ -429,7 +545,7 @@ export async function dryRunV7(prepared) {
     approvalTemplateDigest: heldoutDigest(prepared.approval), splitDigests: prepared.analysis.splits.map(({ name, digest }) => ({ name, digest })) };
 }
 
-export async function dryRun(prepared) {
+export async function dryRunV6(prepared) {
   const phases = Object.fromEntries(['calibration', 'test'].map(phase => {
     const rows = prepared.corpus.rows.filter(row => phase === 'test' ? row.split === 'test' : row.split !== 'test');
     return [phase, { subjects: rows.length, initialCalls: rows.reduce((n, row) => n + row.requests.length, 0) }];
@@ -701,9 +817,9 @@ function validateReviews(prepared, reviews) {
 
 /** Scoring context comes from protected host artifacts, never from corpus payload or provider output. */
 export function studyModule(context) {
-  const prepareFor = seed => seed === 'd29-study-v7' ? prepareV7(seed) : prepare(seed);
-  return { prepare: prepareFor, score: async input => {
-    const prepared = await prepareFor(input.corpus.provenance.seed);
+  return { prepare, score: async input => {
+    // Score regenerates with the generator recorded in the corpus rows, never by seed.
+    const prepared = await prepareWithGenerator(d29CorpusGeneratorId(input.corpus), input.corpus.provenance.seed);
     const scoped = { ...prepared.corpus, rows: prepared.corpus.rows.filter(row => row.split === 'test') };
     if (heldoutDigest(input.corpus) !== heldoutDigest(scoped)) refuse('test-phase-corpus');
     return score({ ...input, corpus: prepared.corpus }, context);
@@ -712,7 +828,7 @@ export function studyModule(context) {
 
 export async function score(input, context = null) {
   validateHeldoutInputs(input.corpus, input.preregistration);
-  const prepared = await (input.corpus.provenance.seed === 'd29-study-v7' ? prepareV7(input.corpus.provenance.seed) : prepare(input.corpus.provenance.seed));
+  const prepared = await prepareWithGenerator(d29CorpusGeneratorId(input.corpus), input.corpus.provenance.seed);
   if (heldoutDigest(input.corpus) !== heldoutDigest(prepared.corpus) || heldoutDigest(input.gold) !== prepared.corpus.provenance.goldDigest
     || heldoutDigest(input.preregistration) !== heldoutDigest(prepared.preregistration)) refuse('frozen-study-mismatch');
   const seenAttempts = new Set();

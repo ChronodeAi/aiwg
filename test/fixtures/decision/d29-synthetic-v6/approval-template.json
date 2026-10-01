@@ -15,7 +15,7 @@
   "credentialRef": null,
   "credentialResolverDigest": null,
   "corpusDigest": "sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549",
-  "preregistrationDigest": "sha256:cd357d48250ff5de5725a8963ba7c08d615410346f8874ba98f6b9b269f62a84",
+  "preregistrationDigest": "sha256:ef6d59e06ba3fea82b3c36a620f17b93a603d38c7e6e576f7c78951f9cffe4ac",
   "executionDigest": null,
   "calibration": {
     "mode": "staged",
