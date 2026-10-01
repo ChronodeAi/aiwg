@@ -484,6 +484,226 @@
       "consumers": []
     },
     {
+      "logicalName": "schemas.decision.decisioncomparativereplayauditsample.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayAuditSample.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayAuditSample.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplaycorpus.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayCorpus.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayCorpus.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplayfreeze.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayFreeze.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayFreeze.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplaygold.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayGold.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayGold.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplaygoldasset.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayGoldAsset.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayGoldAsset.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplayintegrity.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayIntegrity.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayIntegrity.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplaymembers.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayMembers.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayMembers.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplaypreregistration.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayPreregistration.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayPreregistration.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplayreport.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayReport.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayReport.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplayreviewpackets.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayReviewPackets.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplayReviewPackets.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
+      "logicalName": "schemas.decision.decisioncomparativereplaysplit.v1",
+      "id": "https://aiwg.io/schemas/decision/DecisionComparativeReplaySplit.v1.schema.json",
+      "version": "1.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/DecisionComparativeReplaySplit.v1.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "schemas.decision.decisioninteropmapping.v1",
       "id": "https://aiwg.io/schemas/decision/DecisionInteropMapping.v1.schema.json",
       "version": "1.0.0",

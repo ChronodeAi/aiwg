@@ -16,6 +16,7 @@ import { createHash } from 'crypto';
 import { load as loadYaml } from 'js-yaml';
 import { validateDecisionDocument } from '../decision/validate.js';
 import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
+import { validateGateDocument } from '../gates/schema.js';
 import type { MetadataEntry, ArtifactIndex, TagIndex, DependencyGraph, GraphType, TypedEdge, MetadataSupplementConfig } from './types.js';
 import {
   DEFAULT_INDEX_EXTENSIONS,
@@ -217,6 +218,16 @@ interface DecisionDocMetadata {
   searchTerms: string[];
 }
 
+interface GatePackDocMetadata {
+  type: 'gate-pack';
+  kind: 'GatePack';
+  name: string;
+  description: string;
+  capability: string;
+  tags: string[];
+  searchTerms: string[];
+}
+
 /** Classify and schema-check authored decision-system documents. */
 export function parseDecisionDoc(content: string, relativePath: string): DecisionDocMetadata | null {
   if (!/\.(json|ya?ml)$/i.test(relativePath)) return null;
@@ -247,6 +258,43 @@ export function parseDecisionDoc(content: string, relativePath: string): Decisio
   return {
     type, kind: value.kind, name: value.metadata.id, description: value.metadata.description,
     capability: purpose.slice(0, 240), tags: ['decision-system', value.kind], searchTerms: [...terms],
+  };
+}
+
+/**
+ * Classify and schema-check authored gate-pack documents (#2830).
+ *
+ * Packs live in `<bundle>/gate-packs/*.gatepack.yaml|json` (never `gates/`,
+ * which agent-persistence HITL uses). The `.gatepack.` extension is the
+ * boundary: HITL `gates/*.yaml` files must never classify as `gate-pack`.
+ * Invalid packs return null so they are never discoverable; the bundle
+ * loader rejects them at load with a diagnostic.
+ */
+export function parseGatePackDoc(content: string, relativePath: string): GatePackDocMetadata | null {
+  if (!/\.gatepack\.(json|ya?ml)$/i.test(relativePath)) return null;
+  if (Buffer.byteLength(content, 'utf8') > 262_144) return null;
+  let document: unknown;
+  try {
+    document = /\.json$/i.test(relativePath) ? parseDecisionJson(content) : parseDecisionYaml(content);
+    validateGateDocument(document);
+  } catch {
+    return null;
+  }
+  const value = document as {
+    kind: string;
+    metadata: { id: string; version: string; description: string };
+    spec: { gates?: Array<{ id?: string }>; metrics?: Record<string, unknown> };
+  };
+  if (value.kind !== 'GatePack') return null;
+  const description = value.metadata.description;
+  const terms = new Set<string>([
+    value.kind, value.metadata.id, value.metadata.version, description,
+    ...(value.spec.gates ?? []).map(gate => String(gate.id ?? '')).filter(Boolean),
+    ...Object.keys(value.spec.metrics ?? {}),
+  ]);
+  return {
+    type: 'gate-pack', kind: 'GatePack', name: value.metadata.id, description,
+    capability: description.slice(0, 240), tags: ['gates', value.kind], searchTerms: [...terms],
   };
 }
 
@@ -1058,15 +1106,16 @@ export async function buildIndex(
       // become discoverable (#1540).
       const flow = parseFlowDoc(content, relativePath);
       const decision = flow ? null : parseDecisionDoc(content, relativePath);
+      const gatePack = flow || decision ? null : parseGatePackDoc(content, relativePath);
       const inferredType = inferType(data, relativePath);
       const physicalType = inferType({ ...data, type: undefined }, relativePath);
-      const runbook = flow || decision ? null : parseRunbookDoc(data, body, relativePath);
+      const runbook = flow || decision || gatePack ? null : parseRunbookDoc(data, body, relativePath);
       const schemaDoc = inferredType === 'schema' ? parseSchemaDoc(content, relativePath) : null;
-      const title = flow?.name ?? decision?.name ?? schemaDoc?.title ?? extractTitle(data, body);
+      const title = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.title ?? extractTitle(data, body);
       const phase = typeof data.phase === 'string' ? data.phase : inferPhase(relativePath);
-      const type = flow?.type ?? decision?.type ?? (runbook ? 'runbook' : inferredType);
-      const tags = flow?.tags ?? decision?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
-      const summary = flow?.description ?? decision?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
+      const type = flow?.type ?? decision?.type ?? gatePack?.type ?? (runbook ? 'runbook' : inferredType);
+      const tags = flow?.tags ?? decision?.tags ?? gatePack?.tags ?? (Array.isArray(data.tags) ? data.tags.map(String) : []);
+      const summary = flow?.description ?? decision?.description ?? gatePack?.description ?? schemaDoc?.capability ?? runbook?.capability ?? extractSummary(data, body);
       const dependencies = extractMentions(content);
       const markdownLinks = extractMarkdownLinks(content);
 
@@ -1079,10 +1128,10 @@ export async function buildIndex(
       // Declarative processes have no trigger phrases — they rely on their
       // capability and structure-aware search terms.
       const triggers = isDiscoverable && !flow ? extractTriggers(body, data) : undefined;
-      const capability = flow?.capability ?? decision?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
-      const kind = flow?.kind ?? decision?.kind ?? runbook?.kind;
+      const capability = flow?.capability ?? decision?.capability ?? gatePack?.capability ?? schemaDoc?.capability ?? runbook?.capability ?? (isDiscoverable ? extractCapability(data, body) : undefined);
+      const kind = flow?.kind ?? decision?.kind ?? gatePack?.kind ?? runbook?.kind;
       const sourceType = runbook && physicalType !== 'runbook' ? physicalType : undefined;
-      const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
+      const searchTerms = flow?.searchTerms ?? decision?.searchTerms ?? gatePack?.searchTerms ?? schemaDoc?.searchTerms ?? runbook?.searchTerms;
       const kernel =
         data.kernel === true || data.kernel === 'true' ? true : undefined;
       // Script entrypoint metadata is meaningful for skills only (#1227).
@@ -1092,7 +1141,7 @@ export async function buildIndex(
       // Canonical short name (#1233) — used by the scorer to floor exact-name
       // queries to 1.0 so hyphenated kernel-skill names like `aiwg-doctor`
       // remain searchable even when the rendered title strips the hyphen.
-      const name = flow?.name ?? decision?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
+      const name = flow?.name ?? decision?.name ?? gatePack?.name ?? schemaDoc?.name ?? (isDiscoverable ? extractCanonicalName(data, relativePath) : undefined);
 
       entry = {
         path: relativePath,

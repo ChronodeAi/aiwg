@@ -320,8 +320,9 @@ are rejected. The dispatched world name is `w-` followed by 16 hex digits
 derived from the seed digest, so even permitted seed text stays out of model-visible
 state. A bounded identifier still needs synthetic provenance review;
 this constraint does not prove that an identifier has no external meaning.
-Only the fictional `heldout-lamp/v1` and `heldout-lamp-splits/v1` example generators ship; actual
-D17/D29 generators require reviewed registry additions and fresh corpus pins.
+The fictional `heldout-lamp/v1` and `heldout-lamp-splits/v1` examples and
+source-controlled `d17-entailment/v1` synthetic generator are registered.
+D29 still requires a reviewed registry addition and fresh corpus pins.
 This proves reproducibility, not held-out quality or correctness of the gold.
 These experimental v1 contracts are tightened in place: earlier unproven rows
 must be regenerated, and approvals/attempt token reservations must be refreshed.
@@ -361,12 +362,15 @@ ensemble members), or zero requests with an observed local outcome (D29 failed
 hard prerequisites). Model output cannot select IDs, ranks or protected status.
 Study modules must implement their own native observation mappings and gold
 oracle; the collector does not fabricate distributions, calibration or reviews.
+The experimental [D17 module](ensemble-heldout-study.md) supplies its synthetic
+generator, source-only preparation, native mapping and statistical report
+scaffolding. Use its preparation command to retain all study-specific artifacts.
 
 The following remain open, with no live acceptance claim:
 
 | Study work | Exact missing input |
 | --- | --- |
-| D17 measured ensemble report, AC7/AC14 | Fresh frozen 1,800-subject generator/oracle, D09 calibration, Jev observations, native eight-metric mapping, preregistered Newcombe/bootstrap/coverage gates, approved extra-cost tradeoff and blind review |
+| D17 measured ensemble report, AC7/AC14 | Genuine D09 member/aggregate calibration (outside the current uncalibrated-diagnostic scope), actual Jev observations, externally anchored integrity, approved extra-cost tradeoff and blind review; generator, split/threshold freeze, mapper and statistical scaffolding now exist in the [D17 module](ensemble-heldout-study.md) |
 | D29 measured screening report, AC8/AC9/AC13 | Fresh 1,600-subject corpus/oracle, projected question mapping, calibrated readiness, real observations, native false-rate/NI and external coverage gates, blind gold/reviewer audit and integrity snapshot |
 | Staged D09/test handoff | Sealed real calibration observations, genuinely qualified/registered D09 artifact, protected artifact/seal/approval anchors and human test-phase approval |
 | Any live collection | Priced approval with real evidence references, clean source/CI attestation, canonical root, actual prior spend, resolver pin, synthetic privacy approval and provider terms record |
