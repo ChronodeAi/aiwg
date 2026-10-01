@@ -204,7 +204,7 @@ The second command is an operator handoff, not authorization from this document.
 Approval must precede any spend. The public-seed dry-run emits this placeholder
 approval text; a paid run needs the form generated from its fresh pins:
 
-> I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration sha256:2292382403d9f43f2d33811777d55ed71b628b58c8915e93abef9908513192ec and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.
+> I, roctinam, approve D17 synthetic-only UNCALIBRATED diagnostic preregistration PREREGISTRATION_DIGEST and the separately completed priced approval digest APPROVAL_DIGEST, with USD 8 study/USD 48 portfolio caps and the frozen 88-assessment review protocol; no D09 qualification, calibrated gates or promotion are authorized.
 
 ## Operator review and remaining evidence
 
@@ -241,15 +241,18 @@ operator approval, durable freeze or collected evaluation:
 | Artifact | Digest |
 | --- | --- |
 | Corpus | `sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804` |
-| Preregistration | `sha256:2292382403d9f43f2d33811777d55ed71b628b58c8915e93abef9908513192ec` |
-| Unapproved priced template | `sha256:6b80128671ce397136e2bb857776a2f371130bb5db00915d2913b291dd010624` |
+| Preregistration | source-derived: emitted by `--dry-run` at the approved source commit |
+| Unapproved priced template | source-derived: emitted by `--dry-run` at the approved source commit |
 | Split manifest | `sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f` |
-| Analysis | `sha256:0adf0828d6bf93c598110938b77aca86cda21b72912cb5722637ab7529616187` |
+| Analysis | source-derived: emitted by `--dry-run` at the approved source commit |
 | Private gold | `sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db` |
 
-The source pin changed after the shared acceptance comparison began checking
-confidence against `minimumBps / 10_000`. Corpus, split and gold inputs did not
-change. This source-only regeneration contains no live observations.
+Corpus, split and gold are data pins and stay fixed. Preregistration, the
+priced template and analysis embed the digest of every source byte the study
+runs, so they change with any shared decision-source change; they are bound at
+approval time to the exact approved source commit, and the test suite checks
+that they are well-formed and reproducible rather than pinning stale values.
+This source-only dry run contains no live observations.
 
 Pins will be regenerated at the new source commit before any operator freeze or
 approval; the source dry-run values above were regenerated from the revised source
