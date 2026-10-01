@@ -648,8 +648,8 @@ pre-kernel bulk default.
 keep the full addon sweep that `all` performs.
 
 Bulk deploys (`all`, `writing`, `general`) skip addons whose manifest sets
-`"devOnly": true` (`aiwg-dev`) or `"explicitInstall": true` (`decision-engine`).
-These are deployed only when named, for example `aiwg use decision-engine`.
+`"devOnly": true` (`aiwg-dev`) or `"explicitInstall": true` (`decision-engine`,
+`pm-os`). These are deployed only when named, for example `aiwg use pm-os`.
 `autoInstall: false` is not an exclusion: most addons declare it and are still
 part of `aiwg use all`.
 

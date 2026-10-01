@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import fs from 'fs/promises';
-import { mkdtempSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, readFileSync, rmSync, existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFileSync } from 'child_process';
@@ -109,6 +109,16 @@ async function pathExists(p: string): Promise<boolean> {
   try { await fs.access(p); return true; } catch { return false; }
 }
 
+/** Mode-based deploys skip devOnly and explicitInstall addons, so they are not source that must deploy. */
+function isBulkSkippedAddon(addonDir: string): boolean {
+  try {
+    const manifest = JSON.parse(readFileSync(path.join(addonDir, 'manifest.json'), 'utf8'));
+    return manifest.devOnly === true || manifest.explicitInstall === true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Source manifest: what SHOULD be deployed
 // ---------------------------------------------------------------------------
@@ -142,7 +152,7 @@ async function buildSourceManifest(): Promise<SourceManifest> {
   const addonsDir = path.join(AGENTIC_ROOT, 'addons');
   try {
     const addons = await fs.readdir(addonsDir, { withFileTypes: true });
-    for (const addon of addons.filter(a => a.isDirectory())) {
+    for (const addon of addons.filter(a => a.isDirectory() && !isBulkSkippedAddon(path.join(addonsDir, a.name)))) {
       const addonAgentsDir = path.join(addonsDir, addon.name, 'agents');
       try {
         const entries = await fs.readdir(addonAgentsDir);
@@ -172,7 +182,7 @@ async function buildSourceManifest(): Promise<SourceManifest> {
   // Addon skills
   try {
     const addons = await fs.readdir(addonsDir, { withFileTypes: true });
-    for (const addon of addons.filter(a => a.isDirectory())) {
+    for (const addon of addons.filter(a => a.isDirectory() && !isBulkSkippedAddon(path.join(addonsDir, a.name)))) {
       const addonSkillsDir = path.join(addonsDir, addon.name, 'skills');
       try {
         const entries = await fs.readdir(addonSkillsDir, { withFileTypes: true });

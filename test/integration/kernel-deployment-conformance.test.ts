@@ -57,6 +57,16 @@ function skillDirs(parent: string): string[] {
   }
 }
 
+/** Bulk deploys skip explicit-install and contributor-only addons, so the kernel inventory does too. */
+function isBulkSkipped(bundleDir: string): boolean {
+  try {
+    const manifest = JSON.parse(readFileSync(join(bundleDir, 'manifest.json'), 'utf8'));
+    return manifest.devOnly === true || manifest.explicitInstall === true;
+  } catch {
+    return false;
+  }
+}
+
 function canonicalKernelNames(): string[] {
   const codeRoot = join(REPO_ROOT, 'agentic/code');
   const containers = ['frameworks', 'addons'];
@@ -65,6 +75,7 @@ function canonicalKernelNames(): string[] {
   for (const container of containers) {
     const root = join(codeRoot, container);
     for (const bundle of readdirSync(root)) {
+      if (container === 'addons' && isBulkSkipped(join(root, bundle))) continue;
       for (const skillDir of skillDirs(join(root, bundle, 'skills'))) {
         const source = readFileSync(join(skillDir, 'SKILL.md'), 'utf8');
         if (/^kernel:\s*true\s*$/m.test(source)) {
@@ -136,9 +147,10 @@ afterAll(() => {
 
 describe('kernel deployment conformance', () => {
   it('has a non-empty, unique canonical kernel inventory', () => {
-    expect(EXPECTED_KERNEL.length).toBe(28);
+    expect(EXPECTED_KERNEL.length).toBe(27);
     expect(EXPECTED_KERNEL).toContain('film-production-quickref');
-    expect(EXPECTED_KERNEL).toContain('pm-os-quickref');
+    // pm-os is explicit-install: `aiwg use pm-os` ships its quickref, `aiwg use all` does not.
+    expect(EXPECTED_KERNEL).not.toContain('pm-os-quickref');
     expect(new Set(EXPECTED_KERNEL).size).toBe(EXPECTED_KERNEL.length);
   });
 

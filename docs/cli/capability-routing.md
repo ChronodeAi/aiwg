@@ -21,7 +21,7 @@ AIWG ships **480+ skills** across its frameworks. Agentic platforms (Claude Code
 
 Starting in 2026.5.0, AIWG splits its skill surface into two tiers, with discovery + on-demand fetch closing the loop:
 
-- **Kernel skills** — always-loaded into the platform's flat skill listing. 28 kernel skills total: 12 quickrefs (one per installed framework/addon family + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), and 14 self-maintenance ops, including the plan-first context firewall.
+- **Kernel skills** — always-loaded into the platform's flat skill listing. 27 kernel skills total: 11 quickrefs (one per installed framework/addon family + utils), the `aiwg-language-map` for addons + extensions, the `steward-quickref` feature-domain routing anchor (expansion/persona/project, #1623), and 14 self-maintenance ops, including the plan-first context firewall.
 - **Standard skills** — the other ~460 skills. Stay at `$AIWG_ROOT` and are **not copied per-project** by default (#1217). Reachable via `aiwg discover` (find) and `aiwg show` (fetch).
 - **Project quickref** — an optional, generated kernel skill synthesized from
   discovered project-local bundles. Operators can curate managed discovery with
@@ -110,9 +110,9 @@ You may skip the discover query only when: the user named a specific skill (`/fl
 
 ```mermaid
 flowchart TB
-  subgraph KERNEL["Kernel tier — 28 skills, always loaded"]
+  subgraph KERNEL["Kernel tier — 27 skills, always loaded"]
     direction LR
-    K1[11 framework quickrefs<br/>sdlc / research / forensics /<br/>marketing / media-curator /<br/>film-production / security-eng /<br/>knowledge-base / ops / pm-os /<br/>aiwg-utils-quickref]
+    K1[10 framework quickrefs<br/>sdlc / research / forensics /<br/>marketing / media-curator /<br/>film-production / security-eng /<br/>knowledge-base / ops /<br/>aiwg-utils-quickref]
     K2[3 routing entries<br/>aiwg-language-map / steward-quickref /<br/>dataset-intelligence]
     K3[14 self-maintenance ops<br/>steward / doctor / refresh / status / help / use /<br/>regenerate router + 3 branches / issue / PR / mission / context firewall]
   end
@@ -165,7 +165,7 @@ Source of truth ($AIWG_ROOT/agentic/code/...)
 │  ┌────────────────────────────┐
 ├─►│ KERNEL skills              │  copied per-project to platform-native skills dir
 │  │ kernel: true in frontmatter│  always-loaded into agent context
-│  │ (28 skills today)          │  budget-bound; keep tight
+│  │ (27 skills today)          │  budget-bound; keep tight
 │  └────────────────────────────┘
 │
 └─►┌────────────────────────────┐
@@ -201,9 +201,9 @@ aiwg use all --copy-all           # works for `aiwg use all` too
 
 The `--copy-all` flag (alias `--copy-standard-skills`) restores the legacy copy behavior and writes all skills (kernel + standard) into the per-project tree at `<provider>/.aiwg/skills/` (and where applicable, `.agents/skills/`). With `aiwg use all`, it also opts into the legacy full agent, command, and expanded-rule copy. Without that flag, bulk deployment keeps every provider's startup surface kernel-only and uses `aiwg discover` / `aiwg show` for the broader catalog.
 
-## The kernel set today (28 skills, ~15-25k tokens total)
+## The kernel set today (27 skills, ~15-25k tokens total)
 
-### Framework quickrefs (11)
+### Framework quickrefs (10)
 
 One quickref per framework, deployed when that framework is installed. Each one teaches the framework's mental model and lists curated `aiwg discover` phrases. They do **not** enumerate the full skill surface.
 
@@ -218,8 +218,9 @@ One quickref per framework, deployed when that framework is installed. Each one 
 | `ops-quickref` | ops-complete |
 | `security-engineering-quickref` | security-engineering |
 | `knowledge-base-quickref` | knowledge-base |
-| `pm-os-quickref` | pm-os (addon) |
 | `aiwg-utils-quickref` | aiwg-utils (always present) |
+
+Explicit-install addons keep their quickref out of the bulk kernel: `pm-os-quickref` ships with `aiwg use pm-os`, not with `aiwg use all`.
 
 ### Addon + extension language map (1)
 

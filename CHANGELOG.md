@@ -43,6 +43,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   preflight, delivery (loudness, true peak, black, stream list, frame count,
   hashes, captions) and edit-conform gates name the failures that production found.
 
+- **PMOS addon (`pm-os`) is explicit-install** - `aiwg use all` and the deployer's
+  mode sweeps no longer include it; deploy it by name with `aiwg use pm-os`. Its
+  `pm-os-quickref` leaves the bulk kernel, so the canonical kernel inventory is
+  27 skills with 11 quickrefs, down from 28 and 12.
+
 ### Removed
 
 - **Ring Governance addon (`ring-governance`)** - The fork-only addon is removed
