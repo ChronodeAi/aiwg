@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { artifactDigest } from '../../../src/decision/validate.js';
-import { GateEvaluationError, evaluateGates } from '../../../src/gates/evaluate.js';
+import { GateEvaluationError, evaluateGates, sealGateHoldout } from '../../../src/gates/evaluate.js';
 import { validateGateReport } from '../../../src/gates/report.js';
 import type { GateMetricsDocument } from '../../../src/gates/types.js';
 import {
@@ -145,7 +145,7 @@ describe('gates fail-closed paths', () => {
     expect(() => evaluateGates({ ...input, upstream: forged }))
       .toThrow(/upstream integrity digest/);
     const late = makeBinding();
-    const lateHoldout = { firstAccessedAt: '2026-09-02T00:00:00.000Z', frozenDigest: trustedDigest(late) };
+    const lateHoldout = sealGateHoldout({ firstAccessedAt: '2026-09-02T00:00:00.000Z', frozenDigest: trustedDigest(late) });
     expect(() => evaluateGates({ ...input, binding: late, trustedBindingDigest: trustedDigest(late), holdout: lateHoldout }))
       .toThrow(/at or after holdout access/);
     // The binding's own self-reported field is ignored: a null self-report with a
@@ -156,7 +156,7 @@ describe('gates fail-closed paths', () => {
       .toThrow(/trusted holdout inputs are required/);
     const future = makeBinding({ spec: { frozenAt: '2026-09-10T00:00:00.000Z' } });
     expect(() => evaluateGates({ ...input, binding: future, trustedBindingDigest: trustedDigest(future),
-      holdout: { firstAccessedAt: null, frozenDigest: trustedDigest(future) } }))
+      holdout: sealGateHoldout({ firstAccessedAt: null, frozenDigest: trustedDigest(future) }) }))
       .toThrow(/freezes after the evaluation/);
   });
 

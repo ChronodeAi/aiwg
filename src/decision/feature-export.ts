@@ -1202,14 +1202,18 @@ function normalizeEvalIntegrity(value: DecisionFeatureEvalIntegrity | undefined)
 }
 
 function validateQualificationRelease(record: QualificationReleaseRecord): void {
-  if (!record || record.schemaVersion !== 'decision-qualification-release/v1' || !record.runId || !record.sourceCommit
+  if (!record || (record.schemaVersion !== 'decision-qualification-release/v1'
+    && record.schemaVersion !== 'decision-qualification-release/v2') || !record.runId || !record.sourceCommit
     || !['PROMOTE', 'HOLD', 'ROLLBACK'].includes(record.decision) || !/^sha256:[0-9a-f]{64}$/.test(record.digest)) {
     throw new DecisionFeatureExportError('Feature export qualification release is invalid');
   }
-  // Versioned legacy allowlist: pre-migration release records hashed JSON.stringify
-  // output. The v1 schema version is the pre-migration lineage, so it alone
-  // allowlists legacy; verification defaults to canonical-only everywhere else.
-  if (verifyQualificationReleaseDigest(record, { digestModes: ['canonical', 'legacy'] }) === null) {
+  // Versioned legacy allowlist: pre-migration v1 release records hashed
+  // JSON.stringify output. The v1 schema version is the pre-migration lineage,
+  // so it alone allowlists legacy; v2 verifies canonical-only even under an
+  // explicit allowlist.
+  const digestModes = record.schemaVersion === 'decision-qualification-release/v1'
+    ? ['canonical', 'legacy'] as const : ['canonical'] as const;
+  if (verifyQualificationReleaseDigest(record, { digestModes: [...digestModes] }) === null) {
     throw new DecisionFeatureExportError('Feature export qualification release digest does not match its content');
   }
   validateQualificationIntegrity(record.integrity);

@@ -82,8 +82,8 @@ export interface GateDefinition {
   scope: GateScope;
   /** Outcome when the gate fails. Never PROMOTE. */
   onFail: GateFailOutcome;
-  /** Outcome when evidence is insufficient. Never PROMOTE; defaults to HOLD. */
-  onInsufficient?: GateFailOutcome;
+  /** Outcome when evidence is insufficient. Always HOLD (ROLLBACK needs an observed blocking failure); defaults to HOLD. */
+  onInsufficient?: 'HOLD';
   direction: TighteningDirection;
   floor?: boolean;
   evidence?: { required: string[] };
@@ -157,15 +157,22 @@ export interface GateBinding {
 }
 
 /**
- * Trusted holdout inputs for one evaluation, taken from the HeldoutFrozen /
- * first-access record — never from the binding. Both fields are required:
- * a missing record refuses evaluation.
+ * Sealed trusted holdout inputs for one evaluation, derived from the
+ * HeldoutFrozen / first-access record — never from the binding. The seal
+ * (`digest` over `{frozenDigest, firstAccessedAt}`) is re-derived on every
+ * use, following `readHeldoutFrozen` (`src/decision/heldout/calibration.ts`)
+ * and `sealUpstream`: a spread-copied or forged record is refused. Both
+ * content fields are required; a missing record refuses evaluation.
+ * `firstAccessedAt` is null only when the binding declares no held-out split
+ * (no `splitDigest`/`corpusDigest`/`goldDigest`); otherwise null refuses.
  */
 export interface GateHoldoutInputs {
   /** First test-access timestamp, or null when no access has been recorded. */
   firstAccessedAt: string | null;
   /** Binding digest in the frozen record; must match the trusted binding digest. */
   frozenDigest: Sha256Digest;
+  /** Seal over `{frozenDigest, firstAccessedAt}`; re-derived on every use. */
+  digest: Sha256Digest;
 }
 
 export type GateOutcome = 'PROMOTE' | 'HOLD' | 'ROLLBACK';
@@ -233,6 +240,15 @@ export interface UpstreamRecord {
   digest: Sha256Digest;
 }
 
+export interface GateHoldoutRecord {
+  /** Seal of the trusted holdout inputs consumed by this evaluation. */
+  digest: Sha256Digest;
+  /** Binding digest carried by the sealed record. */
+  frozenDigest: Sha256Digest;
+  /** First test-access timestamp carried by the sealed record. */
+  firstAccessedAt: string | null;
+}
+
 export interface GateReport {
   apiVersion: typeof GATES_API_VERSION;
   kind: 'GateReport';
@@ -241,6 +257,7 @@ export interface GateReport {
   packs: GatePackPin[];
   metricProviders: { id: string; version: string; sourceDigest: Sha256Digest }[];
   metricsDigest: Sha256Digest;
+  holdout: GateHoldoutRecord;
   gateEvidence: GateEvidence[];
   references: { name: string; kind: ReferenceKind; observed: boolean }[];
   upstream: UpstreamRecord | null;

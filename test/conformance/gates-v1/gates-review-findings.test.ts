@@ -3,7 +3,7 @@ import { artifactDigest } from '../../../src/decision/validate.js';
 import {
   buildQualificationReleaseRecord, verifyQualificationReleaseDigest,
 } from '../../../src/decision/qualification/release.js';
-import { GateEvaluationError, evaluateGates } from '../../../src/gates/evaluate.js';
+import { GateEvaluationError, evaluateGates, sealGateHoldout } from '../../../src/gates/evaluate.js';
 import { validateGateReport } from '../../../src/gates/report.js';
 import { GateRegistry } from '../../../src/gates/registry.js';
 import { validateGateDocument } from '../../../src/gates/schema.js';
@@ -106,12 +106,16 @@ describe('gates review findings', () => {
     // self-reported field claims no access.
     expect(binding.spec.holdoutAccessedAt).toBeNull();
     expect(() => evaluateGates({
-      ...base, holdout: { firstAccessedAt: '2026-09-01T00:00:00.000Z', frozenDigest: trustedDigest(binding) },
+      ...base, holdout: sealGateHoldout({ firstAccessedAt: '2026-09-01T00:00:00.000Z', frozenDigest: trustedDigest(binding) }),
     })).toThrow(/at or after holdout access/);
     // A frozen-record digest that does not match the trusted pin refuses.
     expect(() => evaluateGates({
-      ...base, holdout: { firstAccessedAt: null, frozenDigest: `sha256:${'0'.repeat(64)}` },
+      ...base, holdout: sealGateHoldout({ firstAccessedAt: null, frozenDigest: `sha256:${'0'.repeat(64)}` }),
     })).toThrow(/frozen record digest/);
+    // An unsealed (plain caller object) holdout is forged: the seal never matches.
+    expect(() => evaluateGates({
+      ...base, holdout: { firstAccessedAt: null, frozenDigest: trustedDigest(binding) } as never,
+    })).toThrow(/holdout record seal/);
   });
 
   it('H2: loosening the parent after child registration must move the child resolved digest', () => {
@@ -240,15 +244,20 @@ describe('gates review findings', () => {
     } as unknown)).toThrow();
   });
 
-  it('H7: a legacy digest on a newly written release record must be rejected by default', () => {
+  it('H7: a legacy digest on a newly written v2 release record is rejected even under allowlist', () => {
     const { executed, input } = syntheticReleaseInput();
     const record = buildQualificationReleaseRecord(executed, input) as unknown as Record<string, any>;
+    expect(record.schemaVersion).toBe('decision-qualification-release/v2');
     const { digest: _dropped, ...fields } = record;
     void _dropped;
     const legacy = { ...fields, digest: legacySha256(fields) };
     expect(verifyQualificationReleaseDigest(record as never)).toBe('canonical');
     expect(verifyQualificationReleaseDigest(legacy as never)).toBeNull();
-    expect(verifyQualificationReleaseDigest(legacy as never, { digestModes: ['canonical', 'legacy'] })).toBe('legacy');
+    expect(verifyQualificationReleaseDigest(legacy as never, { digestModes: ['canonical', 'legacy'] })).toBeNull();
+    // Pre-migration v1 records with a legacy digest still verify under allowlist.
+    const v1fields = { ...fields, schemaVersion: 'decision-qualification-release/v1' };
+    const v1legacy = { ...v1fields, digest: legacySha256(v1fields) };
+    expect(verifyQualificationReleaseDigest(v1legacy as never, { digestModes: ['canonical', 'legacy'] })).toBe('legacy');
   });
 
   it('M1: gates over unpinned providers must fail binding load', () => {

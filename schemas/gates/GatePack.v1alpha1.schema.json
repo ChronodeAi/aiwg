@@ -17,7 +17,7 @@
       "properties": {
         "extends": {
           "$ref": "#/$defs/parentPin",
-          "description": "Full pin over the parent pack (id, version, authored digest). A child may only tighten: thresholds move in their declared direction, minimumN only rises, onFail/onInsufficient only HOLD-to-ROLLBACK, scope only narrows per kind, floor:true gates cannot be removed."
+          "description": "Full pin over the parent pack (id, version, authored digest). A child may only tighten: thresholds move in their declared direction, minimumN only rises, onFail only HOLD-to-ROLLBACK (onInsufficient is always HOLD), scope only narrows per kind with the child covering a superset of the parent's slices, floor:true gates cannot be removed."
         },
         "parameters": {
           "type": "object",
@@ -194,7 +194,7 @@
         "minimumN": { "type": "integer", "minimum": 0 },
         "scope": { "$ref": "#/$defs/scope" },
         "onFail": { "enum": ["HOLD", "ROLLBACK"] },
-        "onInsufficient": { "enum": ["HOLD", "ROLLBACK"] },
+        "onInsufficient": { "const": "HOLD", "description": "Insufficient evidence always holds; ROLLBACK needs an observed blocking failure." },
         "direction": { "enum": ["lower-is-stricter", "higher-is-stricter"] },
         "floor": { "type": "boolean" },
         "evidence": {

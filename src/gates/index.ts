@@ -6,7 +6,7 @@
 export { GATES_API_VERSION, qualifyGateParameter } from './types.js';
 export type {
   ArtifactPinLike, GateBinding, GateDefinition, GateEvidence, GateFailOutcome, GateHoldoutInputs,
-  GateKind, GateMetadata, GateMetricsDocument, GateOutcome, GatePack, GatePackPin, GateParameter,
+  GateHoldoutRecord, GateKind, GateMetadata, GateMetricsDocument, GateOutcome, GatePack, GatePackPin, GateParameter,
   GateParentPin, GateReference, GateReport, GateScope, GateScopeMode,
   GateStatistic, GateStatus, GateThreshold, MetricKind, MetricObservation, MetricSeries, ParameterType,
   ProviderMetrics, ReferenceKind, Sha256Digest, StatisticEvidenceMethod, StatisticKind, StatisticMethod,
@@ -15,10 +15,14 @@ export type {
 export { GateSchemaError, validateGateDocument, type GateDocumentKind } from './schema.js';
 export {
   GateRegistryError, GATE_NAMESPACES, splitPackId, validateResolvedPack, resolveThresholdDefault,
-  assertGateTightens, GateRegistry, type GateNamespace, type ResolvedBinding, type ResolvedPack,
+  assertGateTightens, applyGateExtends, composeGatePack, resolveGateBinding,
+  authoredGatePacksOf, gateProvidersOf, GateRegistry,
+  type AuthoredGatePackEntry, type AuthoredGatePackMap,
+  type GateNamespace, type ResolvedBinding, type ResolvedPack,
 } from './registry.js';
 export {
-  GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream, evaluateGates, type EvaluateGatesInput,
+  GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream, sealGateHoldout,
+  evaluateGates, type EvaluateGatesInput,
 } from './evaluate.js';
 export { validateGateReport, type GateReportValidation } from './report.js';
 export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider } from './providers/index.js';

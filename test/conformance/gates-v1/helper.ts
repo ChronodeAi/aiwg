@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { artifactDigest } from '../../../src/decision/validate.js';
 import type { QualificationIntegrityMetadata } from '../../../src/decision/qualification/release.js';
-import { evaluateGates, sealUpstream } from '../../../src/gates/evaluate.js';
+import { evaluateGates, sealGateHoldout, sealUpstream } from '../../../src/gates/evaluate.js';
 import { GateRegistry, type ResolvedBinding } from '../../../src/gates/registry.js';
 import type {
   GateBinding, GateHoldoutInputs, GateMetricsDocument, GatePack, Sha256Digest, UpstreamCeiling,
@@ -80,12 +80,12 @@ export function trustedDigest(binding: GateBinding): Sha256Digest {
   return artifactDigest(binding);
 }
 
-/** Trusted holdout inputs mirroring the frozen record for a test binding. */
+/** Sealed holdout inputs mirroring the frozen record for a test binding. */
 export function testHoldout(binding: GateBinding, firstAccessedAt?: string | null): GateHoldoutInputs {
-  return {
-    firstAccessedAt: firstAccessedAt ?? (binding.spec.holdoutAccessedAt as string | null | undefined) ?? null,
+  return sealGateHoldout({
     frozenDigest: trustedDigest(binding),
-  };
+    firstAccessedAt: firstAccessedAt ?? (binding.spec.holdoutAccessedAt as string | null | undefined) ?? null,
+  });
 }
 
 export function cleanIntegrity(overrides?: Partial<QualificationIntegrityMetadata>): QualificationIntegrityMetadata {

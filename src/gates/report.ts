@@ -34,6 +34,18 @@ export function validateGateReport(report: unknown, input: EvaluateGatesInput): 
     || input.holdout.frozenDigest !== parsed.binding.digest) {
     reasons.push('report-holdout-mismatch');
   }
+  if ((input.holdout as { digest?: unknown } | null | undefined) !== undefined
+    && (input.holdout as { digest?: unknown } | null | undefined) !== null) {
+    const sealed = input.holdout as { digest?: unknown; firstAccessedAt?: unknown };
+    if (sealed.digest !== (parsed as { holdout?: { digest?: unknown } }).holdout?.digest
+      || sealed.firstAccessedAt !== (parsed as { holdout?: { firstAccessedAt?: unknown } }).holdout?.firstAccessedAt) {
+      reasons.push('report-holdout-mismatch');
+    }
+  }
+  if ((parsed as { holdout?: { digest?: unknown; frozenDigest?: unknown } }).holdout?.digest === undefined
+    || (parsed as { holdout?: { frozenDigest?: unknown } }).holdout?.frozenDigest !== parsed.binding.digest) {
+    reasons.push('report-holdout-mismatch');
+  }
   for (const pin of input.binding.spec.packs) {
     const found = parsed.packs.find(candidate => candidate.id === pin.id);
     if (found === undefined || found.digest !== pin.digest || found.resolvedDigest !== pin.resolvedDigest) {

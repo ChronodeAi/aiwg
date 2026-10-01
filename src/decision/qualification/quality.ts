@@ -16,8 +16,12 @@ export type {
 /** Digest modes accepted when verifying a frozen benchmark plan. Canonical-only by default; pass an explicit legacy allowlist to verify pre-migration evidence. */
 export type BenchmarkDigestModes = readonly EvidenceDigestMode[];
 
+export type BinaryBenchmarkPlanVersion =
+  | 'decision-binary-benchmark-plan/v1'
+  | 'decision-binary-benchmark-plan/v2';
+
 export interface FrozenBinaryBenchmarkPlan {
-  schemaVersion: 'decision-binary-benchmark-plan/v1';
+  schemaVersion: BinaryBenchmarkPlanVersion;
   splits: readonly QualificationSplit[];
   /** Hash of sorted (id, label, slice) triples across all splits, before any held-out predictions. */
   datasetDigest: `sha256:${string}`;
@@ -55,7 +59,7 @@ function buildBinaryBenchmarkPlanFields(
     throw new Error('invalid preregistered benchmark plan');
   }
   return {
-    schemaVersion: 'decision-binary-benchmark-plan/v1' as const,
+    schemaVersion: 'decision-binary-benchmark-plan/v2' as const,
     splits: ['tuning', 'calibration', 'test'].map(name => splits.find(split => split.name === name)!),
     datasetDigest: canonicalSha256([...labels].sort((a, b) => a.id.localeCompare(b.id))),
     ...limits,
@@ -65,13 +69,17 @@ function buildBinaryBenchmarkPlanFields(
 /**
  * Verifies a frozen plan digest without scoring. Canonical-only by default; pass
  * `{ digestModes: ['canonical', 'legacy'] }` to allowlist the versioned legacy
- * (`JSON.stringify`) digest for pre-migration evidence.
+ * (`JSON.stringify`) digest for pre-migration v1 evidence. Fresh v2 records are
+ * canonical-only: a legacy digest on v2 fields never verifies, even under an
+ * explicit allowlist.
  */
 export function verifyBinaryBenchmarkPlanDigest(
   plan: FrozenBinaryBenchmarkPlan, labels: readonly BinaryBenchmarkLabel[],
   options?: { digestModes?: BenchmarkDigestModes },
 ): EvidenceDigestMode | null {
   const { digest, ...fields } = plan;
+  if (fields.schemaVersion !== 'decision-binary-benchmark-plan/v1'
+    && fields.schemaVersion !== 'decision-binary-benchmark-plan/v2') return null;
   let expected: Omit<FrozenBinaryBenchmarkPlan, 'digest'>;
   try {
     expected = buildBinaryBenchmarkPlanFields(plan.splits, labels, {
@@ -82,8 +90,18 @@ export function verifyBinaryBenchmarkPlanDigest(
   } catch {
     return null;
   }
-  if (canonicalSha256(expected) !== canonicalSha256(fields)) return null;
-  return matchEvidenceDigest(fields, digest, options?.digestModes);
+  // Substantive fields must match; the version selects the digest lineage.
+  const { schemaVersion: _expectedVersion, ...expectedRest } = expected;
+  void _expectedVersion;
+  const { schemaVersion: _fieldsVersion, ...fieldsRest } = fields;
+  void _fieldsVersion;
+  if (canonicalSha256(expectedRest) !== canonicalSha256(fieldsRest)) return null;
+  // v1 respects the caller's allowlist (default canonical-only); v2 intersects
+  // it with canonical-only, so a legacy digest on v2 never verifies.
+  const modes = fields.schemaVersion === 'decision-binary-benchmark-plan/v1'
+    ? options?.digestModes
+    : (options?.digestModes ?? (['canonical'] as const)).filter(mode => mode === 'canonical');
+  return matchEvidenceDigest(fields, digest, modes);
 }
 
 /** A separately anchored digest is required: a caller-created plan cannot attest its own preregistration. */

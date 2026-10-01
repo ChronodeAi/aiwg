@@ -6,7 +6,7 @@ import { wilsonScoreInterval } from './stats/binomial.js';
 import { pairedMeanDifferenceBootstrap } from './stats/bootstrap.js';
 import { PairedDifferenceError } from './stats/error.js';
 import { pairedBinaryDifferenceInterval, pairedNonInferiority } from './stats/paired.js';
-import type { GateRegistry, ResolvedBinding } from './registry.js';
+import { GateRegistry, authoredGatePacksOf, gateProvidersOf, resolveGateBinding, type ResolvedBinding } from './registry.js';
 import { qualifyGateParameter } from './types.js';
 import type {
   GateBinding, GateDefinition, GateEvidence, GateHoldoutInputs, GateMetricsDocument, GateOutcome, GateReport,
@@ -26,8 +26,8 @@ export function maxOutcome(...outcomes: GateOutcome[]): GateOutcome {
 
 /**
  * Per-gate outcome from its own status: `pass` promotes, `fail` takes the
- * gate's `onFail`, `insufficient` takes `onInsufficient` (default HOLD).
- * Shortfalls never PROMOTE.
+ * gate's `onFail`, `insufficient` takes `onInsufficient` (always HOLD by load
+ * validation; ROLLBACK needs an observed blocking failure). Shortfalls never PROMOTE.
  */
 export function gateStatusOutcome(status: GateStatus, gate: Pick<GateDefinition, 'onFail' | 'onInsufficient'>): GateOutcome {
   if (status === 'pass') return 'PROMOTE';
@@ -58,6 +58,20 @@ export interface EvaluateGatesInput {
 /** Binds an integrity report for evaluation. The digest is re-derived on every use; a forged copy is refused. */
 export function sealUpstream(metadata: QualificationIntegrityMetadata): UpstreamCeiling {
   return { metadata, digest: artifactDigest(metadata) };
+}
+
+/**
+ * Seals trusted holdout inputs for evaluation. The seal covers
+ * `{frozenDigest, firstAccessedAt}` and is re-derived by `evaluateGates` on
+ * every use, following the HeldoutFrozen seal (`readHeldoutFrozen` checks
+ * `frozen.digest === heldoutDigest(frozen.bundle)`): a spread-copied or forged
+ * record is refused. `frozenDigest` is the binding digest in the frozen record.
+ */
+export function sealGateHoldout(input: {
+  frozenDigest: Sha256Digest; firstAccessedAt: string | null;
+}): import('./types.js').GateHoldoutInputs {
+  const payload = { frozenDigest: input.frozenDigest, firstAccessedAt: input.firstAccessedAt };
+  return { ...payload, digest: artifactDigest(payload) as Sha256Digest };
 }
 
 const fail = (message: string): never => { throw new GateEvaluationError(message); };
@@ -404,10 +418,15 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     && (input as unknown as Record<string, unknown>).resolved !== undefined) {
     fail('caller-supplied gate resolution is not accepted: pass the binding and registry');
   }
-  if (registry === undefined || registry === null) fail('a gate registry is required for internal resolution');
+  if (!(registry instanceof GateRegistry)) fail('a GateRegistry is required for internal resolution');
   // Reserve before dispatch: resolve and fully validate the binding (pins,
-  // providers, parameters, slices) before any gate observes any metric.
-  const resolved = registry.resolveBinding(binding);
+  // providers, parameters, slices) before any gate observes any metric. The
+  // resolution runs through the pure `resolveGateBinding` over a standalone
+  // snapshot of the registry's authored packs: no overridable `GateRegistry`
+  // instance method is called for anything security-relevant, so a subclass
+  // that overrides `resolveBinding` (or a duck-typed `{resolveBinding}`)
+  // cannot empty gates, loosen parameters or forge digests.
+  const resolved = resolveGateBinding(binding, authoredGatePacksOf(registry), gateProvidersOf(registry));
   const { packs, parameters } = resolved;
   // 1:1 pins<->packs: the pin list and the resolved packs must match exactly.
   if (packs.length !== binding.spec.packs.length) fail('binding pins do not match resolved packs 1:1');
@@ -415,6 +434,12 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     // Recompute the authored digest: the stored pin is never trusted on its own.
     if ((artifactDigest(pack.authored) as Sha256Digest) !== pack.digest) {
       fail(`pack digest mismatch for ${pack.authored.metadata.id}`);
+    }
+    // Recompute the composed digest from the evaluator's own pure composition
+    // (`resolveGateBinding` above): registry-provided resolved bytes and
+    // digests are never trusted.
+    if ((artifactDigest(pack.resolved) as Sha256Digest) !== pack.resolvedDigest) {
+      fail(`composed pack digest mismatch for ${pack.authored.metadata.id}`);
     }
     const pin = binding.spec.packs.find(candidate => candidate.id === pack.authored.metadata.id);
     if (pin === undefined || pin.version !== pack.authored.metadata.version
@@ -441,19 +466,36 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs)) fail('evaluation timestamp is not a valid date-time');
   if (artifactDigest(binding) !== trustedBindingDigest) fail('binding digest does not match its trusted pin');
-  // Holdout freeze is enforced from the REQUIRED trusted holdout record, never
-  // from binding fields (which the study author controls).
+  // Holdout freeze is enforced from the REQUIRED sealed holdout record, never
+  // from binding fields (which the study author controls). The seal is
+  // re-derived here: `frozenDigest` and `firstAccessedAt` come only from a
+  // `sealGateHoldout` record whose digest matches its content.
   if (holdout === undefined || holdout === null) fail('trusted holdout inputs are required for evaluation');
-  if (holdout.frozenDigest !== trustedBindingDigest) fail('binding digest does not match the frozen record digest');
+  const sealed = holdout as { frozenDigest?: unknown; firstAccessedAt?: unknown; digest?: unknown };
+  if (typeof sealed.digest !== 'string'
+    || artifactDigest({ frozenDigest: sealed.frozenDigest, firstAccessedAt: sealed.firstAccessedAt }) !== sealed.digest) {
+    fail('holdout record seal does not match its content');
+  }
+  if (sealed.frozenDigest !== trustedBindingDigest) fail('binding digest does not match the frozen record digest');
+  const frozenDigest = sealed.frozenDigest as Sha256Digest;
+  const firstAccessedAt = sealed.firstAccessedAt as string | null;
+  if (firstAccessedAt !== null && typeof firstAccessedAt !== 'string') {
+    fail('trusted holdout first-access time must be a date-time or null');
+  }
+  // Null access is allowed only when the binding declares no held-out split:
+  // a split binding with a null record would disable the freeze check.
+  const declaresSplit = binding.spec.splitDigest !== undefined
+    || binding.spec.corpusDigest !== undefined || binding.spec.goldDigest !== undefined;
+  if (firstAccessedAt === null && declaresSplit) {
+    fail('holdout record reports no access but the binding declares held-out data');
+  }
   const frozenAt = Date.parse(binding.spec.frozenAt);
   if (!Number.isFinite(frozenAt)) fail('binding freeze timestamp is not a valid date-time');
   if (frozenAt > nowMs) fail('binding freezes after the evaluation timestamp');
-  if (holdout.firstAccessedAt !== undefined && holdout.firstAccessedAt !== null) {
-    const accessedAt = Date.parse(holdout.firstAccessedAt);
+  if (firstAccessedAt !== null) {
+    const accessedAt = Date.parse(firstAccessedAt);
     if (!Number.isFinite(accessedAt)) fail('holdout access timestamp is not a valid date-time');
     if (frozenAt >= accessedAt) fail('binding froze at or after holdout access: evaluation refused');
-  } else if (holdout.firstAccessedAt !== null) {
-    fail('trusted holdout first-access time must be a date-time or null');
   }
   const gateEvidence: GateEvidence[] = [];
   for (const pack of packs) {
@@ -512,6 +554,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
       digest: pack.digest, resolvedDigest: pack.resolvedDigest })),
     metricProviders: binding.spec.metricProviders.map(pin => ({ ...pin })),
     metricsDigest: artifactDigest(metrics),
+    holdout: { digest: sealed.digest as Sha256Digest, frozenDigest, firstAccessedAt },
     gateEvidence,
     references: binding.spec.references.map(reference => ({
       name: reference.name, kind: reference.kind, observed: metrics.references?.[reference.name] !== undefined,

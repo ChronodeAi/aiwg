@@ -22,8 +22,17 @@ const sample = (id: string) => ({
   inputTokens: 3, outputTokens: 2, costUsd: 0.01, calls: 1, retries: 0, fallbacks: 0,
 });
 
-/** A pre-migration plan: identical fields, JSON.stringify digest, original key order. */
+/** A pre-migration v1 plan: v1 fields with a JSON.stringify digest. */
 const legacyPlan = () => {
+  const plan = freezeBinaryBenchmarkPlan(splits(), labels, limits);
+  const { digest: _dropped, ...fields } = plan;
+  void _dropped;
+  const v1fields = { ...fields, schemaVersion: 'decision-binary-benchmark-plan/v1' as const };
+  return { ...v1fields, digest: legacySha256(v1fields) };
+};
+
+/** A freshly built (v2) plan with a legacy digest: must never verify. */
+const freshLegacyPlan = () => {
   const plan = freezeBinaryBenchmarkPlan(splits(), labels, limits);
   const { digest: _dropped, ...fields } = plan;
   void _dropped;
@@ -31,11 +40,14 @@ const legacyPlan = () => {
 };
 
 describe('qualification digest migration', () => {
-  it('writes canonical digests for new benchmark plans', () => {
+  it('writes canonical v2 digests for new benchmark plans', () => {
     const plan = freezeBinaryBenchmarkPlan(splits(), labels, limits);
+    expect(plan.schemaVersion).toBe('decision-binary-benchmark-plan/v2');
     expect(verifyBinaryBenchmarkPlanDigest(plan, labels)).toBe('canonical');
     expect(verifyBinaryBenchmarkPlanDigest(plan, labels, { digestModes: ['canonical'] })).toBe('canonical');
     expect(verifyBinaryBenchmarkPlanDigest(plan, labels, { digestModes: ['legacy'] })).toBeNull();
+    // A legacy digest on freshly built v2 fields never verifies, even allowlisted.
+    expect(verifyBinaryBenchmarkPlanDigest(freshLegacyPlan() as never, labels, { digestModes: ['canonical', 'legacy'] })).toBeNull();
     // Canonical bytes differ from the legacy encoding for the same plan.
     expect(plan.digest).not.toBe(legacyPlan().digest);
     // Membership digests over sorted string arrays are byte-identical in both modes.
@@ -43,8 +55,9 @@ describe('qualification digest migration', () => {
       `sha256:${createHash('sha256').update(JSON.stringify(['test-1', 'test-2'])).digest('hex')}`);
   });
 
-  it('rejects legacy plans by default and verifies them only under an explicit allowlist', () => {
+  it('rejects v1 legacy plans by default and verifies them only under an explicit allowlist', () => {
     const plan = legacyPlan();
+    expect(plan.schemaVersion).toBe('decision-binary-benchmark-plan/v1');
     // Fail closed: a legacy digest on plan fields never verifies by default.
     expect(verifyBinaryBenchmarkPlanDigest(plan, labels)).toBeNull();
     expect(verifyBinaryBenchmarkPlanDigest(plan, labels, { digestModes: ['canonical'] })).toBeNull();
@@ -70,16 +83,22 @@ describe('qualification digest migration', () => {
     expect(metrics.overall.brier).toBeCloseTo(0.04);
   });
 
-  it('writes canonical release digests and rejects legacy digests by default', () => {
+  it('writes canonical v2 release digests and rejects legacy digests by default', () => {
     const { executed, input } = syntheticReleaseInput();
     const record = buildQualificationReleaseRecord(executed, input);
+    expect(record.schemaVersion).toBe('decision-qualification-release/v2');
     expect(verifyQualificationReleaseDigest(record)).toBe('canonical');
     expect(verifyQualificationReleaseDigest(record, { digestModes: ['canonical'] })).toBe('canonical');
     const { digest: _dropped, ...fields } = record;
     void _dropped;
-    const legacy = { ...fields, digest: legacySha256(fields) };
-    // Fail closed in both directions: legacy on new fields is rejected unless
-    // the caller allowlists the pre-migration mode explicitly.
+    // A legacy digest on freshly built v2 fields never verifies, even allowlisted.
+    const freshLegacy = { ...fields, digest: legacySha256(fields) };
+    expect(verifyQualificationReleaseDigest(freshLegacy)).toBeNull();
+    expect(verifyQualificationReleaseDigest(freshLegacy, { digestModes: ['canonical'] })).toBeNull();
+    expect(verifyQualificationReleaseDigest(freshLegacy, { digestModes: ['canonical', 'legacy'] })).toBeNull();
+    // Pre-migration v1 records with a legacy digest still verify under allowlist.
+    const v1fields = { ...fields, schemaVersion: 'decision-qualification-release/v1' as const };
+    const legacy = { ...v1fields, digest: legacySha256(v1fields) };
     expect(verifyQualificationReleaseDigest(legacy)).toBeNull();
     expect(verifyQualificationReleaseDigest(legacy, { digestModes: ['canonical'] })).toBeNull();
     expect(verifyQualificationReleaseDigest(legacy, { digestModes: ['canonical', 'legacy'] })).toBe('legacy');

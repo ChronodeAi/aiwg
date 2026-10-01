@@ -9,6 +9,29 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Tightened the experimental, default-off gates core addendum: every scope
+  transition now requires the child to cover a superset of the parent's
+  slices under every slice universe (`listed -> each` must except none of
+  the parent's listed slices, `all -> each` allows no exceptions),
+  `onInsufficient` is HOLD-only in schema and runtime (ROLLBACK needs an
+  observed blocking failure), and the D17 source dry-run pins are refreshed
+  for the resulting source digest while the corpus and split/gold pins are
+  unchanged. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
+- Hardened the experimental, default-off gates core fix round 2: the
+  evaluator re-resolves through pure `resolveGateBinding`/`composeGatePack`/
+  `applyGateExtends` over a standalone authored-pack snapshot and rejects
+  non-`GateRegistry` registries, so subclassed or duck-typed registries cannot
+  empty gates or loosen parameters; holdout inputs are sealed
+  `sealGateHoldout` records with re-derived digests, null allowed only when
+  the binding declares no held-out split, and the report records the sealed
+  holdout; benchmark and release builders emit canonical-only `/v2` records
+  with legacy allowlisted only for `/v1` pre-migration evidence; child-drops-
+  default is documented as P7 binding freedom with project floors as the
+  future check. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
 - Hardened the experimental, default-off gates core against independent review
   findings: the evaluator resolves the binding internally and refuses
   caller-supplied resolution, `extends` is a full parent pin with the composed
