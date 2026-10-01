@@ -25,7 +25,10 @@ attested price from an optional approval file, or else from the committed templa
 | `--collect-approved APPROVAL CORPUS ARTIFACT_ROOT RESOLVER_CONFIG` with `AIWG_DECISION_EGRESS_LIVE=1` | yes | yes |
 
 Without `AIWG_DECISION_EGRESS_LIVE=1`, `--collect-approved` exits with code 2 before it
-reads any file or credential. `--prepare` writes `corpus.json` only beneath the canonical
+reads any file or credential. The library entry point enforces the same gate itself:
+`runEgressLiveQualification` without `offlineTransport` throws before credential or
+transport use unless the variable is `1`. Calls with an injected `offlineTransport`
+stay synthetic and need no opt-in. `--prepare` writes `corpus.json` only beneath the canonical
 root from `aiwg artifacts path --json --check-write`, and never overwrites a file.
 
 ```sh

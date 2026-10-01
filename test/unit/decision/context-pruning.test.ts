@@ -9,6 +9,8 @@ import {
   classifyContextPruningCandidates,
   classifyContextPruningCandidate,
   computeContextBudgetManagerBaseline,
+  CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS,
+  CONTEXT_PRUNING_QUALITY_METRICS,
   contextPruningDigest,
   contextPruningPairSetDigest,
   contextPruningReceiptSetDigest,
@@ -134,6 +136,7 @@ function preregister(
       slices: ['code', 'docs'],
       minimumOverallN: 40,
       minimumSliceN: 20,
+      minimumZeroVarianceN: 30,
       minimumProtectedN: 30,
       powerRule: 'fixture: reviewer-owned power analysis before held-out access',
       qualityNonInferiorityMarginBps: -500,
@@ -178,7 +181,8 @@ function report(
   metrics: ContextPruningPairedMetrics,
   options: { gate?: 'PROMOTE' | 'HOLD' | 'ROLLBACK'; preregistration?: ContextPruningPreregistration;
     holdoutAccessedAt?: string | null; trustedDigest?: `sha256:${string}`; missingInputs?: string[];
-    runs?: PruningRunEvidence[]; trustedReceiptSetDigest?: `sha256:${string}` } = {},
+    runs?: PruningRunEvidence[]; trustedReceiptSetDigest?: `sha256:${string}`;
+    evaluationNow?: () => number } = {},
 ) {
   // By default the preregistration froze exactly the pair set being reported.
   const preregistration = options.preregistration ?? preregister({}, now(), metrics.pairs);
@@ -192,6 +196,7 @@ function report(
     pruningRuns: runs,
     trustedReceiptSetDigest: options.trustedReceiptSetDigest ?? contextPruningReceiptSetDigest(runs.flatMap(run => run.receipts)),
     missingInputs: options.missingInputs,
+    evaluationNow: options.evaluationNow,
   });
 }
 
@@ -523,6 +528,49 @@ describe('D26 context pruning pilot', () => {
     expect(missing.findings).toContain('quality-metric-missing:citation-accuracy');
   });
 
+  it('A: two identical bounded pairs cannot PROMOTE on a zero-width interval, while adequate identical support can', () => {
+    const identicalMetrics = (count: number, baseline = 0.8, candidate = 0.8) => {
+      const ids = Array.from({ length: count }, (_, index) => `zero-variance-${String(index).padStart(3, '0')}`);
+      return {
+        ...goodMetrics(),
+        pairs: ids.map(pairId => ({ pairId, slice: 'code' })),
+        quality: CONTEXT_PRUNING_QUALITY_METRICS.map(metric => ({
+          metric, pairs: ids.map(pairId => ({ pairId, baseline, candidate })),
+        })),
+      };
+    };
+    const boundedPreregistration = (pairs: readonly ContextPruningPairRecord[], minimumZeroVarianceN: number) =>
+      preregister({
+        qualityMetrics: CONTEXT_PRUNING_QUALITY_METRICS.map(metric => ({ metric, scale: 'bounded' as const })),
+        slices: ['code'],
+        minimumOverallN: 2,
+        minimumSliceN: 1,
+        minimumZeroVarianceN,
+        // One protected receipt per pair: keep the protected-item floor (#2786) satisfied at n=2.
+        minimumProtectedN: 2,
+      }, now(), pairs);
+    // Two identical pairs read a zero-width interval at the estimate, which carries no variability
+    // evidence: the preregistered support rule withholds PROMOTE even though economics and integrity pass.
+    const small = identicalMetrics(2);
+    const held = report(small, { preregistration: boundedPreregistration(small.pairs, 10) });
+    expect(held.derived.quality.every(item => item.decision === 'insufficient')).toBe(true);
+    expect(held.derived.quality[0]!.interval).toMatchObject({
+      lowerBps: 0, upperBps: 0, estimateBps: 0, method: 'percentile-bootstrap' });
+    expect(held.findings).toEqual(CONTEXT_PRUNING_QUALITY_METRICS.map(metric => `insufficient-quality-support:${metric}`).sort());
+    expect(held).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+    // An adequate identical sample meets the declared rule and remains eligible for PROMOTE.
+    const adequate = identicalMetrics(10);
+    const promoted = report(adequate, { preregistration: boundedPreregistration(adequate.pairs, 10) });
+    expect(promoted.findings).toEqual([]);
+    expect(promoted).toMatchObject({ decision: 'PROMOTE', advisory: null });
+    // A uniform regression still rolls back: the support rule withholds passes, never harm.
+    const worse = identicalMetrics(2, 0.75, 0.5);
+    const rolledBack = report(worse, { preregistration: boundedPreregistration(worse.pairs, 10) });
+    expect(rolledBack.derived.quality.every(item => item.decision === 'not-non-inferior' && item.harm)).toBe(true);
+    expect(rolledBack.derived.quality[0]!.interval).toMatchObject({ lowerBps: -2500, upperBps: -2500 });
+    expect(rolledBack.decision).toBe('ROLLBACK');
+  });
+
   it('B: doubled pruned spend with inflated cache usage cannot PROMOTE and triggers ROLLBACK', () => {
     const doubled = goodMetrics({
       providerUsage: providerAccounting({ prunedDownstream: usage(20_000, 20_000, 2_000, 2.00) }),
@@ -796,6 +844,31 @@ describe('D26 context pruning pilot', () => {
     expect(() => validateContextPruningPreregistration(legacy as never)).toThrow('invalid context pruning preregistration');
   });
 
+  it('I: rejects a holdout access attested after the evaluation clock beyond skew', () => {
+    // Fake evaluation clock: fixed epoch ms, so the check never reads Date.now.
+    const evaluationMs = Date.parse('2026-10-01T12:00:00.000Z');
+    const evaluationNow = () => evaluationMs;
+    // A far-future attestation is refused before report construction, even
+    // though it satisfies the preregistration ordering check.
+    expect(() => report(goodMetrics(), { holdoutAccessedAt: '2099-06-01T00:00:00.000Z', evaluationNow }))
+      .toThrow('future holdout access');
+    // One millisecond past the documented skew allowance is still in the future.
+    const pastSkew = new Date(evaluationMs + CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS + 1).toISOString();
+    expect(() => report(goodMetrics(), { holdoutAccessedAt: pastSkew, evaluationNow })).toThrow('future holdout access');
+    // Exactly at the allowance the attestation is accepted and recorded.
+    const atSkew = new Date(evaluationMs + CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS).toISOString();
+    expect(report(goodMetrics(), { holdoutAccessedAt: atSkew, evaluationNow }).holdoutAccessedAt).toBe(atSkew);
+  });
+
+  it('J: accepts a valid prior holdout timestamp against the injected clock', () => {
+    const evaluationNow = () => Date.parse('2026-10-01T12:00:00.000Z');
+    const result = report(goodMetrics(), { evaluationNow });
+    expect(result).toMatchObject({ decision: 'PROMOTE', advisory: null, holdoutAccessedAt: HOLDOUT_AT });
+    const unrecorded = report(goodMetrics(), { holdoutAccessedAt: null, evaluationNow });
+    expect(unrecorded).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+    expect(unrecorded.findings).toEqual(['holdout-access-unrecorded']);
+  });
+
   it('keeps protected-retention breaches on ROLLBACK and preserves missing-input advisories', () => {
     // A caller-asserted breach that the receipts do not show is refused rather than trusted either way.
     expect(() => report(goodMetrics({ protectedRetentionBps: 9_999 }))).toThrow('protected retention');
@@ -812,6 +885,8 @@ describe('D26 context pruning pilot', () => {
     expect(() => preregister({ qualityMetrics: preregister().thresholds.qualityMetrics.slice(1) })).toThrow('invalid');
     expect(() => preregister({ qualityNonInferiorityMarginBps: -2.5 })).toThrow('invalid');
     expect(() => preregister({ slices: [] })).toThrow('invalid');
+    expect(() => preregister({ minimumZeroVarianceN: 1 })).toThrow('invalid');
+    expect(() => preregister({ minimumZeroVarianceN: 2.5 })).toThrow('invalid');
   });
 
   it('derives the prior deterministic baseline from ContextBudgetManager', () => {

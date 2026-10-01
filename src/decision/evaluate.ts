@@ -218,10 +218,15 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
     rulesetPin = artifactPin(request.ruleset);
     bindingPin = artifactPin(request.binding);
     // Pin and execute immutable snapshots; adapters receive separate per-attempt copies.
+    // D24 lineage and verification are host-supplied too: the gate and the recorded
+    // result share one snapshot, so caller-owned mutation during evaluation cannot
+    // change the verdict or the recorded lineage.
     request = {
       ...request,
       ruleset: structuredClone(request.ruleset), binding: structuredClone(request.binding),
       definitions: structuredClone(request.definitions), input: structuredClone(request.input),
+      preprocessingLineage: snapshotPreprocessingLineage(request.preprocessingLineage),
+      preprocessingVerification: snapshotPreprocessingVerification(request.preprocessingVerification),
     };
     base = resultBase(request, rulesetPin, bindingPin);
     validateBinding(request.binding, request.ruleset);
@@ -986,6 +991,40 @@ async function invokeWithDeadline(
 
 /** Requests whose projection evidence prohibited automatic action (allowed incomplete context). */
 const projectionBlockedAutomaticAction = new WeakSet<DecisionEvaluationRequest>();
+
+/**
+ * D24 snapshot of host-supplied lineage. Uncloneable content cannot be well-formed
+ * lineage, so it is passed through for the gate to refuse exactly as before.
+ */
+function snapshotPreprocessingLineage(
+  lineage: DecisionEvaluationRequest['preprocessingLineage'],
+): DecisionEvaluationRequest['preprocessingLineage'] {
+  if (lineage === undefined) return undefined;
+  try {
+    return structuredClone(lineage);
+  } catch {
+    return lineage;
+  }
+}
+
+/**
+ * D24 snapshot of host-supplied verification. Manifests, lifecycle and bindings are
+ * data and snapshotted with the lineage; `now` is host code and carried by reference
+ * like the other request callbacks. Uncloneable data is passed through for the gate
+ * to judge.
+ */
+function snapshotPreprocessingVerification(
+  verification: DecisionEvaluationRequest['preprocessingVerification'],
+): DecisionEvaluationRequest['preprocessingVerification'] {
+  if (verification === undefined) return undefined;
+  const { now, ...rest } = verification;
+  try {
+    const snapshot = structuredClone(rest);
+    return now === undefined ? snapshot : { ...snapshot, now };
+  } catch {
+    return verification;
+  }
+}
 
 /**
  * D24 applies when lineage is supplied or the host supplied verification expecting lineage.

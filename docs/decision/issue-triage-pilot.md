@@ -55,11 +55,20 @@ merge tracker issues, and it cannot bypass issue-planner approval.
 - `DecisionIssueTriageEvaluationManifest.v1` preregisters minimum support,
   insufficient-slice behavior, promotion thresholds, confidence interval method
   and level, sample rules, the digests of the frozen tuning/calibration/test
-  splits, and a positive benefit requirement before holdout access.
+  splits, and a positive benefit requirement before holdout access. It also pins
+  the calibration evidence a report may score against: the canonical digests of
+  the calibration registry content (artifacts, relations, alias history) and
+  the compatibility policy, plus the rule every per-sample compatibility
+  request must satisfy (requested alias, runId bound to the sample ID,
+  calibration artifact, not-before instant). An all-null pin allows no
+  registry: a report that supplies one is rejected.
 - `buildIssueTriageEvaluationReport()` scores only the preregistered test split,
   and only with the pilot pack the manifest pins: the pack's id, version and
   canonical digest must equal `manifest.pilotPack`, and the report records that
-  pin. Baseline responses are checked against the same taxonomy and closed
+  pin. It scores only with the calibration evidence the manifest pins, verified
+  before scoring: a swapped registry, policy or per-sample request is rejected,
+  and a supplied registry with no pin (or a pin with no supplied registry) is
+  rejected. Baseline responses are checked against the same taxonomy and closed
   response fields as cascade responses.
   It never trusts a caller's acceptance verdict or compatibility pin: it
   re-validates each cascade response and recomputes acceptance with the same
@@ -92,7 +101,7 @@ Every gate reads the preregistered manifest. Any finding yields `HOLD`.
 | Duplicate support and recall | At least `minimumDuplicateSamples` labeled duplicate cases, and the Wilson lower bound of duplicate recall must be at least `minimumDuplicateRecall`. |
 | Usage | Every arm's totals, call counts and cache flag must reconcile with its provider receipts, or the report records `usage-unreconciled` and token and cost comparisons become unknown. |
 | Benefit | Computed only on the preregistered metric (`reviewer-time` or `total-task-token-cost`), from reconciled receipts that include fallback calls and cache reads. An unknown value is `benefit-insufficient`; tokens never stand in for an unknown cost. |
-| Calibration | With `acceptance.calibration: required`, a sample is accepted only if its registry request resolves to `allow` for its alias and served model; a report built without registry requests for every sample is `calibration-required-unverified`. |
+| Calibration | With `acceptance.calibration: required`, a sample is accepted only if its registry request resolves to `allow` for its alias and served model; a report built without registry requests for every sample is `calibration-required-unverified`. The registry, policy and per-sample requests must match the manifest's calibration pin before scoring. |
 | Integrity | The upstream eval-integrity `PROMOTE`/`HOLD`/`ROLLBACK` can be preserved or tightened, never upgraded. |
 
 `validateIssueTriageEvaluationReport(report, { inputs, trustedManifestDigest })`
