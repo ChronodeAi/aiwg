@@ -360,6 +360,9 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- The experimental, default-off routing control drill re-reads policy history
+  when a policy restore throws, so a throw-after-install reports the installed
+  policy as inconsistent instead of the stale pre-restore state (#2790).
 - The experimental, default-off egress live qualification runner now requires
   the `AIWG_DECISION_EGRESS_LIVE=1` opt-in inside `runEgressLiveQualification`
   before credential or transport use; in-process live calls without it are
