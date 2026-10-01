@@ -181,6 +181,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- The experimental, default-off egress live qualification runner now requires
+  the `AIWG_DECISION_EGRESS_LIVE=1` opt-in inside `runEgressLiveQualification`
+  before credential or transport use; in-process live calls without it are
+  refused, while the synthetic offline-transport path needs no opt-in (#2801).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
