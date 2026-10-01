@@ -929,6 +929,32 @@ describe('D24 round-2 review regressions', () => {
     expect(declared.evaluate).toHaveBeenCalledTimes(3);
   });
 
+  it('MML-BIND-ROOT-01 rejects a root non-lineage declaration while a scoped declaration still covers its subtree', async () => {
+    const value = verified('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination });
+
+    // A root declaration would mark every text-bearing position as covered: it must never allow the gate.
+    const root = await runBound(value, resolved.receiptEvidence, { message: resolved.state.text, notes: 'operator note' },
+      hostVerification([value], { nonLineagePointers: [''] }), true);
+    expect(root.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'review', reasons: ['unverified'] });
+    expect(root.result.spec.status).toBe('review');
+    expect(root.evaluate).not.toHaveBeenCalled();
+    expect(root.resolveCredential).not.toHaveBeenCalled();
+
+    // A scoped declaration still covers its intended subtree.
+    const scoped = await runBound(value, resolved.receiptEvidence, { message: resolved.state.text, notes: 'operator note' },
+      hostVerification([value], { nonLineagePointers: ['/notes'] }), true);
+    expect(scoped.result.spec.status).toBe('completed');
+    expect(scoped.evaluate).toHaveBeenCalledTimes(3);
+
+    // Undeclared text beside the valid bound field is still refused.
+    const smuggled = await runBound(value, resolved.receiptEvidence, { message: resolved.state.text, notes: 'operator note' },
+      hostVerification([value]), true);
+    expect(smuggled.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-undeclared'] });
+    expect(smuggled.evaluate).not.toHaveBeenCalled();
+    expect(smuggled.resolveCredential).not.toHaveBeenCalled();
+  });
+
   it('MML-VERIFY-THRESHOLDS-01 routes to review when host quality/age thresholds are missing or not finite', async () => {
     const value = verified('scanned-document-ocr');
     const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination });
