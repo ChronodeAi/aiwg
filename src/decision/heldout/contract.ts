@@ -41,7 +41,7 @@ const D29_PUBLIC_DEMO_CORPORA = new Set([
   'sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549',
   'sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de',
   // Generator d29-synthetic/v8 public development corpus (seed d29-study-v8); refused preemptively.
-  'sha256:ce128f30530830a8f27432a399057af18c0b88cbcd49a4a838b8316887c2a8a7',
+  'sha256:c95cb6499191e19a2885a86c3fc11bb4631e2052afd1509aac09d3ec18907a99',
 ]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };
