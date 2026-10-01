@@ -102,6 +102,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   digests; the corpus and split/gold pins are unchanged. Live evidence and
   approval remain pending (#2824)
 
+- The Fortemi prebuilt-package gate (`npm run lint:fortemi-prebuilt-package`)
+  ran `npm pack` with no timeout, so a wedged pack held the CI job until the
+  runner timeout. The call is now bounded at 5 minutes, overridable with
+  `AIWG_FORTEMI_PACK_TIMEOUT_MS` (a positive integer of milliseconds), and a
+  timed-out pack fails the gate with an error naming the bound (#2802)
 - Refreshed experimental, default-off D17 source dry-run pins after the shared
   acceptance threshold fix entered the source digest; the corpus and split/gold
   pins are unchanged. Live evidence and approval remain pending (#2611)
@@ -150,6 +155,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   unchanged. No CLI, no shipped floor pack and no
   migrated study; live criteria remain pending (#2832)
 
+- Experimental, default-off D23 offline comparative policy replay: closed schemas,
+  a frozen 600-root synthetic corpus, digest-bound eval-integrity reports, and
+  a 44-assessment operator audit template. Zero provider calls; the retained
+  report now passes the preregistered diagnostic gates after the confidence
+  threshold fix, while its final decision stays HOLD pending independent
+  integrity and human review (#2616)
 - Experimental, default-off D17 study regeneration for the shared collector's
   registered generator, closed seeds, free-output approval, byte-based input
   reservations and durable spend baseline. The uncollected corpus,
@@ -333,6 +344,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Stop the experimental, default-off D12 live qualification on a per-call
+  usage-bound breach: a call reporting more than its approved 4000-token bound
+  is charged in full and records a budget breach that refuses every later
+  reservation. Usage exactly at the bound still settles normally. The Jev
+  transport offers no provider-side output cap, so the reservation, the breach
+  refusal and the run stop are the per-call enforcement; ordinary decision
+  behavior is unchanged (#2800).
 
 - Experimental, default-off gates capability phase 1 core: closed versioned
   GatePack/GateBinding/GateReport schemas with catalog entries, a namespaced
