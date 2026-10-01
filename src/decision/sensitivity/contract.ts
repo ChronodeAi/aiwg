@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import Ajv2020, { type ValidateFunction } from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { canonicalJson } from '../../security/artifact-trust.js';
-import { admitEntry } from '../entry.js';
+import { admitEntry, DEFAULT_ENTRY_LIMITS } from '../entry.js';
 import type { JsonValue } from '../types.js';
 import type { SensitivityPlan, SensitivityReport, SensitivityDigest } from './types.js';
 
@@ -19,6 +19,11 @@ export class SensitivityContractError extends Error {
 export const SENSITIVITY_SCHEMA_FILES = {
   plan: 'DecisionSensitivityPlan.v1.schema.json',
   report: 'DecisionSensitivityReport.v1.schema.json',
+  comparativePlan: 'DecisionComparativeReplayPreregistration.v1.schema.json',
+  comparativeReport: 'DecisionComparativeReplayReport.v1.schema.json',
+  comparativeMembers: 'DecisionComparativeReplayMembers.v1.schema.json',
+  comparativeGold: 'DecisionComparativeReplayGold.v1.schema.json',
+  comparativeIntegrity: 'DecisionComparativeReplayIntegrity.v1.schema.json',
 } as const;
 export type SensitivitySchemaKind = keyof typeof SENSITIVITY_SCHEMA_FILES;
 
@@ -40,7 +45,9 @@ function schemaValidator(kind: SensitivitySchemaKind): ValidateFunction {
 }
 
 export function checkSensitivitySchema(kind: SensitivitySchemaKind, value: unknown): void {
-  try { admitEntry(value); } catch { throw new SensitivityContractError(`${kind} admission denied`, 'admission'); }
+  try { admitEntry(value, kind.startsWith('comparative')
+    ? { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 2_097_152, properties: 32_768, entries: 65_536, memoryBytes: 16_777_216 }
+    : DEFAULT_ENTRY_LIMITS); } catch { throw new SensitivityContractError(`${kind} admission denied`, 'admission'); }
   const check = schemaValidator(kind);
   if (!check(value)) {
     throw new SensitivityContractError(`${kind} does not match its v1 schema`, 'schema',

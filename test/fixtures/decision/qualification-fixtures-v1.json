@@ -1822,6 +1822,176 @@
         "#2622",
         "#2778"
       ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-01",
+      "path": "docs/decision/evidence/comparative-replay-v1/access.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:6e21e2162eeb8b05b06ab62d88e3a8bf997fb57a19f8e4748d1e381c1b2abded",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-02",
+      "path": "docs/decision/evidence/comparative-replay-v1/freeze-manifest.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-freeze/v1",
+      "digest": "sha256:9839f9378c2a3bf7b94e05a2832edce73778bed3156b7a2194932a57e685f940",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-03",
+      "path": "docs/decision/evidence/comparative-replay-v1/preregistration.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-preregistration/v1",
+      "digest": "sha256:b588a6ddaf702204e5c295949b2434ea81b9ff5cf289bb77dcb7915496be92bb",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-04",
+      "path": "docs/decision/evidence/comparative-replay-v1/report.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-report/v1",
+      "digest": "sha256:1a76764c1dff0f9c27def46d4fed230c288e49f993183259194bf2b7ed4accf0",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; diagnostic pass, final HOLD pending independent integrity and operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-05",
+      "path": "test/fixtures/decision/comparative-replay/audit-sample.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-audit-sample/v1",
+      "digest": "sha256:31934ec99f74f753ddd0e5e9a4a94edb9fc720d13bd209ed1947de156524bd2f",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-06",
+      "path": "test/fixtures/decision/comparative-replay/corpus.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-corpus/v1",
+      "digest": "sha256:6712f34a8e5346a9bceec16acc2fd66f21038aa9eb7f8397ba46422876d2f145",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-07",
+      "path": "test/fixtures/decision/comparative-replay/gold.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-gold/v1",
+      "digest": "sha256:f107f4bc86f99cfdb74f516714799ac44435332a32d10b95d6b35a14478c61d5",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-08",
+      "path": "test/fixtures/decision/comparative-replay/review-template.md",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "source-module",
+      "digest": "sha256:eef8b7fdff7fa1ae64e47ffdb2bec6574a779d36a93441d0819d8ac4363eff31",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-09",
+      "path": "test/fixtures/decision/comparative-replay/split.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-split/v1",
+      "digest": "sha256:41f6a26f540805a805318503b1d9c48406fcb6c4d27ea9d33d3129a62ea4580d",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
+    },
+    {
+      "id": "DEC-COMPARATIVEREPLAY-10",
+      "path": "docs/decision/evidence/comparative-replay-v1/review-packets.json",
+      "origin": "repository-authored",
+      "author": "AIWG maintainers",
+      "date": "2026-09-30",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-comparative-replay-review-packets/v1",
+      "digest": "sha256:53225de48bbf0900697456a17e066e892536054d02701729570dc89537386723",
+      "expectedOutcome": "Frozen synthetic D23 comparative replay; HOLD with two known boundary errors and pending operator review",
+      "links": [
+        "D23",
+        "JEV-16",
+        "#2616"
+      ]
     }
   ]
 }
