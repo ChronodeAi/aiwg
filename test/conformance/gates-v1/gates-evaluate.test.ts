@@ -1,22 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { artifactDigest } from '../../../src/decision/validate.js';
 import { GateEvaluationError, evaluateGates, sealGateHoldout } from '../../../src/gates/evaluate.js';
+import { resolveProjectFloors } from '../../../src/gates/floors.js';
 import { validateGateReport } from '../../../src/gates/report.js';
 import type { GateMetricsDocument } from '../../../src/gates/types.js';
 import {
   evidenceProvider, pairedProvider, proportionProvider, scalarProvider,
 } from '../../../src/gates/providers/index.js';
 import {
-  NOW, evaluateFixture, makeBinding, makeUpstream, pairedRecords, passingMetrics,
+  NOW, evaluateFixture, loadPack, makeBinding, makeBindingForPack, makeUpstream, pairedRecords, passingMetrics,
   proportionRecords, scalarRecords, testHoldout, testRegistry, trustedDigest,
 } from './helper.js';
 
 const breached = (metrics: GateMetricsDocument) => evaluateFixture({ metrics });
 
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
 const evaluateContext = (binding = makeBinding()) => {
   const { registry } = testRegistry();
   return {
     binding, registry, trustedBindingDigest: trustedDigest(binding), holdout: testHoldout(binding),
+    floors: resolveProjectFloors({}),
   };
 };
 
@@ -176,10 +180,25 @@ describe('gates fail-closed paths', () => {
     expect(compromised.gateEvidence.find(entry => entry.gateId === 'integrity-ceiling')).toMatchObject({
       status: 'fail', outcome: 'ROLLBACK',
     });
-    const orphan = evaluateFixture({ upstream: null });
-    expect(orphan.decision).toBe('HOLD');
-    expect(orphan.ceilings.upstreamCeiling).toBe('HOLD');
-    expect(orphan.gateEvidence.find(entry => entry.gateId === 'integrity-ceiling')).toMatchObject({ status: 'insufficient' });
+    // A bound upstream-ceiling gate without a sealed upstream refuses in the
+    // evaluator itself instead of downgrading to HOLD (p1b A3).
+    expect(() => evaluateFixture({ upstream: null })).toThrow(/sealed upstream/);
+  });
+
+  it('holds without an upstream only when no upstream-ceiling gate is bound', () => {
+    const pack = clone(loadPack());
+    pack.metadata = { ...pack.metadata, id: 'aiwg:test-gates/no-ceiling' };
+    pack.spec.gates = pack.spec.gates.filter(gate => gate.kind !== 'upstream-ceiling');
+    const { registry } = testRegistry();
+    registry.registerPack(pack, { namespace: 'aiwg', bundle: 'test-gates' });
+    const binding = makeBindingForPack(pack);
+    const report = evaluateGates({
+      binding, registry, trustedBindingDigest: trustedDigest(binding),
+      holdout: testHoldout(binding), metrics: passingMetrics(),
+      upstream: null, now: NOW, floors: 'none-explicit-opt-out',
+    });
+    expect(report.decision).toBe('HOLD');
+    expect(report.ceilings.upstreamCeiling).toBe('HOLD');
   });
 
   it('reports references without gating on them', () => {

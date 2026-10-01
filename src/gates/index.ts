@@ -22,7 +22,8 @@ export {
   type ExpandedFloorPack, type GateNamespace, type ResolvedBinding, type ResolvedPack,
 } from './registry.js';
 export {
-  DEFAULT_PROJECT_FLOOR_PACK, projectCeilingSatisfied, resolveProjectFloors, validateGatesConfig,
+  INTEGRITY_CEILING_FLOOR_PACK_ID, INTEGRITY_CEILING_FLOOR_PACK_VERSION,
+  projectCeilingSatisfied, resolveProjectFloors, validateGatesConfig,
 } from './floors.js';
 export type { ProjectFloors, ProjectFloorSource } from './floors.js';
 export {
@@ -34,11 +35,12 @@ export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportio
 export type { MetricProvider } from './providers/index.js';
 export { MetricProviderRegistry } from './providers/index.js';
 export {
-  GATE_PACKS_DIR, isGatePackFile, listGatePackFiles, readBundleGatePacksDeclaration,
-  loadGatePackFile, registerBundleGatePacks, discoverShippedGatePacks,
+  GATE_PACKS_DIR, GATE_PACK_MAX_BYTES, isGatePackFile, listGatePackFiles, readBundleGatePacksDeclaration,
+  loadGatePackFile, originForPackDir, registerBundleGatePacks, resolveGatePacksDir, discoverShippedGatePacks,
 } from './discovery.js';
 export {
   buildGatesRegistry, validateGateFile, loadHoldoutFile, loadUpstreamFile,
-  evaluateGatesFromFiles, listGatePacks, showGatePack, packsReferencedByRule,
+  evaluateGatesFromFiles, installedAiwgRoot, listGatePacks, loadProjectFloorsForEvaluate,
+  showGatePack, packsReferencedByRule,
 } from './driver.js';
-export type { GatesDriverOptions, GateValidateKind, GateValidateResult, GatesEvaluateFiles, GatePackSummary } from './driver.js';
+export type { GatesDriverOptions, GateValidateKind, GateValidateResult, GatesEvaluateFiles, GatePackSummary, ShippedRootTrust } from './driver.js';

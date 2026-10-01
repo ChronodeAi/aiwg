@@ -264,5 +264,13 @@ export interface GateReport {
   ceilings: { packOutcome: GateOutcome; upstreamCeiling: GateOutcome; bindingCeiling: GateOutcome };
   decision: GateOutcome;
   evaluatedAt: string;
+  /**
+   * Provenance of the trust ceremony behind this report. Present only on
+   * reports produced by the offline CLI (`evaluateGatesFromFiles`), whose
+   * trust inputs are caller-asserted files: `offline-cli` marks them
+   * distinguishable from reports built over a verified ceremony. Absent on
+   * library-produced reports; absence changes no bytes.
+   */
+  attestation?: 'offline-cli';
   digest: Sha256Digest;
 }

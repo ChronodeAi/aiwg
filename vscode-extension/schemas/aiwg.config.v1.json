@@ -574,7 +574,7 @@
         },
         "ceilings": {
           "type": "object",
-          "description": "Per-study outcome ceilings keyed by binding metadata.id. A binding declaring a looser ceiling is refused at resolution.",
+          "description": "Outcome ceilings keyed by binding metadata.id, plus '*' as the project-wide default applied to every binding. A per-study key may only tighten the '*' default; a binding declaring a looser ceiling is refused at resolution.",
           "additionalProperties": {
             "type": "string",
             "enum": ["PROMOTE", "HOLD", "ROLLBACK"]

@@ -600,11 +600,12 @@ export interface AiwgConfig {
   /**
    * Project gate floors for decision studies. Lists the gate packs (or pack
    * references) every binding in the project must include and tighten, plus
-   * optional per-study outcome ceilings. Optional — when absent, callers that
-   * load floors via `resolveProjectFloors` get the operator default
-   * integrity-ceiling floor; callers that never pass floors to the gates
-   * registry/evaluator keep legacy behavior unchanged.
-   * @implements #2832
+   * outcome ceilings keyed by study id (`'*'` is the project-wide default).
+   * Optional — when absent, the operator default integrity-ceiling floor
+   * (the shipped `aiwg:decision-engine/integrity-ceiling` pack, applied at
+   * expansion) still governs every evaluation. `evaluateGates` requires
+   * floors explicitly; invalid sections warn at read time and fail closed in
+   * gates entry points. @implements #2832
    */
   gates?: ProjectFloors;
 }
@@ -1708,8 +1709,15 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   const uhpErrors = validateUhpConfig(parsed.uhp);
   if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
 
+  // Gates errors warn (non-fatal): an invalid `gates` section must not brick
+  // every command that reads the config. Gates entry points (`aiwg gates
+  // evaluate`, binding resolution with floors) re-validate strictly via
+  // `validateGatesConfig` and fail closed there; `writeAiwgConfig` below
+  // stays strict so bad policy is never persisted.
   const gatesErrors = validateGatesConfig(parsed.gates);
-  if (gatesErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${gatesErrors.join('\n')}`);
+  if (gatesErrors.length > 0) {
+    console.warn(`Invalid gates section in .aiwg/aiwg.config (ignored):\n${gatesErrors.join('\n')}`);
+  }
 
   return parsed;
 }

@@ -4,6 +4,7 @@ import {
   buildQualificationReleaseRecord, verifyQualificationReleaseDigest,
 } from '../../../src/decision/qualification/release.js';
 import { GateEvaluationError, evaluateGates, sealGateHoldout } from '../../../src/gates/evaluate.js';
+import { resolveProjectFloors } from '../../../src/gates/floors.js';
 import { validateGateReport } from '../../../src/gates/report.js';
 import { GateRegistry } from '../../../src/gates/registry.js';
 import { validateGateDocument } from '../../../src/gates/schema.js';
@@ -35,6 +36,7 @@ const evaluateContext = (binding = makeBinding()) => {
   const { registry } = testRegistry();
   return {
     binding, registry, trustedBindingDigest: trustedDigest(binding), holdout: testHoldout(binding),
+    floors: resolveProjectFloors({}),
   };
 };
 
@@ -209,6 +211,10 @@ describe('gates review findings', () => {
     ceiling.onFail = 'ROLLBACK';
     const registry = new GateRegistry(createCoreProviderRegistry());
     registry.registerPack(parent, { namespace: 'aiwg', bundle: 'test-gates' });
+    // The default floor resolves from the registry, so the shipped ceiling is registered too.
+    registry.registerPack(clone(testRegistry().registry.getPack('aiwg:decision-engine/integrity-ceiling')), {
+      namespace: 'aiwg', bundle: 'decision-engine',
+    });
     const digest = artifactDigest(parent);
     const binding = makeBinding({
       spec: {
@@ -225,6 +231,7 @@ describe('gates review findings', () => {
     const report = evaluateGates({
       binding, registry, trustedBindingDigest: trustedDigest(binding),
       holdout: testHoldout(binding), metrics: passingMetrics(), upstream: makeUpstream('hold'), now: NOW,
+      floors: resolveProjectFloors({}),
     });
     expect(report.gateEvidence.find(entry => entry.gateId === 'integrity-ceiling')).toMatchObject({
       status: 'fail', outcome: 'HOLD',

@@ -6,7 +6,7 @@ import type {
   ArtifactPinLike, GateBinding, GateDefinition, GateOutcome, GatePack, GateParameter, Sha256Digest,
 } from './types.js';
 import { qualifyGateParameter } from './types.js';
-import { projectCeilingSatisfied } from './floors.js';
+import { INTEGRITY_CEILING_FLOOR_PACK_ID, projectCeilingSatisfied } from './floors.js';
 import type { ProjectFloors } from './floors.js';
 
 export class GateRegistryError extends Error {
@@ -461,6 +461,26 @@ export interface ExpandedFloorPack {
 }
 
 /**
+ * Whether one expanded floor's `integrity-ceiling` gate genuinely governs the
+ * default ceiling: it must be an all-scoped `upstream-ceiling` gate that
+ * tightens the shipped default gate (floor flag included). A same-id gate of
+ * any other kind or scope never suppresses the default.
+ */
+function governsDefaultCeiling(floor: ExpandedFloorPack, defaultGate: GateDefinition): boolean {
+  return floor.gates.some(gate => {
+    if (gate.id !== 'integrity-ceiling' || gate.kind !== 'upstream-ceiling' || gate.scope.mode !== 'all') {
+      return false;
+    }
+    try {
+      assertGateTightens(defaultGate, gate, floor.params);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
  * Expands project floors over an explicit authored-pack map: inline packs are
  * schema-checked again (direct registry callers bypass config validation) and
  * semantically validated, pack references are verified by version and authored
@@ -468,13 +488,20 @@ export interface ExpandedFloorPack {
  * enforce their composed minima). Every floor gate that binds a threshold
  * parameter must declare a default for it: the default is the enforced
  * minimum, and a required (default-less) floor parameter is a load error.
+ *
+ * The operator default floor — the composed gates of the shipped
+ * `aiwg:decision-engine/integrity-ceiling` pack, the single source of truth —
+ * is appended unless a configured floor governs it via `governsDefaultCeiling`
+ * above. An inline gate that merely reuses the id (any other kind or scope)
+ * never suppresses the default; the binding must then satisfy both, which
+ * fails closed with a diagnostic.
  */
 export function expandFloorPacks(
   floors: ProjectFloors,
   lookupAuthored: (id: string) => GatePack,
   providers: MetricProviderRegistry,
 ): ExpandedFloorPack[] {
-  return (floors.floors ?? []).map(source => {
+  const expanded: ExpandedFloorPack[] = (floors.floors ?? []).map(source => {
     if ('packRef' in source) {
       const pin = source.packRef;
       const authored = lookupAuthored(pin.id);
@@ -507,6 +534,21 @@ export function expandFloorPacks(
       params: { ...(composed.spec.parameters ?? {}) },
     };
   });
+  const defaultAuthored = lookupAuthored(INTEGRITY_CEILING_FLOOR_PACK_ID);
+  const defaultComposed = composeGatePack(defaultAuthored, lookupAuthored);
+  validateResolvedPack(defaultComposed, providers);
+  const defaultGate = defaultComposed.spec.gates.find(gate => gate.id === 'integrity-ceiling');
+  if (defaultGate === undefined) {
+    throw new GateRegistryError(`shipped default floor ${INTEGRITY_CEILING_FLOOR_PACK_ID} has no integrity-ceiling gate`);
+  }
+  if (!expanded.some(floor => governsDefaultCeiling(floor, defaultGate))) {
+    expanded.push({
+      packId: defaultAuthored.metadata.id,
+      gates: defaultComposed.spec.gates,
+      params: { ...(defaultComposed.spec.parameters ?? {}) },
+    });
+  }
+  return expanded;
 }
 
 /**
@@ -544,7 +586,11 @@ export function enforceProjectFloors(
   expanded: ExpandedFloorPack[],
   ceilings: Record<string, GateOutcome>,
 ): void {
-  const configured = ceilings[binding.metadata.id];
+  // The '*' key is the project-wide default ceiling for every binding; a
+  // per-study key overrides it for that study only (exact match — renames
+  // never inherit). `validateGatesConfig` already forbids per-study keys that
+  // loosen the default.
+  const configured = ceilings[binding.metadata.id] ?? ceilings['*'];
   if (!projectCeilingSatisfied(binding.spec.ceiling, configured)) {
     throw new GateRegistryError(
       `binding '${binding.metadata.id}' declares ceiling ${binding.spec.ceiling ?? 'PROMOTE'}`

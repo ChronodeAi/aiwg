@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,10 +6,14 @@ import { artifactDigest } from '../../../src/decision/validate.js';
 import { emptyConfig, readAiwgConfig, writeAiwgConfig } from '../../../src/config/aiwg-config.js';
 import { evaluateGates } from '../../../src/gates/evaluate.js';
 import {
-  DEFAULT_PROJECT_FLOOR_PACK, resolveProjectFloors, validateGatesConfig,
+  INTEGRITY_CEILING_FLOOR_PACK_ID, INTEGRITY_CEILING_FLOOR_PACK_VERSION,
+  resolveProjectFloors, validateGatesConfig,
 } from '../../../src/gates/floors.js';
 import type { ProjectFloors } from '../../../src/gates/floors.js';
-import { GateRegistry, GateRegistryError, validateResolvedPack } from '../../../src/gates/registry.js';
+import {
+  GateRegistry, GateRegistryError, authoredGatePacksOf, expandFloorPacks,
+  gateProvidersOf, validateResolvedPack,
+} from '../../../src/gates/registry.js';
 import { validateGateReport } from '../../../src/gates/report.js';
 import type { GateBinding, GateDefinition, GatePack } from '../../../src/gates/types.js';
 import {
@@ -148,39 +152,57 @@ describe('project floors config validation', () => {
 });
 
 describe('project floors default resolution', () => {
-  it('injects the operator default integrity-ceiling floor when unconfigured', () => {
+  const expandedFloorsOf = (gates: ProjectFloors | undefined) => {
+    const { registry } = testRegistry();
+    const authored = authoredGatePacksOf(registry);
+    return expandFloorPacks(
+      resolveProjectFloors(gates),
+      (id: string) => {
+        const entry = authored.get(id);
+        if (entry === undefined) throw new Error(`unknown gate pack: ${id}`);
+        return entry.authored;
+      },
+      gateProvidersOf(registry));
+  };
+
+  it('returns configured floors verbatim; the default applies at expansion', () => {
     const inputs: Array<ProjectFloors | undefined> = [undefined, {}, { floors: [] }, { ceilings: { study: 'HOLD' } }];
     for (const input of inputs) {
       const resolved = resolveProjectFloors(input);
-      expect(resolved.floors).toHaveLength(1);
-      const source = resolved.floors[0]!;
-      expect(source).toHaveProperty('pack');
-      const pack = (source as { pack: GatePack }).pack;
-      expect(pack.metadata.id).toBe('project:default-floors');
-      expect(pack.spec.gates).toHaveLength(1);
-      expect(pack.spec.gates[0]).toMatchObject({
-        id: 'integrity-ceiling', kind: 'upstream-ceiling', scope: { mode: 'all' }, onFail: 'HOLD',
-      });
+      expect(resolved.floors ?? []).toEqual(input?.floors ?? []);
     }
     expect(resolveProjectFloors({ ceilings: { study: 'HOLD' } }).ceilings).toEqual({ study: 'HOLD' });
+    // With nothing configured, expansion appends the shipped default floor.
+    const expanded = expandedFloorsOf(undefined);
+    expect(expanded).toHaveLength(1);
+    expect(expanded[0]!.packId).toBe(INTEGRITY_CEILING_FLOOR_PACK_ID);
   });
 
   it('keeps a project-governed integrity ceiling instead of the default', () => {
-    const resolved = resolveProjectFloors({ floors: [{ pack: floorPack() }] });
-    expect(resolved.floors).toHaveLength(1);
-    expect((resolved.floors[0] as { pack: GatePack }).pack.metadata.id).toBe(FLOOR_ID);
+    const expanded = expandedFloorsOf({ floors: [{ pack: floorPack() }] });
+    expect(expanded).toHaveLength(1);
+    expect(expanded[0]!.packId).toBe(FLOOR_ID);
   });
 
-  it('appends the default when custom floors do not govern the ceiling', () => {
+  it('appends the shipped default when custom floors do not govern the ceiling', () => {
     const custom = floorPack();
     custom.spec.gates = custom.spec.gates.filter(gate => gate.id !== 'integrity-ceiling');
-    const resolved = resolveProjectFloors({ floors: [{ pack: custom }] });
-    expect(resolved.floors).toHaveLength(2);
-    expect((resolved.floors[1] as { pack: GatePack }).pack.metadata.id).toBe('project:default-floors');
+    const expanded = expandedFloorsOf({ floors: [{ pack: custom }] });
+    expect(expanded).toHaveLength(2);
+    expect(expanded[1]!.packId).toBe(INTEGRITY_CEILING_FLOOR_PACK_ID);
   });
 
-  it('ships a schema-valid default floor pack', () => {
-    expect(() => validateResolvedPack(DEFAULT_PROJECT_FLOOR_PACK, createCoreProviderRegistry())).not.toThrow();
+  it('ships a schema-valid default floor pack as the single source of truth', () => {
+    const { registry } = testRegistry();
+    expect(registry.getPack(INTEGRITY_CEILING_FLOOR_PACK_ID).metadata).toMatchObject({
+      id: INTEGRITY_CEILING_FLOOR_PACK_ID, version: INTEGRITY_CEILING_FLOOR_PACK_VERSION,
+    });
+    expect(() => validateResolvedPack(
+      registry.resolvePack(INTEGRITY_CEILING_FLOOR_PACK_ID).resolved, createCoreProviderRegistry())).not.toThrow();
+    // The shipped gate is the shape every binding ceiling must tighten.
+    expect(registry.getPack(INTEGRITY_CEILING_FLOOR_PACK_ID).spec.gates).toMatchObject([{
+      id: 'integrity-ceiling', kind: 'upstream-ceiling', scope: { mode: 'all' }, onFail: 'HOLD',
+    }]);
   });
 });
 
@@ -347,13 +369,13 @@ describe('project floors pack references and ceilings', () => {
     floors: [{ packRef: { id: pack.metadata.id, version: pack.metadata.version, digest: artifactDigest(pack) } }],
   });
 
-  it('enforces referenced packs by digest, including the appended default', () => {
+  it('enforces referenced packs by digest, appending the shipped default when ungoverned', () => {
     const pack = refPack();
     const { registry } = testRegistry();
     registry.registerPack(pack, { namespace: 'project' });
     const floors = refFloors(pack);
-    // The reference plus the appended default both govern integrity-ceiling.
-    expect(floors.floors).toHaveLength(2);
+    // Configured floors stay verbatim; the default applies at expansion.
+    expect(floors.floors).toHaveLength(1);
     const binding = makeBinding();
     expect(() => registry.resolveBinding(binding, floors)).not.toThrow();
     const loosened = variantPack('aiwg:test-gates/floor-loose-ref',
@@ -361,6 +383,19 @@ describe('project floors pack references and ceilings', () => {
     registry.registerPack(loosened, { namespace: 'aiwg', bundle: 'test-gates' });
     expect(() => registry.resolveBinding(variantBinding(loosened), floors))
       .toThrow(/loosens project floor gate 'support-total'.*floor pack 'project:conformance-ref-floors'/);
+    // A reference that drops the ceiling still gets the shipped default: a
+    // binding without an integrity-ceiling gate is refused naming the
+    // shipped pack, not the reference.
+    const bareRef: GatePack = {
+      ...pack,
+      metadata: { id: 'project:conformance-ref-bare', version: '1.0.0', description: 'Bare reference floors.' },
+      spec: { ...pack.spec, gates: pack.spec.gates.filter(gate => gate.id !== 'integrity-ceiling') },
+    };
+    registry.registerPack(bareRef, { namespace: 'project' });
+    const bare = dropGate('integrity-ceiling');
+    registry.registerPack(bare, { namespace: 'aiwg', bundle: 'test-gates' });
+    expect(() => registry.resolveBinding(variantBinding(bare), refFloors(bareRef)))
+      .toThrow(new RegExp(`omits project floor gate 'integrity-ceiling'.*floor pack '${INTEGRITY_CEILING_FLOOR_PACK_ID.replace(/[/:]/g, '\\$&')}'`));
   });
 
   it('refuses forged pack references and unknown packs', () => {
@@ -451,7 +486,7 @@ describe('project floors default integrity ceiling', () => {
     const binding = variantBinding(standalone);
     expect(() => registry.resolveBinding(binding)).not.toThrow();
     expect(() => registry.resolveBinding(binding, resolveProjectFloors(undefined)))
-      .toThrow(/omits project floor gate 'integrity-ceiling'.*floor pack 'project:default-floors'/);
+      .toThrow(/omits project floor gate 'integrity-ceiling'.*floor pack 'aiwg:decision-engine\/integrity-ceiling'/);
     const { registry: fresh } = testRegistry();
     expect(() => fresh.resolveBinding(makeBinding(), resolveProjectFloors(undefined))).not.toThrow();
   });
@@ -488,21 +523,24 @@ describe('project floors evaluation and legacy behavior', () => {
     expect(validateGateReport(report, input)).toEqual({ valid: true, reasons: [] });
   });
 
-  it('leaves floors-unaware resolution and evaluation byte-identical', () => {
+  it('keeps the explicit opt-out path byte-identical to floors-unaware evaluation', () => {
     const pack = variantPack('aiwg:test-gates/floor-legacy-case',
       loosenOnly('false-ready-upper', { threshold: { op: 'lte', value: 200 } }));
     const registry = registryWith(pack);
     const binding = variantBinding(pack);
-    // The floor-violating binding keeps its legacy behavior when floors are
-    // not passed: resolution succeeds and evaluation promotes on clean metrics.
+    // Without floors, resolution keeps its legacy diagnostics and order.
     const resolved = registry.resolveBinding(binding);
     expect(resolved.binding.metadata.id).toBe(BINDING_ID);
+    // The documented opt-out evaluates exactly like the pre-floors path:
+    // the floor-violating binding promotes on clean metrics, with no
+    // provenance label added.
     const report = evaluateGates({
       binding, registry, trustedBindingDigest: trustedDigest(binding),
       holdout: testHoldout(binding), metrics: passingMetrics(),
-      upstream: makeUpstream('promote'), now: NOW,
+      upstream: makeUpstream('promote'), now: NOW, floors: 'none-explicit-opt-out',
     });
     expect(report.decision).toBe('PROMOTE');
+    expect(report).not.toHaveProperty('attestation');
     // Passing `floors: undefined` explicitly is the same as omitting it.
     expect(registry.resolveBinding(binding, undefined)).toEqual(resolved);
   });
@@ -528,11 +566,22 @@ describe('project floors aiwg.config parsing', () => {
     }));
   };
 
-  it('fails closed when the gates section does not parse', async () => {
-    writeRawConfig({ floors: 'nope' });
-    await expect(readAiwgConfig(tmpDir)).rejects.toThrow('gates.floors: must be an array');
-    writeRawConfig({ floors: [{ pack: { ...floorPack(), kind: 'GateBinding' } }] });
-    await expect(readAiwgConfig(tmpDir)).rejects.toThrow(/^Invalid \.aiwg\/aiwg\.config:\ngates\.floors\[0\]\.pack: /);
+  it('warns instead of bricking reads when the gates section does not parse', async () => {
+    const warned: string[] = [];
+    const spy = vi.spyOn(console, 'warn').mockImplementation((message?: unknown) => {
+      warned.push(String(message));
+    });
+    try {
+      writeRawConfig({ floors: 'nope' });
+      await expect(readAiwgConfig(tmpDir)).resolves.toBeDefined();
+      expect(warned.join('\n')).toMatch(/gates\.floors: must be an array/);
+      warned.length = 0;
+      writeRawConfig({ floors: [{ pack: { ...floorPack(), kind: 'GateBinding' } }] });
+      await expect(readAiwgConfig(tmpDir)).resolves.toBeDefined();
+      expect(warned.join('\n')).toMatch(/gates\.floors\[0\]\.pack: /);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('round-trips a valid gates section and resolves its floors', async () => {

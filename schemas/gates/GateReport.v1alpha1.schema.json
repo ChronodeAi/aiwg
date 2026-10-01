@@ -64,6 +64,7 @@
     },
     "decision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
     "evaluatedAt": { "type": "string", "format": "date-time" },
+    "attestation": { "const": "offline-cli", "description": "Present only on reports produced by the offline CLI over caller-asserted files." },
     "digest": { "$ref": "#/$defs/digest" }
   },
   "$defs": {

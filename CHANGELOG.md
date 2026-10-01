@@ -61,6 +61,24 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   legacy allowlist. Live CLI, project floors, provider loading and study
   adoption remain pending (#2824)
 
+- Hardened the experimental, default-off gates discovery, CLI and floors
+  against review findings: `--pack-dir` files are always `project:` packs
+  (`aiwg:` stays reserved for the installed tree, never the cwd;
+  `addon:`/`framework:`/`extension:` load only from manifest-declared
+  bundles), manifest `gatePacks` dirs are contained by realpath with symlinks
+  rejected and a 256 KiB pre-read cap, CLI evaluation requires a
+  caller-asserted `--trusted-binding-digest` plus already-sealed holdout and
+  upstream files (no auto-sealing), a missing upstream refuses instead of
+  downgrading to HOLD, CLI reports carry `attestation: 'offline-cli'`,
+  project floors are a required evaluator input loaded from `aiwg.config`
+  (unreadable or invalid config refuses evaluation; reads only warn), the
+  default floor is the shipped integrity-ceiling pack itself (suppressed only
+  by a tightening all-scoped upstream-ceiling floor gate), ceilings gain a
+  project-wide `'*'` default that per-study keys may only tighten, and the
+  discovery fixture gains a second pack with same-type hard negatives and
+  paraphrase queries. Provider loading, study adoption and any live,
+  held-out, human-review or production evidence remain pending (#2830)
+
 - Refreshed experimental, default-off D17 source dry-run pins after the gates
   phase 1 core moved the qualification statistics and canonicalised evidence
   digests; the corpus and split/gold pins are unchanged. Live evidence and

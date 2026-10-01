@@ -6,16 +6,15 @@ import { allHandlers } from '../../../../src/cli/handlers/index.js';
 import { gatesHandler } from '../../../../src/cli/handlers/gates.js';
 import { getCommandDefinition, getCommandIds, searchCommandsByKeyword } from '../../../../src/extensions/commands/definitions.js';
 import { artifactDigest } from '../../../../src/decision/validate.js';
-import type { GateBinding, GateMetricsDocument } from '../../../../src/gates/types.js';
+import type { GateBinding, GateMetricsDocument, GatePack } from '../../../../src/gates/types.js';
 import {
-  NOW, evaluateFixture, makeBinding, makeUpstream, pairedRecords, passingMetrics,
-  proportionRecords, testHoldout,
+  NOW, evaluateFixture, makeBindingForPack, makeUpstream, pairedRecords, passingMetrics,
+  projectPack, proportionRecords, testHoldout,
 } from '../../../conformance/gates-v1/helper.js';
 import { proportionProvider, pairedProvider } from '../../../../src/gates/providers/index.js';
 
 const repoRoot = process.cwd();
 const fixturePack = 'test/conformance/gates-v1/fixtures/valid-pack.json';
-const fixturePackAbs = path.join(repoRoot, fixturePack);
 
 function ctx(args: string[], cwd = repoRoot) {
   return { args, rawArgs: ['gates', ...args], cwd, frameworkRoot: repoRoot };
@@ -27,17 +26,37 @@ function writeJson(dir: string, name: string, value: unknown): string {
   return file;
 }
 
-function offlineFiles(dir: string, overrides?: { binding?: GateBinding; metrics?: GateMetricsDocument; upstream?: 'promote' | 'hold' | 'rollback' | null }) {
-  const binding = overrides?.binding ?? makeBinding();
+// `--pack-dir` file loads are always project: packs, so CLI fixtures bind a
+// project-homed copy of the conformance pack (aiwg: ids are reserved for the
+// installed tree and manifest-declared bundles).
+function offlineFiles(dir: string, overrides?: {
+  pack?: GatePack; binding?: GateBinding; metrics?: GateMetricsDocument; upstream?: 'promote' | 'hold' | 'rollback' | null;
+}) {
+  const pack = overrides?.pack ?? projectPack();
+  const binding = overrides?.binding ?? makeBindingForPack(pack);
   const metrics = overrides?.metrics ?? passingMetrics();
   const upstream = overrides?.upstream === undefined ? makeUpstream('promote')
     : overrides.upstream === null ? null : makeUpstream(overrides.upstream);
   const holdout = testHoldout(binding);
+  const packPath = writeJson(dir, 'pack.gatepack.json', pack);
   const bindingPath = writeJson(dir, 'binding.json', binding);
   const metricsPath = writeJson(dir, 'metrics.json', metrics);
   const holdoutPath = writeJson(dir, 'holdout.json', holdout);
   const upstreamPath = upstream ? writeJson(dir, 'upstream.json', upstream) : undefined;
-  return { binding, metrics, holdout, upstream, bindingPath, metricsPath, holdoutPath, upstreamPath };
+  return { pack, packPath, binding, metrics, holdout, upstream, bindingPath, metricsPath, holdoutPath, upstreamPath };
+}
+
+function evaluateArgs(files: {
+  bindingPath: string; metricsPath: string; holdoutPath: string; upstreamPath?: string; packPath: string;
+  binding: GateBinding;
+}): string[] {
+  return [
+    'evaluate', '--binding', files.bindingPath, '--metrics', files.metricsPath,
+    '--holdout', files.holdoutPath,
+    ...(files.upstreamPath ? ['--upstream', files.upstreamPath] : []),
+    '--now', NOW, '--trusted-binding-digest', artifactDigest(files.binding),
+    '--pack-dir', files.packPath,
+  ];
 }
 
 describe('gatesHandler', () => {
@@ -52,18 +71,23 @@ describe('gatesHandler', () => {
 
   it('validates packs, bindings and reports offline', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
-    const { binding } = offlineFiles(dir);
-    const report = evaluateFixture({ binding });
+    const { packPath, bindingPath } = offlineFiles(dir);
+    const report = evaluateFixture();
     const reportPath = writeJson(dir, 'report.json', report);
-    for (const [kind, file] of [
-      ['pack', fixturePack],
-      ['binding', path.join(dir, 'binding.json')],
-      ['report', reportPath],
+    for (const [kind, file, extra] of [
+      ['pack', packPath, []],
+      ['pack', fixturePack, []],
+      ['binding', bindingPath, ['--pack-dir', packPath]],
+      ['report', reportPath, []],
     ] as const) {
-      const result = await gatesHandler.execute(ctx(['validate', kind, file, '--pack-dir', fixturePackAbs]));
-      expect(result.exitCode, kind).toBe(0);
+      const result = await gatesHandler.execute(ctx(['validate', kind, file, ...extra]));
+      expect(result.exitCode, `${kind} ${file}`).toBe(0);
       expect(JSON.parse(result.message ?? '{}')).toMatchObject({ valid: true, kind });
     }
+    // An aiwg: pack claimed by a --pack-dir file is not a project pack.
+    const smuggled = await gatesHandler.execute(ctx(['validate', 'binding', bindingPath, '--pack-dir', fixturePack]));
+    expect(smuggled.exitCode).toBe(2);
+    expect(JSON.parse(smuggled.message ?? '{}')).toMatchObject({ valid: false });
     const invalid = await gatesHandler.execute(ctx(['validate', 'pack', 'test/conformance/gates-v1/fixtures/invalid-pack-kind.json']));
     expect(invalid.exitCode).toBe(2);
     expect(JSON.parse(invalid.message ?? '{}')).toMatchObject({ valid: false });
@@ -78,13 +102,9 @@ describe('gatesHandler', () => {
   it('evaluates a passing binding to PROMOTE and refuses to promote breached thresholds', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
     const passing = offlineFiles(dir);
-    const ok = await gatesHandler.execute(ctx([
-      'evaluate', '--binding', passing.bindingPath, '--metrics', passing.metricsPath,
-      '--holdout', passing.holdoutPath, '--upstream', passing.upstreamPath as string,
-      '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-    ], dir));
+    const ok = await gatesHandler.execute(ctx(evaluateArgs(passing), dir));
     expect(ok.exitCode).toBe(0);
-    expect(JSON.parse(ok.message ?? '{}')).toMatchObject({ decision: 'PROMOTE' });
+    expect(JSON.parse(ok.message ?? '{}')).toMatchObject({ decision: 'PROMOTE', attestation: 'offline-cli' });
 
     // Regressed Wilson upper bound: 12 false-ready events on slice a breaches
     // falseReadyMaxBps=100, so the candidate must NOT promote.
@@ -99,11 +119,7 @@ describe('gatesHandler', () => {
       },
     };
     const breached = offlineFiles(dir, { metrics: breachedMetrics });
-    const held = await gatesHandler.execute(ctx([
-      'evaluate', '--binding', breached.bindingPath, '--metrics', breached.metricsPath,
-      '--holdout', breached.holdoutPath, '--upstream', breached.upstreamPath as string,
-      '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-    ], dir));
+    const held = await gatesHandler.execute(ctx(evaluateArgs({ ...breached, upstreamPath: breached.upstreamPath as string }), dir));
     expect(held.exitCode).toBe(0);
     const heldReport = JSON.parse(held.message ?? '{}');
     expect(heldReport.decision).toBe('HOLD');
@@ -122,11 +138,7 @@ describe('gatesHandler', () => {
       },
     };
     const regressed = offlineFiles(dir, { metrics: regressedMetrics });
-    const rolled = await gatesHandler.execute(ctx([
-      'evaluate', '--binding', regressed.bindingPath, '--metrics', regressed.metricsPath,
-      '--holdout', regressed.holdoutPath, '--upstream', regressed.upstreamPath as string,
-      '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-    ], dir));
+    const rolled = await gatesHandler.execute(ctx(evaluateArgs({ ...regressed, upstreamPath: regressed.upstreamPath as string }), dir));
     expect(JSON.parse(rolled.message ?? '{}').decision).toBe('ROLLBACK');
   });
 
@@ -134,31 +146,21 @@ describe('gatesHandler', () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
     for (const upstream of ['hold', 'rollback'] as const) {
       const files = offlineFiles(dir, { upstream });
-      const result = await gatesHandler.execute(ctx([
-        'evaluate', '--binding', files.bindingPath, '--metrics', files.metricsPath,
-        '--holdout', files.holdoutPath, '--upstream', files.upstreamPath as string,
-        '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-      ], dir));
+      const result = await gatesHandler.execute(ctx(evaluateArgs({ ...files, upstreamPath: files.upstreamPath as string }), dir));
       expect(JSON.parse(result.message ?? '{}').decision).toBe(upstream === 'hold' ? 'HOLD' : 'ROLLBACK');
     }
     const clean = offlineFiles(dir);
     const forgedUpstream = { ...(clean.upstream as object), digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000' };
     const forgedUpstreamPath = writeJson(dir, 'forged-upstream.json', forgedUpstream);
-    const refused = await gatesHandler.execute(ctx([
-      'evaluate', '--binding', clean.bindingPath, '--metrics', clean.metricsPath,
-      '--holdout', clean.holdoutPath, '--upstream', forgedUpstreamPath,
-      '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-    ], dir));
+    const refused = await gatesHandler.execute(ctx(
+      evaluateArgs({ ...clean, upstreamPath: forgedUpstreamPath }), dir));
     expect(refused.exitCode).toBe(1);
     expect(refused.message).toMatch(/digest does not match/);
 
     const forgedHoldout = { ...clean.holdout, digest: 'sha256:1111111111111111111111111111111111111111111111111111111111111111' };
     const forgedHoldoutPath = writeJson(dir, 'forged-holdout.json', forgedHoldout);
-    const refusedHoldout = await gatesHandler.execute(ctx([
-      'evaluate', '--binding', clean.bindingPath, '--metrics', clean.metricsPath,
-      '--holdout', forgedHoldoutPath, '--upstream', clean.upstreamPath as string,
-      '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-    ], dir));
+    const refusedHoldout = await gatesHandler.execute(ctx(
+      evaluateArgs({ ...clean, holdoutPath: forgedHoldoutPath, upstreamPath: clean.upstreamPath as string }), dir));
     expect(refusedHoldout.exitCode).toBe(1);
     expect(refusedHoldout.message).toMatch(/seal does not match/);
   });
@@ -166,14 +168,14 @@ describe('gatesHandler', () => {
   it('fails closed without throwing on missing files, bad digests and bad clocks', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'aiwg-gates-cli-'));
     const files = offlineFiles(dir);
-    const missing = await gatesHandler.execute(ctx([
-      'evaluate', '--binding', path.join(dir, 'missing.json'), '--metrics', files.metricsPath,
-      '--holdout', files.holdoutPath, '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-    ], dir));
+    const missing = await gatesHandler.execute(ctx(
+      evaluateArgs({ ...files, bindingPath: path.join(dir, 'missing.json') }), dir));
     expect(missing.exitCode).toBe(1);
     const badClock = await gatesHandler.execute(ctx([
       'evaluate', '--binding', files.bindingPath, '--metrics', files.metricsPath,
-      '--holdout', files.holdoutPath, '--now', 'not-a-time', '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
+      '--holdout', files.holdoutPath, '--upstream', files.upstreamPath as string,
+      '--now', 'not-a-time', '--trusted-binding-digest', artifactDigest(files.binding),
+      '--pack-dir', files.packPath,
     ], dir));
     expect(badClock.exitCode).toBe(1);
     // A binding whose digest differs from the frozen record is a new study version, never an edit.
@@ -183,10 +185,8 @@ describe('gatesHandler', () => {
       frozenDigest: artifactDigest(files.binding), firstAccessedAt: null,
       digest: artifactDigest({ frozenDigest: artifactDigest(files.binding), firstAccessedAt: null }),
     });
-    const stale = await gatesHandler.execute(ctx([
-      'evaluate', '--binding', editedPath, '--metrics', files.metricsPath,
-      '--holdout', editedHoldoutPath, '--now', NOW, '--pack-dir', fixturePackAbs, '--aiwg-root', dir,
-    ], dir));
+    const stale = await gatesHandler.execute(ctx(
+      evaluateArgs({ ...files, bindingPath: editedPath, holdoutPath: editedHoldoutPath }), dir));
     expect(stale.exitCode).toBe(1);
     expect(stale.message).toMatch(/frozen record|trusted|mismatch/i);
   });

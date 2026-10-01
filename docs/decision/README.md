@@ -111,12 +111,8 @@ digests with a versioned legacy mode. Packs are discoverable (`gate-pack`
 in `aiwg discover`/`aiwg show`), declared per bundle (`gatePacks` manifest
 field, `<bundle>/gate-packs/*.gatepack.yaml|json`) and exercised through
 the offline `aiwg gates validate|evaluate|show|list` CLI; the bundled
-`aiwg:decision-engine/integrity-ceiling` example pack validates. There is
-no project floor enforcement, no addon provider loading and no migrated
+`aiwg:decision-engine/integrity-ceiling` example pack validates. Project
+floors from `aiwg.config` `gates` (including the shipped default
+integrity-ceiling floor) are a required evaluator input; the opt-out is
+explicit and documented. There is no addon provider loading and no migrated
 study; live criteria remain pending.
-
-digests with a versioned legacy mode. Project floors from `aiwg.config`
-`gates` (including the default integrity-ceiling floor) are enforced only
-when the caller passes them as trusted registry/evaluator input; without
-that input behavior is unchanged. There is no CLI, no addon provider loading
-and no migrated study; live criteria remain pending.

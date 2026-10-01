@@ -76,7 +76,14 @@ is a load error with any other mode.
 ## Evaluation contract
 
 `evaluateGates({ binding, registry, trustedBindingDigest, holdout, metrics,
-upstream, now })` is pure: no I/O, injected clock, seeded bootstrap only.
+upstream, now, floors, attestation })` is pure: no I/O, injected clock,
+seeded bootstrap only. `floors` is required: pass
+`resolveProjectFloors(config)` or `'none-explicit-opt-out'` (tests/legacy
+only, with a documented reason); an `undefined` floors input refuses
+evaluation. When the resolved binding observes any `upstream-ceiling` gate
+(including the default floor's), a null `upstream` refuses evaluation
+instead of downgrading to HOLD. `attestation: 'offline-cli'` labels
+CLI-produced reports; library reports omit it and stay byte-identical.
 `registry` must be a `GateRegistry` (duck-typed `{resolveBinding}` objects
 are rejected). The binding is resolved internally through the pure
 `resolveGateBinding` over a standalone snapshot of the registry's authored
@@ -133,36 +140,43 @@ slice inventory but never gates (pooled-of group references are deferred).
 Experimental, default-off project policy over the core above. The `gates`
 section of `.aiwg/aiwg.config` holds `floors` (inline `project:` GatePacks
 and/or pins over registered packs whose composed gates all become floors)
-and optional per-study `ceilings` keyed by binding `metadata.id`. Inline
-floor packs validate against the closed GatePack schema at config load;
-pack-reference versions and authored digests are verified at resolution and
-composed through the pure `extends` chain, so a loosened parent moves the
-composed digest and breaks the pin. Every floor gate that binds a threshold
+and `ceilings`: exact binding `metadata.id` keys plus `'*'` as the
+project-wide default applied to every binding (a per-study key may only
+tighten the `'*'` default; renames never inherit). Inline floor packs
+validate against the closed GatePack schema at config load; pack-reference
+versions and authored digests are verified at resolution and composed
+through the pure `extends` chain, so a loosened parent moves the composed
+digest and breaks the pin. Every floor gate that binds a threshold
 parameter must declare a default for it: the default is the enforced
-minimum.
+minimum. An inline floor gate with id `integrity-ceiling` must be an
+all-scoped `upstream-ceiling` gate, or config validation flags it.
 
 Resolution refuses a binding that omits a floor gate or loosens any floor
 gate's threshold, parameter value, scope or outcome, reusing the per-kind
 `assertGateTightens` validator and the scope-superset rule. Binding threshold
 parameters are resolved to their preregistered values before comparison, so
 the check is value-against-minimum in the gate's declared direction. A
-binding whose ceiling sits below its configured per-study ceiling is refused;
-tighter ceilings resolve. `resolveGateBinding`, `GateRegistry.resolveBinding`
-and `evaluateGates` take floors as an optional trusted input loaded from
-`aiwg.config` by the caller (`resolveProjectFloors`), in the same trust
-class as `trustedBindingDigest` and the sealed holdout record: pins and
-composition are re-derived, never trusted. An absent floors input disables
-the check and keeps resolution and evaluation byte-identical.
+binding whose ceiling sits below its configured ceiling (per-study key, else
+the `'*'` default) is refused; tighter ceilings resolve.
+`resolveGateBinding` and `GateRegistry.resolveBinding` take floors as a
+trusted input loaded from `aiwg.config` by the caller
+(`resolveProjectFloors`), in the same trust class as
+`trustedBindingDigest` and the sealed holdout record: pins and composition
+are re-derived, never trusted. `evaluateGates` requires it (see above).
 
-When no floors are configured, `resolveProjectFloors` injects the operator
-default: the `project:default-floors` pack, whose single `integrity-ceiling`
-`upstream-ceiling` gate requires every decision study to observe the
-eval-integrity ceiling. Configuring floors replaces the default only for the
-`integrity-ceiling` gate id itself: an inline floor pack that governs a gate
-with that id suppresses the default, anything else keeps it. There is no
-opt-out: a project that configures floors without governing the ceiling keeps
-the default ceiling. Config parsing errors fail closed at
-`readAiwgConfig`/`writeAiwgConfig` time.
+The operator default floor is the shipped
+`aiwg:decision-engine/integrity-ceiling` pack itself — the single source of
+truth — applied at expansion time (`expandFloorPacks`), never an inline
+copy. It is suppressed only by a configured floor gate with id
+`integrity-ceiling` that is an all-scoped `upstream-ceiling` gate tightening
+the shipped gate (floor flag included, proven by `assertGateTightens`). A
+same-id gate of any other kind or scope never suppresses the default; the
+binding must then satisfy both, which fails closed with a diagnostic. There
+is no silent opt-out: a project that configures floors without governing the
+ceiling keeps the default ceiling. Invalid `gates` sections warn (non-fatal)
+at `readAiwgConfig` time so unrelated commands keep working, and fail closed
+in gates entry points (`aiwg gates evaluate`, binding resolution with
+floors); `writeAiwgConfig` stays strict so bad policy is never persisted.
 
 Example (every decision study observes the integrity ceiling and caps the
 false-ready rate; study `d29-synthetic-v8` can never promote):
@@ -220,20 +234,38 @@ Bundles declare packs with the `gatePacks`/`entry.gatePacks` manifest fields
 and ship them as `<bundle>/gate-packs/*.gatepack.yaml|json` (never `gates/`).
 `src/gates/discovery.ts` loads and registers them: shipped packs as
 `aiwg:<bundle>/<name>`, project-local bundles under their own
-`framework:`/`addon:`/`extension:` namespace. Invalid packs are rejected at
-load with a file-pathed diagnostic and never enter the `GateRegistry`.
+`framework:`/`addon:`/`extension:` namespace. The manifest's
+`entry.gatePacks` dir is validated as a safe relative path and contained by
+realpath (traversal and symlink escapes are load errors); listed files are
+lstat-checked (symlinks rejected, regular files only, 256 KiB cap enforced
+before reading). Invalid packs are rejected at load with a file-pathed
+diagnostic and never enter the `GateRegistry`.
 
 `aiwg gates` (`src/cli/handlers/gates.ts`, `src/gates/driver.ts`) is pure
-and offline:
+and offline, with explicit trust boundaries:
 
+- Single files passed via `--pack-dir` are always `project:` packs: an
+  `aiwg:` (or `addon:`/`framework:`/`extension:`) id claimed by a file is
+  rejected. Those namespaces load only from the installed tree
+  (`aiwg:`, resolved from the package location, never the cwd) or from
+  manifest-declared bundles (directory `--pack-dir` with a matching
+  `manifest.json` `{id, type}`; the origin never comes from path sniffing).
+- An explicit `--aiwg-root` override is untrusted: `list`/`show`/`validate`
+  still inspect it, but `evaluate` refuses it.
 - `validate <pack|binding|report> <path>` schema-checks plus pack semantics
   (`validateResolvedPack`) and binding resolution; invalid files report
   `valid: false` (exit 2) instead of throwing.
 - `evaluate --binding <file> --metrics <file> --holdout <file>
-  [--upstream <file>] --now <iso>` re-derives pack, provider, binding and
-  seal digests inside the evaluator and prints the `GateReport` JSON.
-  A breached threshold never promotes; upstream `HOLD`/`ROLLBACK` is never
-  upgraded; forged holdout/upstream seals are refused.
+  [--upstream <file>] --now <iso> --trusted-binding-digest <sha256>`
+  re-derives pack, provider, binding and seal digests inside the evaluator
+  and prints the `GateReport` JSON. The binding digest is caller-asserted
+  (never self-derived); holdout and upstream files must already carry their
+  sealed digests (auto-sealing refused); `--upstream` is required whenever
+  the binding observes an `upstream-ceiling` gate. A breached threshold
+  never promotes; upstream `HOLD`/`ROLLBACK` is never upgraded; forged
+  holdout/upstream seals are refused. Project floors load from
+  `.aiwg/aiwg.config` in the cwd (unreadable or invalid config refuses
+  evaluation). Printed reports carry `attestation: 'offline-cli'`.
 - `show <id>` prints the resolved pack with authored and composed digests.
 - `list [--namespace <ns>] [--rule [<rule-id>]]` lists registered packs.
   `--rule` enforcedBy coverage is a stub: it reports packs named by rules'
@@ -248,17 +280,11 @@ so discovery has a real entry; it validates and registers.
 ## Pending (not in this phase)
 
 Live Jev calls, real held-out data, human reviewers and production rollout:
-no project floors in `aiwg.config` (#2832), no addon/extension provider
-loading — providers register only through core modules and `sourceDigest`
-binds the provider descriptor, not a code hash (#2831) — and no study
-migrates to bindings (#2833+). Rule `enforcedBy` coverage stays a stub
-(#2839). No live criterion is met; the harness above is what those phases
-build on.
-
-there is no CLI (`aiwg gates`, #2830), no addon/extension provider loading —
-providers register only through core modules and `sourceDigest` binds the
-provider descriptor, not a code hash (#2831) — and no study migrates to
-bindings (#2833+). Project floors in `aiwg.config` (#2832) are implemented as
-a trusted registry/evaluator input with the default integrity-ceiling floor,
-but no shipped floor pack exists yet and no study resolves with floors. No
-live criterion is met; the harness above is what those phases build on.
+no addon/extension provider loading — providers register only through core
+modules and `sourceDigest` binds the provider descriptor, not a code hash
+(#2831) — and no study migrates to bindings (#2833+). Rule `enforcedBy`
+coverage stays a stub (#2839). The discovery relevance fixture covers the
+shipped integrity-ceiling pack plus the `coverage-floor` conformance fixture
+pack (`test/conformance/gates-v1/fixtures/`); live discovery ranking against
+a full index is not asserted. No live criterion is met; the harness above is
+what those phases build on.

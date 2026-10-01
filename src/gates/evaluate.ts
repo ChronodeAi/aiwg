@@ -47,16 +47,24 @@ export interface EvaluateGatesInput {
   metrics: GateMetricsDocument;
   upstream: UpstreamCeiling | null;
   /**
-   * Optional trusted project floors, loaded from `.aiwg/aiwg.config` by the
+   * Required trusted project floors, loaded from `.aiwg/aiwg.config` by the
    * caller via `resolveProjectFloors` (see `src/gates/floors.ts`). Like
    * `trustedBindingDigest` and `holdout`, floors are caller-asserted project
    * policy: the evaluator re-derives pack pins, composition and tightening
-   * from them but never fetches them. Absent disables the check and keeps
-   * evaluation byte-identical to the floors-unaware path.
+   * from them but never fetches them. There is no absent state: pass
+   * `'none-explicit-opt-out'` only for tests or legacy callers with a
+   * documented reason, which skips the check exactly like the pre-floors
+   * path. An `undefined` floors input refuses evaluation.
    */
-  floors?: ProjectFloors;
+  floors: ProjectFloors | 'none-explicit-opt-out';
   /** Fake-clock timestamp (ISO date-time). Recorded as evaluatedAt, so identical inputs give identical bytes. */
   now: string;
+  /**
+   * Report provenance label, recorded in the report body (and its digest).
+   * The offline CLI passes `'offline-cli'`; library callers leave it absent,
+   * which keeps their reports byte-identical.
+   */
+  attestation?: 'offline-cli';
   /**
    * Removed: caller-supplied resolution is never accepted (it let callers drop
    * packs, empty gates or loosen parameters under a pinned digest). Present only
@@ -426,12 +434,16 @@ function upstreamOutcome(upstream: UpstreamCeiling | null): { ceiling: GateOutco
  * conservative (wider) relative to a one-sided interval at the same level.
  */
 export function evaluateGates(input: EvaluateGatesInput): GateReport {
-  const { binding, registry, trustedBindingDigest, holdout, metrics, upstream, now, floors } = input;
+  const { binding, registry, trustedBindingDigest, holdout, metrics, upstream, now } = input;
   if ('resolved' in (input as unknown as Record<string, unknown>)
     && (input as unknown as Record<string, unknown>).resolved !== undefined) {
     fail('caller-supplied gate resolution is not accepted: pass the binding and registry');
   }
   if (!(registry instanceof GateRegistry)) fail('a GateRegistry is required for internal resolution');
+  if (input.floors === undefined) {
+    fail('project floors are required: pass resolveProjectFloors(config) or \'none-explicit-opt-out\' with a documented reason');
+  }
+  const floors = input.floors === 'none-explicit-opt-out' ? undefined : input.floors;
   // Reserve before dispatch: resolve and fully validate the binding (pins,
   // providers, parameters, slices) before any gate observes any metric. The
   // resolution runs through the pure `resolveGateBinding` over a standalone
@@ -475,6 +487,14 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
   }
   if (upstream !== null && artifactDigest(upstream.metadata) !== upstream.digest) {
     fail('upstream integrity digest does not match its report');
+  }
+  // Omitting the upstream record must never downgrade a bound ceiling to
+  // HOLD: when the resolved binding observes any upstream-ceiling gate
+  // (including the default floor's), evaluation without a sealed upstream is
+  // refused here in the evaluator, not just at the CLI.
+  if (upstream === null
+    && packs.some(pack => pack.resolved.spec.gates.some(gate => gate.kind === 'upstream-ceiling'))) {
+    fail('evaluation requires a sealed upstream record: the binding observes an upstream-ceiling gate');
   }
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs)) fail('evaluation timestamp is not a valid date-time');
@@ -581,6 +601,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     ceilings: { packOutcome, upstreamCeiling, bindingCeiling },
     decision,
     evaluatedAt: now,
+    ...(input.attestation === undefined ? {} : { attestation: input.attestation }),
   };
   return { ...body, digest: artifactDigest(body) };
 }

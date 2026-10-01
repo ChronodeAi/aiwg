@@ -16,8 +16,10 @@ import type { GateOutcome, GatePack, GateParentPin } from './types.js';
  * `trustedBindingDigest` and the sealed holdout record: the caller loads them
  * from `.aiwg/aiwg.config` (via `validateGatesConfig` + `resolveProjectFloors`)
  * and passes them to `resolveGateBinding`/`GateRegistry.resolveBinding`/
- * `evaluateGates`. An absent (`undefined`) floors input disables the check
- * entirely, so existing behavior is byte-identical when floors are not used.
+ * `evaluateGates`. `evaluateGates` requires the input (pass
+ * `'none-explicit-opt-out'` only for tests or legacy callers with a
+ * documented reason); `resolveGateBinding` still accepts an absent input,
+ * which skips the check exactly like the pre-floors path.
  */
 
 /** One project floor source: an inline pack or a pin over a registered pack. */
@@ -27,13 +29,19 @@ export type ProjectFloorSource =
 
 /**
  * The `gates` section of `.aiwg/aiwg.config`, as stored (as-authored).
- * `resolveProjectFloors` injects the operator default when the project does
- * not govern the integrity ceiling itself.
+ * The operator default integrity-ceiling floor is applied at expansion time
+ * (`expandFloorPacks` in `registry.ts`) from the shipped
+ * `aiwg:decision-engine/integrity-ceiling` pack, so it needs no entry here.
  */
 export interface ProjectFloors {
   /** Floor packs or pack references. Empty or absent means unconfigured. */
   floors?: ProjectFloorSource[];
-  /** Per-study outcome ceilings keyed by binding `metadata.id`. */
+  /**
+   * Outcome ceilings: exact binding `metadata.id` keys, plus the `'*'` key
+   * as the project-wide default applied to every binding. A per-study key
+   * may only tighten the `'*'` default, never loosen it (rename escapes:
+   * `study-a-v2` never inherits `study-a`'s ceiling).
+   */
   ceilings?: Record<string, GateOutcome>;
 }
 
@@ -46,32 +54,15 @@ const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
 /**
  * Operator default floor (ADR section 12): every decision study observes the
- * eval-integrity ceiling. The gate carries no `floor` flag, so bindings need
- * only match its shape (an `upstream-ceiling` gate over `all` scopes); the
- * floor-ness comes from project policy, not from the binding.
+ * eval-integrity ceiling. This is a reference to the shipped
+ * `aiwg:decision-engine/integrity-ceiling` pack — the single source of truth
+ * — applied at expansion time (`expandFloorPacks`), never an inline copy.
+ * The default is suppressed only by a configured floor gate with id
+ * `integrity-ceiling` that is an all-scoped `upstream-ceiling` gate
+ * tightening the shipped gate (floor flag included).
  */
-export const DEFAULT_PROJECT_FLOOR_PACK: GatePack = {
-  apiVersion: 'gates.aiwg.io/v1alpha1',
-  kind: 'GatePack',
-  metadata: {
-    id: 'project:default-floors',
-    version: '1.0.0',
-    description: 'Operator default project floor: every decision study observes the eval-integrity ceiling.',
-  },
-  spec: {
-    metrics: {},
-    gates: [
-      {
-        id: 'integrity-ceiling',
-        kind: 'upstream-ceiling',
-        description: 'Eval-integrity ceiling: compromise rolls back, allowlist problems hold.',
-        scope: { mode: 'all' },
-        onFail: 'HOLD',
-        direction: 'higher-is-stricter',
-      },
-    ],
-  },
-};
+export const INTEGRITY_CEILING_FLOOR_PACK_ID = 'aiwg:decision-engine/integrity-ceiling';
+export const INTEGRITY_CEILING_FLOOR_PACK_VERSION = '1.0.0';
 
 /**
  * A binding ceiling satisfies the configured per-study ceiling when it is at
@@ -86,20 +77,17 @@ export function projectCeilingSatisfied(
 }
 
 /**
- * Resolves the effective project floors: the configured entries plus the
- * operator default integrity-ceiling pack, unless the project already governs
- * a gate with id `integrity-ceiling` in an inline floor pack. Pack references
- * cannot suppress the default (their gates are only known after registry
- * resolution); a redundant ceiling is satisfiable whenever the referenced
- * pack uses the same all-scoped shape, and any conflict fails closed at
- * resolution with a diagnostic.
+ * Resolves the effective project floors: the configured entries, verbatim.
+ * The operator default integrity-ceiling floor is NOT injected here — it is
+ * applied at expansion time (`expandFloorPacks`) from the shipped
+ * `aiwg:decision-engine/integrity-ceiling` pack, where the registry can prove
+ * (via `assertGateTightens`) whether a configured floor genuinely tightens
+ * it. A same-id gate that is not an all-scoped `upstream-ceiling` tightening
+ * never suppresses the default; it is flagged by `validateGatesConfig` and
+ * fails closed at resolution.
  */
 export function resolveProjectFloors(gates?: ProjectFloors): ProjectFloors {
-  const floors: ProjectFloorSource[] = [...(gates?.floors ?? [])];
-  const governsIntegrityCeiling = floors.some(source =>
-    'pack' in source && source.pack.spec.gates.some(gate => gate.id === 'integrity-ceiling'));
-  if (!governsIntegrityCeiling) floors.push({ pack: DEFAULT_PROJECT_FLOOR_PACK });
-  return { floors, ceilings: { ...(gates?.ceilings ?? {}) } };
+  return { floors: [...(gates?.floors ?? [])], ceilings: { ...(gates?.ceilings ?? {}) } };
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -141,6 +129,16 @@ export function validateGatesConfig(gates: unknown): string[] {
           errors.push(`gates.ceilings.${study}: must be PROMOTE, HOLD or ROLLBACK`);
         }
       }
+      const star = (gates.ceilings as Record<string, unknown>)['*'];
+      if (typeof star === 'string' && (OUTCOMES as readonly string[]).includes(star)) {
+        for (const [study, ceiling] of Object.entries(gates.ceilings)) {
+          if (study !== '*' && typeof ceiling === 'string'
+            && (OUTCOMES as readonly string[]).includes(ceiling)
+            && OUTCOME_RANK[ceiling as GateOutcome] < OUTCOME_RANK[star as GateOutcome]) {
+            errors.push(`gates.ceilings.${study}: must tighten the project default ceiling ${star}, not loosen it`);
+          }
+        }
+      }
     }
   }
   return errors;
@@ -175,7 +173,16 @@ function validateInlineFloorPack(pack: unknown, where: string): string[] {
   } catch (error) {
     return [`${where}.pack: ${error instanceof Error ? error.message : 'invalid pack id'}`];
   }
-  return [];
+  const errors: string[] = [];
+  for (const gate of parsed.spec.gates) {
+    if (gate.id === 'integrity-ceiling'
+      && (gate.kind !== 'upstream-ceiling' || gate.scope.mode !== 'all')) {
+      errors.push(`${where}.pack: floor gate 'integrity-ceiling' must be an all-scoped upstream-ceiling gate`
+        + ` to govern the default ceiling (a weaker same-id gate never suppresses it;`
+        + ` full tightening against the shipped pack is enforced at resolution)`);
+    }
+  }
+  return errors;
 }
 
 function validateFloorPackRef(packRef: unknown, where: string): string[] {

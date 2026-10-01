@@ -10,13 +10,21 @@ function usage(): string {
     '',
     'Commands:',
     '  validate <pack|binding|report> <path> [--pack-dir <dir>] [--aiwg-root <dir>]',
-    '  evaluate --binding <file> --metrics <file> --holdout <file> [--upstream <file>] --now <iso> [--pack-dir <dir>] [--aiwg-root <dir>]',
+    '  evaluate --binding <file> --metrics <file> --holdout <file> [--upstream <file>] --now <iso> --trusted-binding-digest <sha256> [--pack-dir <dir>] [--aiwg-root <dir>]',
     '  show <id> [--pack-dir <dir>] [--aiwg-root <dir>]',
     '  list [--namespace <ns>] [--rule [<rule-id>]] [--pack-dir <dir>] [--aiwg-root <dir>]',
     '',
     'Packs live in <bundle>/gate-packs/*.gatepack.yaml|json and register as',
     'aiwg:<bundle>/<name> (shipped) or framework:/addon:/extension:<bundle>/<name>.',
+    'Single files passed via --pack-dir are always project: packs; aiwg: is',
+    'reserved for the installed tree. An --aiwg-root override is untrusted:',
+    'list/show/validate still inspect it, but evaluate refuses it.',
     'Evaluation is pure and offline: pass --now <iso> for the fake clock.',
+    'The holdout and upstream files must already carry their sealed digests,',
+    'and --upstream is required whenever the binding observes an',
+    'upstream-ceiling gate. Project floors load from .aiwg/aiwg.config in the',
+    'cwd (unreadable or invalid config refuses evaluation). Reports printed',
+    "here carry attestation: 'offline-cli'.",
   ].join('\n');
 }
 
@@ -35,14 +43,18 @@ function takeAllOptions(args: string[], name: string): string[] {
 }
 
 function driverOptions(ctx: HandlerContext) {
-  const aiwgRoot = takeOption(ctx.args, '--aiwg-root') ?? ctx.frameworkRoot ?? ctx.cwd;
+  // The shipped root resolves from the installed framework location, never
+  // from the cwd: any checkout could otherwise impersonate the aiwg:
+  // namespace. An explicit --aiwg-root is kept for inspection only; packs
+  // loaded from it are marked untrusted and refused by evaluate.
+  const aiwgRoot = takeOption(ctx.args, '--aiwg-root') ?? ctx.frameworkRoot;
   const packDirs = takeAllOptions(ctx.args, '--pack-dir');
   return { cwd: ctx.cwd, aiwgRoot, ...(packDirs.length ? { packDirs } : {}) };
 }
 
 /** Positional args with each known value-flag and its value skipped in order. */
 function positionals(args: string[], skipCommand: string): string[] {
-  const valueFlags = new Set(['--pack-dir', '--aiwg-root', '--binding', '--metrics', '--holdout', '--upstream', '--now', '--namespace', '--rule']);
+  const valueFlags = new Set(['--pack-dir', '--aiwg-root', '--binding', '--metrics', '--holdout', '--upstream', '--now', '--namespace', '--rule', '--trusted-binding-digest']);
   const found: string[] = [];
   let skipNext = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -86,12 +98,17 @@ async function executeGates(ctx: HandlerContext): Promise<HandlerResult> {
       const holdout = takeOption(ctx.args, '--holdout');
       const upstream = takeOption(ctx.args, '--upstream');
       const now = takeOption(ctx.args, '--now');
-      if (!binding || !metrics || !holdout || !now) {
-        return { exitCode: 2, message: `gates evaluate requires --binding <file> --metrics <file> --holdout <file> --now <iso>\n\n${usage()}`, rawOutput: true };
+      const trustedBindingDigest = takeOption(ctx.args, '--trusted-binding-digest');
+      if (!binding || !metrics || !holdout || !now || !trustedBindingDigest) {
+        return { exitCode: 2, message: `gates evaluate requires --binding <file> --metrics <file> --holdout <file> --now <iso> --trusted-binding-digest <sha256:..>\n\n${usage()}`, rawOutput: true };
+      }
+      if (!/^sha256:[0-9a-f]{64}$/.test(trustedBindingDigest)) {
+        return { exitCode: 2, message: `gates evaluate requires --trusted-binding-digest <sha256:..> (64 hex chars)\n\n${usage()}`, rawOutput: true };
       }
       const report = await evaluateGatesFromFiles({
         bindingPath: binding, metricsPath: metrics, holdoutPath: holdout,
         ...(upstream ? { upstreamPath: upstream } : {}), now,
+        trustedBindingDigest: trustedBindingDigest as `sha256:${string}`,
       }, options);
       return jsonResult(report, 0);
     }

@@ -7,6 +7,7 @@ import {
   freezeBinaryBenchmarkPlan, freezeQualificationSplit, verifyBinaryBenchmarkPlanDigest,
 } from '../../../src/decision/qualification/quality.js';
 import { evaluateGates, sealGateHoldout } from '../../../src/gates/evaluate.js';
+import { resolveProjectFloors } from '../../../src/gates/floors.js';
 import { validateGateReport } from '../../../src/gates/report.js';
 import { GateRegistry } from '../../../src/gates/registry.js';
 import { legacySha256 } from '../../../src/gates/stats/digest.js';
@@ -62,6 +63,8 @@ describe('gates fix round 2 regressions', () => {
       binding, registry: evil, trustedBindingDigest: trustedDigest(binding),
       holdout: testHoldout(binding), metrics: breachedMetrics(),
       upstream: makeUpstream('promote'), now: NOW,
+      // Not a floors test: opt out so override-resistance is exercised alone.
+      floors: 'none-explicit-opt-out',
     };
     const report = evaluateGates(input);
     // Honest evaluation of breached metrics holds; tampered composition must never promote.
@@ -88,6 +91,7 @@ describe('gates fix round 2 regressions', () => {
       binding, registry: fake as never, trustedBindingDigest: trustedDigest(binding),
       holdout: testHoldout(binding), metrics: breachedMetrics(),
       upstream: makeUpstream('promote'), now: NOW,
+      floors: 'none-explicit-opt-out',
     })).toThrow(/GateRegistry/);
   });
 
@@ -118,6 +122,8 @@ describe('gates fix round 2 regressions', () => {
       binding, registry: evil, trustedBindingDigest: trustedDigest(binding),
       holdout: testHoldout(binding), metrics: breachedMetrics(),
       upstream: makeUpstream('promote'), now: NOW,
+      // Not a floors test: opt out so override-resistance is exercised alone.
+      floors: 'none-explicit-opt-out',
     };
     const report = evaluateGates(input);
     expect(report.decision).not.toBe('PROMOTE');
@@ -135,6 +141,7 @@ describe('gates fix round 2 regressions', () => {
       metrics: passingMetrics(),
       upstream: makeUpstream('promote'),
       now: NOW,
+      floors: resolveProjectFloors({}),
     };
     // The binding declares held-out data yet the caller asserts no access: fail closed.
     expect(() => evaluateGates(input)).toThrow(/holdout/);
@@ -156,6 +163,7 @@ describe('gates fix round 2 regressions', () => {
       metrics: passingMetrics(),
       upstream: makeUpstream('promote'),
       now: NOW,
+      floors: resolveProjectFloors({}),
     })).toThrow(/holdout/);
   });
 
@@ -170,6 +178,7 @@ describe('gates fix round 2 regressions', () => {
       metrics: passingMetrics(),
       upstream: makeUpstream('promote'),
       now: NOW,
+      floors: resolveProjectFloors({}),
     })).toThrow(/after the evaluation timestamp/);
   });
 

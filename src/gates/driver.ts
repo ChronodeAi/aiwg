@@ -1,9 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { findPackageRoot } from '../cli/find-package-root.js';
+import { readAiwgConfig } from '../config/aiwg-config.js';
 import { parseDecisionJson, parseDecisionYaml } from '../decision/entry.js';
 import { artifactDigest } from '../decision/validate.js';
-import { discoverShippedGatePacks, loadGatePackFile, registerBundleGatePacks } from './discovery.js';
-import { evaluateGates, sealGateHoldout, sealUpstream } from './evaluate.js';
+import { discoverShippedGatePacks, loadGatePackFile, originForPackDir, registerBundleGatePacks } from './discovery.js';
+import { evaluateGates } from './evaluate.js';
+import { resolveProjectFloors, validateGatesConfig, type ProjectFloors } from './floors.js';
 import { MetricProviderRegistry } from './providers/index.js';
 import { createCoreProviderRegistry } from './providers/index.js';
 import { GateRegistry, splitPackId, validateResolvedPack } from './registry.js';
@@ -18,12 +23,25 @@ export interface GatesDriverOptions {
   packDirs?: string[];
 }
 
+export type ShippedRootTrust = 'shipped' | 'untrusted-override';
+
 function baseDir(options: GatesDriverOptions = {}): string {
   return path.resolve(options.cwd ?? process.cwd());
 }
 
+/**
+ * The installed package root: the only tree allowed to contribute `aiwg:`
+ * packs. Resolved from the installed package location, never from the cwd,
+ * so an arbitrary checkout cannot impersonate the shipped namespace.
+ */
+export function installedAiwgRoot(): string {
+  const root = findPackageRoot(dirname(fileURLToPath(import.meta.url)));
+  if (root === null) throw new Error('installed aiwg package root is unavailable');
+  return root;
+}
+
 function rootDir(options: GatesDriverOptions = {}): string {
-  return path.resolve(options.aiwgRoot ?? options.cwd ?? process.cwd());
+  return path.resolve(options.aiwgRoot ?? installedAiwgRoot());
 }
 
 function resolvePath(candidate: string, base: string): string {
@@ -40,11 +58,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Build an offline registry from shipped packs plus explicit pack dirs/files (tests). */
-export function buildGatesRegistry(options: GatesDriverOptions = {}): { registry: GateRegistry; loaded: string[] } {
+/**
+ * Build an offline registry from shipped packs plus explicit pack dirs/files.
+ * Trust rules: `aiwg:` is reserved for the installed tree (an `--aiwg-root`
+ * override is marked `untrusted-override` and can never feed evaluation);
+ * single files loaded via `packDirs` are always `project:` packs regardless
+ * of the id they declare; `addon:`/`framework:`/`extension:` packs load only
+ * from manifest-declared bundles via `originForPackDir` (never path
+ * sniffing). Read-only inspection (`list`/`show`/`validate`) works on any
+ * root; `evaluateGatesFromFiles` refuses untrusted roots.
+ */
+export function buildGatesRegistry(options: GatesDriverOptions = {}): {
+  registry: GateRegistry; loaded: string[]; shippedTrust: ShippedRootTrust;
+} {
   const registry = new GateRegistry(createCoreProviderRegistry());
   const loaded: string[] = [];
+  const installed = installedAiwgRoot();
   const root = rootDir(options);
+  const shippedTrust: ShippedRootTrust = options.aiwgRoot !== undefined
+    && path.resolve(options.aiwgRoot) !== path.resolve(installed)
+    ? 'untrusted-override' : 'shipped';
   try {
     loaded.push(...discoverShippedGatePacks(root, registry));
   } catch (error) {
@@ -56,35 +89,23 @@ export function buildGatesRegistry(options: GatesDriverOptions = {}): { registry
     if (lower.endsWith('.gatepack.yaml') || lower.endsWith('.gatepack.yml') || lower.endsWith('.gatepack.json')
       || lower.endsWith('.json') || lower.endsWith('.yaml') || lower.endsWith('.yml')) {
       const pack = loadGatePackFile(resolved);
-      const { namespace, rest } = splitPackId(pack.metadata.id);
-      const bundle = namespace === 'project' ? undefined : rest.includes('/') ? rest.slice(0, rest.indexOf('/')) : undefined;
+      const { namespace } = splitPackId(pack.metadata.id);
+      if (namespace !== 'project') {
+        throw new Error(`gate pack rejected: ${resolved}: pack ${pack.metadata.id} from --pack-dir`
+          + ` must use the project: namespace (aiwg: is reserved for shipped packs;`
+          + ` addon:/framework:/extension: packs load only from manifest-declared bundles)`);
+      }
       try {
-        registry.registerPack(pack, bundle === undefined ? { namespace } : { namespace, bundle });
+        registry.registerPack(pack, { namespace: 'project' });
       } catch (error) {
         throw new Error(`gate pack rejected: ${resolved}: ${error instanceof Error ? error.message : String(error)}`);
       }
       loaded.push(pack.metadata.id);
       continue;
     }
-    const origin = inferPackOrigin(resolved);
-    loaded.push(...registerBundleGatePacks(registry, resolved, origin));
+    loaded.push(...registerBundleGatePacks(registry, resolved, originForPackDir(resolved)));
   }
-  return { registry, loaded };
-}
-
-function inferPackOrigin(dir: string): { namespace: 'framework' | 'addon' | 'extension' | 'project' | 'aiwg'; bundle?: string } {
-  const normalized = dir.replace(/\\/g, '/');
-  const bundle = basenameOf(dir);
-  if (normalized.includes('/frameworks/')) return { namespace: 'framework', bundle };
-  if (normalized.includes('/addons/')) return { namespace: 'addon', bundle };
-  if (normalized.includes('/extensions/')) return { namespace: 'extension', bundle };
-  if (normalized.endsWith('/gate-packs') || normalized.includes('/.aiwg/')) return { namespace: 'project' };
-  return { namespace: 'project' };
-}
-
-function basenameOf(dir: string): string {
-  const parts = dir.replace(/\\/g, '/').split('/').filter(Boolean);
-  return parts[parts.length - 1] ?? 'unknown';
+  return { registry, loaded, shippedTrust };
 }
 
 export type GateValidateKind = 'pack' | 'binding' | 'report';
@@ -160,9 +181,19 @@ export interface GatesEvaluateFiles {
   holdoutPath: string;
   upstreamPath?: string;
   now: string;
+  /**
+   * Caller-asserted binding digest (CLI `--trusted-binding-digest`), verified
+   * against the binding bytes inside the evaluator. Never derived here: a
+   * self-derived digest would vouch for whatever bytes it just read.
+   */
+  trustedBindingDigest: Sha256Digest;
 }
 
-/** Load a sealed holdout record from disk. A present digest is re-derived; a missing digest is sealed. */
+/**
+ * Load a sealed holdout record from disk. The record must already carry its
+ * digest; the seal is re-derived and a missing digest is refused (never
+ * auto-sealed: sealing is a trust assertion the file alone cannot make).
+ */
 export async function loadHoldoutFile(filePath: string, cwd: string) {
   const resolved = resolvePath(filePath, cwd);
   const document = await readDocument(resolved);
@@ -173,31 +204,53 @@ export async function loadHoldoutFile(filePath: string, cwd: string) {
   if (typeof frozenDigest !== 'string' || !(firstAccessedAt === null || typeof firstAccessedAt === 'string')) {
     throw new Error(`holdout file must carry {frozenDigest, firstAccessedAt}: ${resolved}`);
   }
-  if (digest !== undefined) {
-    if (typeof digest !== 'string') throw new Error(`holdout digest must be a string: ${resolved}`);
-    const expected = artifactDigest({ frozenDigest, firstAccessedAt });
-    if (expected !== digest) throw new Error(`holdout record seal does not match its content: ${resolved}`);
-    return { frozenDigest: frozenDigest as Sha256Digest, firstAccessedAt: firstAccessedAt as string | null, digest: digest as Sha256Digest };
+  if (typeof digest !== 'string') {
+    throw new Error(`holdout file must already carry its sealed digest (refusing to auto-seal): ${resolved}`);
   }
-  return sealGateHoldout({ frozenDigest: frozenDigest as Sha256Digest, firstAccessedAt: firstAccessedAt as string | null });
+  const expected = artifactDigest({ frozenDigest, firstAccessedAt });
+  if (expected !== digest) throw new Error(`holdout record seal does not match its content: ${resolved}`);
+  return { frozenDigest: frozenDigest as Sha256Digest, firstAccessedAt: firstAccessedAt as string | null, digest: digest as Sha256Digest };
 }
 
-/** Load a sealed upstream record from disk. A present digest is re-derived; raw metadata is sealed. */
+/**
+ * Load a sealed upstream record from disk. The file must be a sealed
+ * `{metadata, digest}` record whose digest is re-derived; raw upstream
+ * metadata is refused (never auto-sealed).
+ */
 export async function loadUpstreamFile(filePath: string, cwd: string): Promise<UpstreamCeiling> {
   const resolved = resolvePath(filePath, cwd);
   const document = await readDocument(resolved);
   if (!isRecord(document)) throw new Error(`upstream file must be an object: ${resolved}`);
-  if (isRecord(document.metadata) && typeof document.digest === 'string') {
-    const expected = artifactDigest(document.metadata);
-    if (expected !== document.digest) throw new Error(`upstream integrity digest does not match its report: ${resolved}`);
-    return { metadata: document.metadata as unknown as UpstreamCeiling['metadata'], digest: document.digest as Sha256Digest };
+  if (!isRecord(document.metadata) || typeof document.digest !== 'string') {
+    throw new Error(`upstream file must be a sealed record {metadata, digest} (refusing to auto-seal): ${resolved}`);
   }
-  return sealUpstream(document as unknown as UpstreamCeiling['metadata']);
+  const expected = artifactDigest(document.metadata);
+  if (expected !== document.digest) throw new Error(`upstream integrity digest does not match its report: ${resolved}`);
+  return { metadata: document.metadata as unknown as UpstreamCeiling['metadata'], digest: document.digest as Sha256Digest };
+}
+
+/**
+ * Load the trusted project floors for one CLI evaluation from
+ * `<cwd>/.aiwg/aiwg.config`. A missing config resolves to the operator
+ * defaults; an unreadable file or an invalid `gates` section refuses
+ * evaluation (fail closed). `readAiwgConfig` itself only warns on gates
+ * errors (so unrelated commands keep working); this path re-validates
+ * strictly because it feeds the evaluator.
+ */
+export async function loadProjectFloorsForEvaluate(cwd: string): Promise<ProjectFloors> {
+  const config = await readAiwgConfig(cwd);
+  const errors = validateGatesConfig(config?.gates);
+  if (errors.length > 0) {
+    throw new Error(`refusing evaluation: invalid gates section in aiwg.config:\n${errors.join('\n')}`);
+  }
+  return resolveProjectFloors(config?.gates);
 }
 
 /**
  * Offline evaluation from files. Packs resolve through the offline registry;
- * digests, pins and the holdout seal are re-derived inside the evaluator.
+ * digests, pins and seals are re-derived inside the evaluator. The report is
+ * labeled `attestation: 'offline-cli'` so CLI-produced reports are
+ * distinguishable from reports built over a verified trust ceremony.
  * Returns the report object (the CLI prints it as JSON).
  */
 export async function evaluateGatesFromFiles(
@@ -205,13 +258,20 @@ export async function evaluateGatesFromFiles(
   options: GatesDriverOptions = {},
 ): Promise<GateReport> {
   const cwd = baseDir(options);
+  const { registry, shippedTrust } = buildGatesRegistry(options);
+  if (shippedTrust !== 'shipped') {
+    throw new Error('refusing evaluation: packs from an --aiwg-root override are untrusted'
+      + ' and cannot be used by evaluate (list/show/validate remain available for inspection)');
+  }
+  const floors = await loadProjectFloorsForEvaluate(cwd);
   const binding = await readDocument(resolvePath(files.bindingPath, cwd)) as GateBinding;
   const metrics = await readDocument(resolvePath(files.metricsPath, cwd)) as GateMetricsDocument;
   const holdout = await loadHoldoutFile(files.holdoutPath, cwd);
   const upstream = files.upstreamPath ? await loadUpstreamFile(files.upstreamPath, cwd) : null;
-  const { registry } = buildGatesRegistry(options);
-  const trustedBindingDigest = artifactDigest(binding) as Sha256Digest;
-  return evaluateGates({ binding, registry, trustedBindingDigest, holdout, metrics, upstream, now: files.now });
+  return evaluateGates({
+    binding, registry, trustedBindingDigest: files.trustedBindingDigest,
+    holdout, metrics, upstream, now: files.now, floors, attestation: 'offline-cli',
+  });
 }
 
 export interface GatePackSummary {
