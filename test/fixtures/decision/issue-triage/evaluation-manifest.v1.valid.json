@@ -6,6 +6,11 @@
     "version": "2026.9.29",
     "digest": "sha256:90e06e732b057de5e6fd3a1f37ecacfe81adb8125e5e3de6c083b18d91a72887"
   },
+  "calibration": {
+    "registryDigest": null,
+    "policyDigest": null,
+    "requestRule": null
+  },
   "dataset": {
     "id": "synthetic-time-sliced-issues",
     "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayFreeze.v1.schema.json",
+  "title": "DecisionComparativeReplayFreeze.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "sourceArtifacts",
+    "generatorDigest",
+    "preregistrationDigest",
+    "operatorRecord",
+    "priorTestAccess",
+    "contingencyUsd",
+    "contingencySpentUsd"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-freeze/v1"
+    },
+    "status": {
+      "const": "local-unverified"
+    },
+    "sourceArtifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpus",
+        "gold",
+        "split",
+        "auditSample"
+      ],
+      "properties": {
+        "corpus": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "gold": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "split": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "auditSample": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "generatorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "preregistrationDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "operatorRecord": {
+      "type": "null"
+    },
+    "priorTestAccess": {
+      "const": "development implementation inspected this synthetic regression corpus"
+    },
+    "contingencyUsd": {
+      "const": 3
+    },
+    "contingencySpentUsd": {
+      "const": 0
+    }
+  }
+}

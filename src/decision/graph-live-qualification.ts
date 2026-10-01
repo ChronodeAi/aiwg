@@ -177,13 +177,17 @@ export interface DagLiveReportedUsage { inputTokens: number | null; outputTokens
  * Pure accounting guard. Every call reserves the full per-call token bound at the larger of
  * the attested price and the floor before dispatch, and is refused once any global or
  * per-pattern dimension would pass the stop fraction. Settlement replaces the reservation
- * with the reported usage, including usage above the reservation. A call with missing usage
+ * with the reported usage, including usage above the reservation. A call reporting more
+ * than its per-call bound records a budget breach: its observed spend is still charged in
+ * full, and every later reservation is refused. A call with missing usage
  * keeps at least its full reservation. Calls are never refunded.
  */
 export class DagLiveBudget {
   readonly total: Totals = { calls: 0, tokens: 0, usdMicros: 0 };
   private readonly patterns = new Map<DagLivePattern, Totals & { started: number }>();
   private readonly boundMicros: number;
+  /** Set when a settled call reports more than its approved per-call bound. */
+  private breached = false;
   constructor(private readonly approval: Pick<DagLiveApproval, 'budget' | 'priceBound'>, private readonly bound: number,
     private readonly stopFraction: number, readonly started: number, private readonly now: () => number = Date.now) {
     if (!Number.isSafeInteger(bound) || bound < 1 || !(stopFraction > 0 && stopFraction <= 1)) throw new Error('invalid D12 budget');
@@ -200,6 +204,7 @@ export class DagLiveBudget {
     return null;
   }
   reserve(pattern: DagLivePattern): (usage: DagLiveReportedUsage | null) => { tokens: number; usdMicros: number } {
+    if (this.breached) throw new DagLiveStop('budget-run-usage-bound');
     const now = this.now();
     const current = this.patterns.get(pattern) ?? { calls: 0, tokens: 0, usdMicros: 0, started: now };
     const global = this.exceeds(this.total, this.approval.budget, now - this.started);
@@ -213,6 +218,10 @@ export class DagLiveBudget {
       settled = true;
       const count = (value: number | null | undefined) => Number.isSafeInteger(value) && value! >= 0 ? value! : null;
       const input = count(usage?.inputTokens), output = count(usage?.outputTokens);
+      // Observed spend above the per-call bound is a breach, never a clamp: the full
+      // amount is charged below, and later reservations are refused. Settlement itself
+      // never throws, so the completed call is always recorded.
+      if ((input ?? 0) + (output ?? 0) > this.bound) this.breached = true;
       const complete = input !== null && output !== null;
       const known = (input ?? 0) + (output ?? 0);
       const charged = complete ? { tokens: known, usdMicros: dagLiveChargeMicros(this.approval.priceBound, input, output) }
