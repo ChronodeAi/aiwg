@@ -55,7 +55,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   no variant's relevant record conditions placement; the shipped scan names
   the relevant record by rendered position and checks claimed-module
   distractors with trees and count rules against a round-8 positive control.
-  v6/v7 rows, gold and generator pins are unchanged (#2622)
+  Relevant records whose mode is not label-defining (other-attribute,
+  near-miss, wrong-attribute, wrong-subject) now draw it from the distractor
+  mode distribution instead of always rendering exact (which marked
+  wrong-attribute at 0.98); distractor modes are near-uniform so every
+  variant-defining form also appears on distractors; the criterion length
+  budget covers distractors and benign notes together; note count and
+  parser-unseen rows no longer follow the row offset. New relevant-record-only
+  and all-record variant scans (round-9 positive control). Gold labels are
+  unchanged. v6/v7 rows, gold and generator pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

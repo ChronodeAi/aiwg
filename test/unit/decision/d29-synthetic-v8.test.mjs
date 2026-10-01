@@ -93,9 +93,14 @@ describe('D29 v8 operator-note templates', () => {
     const rows = worlds(d29WorldV8, D29_V8_SEED);
     expect(commaCue(rows)).toEqual({ train: { injected: 0, injectedRows: 100, benign: 0, benignRows: 400 },
       test: { injected: 0, injectedRows: 300, benign: 0, benignRows: 1200 } });
+    // Three to five notes, drawn per offset (round 10): every slice at one offset shares the count.
+    const countAt = new Map();
     for (const row of rows) {
       const notes = notesOf(row.payload), pool = row.world.pool === 'train' ? D29_TRAIN_V8 : D29_TEST_V8;
-      expect(notes.length, row.id).toBe(3 + Number(row.familyId.split('-').at(-1)) % 3);
+      expect(notes.length, row.id).toBeGreaterThanOrEqual(3);
+      expect(notes.length, row.id).toBeLessThanOrEqual(5);
+      const at = `${row.split}:${row.familyId.split('-').at(-1)}`;
+      if (countAt.has(at)) expect(notes.length, row.id).toBe(countAt.get(at)); else countAt.set(at, notes.length);
       for (const note of notes) expect((note.match(/,/g) ?? []).length, `${row.id}: ${note}`).toBe(1);
       const slot = notes.filter(note => [...pool.instructions, ...pool.counterparts].some(clause => note.includes(clause)));
       expect(slot, row.id).toHaveLength(1);
@@ -584,7 +589,7 @@ describe('D29 v8 review round 5', () => {
 describe('D29 v8 review round 6', () => {
   it('V8-19 separates no label or variant from unrelated-module records plus layout (blind mode), on three seeds and both pools', async () => {
     const { recordUnits, blindFeatures, blindExclusive, blindTree, unitFeatures, exclusiveFeatures, BLIND_ROLES,
-      countFeatures, countRuleBalancedAccuracy } = await import('./d29-structure-scan.mjs');
+      countFeatures, countRuleBalancedAccuracy, countRuleTransfer } = await import('./d29-structure-scan.mjs');
     const { injectionPopulationV8 } = await import('../../../tools/decision/studies/d29-shortcuts-v8.mjs');
     const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
     const targetsOf = kind => ({
@@ -606,11 +611,10 @@ describe('D29 v8 review round 6', () => {
           // Non-blind: every non-relevant role, with the explicit (empty) allowlist.
           const found = exclusiveFeatures(members, row => unitFeatures(parsed.get(row).units), targets, { onlyDirection: ['variant'] });
           expect(found.map(item => `${item.target}:${item.feature}=${item.value} ${item.direction} ${item.label} (n=${item.support})`), `${seed}/${kind}/${pool}`).toEqual([]);
-          // Count rules: distractor-only counts carry nothing; counts over every record carry only the relevant record's own form.
+          // Count rules over every record carry only the relevant record's own form (operator bound 0.75); variant
+          // targets are in V8-24, distractor-only count rules below (learned on one pool, scored on the other).
           for (const targetOf of [targets.label, targets.injected]) {
             const scoped = members.filter(row => targetOf(row) !== undefined);
-            const [blindBest] = countRuleBalancedAccuracy(scoped, row => countFeatures(parsed.get(row).units.filter(unit => BLIND_ROLES.includes(unit.role))), targetOf);
-            expect(blindBest.balancedAccuracy, `${seed}/${kind}/${pool} blind ${blindBest.feature}>=${blindBest.threshold} ${blindBest.label}`).toBeLessThan(0.65);
             const [best] = countRuleBalancedAccuracy(scoped, row => countFeatures(parsed.get(row).units), targetOf);
             expect(best.balancedAccuracy, `${seed}/${kind}/${pool} ${best.feature}>=${best.threshold} ${best.label}`).toBeLessThan(0.75);
           }
@@ -619,6 +623,12 @@ describe('D29 v8 review round 6', () => {
         const test = rows.filter(row => row.world.kind === kind && row.world.pool === 'test');
         for (const result of blindTree(train, train.map(row => blind.get(row)), test, test.map(row => blind.get(row)), targets)) {
           expect(Math.max(result.stump, result.tree), `${seed}/${kind} ${result.target}:${result.label} [${result.treeFeatures.join(' | ')}]`).toBeLessThan(0.75);
+        }
+        // Distractor-only (blind) count rules carry nothing: below 0.65 learned on either pool and scored on the other.
+        const blindCounts = row => countFeatures(parsed.get(row).units.filter(unit => BLIND_ROLES.includes(unit.role)));
+        for (const targetOf of [targets.label, targets.injected]) for (const [from, to] of [[train, test], [test, train]]) {
+          const [best] = countRuleTransfer(from.filter(row => targetOf(row) !== undefined), to.filter(row => targetOf(row) !== undefined), blindCounts, targetOf);
+          expect(best.balancedAccuracy, `${seed}/${kind} blind ${best.feature}>=${best.threshold} ${best.label}`).toBeLessThan(0.65);
         }
       }
       recurring.push(hits);
@@ -709,8 +719,49 @@ describe('D29 v8 review round 9', () => {
     const [worst] = scan({});
     expect(worst.score, worst.what).toBeLessThan(0.7);
     // Positive control: the round-8 placement (only a wrong-attribute relevant record entered criterion placement).
-    const control = scan({ legacyRelevantPlacement: true });
+    const control = scan({ legacy: 'round-8' });
     expect(control[0].score, control[0].what).toBeGreaterThanOrEqual(0.7);
     expect(control[0].what).toContain('wrong-attribute');
   }, 600_000);
 });
+
+describe('D29 v8 review round 10', () => {
+  const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
+  const seeds = [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b'];
+  const build = options => {
+    const rows = seeds.flatMap(seed => Array.from({ length: 2000 }, (_, ordinal) => d29WorldV8(seed, ordinal, options)));
+    return { rows, parsed: new Map(rows.map(row => [row, recordUnitsOf(row)])) };
+  };
+  let recordUnitsOf;
+  beforeAll(async () => { const { recordUnits } = await import('./d29-structure-scan.mjs'); recordUnitsOf = row => recordUnits(row, pools); });
+
+  it('V8-23 keeps every non-label-defining relevant-record feature below 0.75 on every variant, and catches the round-9 exact mode', async () => {
+    const { relevantOnlyScores } = await import('./d29-structure-scan.mjs');
+    const { injectionPopulationV8 } = await import('../../../tools/decision/studies/d29-shortcuts-v8.mjs');
+    const { D29_V8_MODE_FREE_VARIANTS } = await import('../../../src/decision/heldout/d29-v8.js');
+    const options = { modeFree: D29_V8_MODE_FREE_VARIANTS, inInjectionPopulation: row => injectionPopulationV8(row.world, oracle(row.world)) };
+    // The oracle reads only module and attribute for the mode-free variants: any rendered mode keeps their gold.
+    // Flip every latent flag a rendering mode could stand for; the oracle's answer for these rows must not move.
+    const flags = [{ negatedValues: [] }, { exclusive: true }, { uncertain: true }, { scoped: true }, { temporal: true },
+      { current: false }, { independent: false }, { complete: false }];
+    for (const row of worlds(d29WorldV8, D29_V8_SEED).filter(item => D29_V8_MODE_FREE_VARIANTS.includes(item.world.variant))) {
+      for (const flag of flags) expect(oracle({ ...row.world, ...flag, negatedValues: flag.negatedValues ?? [row.world.claimValue] }), row.id).toEqual(oracle(row.world));
+    }
+    const now = build({});
+    const [worst] = relevantOnlyScores(now.rows, now.parsed, options);
+    expect(worst.score, worst.what).toBeLessThan(0.75);
+    // Positive control: round 9 rendered every mode-free relevant record exact.
+    const round9 = build({ legacy: 'round-9' });
+    const [caught] = relevantOnlyScores(round9.rows, round9.parsed, options);
+    expect(caught.score, caught.what).toBeGreaterThanOrEqual(0.75);
+    expect(caught.what).toMatch(/wrong-attribute|wrong-subject|other-attribute|near-miss/);
+  }, 600_000);
+
+  it('V8-24 keeps all-record (relevant-inclusive) count rules and trees below 0.75 for every variant, both pools', async () => {
+    const { allRecordVariantScores } = await import('./d29-structure-scan.mjs');
+    const now = build({});
+    const [worst] = allRecordVariantScores(now.rows.filter(row => row.world.artifactPresent && row.world.testPassed), now.parsed);
+    expect(worst.score, worst.what).toBeLessThan(0.75);
+  }, 600_000);
+});
+

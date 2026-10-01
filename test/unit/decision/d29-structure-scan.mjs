@@ -544,3 +544,112 @@ export function countRuleTransfer(trainRows, testRows, countsOf, labelOf) {
   }
   return out.sort((a, b) => b.balancedAccuracy - a.balancedAccuracy);
 }
+
+/** Binary features from per-row counts (`name>=t` for every observed t >= 1). */
+export function countBinaryFeatures(counts) {
+  const features = new Set();
+  for (const [name, count] of Object.entries(counts)) for (let t = 1; t <= count; t++) features.add(`${name}>=${t}`);
+  return features;
+}
+
+/**
+ * Features of the relevant record alone (identified by rendered position): its
+ * mode family, mode, each surface form, slot and sentence index. `kind` names
+ * the feature class (`mode` or `surface` or `place`) for the label-defining
+ * rule in `relevantLabelDefining`.
+ */
+export function relevantFeatures({ units }) {
+  const unit = units.find(item => item.role === 'relevant');
+  const features = new Map();
+  if (!unit) return features;
+  const mode = unit.forms[0];
+  const family = VERIFIED_FAMILY.includes(mode) ? 'verified-family' : mode;
+  features.set(`mode=${mode}`, 'mode');
+  features.set(`family=${family}`, 'mode');
+  features.set(`qualified=${unit.forms.includes('qualified')}`, 'mode');
+  for (const form of ['plain', 'paraphrase', 'two-value']) features.set(`${form}=${unit.forms.includes(form)}`, 'surface');
+  features.set(`coreference=${unit.forms.includes('coreference')}`, 'place');
+  features.set(`sentence=${unit.sentence}`, 'place');
+  return features;
+}
+
+/**
+ * Which relevant-record feature classes define a variant: the mode for every
+ * variant rendered by its own mode (and the claimed-fact variants whose value
+ * relation needs the exact mode), the surface for the supports variants and
+ * the injection counterparts. Mode-free variants (D29_V8_MODE_FREE_VARIANTS)
+ * have none.
+ */
+export function relevantLabelDefining(variant, modeFree) {
+  if (modeFree.includes(variant)) return [];
+  if (['exact', 'paraphrase', 'multi-value', 'injection'].includes(variant)) return ['mode', 'surface'];
+  return ['mode'];
+}
+
+const variantOfRow = row => row.slice.endsWith('-injection') ? 'injection' : row.world.variant;
+const twoValuedClaim = row => ['port', 'protocol'].includes(row.world.claimAttribute);
+/** Whether a variant target covers a row: the rows whose claim attribute admits that variant (d29WorldV4 applicability). */
+export function variantAdmits(variant, row) {
+  if (['multi-value', 'different-nonexclusive'].includes(variant)) return twoValuedClaim(row);
+  if (variant === 'different-current') return !twoValuedClaim(row);
+  return true;
+}
+
+/**
+ * Relevant-record-only scores: per kind, pool and variant (one vs rest among
+ * rows admitting it; the injection variant against its population), the
+ * balanced accuracy of every single relevant-record feature that does not
+ * define that variant (`relevantLabelDefining`). Rows with no provider
+ * requests are left out. Returns scores sorted high to low.
+ */
+export function relevantOnlyScores(rows, parsed, { modeFree, inInjectionPopulation }) {
+  const out = [];
+  const scored = rows.filter(row => row.world.artifactPresent && row.world.testPassed);
+  for (const kind of ['citation', 'phase-criterion']) for (const pool of ['train', 'test']) {
+    const members = scored.filter(row => row.world.kind === kind && row.world.pool === pool);
+    const features = new Map(members.map(row => [row, relevantFeatures(parsed.get(row))]));
+    for (const variant of new Set(members.map(variantOfRow))) {
+      const scope = variant === 'injection' ? members.filter(inInjectionPopulation)
+        : members.filter(row => variantOfRow(row) !== 'injection' && variantAdmits(variant, row));
+      const positives = scope.filter(row => variantOfRow(row) === variant), negatives = scope.filter(row => variantOfRow(row) !== variant);
+      if (!positives.length || !negatives.length) continue;
+      const skip = relevantLabelDefining(variant, modeFree);
+      const names = new Map();
+      for (const row of scope) for (const [name, cls] of features.get(row)) names.set(name, cls);
+      for (const [name, cls] of names) {
+        if (skip.includes(cls)) continue;
+        const tp = positives.filter(row => features.get(row).has(name)).length / positives.length;
+        const fp = negatives.filter(row => features.get(row).has(name)).length / negatives.length;
+        out.push({ score: Math.max((tp + 1 - fp) / 2, (1 - tp + fp) / 2), what: `${kind}/${pool} ${variant} ${name} ${tp.toFixed(2)}/${fp.toFixed(2)}` });
+      }
+    }
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * All-record (relevant-inclusive) count rules and count-feature trees for every
+ * variant (one vs rest among rows admitting it), learned on one pool and
+ * scored on the other, both ways. Returns scores sorted high to low.
+ */
+export function allRecordVariantScores(rows, parsed) {
+  const out = [];
+  const counts = new Map(rows.map(row => [row, countFeatures(parsed.get(row).units)]));
+  const sets = new Map(rows.map(row => [row, countBinaryFeatures(counts.get(row))]));
+  for (const kind of ['citation', 'phase-criterion']) {
+    const train = rows.filter(row => row.world.kind === kind && row.world.pool === 'train');
+    const test = rows.filter(row => row.world.kind === kind && row.world.pool === 'test');
+    for (const [from, to, direction] of [[train, test, 'train->test'], [test, train, 'test->train']]) {
+      for (const variant of new Set(from.map(variantOfRow))) {
+        const targetOf = row => variantAdmits(variant, row) ? String(variantOfRow(row) === variant) : undefined;
+        const a = from.filter(row => targetOf(row) !== undefined), b = to.filter(row => targetOf(row) !== undefined);
+        for (const result of blindTree(a, a.map(row => sets.get(row)), b, b.map(row => sets.get(row)), { variant: targetOf })) {
+          if (result.label === 'true') out.push({ score: Math.max(result.stump, result.tree), what: `${kind} ${direction} tree ${variant} [${result.treeFeatures.join(' | ')}]` });
+        }
+        const [best] = countRuleTransfer(a, b, row => counts.get(row), targetOf).filter(rule => rule.label === 'true');
+        if (best) out.push({ score: best.balancedAccuracy, what: `${kind} ${direction} count ${variant} ${best.feature}>=${best.threshold}` });
+      }
+    }
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
