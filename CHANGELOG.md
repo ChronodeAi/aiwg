@@ -425,6 +425,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   qualification evidence digests with a versioned legacy mode. There is no
   CLI, no project floor enforcement, no addon provider loading and no
   migrated study; live criteria remain pending (#2824)
+- The experimental, default-off D26 context pruning report records
+  `insufficient-quality-evidence:<metric>` for every remaining insufficient
+  quality decision at or above the overall minimum n, so it yields HOLD with
+  `INSUFFICIENT EVIDENCE` instead of omitting the decision from the findings (#2788).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

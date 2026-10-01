@@ -784,10 +784,16 @@ export function buildContextPruningEvaluationReport(input: {
       findings.add(`quality-metric-missing:${result.metric}`);
     } else if (result.decision === 'insufficient' && result.n < thresholds.minimumOverallN) {
       findings.add(`insufficient-quality-sample:${result.metric}`);
-    } else if (result.decision === 'insufficient' && result.missingPairs === 0) {
+    } else if (result.decision === 'insufficient' && result.missingPairs === 0 && result.scale === 'bounded'
+      && result.interval !== null && result.interval.lowerBps === result.interval.upperBps
+      && result.n < thresholds.minimumZeroVarianceN) {
       // A conclusive-sized read withheld for lack of variability evidence: a zero-width bounded
-      // interval below the preregistered zero-variance support. Omitted pairs are reported above.
+      // interval below the preregistered zero-variance support.
       findings.add(`insufficient-quality-support:${result.metric}`);
+    } else if (result.decision === 'insufficient') {
+      // Interval construction failed, the verdict was unreadable, or a passing
+      // verdict was withheld for omitted pairs: adequate n is not evidence.
+      findings.add(`insufficient-quality-evidence:${result.metric}`);
     }
   }
 
