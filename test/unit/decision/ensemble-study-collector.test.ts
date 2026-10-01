@@ -409,7 +409,8 @@ describe('D17 scorer with recorded injected-transport observations', () => {
     await expect(buildD17NativeReport({ ...nativeInput, integrity: unbound, trustedIntegrityDigest: heldoutDigest(unbound),
       record: { ...record, evaluationIntegrityReport: { ...record.evaluationIntegrityReport, digest: heldoutDigest(unbound) } } }))
       .rejects.toThrow('unbound native statistics');
-  });
+    // Two 1,800-row preparations plus 1,200-row native replays; a shared, loaded CI host needs headroom.
+  }, 60_000);
   it('AC13 source-only scoring CLI describes local replay and rejects collection mode without opening artifacts', () => {
     const help = spawnSync(process.execPath, ['tools/decision/d17-score.mjs', '--help'], { encoding: 'utf8', timeout: 10000 });
     expect(help.status, help.stderr).toBe(0); expect(help.stdout).toContain('Offline D17 scoring');
