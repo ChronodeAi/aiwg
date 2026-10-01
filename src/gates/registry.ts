@@ -3,9 +3,11 @@ import { artifactDigest } from '../decision/validate.js';
 import type { MetricProviderRegistry } from './providers/registry.js';
 import { validateGateDocument } from './schema.js';
 import type {
-  ArtifactPinLike, GateBinding, GateDefinition, GatePack, GateParameter, Sha256Digest,
+  ArtifactPinLike, GateBinding, GateDefinition, GateOutcome, GatePack, GateParameter, Sha256Digest,
 } from './types.js';
 import { qualifyGateParameter } from './types.js';
+import { projectCeilingSatisfied } from './floors.js';
+import type { ProjectFloors } from './floors.js';
 
 export class GateRegistryError extends Error {
   constructor(message: string) { super(message); this.name = 'GateRegistryError'; }
@@ -451,6 +453,128 @@ export function composeGatePack(
 export type AuthoredGatePackEntry = { authored: GatePack; digest: Sha256Digest; namespace: GateNamespace };
 export type AuthoredGatePackMap = Map<string, AuthoredGatePackEntry>;
 
+/** One floor pack expanded to its composed gates and parameter defaults. */
+export interface ExpandedFloorPack {
+  packId: string;
+  gates: GateDefinition[];
+  params: Record<string, GateParameter>;
+}
+
+/**
+ * Expands project floors over an explicit authored-pack map: inline packs are
+ * schema-checked again (direct registry callers bypass config validation) and
+ * semantically validated, pack references are verified by version and authored
+ * digest and composed through the pure `composeGatePack` (so `extends` floors
+ * enforce their composed minima). Every floor gate that binds a threshold
+ * parameter must declare a default for it: the default is the enforced
+ * minimum, and a required (default-less) floor parameter is a load error.
+ */
+export function expandFloorPacks(
+  floors: ProjectFloors,
+  lookupAuthored: (id: string) => GatePack,
+  providers: MetricProviderRegistry,
+): ExpandedFloorPack[] {
+  return (floors.floors ?? []).map(source => {
+    if ('packRef' in source) {
+      const pin = source.packRef;
+      const authored = lookupAuthored(pin.id);
+      if (authored.metadata.version !== pin.version
+        || (artifactDigest(authored) as Sha256Digest) !== pin.digest) {
+        throw new GateRegistryError(`project floor pack pin mismatch for ${pinLabel(pin)}`);
+      }
+      const composed = composeGatePack(authored, lookupAuthored);
+      validateResolvedPack(composed, providers);
+      return {
+        packId: authored.metadata.id,
+        gates: composed.spec.gates,
+        params: { ...(composed.spec.parameters ?? {}) },
+      };
+    }
+    const pack = validateGateDocument<GatePack>(source.pack);
+    if (pack.kind !== 'GatePack') throw new GateRegistryError('project floor pack requires a GatePack document');
+    const composed = pack.spec.extends === undefined ? pack : composeGatePack(pack, lookupAuthored);
+    validateResolvedPack(composed, providers);
+    for (const gate of composed.spec.gates) {
+      if (gate.threshold?.param !== undefined
+        && composed.spec.parameters?.[gate.threshold.param]?.default === undefined) {
+        throw new GateRegistryError(
+          `project floor gate '${gate.id}' parameter '${gate.threshold.param}' requires a default: it is the enforced minimum`);
+      }
+    }
+    return {
+      packId: pack.metadata.id,
+      gates: composed.spec.gates,
+      params: { ...(composed.spec.parameters ?? {}) },
+    };
+  });
+}
+
+/**
+ * Resolves a binding gate's threshold parameter to its preregistered binding
+ * value, so floor comparison is always value-against-minimum in the gate's
+ * declared direction. A binding may parameterize a floor literal: the value,
+ * not the spelling, must tighten.
+ */
+function synthesizeFloorCandidate(
+  gate: GateDefinition,
+  packId: string,
+  parameters: Record<string, number>,
+): GateDefinition {
+  if (gate.threshold?.param === undefined) return gate;
+  const value = parameters[qualifyGateParameter(packId, gate.threshold.param)];
+  if (value === undefined) {
+    throw new GateRegistryError(`binding gate '${gate.id}' parameter '${gate.threshold.param}' has no resolved value`);
+  }
+  return { ...gate, threshold: { op: gate.threshold.op, value } };
+}
+
+/**
+ * Enforces project floors over already-resolved binding packs. Project policy
+ * outranks addon and framework packs: a binding that omits a floor gate, or
+ * whose gate loosens any floor gate's threshold, parameter value, scope or
+ * outcome (via the shared per-kind `assertGateTightens` and the scope-superset
+ * rule), is refused with a diagnostic naming the binding, the gate and the
+ * floor pack. Every binding gate sharing a floor gate id must tighten it, so
+ * a loosened duplicate cannot evade the floor.
+ */
+export function enforceProjectFloors(
+  binding: GateBinding,
+  packs: ResolvedPack[],
+  parameters: Record<string, number>,
+  expanded: ExpandedFloorPack[],
+  ceilings: Record<string, GateOutcome>,
+): void {
+  const configured = ceilings[binding.metadata.id];
+  if (!projectCeilingSatisfied(binding.spec.ceiling, configured)) {
+    throw new GateRegistryError(
+      `binding '${binding.metadata.id}' declares ceiling ${binding.spec.ceiling ?? 'PROMOTE'}`
+      + ` below the project ceiling ${configured} for this study`);
+  }
+  const union: Array<{ gate: GateDefinition; packId: string }> = [];
+  for (const pack of packs) {
+    for (const gate of pack.resolved.spec.gates) union.push({ gate, packId: pack.authored.metadata.id });
+  }
+  for (const floor of expanded) {
+    for (const floorGate of floor.gates) {
+      const matches = union.filter(candidate => candidate.gate.id === floorGate.id);
+      if (!matches.length) {
+        throw new GateRegistryError(
+          `binding '${binding.metadata.id}' omits project floor gate '${floorGate.id}'`
+          + ` (floor pack '${floor.packId}'): every binding in this project must include and tighten it`);
+      }
+      for (const match of matches) {
+        try {
+          assertGateTightens(floorGate, synthesizeFloorCandidate(match.gate, match.packId, parameters), floor.params);
+        } catch (error) {
+          throw new GateRegistryError(
+            `binding '${binding.metadata.id}' loosens project floor gate '${floorGate.id}'`
+            + ` (floor pack '${floor.packId}'): ${error instanceof Error ? error.message : 'invalid tightening'}`);
+        }
+      }
+    }
+  }
+}
+
 /**
  * Standalone snapshot readers. These are module functions, not `GateRegistry`
  * methods, so a subclass override of `resolveBinding`/`resolvePack`/`getPack`
@@ -469,11 +593,19 @@ export function gateProvidersOf(registry: GateRegistry): MetricProviderRegistry 
   return providers as MetricProviderRegistry;
 }
 
-/** Pure binding resolution over an explicit authored-pack map and provider registry. */
+/**
+ * Pure binding resolution over an explicit authored-pack map and provider registry.
+ * Project floors (`floors`, loaded from `aiwg.config` by the caller via
+ * `resolveProjectFloors`) are an optional trusted input: when present, the
+ * binding must include and tighten every floor gate and respect its per-study
+ * ceiling. When absent the check is skipped entirely and resolution is
+ * byte-identical to the floors-unaware path.
+ */
 export function resolveGateBinding(
   doc: unknown,
   authoredById: AuthoredGatePackMap,
   providers: MetricProviderRegistry,
+  floors?: ProjectFloors,
 ): ResolvedBinding {
   const binding = validateGateDocument<GateBinding>(doc);
   if (binding.kind !== 'GateBinding') throw new GateRegistryError('resolveBinding requires a GateBinding document');
@@ -589,6 +721,13 @@ export function resolveGateBinding(
   if (registeredAt > frozenAt) {
     throw new GateRegistryError(`binding ${binding.metadata.id} registers after it freezes`);
   }
+  // Project floors run after every legacy check, so floors-unaware diagnostics
+  // keep their exact messages and order. Floor expansion reuses the same pure
+  // lookup the binding pins above, never registry instance state.
+  if (floors !== undefined) {
+    enforceProjectFloors(binding, packs, parameters,
+      expandFloorPacks(floors, lookupAuthored, providers), floors.ceilings ?? {});
+  }
   return { binding, packs, parameters };
 }
 
@@ -685,8 +824,8 @@ export class GateRegistry {
     });
   }
 
-  resolveBinding(doc: unknown): ResolvedBinding {
-    return resolveGateBinding(doc, this.packs, this.providers);
+  resolveBinding(doc: unknown, floors?: ProjectFloors): ResolvedBinding {
+    return resolveGateBinding(doc, this.packs, this.providers, floors);
   }
 }
 

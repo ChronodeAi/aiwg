@@ -107,6 +107,8 @@ review and study-specific statistical reports remain pending.
 The experimental, default-off [gates capability phase 1 core](gates.md)
 adds declarative gate packs, a pure offline evaluator with digest-bound
 reports, an exact Clopper-Pearson interval, and canonical-JSON evidence
-digests with a versioned legacy mode. There is no CLI, no project floor
-enforcement, no addon provider loading and no migrated study; live criteria
-remain pending.
+digests with a versioned legacy mode. Project floors from `aiwg.config`
+`gates` (including the default integrity-ceiling floor) are enforced only
+when the caller passes them as trusted registry/evaluator input; without
+that input behavior is unchanged. There is no CLI, no addon provider loading
+and no migrated study; live criteria remain pending.
