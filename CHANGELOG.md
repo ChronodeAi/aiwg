@@ -44,6 +44,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
+  per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
+  bound) and fails the canary on unknown or over-bound reported output, stopping
+  further dispatch. Jev exposes no request-level output cap, so enforcement is
+  after dispatch, fail-closed. Offline coverage only; live evidence remains
+  pending (#2799)
 - Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
   implementation in `tools/decision/jev-openbao-credential.mjs`, with
   `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
