@@ -8,6 +8,7 @@ import {
   deterministicIssueDuplicateCandidates,
   issueTriageArtifactDigest,
   IssueTriagePilotError,
+  pinIssueTriageCalibration,
   projectIssueTriageModelState,
   runIssueTriageShadow,
   validateIssueTriageBatchSubject,
@@ -15,6 +16,7 @@ import {
   validateIssueTriageEvaluationReport,
   validateIssueTriageModelResponse,
   validateIssueTriagePilotPack,
+  type IssueTriageCalibrationRequestRule,
   type IssueTriageCandidateInput,
   type IssueTriageCandidateLineage,
   type IssueTriageEvaluationInput,
@@ -32,6 +34,7 @@ import {
   type CalibrationArtifact,
   type CalibrationIdentity,
   type CompatibilityPolicy,
+  type CompatibilityRequest,
 } from '../../../src/decision/calibration/index.js';
 import { freezeQualificationSplit, type QualificationSplit } from '../../../src/decision/qualification/quality.js';
 import { loadSchemaCatalog, SchemaResolver } from '../../../src/schema/index.js';
@@ -214,16 +217,29 @@ const reportCalibration = (): IssueTriageEvaluationInput['calibration'] => ({
   requestedModel: 'jev-latest', compatibleActualModels: ['jev-2026-09-01'], uncertaintyProfile: 'typesafe-distribution-v1',
 });
 
+/** Preregistered rule for per-sample calibration requests: runId binds each request to its sample. */
+const calibrationRequestRule: IssueTriageCalibrationRequestRule = {
+  requestedAlias: 'jev-latest',
+  runIdPrefix: 'run-',
+  calibrationArtifactId: 'triage-cal-1',
+  notBefore: '2026-09-01T00:00:00.000Z',
+};
+
 function reportInput(samples: IssueTriageEvaluationSample[], thresholds: Partial<IssueTriageEvaluationManifest['thresholds']> = {},
   extra: { pack?: IssueTriagePilotPack; slices?: IssueTriageEvaluationManifest['slices']; splits?: QualificationSplit[];
     calibration?: IssueTriageEvaluationInput['calibration'] } = {}): IssueTriageEvaluationInput {
+  const calibration = extra.calibration ?? reportCalibration();
+  const manifest = gatedManifest(splitsFor(samples), thresholds, extra.slices, extra.pack ?? evaluatedPack());
+  if (calibration.registry) {
+    manifest.calibration = pinIssueTriageCalibration(calibration.registry.registry, calibration.registry.policy, calibrationRequestRule);
+  }
   return {
     id: 'triage-report',
-    manifest: gatedManifest(splitsFor(samples), thresholds, extra.slices, extra.pack ?? evaluatedPack()),
+    manifest,
     pack: extra.pack ?? evaluatedPack(),
     samples,
     splits: extra.splits ?? splitsFor(samples),
-    calibration: extra.calibration ?? reportCalibration(),
+    calibration,
     upstreamDecision: 'PROMOTE',
   };
 }
@@ -921,5 +937,106 @@ describe('issue triage evaluation gates (#2618 review round 2)', () => {
       mutate: (sample, index) => { if (index === 5) (sample.baseline as unknown as Record<string, unknown>).labelToCreate = 'priority:P0'; },
     });
     expect(() => report(extra)).toThrow(/sample S-005 baseline response rejected: model response contains unauthorized field labelToCreate/);
+  });
+});
+
+describe('issue triage calibration evidence pin (#2794)', () => {
+  const scoredRegistry = (): CalibrationRegistry => {
+    const registry = new CalibrationRegistry();
+    registry.registerArtifact(calibrationArtifact());
+    registry.observeAlias('jev-latest', calibrationIdentity(), '2026-09-01T00:00:00.000Z');
+    return registry;
+  };
+
+  const calibrationRequests = (samples: readonly IssueTriageEvaluationSample[]): Record<string, CompatibilityRequest> =>
+    Object.fromEntries(samples.map(sample => [sample.id, {
+      runId: `run-${sample.id}`,
+      requestedAlias: 'jev-latest',
+      actualIdentity: calibrationIdentity(),
+      calibrationArtifactId: 'triage-cal-1',
+      at: '2026-09-10T00:00:00.000Z',
+    }]));
+
+  /** Manifest pin built from one registry instance, scored with an identically constructed second instance. */
+  const pinnedInput = (samples: IssueTriageEvaluationSample[]): IssueTriageEvaluationInput => {
+    const splits = splitsFor(samples);
+    return {
+      id: 'triage-report',
+      manifest: {
+        ...gatedManifest(splits, {}, undefined, requiredPack()),
+        calibration: pinIssueTriageCalibration(scoredRegistry(), calibrationPolicy, calibrationRequestRule),
+      },
+      pack: requiredPack(),
+      samples,
+      splits,
+      calibration: {
+        ...reportCalibration(),
+        registry: { registry: scoredRegistry(), policy: calibrationPolicy, requests: calibrationRequests(samples) },
+      },
+      upstreamDecision: 'PROMOTE',
+    };
+  };
+
+  it('TRIAGE-CALPIN-01 scores held-out samples against matching pinned calibration evidence', () => {
+    const samples = buildSamples(120, { duplicates: 40 });
+    const built = buildIssueTriageEvaluationReport(pinnedInput(samples));
+    expect(built.calibration.riskCoverage.acceptedN).toBe(120);
+    expect(built.integrity.findings).toEqual([]);
+    expect(built.decision).toBe('PROMOTE');
+  });
+
+  it('TRIAGE-CALPIN-02 rejects a swapped registry or policy after preregistration', () => {
+    const samples = buildSamples(120, { duplicates: 40 });
+    const input = pinnedInput(samples);
+    const swappedRegistry = new CalibrationRegistry();
+    const { digest: _ignored, ...payload } = calibrationArtifact();
+    const drifted = { ...payload, identity: calibrationIdentity({ adapterVersion: 'prompt-v2' }) };
+    swappedRegistry.registerArtifact({ ...drifted, digest: calibrationArtifactDigest(drifted) });
+    swappedRegistry.observeAlias('jev-latest', calibrationIdentity({ adapterVersion: 'prompt-v2' }), '2026-09-01T00:00:00.000Z');
+    expect(() => buildIssueTriageEvaluationReport({ ...input,
+      calibration: { ...input.calibration, registry: { ...input.calibration.registry!, registry: swappedRegistry } } }))
+      .toThrow(/calibration registry does not match the manifest pin/);
+    // Any policy change is rejected, even one that would not alter this report's allow outcomes.
+    const swappedPolicy = { ...calibrationPolicy, unknown: 'fail' as const };
+    expect(() => buildIssueTriageEvaluationReport({ ...input,
+      calibration: { ...input.calibration, registry: { ...input.calibration.registry!, policy: swappedPolicy } } }))
+      .toThrow(/calibration policy does not match the manifest pin/);
+  });
+
+  it('TRIAGE-CALPIN-03 rejects a swapped per-sample request after preregistration', () => {
+    const samples = buildSamples(120, { duplicates: 40 });
+    const input = pinnedInput(samples);
+    const withRequests = (requests: Record<string, CompatibilityRequest>) => buildIssueTriageEvaluationReport({
+      ...input, calibration: { ...input.calibration, registry: { ...input.calibration.registry!, requests } },
+    });
+    const base = calibrationRequests(samples);
+    const target = samples[7]!.id;
+    // A request rerouted from another sample no longer binds to its sample.
+    expect(() => withRequests({ ...base, [target]: { ...base[target]!, runId: `run-${samples[8]!.id}` } }))
+      .toThrow(/request runId .* does not match the preregistered rule/);
+    // A request for an unpinned alias or artifact escapes the pinned evidence.
+    expect(() => withRequests({ ...base, [target]: { ...base[target]!, requestedAlias: 'jev-fork' } }))
+      .toThrow(/requestedAlias .* does not match the preregistered rule/);
+    expect(() => withRequests({ ...base, [target]: { ...base[target]!, calibrationArtifactId: 'triage-cal-2' } }))
+      .toThrow(/calibrationArtifactId .* does not match the preregistered rule/);
+    // A request predating preregistration cannot score.
+    expect(() => withRequests({ ...base, [target]: { ...base[target]!, at: '2026-08-01T00:00:00.000Z' } }))
+      .toThrow(/predates the preregistered rule/);
+    // Every evaluated sample needs exactly one request.
+    const { [target]: _dropped, ...missing } = base;
+    expect(() => withRequests(missing)).toThrow(/requests do not cover the evaluated samples/);
+  });
+
+  it('TRIAGE-CALPIN-04 requires both sides of the pin: no unpinned registry, no missing registry', () => {
+    const samples = buildSamples(120, { duplicates: 40 });
+    const input = pinnedInput(samples);
+    const unpinnedManifest = {
+      ...input.manifest,
+      calibration: { registryDigest: null, policyDigest: null, requestRule: null } as IssueTriageEvaluationManifest['calibration'],
+    };
+    expect(() => buildIssueTriageEvaluationReport({ ...input, manifest: unpinnedManifest }))
+      .toThrow(/calibration registry was not preregistered/);
+    expect(() => buildIssueTriageEvaluationReport({ ...input, calibration: reportCalibration() }))
+      .toThrow(/requires the preregistered calibration registry/);
   });
 });
