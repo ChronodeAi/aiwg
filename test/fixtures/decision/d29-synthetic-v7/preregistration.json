@@ -2,8 +2,8 @@
   "schemaVersion": "decision-heldout-preregistration/v1",
   "study": "D29",
   "frozenAt": "2026-09-30T00:00:00.000Z",
-  "corpusDigest": "sha256:8a6e9acbb89c726c8ad8fcb31db84c1d27f3e35fdf555c6e8469e5854eeee499",
-  "studyAnalysisDigest": "sha256:42e2a7f2221c87321d13f98d889bec34393eb551cc90314511daa42c8ce241d8",
+  "corpusDigest": "sha256:5d09130d1327033dc00e7edb6e936fc3388036c3177aaef3ba20ae1a6ae38604",
+  "studyAnalysisDigest": "sha256:a320b4b1e7c0c27483f28fbc8a7a236329444a560059db15419802c1a0814ac4",
   "scorerDigest": "sha256:91fdd3f3aa9ab05b94eda04581af3a728f5f6afe29742e51f0a899f3611b25cc",
   "calibration": {
     "scope": "calibrated",
@@ -16,8 +16,8 @@
     ]
   },
   "regeneration": {
-    "reason": "synthetic-v6-balanced-records-claim-relative-audit-passage-v2",
-    "collectorCommit": "ca23244f3",
+    "reason": "synthetic-v7-held-out-wording-pools-train-test-split",
+    "collectorCommit": "ba5946380",
     "priorLiveObservations": 0
   },
   "providerFailurePolicy": {

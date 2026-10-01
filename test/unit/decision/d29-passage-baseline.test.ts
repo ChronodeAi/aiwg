@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { sha256 } from '../../../src/decision/compile-cache/identity.js';
 import { d29PassageBaseline, d29PassageBaselineDigest } from '../../../src/decision/heldout/d29-passage-baseline.js';
-import { D29_V4_VARIANTS, d29WorldV4, generateHeldoutRow } from '../../../src/decision/heldout/generators.js';
+import { D29_V4_VARIANTS, d29WorldV2, d29WorldV3, d29WorldV4, generateHeldoutRow } from '../../../src/decision/heldout/generators.js';
 import type { HeldoutRow } from '../../../src/decision/heldout/types.js';
 
 const module = '207303-826471-113569', other = '270303-826471-113569';
@@ -118,13 +118,22 @@ describe('D29 visible passage baseline', () => {
     expect([...seen].sort()).toEqual(Object.entries(D29_V4_VARIANTS)
       .flatMap(([slice, variants]) => variants.map(variant => `${slice}/${variant}`)).sort());
   });
-  it.each([['v2', 'sha256:a179da85cf783144d42f838691418e8998fc16b0145e2e5e49c9edc4c500606a'],
-    ['v3', 'sha256:7cc8cb1ad72d25ed2e6f27cbedf2258bcf7823d429e9e603ca688bdc892cf0dc']])('D29-PB-11 preserves all 2,000 historical %s outputs byte-for-byte', (version, expected) => {
-    const historical = JSON.parse(readFileSync(new URL(`../../fixtures/decision/d29-synthetic-${version}/corpus.json`, import.meta.url), 'utf8')) as { rows: HeldoutRow[] };
-    expect(historical.rows).toHaveLength(2000);
-    expect(sha256(historical.rows)).toBe(expected);
-    const regenerated = historical.rows.map(row => generateHeldoutRow(row.provenance.generatorId, row.provenance.seed));
+  it.each([
+    ['v2', 'd29-synthetic/v2', 'd29-study-v3', d29WorldV2, 'sha256:a179da85cf783144d42f838691418e8998fc16b0145e2e5e49c9edc4c500606a'],
+    ['v3', 'd29-synthetic/v3', 'd29-study-v4', d29WorldV3, 'sha256:7cc8cb1ad72d25ed2e6f27cbedf2258bcf7823d429e9e603ca688bdc892cf0dc'],
+  ])('D29-PB-11 regenerates all 2,000 historical %s rows byte-for-byte and pins the recorded digest', (version, generatorId, worldSeed, worldFn, expected) => {
+    // R9: v2/v3 corpus fixtures are slim headers; rows regenerate from the frozen row API and must
+    // reproduce the recorded historical pins (also asserted against the header file itself).
+    const header = JSON.parse(readFileSync(new URL(`../../fixtures/decision/d29-synthetic-${version}/corpus.json`, import.meta.url), 'utf8')) as { pins: { rowsDigest: string } };
+    expect(header.pins.rowsDigest).toBe(expected);
+    const regenerated = [];
+    for (let ordinal = 0; ordinal < 2000; ordinal++) {
+      const { world } = worldFn(worldSeed, ordinal) as { world: { artifactPresent: boolean; testPassed: boolean } };
+      regenerated.push(generateHeldoutRow(generatorId, `${worldSeed}:${ordinal}:${world.artifactPresent && world.testPassed ? 'single' : 'local'}`));
+    }
+    expect(regenerated).toHaveLength(2000);
     expect(sha256(regenerated)).toBe(expected);
-    expect(JSON.stringify(regenerated)).toBe(JSON.stringify(historical.rows));
+    const again = regenerated.map(row => generateHeldoutRow((row as HeldoutRow).provenance.generatorId, (row as HeldoutRow).provenance.seed));
+    expect(JSON.stringify(again)).toBe(JSON.stringify(regenerated));
   });
 });

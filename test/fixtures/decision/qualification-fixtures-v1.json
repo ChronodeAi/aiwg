@@ -1831,9 +1831,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-heldout-corpus/v1",
-      "digest": "sha256:76915016f198a63a697e4865ae14e1a9a84b38c25b85a82e68235d8ae8a17c62",
-      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
+      "schemaVersion": "decision-d29-corpus-header/v1",
+      "digest": "sha256:9475cf1ee212ef89b3d4cbbbd95b479a7cedf0a723dff1985ce2e2b79b15886c",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -1863,9 +1863,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-d29-gold/v2",
-      "digest": "sha256:fd528667e12510063ade449157f1ffac2d3256375af93c81a1768ea9cd41b90a",
-      "expectedOutcome": "Public D29 development demo for d29-study-v3; rejected for paid collection, zero provider calls, unapproved templates, no live quality or calibration claim",
+      "schemaVersion": "decision-d29-gold-header/v1",
+      "digest": "sha256:90966a7c68f8ffc4dc7888c6c649052a78dceeb88f21aca1d9244de58aaa215c",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -2007,9 +2007,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-heldout-corpus/v1",
-      "digest": "sha256:2dd943f6e2bb9bf14907c7edff5d97fc80ac0e5218c17232e3c8b66d011cb1c5",
-      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "schemaVersion": "decision-d29-corpus-header/v1",
+      "digest": "sha256:c8da08cdbb424726b6aed9d8a3c8f80efbfb9e9319e0fd0839b7d99fe2a87bff",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -2039,9 +2039,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-d29-gold/v3",
-      "digest": "sha256:f097b278e69dceca47255fe9b64ddc7ce50fca7f4f956a695075d62cc4a681da",
-      "expectedOutcome": "Public D29 v3 development demo for d29-study-v4; rejected for paid collection, zero provider calls, passing single-feature shortcut audit, unapproved templates",
+      "schemaVersion": "decision-d29-gold-header/v1",
+      "digest": "sha256:d71ecb638e13f48bc71a0c0ef12a0b7dd134c98aae4629ec599ccea9f29070b7",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -2087,9 +2087,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-heldout-corpus/v1",
-      "digest": "sha256:f54db32c7ea4d325ad786fa5b78fc688e08886babc466cbb9e8cdb18c6cbf7ac",
-      "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
+      "schemaVersion": "decision-d29-corpus-header/v1",
+      "digest": "sha256:2b7906f024e21ee3d374dd7349f16c41ccaf9b69b95d839242390f15abc66ad1",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -2119,9 +2119,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-d29-gold/v4",
-      "digest": "sha256:54550aa546a8b36a0d3ff3969de4df5d4c6ec679e9fb2a61283950c60025c206",
-      "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
+      "schemaVersion": "decision-d29-gold-header/v1",
+      "digest": "sha256:943aa06a677a25cd3377e8a0a87a2f259a2b999d42786c53cca440ff779624d6",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -2216,7 +2216,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-approval/v1",
-      "digest": "sha256:bc9d95364231fb3d316fc7171fb4c05fa798843423c10e50c12d0806a77d7f8b",
+      "digest": "sha256:975505f0108a3a5004ddd478456e399e56882848921b631d3e5e04bb81a85111",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2231,9 +2231,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-heldout-corpus/v1",
-      "digest": "sha256:d4a6e1a3fc38c71efe060dba49926639ecb47eb3b8a88afc3fc628825f457c86",
-      "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
+      "schemaVersion": "decision-d29-corpus-header/v1",
+      "digest": "sha256:2a4ad43416dc3448e56d08287fec7e75b77bc7cbfce396f6308df7347fcae06d",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -2248,7 +2248,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "unversioned-json",
-      "digest": "sha256:2aebd2da33b3267dfe0e6d53fca7f8cbe471fe066550b3d60afe43180e1bb1b4",
+      "digest": "sha256:ba304e6073156fee1ef03ca769e7ea470c3354d8aa2dc52d4f0e72ac8aabfcf2",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2263,9 +2263,9 @@
       "date": "2026-09-30",
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
-      "schemaVersion": "decision-d29-gold/v6",
-      "digest": "sha256:cba1d84ddb662da0a86a609d03c597bf9b353bf3d61533005c29d9d4b35e2657",
-      "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
+      "schemaVersion": "decision-d29-gold-header/v1",
+      "digest": "sha256:a81b0c8e25c670b48cb6e0a53fefa8073e7445138a29821b4775c85c8839e93b",
+      "expectedOutcome": "Public synthetic development demo only; slim header with digest pins, rows regenerate offline, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"
@@ -2280,7 +2280,7 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-heldout-preregistration/v1",
-      "digest": "sha256:ed8ca3fa3d5b64be2a5aa22de2d59afd8dba11bbc0d8300d8cee4f87f2d38fec",
+      "digest": "sha256:67e7d277f19b307e9671645d2b69a7f2f5fa8731dbaeea710ed707a6f5998f2f",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
@@ -2296,8 +2296,88 @@
       "permission": "MIT (repository LICENSE)",
       "sanitization": "synthetic; no personal inputs",
       "schemaVersion": "decision-d29-review/v2",
-      "digest": "sha256:41789144e67eae56b5c005f3d3e8fbae97d1dc4c8a18e51c7df34cf3513b490e",
+      "digest": "sha256:02d1d218c628a38500ac3cd2bcdf7fdb2969db8d329ac55620e83208895599e9",
       "expectedOutcome": "Public synthetic development demo only; offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVSEVEN-01",
+      "path": "test/fixtures/decision/d29-synthetic-v7/analysis.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-analysis/v5",
+      "digest": "sha256:fa3ff1737f49fcb98e18c9489ce90eccfd6de302e5bfba0b461b4a898724bb0e",
+      "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVSEVEN-02",
+      "path": "test/fixtures/decision/d29-synthetic-v7/approval-template.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-heldout-approval/v1",
+      "digest": "sha256:f0d31ca0e4e2d0a8fc463df56ffec57c57b269237d6a57ff92e87ecf0f95410e",
+      "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVSEVEN-03",
+      "path": "test/fixtures/decision/d29-synthetic-v7/dry-run.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "unversioned-json",
+      "digest": "sha256:d01e2481ce70f537362ee0acc90593a7e581c731f047fcf242e2079693036be6",
+      "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVSEVEN-04",
+      "path": "test/fixtures/decision/d29-synthetic-v7/preregistration.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-heldout-preregistration/v1",
+      "digest": "sha256:41d084004c7c5986866df85b46e9600d285c2bc34b13499c7a0d5d24d3092e08",
+      "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
+      "links": [
+        "JEV-16",
+        "#2622"
+      ]
+    },
+    {
+      "id": "DEC-DTWENTYNINEVSEVEN-05",
+      "path": "test/fixtures/decision/d29-synthetic-v7/reviews.json",
+      "origin": "repository-authored",
+      "author": "Repository maintainers",
+      "date": "2026-10-01",
+      "permission": "MIT (repository LICENSE)",
+      "sanitization": "synthetic; no personal inputs",
+      "schemaVersion": "decision-d29-review/v2",
+      "digest": "sha256:483ce260782c167c6a9e865ce548d04e1b522da97c0d8d8b2773337d40b3311e",
+      "expectedOutcome": "Public synthetic development demo only; held-out wording pools (train/test split), offline regeneration, no observations or approvals",
       "links": [
         "JEV-16",
         "#2622"

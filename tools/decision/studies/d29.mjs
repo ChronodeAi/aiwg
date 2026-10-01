@@ -13,9 +13,12 @@ import { artifactPin, validateDistribution } from '../../../src/decision/validat
 import { evaluateSdlcEvidenceScreening, sdlcScreeningPreflight, buildSdlcScreeningReleaseReport } from '../../../src/decision/sdlc-screening.ts';
 
 import { d29WorldV6 } from '../../../src/decision/heldout/d29-v6.ts';
+import { d29WorldV7, D29_V7_GENERATOR_ID } from '../../../src/decision/heldout/d29-v7.ts';
 import { d29PassageBaselineV2, d29PassageBaselineV2Digest } from '../../../src/decision/heldout/d29-passage-baseline-v2.ts';
+import { d29PassageBaselineV3, d29PassageBaselineV3Digest } from '../../../src/decision/heldout/d29-passage-baseline-v3.ts';
 import { d29PassageBaseline, d29PassageBaselineDigest } from '../../../src/decision/heldout/d29-passage-baseline.ts';
 import { shortcutAudit } from './d29-shortcuts.mjs';
+import { shortcutAuditV7 } from './d29-shortcuts-v7.mjs';
 
 export const LABELS = ['supports', 'contradicts', 'unclear', 'does-not-support'];
 export const SLICES = Object.keys(D29_VARIANTS);
@@ -42,8 +45,11 @@ ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Stud
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v3.schema.json', import.meta.url), 'utf8')));
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v4.schema.json', import.meta.url), 'utf8')));
 const artifactValidator = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v6.schema.json', import.meta.url), 'utf8')));
+const artifactValidatorV7 = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v7.schema.json', import.meta.url), 'utf8')));
+const V7_VERSIONS = new Set(['decision-d29-gold/v7', 'decision-d29-shortcut-audit/v4', 'decision-d29-analysis/v5', 'decision-d29-score/v7']);
 export function validateStudyArtifact(value) {
-  if (!artifactValidator(value)) refuse('study-schema');
+  const validator = value && typeof value === 'object' && V7_VERSIONS.has(value.schemaVersion) ? artifactValidatorV7 : artifactValidator;
+  if (!validator(value)) refuse('study-schema');
 }
 function validatedArtifact(value) { validateStudyArtifact(value); return value; }
 const byteDigest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -156,6 +162,60 @@ export async function prepare(seed) {
   return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus, gold), approval: approvalTemplate(corpus, preregistration) };
 }
 
+export async function prepareV7(seed) {
+  if (typeof seed !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(seed)) refuse('seed');
+  const moduleDigest = byteDigest(await readFile(new URL(import.meta.url)));
+  const rows = [], goldRows = [];
+  for (let ordinal = 0; ordinal < 2000; ordinal++) {
+    const { world } = d29WorldV7(seed, ordinal);
+    const row = generateHeldoutRow(D29_V7_GENERATOR_ID, `${seed}:${ordinal}:${world.artifactPresent && world.testPassed ? 'single' : 'local'}`);
+    const { subject, policy } = buildHost(row.id, row.input.payload, world.artifactPresent, world.testPassed);
+    if ((sdlcScreeningPreflight(subject, Date.parse(FROZEN_AT), policy).length === 0) !== (row.requests.length > 0)) refuse('preflight-generator');
+    if ((world.pool === 'train') !== (row.split !== 'test')) refuse('pool-split');
+    rows.push(row); goldRows.push({ id: row.id, variant: world.variant, world, gold: oracle(world) });
+  }
+  const gold = { schemaVersion: 'decision-d29-gold/v7', syntheticOnly: true, rows: goldRows };
+  const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(), seed, goldDigest: heldoutDigest(gold) }, definitions: definitions(), rows };
+  const analysis = analysisPlanV7(corpus);
+  const preregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D29', frozenAt: FROZEN_AT,
+    corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
+    calibration: { scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration'] },
+    regeneration: { reason: 'synthetic-v7-held-out-wording-pools-train-test-split', collectorCommit: 'ba5946380', priorLiveObservations: 0 },
+    providerFailurePolicy: { maxRetries: 1, maximumSliceFailureBps: 500, retryOnlyTerminal: true },
+    perRequestTokenBound: 4500, providerOverheadTokens: 512, outputAndHiddenTokenAllowance: 256,
+    requestTimeoutMs: 30000, minDispatchIntervalMs: 1000, sessionLimitMs: 1800000 };
+  validateHeldoutInputs(corpus, preregistration);
+  validateStudyArtifact(gold); validateStudyArtifact(analysis);
+  return { corpus, preregistration, gold, analysis, reviews: reviewTemplate(corpus, gold), approval: approvalTemplate(corpus, preregistration) };
+}
+
+export function analysisPlanV7(corpus) {
+  const splits = ['tuning', 'calibration', 'test'].map(name => freezeQualificationSplit(name, corpus.rows.filter(row => row.split === name).map(row => row.id)));
+  const generatorSource = readFileSync(new URL('../../../src/decision/heldout/generators.ts', import.meta.url), 'utf8');
+  const secondarySource = generatorSource.slice(generatorSource.indexOf('export function d29Baseline('), generatorSource.indexOf('export function d29World('));
+  return { schemaVersion: 'decision-d29-analysis/v5', syntheticOnly: true, splits,
+    comparators: { primary: { id: 'd29-passage-baseline/v3', sourceDigest: d29PassageBaselineV3Digest() },
+      ceiling: { id: 'd29-passage-baseline/v2', sourceDigest: d29PassageBaselineV2Digest() },
+      passageV1: { id: 'd29-passage-baseline/v1', sourceDigest: d29PassageBaselineDigest() },
+      secondary: { id: 'd29-baseline/v1', sourceDigest: byteDigest(secondarySource) } },
+    shortcutAudit: { sourceDigest: byteDigest(readFileSync(new URL('./d29-shortcuts-v7.mjs', import.meta.url))),
+      pairFeatureLimit: 200, injection: 0.75, readiness: 0.75, support: 0.80,
+      modelInjection: 0.80, modelReadiness: 0.80, modelSupport: 0.85 },
+    native: { schemaVersion: 'decision-sdlc-screening-preregistration/v1', planId: 'd29-synthetic-v7', frozenAt: FROZEN_AT,
+      heldoutSplitDigest: splits[2].digest, slices: [...SLICES], gateBlockingSlices: ['citation-injection', 'criterion-injection', 'missing-artifact', 'failed-test'],
+      maximumFalseSupportRateBps: 100, maximumFalseReadyRateBps: 100, minimumTotalSupport: 1500, minimumSliceSupport: 100,
+      minimumGateBlockingSliceSupport: 500, confidenceInterval: { method: 'wilson', levelBps: 9500 }, qualityNonInferiorityBps: 300,
+      efficiencyClaim: { enabled: false, minimumPositiveTotalEconomicsUsd: null } },
+    external: { minimumAcceptedCoverageLowerBps: 1500, maximumBlockingSliceFalseReadyEvents: 0, maximumBlockingSliceFalseReadyUpperBps: 500 },
+    calibration: { method: 'kind-and-safe-semantic-ready-frequency-v2', minimumCellN: 10, smoothing: 'laplace-1', split: 'calibration',
+      profile: { minimumTotalSamples: 250, minimumPerSliceSamples: 25, powerRule: null, confidenceInterval: { method: 'wilson', level: 0.95 },
+        maximumCalibrationError: 0.1, maximumSelectiveRisk: 0.1, expiresAfterDays: 30 } },
+    review: { development: 50, holdout: 100, delayedRepeats: 15, reviewer: 'roctinam' },
+    missingPolicy: 'withhold-native-report; complete-case-description; missing-as-error',
+    conditionalRates: ['false-support/non-support-gold', 'false-support/accepted-support', 'false-ready/non-ready-gold', 'false-ready/accepted-ready'] };
+}
+
 export function analysisPlan(corpus) {
   const splits = ['tuning', 'calibration', 'test'].map(name => freezeQualificationSplit(name, corpus.rows.filter(row => row.split === name).map(row => row.id)));
   const generatorSource = readFileSync(new URL('../../../src/decision/heldout/generators.ts', import.meta.url), 'utf8');
@@ -210,6 +270,41 @@ export function reviewTemplate(corpus, gold) {
       .map((item, i) => ({ assessmentId: `audit-${String(i + 1).padStart(3, '0')}`, ...item,
         goldCorrect: null, goldRationale: null, blindReviewedAt: null, agreed: null, overridden: null, rationale: null, unblindedAt: null })),
     preregistrationReview: null, finalDispositionReview: null };
+}
+
+export async function dryRunV7(prepared) {
+  const phases = Object.fromEntries(['calibration', 'test'].map(phase => {
+    const rows = prepared.corpus.rows.filter(row => phase === 'test' ? row.split === 'test' : row.split !== 'test');
+    return [phase, { subjects: rows.length, initialCalls: rows.reduce((n, row) => n + row.requests.length, 0) }];
+  }));
+  const initial = prepared.corpus.rows.reduce((n, row) => n + row.requests.length, 0);
+  const planningApproval = { ...prepared.approval, region: 'fixture-region', credentialRef: 'openbao-approle.fixture.typesafe-jev' };
+  let inputTokens = 0, reservedTokens = 0, reservedUsdMicros = 0, maximumRequestEstimateTokens = 0;
+  for (const row of prepared.corpus.rows) for (const request of row.requests) {
+    const approval = row.split === 'test' ? { ...planningApproval, calibration: { mode: 'staged', phase: 'test',
+      calibrationArtifactDigest: null, calibrationPhaseRecordDigest: null, priorApprovalDigest: null } } : planningApproval;
+    const planned = await heldoutRequest(prepared.corpus, prepared.preregistration, approval, row, request);
+    inputTokens += planned.estimatedTokens;
+    reservedTokens += heldoutReservationTokens(prepared.preregistration, planned.estimatedTokens);
+    reservedUsdMicros += heldoutReservationMicros(planningApproval, planned.estimatedTokens);
+    maximumRequestEstimateTokens = Math.max(maximumRequestEstimateTokens, planned.estimatedTokens);
+  }
+  // The v4 audit learns on train-pool rows and evaluates the same rules on the
+  // held-out test split internally, so no separate public-test audit call is needed.
+  const audit = shortcutAuditV7(prepared.corpus, prepared.gold); validateStudyArtifact(audit);
+  return { ...populationSummary(prepared), shortcutAudit: audit, publicTestShortcutAudit: null, providerCalls: 0, execution: 'individual-questions', phases, subjects: prepared.corpus.rows.length,
+    deterministicNoCallSubjects: prepared.corpus.rows.filter(row => !row.requests.length).length,
+    providerOverheadTokens: prepared.preregistration.providerOverheadTokens,
+    maximumRequestEstimateTokens,
+    expected: { initialCalls: initial, attempts: initial * 1.025, inputTokens: inputTokens * 1.025,
+      reservedTokens: reservedTokens * 1.025, inputAtAttestedTariffUsd: inputTokens * 1.025 * 0.042 / 1e6,
+      reservedUsd: reservedUsdMicros * 1.025 / 1e6 },
+    worst: { attempts: initial * 2, inputTokens: inputTokens * 2, tokens: reservedTokens * 2,
+      reservedUsd: reservedUsdMicros * 2 / 1e6 },
+    hardCapUsd: 6, stopAtUsd: 4.8, preregistrationDigest: heldoutDigest(prepared.preregistration),
+    analysisDigest: heldoutDigest(prepared.analysis), corpusDigest: heldoutDigest(prepared.corpus),
+    goldDigest: prepared.corpus.provenance.goldDigest, generatorDigest: prepared.corpus.provenance.generatorDigest, scorerDigest: prepared.preregistration.scorerDigest,
+    approvalTemplateDigest: heldoutDigest(prepared.approval), splitDigests: prepared.analysis.splits.map(({ name, digest }) => ({ name, digest })) };
 }
 
 export async function dryRun(prepared) {
@@ -341,7 +436,9 @@ export function groupedMetrics(corpus, gold, samples, levelBps = 9500) {
     const secondary = rows.map(row => ({ gold: labels.get(row.id).gold, prediction: row.localOutcome.baseline }));
     return { slice, variant, n: rows.length, missingCandidate: rows.length - candidate.length,
       candidate: descriptiveMetrics(candidate, levelBps), baseline: descriptiveMetrics(baseline, levelBps), secondaryBaseline: descriptiveMetrics(secondary, levelBps),
-      passageBaselineV1: descriptiveMetrics(rows.map(row => ({ gold: labels.get(row.id).gold, prediction: row.localOutcome.passageBaselineV1 })), levelBps) };
+      passageBaselineV1: descriptiveMetrics(rows.map(row => ({ gold: labels.get(row.id).gold, prediction: row.localOutcome.passageBaselineV1 })), levelBps),
+      ...(rows.some(row => row.localOutcome.passageBaselineV3)
+        ? { passageBaselineV3: descriptiveMetrics(rows.map(row => ({ gold: labels.get(row.id).gold, prediction: row.localOutcome.passageBaselineV3 })), levelBps) } : {}) };
   };
   return { slices: SLICES.map(slice => group(slice, null)), variants: SLICES.flatMap(slice => D29_VARIANTS[slice].map(variant => group(slice, variant))) };
 }
@@ -360,10 +457,13 @@ export function populationSummary(prepared) {
     test: measure(prepared.corpus.rows.filter(row => row.split === 'test'), key),
     developmentReview: measure(prepared.corpus.rows.filter(row => development.has(row.id)), key) });
   const injectionPhrases = [...new Set(prepared.gold.rows.filter(row => development.has(row.id) && row.world.injected).map(row => row.world.injectionPhrase))].sort((a, b) => a - b);
+  const pooled = prepared.gold.rows.some(row => row.world.pool);
   return { population, developmentReviewMissingVariants, developmentReviewCoverage: {
     slices: Object.fromEntries(SLICES.map(slice => [slice, prepared.corpus.rows.filter(row => row.slice === slice && development.has(row.id)).length])),
+    ...(pooled ? { pool: 'train' } : {}),
     injectionPhrases, excludedInjectionPhrases: Array.from({ length: 16 }, (_, i) => i).filter(i => !injectionPhrases.includes(i)) },
-    baseline: baselineMetrics('passageBaseline'), passageBaselineV1: baselineMetrics('passageBaselineV1'), secondaryBaseline: baselineMetrics('baseline') };
+    baseline: baselineMetrics('passageBaseline'), passageBaselineV1: baselineMetrics('passageBaselineV1'), secondaryBaseline: baselineMetrics('baseline'),
+    ...(prepared.corpus.rows.some(row => row.localOutcome.passageBaselineV3) ? { passageBaselineV3: baselineMetrics('passageBaselineV3') } : {}) };
 }
 
 /** Additional study gates retain the native builders' Wilson/Newcombe/economics decisions. */
@@ -427,8 +527,9 @@ function validateReviews(prepared, reviews) {
 
 /** Scoring context comes from protected host artifacts, never from corpus payload or provider output. */
 export function studyModule(context) {
-  return { prepare, score: async input => {
-    const prepared = await prepare(input.corpus.provenance.seed);
+  const prepareFor = seed => seed === 'd29-study-v7' ? prepareV7(seed) : prepare(seed);
+  return { prepare: prepareFor, score: async input => {
+    const prepared = await prepareFor(input.corpus.provenance.seed);
     const scoped = { ...prepared.corpus, rows: prepared.corpus.rows.filter(row => row.split === 'test') };
     if (heldoutDigest(input.corpus) !== heldoutDigest(scoped)) refuse('test-phase-corpus');
     return score({ ...input, corpus: prepared.corpus }, context);
@@ -437,7 +538,7 @@ export function studyModule(context) {
 
 export async function score(input, context = null) {
   validateHeldoutInputs(input.corpus, input.preregistration);
-  const prepared = await prepare(input.corpus.provenance.seed);
+  const prepared = await (input.corpus.provenance.seed === 'd29-study-v7' ? prepareV7(input.corpus.provenance.seed) : prepare(input.corpus.provenance.seed));
   if (heldoutDigest(input.corpus) !== heldoutDigest(prepared.corpus) || heldoutDigest(input.gold) !== prepared.corpus.provenance.goldDigest
     || heldoutDigest(input.preregistration) !== heldoutDigest(prepared.preregistration)) refuse('frozen-study-mismatch');
   const seenAttempts = new Set();
@@ -514,7 +615,7 @@ export async function score(input, context = null) {
       ...(observation ? { observation } : {}) }, { gatePolicyPin: host.gatePolicyPin, gatePolicies: [host.policy], calibration });
     const attempts = input.attempts.filter(attempt => attempt.rowId === row.id);
     const sum = field => attempts.some(attempt => attempt.result?.[field] == null) ? null : attempts.reduce((n, attempt) => n + attempt.result[field], 0);
-    const label = gold.get(row.id), saved = row.localOutcome.passageBaseline;
+    const label = gold.get(row.id), saved = row.localOutcome.passageBaselineV3 ?? row.localOutcome.passageBaseline;
     const correct = (saved.route === 'ADVISORY_READY') === label.ready && (row.input.payload.kind !== 'citation' || saved.support === label.support);
     samples.push({ id: row.id, kind: host.subject.kind, slice: row.slice, gold: label,
       candidate: { route: receipt.route, support: observation?.kind === 'citation' ? observation.support : null,
@@ -526,7 +627,10 @@ export async function score(input, context = null) {
     provenance.push({ id: row.id, receiptDigest: heldoutDigest(receipt), attempts: item.lineage, mappingDigest: context.trustedMappingDigest,
       baseline: saved, baselineDigest: heldoutDigest(saved), secondaryBaseline: row.localOutcome.baseline,
       secondaryBaselineDigest: heldoutDigest(row.localOutcome.baseline), passageBaselineV1: row.localOutcome.passageBaselineV1,
-      passageBaselineV1Digest: heldoutDigest(row.localOutcome.passageBaselineV1), reservationUsdMicros: attempts.reduce((n, attempt) => n + attempt.reservedUsdMicros, 0) });
+      passageBaselineV1Digest: heldoutDigest(row.localOutcome.passageBaselineV1),
+      ...(row.localOutcome.passageBaselineV3 ? { passageBaselineV3: row.localOutcome.passageBaselineV3,
+        passageBaselineV3Digest: heldoutDigest(row.localOutcome.passageBaselineV3) } : {}),
+      reservationUsdMicros: attempts.reduce((n, attempt) => n + attempt.reservedUsdMicros, 0) });
   }
   if (input.integrity.sample_n !== rows.length || !Number.isSafeInteger(context.nowEpochMs)
     || context.nowEpochMs < Date.parse(access.firstTestAccessAt)) refuse('evaluation-time-or-n');
@@ -549,7 +653,8 @@ export async function score(input, context = null) {
   }
   const failureAsError = { counts, interval: pairedBinaryDifferenceInterval({ counts, levelBps: analysis.native.confidenceInterval.levelBps }),
     missingCandidateErrors: missing.length, denominator: rows.length, promotable: false };
-  return validatedArtifact({ schemaVersion: 'decision-d29-score/v6', decision: rollback ? 'ROLLBACK' : 'HOLD', native, external, groups, heldout: missing.length ? null : heldout,
+  return validatedArtifact({ schemaVersion: analysis.schemaVersion === 'decision-d29-analysis/v5' ? 'decision-d29-score/v7' : 'decision-d29-score/v6',
+    decision: rollback ? 'ROLLBACK' : 'HOLD', native, external, groups, heldout: missing.length ? null : heldout,
     provenance, reviewerN: samples.filter(row => row.reviewer !== null).length, missingInputs: missing,
     completeCase: { n: samples.length, correct: samples.filter(correct).length, external: externalReport(analysis, samples) },
     failureAsError, proposedStatisticalDisposition: report.proposedStatisticalDisposition,

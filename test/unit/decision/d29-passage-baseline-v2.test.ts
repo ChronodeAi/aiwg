@@ -94,7 +94,10 @@ describe('D29 visible passage baseline v2', () => {
       gold: { ready: true, support: 'supports' }, world: { claimModule: module }, variant: 'exact' };
     expect(d29PassageBaselineV2(input, true)).toEqual(review('does-not-support'));
   });
-  it('D29-PBV2-09 resolves every v6 visible fact while retaining the deliberate injection weakness', () => {
+  it('D29-PBV2-09 keeps v2 as the same-wording solvability ceiling (diagnostic, not the primary goal)', () => {
+    // R4: v2 is fitted to all pre-v7 wording, so perfect recovery of v6 slice labels is the ceiling
+    // reference other comparators are measured against — it must not be read as the study goal. The v7
+    // primary (v3, train pools only) is scored honestly on held-out test wording instead (see V7-04).
     const counts: Record<string, number> = {};
     let readyCount = 0;
     for (let ordinal = 0; ordinal < 2000; ordinal++) {

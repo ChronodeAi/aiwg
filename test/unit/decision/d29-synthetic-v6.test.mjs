@@ -71,11 +71,27 @@ describe('D29 v6 balanced inventory records', () => {
     const forged = structuredClone(report); forged.targets[0].maximumClaimRelativeBalancedAccuracy = null;
     expect(() => validateStudyArtifact(forged)).toThrow('study-schema');
   }, 9000);
-  it('V6-04 reproduces closed public fixtures and all review coverage without provider observations', async () => {
-    for (const [name, value] of Object.entries(prepared)) {
+  it('V6-04 reproduces closed small artifacts and header-pinned public fixtures without provider observations', async () => {
+    // v6 commits only small artifacts plus digest pins: corpus/gold fixtures are slim headers, and
+    // regenerated rows must reproduce the pinned historical digests recorded in those headers.
+    const goldDigest = heldoutDigest(prepared.gold);
+    for (const name of ['analysis', 'preregistration', 'approval', 'reviews']) {
       const file = `../../fixtures/decision/d29-synthetic-v6/${name === 'approval' ? 'approval-template' : name}.json`;
-      expect(heldoutDigest(JSON.parse(await readFile(new URL(file, import.meta.url), 'utf8'))), name).toBe(heldoutDigest(value));
+      expect(heldoutDigest(JSON.parse(await readFile(new URL(file, import.meta.url), 'utf8'))), name).toBe(heldoutDigest(prepared[name]));
     }
+    const corpusHeader = JSON.parse(await readFile(new URL('../../fixtures/decision/d29-synthetic-v6/corpus.json', import.meta.url), 'utf8'));
+    expect(corpusHeader.schemaVersion, 'corpus slim header').toBe('decision-d29-corpus-header/v1');
+    // Rows and definitions are frozen byte-identical: the historical pins recorded at slimming time
+    // still match fresh output. The full-corpus pin is historical too, but no longer reproduces because
+    // corpus provenance carries the registry digest, which legitimately advanced (v7 revision added).
+    expect(heldoutDigest(prepared.corpus.rows), 'v6 rows frozen').toBe(corpusHeader.pins.rowsDigest);
+    expect(heldoutDigest(prepared.corpus.definitions), 'v6 definitions frozen').toBe(corpusHeader.pins.definitionsDigest);
+    expect(corpusHeader.pins.fullCorpusDigest, 'historical full-corpus pin recorded').toMatch(/^sha256:[0-9a-f]{64}$/);
+    const goldHeader = JSON.parse(await readFile(new URL('../../fixtures/decision/d29-synthetic-v6/gold.json', import.meta.url), 'utf8'));
+    expect(goldHeader.schemaVersion, 'gold slim header').toBe('decision-d29-gold-header/v1');
+    expect(goldHeader.pins.fullGoldDigest, 'gold historical pin reproduces').toBe(goldDigest);
+    const { heldoutGeneratorDigest } = await import('../../../src/decision/heldout/generators.js');
+    expect(prepared.corpus.provenance.generatorDigest, 'registry digest').toBe(heldoutGeneratorDigest());
     expect(prepared.preregistration.regeneration).toMatchObject({ priorLiveObservations: 0, collectorCommit: 'ca23244f3' });
     expect(prepared.reviews.assessments.filter(item => item.phase === 'development')).toHaveLength(50);
     for (const artifact of [prepared.gold, prepared.analysis, prepared.reviews]) {
@@ -85,6 +101,8 @@ describe('D29 v6 balanced inventory records', () => {
   });
   it('V6-05 reproduces zero-call spend, all comparators and both public audit tables', async () => {
     const report = await dryRun(prepared);
+    expect(report.corpusDigest).toBe(heldoutDigest(prepared.corpus));
+    expect(report.goldDigest).toBe(heldoutDigest(prepared.gold));
     const saved = JSON.parse(await readFile(new URL('../../fixtures/decision/d29-synthetic-v6/dry-run.json', import.meta.url), 'utf8'));
     expect(heldoutDigest(report)).toBe(heldoutDigest(saved));
     expect(report.providerCalls).toBe(0); expect(report.worst.reservedUsd).toBeLessThan(4.8);

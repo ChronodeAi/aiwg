@@ -9,6 +9,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 v7 adopts disjoint held-out wording pools
+  (train for tuning/calibration, test for test only) with a frozen train-only
+  primary passage baseline v3, passage v2 kept as the solvability-ceiling
+  diagnostic, and gated singles/pairs/OR-of-5 plus model shortcut audits
+  evaluated train-to-test. Public seed `d29-study-v7`; v2/v3/v4/v6 corpus and
+  gold fixtures become slim headers with digest pins. Live evidence, calibration
+  qualification and human review remain pending (#2622)
+
 - Experimental, default-off D29 v6 balances record structure and claim-relative
   occurrences, replaces matched benign note slots with screening-control text,
   and sends explicit labeling conventions. Passage baseline v2 is primary;

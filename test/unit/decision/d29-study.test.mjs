@@ -8,7 +8,7 @@ import { prepare, dryRun, drawStream, baseline, hostContext, oracle, observation
   externalReport, validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
   analysisPlan, approvalTemplate, LABELING_CONVENTIONS } from '../../../tools/decision/studies/d29.mjs';
 import { heldoutDigest, heldoutExecutionDigest, validateHeldoutInputs, validateHeldoutBundle, planHeldoutCollection } from '../../../src/decision/heldout/contract.js';
-import { generateHeldoutRow, d29World, d29WorldV2, D29_VARIANTS, D29_V4_VARIANTS } from '../../../src/decision/heldout/generators.js';
+import { generateHeldoutRow, d29World, d29WorldV2, D29_VARIANTS, D29_V4_VARIANTS, heldoutGeneratorDigest } from '../../../src/decision/heldout/generators.js';
 import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js';
 import { heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
@@ -25,8 +25,34 @@ let small;
 const fixtureLabels = new Map();
 beforeAll(async () => {
   prepared = await prepare('offline-d29-conformance');
-  legacy = Object.fromEntries(await Promise.all(['corpus', 'gold', 'analysis', 'preregistration', 'reviews', 'approval-template']
-    .map(async name => [name === 'approval-template' ? 'approval' : name, JSON.parse(await readFile(new URL(`../../fixtures/decision/d29-synthetic-v2/${name}.json`, import.meta.url), 'utf8'))])));
+  legacy = await loadLegacyV2();
+async function loadLegacyV2() {
+  // R9: v2 commits only slim headers plus digest pins for corpus/gold; rows regenerate deterministically
+  // from the frozen row API (world seed d29-study-v3) and must reproduce the recorded historical pins.
+  const dir = name => new URL(`../../fixtures/decision/d29-synthetic-v2/${name}.json`, import.meta.url);
+  const header = JSON.parse(await readFile(dir('corpus'), 'utf8'));
+  const goldHeader = JSON.parse(await readFile(dir('gold'), 'utf8'));
+  const rows = [];
+  for (let ordinal = 0; ordinal < 2000; ordinal++) {
+    const { world } = d29WorldV2('d29-study-v3', ordinal);
+    rows.push(generateHeldoutRow('d29-synthetic/v2', `d29-study-v3:${ordinal}:${world.artifactPresent && world.testPassed ? 'single' : 'local'}`));
+  }
+  expect(heldoutDigest(rows), 'v2 rows reproduce the recorded pin').toBe(header.pins.rowsDigest);
+  const goldRows = rows.map((row, ordinal) => {
+    const { world } = d29WorldV2('d29-study-v3', ordinal);
+    return { id: row.id, variant: world.variant, world, gold: oracle(world) };
+  });
+  const gold = { schemaVersion: 'decision-d29-gold/v2', syntheticOnly: true, rows: goldRows };
+  expect(heldoutDigest(gold), 'v2 gold reproduces the recorded pin').toBe(goldHeader.pins.fullGoldDigest);
+  const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(),
+      seed: 'd29-study-v3', goldDigest: heldoutDigest(gold) },
+    definitions: header.definitions, rows };
+  expect(heldoutDigest(corpus.definitions), 'v2 definitions frozen').toBe(header.pins.definitionsDigest);
+  const small = Object.fromEntries(await Promise.all(['analysis', 'preregistration', 'reviews', 'approval-template']
+    .map(async name => [name === 'approval-template' ? 'approval' : name, JSON.parse(await readFile(dir(name), 'utf8'))])));
+  return { corpus, gold, ...small, pins: header.pins };
+}
   prepared.corpus.rows.forEach((row, i) => fixtureLabels.set(heldoutDigest(row.input.payload), prepared.gold.rows[i]));
   small = smallStudy();
 });
@@ -466,7 +492,7 @@ function response(init) {
 }
 
 describe('D29 collector integration', () => {
-  it.each(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6'])('PUBLIC-01 refuses public demo seed %s before credentials or dispatch', async seed => {
+  it.each(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6', 'd29-study-v7'])('PUBLIC-01 refuses public demo seed %s before credentials or dispatch', async seed => {
     const c = await setup(), demo = await prepare(seed);
     // A valid subset changes the corpus digest, so this must exercise the seed exclusion.
     demo.corpus.rows = demo.corpus.rows.slice(0, 1);

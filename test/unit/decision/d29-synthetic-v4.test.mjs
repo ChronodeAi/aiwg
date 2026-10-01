@@ -1,15 +1,38 @@
 import { readFile } from 'node:fs/promises';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { oracle, reviewTemplate, validateStudyArtifact } from '../../../tools/decision/studies/d29.mjs';
-import { generateHeldoutRow, d29WorldV4, D29_V4_VARIANTS, D29_V4_INJECTIONS } from '../../../src/decision/heldout/generators.js';
+import { generateHeldoutRow, d29WorldV4, D29_V4_VARIANTS, D29_V4_INJECTIONS, heldoutGeneratorDigest } from '../../../src/decision/heldout/generators.js';
 import { shortcutAudit } from '../../../tools/decision/studies/d29-shortcuts.mjs';
 import { heldoutDigest, heldoutExecution, heldoutRequest } from '../../../src/decision/heldout/contract.js';
 import { projectDecisionState, partitionProjectedState } from '../../../src/decision/projection.js';
 
 let prepared;
 beforeAll(async () => {
-  prepared = Object.fromEntries(await Promise.all(['corpus', 'gold', 'analysis', 'reviews', 'preregistration', 'approval'].map(async name => [name,
-    JSON.parse(await readFile(new URL(`../../fixtures/decision/d29-synthetic-v4/${name === 'approval' ? 'approval-template' : name}.json`, import.meta.url), 'utf8'))])));
+  // R9: v4 commits only slim headers plus digest pins for corpus/gold; rows regenerate deterministically
+  // from the frozen row API (world seed d29-study-v5) and must reproduce the recorded historical pins.
+  const dir = name => new URL(`../../fixtures/decision/d29-synthetic-v4/${name}.json`, import.meta.url);
+  const header = JSON.parse(await readFile(dir('corpus'), 'utf8'));
+  const goldHeader = JSON.parse(await readFile(dir('gold'), 'utf8'));
+  const rows = [];
+  for (let ordinal = 0; ordinal < 2000; ordinal++) {
+    const { world } = d29WorldV4('d29-study-v5', ordinal);
+    rows.push(generateHeldoutRow('d29-synthetic/v4', `d29-study-v5:${ordinal}:${world.artifactPresent && world.testPassed ? 'single' : 'local'}`));
+  }
+  expect(heldoutDigest(rows), 'v4 rows reproduce the recorded pin').toBe(header.pins.rowsDigest);
+  const goldRows = rows.map((row, ordinal) => {
+    const { world } = d29WorldV4('d29-study-v5', ordinal);
+    return { id: row.id, variant: world.variant, world, gold: oracle(world) };
+  });
+  const gold = { schemaVersion: 'decision-d29-gold/v4', syntheticOnly: true, rows: goldRows };
+  expect(heldoutDigest(gold), 'v4 gold reproduces the recorded pin').toBe(goldHeader.pins.fullGoldDigest);
+  const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
+    provenance: { kind: 'authored-synthetic', generatorDigest: heldoutGeneratorDigest(),
+      seed: 'd29-study-v5', goldDigest: heldoutDigest(gold) },
+    definitions: header.definitions, rows };
+  expect(heldoutDigest(corpus.definitions), 'v4 definitions frozen').toBe(header.pins.definitionsDigest);
+  const small = Object.fromEntries(await Promise.all(['analysis', 'reviews', 'preregistration', 'approval'].map(async name => [name,
+    JSON.parse(await readFile(dir(name === 'approval' ? 'approval-template' : name), 'utf8'))])));
+  prepared = { corpus, gold, ...small, pins: header.pins };
 });
 
 describe('D29 synthetic v4', () => {
@@ -145,7 +168,12 @@ describe('D29 synthetic v4', () => {
   it('V4-05 deterministically maximizes variant coverage in the 50 and retains closed versioned artifacts', async () => {
     const rows = prepared.corpus.rows.map(row => generateHeldoutRow(row.provenance.generatorId, row.provenance.seed));
     expect(JSON.stringify(rows)).toBe(JSON.stringify(prepared.corpus.rows));
-    expect(reviewTemplate(prepared.corpus, prepared.gold)).toEqual(prepared.reviews);
+    // The reviews template reproduces exactly; only its embedded corpusDigest is the recorded historical
+    // pin (full-corpus envelope advanced with the registry digest, rows stayed frozen).
+    const fresh = reviewTemplate(prepared.corpus, prepared.gold);
+    expect({ ...fresh, corpusDigest: prepared.reviews.corpusDigest }).toEqual(prepared.reviews);
+    expect(fresh.corpusDigest).toBe(heldoutDigest(prepared.corpus));
+    expect(prepared.reviews.corpusDigest, 'recorded historical full-corpus pin').toBe(prepared.pins.fullCorpusDigest);
     const ids = new Set(prepared.reviews.assessments.filter(item => item.phase === 'development').map(item => item.id));
     expect(ids.size).toBe(50);
     for (const [slice, variants] of Object.entries(D29_V4_VARIANTS)) {

@@ -19,14 +19,20 @@ export { sha256 as heldoutDigest };
 export const HELDOUT_CAP_USD: Readonly<Record<Study, number>> = Object.freeze({ D17: 8, D29: 6 });
 export const HELDOUT_PORTFOLIO_CAP_USD = 48;
 export const HELDOUT_ENV_GATE = 'AIWG_DECISION_HELDOUT_LIVE';
-const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6']);
+const D29_PUBLIC_DEMO_SEEDS = new Set(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6', 'd29-study-v7']);
 // Canonical corpus digests, including the public version before the wording correction.
+// Slim corpus headers stay refused alongside the full corpora they pin: both are committed demo bytes.
 const D29_PUBLIC_DEMO_CORPORA = new Set([
   'sha256:6bb4c5990c2d039841074bfb099e8c1ad5c6c40b5bd334817cb897bc320fd744',
   'sha256:4a0833e7a82d3809cb3b9448af1fbe5eae0ebeb1ee4d8055ae67b9c24f05baca',
   'sha256:505283a46217e158b39ba93f61e17c28c39c582cad857f7090f38e8844a6794a',
   'sha256:35ecc8936b7a251d1c34cf630e9b09ed82eff0d05f96c901c01edfa0f9849934',
   'sha256:372cb180f129938280751bf3db76e4f9bc142ef85e68f38370b88aeec5602963',
+  'sha256:5d09130d1327033dc00e7edb6e936fc3388036c3177aaef3ba20ae1a6ae38604',
+  'sha256:d5b722d175903aefe1b98c3db0c5310df35c0807eb8b7682ebd852f566e28ebc',
+  'sha256:53dea2a1008af107c1634c4d35c663fc18a9412a82a662141a50b0c8bbbdaf64',
+  'sha256:018912caaae0102593be0196fa86f0721edded8b2bed625b5a32b4df260b8a6e',
+  'sha256:6f5834c418810e5d89ce37185b13063ce0c8922220becbb43ae7253678d2da23',
 ]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };

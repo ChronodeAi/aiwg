@@ -35,9 +35,11 @@ export async function runD29Command(args) {
       registration: approved ? 'reviewed' : 'pending-operator-review', testApproved: false };
   }
   if (!['--dry-run', '--prepare'].includes(mode) || args.length > 3 || mode === '--prepare' && !destination) throw new Error('usage');
-  const prepared = await prepare(seed);
+  const { prepareV7, dryRunV7 } = await import('./studies/d29.mjs');
+  const seventh = seed === 'd29-study-v7';
+  const prepared = seventh ? await prepareV7(seed) : await prepare(seed);
   if (mode === '--prepare') await write(destination, Object.fromEntries(Object.entries(prepared).map(([name, value]) => [name === 'approval' ? 'approval-template' : name, value])));
-  return dryRun(prepared);
+  return seventh ? dryRunV7(prepared) : dryRun(prepared);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -20,18 +20,34 @@ Run from this source checkout; no build, package installation, credentials or
 network are needed:
 
 ```bash
-nice -n 19 node tools/decision/d29-study.mjs --dry-run d29-study-v6
+nice -n 19 node tools/decision/d29-study.mjs --dry-run d29-study-v7
 ```
 
-The complete **PUBLIC DEVELOPMENT DEMO** is retained under
-[`test/fixtures/decision/d29-synthetic-v6/`](../../test/fixtures/decision/d29-synthetic-v6/):
-`corpus.json` (2,000 rows), separate `gold.json`, `analysis.json`,
-`preregistration.json`, blank `reviews.json`, incomplete `approval-template.json`
-and the exact `dry-run.json`. The fixture provenance registry pins every file;
-`V6-05` re-derives them from source. These are synthetic inputs and planning
-records, with no observations or completed reviews. The entire corpus and gold
-are public, so neither this dataset nor its seed is a paid holdout. Keep
-`d29-study-v6` for development review and automated verification only.
+The current **PUBLIC DEVELOPMENT DEMO** is the v7 held-out-wording study under
+[`test/fixtures/decision/d29-synthetic-v7/`](../../test/fixtures/decision/d29-synthetic-v7/):
+`analysis.json`, `preregistration.json`, blank `reviews.json`, incomplete
+`approval-template.json` and the exact `dry-run.json`. Corpus and gold rows are
+not committed for v7: tuning/calibration rows draw only from the TRAIN wording
+pools and test rows only from the TEST pools, and rows regenerate
+deterministically from the frozen `d29-synthetic/v7` registry entry. The fixture
+provenance registry pins every committed file; `V7-06` re-derives the small
+artifacts from source and checks the regenerated corpus/gold against the digest
+pins recorded in `dry-run.json`. These are synthetic inputs and planning
+records, with no observations or completed reviews. The generator, pools and
+seeds are public, so neither this dataset nor its seed is a paid holdout. Keep
+`d29-study-v7` for development review and automated verification only.
+
+The v6 demo is retained under
+[`test/fixtures/decision/d29-synthetic-v6/`](../../test/fixtures/decision/d29-synthetic-v6/)
+with the same small artifacts. The v2, v3, v4 and v6 `corpus.json`/`gold.json`
+fixtures are slim headers (`decision-d29-corpus-header/v1` /
+`decision-d29-gold-header/v1`) carrying definitions, provenance and digest pins
+instead of the full 2,000 rows (R9); rows regenerate from the frozen row-level
+generator entries and must reproduce the recorded row pins. The v3 historical
+gold pin no longer matches the current oracle (38 rows differed at the last
+full-fixture comparison before slimming) and is kept as a recorded constant;
+current v3 oracle behavior is pinned separately (`D29-PBV3-03`), which asserts
+both digests and their inequality.
 
 ## Prepare and approve the private calibration phase
 
@@ -58,9 +74,10 @@ unset D29_PRIVATE_SEED
 ```
 
 The approved bundle boundary rejects public seeds `d29-study-v1`,
-`d29-study-v2`, `d29-study-v3`, `d29-study-v4`, `d29-study-v5` and
-`d29-study-v6`, plus canonical
-corpus digests pinned for the committed demo (including its prior wording).
+`d29-study-v2`, `d29-study-v3`, `d29-study-v4`, `d29-study-v5`,
+`d29-study-v6` and `d29-study-v7`, plus canonical
+corpus digests pinned for the committed demo (full corpora and their slim
+headers, including prior wording).
 This applies to approved dry-runs
 and both collection phases, before credentials, dispatch or journal creation.
 Source-only preparation and the development dry-run remain available. The
@@ -339,6 +356,10 @@ the claimed module remains a different entity, even when the actual claimed
 entity appears elsewhere with unrelated facts.
 
 ### Labeling guide
+
+Conventions below illustrate TRAIN-pool and earlier public wording only.
+TEST-pool phrasings are never printed here; treat any unlisted novel verb,
+periphrase or coreference rendering by the same latent-fact rules.
 
 The oracle reads latent facts, never wording or the variant label. First match
 entity and attribute: evidence only about a different entity or attribute is
@@ -650,9 +671,141 @@ provider observations. A passing result never certifies live screening quality.
 | failed-test | checklist | 9 | 9 | 33 |
 <!-- D29 population counts:end -->
 
+### Held-out wording pools (v7)
+
+The v7 population (`d29-synthetic/v7`, public seed `d29-study-v7`) splits every
+wording family into disjoint TRAIN and TEST pools
+(`src/decision/heldout/d29-pools.ts`, pools digest
+`sha256:fd1c4a96150b6e8d2cd68a5e750d957d347868501db403fa1020d8264bdc2989`).
+Tuning and calibration rows (500) draw only from TRAIN; test rows (1,500) draw
+only from TEST. The v7 renderer (`src/decision/heldout/d29-v7.ts`) selects its
+pool by split, and `prepareV7` refuses any row whose pool disagrees with its
+split. The split families are: claim/fact verbs and frames per attribute,
+scoped/temporal/tentative qualifiers, the paraphrase verb (`recorded` in TRAIN),
+criterion evidence phrasing for all eight modes, benign operator-note
+roles/tasks/timings, the 16 injection phrasings and their placements, and
+document framing. This paragraph prints TRAIN examples only: TEST-pool wording
+is never printed in docs or admitted to development review. TEST families are
+described abstractly (novel verbs, periphrases such as external-reviewer
+confirmation, cross-sentence coreference such as a migration lead followed by a
+pronominal continuation) and pinned by the pools digest above.
+
+Review findings R1–R9 from the v6 audit are fixed in v7 while v1–v4/v6
+registry entries, generators and baselines stay byte-identical:
+
+- R1 lexicon: benign operator notes reuse their own pool's injection
+  vocabulary and share its sentence frames, so no injection-only vocabulary
+  separates injected from benign rows (`V7-01` asserts zero gap word-by-word).
+- R2 length: injections are framed with role and timing clauses to match benign
+  note length distributions; the audit targets the actual note grammar with
+  per-note length features instead of the obsolete templates.
+- R3: explicit-none/stale second clauses carry their criterion scope
+  (`records no verification of {criterion}`, `has not been re-verified for
+  {criterion}`); `V7-08` checks every rendered row.
+- R4: the primary v3 baseline (TRAIN pools only, below) does not solve test
+  rows — its test accuracy is reported honestly instead of baked in. Half the
+  test rows use parser-unseen coreference renderings. Passage v2 remains only
+  as the same-wording solvability-ceiling diagnostic (`D29-PBV2-09`).
+- R5: distractor ports come from the same random draw as claimed ports.
+- R6: the two arguably screening-control benign notes are reworded to be
+  unambiguously operator-addressed.
+- R7: the audit learns singles, pairs and greedy OR-of-k (k up to 5) lexicon
+  rules on training folds, evaluates them on held-out folds and on the test
+  split, and GATES (not merely reports) the depth-3 tree / logistic bag-of-words
+  score. Single/pair limits are unchanged (0.75 injection/readiness, 0.80
+  support); model limits are 0.80 injection/readiness and 0.85 support.
+- R8: partial coverage varies k of n (`for 1/2/3 of 4 components`); code and
+  docs agree.
+- R9: v2/v3/v4/v6 full corpus/gold fixtures are slim headers plus recorded
+  digest pins; v7 commits only small artifacts plus pins. Row pins still
+  reproduce from the frozen row APIs; the v3 historical gold pin is a recorded
+  constant (see above).
+
+The primary comparator for v7 is `d29PassageBaselineV3` from
+`src/decision/heldout/d29-passage-baseline-v3.ts`, identified as
+`d29-passage-baseline/v3` (source digest
+`sha256:df96b6d95d603e9bd482bf6ea38e39fdb5d75381eaea0d288a045a5380633e8a`,
+pinned in `analysis.comparators.primary` and bound by the preregistration
+analysis digest). It implements the same decision logic as v2 but derives every
+verb, qualifier and criterion pattern from the imported TRAIN pools only
+(`D29-PBV3-01` fails the build if `D29_TEST` ever appears in its source), so
+TEST wording is parser-unseen by construction. On TRAIN wording it reaches the
+v2 ceiling verdict-for-verdict (`D29-PBV3-02`); on TEST wording every prediction
+stays at the REVIEW defaults, so the primary misses ready gold honestly and
+never false-readies a test row (`V7-04`: test joint 600/1500, support 200/1000
+citations, false-ready 0/1200). Passage v2 stays reported as the ceiling
+diagnostic, v1 and the original as secondary.
+
+v7 dry-run comparator counts (from the committed `dry-run.json`, zero provider
+calls; every baseline defaults to REVIEW on unseen TEST wording, which is why
+the four test rows below coincide):
+
+<!-- D29 v7 baseline metrics:start -->
+| Comparator | Population | N | Readiness correct | Joint correct | False-ready / non-ready |
+| --- | --- | --- | --- | --- | --- |
+| Primary passage v3 | tuning | 250 | 200/250 | 200/250 | 50/200 |
+| Primary passage v3 | calibration | 250 | 200/250 | 200/250 | 50/200 |
+| Primary passage v3 | test | 1500 | 1200/1500 | 600/1500 | 0/1200 |
+| Primary passage v3 | developmentReview | 50 | 34/50 | 34/50 | 16/41 |
+| Ceiling passage v2 | tuning | 250 | 200/250 | 200/250 | 50/200 |
+| Ceiling passage v2 | calibration | 250 | 200/250 | 200/250 | 50/200 |
+| Ceiling passage v2 | test | 1500 | 1200/1500 | 600/1500 | 0/1200 |
+| Ceiling passage v2 | developmentReview | 50 | 34/50 | 34/50 | 16/41 |
+| Secondary passage v1 | tuning | 250 | 200/250 | 140/250 | 35/200 |
+| Secondary passage v1 | calibration | 250 | 200/250 | 141/250 | 35/200 |
+| Secondary passage v1 | test | 1500 | 1200/1500 | 600/1500 | 0/1200 |
+| Secondary passage v1 | developmentReview | 50 | 39/50 | 25/50 | 8/41 |
+| Secondary original | tuning | 250 | 200/250 | 125/250 | 0/200 |
+| Secondary original | calibration | 250 | 200/250 | 125/250 | 0/200 |
+| Secondary original | test | 1500 | 1200/1500 | 600/1500 | 0/1200 |
+| Secondary original | developmentReview | 50 | 41/50 | 21/50 | 0/41 |
+
+Test support confusion is identical for all four comparators: every test
+citation predicts `unclear` (supports 0/400, contradicts 0/200, unclear
+200/200, does-not-support 0/200). These are deterministic synthetic
+diagnostics, not model measurements or reviewer assessments.
+<!-- D29 v7 baseline metrics:end -->
+
+v7 shortcut audit (`decision-d29-shortcut-audit/v4`, n=500 train-pool rows,
+evaluated on held-out folds and the 1,500-row test split; `passed: true`):
+
+<!-- D29 v7 audit maxima:start -->
+| Target | Limit | Single dev | Pair dev | OR-≤5 dev | Single test | Pair test | OR-≤5 test |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| injection | 0.75 | 0.6300 | 0.6650 | 0.6838 | 0.6438 | 0.6017 | 0.5300 |
+| readiness | 0.75 | 0.6150 | 0.6312 | 0.5837 | 0.5254 | 0.5046 | 0.4925 |
+| supports | 0.80 | 0.6150 | 0.6600 | 0.6450 | 0.5408 | 0.5571 | 0.5133 |
+| contradicts | 0.80 | 0.5650 | 0.6175 | 0.4675 | 0.5119 | 0.5256 | 0.5106 |
+| unclear | 0.80 | 0.5800 | 0.6300 | 0.5050 | 0.5256 | 0.5256 | 0.5000 |
+| does-not-support | 0.80 | 0.6000 | 0.6400 | 0.4600 | 0.5000 | 0.5606 | 0.5000 |
+
+Structural maxima (dev): injection 0.6600, readiness 0.6238, supports 0.6550,
+contradicts 0.6175, unclear 0.6300, does-not-support 0.6400. Claim-relative
+maxima (dev): injection 0.6300, readiness 0.6213, supports 0.6450, contradicts
+0.6175, unclear 0.6300, does-not-support 0.6400. Gated model maxima
+(tree/logistic, dev → test): injection 0.7000/0.5000 → 0.5000/0.5000 (limit
+0.80); readiness 0.5750/0.5000 → 0.5046/0.5000 (limit 0.80); supports
+0.6500/0.5000 → 0.5133/0.5000 (limit 0.85); contradicts 0.5300/0.5000 →
+0.5119/0.5000 (limit 0.85); unclear 0.5175/0.5000 → 0.5025/0.5000 (limit 0.85);
+does-not-support 0.5550/0.5000 → 0.5000/0.5000 (limit 0.85).
+<!-- D29 v7 audit maxima:end -->
+
+The 50-item development review covers every variant family and all 16 TRAIN
+injection phrasings (pool `train`, excluded phrasings none); TEST phrasings
+never appear in development review (`V7-07`). Per-slice counts match the v6
+selection shape (6/5/4/3/12/3/7/4/3/3 across the ten slices in slice order).
+Worst-case reserved spend is USD 3.789646 against the USD 4.80 stop and USD 6
+cap, with zero provider calls (`V7-06`).
+
+Still open (live-gated, scaffolded only, never fabricated): live Jev calls,
+real held-out data, human development/holdout/delayed-repeat review, D09
+calibration qualification and registration, test-phase approval, production
+rollout, and any net-economics claim. The preregistration records
+`priorLiveObservations: 0` and collector base commit `ba5946380`.
+
 ### Primary and secondary comparators
 
-The primary comparator is `d29PassageBaselineV2` from
+The v6 primary comparator is `d29PassageBaselineV2` from
 `src/decision/heldout/d29-passage-baseline-v2.ts`, identified as
 `d29-passage-baseline/v2`. It matches the exact claimed entity and attribute in
 visible source/evidence clauses, including the natural attribute-specific

@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { sha256 } from '../compile-cache/identity.js';
 import { d29WorldV6, d29V6RendererDigest } from './d29-v6.js';
+import { d29WorldV7, d29V7RendererDigest, D29_V7_GENERATOR_ID } from './d29-v7.js';
+import { d29PoolsDigest } from './d29-pools.js';
+import { d29PassageBaselineV3 } from './d29-passage-baseline-v3.js';
 import { d29PassageBaselineV2 } from './d29-passage-baseline-v2.js';
 import { d29PassageBaseline } from './d29-passage-baseline.js';
 import type { HeldoutRow } from './types.js';
@@ -551,6 +554,20 @@ function generateD29V4(seed: string, ordinal: number, layout: string): Generated
       passageBaseline: d29PassageBaseline(payload, hardPass) } };
 }
 
+function generateD29V7(seed: string, ordinal: number, layout: string): GeneratedRow {
+  const { world, payload, split, slice, familyId, id } = d29WorldV7(seed, ordinal);
+  const hardPass = world.artifactPresent && world.testPassed;
+  if (layout !== (hardPass ? 'single' : 'local')) throw new Error('generator-layout');
+  const names = world.kind === 'citation' ? ['support', 'strength', 'injection']
+    : ['relevance', 'completeness', 'contradiction', 'ambiguity', 'reviewerAttention'];
+  return { id, familyId, split: split as HeldoutRow['split'], slice, input: { payload },
+    requests: hardPass ? names.map(name => ({ id: name, arm: 'candidate', definitionId: `d29-${name}` })) : [],
+    localOutcome: { artifactPresent: world.artifactPresent, testPassed: world.testPassed,
+      sourceDigest: 'source' in payload ? sha256(payload.source) : null, baseline: d29Baseline(payload, hardPass),
+      passageBaselineV1: d29PassageBaseline(payload, hardPass), passageBaseline: d29PassageBaselineV2(payload, hardPass),
+      passageBaselineV3: d29PassageBaselineV3(payload, hardPass) } };
+}
+
 function generateD29V6(seed: string, ordinal: number, layout: string): GeneratedRow {
   const { world, payload, split, slice, familyId, id } = d29WorldV6(seed, ordinal);
   const hardPass = world.artifactPresent && world.testPassed;
@@ -578,6 +595,7 @@ function generate(generatorId: string, seed: string): GeneratedRow {
   if (generatorId === 'd29-synthetic/v2') return generateD29V2(worldSeed, i, layout);
   if (generatorId === 'd29-synthetic/v3') return generateD29V3(worldSeed, i, layout);
   if (generatorId === 'd29-synthetic/v6') return generateD29V6(worldSeed, i, layout);
+  if (generatorId === D29_V7_GENERATOR_ID) return generateD29V7(worldSeed, i, layout);
   if (generatorId === 'd29-synthetic/v4') return generateD29V4(worldSeed, i, layout);
   if (generatorId !== 'heldout-lamp/v1') throw new Error('unregistered-generator');
   const world = `w-${sha256(worldSeed).slice(7, 23)}`;
@@ -601,7 +619,8 @@ export function reproducibleHeldoutRow(row: HeldoutRow): boolean {
 
 /** The corpus pins the registered implementation, independently of its trusted study/scorer module. */
 export function heldoutGeneratorDigest(): `sha256:${string}` {
-  return sha256({ registry: readFileSync(new URL(import.meta.url), 'utf8'), renderer: d29V6RendererDigest() });
+  return sha256({ registry: readFileSync(new URL(import.meta.url), 'utf8'), renderer: d29V6RendererDigest(),
+    v7renderer: d29V7RendererDigest(), v7pools: d29PoolsDigest() });
 }
 export function heldoutCorpusSeed(rows: readonly HeldoutRow[]): string | null {
   const seeds = new Set(rows.map(row => row.provenance.seed.split(':')[0]));
