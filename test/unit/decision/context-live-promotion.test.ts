@@ -155,7 +155,9 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     const c = await canary(['aggregate-raw-2', 'longest-raw-2', 'dominant']);
     try {
       const expected = await contextCanaryDispatches(c.approval.plan.caseIds, c.s.corpus, c.record);
-      expect(expected).toEqual([{ caseId: 'aggregate-raw-2', enforce: expect.any(Number), rollback: 4 }, { caseId: 'longest-raw-2', enforce: 0, rollback: 0 }, { caseId: 'dominant', enforce: 1, rollback: 2 }]);
+      expect(expected).toEqual([{ caseId: 'aggregate-raw-2', enforce: expect.any(Number), rollback: 4, enforceRejection: null, rollbackRejection: null },
+        { caseId: 'longest-raw-2', enforce: 0, rollback: 0, enforceRejection: 'oversized-state', rollbackRejection: 'oversized-state' },
+        { caseId: 'dominant', enforce: 1, rollback: 2, enforceRejection: null, rollbackRejection: null }]);
       expect(expected[0]!.enforce).toBeGreaterThan(1);
       const summary = await c.run();
       expect(summary).toMatchObject({ source: 'synthetic', canaryPassed: true, stopped: null, oversizedDispatches: 0, rollbackExercised: true, rollbackNativeDispatches: 0, cases: 6 });
@@ -214,8 +216,34 @@ describe('TV-12 enforce canary with rollback (offline guards, not staging eviden
     } finally { await c.cleanup(); }
   });
 
+  it('admits the many-short shape in the canary approval (#2797)', async () => {
+    const c = await canary(['dominant', 'many-short']);
+    try {
+      // The envelope preflight rejects many-short before dispatch, so the approval carries it.
+      expect(() => validateContextCanaryApproval(c.approval, c.s.corpus, c.record)).not.toThrow();
+      expect(await contextCanaryDispatches(c.approval.plan.caseIds, c.s.corpus, c.record)).toEqual([
+        { caseId: 'dominant', enforce: 1, rollback: 2, enforceRejection: null, rollbackRejection: null },
+        { caseId: 'many-short', enforce: 0, rollback: 0, enforceRejection: 'invalid-input', rollbackRejection: 'invalid-input' }]);
+    } finally { await c.cleanup(); }
+  });
+
+  it('covers the many-short shape as rejected-before-dispatch without provider work', async () => {
+    const c = await canary(['many-short']);
+    try {
+      const summary = await c.run();
+      expect(summary).toMatchObject({ source: 'synthetic', canaryPassed: true, stopped: null, oversizedDispatches: 0,
+        enforceDispatches: 0, rollbackExercised: true, rollbackNativeDispatches: 0, cases: 2 });
+      expect(summary.reserved).toMatchObject({ requests: 0 });
+      expect(c.fetch).not.toHaveBeenCalled(); expect(c.resolver).not.toHaveBeenCalled();
+      const enforce = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'many-short-enforce.json'), 'utf8'));
+      expect(enforce).toMatchObject({ rejectedBeforeDispatch: true, dispatches: 0, pass: true });
+      const rollback = JSON.parse(await readFile(join(c.runs, 'offline-canary', 'many-short-rollback.json'), 'utf8'));
+      expect(rollback).toMatchObject({ rejectedBeforeDispatch: true, dispatches: 0, pass: true });
+    } finally { await c.cleanup(); }
+  });
+
   it.each([
-    ['a many-question case whose result exceeds entry limits', (a: ContextCanaryApproval) => { a.plan.caseIds = ['dominant', 'many-short']; }],
+    ['an unknown case id', (a: ContextCanaryApproval) => { a.plan.caseIds = ['no-such-case']; }],
     ['a plan budget above the issue cap', (a: ContextCanaryApproval) => { a.plan.budget.usd = 2.5; }],
   ])('rejects %s in the canary approval', async (_label, mutate) => {
     const c = await canary(['dominant', 'many-short']);
