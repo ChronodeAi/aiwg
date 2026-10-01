@@ -9,6 +9,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
+  implementation in `tools/decision/jev-openbao-credential.mjs`, with
+  `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
+  live-run paths keep their logical-reference and approval-pin checks, the D12
+  resolver file stays loadable through its digest-pinned import, and the TV-12
+  resolver is unchanged. Live qualification remains approval-gated and no live
+  run was performed (#2798)
+
 - Refreshed experimental, default-off D17 source dry-run pins after the shared
   acceptance threshold fix entered the source digest; the corpus and split/gold
   pins are unchanged. Live evidence and approval remain pending (#2611)

@@ -198,13 +198,18 @@ helper, then reads the secret over Node HTTPS with certificate verification alwa
 also revokes a helper token that fails validation, if the token can be sent as a
 header at all, and it revokes when the read failed.
 
+The token-helper runner, TLS refusal, request options, bounded HTTPS GET and KV v2
+envelope reader in that file are the single shared implementation (#2798): the D10
+egress resolver (`tools/decision/openbao-kv-credential-resolver.mjs`) delegates to
+them. The D12 file stays self-contained apart from `node:` built-ins so the runner
+can keep loading it through the digest-pinned `data:` import; any edit still needs a
+new approval pinning the new digest. The TV-12 resolver
+(`tools/decision/jev-credential-resolver.mjs`) remains a separate module with its own
+binding reference format.
+
 Errors carry a fixed category only, so no key, path, token or helper text reaches an
 error, log or artifact. The runner reads the key once per run and zeroes its copy at
 the end.
-
-This resolver mirrors the TV-12 resolver proposed in #2770, which is not on main and
-uses a logical reference that does not fit this runner's binding `credentialRef`.
-The duplication stays until one shared resolver lands.
 
 ## Evidence
 
