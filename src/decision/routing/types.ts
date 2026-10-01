@@ -221,6 +221,14 @@ export interface RoutingDispatchResult {
   outcomeLabel: string | null;
 }
 
+/** The enforceable remaining-cost cap for one routing attempt. `costCeilingMicros` never exceeds
+ * `remainingBudgetMicros`; `estimatedCostMicros` is the worst pinned or observed price used for admission. */
+export interface RoutingAttemptBudget {
+  remainingBudgetMicros: number;
+  costCeilingMicros: number;
+  estimatedCostMicros: number;
+}
+
 export interface RoutingRuntimeOptions {
   enabled?: boolean;
   now?: () => number;
@@ -229,8 +237,9 @@ export interface RoutingRuntimeOptions {
   /** Attempt-deadline timer raced against dispatch; defaults to a real timer. */
   timer?: (ms: number, signal: AbortSignal) => Promise<void>;
   signal?: AbortSignal;
-  /** Mandatory with `dispatch`: admission for the one route about to be attempted. */
-  reserve?: (candidate: RouteCandidate, attemptOrdinal: number) => boolean | Promise<boolean>;
+  /** Mandatory with `dispatch`: admission for the one route about to be attempted, capped so the
+   * attempt cannot authorize spend above the remaining run budget. A denial refuses the attempt. */
+  reserve?: (candidate: RouteCandidate, attemptOrdinal: number, budget: RoutingAttemptBudget) => boolean | Promise<boolean>;
   /** Mandatory with `dispatch`: called once for every granted reservation with the charged cost (null = unknown). */
   release?: (candidate: RouteCandidate, attemptOrdinal: number, chargedCostMicros: number | null) => void | Promise<void>;
   evidence?: (request: {
@@ -245,6 +254,8 @@ export interface RoutingRuntimeOptions {
     candidate: RouteCandidate;
     attemptOrdinal: number;
     deadlineEpochMs: number;
+    /** The attempt must not spend above this ceiling; it never exceeds the remaining run budget. */
+    costCeilingMicros: number;
     signal: AbortSignal;
   }) => Promise<RoutingDispatchResult>;
 }
@@ -393,9 +404,13 @@ export interface RoutingControlDrillState {
   policyRestored: boolean;
   aliasRolledBack: boolean;
   compensated: boolean;
-  /** False only when the routing policy and the D17 alias disagree. */
+  /** False when the routing policy and the D17 alias disagree, or when active-run pins changed during the response. */
   consistent: boolean;
   currentPolicy: RoutingPin;
+  /** Only set on an active-run-pin mismatch: the pins read before the drift response. */
+  activeRunPinsBefore?: RoutingActiveRunPin[];
+  /** Only set on an active-run-pin mismatch: the pins read after the drift response. */
+  activeRunPinsAfter?: RoutingActiveRunPin[];
 }
 
 export interface RoutingControlDrillResult {

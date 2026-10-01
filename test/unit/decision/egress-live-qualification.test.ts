@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  computeEgressLiveMetrics, EGRESS_ATTACK_CLASSES, EgressLiveBudget, egressLiveDigest, egressLiveDryRun, egressLivePreregistration,
+  computeEgressLiveMetrics, EGRESS_ATTACK_CLASSES, EGRESS_LIVE_ENV_GATE, EgressLiveBudget, egressLiveDigest, egressLiveDryRun, egressLivePreregistration,
   EGRESS_LIVE_MAX_MEASUREMENT_FAILURES_PER_CLASS, egressLiveReservationMicros, egressPriorRunSpendUsd, egressRetryDecision, egressWorstCaseDispatches, generateEgressAttackCorpus, guardEgressTransport, runEgressLiveQualification, scopedCredentialResolver, validateEgressLiveApproval,
   type EgressCredentialAuditEntry, type EgressLiveApproval, type EgressLiveCorpus, type EgressLiveHost,
 } from '../../../src/decision/egress-live-qualification.js';
@@ -551,12 +551,52 @@ describe('#2680 synthetic end-to-end collection through the real evaluator and D
     });
   }, 60_000);
 
-  it('EGRESS-E2E-06 a live run (no offline transport) refuses anything but the full preregistered corpus', async () => {
-    const corpus = generateEgressAttackCorpus(undefined, 2); const host = fakeHost();
-    await expect(runEgressLiveQualification({ approval: approvalFor(corpus), corpus, sourceRoot: '.', artifactRoot: '.', host }))
-      .rejects.toThrow('full preregistered corpus');
-    expect(host.resolveCredential).not.toHaveBeenCalled();
+  it('EGRESS-E2E-06 an opted-in live run (no offline transport) refuses anything but the full preregistered corpus', async () => {
+    vi.stubEnv(EGRESS_LIVE_ENV_GATE, '1');
+    try {
+      const corpus = generateEgressAttackCorpus(undefined, 2); const host = fakeHost();
+      await expect(runEgressLiveQualification({ approval: approvalFor(corpus), corpus, sourceRoot: '.', artifactRoot: '.', host }))
+        .rejects.toThrow('full preregistered corpus');
+      expect(host.resolveCredential).not.toHaveBeenCalled();
+    } finally { vi.unstubAllEnvs(); }
   });
+
+  it('EGRESS-GATE-01 a live call without the runtime opt-in is refused before credential or transport use', async () => {
+    vi.stubEnv(EGRESS_LIVE_ENV_GATE, '');
+    const seen: unknown[][] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (...args: unknown[]) => { seen.push(args); return new Response('{}', { status: 200 }); }) as typeof fetch;
+    try {
+      const corpus = generateEgressAttackCorpus(undefined, 2); const host = fakeHost();
+      await expect(runEgressLiveQualification({ approval: approvalFor(corpus), corpus, sourceRoot: '.', artifactRoot: '.', host }))
+        .rejects.toThrow('AIWG_DECISION_EGRESS_LIVE=1');
+      expect(host.resolveCredential).not.toHaveBeenCalled();
+      expect(seen).toEqual([]);
+    } finally { globalThis.fetch = realFetch; vi.unstubAllEnvs(); }
+  });
+
+  it('EGRESS-GATE-02 an opted-in live call still meets the existing approval checks', async () => {
+    vi.stubEnv(EGRESS_LIVE_ENV_GATE, '1');
+    try {
+      const corpus = generateEgressAttackCorpus(undefined, 2);
+      const bad = approvalFor(corpus); bad.region = 'unknown';
+      await expect(runEgressLiveQualification({ approval: bad, corpus, sourceRoot: '.', artifactRoot: '.', host: fakeHost() }))
+        .rejects.toThrow('Incomplete, altered or over-cap');
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it('EGRESS-GATE-03 an offline-transport call stays synthetic with no live opt-in', async () => {
+    vi.stubEnv(EGRESS_LIVE_ENV_GATE, '');
+    try {
+      await withRun(async ({ source, commit, output, corpus }) => {
+        const jev = fakeJev();
+        const summary = await runEgressLiveQualification({ approval: approvalFor(corpus, { sourceCommit: commit }), corpus, sourceRoot: source,
+          artifactRoot: output, host: fakeHost(), offlineTransport: jev.fetch as unknown as typeof fetch });
+        expect(summary).toMatchObject({ source: 'synthetic', stopped: null, planned: 28, dispatched: 28, recordedRows: 28 });
+        expect(jev.fetch).toHaveBeenCalledTimes(28);
+      });
+    } finally { vi.unstubAllEnvs(); }
+  }, 60_000);
 });
 
 describe('#2680 OpenBao KV resolver (offline seams)', () => {

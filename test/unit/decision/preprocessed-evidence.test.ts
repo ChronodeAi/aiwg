@@ -480,6 +480,113 @@ describe('preprocessed evidence evaluator integration', () => {
     expect(dispatched.result.spec.status).toBe('completed');
     expect(dispatched.evaluate).toHaveBeenCalledTimes(3);
   });
+
+  it('MML-SNAPSHOT-01 refuses denied lineage even when the caller mutates it during evaluation', async () => {
+    const value = manifest('scanned-document-ocr');
+    value.spec.policy.rawEgress = { allowed: true, destinations: [jevDestination] };
+    value.spec.policy.derivedEgress = { allowed: true, destinations: [{ provider: 'llm-subagent', origin: 'local://worker' }] };
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination, requireRawEgress: true });
+    const lineage = resolved.receiptEvidence;
+    const original = structuredClone(lineage);
+    const seen: unknown[] = [];
+    const adapter = spyAdapter(seen);
+    const evaluate = vi.spyOn(adapter, 'evaluate');
+    const resolveCredential = vi.fn(async () => new Uint8Array([1]));
+    const result = await evaluateDecisionRuleset({
+      ruleset: addon<DecisionRuleset>('ruleset.json'),
+      binding: addon<DecisionBinding>('binding-jev.json'),
+      definitions: {
+        category: addon<DecisionDefinition>('decision-category.json'),
+        severity: addon<DecisionDefinition>('decision-severity.json'),
+        core: addon<DecisionDefinition>('decision-core_unavailable.json'),
+      },
+      input: { message: resolved.state.text || 'Invoice 314 total 128.40 USD.' },
+      runId: 'run', invocationId: 'mml-snapshot-refused',
+      adapters: { jev: adapter },
+      resolveCredential,
+      // Caller-owned mutation during evaluation: the projection hook runs while the
+      // gate arguments are evaluated, after the result base was recorded. It flips
+      // the stored egress flag, but the gate must still see the snapshot.
+      projection: { resolve: () => {
+        lineage.references[0]!.policy.derivedEgressAllowed = true;
+        return projectionPolicy();
+      } },
+      preprocessingLineage: lineage,
+      preprocessingVerification: hostVerification([value]),
+    });
+    expect(result.spec.status).toBe('error');
+    expect(result.spec.reason).toBe('data-boundary-denied');
+    expect(result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['derived-egress-denied'] });
+    expect(result.spec.preprocessingLineage).toEqual({ ...original,
+      dispatchGate: { outcome: 'refused', reasons: ['derived-egress-denied'] } });
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(resolveCredential).not.toHaveBeenCalled();
+  });
+
+  it('MML-SNAPSHOT-02 gates and records the same snapshot when the caller mutates verification during evaluation', async () => {
+    const source = manifest('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([source], { destination: jevDestination, minQualityScore: 0.8 });
+    const lineage = resolved.receiptEvidence;
+    const original = structuredClone(lineage);
+    const verification = hostVerification([source]);
+    const calls: unknown[] = [];
+    const result = await evaluateDecisionRuleset({
+      ruleset: addon<DecisionRuleset>('ruleset.json'),
+      binding: addon<DecisionBinding>('binding-jev.json'),
+      definitions: {
+        category: addon<DecisionDefinition>('decision-category.json'),
+        severity: addon<DecisionDefinition>('decision-severity.json'),
+        core: addon<DecisionDefinition>('decision-core_unavailable.json'),
+      },
+      input: { message: resolved.state.text },
+      runId: 'run', invocationId: 'mml-snapshot-allowed',
+      adapters: { jev: spyAdapter(calls) },
+      resolveCredential: vi.fn(async () => new Uint8Array([1])),
+      // Caller-owned mutation during evaluation: the projection hook runs while the
+      // gate arguments are evaluated. It drops the current manifests, but the gate
+      // must still verify against the snapshot.
+      projection: { resolve: () => {
+        verification.manifests.length = 0;
+        return projectionPolicy();
+      } },
+      preprocessingLineage: lineage,
+      preprocessingVerification: verification,
+    });
+    expect(result.spec.status).toBe('completed');
+    expect(result.spec.preprocessingLineage).toEqual({ ...original, dispatchGate: { outcome: 'allowed', reasons: [] } });
+    expect(calls).toHaveLength(3);
+    validateDecisionDocument(result);
+  });
+
+  it('MML-SNAPSHOT-03 refuses pre-verdicted (malformed) lineage without dispatch', async () => {
+    const source = manifest('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([source], { destination: jevDestination, minQualityScore: 0.8 });
+    const lineage = { ...structuredClone(resolved.receiptEvidence),
+      dispatchGate: { outcome: 'allowed' as const, reasons: [] as string[] } };
+    const seen: unknown[] = [];
+    const adapter = spyAdapter(seen);
+    const evaluate = vi.spyOn(adapter, 'evaluate');
+    const result = await evaluateDecisionRuleset({
+      ruleset: addon<DecisionRuleset>('ruleset.json'),
+      binding: addon<DecisionBinding>('binding-jev.json'),
+      definitions: {
+        category: addon<DecisionDefinition>('decision-category.json'),
+        severity: addon<DecisionDefinition>('decision-severity.json'),
+        core: addon<DecisionDefinition>('decision-core_unavailable.json'),
+      },
+      input: { message: resolved.state.text },
+      runId: 'run', invocationId: 'mml-snapshot-malformed',
+      adapters: { jev: adapter },
+      resolveCredential: vi.fn(async () => new Uint8Array([1])),
+      projection: { resolve: () => projectionPolicy() },
+      preprocessingLineage: lineage,
+      preprocessingVerification: hostVerification([source]),
+    });
+    expect(result.spec.status).toBe('error');
+    expect(result.spec.reason).toBe('data-boundary-denied');
+    expect(result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['malformed-lineage'] });
+    expect(evaluate).not.toHaveBeenCalled();
+  });
 });
 
 describe('preprocessed evidence D10 lifecycle surface', () => {

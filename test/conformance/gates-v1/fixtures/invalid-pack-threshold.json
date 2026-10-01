@@ -1,0 +1,41 @@
+{
+  "apiVersion": "gates.aiwg.io/v1alpha1",
+  "kind": "GatePack",
+  "metadata": {
+    "id": "aiwg:test-gates/invalid-threshold",
+    "version": "1.0.0",
+    "description": "Threshold with neither value nor param."
+  },
+  "spec": {
+    "metrics": {
+      "false-ready": {
+        "provider": "test.proportion/v1",
+        "kind": "proportion"
+      }
+    },
+    "gates": [
+      {
+        "id": "false-ready-upper",
+        "kind": "interval-bound",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "false-ready"
+        },
+        "statistic": {
+          "kind": "interval-bound",
+          "method": "wilson",
+          "bound": "upper",
+          "levelBps": 9500
+        },
+        "threshold": {
+          "op": "lte"
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "lower-is-stricter",
+        "onFail": "HOLD"
+      }
+    ]
+  }
+}
