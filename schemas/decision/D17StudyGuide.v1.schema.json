@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyGuide.v1.schema.json",
+  "title": "D17StudyGuide",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "population",
+    "yes",
+    "no",
+    "authority",
+    "oracleAudit",
+    "invalidGold",
+    "timing",
+    "independence"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-guide/v1"
+    },
+    "population": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "yes": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "no": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "authority": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "oracleAudit": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "invalidGold": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "timing": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "independence": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    }
+  }
+}

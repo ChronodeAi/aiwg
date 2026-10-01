@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { sha256 } from '../compile-cache/identity.js';
 import type { HeldoutRow } from './types.js';
+import { d17GenerateCase } from '../ensemble-study/corpus.js';
 
 type GeneratedRow = Omit<HeldoutRow, 'provenance'>;
 /** Source-controlled registry only: corpus data cannot register code or supply a module path. */
 function generate(generatorId: string, seed: string): GeneratedRow {
+  if (generatorId === 'd17-entailment/v1') return d17GenerateCase(seed).row;
   if (generatorId === 'heldout-lamp-splits/v1') {
     const match = /^(.*):(tuning|calibration|test)$/.exec(seed);
     if (!match) throw new Error('generator-seed');
@@ -36,7 +38,10 @@ export function reproducibleHeldoutRow(row: HeldoutRow): boolean {
 
 /** The corpus pins the registered implementation, independently of its trusted study/scorer module. */
 export function heldoutGeneratorDigest(): `sha256:${string}` {
-  return `sha256:${createHash('sha256').update(readFileSync(new URL(import.meta.url))).digest('hex')}`;
+  const source = new URL('../ensemble-study/corpus.ts', import.meta.url);
+  const implementation = existsSync(source) ? source : new URL('../ensemble-study/corpus.js', import.meta.url);
+  return `sha256:${createHash('sha256').update(readFileSync(new URL(import.meta.url)))
+    .update(readFileSync(implementation)).digest('hex')}`;
 }
 export function heldoutCorpusSeed(rows: readonly HeldoutRow[]): string | null {
   const seeds = new Set(rows.map(row => row.provenance.seed.split(':')[0]));
