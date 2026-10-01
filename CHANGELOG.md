@@ -224,6 +224,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Stop the experimental, default-off D12 live qualification on a per-call
+  usage-bound breach: a call reporting more than its approved 4000-token bound
+  is charged in full and records a budget breach that refuses every later
+  reservation. Usage exactly at the bound still settles normally. The Jev
+  transport offers no provider-side output cap, so the reservation, the breach
+  refusal and the run stop are the per-call enforcement; ordinary decision
+  behavior is unchanged (#2800).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

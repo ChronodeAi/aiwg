@@ -206,6 +206,25 @@ describe('D12 budget, plan and stop rules', () => {
     expect(budget.total).toMatchObject({ calls: 1, tokens: 4508, usdMicros: 451 });
   });
 
+  it('records an over-bound call as a budget breach: observed spend is charged and later reserves are refused', () => {
+    const budget = new DagLiveBudget({ ...limits, priceBound: PRICE }, 4000, 0.8, 0, () => 0);
+    // Settlement itself never throws and never clamps: the full observed usage is charged.
+    const charged = budget.reserve('taxonomy-beam')({ inputTokens: 4500, outputTokens: 8 });
+    expect(charged).toEqual({ tokens: 4508, usdMicros: 451 });
+    expect(budget.total).toMatchObject({ calls: 1, tokens: 4508, usdMicros: 451 });
+    // The breach stops subsequent dispatch at the guard, for any pattern.
+    expect(() => budget.reserve('taxonomy-beam')).toThrow('budget-run-usage-bound');
+    expect(() => budget.reserve('shortlist-rerank')).toThrow('budget-run-usage-bound');
+  });
+
+  it('settles a call exactly at the per-call bound normally, with no breach', () => {
+    const budget = new DagLiveBudget({ ...limits, priceBound: PRICE }, 4000, 0.8, 0, () => 0);
+    const charged = budget.reserve('taxonomy-beam')({ inputTokens: 4000, outputTokens: 0 });
+    expect(charged).toEqual({ tokens: 4000, usdMicros: 400 });
+    expect(budget.total).toMatchObject({ calls: 1, tokens: 4000, usdMicros: 400 });
+    expect(() => budget.reserve('taxonomy-beam')({ inputTokens: 100, outputTokens: 8 })).not.toThrow();
+  });
+
   it('plans worst-case calls, tokens and USD without any provider call, and flags a budget that cannot cover it', () => {
     const workload = generateDagLiveWorkload();
     const preregistration = dagLivePreregistration(workload);
@@ -454,6 +473,28 @@ describe('D12 paired collection with an injected transport (synthetic, never liv
     expect(summary.spend.chargedUsd).toBe(result.reserved.usd);
     if (reason === 'usage-exceeded-reservation') expect(summary.stoppingCall).toMatchObject({ inputTokens: 4500, outputTokens: 8 });
     expect(JSON.parse(files['run-manifest.json']).evidence.every((row: any) => row.outcome === 'fail')).toBe(true);
+  }, 60_000);
+
+  it('settles usage exactly at the per-call bound normally and completes the run', async () => {
+    const workload = generateDagLiveWorkload(21, 4);
+    const inner = oracle(workload);
+    let requests = 0;
+    const fetch = vi.fn(async (url: unknown, init: RequestInit) => {
+      const response = await inner(url, init);
+      if (++requests !== 5) return response;
+      const body = await response.json(); body.usage.input_tokens = 3992;
+      return new Response(JSON.stringify(body), { headers: response.headers });
+    });
+    const { result, files } = await run(workload, fetch as never);
+    expect(result.stopped).toBeNull();
+    expect(result.pairs).toBe(12);
+    const calls = files['calls.jsonl'].trim().split('\n').map(line => JSON.parse(line));
+    expect(calls).toHaveLength(fetch.mock.calls.length);
+    expect(calls.every((call: any) => call.outcome === 'ok')).toBe(true);
+    // The fifth call reports exactly the 4000-token bound: settled normally, charged in full.
+    expect(calls[4]).toMatchObject({ inputTokens: 3992, outputTokens: 8, outcome: 'ok', attempt: 1, chargedTokens: 4000 });
+    expect(result.reserved.tokens).toBe((fetch.mock.calls.length - 1) * 608 + 4000);
+    expect(result.reserved.calls).toBe(fetch.mock.calls.length);
   }, 60_000);
 
   it.each([
