@@ -44,6 +44,14 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
+  implementation in `tools/decision/jev-openbao-credential.mjs`, with
+  `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
+  live-run paths keep their logical-reference and approval-pin checks, the D12
+  resolver file stays loadable through its digest-pinned import, and the TV-12
+  resolver is unchanged. Live qualification remains approval-gated and no live
+  run was performed (#2798)
+
 - Tightened the experimental, default-off gates core addendum: every scope
   transition now requires the child to cover a superset of the parent's
   slices under every slice universe (`listed -> each` must except none of
