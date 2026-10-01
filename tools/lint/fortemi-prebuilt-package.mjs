@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { resolveNpmPackTimeoutMs, runNpmPack } from './lib/fortemi-npm-pack.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const prebuiltDir = path.join(repoRoot, 'prebuilt', 'fortemi-core', 'framework');
@@ -48,15 +49,18 @@ function parseNpmPackJson(stdout) {
 
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'aiwg-fortemi-prebuilt-gate-'));
 process.once('exit', () => rmSync(tmp, { recursive: true, force: true }));
-const pack = spawnSync('npm', ['pack', '--json', '--pack-destination', tmp], {
-  cwd: repoRoot,
-  encoding: 'utf8',
-  maxBuffer: 64 * 1024 * 1024,
-});
-if (pack.status !== 0) {
-  console.error(pack.stdout);
-  console.error(pack.stderr);
-  fail(`npm pack --json exited with status ${pack.status}`);
+let packTimeoutMs;
+try {
+  packTimeoutMs = resolveNpmPackTimeoutMs();
+} catch (err) {
+  fail(err.message);
+}
+const packRun = runNpmPack({ cwd: repoRoot, destination: tmp, timeoutMs: packTimeoutMs });
+const pack = packRun.result;
+if (!packRun.ok) {
+  if (pack.stdout) console.error(pack.stdout);
+  if (pack.stderr) console.error(pack.stderr);
+  fail(packRun.message);
 }
 
 let packJson;

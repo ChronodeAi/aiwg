@@ -679,6 +679,27 @@ describe('D28 routing pilot review regressions (#2620)', () => {
       })).rejects.toThrow(/active run pins changed/);
     });
 
+    it('ROUTE-F19 a pin mismatch throws the drill error with circuit, policy and rollback state', async () => {
+      const error = await drillError(gateway(), control({ mutateRunsOnRestore: true }));
+      expect(error.message).toMatch(/active run pins changed/);
+      expect(error.state.jevCircuitOpen).toBe(true);
+      expect(error.state.policyRestored).toBe(true);
+      expect(error.state.aliasRolledBack).toBe(true);
+      expect(error.state.compensated).toBe(false);
+      expect(error.state.currentPolicy).toEqual(v1);
+    });
+
+    it('ROUTE-F19 a pin mismatch keeps the before and after pins distinguishable', async () => {
+      const error = await drillError(gateway(), control({ mutateRunsOnRestore: true }));
+      expect(error.state.activeRunPinsBefore).toEqual([
+        { runId: 'run-a', policy: v2, aliasRevision: 2, identityDigest: record.challenger.identityDigest },
+      ]);
+      expect(error.state.activeRunPinsAfter).toEqual([
+        { runId: 'run-a', policy: v1, aliasRevision: 2, identityDigest: record.challenger.identityDigest },
+      ]);
+      expect(error.state.activeRunPinsAfter).not.toEqual(error.state.activeRunPinsBefore);
+    });
+
     const drill = (aliases: ReturnType<typeof gateway>, routing: ReturnType<typeof control>) => runRoutingControlDrill({
       championChallenger: record, driftPolicy, driftSignal: signal, approvalReference: 'review-2620',
       gateway: aliases, control: routing, at: '2026-09-29T00:00:00.000Z',

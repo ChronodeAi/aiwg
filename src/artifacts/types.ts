@@ -183,6 +183,7 @@ export const OPERATIONAL_DISCOVERY_TYPES = [
   'decision-definition',
   'decision-ruleset',
   'decision-binding',
+  'gate-pack',
   'flow',
   'runbook',
   'template',

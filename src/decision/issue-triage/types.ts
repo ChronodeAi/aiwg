@@ -41,10 +41,32 @@ export interface IssueTriagePilotPack {
   rollback: { disableRestoresPriorWorkflow: true; preserveReceiptsAndLabels: true };
 }
 
+export interface IssueTriageCalibrationRequestRule {
+  /** Every per-sample compatibility request must use this requested alias. */
+  requestedAlias: string;
+  /** Every per-sample request runId must equal `${runIdPrefix}${sampleId}`, binding each request to its sample. */
+  runIdPrefix: string;
+  /** Every per-sample request must cite this calibration artifact; null pins requests without an artifact. */
+  calibrationArtifactId: string | null;
+  /** Requests dated before this instant are rejected, binding requests to preregistration time. */
+  notBefore: string;
+}
+
+export interface IssueTriageCalibrationPin {
+  /** Canonical digest of the pinned registry content (artifacts, relations, alias history); null pins "no registry". */
+  registryDigest: `sha256:${string}` | null;
+  /** Canonical digest of the pinned compatibility policy; null pins "no registry". */
+  policyDigest: `sha256:${string}` | null;
+  /** Rule every per-sample compatibility request must satisfy; null pins "no registry". */
+  requestRule: IssueTriageCalibrationRequestRule | null;
+}
+
 export interface IssueTriageEvaluationManifest {
   schemaVersion: 'decision-issue-triage-evaluation-manifest/v1';
   id: string;
   pilotPack: ArtifactPin;
+  /** Calibration registry, policy and per-sample request rule frozen before holdout access. */
+  calibration: IssueTriageCalibrationPin;
   dataset: {
     id: string;
     digest: `sha256:${string}`;

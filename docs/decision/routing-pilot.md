@@ -53,16 +53,23 @@ the runtime checks, in order:
    circuit-open failure and skips later routes on the same provider;
 4. the cumulative budget: `spent + price <= min(task, policy)`, where `price`
    is the larger of the pinned `costMicrosPerAttempt` and the highest actual
-   cost already charged on that route or provider in this run;
+   cost already charged on that route or provider in this run. Unknown charged
+   spend (`null`) never counts as zero: the run stops with `cost-unknown`
+   before any further dispatch;
 5. the cumulative deadline: `min(task, policy)` from the start on the injected
    clock, after exponential backoff from `retryDelayMs` (capped at 30 s). The
    backoff uses a real timer when `delay` is omitted.
-6. `reserve` for that one route only.
+6. `reserve` for that one route only, carrying the remaining-cost cap
+   (`remainingBudgetMicros`, `costCeilingMicros` and `estimatedCostMicros`).
+   A denial refuses the attempt as `reservation-denied`.
 
-Each dispatch races an attempt deadline through `timer`, which defaults to a
-real timer. When the deadline wins, the dispatch signal is aborted and the
-attempt is recorded as `timeout`. Every granted reservation is followed by one
-`release` call with the charged cost.
+Each dispatch carries the same `costCeilingMicros` cap, which never exceeds
+the remaining run budget, so a fallback admitted under its estimate cannot
+authorize spend above what is left. The dispatch must not spend above the
+ceiling. Each dispatch races an attempt deadline through `timer`, which
+defaults to a real timer. When the deadline wins, the dispatch signal is
+aborted and the attempt is recorded as `timeout`. Every granted reservation
+is followed by one `release` call with the charged cost.
 
 Each dispatch result is validated for its exact shape, types and
 status/reason consistency. The reported `actualProvider` and `actualModel`
@@ -186,7 +193,9 @@ rejected.
   false` when the policy and the alias disagree (for example when compensation
   itself fails).
 - Active-run pins are read again after the response and must equal the pins
-  read before it; otherwise the drill throws.
+  read before it; a mismatch throws `RoutingControlDrillError` whose `state`
+  carries the before (`activeRunPinsBefore`) and after (`activeRunPinsAfter`)
+  pins beside the circuit, policy and rollback state.
 
 ## Pending external inputs
 

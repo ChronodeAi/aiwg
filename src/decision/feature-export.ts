@@ -10,7 +10,7 @@ import { type ArtifactPin, type DecisionBinding, type DecisionDefinition,
   type DecisionBatchRequestUsage, type DecisionResult, type DecisionRuleset, type DecisionUsage, type RulesetResult } from './types.js';
 import { type DecisionLifecycleHold, type DecisionLifecyclePolicy, type DecisionLifecycleReference,
   type DecisionLifecycleReferenceState, type DecisionLifecycleStore, validateDecisionLifecyclePolicy } from './lifecycle.js';
-import type { QualificationIntegrityMetadata, QualificationReleaseRecord } from './qualification/release.js';
+import { verifyQualificationReleaseDigest, type QualificationIntegrityMetadata, type QualificationReleaseRecord } from './qualification/release.js';
 
 export const DECISION_FEATURE_EXPORT_VERSION = 'decision-feature-export/v1' as const;
 export const DECISION_FEATURE_SET_KIND = 'DecisionFeatureSet' as const;
@@ -1202,12 +1202,18 @@ function normalizeEvalIntegrity(value: DecisionFeatureEvalIntegrity | undefined)
 }
 
 function validateQualificationRelease(record: QualificationReleaseRecord): void {
-  if (!record || record.schemaVersion !== 'decision-qualification-release/v1' || !record.runId || !record.sourceCommit
+  if (!record || (record.schemaVersion !== 'decision-qualification-release/v1'
+    && record.schemaVersion !== 'decision-qualification-release/v2') || !record.runId || !record.sourceCommit
     || !['PROMOTE', 'HOLD', 'ROLLBACK'].includes(record.decision) || !/^sha256:[0-9a-f]{64}$/.test(record.digest)) {
     throw new DecisionFeatureExportError('Feature export qualification release is invalid');
   }
-  const { digest, ...fields } = record;
-  if (digest !== `sha256:${createHash('sha256').update(JSON.stringify(fields)).digest('hex')}`) {
+  // Versioned legacy allowlist: pre-migration v1 release records hashed
+  // JSON.stringify output. The v1 schema version is the pre-migration lineage,
+  // so it alone allowlists legacy; v2 verifies canonical-only even under an
+  // explicit allowlist.
+  const digestModes = record.schemaVersion === 'decision-qualification-release/v1'
+    ? ['canonical', 'legacy'] as const : ['canonical'] as const;
+  if (verifyQualificationReleaseDigest(record, { digestModes: [...digestModes] }) === null) {
     throw new DecisionFeatureExportError('Feature export qualification release digest does not match its content');
   }
   validateQualificationIntegrity(record.integrity);
