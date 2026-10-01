@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json",
+  "$id": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v2.schema.json",
   "title": "SdlcScreeningRelease",
   "type": "object",
   "additionalProperties": false,
@@ -18,7 +18,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": "decision-sdlc-screening-release/v1"
+      "const": "decision-sdlc-screening-release/v2"
     },
     "preregistration": {
       "$ref": "#/$defs/preregistration"
@@ -109,7 +109,7 @@
       ],
       "properties": {
         "schemaVersion": {
-          "const": "decision-sdlc-screening-preregistration/v1"
+          "const": "decision-sdlc-screening-preregistration/v2"
         },
         "planId": {
           "type": "string",
@@ -178,7 +178,7 @@
           }
         },
         "qualityNonInferiorityBps": {
-          "$ref": "#/$defs/bps"
+          "$ref": "#/$defs/bpsOrNull"
         },
         "efficiencyClaim": {
           "type": "object",

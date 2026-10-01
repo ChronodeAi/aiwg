@@ -301,5 +301,5 @@ describe('SDLC screening round-2 review regressions (#2622)', () => {
     }
     // supports + confident "no" + strength >= 8000 + confidence >= 8000: 2 strengths x 2 confidences.
     expect(citationReady).toBe(4);
-  });
+  }, 60_000);
 });

@@ -1,5 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { heldoutDigest } from '../../../src/decision/heldout/contract.js';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { resolveProjectFloors } from '../../../src/gates/floors.js';
 import { prepareV7, buildReport } from '../../../tools/decision/studies/d29.mjs';
 
@@ -17,7 +20,13 @@ beforeAll(async () => {
 
 const FIRST_ACCESS = '2026-10-02T00:00:00.000Z';
 const EVALUATED_AT = '2026-10-03T00:00:00.000Z';
-const FLOORS = () => resolveProjectFloors({});
+const projectWith = config => {
+  const root = mkdtempSync(join(tmpdir(), 'd29-v8-project-'));
+  mkdirSync(join(root, '.aiwg'), { recursive: true });
+  writeFileSync(join(root, '.aiwg', 'aiwg.config'), JSON.stringify(config));
+  return root;
+};
+const PROJECT_ROOT = projectWith({});
 
 const integrity = () => ({ sample_n: 1500, uncertainty: { method: 'wilson', levelBps: 9500 }, paired_baseline: { n: 1500 },
   integrity_mode: 'locked', fresh_workspace_required: false, fresh_workspace_verified: false, integrity_state: 'verified',
@@ -42,7 +51,7 @@ function run({ ceiling = 'PROMOTE', mutate, heldoutMut = heldout => heldout, gat
   return buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout, integrity: metadata,
     trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(EVALUATED_AT),
     firstTestAccessAt: FIRST_ACCESS, calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
-    floors: FLOORS(), ...gate });
+    projectRoot: PROJECT_ROOT, ...gate });
 }
 
 const atLeastHold = report => expect(['HOLD', 'ROLLBACK'], `decision ${report.decision}`).toContain(report.decision);
@@ -128,8 +137,23 @@ describe('D29 v8 reviewer probes (ceiling raised to PROMOTE)', () => {
     atLeastHold(result);
   });
 
-  it('refuses an explicit floors opt-out instead of evaluating without project floors', () => {
-    expect(() => run({ gate: { floors: 'none-explicit-opt-out' } })).toThrow(/opt-out/);
+  it('refuses any caller-supplied floors, including an opt-out or a looser floors object', () => {
+    expect(run().decision).toBe('PROMOTE');
+    expect(() => run({ gate: { floors: 'none-explicit-opt-out' } })).toThrow(/project-floors-caller-supplied/);
+    expect(() => run({ gate: { floors: resolveProjectFloors({}) } })).toThrow(/project-floors-caller-supplied/);
+    expect(() => run({ gate: { floors: undefined } })).toThrow(/project-floors-caller-supplied/);
+  });
+
+  it('applies the project HOLD ceiling from aiwg.config and cannot be loosened by the caller', () => {
+    const projectRoot = projectWith({ gates: { ceilings: { '*': 'HOLD' } } });
+    expect(() => run({ gate: { projectRoot } })).toThrow();
+    expect(() => run({ gate: { projectRoot, floors: { floors: [], ceilings: {} } } })).toThrow(/project-floors-caller-supplied/);
+  });
+
+  it('requires an explicit project root and refuses a missing config on the scoring path', () => {
+    expect(() => run({ gate: { projectRoot: undefined } })).toThrow(/project-root-missing/);
+    const empty = mkdtempSync(join(tmpdir(), 'd29-v8-noconfig-'));
+    expect(() => run({ gate: { projectRoot: empty, requireProjectConfig: true } })).toThrow(/project-floors-missing/);
   });
 
   it('holds a missing staged-calibration attestation while every other gate passes', () => {
@@ -150,7 +174,7 @@ describe('D29 v8 reviewer probes (ceiling raised to PROMOTE)', () => {
     const result = buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout,
       integrity: metadata, trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(EVALUATED_AT),
       firstTestAccessAt: FIRST_ACCESS, calibrationAttestation: { id: 'staged-calibration-artifact', passed: true },
-      floors: FLOORS() });
+      projectRoot: PROJECT_ROOT });
     expect(result.decision).toBe('ROLLBACK');
   });
 
@@ -161,7 +185,7 @@ describe('D29 v8 reviewer probes (ceiling raised to PROMOTE)', () => {
     expect(() => buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout: null,
       integrity: { ...metadata, integrity_state: 'compromised' }, trustedIntegrityDigest: heldoutDigest(metadata),
       nowEpochMs: Date.parse(EVALUATED_AT), firstTestAccessAt: FIRST_ACCESS,
-      calibrationAttestation: { id: 'staged-calibration-artifact', passed: true }, floors: FLOORS() }))
+      calibrationAttestation: { id: 'staged-calibration-artifact', passed: true }, projectRoot: PROJECT_ROOT }))
       .toThrow(/digest does not match|report-anchor/);
   });
 });
@@ -189,9 +213,10 @@ describe('D29 approval gate-binding pins', () => {
     const { tmpdir } = await import('node:os');
     const { join } = await import('node:path');
     const { loadD29ProjectFloors } = await import('../../../tools/decision/studies/d29.mjs');
-    expect(loadD29ProjectFloors().floors).toEqual([]);
+    expect(() => loadD29ProjectFloors()).toThrow('project-root-missing');
     const empty = mkdtempSync(join(tmpdir(), 'd29-floors-empty-'));
     expect(loadD29ProjectFloors(empty)).toEqual({ floors: [], ceilings: {} });
+    expect(() => loadD29ProjectFloors(empty, { requireConfig: true })).toThrow('project-floors-missing');
     const configured = mkdtempSync(join(tmpdir(), 'd29-floors-set-'));
     mkdirSync(join(configured, '.aiwg'), { recursive: true });
     writeFileSync(join(configured, '.aiwg', 'aiwg.config'), JSON.stringify({ gates: { ceilings: { '*': 'HOLD' } } }));
@@ -259,5 +284,5 @@ describe('D29 v7 dataset freeze (drift guard vs 9d30ab348)', () => {
       expect(study.analysis.splits.map(split => split.digest), `${name} splits`).toEqual(expected.splits);
       expect(study.corpus.rows.filter(row => row.split === 'test')).toHaveLength(1500);
     }
-  });
+  }, 120_000);
 });

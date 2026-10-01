@@ -1204,6 +1204,26 @@
       "consumers": []
     },
     {
+      "logicalName": "schemas.decision.sdlcscreeningrelease.v2",
+      "id": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v2.schema.json",
+      "version": "2.0.0",
+      "format": "json-schema",
+      "dialect": "https://json-schema.org/draft/2020-12/schema",
+      "lifecycle": "active",
+      "stability": "stable",
+      "owner": {
+        "id": "schema-decision"
+      },
+      "authority": {
+        "kind": "canonical",
+        "path": "schemas/decision/SdlcScreeningRelease.v2.schema.json"
+      },
+      "compatibility": {
+        "mode": "unknown"
+      },
+      "consumers": []
+    },
+    {
       "logicalName": "agentic.code.frameworks.media.marketing.kit.schemas.design.template",
       "id": "https://aiwg.io/schemas/design/design-template.schema.json",
       "version": "1.0.0",

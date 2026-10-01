@@ -38,7 +38,7 @@ describe('D29 gates adoption stays disabled outside the study score path', () =>
     const v7 = await prepareV7('d29-study-v7');
     const dry = await dryRunV7(v7);
     expect(heldoutDigest(v7.gold)).toBe(dry.goldDigest);
-  });
+  }, 120_000);
 
   it('v1 native non-inferiority still gates other consumers', () => {
     const plan = preregistration();

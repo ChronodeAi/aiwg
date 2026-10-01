@@ -981,9 +981,17 @@ split/corpus/gold digests. The binding is preregistered inside the analysis
 (`analysis.gateBinding`), so the preregistration analysis digest pins it; the
 dry run reports `gateBindingDigest`, `gatePackDigests` and `gateProviderDigest`
 with zero provider calls. `buildReport` and `score` evaluate the binding through
-`evaluateGates` with the project floors loaded from the project `aiwg.config`
-(the same strict validation the gates CLI uses; an explicit floors opt-out is
-refused in D29), a holdout seal binding the frozen binding digest to the
+`evaluateGates` with the project floors loaded from the `aiwg.config` under an
+explicit project root (the same strict validation the gates CLI uses). Floors
+are never caller input: any caller-supplied `floors` value, including an
+opt-out or a looser floors object, refuses. `score` takes the root from the
+trusted context (`context.projectRoot`) and refuses when no config exists
+there, rather than silently applying empty floors; neither path reads
+`process.cwd()`. `buildReport` is the offline fixture endpoint, and its
+`calibrationAttestation` is caller-asserted and non-authoritative; only `score`
+derives it. The native release report over the v2 preregistration is
+`decision-sdlc-screening-release/v2`, which leaves the v1 release schema
+unchanged. Both paths also use a holdout seal binding the frozen binding digest to the
 verified access record's first test-access time, and the sealed upstream
 integrity record. A binding frozen at or after holdout access, a forged
 integrity record, or a missing staged-calibration attestation refuses or holds

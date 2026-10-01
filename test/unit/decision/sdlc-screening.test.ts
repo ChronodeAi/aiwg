@@ -236,7 +236,9 @@ describe('SDLC evidence screening (#2622)', () => {
     const release = buildSdlcScreeningReleaseReport({ preregistration: v2, trustedPreregistrationDigest: anchored(v2),
       heldout: heldoutRecords(), integrity: verifiedIntegrity(), nowEpochMs: HELDOUT_NOW });
     expect(release).toMatchObject({ preregisteredDecision: 'pass' });
-    expect(schema('SdlcScreeningRelease.v1.schema.json')(release)).toBe(true);
+    expect(release.schemaVersion).toBe('decision-sdlc-screening-release/v2');
+    expect(schema('SdlcScreeningRelease.v2.schema.json')(release)).toBe(true);
+    expect(schema('SdlcScreeningRelease.v1.schema.json')(release)).toBe(false);
   });
 
   it('never upgrades upstream integrity HOLD or ROLLBACK', () => {

@@ -25,6 +25,8 @@ export const SDLC_SCREENING_SCHEMA_VERSION = 'decision-sdlc-evidence-screening/v
 export const SDLC_SCREENING_PREREGISTRATION_VERSION = 'decision-sdlc-screening-preregistration/v1' as const;
 export const SDLC_SCREENING_PREREGISTRATION_VERSION_V2 = 'decision-sdlc-screening-preregistration/v2' as const;
 export const SDLC_SCREENING_RELEASE_VERSION = 'decision-sdlc-screening-release/v1' as const;
+/** Release reports over a v2 preregistration (nullable NI); v1 stays bound to v1 preregistrations. */
+export const SDLC_SCREENING_RELEASE_VERSION_V2 = 'decision-sdlc-screening-release/v2' as const;
 export const SDLC_SCREENING_HELDOUT_RECORDS_VERSION = 'decision-sdlc-screening-heldout-records/v1' as const;
 export const SDLC_SCREENING_HELDOUT_REPORT_VERSION = 'decision-sdlc-screening-heldout-report/v1' as const;
 export const SDLC_GATE_EVIDENCE_POLICY_KIND = 'SdlcGateEvidencePolicy' as const;
@@ -333,7 +335,7 @@ export interface SdlcScreeningPreregistrationResult {
 }
 
 export interface SdlcScreeningReleaseReport {
-  schemaVersion: typeof SDLC_SCREENING_RELEASE_VERSION;
+  schemaVersion: typeof SDLC_SCREENING_RELEASE_VERSION | typeof SDLC_SCREENING_RELEASE_VERSION_V2;
   preregistration: SdlcScreeningPreregistration | SdlcScreeningPreregistrationV2;
   preregistrationDigest: `sha256:${string}`;
   trustedPreregistrationDigest: `sha256:${string}`;
@@ -1471,7 +1473,8 @@ export function buildSdlcScreeningReleaseReport(input: {
     : readable && integrityProblems.length === 0 && preregistered.decision === 'pass'
       && input.integrity.release_gate.decision === 'PROMOTE' ? 'PROMOTE' : 'HOLD';
   const unsigned = {
-    schemaVersion: SDLC_SCREENING_RELEASE_VERSION,
+    schemaVersion: input.preregistration.schemaVersion === SDLC_SCREENING_PREREGISTRATION_VERSION_V2
+      ? SDLC_SCREENING_RELEASE_VERSION_V2 : SDLC_SCREENING_RELEASE_VERSION,
     preregistration: input.preregistration,
     preregistrationDigest: sdlcScreeningPreregistrationDigest(input.preregistration),
     trustedPreregistrationDigest: input.trustedPreregistrationDigest,

@@ -523,13 +523,13 @@
       "additionalProperties": false,
       "properties": {
         "schemaVersion": {
-          "const": "decision-sdlc-screening-release/v1"
+          "const": "decision-sdlc-screening-release/v2"
         },
         "preregistration": {
-          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/preregistration"
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v2.schema.json#/$defs/preregistration"
         },
         "preregistrationDigest": {
-          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/digest"
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v2.schema.json#/$defs/digest"
         },
         "trustedPreregistrationDigest": {
           "type": "string"
@@ -540,12 +540,12 @@
               "type": "null"
             },
             {
-              "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/heldout"
+              "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v2.schema.json#/$defs/heldout"
             }
           ]
         },
         "integrity": {
-          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v1.schema.json#/$defs/integrity"
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningRelease.v2.schema.json#/$defs/integrity"
         },
         "preregisteredDecision": {
           "enum": [

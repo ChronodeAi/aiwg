@@ -132,6 +132,7 @@ for (const name of ['SdlcScreeningPreregistration', 'SdlcScreeningRelease', 'Cal
   ajv.addSchema(JSON.parse(readFileSync(new URL(`../../../schemas/decision/${name}.v1.schema.json`, import.meta.url), 'utf8')));
 }
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/SdlcScreeningPreregistration.v2.schema.json', import.meta.url), 'utf8')));
+ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/SdlcScreeningRelease.v2.schema.json', import.meta.url), 'utf8')));
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/gates/GateBinding.v1alpha1.schema.json', import.meta.url), 'utf8')));
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/gates/GateReport.v1alpha1.schema.json', import.meta.url), 'utf8')));
 ajv.addSchema(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v2.schema.json', import.meta.url), 'utf8')));
@@ -593,11 +594,13 @@ export function populationSummary(prepared) {
  * discovery (control dir first, artifact root second) over the same path
  * helpers, the same strict `validateGatesConfig` gate, and the same empty
  * default when no config exists. An unreadable file or an invalid gates
- * section refuses evaluation (fail closed). Async callers (score) resolve
- * floors through the CLI loader and pass them in; this default covers the
- * pure offline report path only.
+ * section refuses evaluation (fail closed). The project root is always
+ * explicit (never `process.cwd()`), and the scoring path passes
+ * `requireConfig` so a missing config refuses instead of silently applying
+ * empty floors. Floors are never accepted from a caller.
  */
-export function loadD29ProjectFloors(cwd = process.cwd()) {
+export function loadD29ProjectFloors(cwd, { requireConfig = false } = {}) {
+  if (typeof cwd !== 'string' || !cwd) refuse('project-root-missing');
   const paths = [];
   for (const candidate of [projectControlPath(cwd, 'aiwg.config'), projectAiwgPath(cwd, 'aiwg.config')]) {
     if (!paths.includes(candidate)) paths.push(candidate);
@@ -606,7 +609,10 @@ export function loadD29ProjectFloors(cwd = process.cwd()) {
   for (const path of paths) {
     try { raw = readFileSync(path, 'utf8'); break; } catch { raw = null; }
   }
-  if (raw === null) return resolveProjectFloors(undefined);
+  if (raw === null) {
+    if (requireConfig) refuse('project-floors-missing');
+    return resolveProjectFloors(undefined);
+  }
   let parsed = null;
   try { parsed = JSON.parse(raw); } catch { refuse('project-floors-unreadable'); }
   const errors = validateGatesConfig(parsed?.gates);
@@ -652,11 +658,14 @@ export function d29RecordAttestations({ binding, heldout, nowEpochMs }) {
  * pack and provider pins resolve inside `evaluateGates` (never trusted from the caller);
  * the holdout seal binds the frozen binding digest to the first test-access time, and the
  * upstream integrity record is sealed by digest. Missing calibration evidence fails closed,
- * as do missing record attestations and an explicit floors opt-out (D29 never evaluates
- * without project floors; an absent project config means unconfigured, not opted out).
+ * as do missing record attestations. Project floors always load from the project
+ * config under `projectRoot`; a caller-supplied `floors` value (including an opt-out)
+ * refuses evaluation, so no caller can loosen the project ceiling.
  */
-export function evaluateStudyGates({ binding, samples, heldout = null, integrity, firstTestAccessAt, calibrationAttestation = null, nowEpochMs, floors }) {
-  if (floors === 'none-explicit-opt-out') refuse('project-floors-opt-out');
+export function evaluateStudyGates(args) {
+  if (Object.hasOwn(args, 'floors')) refuse('project-floors-caller-supplied');
+  const { binding, samples, heldout = null, integrity, firstTestAccessAt, calibrationAttestation = null, nowEpochMs,
+    projectRoot, requireProjectConfig = false } = args;
   const trustedBindingDigest = artifactDigest(binding);
   const records = [...screeningRecords(samples, calibrationAttestation),
     ...d29RecordAttestations({ binding, heldout, nowEpochMs })];
@@ -664,7 +673,7 @@ export function evaluateStudyGates({ binding, samples, heldout = null, integrity
   return evaluateGates({ binding, registry: gateRegistry(), trustedBindingDigest,
     holdout: sealGateHoldout({ frozenDigest: trustedBindingDigest, firstAccessedAt: firstTestAccessAt }),
     metrics, upstream: sealUpstream(integrity), now: new Date(nowEpochMs).toISOString(),
-    floors: floors ?? loadD29ProjectFloors() });
+    floors: loadD29ProjectFloors(projectRoot, { requireConfig: requireProjectConfig }) });
 }
 
 function validateReviews(prepared, reviews) {
@@ -808,7 +817,7 @@ export async function score(input, context = null) {
     splits: analysis.splits, samples };
   const report = buildReport({ analysis, trustedAnalysisDigest: context.trustedAnalysisDigest, heldout: missing.length ? null : heldout,
     integrity: input.integrity, trustedIntegrityDigest: context.trustedIntegrityDigest, nowEpochMs: context.nowEpochMs,
-    firstTestAccessAt: access.firstTestAccessAt, calibrationAttestation, floors: context.floors });
+    firstTestAccessAt: access.firstTestAccessAt, calibrationAttestation, projectRoot: context.projectRoot, requireProjectConfig: true });
   const { native, gateReport } = report;
   const groups = groupedMetrics(input.corpus, input.gold, samples, analysis.native.confidenceInterval.levelBps);
   const correct = row => (row.candidate.route === 'ADVISORY_READY') === row.gold.ready
@@ -841,9 +850,17 @@ export async function score(input, context = null) {
  * rolls back). `firstTestAccessAt` is a trusted caller input sourced from the
  * verified holdout access record; without it a split-declaring binding refuses
  * evaluation.
+ *
+ * Non-authoritative inputs: `calibrationAttestation` here is caller-asserted
+ * (offline fixtures and reviewer probes). Only `score` is authoritative: it
+ * derives the attestation from a D09 qualification of the trusted calibration
+ * artifact and requires a project config under `context.projectRoot`. Floors
+ * are never caller input on either path.
  */
-export function buildReport({ analysis, trustedAnalysisDigest, heldout, integrity, trustedIntegrityDigest, nowEpochMs,
-  firstTestAccessAt = null, calibrationAttestation = null, floors }) {
+export function buildReport(args) {
+  if (Object.hasOwn(args, 'floors')) refuse('project-floors-caller-supplied');
+  const { analysis, trustedAnalysisDigest, heldout, integrity, trustedIntegrityDigest, nowEpochMs,
+    firstTestAccessAt = null, calibrationAttestation = null, projectRoot, requireProjectConfig = false } = args;
   validateStudyArtifact(analysis);
   if (heldoutDigest(analysis) !== trustedAnalysisDigest || heldoutDigest(integrity) !== trustedIntegrityDigest
     || qualificationIntegrityAllowlistProblems(integrity).includes('integrity-invalid')) refuse('report-anchor');
@@ -851,7 +868,7 @@ export function buildReport({ analysis, trustedAnalysisDigest, heldout, integrit
     heldout, integrity, nowEpochMs });
   const samples = native.heldout && Array.isArray(heldout?.samples) ? heldout.samples : [];
   const gateReport = evaluateStudyGates({ binding: analysis.gateBinding, samples, heldout, integrity,
-    firstTestAccessAt, calibrationAttestation, nowEpochMs, floors });
+    firstTestAccessAt, calibrationAttestation, nowEpochMs, projectRoot, requireProjectConfig });
   // The native verdict is descriptive, not a decision: rename it so no reader
   // mistakes it for one. Its digest covered the signed envelope, so it is
   // dropped with the renamed field rather than carried stale.

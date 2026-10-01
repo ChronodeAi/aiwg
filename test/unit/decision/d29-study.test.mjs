@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { prepare, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
   validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
@@ -16,6 +17,14 @@ import { collectHeldoutStudy } from '../../../src/decision/heldout/collector.js'
 import { heldoutRunsRoot, readHeldoutJournal } from '../../../src/decision/heldout/journal.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../../../src/decision/calibration/registry.js';
 import { evaluateSdlcEvidenceScreening, applySdlcScreeningToGateOutcome } from '../../../src/decision/sdlc-screening.js';
+
+/** Project root fixture with an empty aiwg.config: default floors, explicit root. */
+const PROJECT_ROOT = (() => {
+  const root = mkdtempSync(join(tmpdir(), 'd29-project-'));
+  mkdirSync(join(root, '.aiwg'), { recursive: true });
+  writeFileSync(join(root, '.aiwg', 'aiwg.config'), '{}');
+  return root;
+})();
 
 const hostChecks = vi.hoisted(() => ({ root: '' }));
 vi.mock('../../../src/decision/context-live-qualification.js', async original => {
@@ -98,7 +107,7 @@ function reportFixture() {
   const metadata = integrity();
   const build = (gate = {}) => buildReport({ analysis, trustedAnalysisDigest: heldoutDigest(analysis), heldout, integrity: metadata,
     trustedIntegrityDigest: heldoutDigest(metadata), nowEpochMs: Date.parse(heldout.evaluatedAt),
-    firstTestAccessAt: '2026-10-02T00:00:00.000Z', ...gate });
+    firstTestAccessAt: '2026-10-02T00:00:00.000Z', projectRoot: PROJECT_ROOT, ...gate });
   return { analysis, heldout, metadata, build };
 }
 
@@ -500,7 +509,7 @@ describe('D29 report thresholds', () => {
     expect(savings.build({ calibrationAttestation: CALIBRATED }).native.reasons).toContain('total-economics-not-positive');
     const g = reportFixture();
     expect(() => buildReport({ analysis: g.analysis, trustedAnalysisDigest: heldoutDigest(g.analysis), heldout: g.heldout,
-      integrity: { ...g.metadata, sample_n: 1201 }, trustedIntegrityDigest: heldoutDigest(g.metadata), nowEpochMs: 0 })).toThrow('report-anchor');
+      integrity: { ...g.metadata, sample_n: 1201 }, trustedIntegrityDigest: heldoutDigest(g.metadata), nowEpochMs: 0, projectRoot: PROJECT_ROOT })).toThrow('report-anchor');
     g.metadata.integrity_mode = 'invented';
     expect(g.build({ calibrationAttestation: CALIBRATED }).gateReport.decision).toBe('HOLD');
   });
@@ -776,7 +785,7 @@ describe('D29 collector integration', () => {
     const fixture = reportFixture();
     const withheld = buildReport({ analysis: fixture.analysis, trustedAnalysisDigest: heldoutDigest(fixture.analysis),
       heldout: null, integrity: fixture.metadata, trustedIntegrityDigest: heldoutDigest(fixture.metadata),
-      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt), firstTestAccessAt: '2026-10-02T00:00:00.000Z' });
+      nowEpochMs: Date.parse(fixture.heldout.evaluatedAt), firstTestAccessAt: '2026-10-02T00:00:00.000Z', projectRoot: PROJECT_ROOT });
     expect(withheld.native.heldout).toBeNull();
     expect(withheld.gateReport.decision).toBe('HOLD');
     expect(withheld.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
@@ -812,7 +821,7 @@ describe('D29 collector integration', () => {
       anchoredAt: '2026-09-30T01:00:00Z', firstTestAccessAt: '2026-10-02T00:00:00Z', reference: 'offline-fixture' };
     const metadata = integrity(), context = { trustedIntegrityDigest: heldoutDigest(metadata), trustedAnalysisDigest: analysisDigest,
       access, trustedAccessDigest: heldoutDigest(access), mapping, trustedMappingDigest: mappingDigest,
-      reviews, trustedReviewsDigest: heldoutDigest(reviews), trustedCalibrationDigest: artifact.digest,
+      reviews, trustedReviewsDigest: heldoutDigest(reviews), trustedCalibrationDigest: artifact.digest, projectRoot: PROJECT_ROOT,
       nowEpochMs: Date.parse('2026-10-03T00:00:00Z'), calibration: { registry,
         request: { runId: 'offline-d29', requestedAlias: 'jev-1.13.0', actualIdentity: identity,
           calibrationArtifactId: artifact.id, at: '2026-10-03T00:00:00Z' },
