@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "decision-heldout-preregistration/v1",
+  "study": "D29",
+  "frozenAt": "2026-09-30T00:00:00.000Z",
+  "corpusDigest": "sha256:6bb4c5990c2d039841074bfb099e8c1ad5c6c40b5bd334817cb897bc320fd744",
+  "studyAnalysisDigest": "sha256:42e2a7f2221c87321d13f98d889bec34393eb551cc90314511daa42c8ce241d8",
+  "scorerDigest": "sha256:8785f45cb8eaeb6f16402845ad5595ea0bdb84762fdd7391396d28c6366dddc6",
+  "calibration": {
+    "scope": "calibrated",
+    "allowedModes": [
+      "staged"
+    ],
+    "calibrationPhaseSplits": [
+      "tuning",
+      "calibration"
+    ]
+  },
+  "regeneration": {
+    "reason": "synthetic-v6-balanced-records-claim-relative-audit-passage-v2",
+    "collectorCommit": "ca23244f3",
+    "priorLiveObservations": 0
+  },
+  "providerFailurePolicy": {
+    "maxRetries": 1,
+    "maximumSliceFailureBps": 500,
+    "retryOnlyTerminal": true
+  },
+  "perRequestTokenBound": 4500,
+  "providerOverheadTokens": 512,
+  "outputAndHiddenTokenAllowance": 256,
+  "requestTimeoutMs": 30000,
+  "minDispatchIntervalMs": 1000,
+  "sessionLimitMs": 1800000
+}

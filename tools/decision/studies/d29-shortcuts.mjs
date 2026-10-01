@@ -4,6 +4,11 @@ const LIMITS = { injection: 0.75, readiness: 0.75, supports: 0.80, contradicts: 
 const VIEWS = ['passage', 'passage-and-context', 'context'];
 const PAIR_FEATURE_LIMIT = 200;
 const tokenize = text => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+const sentencePattern = /[.!?](?=\s|$|[)\]]|-->)/g;
+const formats = [['colon', /:/g], ['quotes', /['"“”‘’]/g], ['brackets', /[\[\](){}<>]/g],
+  ['html-comments', /<!--/g], ['quote-markers', /(?:^|\s)>(?=\s)/g], ['parentheses', /\(/g], ['square-brackets', /\[/g], ['semicolons', /;/g]];
+const claimRelative = feature => feature.startsWith('claim:');
+const structural = feature => /^(?:annotations|sentences|residual-sentences|module-mentions|format:|punctuation:|claim:entity:first-)/.test(feature);
 const compare = (a, b) => b.balancedAccuracy - a.balancedAccuracy || a.target.localeCompare(b.target)
   || a.view.localeCompare(b.view) || (a.operator === 'single' ? 0 : 1) - (b.operator === 'single' ? 0 : 1)
   || (a.operator === 'OR' ? 0 : 1) - (b.operator === 'OR' ? 0 : 1)
@@ -16,7 +21,41 @@ const popcount = value => {
   return (((value + (value >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
 };
 
-function features(texts) {
+/** Shallow visible-text accounting only; no world, variant or gold fields enter these probes. */
+export function visibleFeatureCounts(payload, view = 'passage-and-context') {
+  const text = viewText(payload, view), lower = text.toLowerCase();
+  const annotations = D29_BENIGN_ANNOTATIONS.map(annotation => lower.split(annotation.toLowerCase()).length - 1);
+  const counts = { annotations: annotations.reduce((sum, count) => sum + count, 0),
+    'annotations:distinct': annotations.filter(Boolean).length,
+    sentences: (text.match(sentencePattern) ?? []).length,
+    'module-mentions': (text.match(/\bModule\s+[a-z0-9]+(?:-[a-z0-9]+)*\b/gi) ?? []).length };
+  counts['residual-sentences'] = counts.sentences - counts.annotations - counts['module-mentions'];
+  annotations.forEach((count, i) => { counts[`annotations:template-${i}`] = count; });
+  for (const [name, pattern] of formats) counts[`format:${name}`] = (text.match(pattern) ?? []).length;
+  const claim = (payload.claim ?? payload.criterion ?? '').toLowerCase();
+  const entity = /\bmodule\s+([a-z0-9]+(?:-[a-z0-9]+)*)\b/.exec(claim)?.[1];
+  const attribute = /\b(port|protocol|region|owner team|owned by team|major version|rollback coverage|security review sign-off|migration test coverage)\b/.exec(claim)?.[1];
+  const value = attribute && !payload.criterion ? new RegExp(`\\b${attribute} recorded for Module ${entity} is ([a-z0-9-]+)\\b`, 'i').exec(claim)?.[1]
+    ?? new RegExp(`\\b${attribute}\\s+([a-z0-9-]+)\\b`).exec(claim)?.[1] : undefined;
+  const occurrences = term => term ? [...lower.matchAll(new RegExp(`(?<![a-z0-9-])${term}(?![a-z0-9-])`, 'g'))] : [];
+  const entities = occurrences(entity), values = occurrences(value), first = entities[0]?.index ?? -1;
+  counts['claim:entity:present'] = Number(entities.length > 0); counts['claim:entity:count'] = entities.length;
+  counts['claim:entity:first-sentence'] = first < 0 ? -1 : (text.slice(0, first).match(sentencePattern) ?? []).length;
+  counts['claim:entity:first-position-bin-10'] = first < 0 ? -1 : Math.floor(10 * first / Math.max(1, text.length));
+  counts['claim:value:present'] = Number(values.length > 0); counts['claim:value:count'] = values.length;
+  counts['claim:entity-value:same-sentence'] = Number(Boolean(entity && value && text.split(sentencePattern)
+    .some(sentence => occurrencesIn(sentence, entity) && occurrencesIn(sentence, value))));
+  counts['claim:attribute:present'] = Number(Boolean(attribute && new RegExp(`\\b${['owner team', 'owned by team'].includes(attribute)
+    ? '(?:owner team|owned by team)' : attribute}\\b`, 'i').test(text)));
+  return counts;
+}
+
+function occurrencesIn(text, term) {
+  return new RegExp(`(?<![a-z0-9-])${term}(?![a-z0-9-])`, 'i').test(text);
+}
+
+function features(payloads, view) {
+  const texts = payloads.map(payload => viewText(payload, view)), counts = payloads.map(payload => visibleFeatureCounts(payload, view));
   const words = texts.map(tokenize), sets = words.map(tokens => new Set([
     ...tokens.map(token => `token:${token}`), ...tokens.slice(1).map((token, i) => `bigram:${tokens[i]} ${token}`),
   ]));
@@ -26,17 +65,8 @@ function features(texts) {
       if (counts[i] <= count) sets[i].add(`${name}<=${count}`);
     }
   };
-  const annotations = texts.map(text => D29_BENIGN_ANNOTATIONS.map(annotation => text.toLowerCase().split(annotation.toLowerCase()).length - 1));
-  addCounts('annotations', annotations.map(counts => counts.reduce((sum, count) => sum + count, 0)));
-  addCounts('annotations:distinct', annotations.map(counts => counts.filter(Boolean).length));
-  for (let i = 0; i < D29_BENIGN_ANNOTATIONS.length; i++) addCounts(`annotations:template-${i}`, annotations.map(counts => counts[i]));
-  for (const [name, pattern] of [['colon', /:/g], ['quotes', /['"“”‘’]/g], ['brackets', /[\[\](){}<>]/g],
-    ['html-comments', /<!--/g], ['quote-markers', /(?:^|\s)>(?=\s)/g], ['parentheses', /\(/g], ['square-brackets', /\[/g], ['semicolons', /;/g]]) {
-    const counts = texts.map(text => (text.match(pattern) ?? []).length);
-    addCounts(`format:${name}`, counts);
-    counts.forEach((count, i) => { if (count) sets[i].add(`punctuation:${name}`); });
-  }
-  addCounts('sentences', texts.map(text => (text.match(/[.!?](?=\s|$|[)\]]|-->)/g) ?? []).length));
+  for (const name of Object.keys(counts[0])) addCounts(name, counts.map(row => row[name]));
+  for (const [name] of formats) counts.forEach((row, i) => { if (row[`format:${name}`]) sets[i].add(`punctuation:${name}`); });
   addCounts('characters', texts.map(text => text.length));
   addCounts('length-bin-80', texts.map(text => Math.floor(text.length / 80)));
   addCounts('word-bin-10', words.map(tokens => Math.floor(tokens.length / 10)));
@@ -100,9 +130,11 @@ function modelScore(members, truth, target) {
   return { target, balancedAccuracy: (tp / positives + tn / negatives) / 2, validationCount: truth.length, folds };
 }
 
-/** Development-only singles and pair rules gate the corpus; cross-validated trees are informational. */
-export function shortcutAudit(corpus, gold) {
-  const development = corpus.rows.filter(row => row.split === 'tuning' || row.split === 'calibration');
+/** Development is the default; an explicit split selection permits a separately reported public-test audit. */
+export function shortcutAudit(corpus, gold, { splits = ['tuning', 'calibration'] } = {}) {
+  if (!Array.isArray(splits) || !splits.length || new Set(splits).size !== splits.length
+    || splits.some(split => !['tuning', 'calibration', 'test'].includes(split))) throw new Error('shortcut-audit-splits');
+  const development = corpus.rows.filter(row => splits.includes(row.split));
   const ids = new Set(development.map(row => row.id));
   const labels = new Map(gold.rows.filter(row => ids.has(row.id)).map(row => [row.id, row]));
   const rows = development.map(row => {
@@ -111,35 +143,47 @@ export function shortcutAudit(corpus, gold) {
       || ![null, 'supports', 'contradicts', 'unclear', 'does-not-support'].includes(label.gold.support)) throw new Error('shortcut-audit-gold');
     return { payload: row.input.payload, world: label.world, gold: label.gold };
   });
-  const targets = [], models = [];
+  const targets = [], models = [], vocabularies = new Map();
   for (const [target, limit] of Object.entries(LIMITS)) {
     const support = !['injection', 'readiness'].includes(target);
     const members = rows.filter(row => !support || row.gold.support !== null);
     const truth = members.map(row => target === 'injection' ? row.world.injected : target === 'readiness' ? row.gold.ready : row.gold.support === target);
     const positives = truth.filter(Boolean).length, negatives = members.length - positives;
     if (!positives || !negatives) throw new Error('shortcut-audit-support');
-    const trueBits = new Uint32Array(Math.ceil(members.length / 32)), masks = new Uint32Array(trueBits.length).fill(0xffffffff);
+    const trueBits = new Uint32Array(Math.ceil(members.length / 32));
     truth.forEach((positive, i) => { if (positive) trueBits[i >>> 5] |= 1 << (i & 31); });
-    if (members.length % 32) masks[masks.length - 1] = 0xffffffff >>> (32 - members.length % 32);
     const singles = [], pairs = [], pairFeatureCounts = [];
-    let pairRuleCount = 0;
+    let pairRuleCount = 0, maximumStructuralBalancedAccuracy = 0.5, maximumClaimRelativeBalancedAccuracy = 0.5;
     for (const view of VIEWS) {
-      const vocabulary = features(members.map(row => viewText(row.payload, view))), candidates = [];
+      const key = `${support}:${view}`, candidates = [];
+      if (!vocabularies.has(key)) vocabularies.set(key, features(members.map(row => row.payload), view));
+      const vocabulary = vocabularies.get(key);
       for (const [feature, bits] of vocabulary) {
         let tp = 0, fp = 0;
         for (let i = 0; i < bits.length; i++) { tp += popcount(bits[i] & trueBits[i]); fp += popcount(bits[i] & ~trueBits[i]); }
         const score = (tp / positives + (negatives - fp) / negatives) / 2;
         const rule = { target, view, feature, operator: 'single', polarity: score >= 0.5 ? 'present' : 'absent', balancedAccuracy: Math.max(score, 1 - score) };
+        if (structural(feature)) maximumStructuralBalancedAccuracy = Math.max(maximumStructuralBalancedAccuracy, rule.balancedAccuracy);
+        if (claimRelative(feature)) maximumClaimRelativeBalancedAccuracy = Math.max(maximumClaimRelativeBalancedAccuracy, rule.balancedAccuracy);
         singles.push(rule);
-        if (tp + fp && tp + fp < members.length) candidates.push({ ...rule, bits });
+        if (tp + fp && tp + fp < members.length) candidates.push({ ...rule, bits, tp, fp, structural: structural(feature), claimRelative: claimRelative(feature) });
       }
       candidates.sort(compare);
-      const seen = new Set(), selected = [];
-      for (const candidate of candidates) {
+      const seen = new Map(), selected = [];
+      const select = candidate => {
         const signature = candidate.bits.join(',');
-        if (seen.has(signature)) continue;
-        seen.add(signature); selected.push(candidate);
-        if (selected.length === PAIR_FEATURE_LIMIT) break;
+        if (seen.has(signature)) {
+          const previous = seen.get(signature);
+          previous.structural ||= candidate.structural; previous.claimRelative ||= candidate.claimRelative;
+          return false;
+        }
+        seen.set(signature, candidate); selected.push(candidate); return true;
+      };
+      for (const candidate of candidates) if (candidate.structural || candidate.claimRelative) select(candidate);
+      let lexicalCount = 0;
+      for (const candidate of candidates) {
+        if (candidate.structural || candidate.claimRelative) continue;
+        if (select(candidate) && ++lexicalCount === PAIR_FEATURE_LIMIT) break;
       }
       pairFeatureCounts.push({ view, count: selected.length });
       const keep = rule => {
@@ -147,16 +191,21 @@ export function shortcutAudit(corpus, gold) {
         pairs.push(rule); pairs.sort(compare); if (pairs.length > 10) pairs.pop();
       };
       for (let a = 0; a < selected.length; a++) for (let b = a + 1; b < selected.length; b++) {
+        let bothTp = 0, bothFp = 0;
+        for (let i = 0; i < trueBits.length; i++) {
+          const bits = selected[a].bits[i] & selected[b].bits[i];
+          bothTp += popcount(bits & trueBits[i]); bothFp += popcount(bits & ~trueBits[i]);
+        }
         for (let polarity = 0; polarity < 4; polarity++) {
           const invertA = Boolean(polarity & 1), invertB = Boolean(polarity & 2);
-          let tp = 0, fp = 0;
-          for (let i = 0; i < masks.length; i++) {
-            const bits = (invertA ? ~selected[a].bits[i] : selected[a].bits[i])
-              & (invertB ? ~selected[b].bits[i] : selected[b].bits[i]) & masks[i];
-            tp += popcount(bits & trueBits[i]); fp += popcount(bits & ~trueBits[i]);
-          }
+          const tp = invertA && invertB ? positives - selected[a].tp - selected[b].tp + bothTp
+            : invertA ? selected[b].tp - bothTp : invertB ? selected[a].tp - bothTp : bothTp;
+          const fp = invertA && invertB ? negatives - selected[a].fp - selected[b].fp + bothFp
+            : invertA ? selected[b].fp - bothFp : invertB ? selected[a].fp - bothFp : bothFp;
           const score = (tp / positives + (negatives - fp) / negatives) / 2;
           const balancedAccuracy = Math.max(score, 1 - score);
+          if (selected[a].structural || selected[b].structural) maximumStructuralBalancedAccuracy = Math.max(maximumStructuralBalancedAccuracy, balancedAccuracy);
+          if (selected[a].claimRelative || selected[b].claimRelative) maximumClaimRelativeBalancedAccuracy = Math.max(maximumClaimRelativeBalancedAccuracy, balancedAccuracy);
           pairRuleCount += 2;
           if (pairs.length === 10 && balancedAccuracy < pairs[9].balancedAccuracy) continue;
           const literals = [selected[a].feature, selected[b].feature];
@@ -171,13 +220,15 @@ export function shortcutAudit(corpus, gold) {
     const maximumSingleBalancedAccuracy = singles[0].balancedAccuracy, maximumPairBalancedAccuracy = pairs[0]?.balancedAccuracy ?? 0.5;
     targets.push({ target, positives, negatives, limit, featureCount: singles.length, pairFeatureCounts, pairRuleCount,
       maximumSingleBalancedAccuracy, maximumPairBalancedAccuracy,
+      maximumStructuralBalancedAccuracy, maximumClaimRelativeBalancedAccuracy,
       maximumBalancedAccuracy: Math.max(maximumSingleBalancedAccuracy, maximumPairBalancedAccuracy),
       topSingleRules: singles.slice(0, 10), topPairRules: pairs, topRules: [...singles.slice(0, 10), ...pairs].sort(compare).slice(0, 10) });
     models.push(modelScore(members, truth, target));
   }
-  return { schemaVersion: 'decision-d29-shortcut-audit/v2', splits: ['tuning', 'calibration'], n: rows.length,
-    pairFeatureLimit: PAIR_FEATURE_LIMIT, pairSelection: 'strongest-single-distinct-bitsets-per-target-and-view',
-    featureFamilies: ['tokens-including-stopwords', 'bigrams', 'annotation-counts', 'sentence-counts', 'formatting-counts', 'character-thresholds', 'length-bins'],
+  return { schemaVersion: 'decision-d29-shortcut-audit/v3', splits: [...splits], n: rows.length,
+    pairFeatureLimit: PAIR_FEATURE_LIMIT, pairSelection: 'all-structural-and-claim-relative-plus-strongest-lexical-distinct-bitsets-per-target-and-view',
+    featureFamilies: ['tokens-including-stopwords', 'bigrams', 'annotation-counts', 'sentence-counts', 'formatting-counts', 'character-thresholds', 'length-bins',
+      'derived-residual-counts', 'module-mention-counts', 'claim-relative-presence-counts-positions'],
     targets, topRules: targets.flatMap(target => target.topRules).sort(compare).slice(0, 10),
     modelLeakage: { method: 'stratified-5-fold-depth-3-balanced-tree', view: 'passage-and-context',
       vocabulary: 'training-fold-only-token-presence-minimum-two', informationalOnly: true,

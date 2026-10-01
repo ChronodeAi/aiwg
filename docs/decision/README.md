@@ -100,14 +100,14 @@ scorer identity separate from D09 qualification. Live studies, calibration, huma
 review and study-specific statistical reports remain pending.
 
 The [D29 synthetic held-out study](d29-heldout-study.md) supplies a seeded
-2,000-subject v4 public development demo with matched benign annotations,
-explicit injection/near-miss traps, frozen labeling conventions and a primary
-passage baseline alongside the unchanged secondary comparator. Its shortcut
-audit applies fixed single/pairwise cutoffs and reports a cross-validated tree score.
-The 165-assessment template includes 50 development items covering all variant
-families and injection phrasings. The staged runbook seals calibration first,
-fits/registers the reviewed D09 artifact offline, and requires a second approval
-bound to that artifact before test access. It remains experimental and
-default-off; paid collection rejects public demo seeds/corpus digests through
-`d29-study-v5` and requires a fresh private operator seed. Live observations,
-D09 qualification and operator review are pending.
+2,000-subject v6 public development demo with balanced inventory records,
+replacement-slot screening-control attempts and explicit provider conventions.
+Passage baseline v2 is the primary comparator; passage v1 and the original
+baseline remain secondary. Development and public-test audits include structural
+and claim-relative single/pairwise rules plus an informational model score.
+The 165-assessment template covers every variant and injection phrasing in 50
+development items. Staged calibration and test access still require separate
+approvals and a reviewed D09 artifact. Experimental and default-off, the study
+rejects public seeds through `d29-study-v6` and their pinned corpus digests for
+paid collection. Live observations, calibration qualification and human review
+remain pending.

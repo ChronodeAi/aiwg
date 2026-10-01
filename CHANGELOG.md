@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D29 v6 balances record structure and claim-relative
+  occurrences, replaces matched benign note slots with screening-control text,
+  and sends explicit labeling conventions. Passage baseline v2 is primary;
+  historical comparators remain unchanged. Public seed `d29-study-v6` includes
+  development and public-test shortcut audits; live evidence remains pending (#2622)
+
 - Experimental, default-off D29 generator v4 and public development seed
   `d29-study-v5` match benign annotations and distractor cues across labels,
   clarify provider labeling conventions, and audit single and paired shortcuts.

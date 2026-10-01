@@ -254,14 +254,14 @@ describe('D29 frozen synthetic population', () => {
     expect(prepared.reviews.assessments.every(item => item.goldCorrect === null && item.agreed === null)).toBe(true);
   });
   it('AC9 budgets the executable unbatched path, including every retry, without attesting approval', async () => {
-    const frozen = await prepare('d29-study-v5'), planned = await dryRun(frozen);
+    const frozen = await prepare('d29-study-v6'), planned = await dryRun(frozen);
     expect(planned).toMatchObject({ providerCalls: 0, subjects: 2000, deterministicNoCallSubjects: 300,
       providerOverheadTokens: 512, expected: { initialCalls: 6000 },
       worst: { attempts: 12000 }, hardCapUsd: 6 });
     expect(planned.expected.attempts).toBeCloseTo(6150, 8);
     expect(planned.worst.reservedUsd).toBeLessThan(4.8);
     expect(planned.worst.tokens).toBeLessThan(frozen.approval.budget.tokens * 0.8);
-    expect(planned.maximumRequestEstimateTokens).toBeLessThanOrEqual(3744);
+    expect(planned.maximumRequestEstimateTokens).toBeLessThanOrEqual(4244);
     const c = await setup();
     c.bundle.corpus = prepared.corpus; c.bundle.preregistration = prepared.preregistration;
     c.bundle.approval.corpusDigest = heldoutDigest(prepared.corpus);
@@ -269,15 +269,15 @@ describe('D29 frozen synthetic population', () => {
     c.bundle.approval.executionDigest = heldoutExecutionDigest(prepared.corpus, prepared.preregistration, c.bundle.approval);
     const fullPlan = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));
     expect(fullPlan).toMatchObject({ maximumAttempts: 3000, fitsBeforeStop: true });
-    expect(fullPlan.maximumRequestEstimateTokens).toBeLessThanOrEqual(3744);
+    expect(fullPlan.maximumRequestEstimateTokens).toBeLessThanOrEqual(4244);
     expect(c.host.resolveCredential).not.toHaveBeenCalled();
     expect(prepared.approval.budget).toEqual({ calls: 15000, tokens: 60000000, usd: 6 });
     expect(prepared.approval.priceBound).toMatchObject({ inputUsdPerMTok: 0.042, outputUsdPerMTok: 0, perRequestUsd: 0, approvalReference: null });
     const paidOutput = structuredClone(c.bundle);
     paidOutput.approval.priceBound.outputUsdPerMTok = 0.001;
     expect(() => validateHeldoutBundle(paidOutput, heldoutDigest(paidOutput.approval))).toThrow('free-output-required');
-    expect(prepared.preregistration.regeneration).toEqual({ reason: 'synthetic-v4-matched-annotations-cardinality-passage-comparator-pairwise-audit',
-      collectorCommit: 'a5f3bccac', priorLiveObservations: 0 });
+    expect(prepared.preregistration.regeneration).toEqual({ reason: 'synthetic-v6-balanced-records-claim-relative-audit-passage-v2',
+      collectorCommit: 'ca23244f3', priorLiveObservations: 0 });
     expect(() => validateHeldoutBundle({ corpus: prepared.corpus, preregistration: prepared.preregistration, approval: prepared.approval }, heldoutDigest(prepared.approval))).toThrow();
   }, 15000);
 });
@@ -333,11 +333,11 @@ describe('D29 report thresholds', () => {
         && (sample.kind !== 'citation' || passageBaseline.support === sample.gold.support);
     }
     const result = f.build();
-    expect(result.native.heldout.paired.baselineOnly).toBe(500);
+    expect(result.native.heldout.paired.baselineOnly).toBe(700);
     expect(result.native.heldout.paired.candidateOnly).toBe(100);
     expect(result.native.reasons).toContain('quality-not-non-inferior');
     expect(result.proposedStatisticalDisposition).toBe('HOLD');
-    expect(f.analysis.comparators.primary.id).toBe('d29-passage-baseline/v1');
+    expect(f.analysis.comparators.primary.id).toBe('d29-passage-baseline/v2');
     expect(f.analysis.comparators.secondary.id).toBe('d29-baseline/v1');
   });
   it('AC8/13 withholds malformed native records without dereferencing absent candidate fields', () => {
@@ -466,7 +466,7 @@ function response(init) {
 }
 
 describe('D29 collector integration', () => {
-  it.each(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5'])('PUBLIC-01 refuses public demo seed %s before credentials or dispatch', async seed => {
+  it.each(['d29-study-v1', 'd29-study-v2', 'd29-study-v3', 'd29-study-v4', 'd29-study-v5', 'd29-study-v6'])('PUBLIC-01 refuses public demo seed %s before credentials or dispatch', async seed => {
     const c = await setup(), demo = await prepare(seed);
     // A valid subset changes the corpus digest, so this must exercise the seed exclusion.
     demo.corpus.rows = demo.corpus.rows.slice(0, 1);
@@ -487,7 +487,7 @@ describe('D29 collector integration', () => {
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
     await expect(readFile(join(c.runDir, 'frozen.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it.each(['v2', 'v3', 'v4'])('PUBLIC-02 refuses the committed %s corpus by digest before seed or approval validation', async version => {
+  it.each(['v2', 'v3', 'v4', 'v6'])('PUBLIC-02 refuses the committed %s corpus by digest before seed or approval validation', async version => {
     const corpus = JSON.parse(await readFile(new URL(`../../fixtures/decision/d29-synthetic-${version}/corpus.json`, import.meta.url), 'utf8'));
     const bundle = { corpus, preregistration: prepared.preregistration, approval: prepared.approval };
     expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).toThrow('public-demo-corpus');
