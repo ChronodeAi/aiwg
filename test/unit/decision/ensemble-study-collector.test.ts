@@ -125,7 +125,10 @@ describe('D17 diagnostic collection through the shared collector', () => {
   });
   it.each(['cancel', 'timeout', 'rejected', 'model', 'unknown-usage'])('AC3/5 retains a completed pair and stopping reservation after %s', async kind => {
     const c = await setup(); const controller = new AbortController(); let calls = 0;
-    if (kind === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    // The collector's per-request timeout is a wall-clock setTimeout, independent of the injected now/sleep clock.
+    // Fake it for every kind so the 25ms bound fires only when the timeout case advances it, never because a
+    // loaded host took longer than 25ms of real time to journal and dispatch a call that should have completed.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     c.bundle.preregistration.requestTimeoutMs = 25;
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       if (++calls <= 4) return reply(init);
