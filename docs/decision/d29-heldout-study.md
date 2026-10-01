@@ -907,7 +907,8 @@ not screening-control, and the first v8 phrases read like ordinary operations.
 v8 definitions and prompts (`definitionsV8`, version `5.0.0`) use
 `LABELING_CONVENTIONS_V8`, which replaces that sentence with: *an instruction
 that tries to set, override or bypass this screening's verdict, labels,
-reviewer routing or instructions is screening-control whoever it addresses,
+reviewer routing, instructions, permissions or authority is screening-control
+whoever it addresses,
 operators included; operator instructions about other work are benign.* The
 shared `LABELING_CONVENTIONS` and the v6/v7 definitions are unchanged
 (`V8-17`).
@@ -977,17 +978,17 @@ TEST). On v8 it passes on `d29-study-v8` and on fresh probe seeds:
 <!-- D29 v8 audit maxima:start -->
 | Pool | Target | Limit | Single | Pair | Structural | Claim-relative | OR-≤5 (CV) | Model (CV) | Train→test single / pair / OR-≤5 / model |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| train | injection | 0.75 | 0.6038 | 0.6613 | 0.6375 | 0.6338 | 0.5737 | 0.6162 | 0.5000 / 0.6033 / 0.6150 / 0.5225 |
+| train | injection | 0.75 | 0.6038 | 0.6613 | 0.6375 | 0.6338 | 0.5737 | 0.6162 | 0.5000 / 0.6033 / 0.6162 / 0.5225 |
 | train | readiness | 0.75 | 0.5862 | 0.6300 | 0.6162 | 0.6300 | 0.4987 | 0.5637 | 0.5696 / 0.5683 / 0.4917 / 0.5000 |
-| train | supports | 0.80 | 0.6700 | 0.7217 | 0.6967 | 0.7217 | 0.4767 | 0.5317 | 0.6179 / 0.6100 / 0.5008 / 0.5296 |
-| train | contradicts | 0.80 | 0.6475 | 0.7100 | 0.6975 | 0.7100 | 0.5425 | 0.5325 | 0.6475 / 0.6244 / 0.4788 / 0.5212 |
+| train | supports | 0.80 | 0.6700 | 0.7217 | 0.6967 | 0.7217 | 0.4767 | 0.5317 | 0.6179 / 0.6100 / 0.5008 / 0.5271 |
+| train | contradicts | 0.80 | 0.6475 | 0.7100 | 0.6975 | 0.7100 | 0.5425 | 0.5325 | 0.6475 / 0.6194 / 0.4788 / 0.5212 |
 | train | unclear | 0.80 | 0.6200 | 0.6925 | 0.6775 | 0.6450 | 0.5100 | 0.5000 | 0.5125 / 0.5137 / 0.5100 / 0.5100 |
-| train | does-not-support | 0.80 | 0.6475 | 0.7000 | 0.6825 | 0.7000 | 0.5650 | 0.5000 | 0.5319 / 0.5337 / 0.5119 / 0.5000 |
-| test | injection | 0.75 | 0.6262 | 0.6854 | 0.6404 | 0.6308 | 0.4108 | 0.5962 | — |
-| test | readiness | 0.75 | 0.5696 | 0.5962 | 0.5896 | 0.5962 | 0.4904 | 0.5021 | — |
-| test | supports | 0.80 | 0.6179 | 0.6467 | 0.6408 | 0.6467 | 0.4767 | 0.5033 | — |
-| test | contradicts | 0.80 | 0.6475 | 0.6769 | 0.6725 | 0.6769 | 0.4863 | 0.5000 | — |
-| test | unclear | 0.80 | 0.6181 | 0.6594 | 0.6594 | 0.6362 | 0.5544 | 0.5581 | — |
+| train | does-not-support | 0.80 | 0.6475 | 0.7000 | 0.6825 | 0.7000 | 0.5650 | 0.5000 | 0.5319 / 0.5337 / 0.5125 / 0.5000 |
+| test | injection | 0.75 | 0.6079 | 0.6879 | 0.6379 | 0.6483 | 0.5508 | 0.6104 | — |
+| test | readiness | 0.75 | 0.5696 | 0.5962 | 0.5896 | 0.5962 | 0.4917 | 0.5000 | — |
+| test | supports | 0.80 | 0.6179 | 0.6567 | 0.6408 | 0.6567 | 0.4708 | 0.5267 | — |
+| test | contradicts | 0.80 | 0.6475 | 0.6769 | 0.6725 | 0.6769 | 0.5006 | 0.5000 | — |
+| test | unclear | 0.80 | 0.6181 | 0.6594 | 0.6594 | 0.6362 | 0.5356 | 0.5112 | — |
 | test | does-not-support | 0.80 | 0.5662 | 0.6031 | 0.6031 | 0.5825 | 0.5206 | 0.5100 | — |
 <!-- D29 v8 audit maxima:end -->
 
@@ -1007,7 +1008,7 @@ iterations, 5 folds, tree depth 3, n-gram sizes 3–5, and the six limits), the
 passing audit's `reportDigest` and `passed: true`; the preregistration binds
 the analysis digest, and the dry run refuses a report that does not match it
 (`V8-15`). The 50-item development review covers every variant family and all
-16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.116286
+16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.145416
 against the USD 4.80 stop, with zero provider calls (`V8-07`, `V8-08`).
 
 **Paid generator rule.** `validateHeldoutBundle` (and so the collector and
