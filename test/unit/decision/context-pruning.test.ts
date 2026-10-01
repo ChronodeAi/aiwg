@@ -9,6 +9,7 @@ import {
   classifyContextPruningCandidates,
   classifyContextPruningCandidate,
   computeContextBudgetManagerBaseline,
+  CONTEXT_PRUNING_QUALITY_METRICS,
   contextPruningDigest,
   contextPruningPairSetDigest,
   contextPruningReceiptSetDigest,
@@ -133,6 +134,7 @@ function preregister(
       slices: ['code', 'docs'],
       minimumOverallN: 40,
       minimumSliceN: 20,
+      minimumZeroVarianceN: 30,
       powerRule: 'fixture: reviewer-owned power analysis before held-out access',
       qualityNonInferiorityMarginBps: -500,
       positiveTotalTokenTarget: 100,
@@ -521,6 +523,47 @@ describe('D26 context pruning pilot', () => {
     expect(missing.findings).toContain('quality-metric-missing:citation-accuracy');
   });
 
+  it('A: two identical bounded pairs cannot PROMOTE on a zero-width interval, while adequate identical support can', () => {
+    const identicalMetrics = (count: number, baseline = 0.8, candidate = 0.8) => {
+      const ids = Array.from({ length: count }, (_, index) => `zero-variance-${String(index).padStart(3, '0')}`);
+      return {
+        ...goodMetrics(),
+        pairs: ids.map(pairId => ({ pairId, slice: 'code' })),
+        quality: CONTEXT_PRUNING_QUALITY_METRICS.map(metric => ({
+          metric, pairs: ids.map(pairId => ({ pairId, baseline, candidate })),
+        })),
+      };
+    };
+    const boundedPreregistration = (pairs: readonly ContextPruningPairRecord[], minimumZeroVarianceN: number) =>
+      preregister({
+        qualityMetrics: CONTEXT_PRUNING_QUALITY_METRICS.map(metric => ({ metric, scale: 'bounded' as const })),
+        slices: ['code'],
+        minimumOverallN: 2,
+        minimumSliceN: 1,
+        minimumZeroVarianceN,
+      }, now(), pairs);
+    // Two identical pairs read a zero-width interval at the estimate, which carries no variability
+    // evidence: the preregistered support rule withholds PROMOTE even though economics and integrity pass.
+    const small = identicalMetrics(2);
+    const held = report(small, { preregistration: boundedPreregistration(small.pairs, 10) });
+    expect(held.derived.quality.every(item => item.decision === 'insufficient')).toBe(true);
+    expect(held.derived.quality[0]!.interval).toMatchObject({
+      lowerBps: 0, upperBps: 0, estimateBps: 0, method: 'percentile-bootstrap' });
+    expect(held.findings).toEqual(CONTEXT_PRUNING_QUALITY_METRICS.map(metric => `insufficient-quality-support:${metric}`).sort());
+    expect(held).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+    // An adequate identical sample meets the declared rule and remains eligible for PROMOTE.
+    const adequate = identicalMetrics(10);
+    const promoted = report(adequate, { preregistration: boundedPreregistration(adequate.pairs, 10) });
+    expect(promoted.findings).toEqual([]);
+    expect(promoted).toMatchObject({ decision: 'PROMOTE', advisory: null });
+    // A uniform regression still rolls back: the support rule withholds passes, never harm.
+    const worse = identicalMetrics(2, 0.75, 0.5);
+    const rolledBack = report(worse, { preregistration: boundedPreregistration(worse.pairs, 10) });
+    expect(rolledBack.derived.quality.every(item => item.decision === 'not-non-inferior' && item.harm)).toBe(true);
+    expect(rolledBack.derived.quality[0]!.interval).toMatchObject({ lowerBps: -2500, upperBps: -2500 });
+    expect(rolledBack.decision).toBe('ROLLBACK');
+  });
+
   it('B: doubled pruned spend with inflated cache usage cannot PROMOTE and triggers ROLLBACK', () => {
     const doubled = goodMetrics({
       providerUsage: providerAccounting({ prunedDownstream: usage(20_000, 20_000, 2_000, 2.00) }),
@@ -776,6 +819,8 @@ describe('D26 context pruning pilot', () => {
     expect(() => preregister({ qualityMetrics: preregister().thresholds.qualityMetrics.slice(1) })).toThrow('invalid');
     expect(() => preregister({ qualityNonInferiorityMarginBps: -2.5 })).toThrow('invalid');
     expect(() => preregister({ slices: [] })).toThrow('invalid');
+    expect(() => preregister({ minimumZeroVarianceN: 1 })).toThrow('invalid');
+    expect(() => preregister({ minimumZeroVarianceN: 2.5 })).toThrow('invalid');
   });
 
   it('derives the prior deterministic baseline from ContextBudgetManager', () => {

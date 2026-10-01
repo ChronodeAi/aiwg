@@ -310,6 +310,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D26 context-pruning reports hold bounded
+  zero-variance reads at small n: a bounded quality metric whose per-pair
+  differences are all identical (a zero-width bootstrap interval) is
+  insufficient below the new preregistered `minimumZeroVarianceN`, even with
+  passing economics and integrity, while an adequate identical sample remains
+  eligible for PROMOTE. Ordinary decision behavior is unchanged (#2785)
 - The D24 preprocessing gate and the recorded `RulesetResult` now share one
   immutable snapshot of the host-supplied lineage and verification, taken before
   the result is constructed. Caller-owned mutation during evaluation can no
