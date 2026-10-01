@@ -372,6 +372,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Reject the root pointer in decision `nonLineagePointers` as malformed host
+  verification (`unverified` review, nothing dispatched) instead of treating it
+  as covering every text-bearing input position. Scoped subtree declarations are
+  unchanged (#2795).
 - Caller cancellation during experimental, default-off routing dispatch now
   records the `cancelled` terminal reason while keeping unknown-cost accounting
   (null spend and usage) in the receipt; non-cancellation unknown-cost failures
