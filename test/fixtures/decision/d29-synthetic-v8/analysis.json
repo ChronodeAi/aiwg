@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "decision-d29-analysis/v6",
+  "schemaVersion": "decision-d29-analysis/v7",
   "syntheticOnly": true,
   "splits": [
     {
@@ -2040,14 +2040,28 @@
     }
   },
   "shortcutAudit": {
-    "sourceDigest": "sha256:bff6399b47587a631abe4e5d77e2b67f96f2bd6f18d2c1d5d00c2e09dc8d119a",
+    "sourceDigest": "sha256:2bbda01ddbf222d8af31734ec13519a5e1c206e95c8c0fcecbd7f94287ccce73",
     "pairFeatureLimit": 200,
+    "structuralPairLimit": 400,
+    "lexiconCandidates": 40,
+    "lexiconMaxTerms": 5,
+    "logisticFeatures": 120,
+    "logisticIterations": 40,
+    "folds": 5,
+    "treeDepth": 3,
+    "ngramSizes": [
+      3,
+      4,
+      5
+    ],
     "injection": 0.75,
     "readiness": 0.75,
     "support": 0.8,
     "modelInjection": 0.8,
     "modelReadiness": 0.8,
-    "modelSupport": 0.85
+    "modelSupport": 0.85,
+    "reportDigest": "sha256:97ce506681fa80251de35947d6b6e3d3f333bfc671dff2659be2bc4cbea2eae7",
+    "passed": true
   },
   "native": {
     "schemaVersion": "decision-sdlc-screening-preregistration/v2",
@@ -2161,8 +2175,8 @@
       "frozenAt": "2026-10-02T00:00:00.000Z",
       "holdoutAccessedAt": null,
       "splitDigest": "sha256:bcb8b5aac8e55b25579613a9724e7a2e6816fd1c76fcea271b490f82843ae687",
-      "corpusDigest": "sha256:841ee6a3538815117f45a4fcb5db63c2c9a9db8c265e5f141121cba23439d1de",
-      "goldDigest": "sha256:49d33b78b0f99f1b9f2980cc527d63ba26375669431befd12611dac3efc3203a"
+      "corpusDigest": "sha256:bb0a82bdf1c5d3943b7246339fb565e9acc14da03a9b7cdacd2d61c45d40bc71",
+      "goldDigest": "sha256:bf122e30f7a54da87e297ff08f5ec50dd74d1620ca93e98a6cbcf2388db19645"
     }
   },
   "calibration": {

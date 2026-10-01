@@ -65,6 +65,9 @@ try {
   if (['public-demo-seed', 'public-demo-corpus'].includes(error?.category)) {
     process.stderr.write('Public D29 development demo refused for collection; prepare a fresh private operator seed and obtain new approvals.\n');
   }
+  if (error?.category === 'paid-generator') {
+    process.stderr.write('D29 paid collection requires the current paid-eligible generator (d29-synthetic/v8); older generators are public-replay-only. Prepare a fresh private seed.\n');
+  }
   if (error?.category === 'spend-counter-operator-repair-required') process.stderr.write('Spend counter requires operator repair; preserve the counter, head, baselines and run evidence.\n');
   process.stderr.write('Held-out collector refused: mode, approval, provenance, source, artifact root or collection check failed. No automatic retry.\n');
   process.exitCode = 1;

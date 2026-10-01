@@ -28,7 +28,7 @@ import { d29PassageBaselineV3, d29PassageBaselineV3Digest } from '../../../src/d
 import { d29PassageBaseline, d29PassageBaselineDigest } from '../../../src/decision/heldout/d29-passage-baseline.ts';
 import { shortcutAudit } from './d29-shortcuts.mjs';
 import { shortcutAuditV7 } from './d29-shortcuts-v7.mjs';
-import { shortcutAuditV8 } from './d29-shortcuts-v8.mjs';
+import { shortcutAuditV8, SHORTCUT_AUDIT_V8_PARAMETERS } from './d29-shortcuts-v8.mjs';
 
 export const LABELS = ['supports', 'contradicts', 'unclear', 'does-not-support'];
 export const SLICES = Object.keys(D29_VARIANTS);
@@ -155,7 +155,7 @@ const artifactValidatorV8 = ajv.compile(JSON.parse(readFileSync(new URL('../../.
 const artifactValidatorV9 = ajv.compile(JSON.parse(readFileSync(new URL('../../../schemas/decision/D29Study.v9.schema.json', import.meta.url), 'utf8')));
 const V7_VERSIONS = new Set(['decision-d29-gold/v7', 'decision-d29-shortcut-audit/v4', 'decision-d29-analysis/v5', 'decision-d29-score/v7']);
 const V8_VERSIONS = new Set(['decision-d29-analysis/v6', 'decision-d29-score/v8']);
-const V9_VERSIONS = new Set(['decision-d29-shortcut-audit/v5']);
+const V9_VERSIONS = new Set(['decision-d29-shortcut-audit/v5', 'decision-d29-analysis/v7']);
 export function validateStudyArtifact(value) {
   const version = value && typeof value === 'object' ? value.schemaVersion : null;
   const validator = V9_VERSIONS.has(version) ? artifactValidatorV9 : V8_VERSIONS.has(version) ? artifactValidatorV8
@@ -380,7 +380,11 @@ export async function prepareV8(seed) {
   const gold = { schemaVersion: 'decision-d29-gold/v7', syntheticOnly: true, rows: goldRows };
   const corpus = { schemaVersion: 'decision-heldout-corpus/v1', study: 'D29', syntheticOnly: true,
     provenance: { kind: 'authored-synthetic', generatorDigest: registeredHeldoutGeneratorDigest(D29_V8_GENERATOR_ID), seed, goldDigest: heldoutDigest(gold) }, definitions: definitions(), rows };
-  const analysis = analysisPlanV8(corpus);
+  // Fail closed: a v8 corpus is never prepared (and so never approved or
+  // scored) unless the v5 shortcut audit passes; the analysis pins its digest.
+  const audit = shortcutAuditV8Cached(corpus, gold);
+  if (!audit.passed) refuse('shortcut-audit');
+  const analysis = analysisPlanV8(corpus, audit);
   const preregistration = { schemaVersion: 'decision-heldout-preregistration/v1', study: 'D29', frozenAt: V8_DATASET_FROZEN_AT,
     corpusDigest: heldoutDigest(corpus), studyAnalysisDigest: heldoutDigest(analysis), scorerDigest: moduleDigest,
     calibration: { scope: 'calibrated', allowedModes: ['staged'], calibrationPhaseSplits: ['tuning', 'calibration'] },
@@ -394,10 +398,25 @@ export async function prepareV8(seed) {
     approval: approvalWithGatePins(approvalTemplate(corpus, preregistration), analysis) };
 }
 
-export function analysisPlanV8(corpus) {
+/** v5 audit memoized by corpus and gold digest: preparation, scoring and the dry run share one run per process. */
+const v8AuditCache = new Map();
+export function shortcutAuditV8Cached(corpus, gold) {
+  const key = `${heldoutDigest(corpus)}:${heldoutDigest(gold)}`;
+  if (!v8AuditCache.has(key)) {
+    const audit = shortcutAuditV8(corpus, gold); validateStudyArtifact(audit);
+    v8AuditCache.set(key, audit);
+  }
+  return structuredClone(v8AuditCache.get(key));
+}
+
+/** Generator-v8 analysis (`decision-d29-analysis/v7`): every audit parameter plus the passing audit's digest. */
+export function analysisPlanV8(corpus, audit) {
+  if (!audit || audit.schemaVersion !== 'decision-d29-shortcut-audit/v5' || audit.passed !== true) refuse('shortcut-audit');
   const v7 = analysisPlanV7(corpus), splits = v7.splits;
-  return { ...v7, native: { ...v7.native, planId: 'd29-synthetic-v8', frozenAt: V8_DATASET_FROZEN_AT },
-    shortcutAudit: { ...v7.shortcutAudit, sourceDigest: byteDigest(readFileSync(new URL('./d29-shortcuts-v8.mjs', import.meta.url))) },
+  return { ...v7, schemaVersion: 'decision-d29-analysis/v7', native: { ...v7.native, planId: 'd29-synthetic-v8', frozenAt: V8_DATASET_FROZEN_AT },
+    shortcutAudit: { sourceDigest: byteDigest(readFileSync(new URL('./d29-shortcuts-v8.mjs', import.meta.url))),
+      ...structuredClone(SHORTCUT_AUDIT_V8_PARAMETERS), ngramSizes: [...SHORTCUT_AUDIT_V8_PARAMETERS.ngramSizes],
+      reportDigest: heldoutDigest(audit), passed: true },
     gateBinding: absoluteGateBinding({ planId: 'd29-synthetic-v8', bindingId: 'd29-synthetic-v8-absolute-gates',
       splitDigest: splits[2].digest, corpusDigest: heldoutDigest(corpus), goldDigest: corpus.provenance.goldDigest, frozenAt: V8_DATASET_FROZEN_AT }) };
 }
@@ -508,7 +527,8 @@ export async function dryRunV7(prepared) {
 
 /** Generator v8: the v5 audit runs per wording pool and transfers train rules to the test pool. */
 export async function dryRunV8(prepared) {
-  const audit = shortcutAuditV8(prepared.corpus, prepared.gold); validateStudyArtifact(audit);
+  const audit = shortcutAuditV8Cached(prepared.corpus, prepared.gold);
+  if (!audit.passed || heldoutDigest(audit) !== prepared.analysis.shortcutAudit.reportDigest) refuse('shortcut-audit');
   return plannedDryRun(prepared, audit);
 }
 
@@ -949,7 +969,7 @@ export async function score(input, context = null) {
   }
   const failureAsError = { counts, interval: pairedBinaryDifferenceInterval({ counts, levelBps: analysis.native.confidenceInterval.levelBps }),
     missingCandidateErrors: missing.length, denominator: rows.length, promotable: false };
-  return validatedArtifact({ schemaVersion: analysis.schemaVersion === 'decision-d29-analysis/v6' ? 'decision-d29-score/v8'
+  return validatedArtifact({ schemaVersion: ['decision-d29-analysis/v6', 'decision-d29-analysis/v7'].includes(analysis.schemaVersion) ? 'decision-d29-score/v8'
     : analysis.schemaVersion === 'decision-d29-analysis/v5' ? 'decision-d29-score/v7' : 'decision-d29-score/v6',
     decision: report.decision, native, gateReport, groups, heldout: missing.length ? null : heldout,
     provenance, reviewerN: samples.filter(row => row.reviewer !== null).length, missingInputs: missing,

@@ -13,6 +13,7 @@ import { dagLiveReservationMicros } from '../graph-live-qualification.js';
 import { redactStructured, redactText } from '../../governance/redaction.js';
 import { heldoutCorpusSeed } from './generators.js';
 import { registeredHeldoutGeneratorDigest, reproducibleRegisteredHeldoutRow } from './generator-registry.js';
+import { D29_PAID_GENERATOR_IDS } from './d29-generator-ids.js';
 import type { HeldoutApproval, HeldoutAttempt, HeldoutBundle, HeldoutCorpus, HeldoutExecution,
   HeldoutPreregistration, HeldoutRequest, HeldoutRow, Study } from './types.js';
 
@@ -40,7 +41,7 @@ const D29_PUBLIC_DEMO_CORPORA = new Set([
   'sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549',
   'sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de',
   // Generator d29-synthetic/v8 public development corpus (seed d29-study-v8); refused preemptively.
-  'sha256:841ee6a3538815117f45a4fcb5db63c2c9a9db8c265e5f141121cba23439d1de',
+  'sha256:bb0a82bdf1c5d3943b7246339fb565e9acc14da03a9b7cdacd2d61c45d40bc71',
 ]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };
@@ -137,6 +138,16 @@ export function validateHeldoutBundle(bundle: HeldoutBundle, trustedApprovalDige
   if (corpus?.study === 'D29') {
     if (D29_PUBLIC_DEMO_CORPORA.has(sha256(corpus))) throw new HeldoutError('public-demo-corpus');
     if (D29_PUBLIC_DEMO_SEEDS.has(corpus.provenance?.seed)) throw new HeldoutError('public-demo-seed');
+    // Paid collection uses only the current paid-eligible D29 generator; older
+    // D29 generators (v1–v7) reproduce public development corpora only. Rows
+    // must name a generator; the shared collector's own fixture generators
+    // (lamp, D17) are not D29 generators and stay governed by their studies.
+    const rows: unknown[] = Array.isArray(corpus.rows) ? corpus.rows : [];
+    const ids = rows.map(row => (row as HeldoutRow)?.provenance?.generatorId);
+    if (!rows.length || ids.some(id => typeof id !== 'string'
+      || (id.startsWith('d29-') && !D29_PAID_GENERATOR_IDS.includes(id)))) {
+      throw new HeldoutError('paid-generator');
+    }
   }
   validateHeldoutInputs(corpus, plan);
   if (a?.priceBound?.outputUsdPerMTok !== 0) throw new HeldoutError('free-output-required');

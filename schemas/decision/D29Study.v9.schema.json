@@ -2,13 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aiwg.io/schemas/decision/D29Study.v9.schema.json",
   "title": "D29Study v9",
-  "description": "D29 study artifacts for generator d29-synthetic/v8: every v8 artifact plus the v5 shortcut audit (per-pool, per-target structural, surface, character n-gram, lexicon and model rules with train-to-test transfer).",
+  "description": "D29 study artifacts for generator d29-synthetic/v8: every v8 artifact, the v5 shortcut audit (per-pool, per-target structural, surface, claim-rendering, character n-gram, lexicon and model rules with train-to-test transfer) and the v7 analysis that records every audit parameter and the passing audit digest.",
   "oneOf": [
     {
       "$ref": "https://aiwg.io/schemas/decision/D29Study.v8.schema.json"
     },
     {
       "$ref": "#/$defs/audit"
+    },
+    {
+      "$ref": "#/$defs/analysisV7"
     }
   ],
   "$defs": {
@@ -423,6 +426,308 @@
         0.8,
         0.85
       ]
+    },
+    "analysisV7": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "syntheticOnly",
+        "splits",
+        "native",
+        "gateBinding",
+        "calibration",
+        "review",
+        "missingPolicy",
+        "conditionalRates",
+        "comparators",
+        "shortcutAudit"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d29-analysis/v7"
+        },
+        "syntheticOnly": {
+          "const": true
+        },
+        "splits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "ids",
+              "digest"
+            ],
+            "properties": {
+              "name": {
+                "enum": [
+                  "tuning",
+                  "calibration",
+                  "test"
+                ]
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1,
+                "uniqueItems": true
+              },
+              "digest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              }
+            }
+          },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "native": {
+          "$ref": "https://aiwg.io/schemas/decision/SdlcScreeningPreregistration.v2.schema.json"
+        },
+        "gateBinding": {
+          "$ref": "https://aiwg.io/schemas/gates/GateBinding.v1alpha1.schema.json"
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "minimumCellN",
+            "smoothing",
+            "split",
+            "profile"
+          ],
+          "properties": {
+            "method": {
+              "const": "kind-and-safe-semantic-ready-frequency-v2"
+            },
+            "minimumCellN": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "smoothing": {
+              "const": "laplace-1"
+            },
+            "split": {
+              "const": "calibration"
+            },
+            "profile": {
+              "$ref": "https://aiwg.io/schemas/decision/CalibrationArtifact.v1.schema.json#/properties/profile"
+            }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "development",
+            "holdout",
+            "delayedRepeats",
+            "reviewer"
+          ],
+          "properties": {
+            "development": {
+              "const": 50
+            },
+            "holdout": {
+              "const": 100
+            },
+            "delayedRepeats": {
+              "const": 15
+            },
+            "reviewer": {
+              "const": "roctinam"
+            }
+          }
+        },
+        "missingPolicy": {
+          "const": "withhold-native-report; complete-case-description; missing-as-error"
+        },
+        "conditionalRates": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "uniqueItems": true
+        },
+        "comparators": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "primary",
+            "secondary",
+            "passageV1",
+            "ceiling"
+          ],
+          "properties": {
+            "primary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v3",
+                  "description": "Frozen train-only primary comparator for generator v8."
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "secondary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-baseline/v1"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "passageV1": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v1"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "ceiling": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "sourceDigest"
+              ],
+              "properties": {
+                "id": {
+                  "const": "d29-passage-baseline/v2"
+                },
+                "sourceDigest": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            }
+          }
+        },
+        "shortcutAudit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "sourceDigest",
+            "pairFeatureLimit",
+            "structuralPairLimit",
+            "lexiconCandidates",
+            "lexiconMaxTerms",
+            "logisticFeatures",
+            "logisticIterations",
+            "folds",
+            "treeDepth",
+            "ngramSizes",
+            "injection",
+            "readiness",
+            "support",
+            "modelInjection",
+            "modelReadiness",
+            "modelSupport",
+            "reportDigest",
+            "passed"
+          ],
+          "properties": {
+            "sourceDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$"
+            },
+            "pairFeatureLimit": {
+              "const": 200
+            },
+            "structuralPairLimit": {
+              "const": 400
+            },
+            "lexiconCandidates": {
+              "const": 40
+            },
+            "lexiconMaxTerms": {
+              "const": 5
+            },
+            "logisticFeatures": {
+              "const": 120
+            },
+            "logisticIterations": {
+              "const": 40
+            },
+            "folds": {
+              "const": 5
+            },
+            "treeDepth": {
+              "const": 3
+            },
+            "ngramSizes": {
+              "const": [
+                3,
+                4,
+                5
+              ]
+            },
+            "injection": {
+              "const": 0.75
+            },
+            "readiness": {
+              "const": 0.75
+            },
+            "support": {
+              "const": 0.8
+            },
+            "modelInjection": {
+              "const": 0.8
+            },
+            "modelReadiness": {
+              "const": 0.8
+            },
+            "modelSupport": {
+              "const": 0.85
+            },
+            "reportDigest": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "description": "Digest of the passing decision-d29-shortcut-audit/v5 report over this corpus and gold."
+            },
+            "passed": {
+              "const": true,
+              "description": "Preparation refuses a corpus whose audit fails, so a preregistered v8 analysis always records a passing audit."
+            }
+          }
+        }
+      }
     }
   }
 }

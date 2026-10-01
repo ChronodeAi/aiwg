@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { prepare, prepareV6, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
+import { prepare, prepareV6, prepareV8, dryRun, drawStream, baseline, hostContext, oracle, observationFromAttempts, buildReport,
   validateStudyArtifact, fitReadinessMapping, readinessCell, groupedMetrics, SLICES, LABELS, score,
   analysisPlan, approvalTemplate, LABELING_CONVENTIONS,
   GATE_PACK_ID, GATE_CEILING_PACK_ID, GATE_BLOCKING_SLICES } from '../../../tools/decision/studies/d29.mjs';
@@ -33,12 +33,15 @@ vi.mock('../../../src/decision/context-live-qualification.js', async original =>
     assertContextArtifactRoot: vi.fn(async (_source, root) => { if (root !== hostChecks.root) throw new Error('root'); }) };
 });
 let prepared, legacy;
-let small;
+let small, collectable;
 const fixtureLabels = new Map();
 beforeAll(async () => {
   // These conformance tests exercise the frozen v6 pipeline explicitly; a bare
   // fresh seed now prepares with the latest generator (see d29-synthetic-v8).
   prepared = await prepareV6('offline-d29-conformance');
+  // Paid collection admits only the current paid-eligible generator, so the
+  // collector integration tests run on the same seed prepared with v8.
+  collectable = await prepareV8('offline-d29-conformance');
   legacy = await loadLegacyV2();
 async function loadLegacyV2() {
   // R9: v2 commits only slim headers plus digest pins for corpus/gold; rows regenerate deterministically
@@ -67,16 +70,16 @@ async function loadLegacyV2() {
     .map(async name => [name === 'approval-template' ? 'approval' : name, JSON.parse(await readFile(dir(name), 'utf8'))])));
   return { corpus, gold, ...small, pins: header.pins };
 }
-  prepared.corpus.rows.forEach((row, i) => fixtureLabels.set(heldoutDigest(row.input.payload), prepared.gold.rows[i]));
+  for (const source of [prepared, collectable]) source.corpus.rows.forEach((row, i) => fixtureLabels.set(heldoutDigest(row.input.payload), source.gold.rows[i]));
   small = smallStudy();
-});
+}, 180_000);
 const dirs = [];
 afterEach(async () => { vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const integrity = () => ({ sample_n: 1500, uncertainty: { method: 'wilson', levelBps: 9500 }, paired_baseline: { n: 1500 },
   integrity_mode: 'locked', fresh_workspace_required: false, fresh_workspace_verified: false, integrity_state: 'verified',
   trusted_score_source: 'locked-artifact-snapshot', compromise_labels: [], weak_signal_reason: null,
   release_gate: { decision: 'PROMOTE', reasons: [] } });
-function smallStudy() {
+function smallStudy(prepared = collectable) {
   const labels = new Map(prepared.gold.rows.map(row => [row.id, row]));
   const selected = new Set(SLICES.flatMap(slice => ['tuning', 'calibration', 'test'].map(split =>
     prepared.corpus.rows.find(row => row.slice === slice && row.split === split).id)));
@@ -322,10 +325,10 @@ describe('D29 frozen synthetic population', () => {
     expect(planned.worst.tokens).toBeLessThan(frozen.approval.budget.tokens * 0.8);
     expect(planned.maximumRequestEstimateTokens).toBeLessThanOrEqual(4244);
     const c = await setup();
-    c.bundle.corpus = prepared.corpus; c.bundle.preregistration = prepared.preregistration;
-    c.bundle.approval.corpusDigest = heldoutDigest(prepared.corpus);
-    c.bundle.approval.preregistrationDigest = heldoutDigest(prepared.preregistration);
-    c.bundle.approval.executionDigest = heldoutExecutionDigest(prepared.corpus, prepared.preregistration, c.bundle.approval);
+    c.bundle.corpus = collectable.corpus; c.bundle.preregistration = collectable.preregistration;
+    c.bundle.approval.corpusDigest = heldoutDigest(collectable.corpus);
+    c.bundle.approval.preregistrationDigest = heldoutDigest(collectable.preregistration);
+    c.bundle.approval.executionDigest = heldoutExecutionDigest(collectable.corpus, collectable.preregistration, c.bundle.approval);
     const fullPlan = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));
     expect(fullPlan).toMatchObject({ maximumAttempts: 3000, fitsBeforeStop: true });
     expect(fullPlan.maximumRequestEstimateTokens).toBeLessThanOrEqual(4244);
@@ -519,6 +522,7 @@ describe('D29 report thresholds', () => {
 
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'd29-study-')); dirs.push(root); hostChecks.root = root;
+  const prepared = collectable;
   const corpus = structuredClone(prepared.corpus);
   corpus.rows = SLICES.map(slice => corpus.rows.find(row => row.split === 'tuning' && row.slice === slice));
   const preregistration = { ...prepared.preregistration, corpusDigest: heldoutDigest(corpus), requestTimeoutMs: 100 };
@@ -586,7 +590,7 @@ describe('D29 collector integration', () => {
     }
     expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
     await expect(readFile(join(c.runDir, 'frozen.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 120_000);
   it.each(['v2', 'v3', 'v4', 'v6'])('PUBLIC-02 refuses the committed %s corpus by digest before seed or approval validation', async version => {
     const corpus = JSON.parse(await readFile(new URL(`../../fixtures/decision/d29-synthetic-${version}/corpus.json`, import.meta.url), 'utf8'));
     const bundle = { corpus, preregistration: prepared.preregistration, approval: prepared.approval };
@@ -604,8 +608,8 @@ describe('D29 collector integration', () => {
   });
   it('STAGED-02 calibration approval cannot collect test rows through the study', async () => {
     const c = await setup();
-    c.bundle.corpus.rows.push(prepared.corpus.rows.find(row => row.split === 'calibration' && row.slice === SLICES[0]),
-      prepared.corpus.rows.find(row => row.split === 'test' && row.slice === SLICES[0]));
+    c.bundle.corpus.rows.push(collectable.corpus.rows.find(row => row.split === 'calibration' && row.slice === SLICES[0]),
+      collectable.corpus.rows.find(row => row.split === 'test' && row.slice === SLICES[0]));
     c.bundle.preregistration.corpusDigest = heldoutDigest(c.bundle.corpus);
     c.bundle.approval.corpusDigest = heldoutDigest(c.bundle.corpus);
     c.bundle.approval.preregistrationDigest = heldoutDigest(c.bundle.preregistration);

@@ -1,4 +1,4 @@
-import { D29_TRAIN, D29_TEST } from '../../../src/decision/heldout/d29-pools.js';
+import { D29_TRAIN_V8 as D29_TRAIN, D29_TEST_V8 as D29_TEST } from '../../../src/decision/heldout/d29-pools-v8.js';
 
 /**
  * D29 shortcut audit v5 (generator v8 onward).
@@ -27,6 +27,17 @@ const LEXICON_CANDIDATES = 40;
 const LOGISTIC_FEATURES = 120;
 const LOGISTIC_ITERS = 40;
 const NGRAM_SIZES = [3, 4, 5];
+const FOLDS = 5;
+const TREE_DEPTH = 3;
+const LEXICON_MAX_TERMS = 5;
+/** Every audit parameter, recorded verbatim in the v8 analysis plan. */
+export const SHORTCUT_AUDIT_V8_PARAMETERS = Object.freeze({
+  pairFeatureLimit: PAIR_FEATURE_LIMIT, structuralPairLimit: STRUCTURAL_PAIR_LIMIT, lexiconCandidates: LEXICON_CANDIDATES,
+  lexiconMaxTerms: LEXICON_MAX_TERMS, logisticFeatures: LOGISTIC_FEATURES, logisticIterations: LOGISTIC_ITERS,
+  folds: FOLDS, treeDepth: TREE_DEPTH, ngramSizes: Object.freeze([...NGRAM_SIZES]),
+  injection: LIMITS.injection, readiness: LIMITS.readiness, support: LIMITS.supports,
+  modelInjection: MODEL_LIMITS.injection, modelReadiness: MODEL_LIMITS.readiness, modelSupport: MODEL_LIMITS.supports,
+});
 const sentencePattern = /[.!?](?=\s|$|[)\]]|-->)/g;
 const recordPattern = /\bModule\s+[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/;
 const tokenize = text => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
@@ -48,7 +59,7 @@ const popcount = value => {
 
 const formats = [['colon', /:/g], ['quotes', /['"“”‘’]/g], ['brackets', /[\[\](){}<>]/g],
   ['html-comments', /<!--/g], ['quote-markers', /(?:^|\s)>(?=\s)/g], ['parentheses', /\(/g], ['square-brackets', /\[/g], ['semicolons', /;/g]];
-/** Note-grammar phrases repointed at the actual v6/v7 operator-note pools (R2). */
+/** Note-grammar phrases from the v8 operator-note pools (roles, benign tasks, timings). */
 const NOTE_PHRASES = [...new Set([...D29_TRAIN.roles, ...D29_TEST.roles, ...D29_TRAIN.tasks, ...D29_TEST.tasks,
   ...D29_TRAIN.timings, ...D29_TEST.timings].map(phrase => phrase.toLowerCase()))].sort((a, b) => b.length - a.length);
 const NOTE_PATTERN = new RegExp(NOTE_PHRASES.map(phrase => phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
@@ -86,11 +97,34 @@ function noteGrammarCounts(payload, view) {
   counts['claim:entity:first-sentence'] = first < 0 ? -1 : (text.slice(0, first).match(sentencePattern) ?? []).length;
   counts['claim:entity:first-position-bin-10'] = first < 0 ? -1 : Math.floor(10 * first / Math.max(1, text.length));
   counts['claim:value:present'] = Number(values.length > 0); counts['claim:value:count'] = values.length;
-  counts['claim:entity-value:same-sentence'] = Number(Boolean(entity && value && text.split(sentencePattern)
+  // Paired records share one sentence joined by ';', so clauses split on ';' too.
+  counts['claim:entity-value:same-sentence'] = Number(Boolean(entity && value && text.split(sentencePattern).flatMap(part => part.split(';'))
     .some(sentence => occurrencesIn(sentence, entity) && occurrencesIn(sentence, value))));
+  const rendered = claimRenderings(payload);
+  const whole = form => text.includes(`${form}.`) || text.includes(`${form};`);
+  counts['claim:rendered-in-passage'] = Number(rendered.some(whole));
+  counts['claim:rendered-in-passage:pronoun'] = Number(rendered.some(form => pronounForms(form).some(whole)));
+  counts['claim:rendered-in-passage:any'] = Math.max(counts['claim:rendered-in-passage'], counts['claim:rendered-in-passage:pronoun']);
   counts['claim:attribute:present'] = Number(Boolean(attribute && new RegExp(`\\b${['owner team', 'owned by team'].includes(attribute)
     ? '(?:owner team|owned by team)' : attribute}\\b`, 'i').test(text)));
   return counts;
+}
+
+/**
+ * Canonical renderings of the claim in the passage: the claim sentence itself,
+ * or for a criterion the pools' exact current-release verification sentence
+ * for the criterion's module and name. Visible claim text only.
+ */
+function claimRenderings(payload) {
+  if (payload.claim) return [payload.claim.replace(/\.$/, '')];
+  const match = /^Module (\S+) requires independently verified (.+) for all components of the current release\.$/.exec(payload.criterion ?? '');
+  return match ? [D29_TRAIN, D29_TEST].map(pool => pool.criterion.exact(match[1], match[2], '2')) : [];
+}
+
+/** The same sentence with its leading module subject replaced by a pronoun (coreference renderings). */
+function pronounForms(sentence) {
+  const subject = /Module \S+/.exec(sentence)?.[0];
+  return subject ? ['It', 'it', 'that module'].map(pronoun => sentence.replace(subject, pronoun)) : [];
 }
 
 function occurrencesIn(text, term) {
@@ -200,7 +234,7 @@ function balancedAccuracy(truth, predictions) {
 
 function foldAssignments(truth) {
   let positiveFold = 0, negativeFold = 0;
-  return truth.map(positive => (positive ? positiveFold++ : negativeFold++) % 5);
+  return truth.map(positive => (positive ? positiveFold++ : negativeFold++) % FOLDS);
 }
 
 /** Single and pairwise rules over every feature family for one pool and target. */
@@ -296,7 +330,7 @@ function treeFor(tokens, truth, positives, negatives, training) {
   const build = (indices, depth) => {
     const p = indices.filter(i => truth[i]).length / positives, n = indices.filter(i => !truth[i]).length / negatives;
     const prediction = p >= n;
-    if (depth === 3 || !p || !n) return { prediction };
+    if (depth === TREE_DEPTH || !p || !n) return { prediction };
     let best = null, gain = 1e-12;
     for (const token of candidates) {
       let yesP = 0, yesN = 0;
@@ -352,7 +386,7 @@ function logisticVocabulary(tokens, training) {
 function modelScores(tokens, truth, target, transfer = null) {
   const assignments = foldAssignments(truth);
   const treePredictions = Array(truth.length).fill(false), logisticPredictions = Array(truth.length).fill(false);
-  for (let fold = 0; fold < 5; fold++) {
+  for (let fold = 0; fold < FOLDS; fold++) {
     const training = truth.flatMap((_, i) => assignments[i] !== fold ? [i] : []);
     const validation = truth.flatMap((_, i) => assignments[i] === fold ? [i] : []);
     const positives = training.filter(i => truth[i]).length, negatives = training.length - positives;
@@ -395,7 +429,7 @@ function lexiconScores(tokens, truth, target, transfer = null) {
       .map(([token]) => ({ token, score: scoreOf(i => tokens[i].has(token)) }))
       .sort((a, b) => b.score - a.score || a.token.localeCompare(b.token)).slice(0, LEXICON_CANDIDATES);
     const selected = [];
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < LEXICON_MAX_TERMS; k++) {
       let best = null;
       for (const { token } of candidates) {
         if (selected.includes(token)) continue;
@@ -410,7 +444,7 @@ function lexiconScores(tokens, truth, target, transfer = null) {
   };
   const predict = (selected, set) => selected.some(token => set.has(token));
   const predictions = Array(truth.length).fill(false);
-  for (let fold = 0; fold < 5; fold++) {
+  for (let fold = 0; fold < FOLDS; fold++) {
     const training = truth.flatMap((_, i) => assignments[i] !== fold ? [i] : []);
     const selected = learn(training);
     truth.forEach((_, i) => { if (assignments[i] === fold) predictions[i] = predict(selected, tokens[i]); });

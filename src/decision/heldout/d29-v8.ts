@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { sha256 } from '../compile-cache/identity.js';
-import { d29Baseline, d29WorldV4, drawD29Stream } from './generators.js';
+import { d29Baseline, d29WorldV4, drawD29Stream, D29_V4_VARIANTS } from './generators.js';
 import { d29PassageBaseline } from './d29-passage-baseline.js';
 import { d29PassageBaselineV2 } from './d29-passage-baseline-v2.js';
 import { d29PassageBaselineV3 } from './d29-passage-baseline-v3.js';
@@ -28,8 +28,7 @@ import type { HeldoutRow } from './types.js';
  * scheduled by family offset, so slices keep matched layouts without sharing
  * identical note text across every slice.
  */
-export const D29_V8_GENERATOR_ID = 'd29-synthetic/v8';
-export const D29_V8_SEED = 'd29-study-v8';
+export { D29_V8_GENERATOR_ID, D29_V8_SEED } from './d29-generator-ids.js';
 
 type GeneratedRow = Omit<HeldoutRow, 'provenance'>;
 const attributes = ['port', 'protocol', 'region', 'owner-team', 'major-version'] as const;
@@ -87,7 +86,7 @@ function qualify(pool: D29WordPoolV8, train: boolean, text: string, mode: string
   if (mode === 'temporal') return train
     ? `${text}, according to the inventory ${pool.temporal[pick % pool.temporal.length]}`
     : `${text}, ${['as recorded', 'as logged', 'as filed'][pick % 3]} ${pool.temporal[pick % pool.temporal.length]}`;
-  if (mode === 'tentative') return `${pool.tentative[pick % pool.tentative.length]} ${text}`;
+  if (mode === 'tentative') return `${pool.tentative[pick % pool.tentative.length]} ${text.startsWith('The ') ? `the ${text.slice(4)}` : text}`;
   return text;
 }
 
@@ -102,6 +101,14 @@ function coreference(module: string, sentence: string, lead: string, pronoun: st
 }
 
 const coreferenceLeads = ['completed its scheduled migration last week', 'finished its planned maintenance window yesterday', 'closed its rollout review this morning'];
+
+/** The variant a non-injected counterpart row at this offset renders (supports / ready mix). */
+function counterpartVariant(citation: boolean, claimAttribute: string, offset: number): string {
+  const variants = D29_V4_VARIANTS[citation ? 'citation-supports' : 'criterion-ready'];
+  const applicable = variants.filter(variant => !(['multi-value', 'different-nonexclusive'].includes(variant) && !['port', 'protocol'].includes(claimAttribute)));
+  const width = citation ? attributes.length : criteria.length;
+  return applicable[(Math.floor(offset / width) + offset % width) % applicable.length];
+}
 
 /** Index combinations of `size` from `count`, in lexicographic order. */
 function* combinations(count: number, size: number): Generator<number[]> {
@@ -132,12 +139,17 @@ export function d29WorldV8(seed: string, ordinal: number) {
   const citation = world.kind === 'citation';
   const modes = citation ? ['exact', 'negated', 'moved', 'exclusive-single', 'exclusive-restricted', 'scoped', 'temporal', 'tentative']
     : ['exact', 'verified', 'checklist', 'explicit-none', 'planned', 'stale', 'self-attested', 'partial'];
-  const relevantMode = modes.includes(world.variant) ? world.variant : 'exact';
+  // Injected rows render their relevant fact with the mode mix of their
+  // non-injected counterpart slice (citation-supports, criterion-ready), drawn
+  // by the same offset rule d29WorldV4 uses, so a verbatim claim rendering
+  // cannot mark the injected class. Their latent support is unchanged.
+  const renderVariant = world.injected ? counterpartVariant(citation, world.claimAttribute, offset) : world.variant;
+  const relevantMode = modes.includes(renderVariant) ? renderVariant : 'exact';
   const relevantIndex = modes.indexOf(relevantMode);
   const identifier = () => Array.from({ length: 3 }, () => String(100000 + random(900000))).join('-');
   const records = modes.map((mode, i) => ({ mode, module: i === relevantIndex ? world.sourceModule : identifier(),
     attribute: i === relevantIndex ? world.sourceAttribute : world.claimAttribute,
-    value: i === relevantIndex ? world.sourceValue : '', different: '', pick: 0, k: '2' }));
+    value: i === relevantIndex ? world.sourceValue : '', different: '', pick: 0, k: '2', paraphrase: false, second: '' }));
   const others = records.map((_, i) => i).filter(i => i !== relevantIndex);
   for (let i = others.length - 1; i > 0; i--) {
     const at = schedule(i + 1); [others[i], others[at]] = [others[at], others[i]];
@@ -186,6 +198,10 @@ export function d29WorldV8(seed: string, ordinal: number) {
     const extra = citation ? rotated.filter(attribute => !used.has(attribute)) : rotated;
     records[free].attribute = extra[random(extra.length)];
   }
+  if (world.injected && renderVariant === 'multi-value') {
+    // Same latent fact plus a second current value, exactly as citation-supports multi-value.
+    world.sourceValues = [drawValue(random, world.claimAttribute, world.claimValue), world.claimValue];
+  }
   if (citation) {
     for (const record of records) {
       record.value ||= drawValue(random, record.attribute, world.claimValue);
@@ -193,9 +209,9 @@ export function d29WorldV8(seed: string, ordinal: number) {
     }
     const relevant = records[relevantIndex];
     if (world.variant === 'negated' || world.variant === 'moved') relevant.value = world.claimValue;
-    if (world.variant === 'multi-value') relevant.value = train
+    if (renderVariant === 'multi-value') relevant.value = train
       ? world.sourceValues.join(' and ') : `${world.sourceValues[0]} as well as ${world.sourceValues[1]}`;
-    if (world.variant === 'paraphrase') relevant.mode = 'paraphrase';
+    if (renderVariant === 'paraphrase') relevant.mode = 'paraphrase';
     if (['different-current', 'different-nonexclusive'].includes(world.variant)) relevant.value = world.sourceValue;
     // The claimed value appears four times, including facts about other entities.
     let remaining = 4 - Number(relevant.value.split(' and ').includes(world.claimValue) || relevant.value.split(' as well as ').includes(world.claimValue));
@@ -211,22 +227,73 @@ export function d29WorldV8(seed: string, ordinal: number) {
     }
   }
   if (!citation) for (const record of records) record.k = String(1 + random(3));
+  // Surface forms are independent of the support class (citation rows only):
+  // - the exact-mode record (the relevant record or a distractor) renders
+  //   plain, as a paraphrase, or as a two-value list (port/protocol) by the
+  //   same offset rule that picks citation-supports variants, so plain short
+  //   facts, the paraphrase frame and two-value lists occur at one rate in
+  //   every slice; the extra value never equals the claimed value unless the
+  //   row's variant is the supports multi-value case;
+  // - an anchor: one claimed-value record about another module names the
+  //   claimed module in a relative clause, so the claimed module and the
+  //   claimed value share a clause in every row.
+  const relevantRecord = records[relevantIndex];
+  const anchor = citation ? others.map(i => records[i]).find(record => record.module !== world.claimModule
+    && record.value === world.claimValue && record.mode !== 'exact') ?? null : null;
+  if (citation) {
+    const exactRecord = records[modes.indexOf('exact')];
+    const surface = counterpartVariant(true, world.claimAttribute, offset);
+    // Supports rows and injected rows already render by this rule.
+    const variantFixed = exactRecord === relevantRecord && ['exact', 'paraphrase', 'multi-value'].includes(renderVariant);
+    if (!variantFixed && surface !== 'exact') {
+      const twoValued = surface === 'multi-value' && ['port', 'protocol'].includes(exactRecord.attribute);
+      if (!twoValued) {
+        if (exactRecord === relevantRecord) relevantRecord.mode = 'paraphrase'; else exactRecord.paraphrase = true;
+      } else {
+        let second = drawValue(random, exactRecord.attribute, exactRecord.value);
+        while (second === world.claimValue) second = drawValue(random, exactRecord.attribute, exactRecord.value);
+        exactRecord.second = second;
+        if (exactRecord === relevantRecord) world.sourceValues = [exactRecord.value, second];
+      }
+    }
+  }
   const rotation = schedule(records.length);
   const ordered = [...records.slice(rotation), ...records.slice(0, rotation)];
+  const valueOf = (record: typeof records[number]) => !record.second ? record.value
+    : train ? `${record.value} and ${record.second}` : `${record.value} as well as ${record.second}`;
   const render = (record: typeof records[number]): string => {
     if (!citation) return pool.criterion[record.mode](record.module, names[record.attribute], record.k);
+    let text: string;
     if (['scoped', 'temporal', 'tentative'].includes(record.mode)) {
-      return qualify(pool, train, fact(pool, train, record.module, record.attribute, record.value, record.different, 'exact'), record.mode, record.pick);
+      text = qualify(pool, train, fact(pool, train, record.module, record.attribute, valueOf(record), record.different,
+        record.paraphrase ? 'paraphrase' : 'exact'), record.mode, record.pick);
+    } else text = fact(pool, train, record.module, record.attribute, valueOf(record), record.different, record.paraphrase ? 'paraphrase' : record.mode);
+    if (record === anchor) {
+      const subject = `Module ${record.module}`, at = text.indexOf(subject) + subject.length;
+      text = `${text.slice(0, at)}, ${pool.anchor} Module ${world.claimModule}${text[at] === ',' ? '' : ','}${text.slice(at)}`;
     }
-    return fact(pool, train, record.module, record.attribute, record.value, record.different, record.mode);
+    return text;
   };
+  // Test-pool parser-unseen rows render the relevant record by coreference and
+  // one distractor too: a qualified one when the relevant record is unqualified
+  // and an unqualified one otherwise, so pronoun-sentence length and
+  // qualification cannot reveal the variant.
   const unseen = !train && offset % 2 === 0;
+  const qualified = (record: typeof records[number]) => ['scoped', 'temporal', 'tentative'].includes(record.mode);
+  const pronounOf = (record: typeof records[number]) => record.mode === 'paraphrase' || record.paraphrase ? 'that module' : 'It';
+  const corefDistractor = unseen ? (() => {
+    const candidates = others.map(i => records[i]).filter(record => record !== anchor && record.mode !== 'exact'
+      && qualified(record) !== qualified(relevantRecord));
+    return candidates.length ? candidates[random(candidates.length)] : null;
+  })() : null;
   const relevantRender = unseen
-    ? coreference(records[relevantIndex].module, render(records[relevantIndex]),
-      `Module ${records[relevantIndex].module} ${coreferenceLeads[offset % 3]}.`,
-      records[relevantIndex].mode === 'paraphrase' ? 'that module' : 'It')
-    : render(records[relevantIndex]);
-  const renderRelevant = (record: typeof records[number]) => record === records[relevantIndex] ? relevantRender : render(record);
+    ? coreference(relevantRecord.module, render(relevantRecord), `Module ${relevantRecord.module} ${coreferenceLeads[offset % 3]}.`, pronounOf(relevantRecord))
+    : render(relevantRecord);
+  const corefRender = corefDistractor
+    ? coreference(corefDistractor.module, render(corefDistractor), `Module ${corefDistractor.module} ${coreferenceLeads[(offset + 1) % 3]}.`, pronounOf(corefDistractor))
+    : null;
+  const renderRelevant = (record: typeof records[number]) => record === relevantRecord ? relevantRender
+    : record === corefDistractor ? corefRender! : render(record);
   const pairedEntity = ordered.find(record => record.module === world.claimModule && record.attribute !== world.claimAttribute)!;
   const pairedValue = ordered.find(record => record.module !== world.claimModule
     && (citation ? record.value === world.claimValue : record.attribute === world.claimAttribute))!;

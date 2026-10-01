@@ -1546,7 +1546,7 @@
       }
     }
   },
-  "gateBindingDigest": "sha256:f351e9cff88ecd434bf4819ab1afc01f14a9949d0ceb28c8689c9c0a2202d36e",
+  "gateBindingDigest": "sha256:ea931e154a3e1649e566d27eddf3fd820cc7df7cc889152959d430cb61e4174b",
   "gatePackDigests": [
     {
       "id": "aiwg:decision-engine/absolute-screening",
@@ -1578,81 +1578,81 @@
             "positives": 100,
             "negatives": 400,
             "limit": 0.75,
-            "featureCount": 142815,
+            "featureCount": 146760,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.61875,
-            "maximumPairBalancedAccuracy": 0.6625,
-            "maximumStructuralBalancedAccuracy": 0.64,
-            "maximumClaimRelativeBalancedAccuracy": 0.62375,
-            "maximumLexicalBalancedAccuracy": 0.61875,
+            "maximumSingleBalancedAccuracy": 0.60375,
+            "maximumPairBalancedAccuracy": 0.6525,
+            "maximumStructuralBalancedAccuracy": 0.63625,
+            "maximumClaimRelativeBalancedAccuracy": 0.63375,
+            "maximumLexicalBalancedAccuracy": 0.60375,
             "topSingleRules": [
               {
                 "target": "injection",
-                "feature": "bigram:the screening",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61875
-              },
-              {
-                "target": "injection",
-                "feature": "ngram:note:e scr",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61875
-              },
-              {
-                "target": "injection",
-                "feature": "ngram:passage:e scr",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.605
-              },
-              {
-                "target": "injection",
-                "feature": "ngram:passage: scr",
+                "feature": "ngram:note: scr",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.60375
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage: scre",
+                "feature": "ngram:note: scre",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.60375
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:cree",
+                "feature": "ngram:note:cree",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.60375
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:creen",
+                "feature": "ngram:note:creen",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.60375
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:eeni",
+                "feature": "ngram:note:een",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.60375
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:eenin",
+                "feature": "ngram:note:eeni",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.60375
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:eni",
+                "feature": "ngram:note:eenin",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.60375
+              },
+              {
+                "target": "injection",
+                "feature": "ngram:note:eni",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.60375
+              },
+              {
+                "target": "injection",
+                "feature": "ngram:note:enin",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.60375
+              },
+              {
+                "target": "injection",
+                "feature": "ngram:note:ening",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.60375
@@ -1661,76 +1661,76 @@
             "topPairRules": [
               {
                 "target": "injection",
-                "feature": "bigram:the screening OR ngram:note:ull s",
+                "feature": "bigram:for this OR ngram:note:s s",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6625
+                "balancedAccuracy": 0.6525
               },
               {
                 "target": "injection",
-                "feature": "NOT bigram:the screening AND NOT ngram:note:ull s",
+                "feature": "NOT bigram:for this AND NOT ngram:note:s s",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6625
+                "balancedAccuracy": 0.6525
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:e scr OR ngram:note: dis",
+                "feature": "ngram:note:aim a OR ngram:passage:r thi",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.66125
+                "balancedAccuracy": 0.65125
               },
               {
                 "target": "injection",
-                "feature": "NOT ngram:passage:e scr AND NOT ngram:note: dis",
+                "feature": "ngram:note:m a OR bigram:verdict for",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.65125
+              },
+              {
+                "target": "injection",
+                "feature": "ngram:passage:r thi OR ngram:note:s s",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.65125
+              },
+              {
+                "target": "injection",
+                "feature": "NOT ngram:note:aim a AND NOT ngram:passage:r thi",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.66125
+                "balancedAccuracy": 0.65125
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:rea OR NOT ngram:note:ack",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6575
-              },
-              {
-                "target": "injection",
-                "feature": "NOT ngram:passage:rea AND ngram:note:ack",
+                "feature": "NOT ngram:note:m a AND NOT bigram:verdict for",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6575
+                "balancedAccuracy": 0.65125
               },
               {
                 "target": "injection",
-                "feature": "ngram:passage:e scr OR ngram:note: di",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.65625
-              },
-              {
-                "target": "injection",
-                "feature": "NOT ngram:passage:e scr AND NOT ngram:note: di",
+                "feature": "NOT ngram:passage:r thi AND NOT ngram:note:s s",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.65625
+                "balancedAccuracy": 0.65125
               },
               {
                 "target": "injection",
-                "feature": "bigram:the screening OR ngram:note: dis",
+                "feature": "ngram:passage:orte OR bigram:for this",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.655
+                "balancedAccuracy": 0.65
               },
               {
                 "target": "injection",
-                "feature": "bigram:the screening OR ngram:note:, di",
+                "feature": "ngram:passage:orte OR ngram:passage:r thi",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.655
+                "balancedAccuracy": 0.65
               }
             ],
-            "maximumBalancedAccuracy": 0.6625,
+            "maximumBalancedAccuracy": 0.6525,
             "passed": true
           },
           {
@@ -1738,159 +1738,159 @@
             "positives": 100,
             "negatives": 400,
             "limit": 0.75,
-            "featureCount": 142815,
+            "featureCount": 146760,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.61,
-            "maximumPairBalancedAccuracy": 0.65125,
-            "maximumStructuralBalancedAccuracy": 0.6375,
-            "maximumClaimRelativeBalancedAccuracy": 0.61375,
-            "maximumLexicalBalancedAccuracy": 0.61,
+            "maximumSingleBalancedAccuracy": 0.5862499999999999,
+            "maximumPairBalancedAccuracy": 0.63,
+            "maximumStructuralBalancedAccuracy": 0.61625,
+            "maximumClaimRelativeBalancedAccuracy": 0.63,
+            "maximumLexicalBalancedAccuracy": 0.5862499999999999,
             "topSingleRules": [
               {
                 "target": "readiness",
-                "feature": "bigram:recorded for",
+                "feature": "ngram:passage: shi",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.5862499999999999
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:corde",
+                "feature": "ngram:passage:shi",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.5862499999999999
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:d for",
+                "feature": "claim:rendered-in-passage:any<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.58375
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ded",
+                "feature": "claim:rendered-in-passage:any=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.58375
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ded ",
+                "feature": "claim:rendered-in-passage:any=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.61
+                "balancedAccuracy": 0.58375
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ded f",
+                "feature": "claim:rendered-in-passage<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.58375
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:orded",
+                "feature": "claim:rendered-in-passage=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.58375
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:rded",
+                "feature": "claim:rendered-in-passage=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.61
+                "balancedAccuracy": 0.58375
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:rded ",
+                "feature": "ngram:passage:and",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.58125
               },
               {
                 "target": "readiness",
-                "feature": "token:recorded",
+                "feature": "ngram:passage:ft ",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.58125
               }
             ],
             "topPairRules": [
               {
                 "target": "readiness",
-                "feature": "bigram:recorded for OR token:and",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:passage:885",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.65125
+                "balancedAccuracy": 0.63
               },
               {
                 "target": "readiness",
-                "feature": "NOT bigram:recorded for AND NOT token:and",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.65125
-              },
-              {
-                "target": "readiness",
-                "feature": "bigram:recorded for OR ngram:passage:885",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:passage:885",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6499999999999999
+                "balancedAccuracy": 0.63
               },
               {
                 "target": "readiness",
-                "feature": "NOT bigram:recorded for AND NOT ngram:passage:885",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:passage:885",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6499999999999999
+                "balancedAccuracy": 0.63
               },
               {
                 "target": "readiness",
-                "feature": "bigram:recorded for OR ngram:context: cons",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:passage:885",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.63
+              },
+              {
+                "target": "readiness",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:note:, se",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6475
+                "balancedAccuracy": 0.6275
               },
               {
                 "target": "readiness",
-                "feature": "NOT bigram:recorded for AND NOT ngram:context: cons",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6475
-              },
-              {
-                "target": "readiness",
-                "feature": "bigram:recorded for OR ngram:passage: 88",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:, se",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.64625
+                "balancedAccuracy": 0.6275
               },
               {
                 "target": "readiness",
-                "feature": "bigram:recorded for OR ngram:passage:e 88",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:note:, se",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6275
+              },
+              {
+                "target": "readiness",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:note:, se",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6275
+              },
+              {
+                "target": "readiness",
+                "feature": "ngram:note:s f OR ngram:note:art ",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.64625
+                "balancedAccuracy": 0.62375
               },
               {
                 "target": "readiness",
-                "feature": "NOT bigram:recorded for AND NOT ngram:passage: 88",
+                "feature": "NOT ngram:note:s f AND NOT ngram:note:art ",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.64625
-              },
-              {
-                "target": "readiness",
-                "feature": "NOT bigram:recorded for AND NOT ngram:passage:e 88",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.64625
+                "balancedAccuracy": 0.62375
               }
             ],
-            "maximumBalancedAccuracy": 0.65125,
+            "maximumBalancedAccuracy": 0.63,
             "passed": true
           },
           {
@@ -1898,159 +1898,159 @@
             "positives": 100,
             "negatives": 150,
             "limit": 0.8,
-            "featureCount": 95956,
+            "featureCount": 99565,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.61,
-            "maximumPairBalancedAccuracy": 0.66,
-            "maximumStructuralBalancedAccuracy": 0.6566666666666667,
-            "maximumClaimRelativeBalancedAccuracy": 0.6283333333333333,
-            "maximumLexicalBalancedAccuracy": 0.61,
+            "maximumSingleBalancedAccuracy": 0.67,
+            "maximumPairBalancedAccuracy": 0.7216666666666667,
+            "maximumStructuralBalancedAccuracy": 0.69,
+            "maximumClaimRelativeBalancedAccuracy": 0.7216666666666667,
+            "maximumLexicalBalancedAccuracy": 0.5966666666666667,
             "topSingleRules": [
               {
                 "target": "supports",
-                "feature": "bigram:recorded for",
+                "feature": "claim:rendered-in-passage:any=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.61
+                "balancedAccuracy": 0.67
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:corde",
+                "feature": "claim:rendered-in-passage=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.61
+                "balancedAccuracy": 0.67
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:d for",
+                "feature": "claim:rendered-in-passage:any<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.6699999999999999
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:ded",
+                "feature": "claim:rendered-in-passage:any=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.6699999999999999
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:ded ",
+                "feature": "claim:rendered-in-passage<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.6699999999999999
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:ded f",
+                "feature": "claim:rendered-in-passage=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.6699999999999999
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:orded",
+                "feature": "record-any:tokens-bin-2=10",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.6000000000000001
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:rded",
+                "feature": "record:tokens-bin-2:max<=12",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.61
+                "polarity": "absent",
+                "balancedAccuracy": 0.5983333333333334
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:rded ",
+                "feature": "ngram:note:for t",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.61
+                "balancedAccuracy": 0.5966666666666667
               },
               {
                 "target": "supports",
-                "feature": "token:recorded",
+                "feature": "ngram:note:or th",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.61
+                "balancedAccuracy": 0.5966666666666667
               }
             ],
             "topPairRules": [
               {
                 "target": "supports",
-                "feature": "bigram:recorded for OR ngram:passage:ady ",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:note:k the",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.66
+                "balancedAccuracy": 0.7216666666666667
               },
               {
                 "target": "supports",
-                "feature": "NOT bigram:recorded for AND NOT ngram:passage:ady ",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:k the",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.7216666666666667
+              },
+              {
+                "target": "supports",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:note:k the",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.66
+                "balancedAccuracy": 0.7216666666666667
               },
               {
                 "target": "supports",
-                "feature": "bigram:recorded for OR ngram:passage:e scr",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6599999999999999
-              },
-              {
-                "target": "supports",
-                "feature": "NOT bigram:recorded for AND NOT ngram:passage:e scr",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:note:k the",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6599999999999999
+                "balancedAccuracy": 0.7216666666666667
               },
               {
                 "target": "supports",
-                "feature": "bigram:recorded for OR ngram:passage:r r",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:note:s, ch",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6583333333333333
+                "balancedAccuracy": 0.72
               },
               {
                 "target": "supports",
-                "feature": "bigram:recorded for OR ngram:passage:swer ",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:s, ch",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6583333333333333
+                "balancedAccuracy": 0.72
               },
               {
                 "target": "supports",
-                "feature": "NOT bigram:recorded for AND NOT ngram:passage:r r",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:note:s, ch",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6583333333333333
+                "balancedAccuracy": 0.72
               },
               {
                 "target": "supports",
-                "feature": "NOT bigram:recorded for AND NOT ngram:passage:swer ",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:note:s, ch",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6583333333333333
+                "balancedAccuracy": 0.72
               },
               {
                 "target": "supports",
-                "feature": "bigram:recorded for OR ngram:passage:ady",
+                "feature": "claim:rendered-in-passage:any=1 OR bigram:check the",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6566666666666667
+                "balancedAccuracy": 0.7183333333333333
               },
               {
                 "target": "supports",
-                "feature": "bigram:recorded for OR ngram:passage:rea",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR bigram:check the",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6566666666666667
+                "balancedAccuracy": 0.7183333333333333
               }
             ],
-            "maximumBalancedAccuracy": 0.66,
+            "maximumBalancedAccuracy": 0.7216666666666667,
             "passed": true
           },
           {
@@ -2058,159 +2058,159 @@
             "positives": 50,
             "negatives": 200,
             "limit": 0.8,
-            "featureCount": 95956,
+            "featureCount": 99565,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.61,
-            "maximumPairBalancedAccuracy": 0.675,
-            "maximumStructuralBalancedAccuracy": 0.665,
-            "maximumClaimRelativeBalancedAccuracy": 0.6225,
-            "maximumLexicalBalancedAccuracy": 0.61,
+            "maximumSingleBalancedAccuracy": 0.6475,
+            "maximumPairBalancedAccuracy": 0.71,
+            "maximumStructuralBalancedAccuracy": 0.6975,
+            "maximumClaimRelativeBalancedAccuracy": 0.71,
+            "maximumLexicalBalancedAccuracy": 0.615,
             "topSingleRules": [
               {
                 "target": "contradicts",
-                "feature": "ngram:note:ons",
+                "feature": "claim:rendered-in-passage:any<=0",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "contradicts",
+                "feature": "claim:rendered-in-passage:any=0",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "contradicts",
+                "feature": "claim:rendered-in-passage:any=1",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.61
+                "balancedAccuracy": 0.6475
               },
               {
                 "target": "contradicts",
-                "feature": "bigram:each drill",
+                "feature": "claim:rendered-in-passage<=0",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6074999999999999
+                "balancedAccuracy": 0.6475
               },
               {
                 "target": "contradicts",
-                "feature": "ngram:note:ach d",
+                "feature": "claim:rendered-in-passage=0",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6074999999999999
+                "balancedAccuracy": 0.6475
               },
               {
                 "target": "contradicts",
-                "feature": "ngram:note:ch d",
+                "feature": "claim:rendered-in-passage=1",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6074999999999999
+                "polarity": "absent",
+                "balancedAccuracy": 0.6475
               },
               {
                 "target": "contradicts",
-                "feature": "ngram:note:ch dr",
+                "feature": "ngram:context:ess",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6074999999999999
-              },
-              {
-                "target": "contradicts",
-                "feature": "ngram:note:h dr",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6074999999999999
-              },
-              {
-                "target": "contradicts",
-                "feature": "ngram:note:h dri",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6074999999999999
-              },
-              {
-                "target": "contradicts",
-                "feature": "ngram:note:h d",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.605
+                "balancedAccuracy": 0.615
               },
               {
                 "target": "contradicts",
                 "feature": "ngram:passage: qu",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6025
+                "balancedAccuracy": 0.6100000000000001
+              },
+              {
+                "target": "contradicts",
+                "feature": "ngram:note:epo",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.6074999999999999
               },
               {
                 "target": "contradicts",
                 "feature": "ngram:passage: quic",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6025
+                "balancedAccuracy": 0.605
               }
             ],
             "topPairRules": [
               {
                 "target": "contradicts",
-                "feature": "bigram:each drill OR ngram:note:der a",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:note:ck ",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.675
-              },
-              {
-                "target": "contradicts",
-                "feature": "NOT bigram:each drill AND NOT ngram:note:der a",
-                "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.675
+                "balancedAccuracy": 0.71
               },
               {
                 "target": "contradicts",
-                "feature": "bigram:each drill OR ngram:passage:8-4",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:ck ",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6725
-              },
-              {
-                "target": "contradicts",
-                "feature": "ngram:note:h d OR ngram:note:der a",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6725
-              },
-              {
-                "target": "contradicts",
-                "feature": "NOT bigram:each drill AND NOT ngram:passage:8-4",
-                "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6725
+                "balancedAccuracy": 0.71
               },
               {
                 "target": "contradicts",
-                "feature": "NOT ngram:note:h d AND NOT ngram:note:der a",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:note:ck ",
                 "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6725
-              },
-              {
-                "target": "contradicts",
-                "feature": "ngram:note:h d OR ngram:passage:8-4",
-                "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6699999999999999
+                "balancedAccuracy": 0.71
               },
               {
                 "target": "contradicts",
-                "feature": "NOT ngram:note:h d AND NOT ngram:passage:8-4",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:note:ck ",
                 "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.71
+              },
+              {
+                "target": "contradicts",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:context:, s",
+                "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6699999999999999
+                "balancedAccuracy": 0.7025
               },
               {
                 "target": "contradicts",
-                "feature": "ngram:note:ill, OR ngram:note:e de",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:note:k the",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6675
+                "polarity": "absent",
+                "balancedAccuracy": 0.7025
               },
               {
                 "target": "contradicts",
-                "feature": "ngram:note:l,  OR ngram:note:e de",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:passage:9-6",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6675
+                "polarity": "absent",
+                "balancedAccuracy": 0.7025
+              },
+              {
+                "target": "contradicts",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:context:, s",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.7025
+              },
+              {
+                "target": "contradicts",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:k the",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.7025
+              },
+              {
+                "target": "contradicts",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:passage:9-6",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.7025
               }
             ],
-            "maximumBalancedAccuracy": 0.675,
+            "maximumBalancedAccuracy": 0.71,
             "passed": true
           },
           {
@@ -2218,159 +2218,159 @@
             "positives": 50,
             "negatives": 200,
             "limit": 0.8,
-            "featureCount": 95956,
+            "featureCount": 99565,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.6125,
-            "maximumPairBalancedAccuracy": 0.6799999999999999,
-            "maximumStructuralBalancedAccuracy": 0.6775,
-            "maximumClaimRelativeBalancedAccuracy": 0.6275,
-            "maximumLexicalBalancedAccuracy": 0.6125,
+            "maximumSingleBalancedAccuracy": 0.62,
+            "maximumPairBalancedAccuracy": 0.6925,
+            "maximumStructuralBalancedAccuracy": 0.675,
+            "maximumClaimRelativeBalancedAccuracy": 0.64,
+            "maximumLexicalBalancedAccuracy": 0.62,
             "topSingleRules": [
               {
                 "target": "unclear",
-                "feature": "token:5",
+                "feature": "ngram:note:p t",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.62
+              },
+              {
+                "target": "unclear",
+                "feature": "ngram:note:p th",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.62
+              },
+              {
+                "target": "unclear",
+                "feature": "ngram:note:l thi",
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.6125
               },
               {
                 "target": "unclear",
-                "feature": "ngram:note:ning ",
+                "feature": "ngram:note:p the",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6
+                "balancedAccuracy": 0.6125
               },
               {
                 "target": "unclear",
-                "feature": "ngram:note:nin",
+                "feature": "token:5",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5975
+                "balancedAccuracy": 0.61
               },
               {
                 "target": "unclear",
-                "feature": "ngram:note:ning",
+                "feature": "ngram:note:he c",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5975
+                "balancedAccuracy": 0.6075
               },
               {
                 "target": "unclear",
-                "feature": "ngram:passage:4-6",
+                "feature": "ngram:note:the c",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5975
+                "balancedAccuracy": 0.6075
               },
               {
                 "target": "unclear",
-                "feature": "ngram:note:ack",
+                "feature": "ngram:note: la",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.595
+                "balancedAccuracy": 0.6025
               },
               {
                 "target": "unclear",
-                "feature": "ngram:passage:rs, c",
+                "feature": "ngram:note:l t",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5925
+                "balancedAccuracy": 0.6025
               },
               {
                 "target": "unclear",
-                "feature": "note-any:chars-bin-10=14",
+                "feature": "ngram:note:l th",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5900000000000001
-              },
-              {
-                "target": "unclear",
-                "feature": "note:chars-bin-10:max=14",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.5900000000000001
-              },
-              {
-                "target": "unclear",
-                "feature": "v4:note-length:max<=152",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.5900000000000001
+                "balancedAccuracy": 0.6025
               }
             ],
             "topPairRules": [
               {
                 "target": "unclear",
-                "feature": "ngram:passage:4-6 OR ngram:note:e res",
+                "feature": "ngram:note:l thi OR ngram:note:er s",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6799999999999999
+                "balancedAccuracy": 0.6925
               },
               {
                 "target": "unclear",
-                "feature": "NOT ngram:passage:4-6 AND NOT ngram:note:e res",
+                "feature": "NOT ngram:note:l thi AND NOT ngram:note:er s",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6799999999999999
+                "balancedAccuracy": 0.6925
               },
               {
                 "target": "unclear",
-                "feature": "token:5 OR v4:note-length:max<=148",
+                "feature": "ngram:note:er s OR ngram:passage:6, wh",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6775
+                "balancedAccuracy": 0.6875
               },
               {
                 "target": "unclear",
-                "feature": "NOT token:5 AND NOT v4:note-length:max<=148",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6775
-              },
-              {
-                "target": "unclear",
-                "feature": "token:5 OR v4:note-length:mean<=102",
+                "feature": "ngram:note:l t OR ngram:note:er s",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6725
+                "balancedAccuracy": 0.6875
               },
               {
                 "target": "unclear",
-                "feature": "NOT token:5 AND NOT v4:note-length:mean<=102",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6725
-              },
-              {
-                "target": "unclear",
-                "feature": "token:5 OR ngram:passage:95-",
+                "feature": "ngram:note:p t OR ngram:note:er s",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.6875
               },
               {
                 "target": "unclear",
-                "feature": "token:5 OR v4:note-length:max=148",
+                "feature": "NOT ngram:note:er s AND NOT ngram:passage:6, wh",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6875
+              },
+              {
+                "target": "unclear",
+                "feature": "NOT ngram:note:l t AND NOT ngram:note:er s",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6875
+              },
+              {
+                "target": "unclear",
+                "feature": "NOT ngram:note:p t AND NOT ngram:note:er s",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6875
+              },
+              {
+                "target": "unclear",
+                "feature": "ngram:note:p the OR ngram:note:er s",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.685
               },
               {
                 "target": "unclear",
-                "feature": "NOT token:5 AND NOT ngram:passage:95-",
+                "feature": "NOT ngram:note:p the AND NOT ngram:note:er s",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6675
-              },
-              {
-                "target": "unclear",
-                "feature": "NOT token:5 AND NOT v4:note-length:max=148",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.685
               }
             ],
-            "maximumBalancedAccuracy": 0.6799999999999999,
+            "maximumBalancedAccuracy": 0.6925,
             "passed": true
           },
           {
@@ -2378,42 +2378,77 @@
             "positives": 50,
             "negatives": 200,
             "limit": 0.8,
-            "featureCount": 95956,
+            "featureCount": 99565,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.6074999999999999,
-            "maximumPairBalancedAccuracy": 0.6675,
-            "maximumStructuralBalancedAccuracy": 0.6675,
-            "maximumClaimRelativeBalancedAccuracy": 0.6375,
-            "maximumLexicalBalancedAccuracy": 0.6074999999999999,
+            "maximumSingleBalancedAccuracy": 0.6475,
+            "maximumPairBalancedAccuracy": 0.7,
+            "maximumStructuralBalancedAccuracy": 0.6950000000000001,
+            "maximumClaimRelativeBalancedAccuracy": 0.7,
+            "maximumLexicalBalancedAccuracy": 0.625,
             "topSingleRules": [
               {
                 "target": "does-not-support",
-                "feature": "ngram:note:t l",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6074999999999999
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:note:t lo",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6074999999999999
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:note:t log",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6074999999999999
-              },
-              {
-                "target": "does-not-support",
-                "feature": "note:tokens-bin-2:max<=11",
+                "feature": "claim:rendered-in-passage:any<=0",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.605
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "does-not-support",
+                "feature": "claim:rendered-in-passage:any=0",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "does-not-support",
+                "feature": "claim:rendered-in-passage:any=1",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "does-not-support",
+                "feature": "claim:rendered-in-passage<=0",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "does-not-support",
+                "feature": "claim:rendered-in-passage=0",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "does-not-support",
+                "feature": "claim:rendered-in-passage=1",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "does-not-support",
+                "feature": "ngram:note:ire",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.625
+              },
+              {
+                "target": "does-not-support",
+                "feature": "ngram:note:s c",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.6
+              },
+              {
+                "target": "does-not-support",
+                "feature": "ngram:note:ert",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.5975
               },
               {
                 "target": "does-not-support",
@@ -2421,116 +2456,81 @@
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.5975
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:context: in",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5974999999999999
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:note:all ",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5974999999999999
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:context:ll ",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.595
-              },
-              {
-                "target": "does-not-support",
-                "feature": "v4:note-length:max<=163",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.5925
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:passage:r th",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5925
               }
             ],
             "topPairRules": [
               {
                 "target": "does-not-support",
-                "feature": "ngram:context:ow  OR ngram:note:sup",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6675
-              },
-              {
-                "target": "does-not-support",
-                "feature": "NOT ngram:note:all  OR ngram:note:e be",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6675
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:note:r e OR NOT ngram:note:he sc",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6675
-              },
-              {
-                "target": "does-not-support",
-                "feature": "ngram:note:t l OR NOT ngram:passage:t the",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:context:dow.\n",
                 "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.7
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT v4:note-length:max<=163 OR NOT v4:note-length:min<=115",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:passage:-31",
                 "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.7
               },
               {
                 "target": "does-not-support",
-                "feature": "v4:note-length:max<=163 AND v4:note-length:min<=115",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:context:dow.\n",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.7
+              },
+              {
+                "target": "does-not-support",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:passage:-31",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.7
+              },
+              {
+                "target": "does-not-support",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:context:dow.\n",
                 "operator": "AND",
                 "polarity": "present",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.7
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT ngram:note:r e AND ngram:note:he sc",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6675
-              },
-              {
-                "target": "does-not-support",
-                "feature": "NOT ngram:note:t l AND ngram:passage:t the",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:passage:-31",
                 "operator": "AND",
                 "polarity": "present",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.7
               },
               {
                 "target": "does-not-support",
-                "feature": "ngram:note:all  AND NOT ngram:note:e be",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:context:dow.\n",
                 "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6675
+                "polarity": "present",
+                "balancedAccuracy": 0.7
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT ngram:context:ow  AND NOT ngram:note:sup",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:passage:-31",
                 "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.7
+              },
+              {
+                "target": "does-not-support",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:note:form",
+                "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6675
+                "balancedAccuracy": 0.6975
+              },
+              {
+                "target": "does-not-support",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:form",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6975
               }
             ],
-            "maximumBalancedAccuracy": 0.6675,
+            "maximumBalancedAccuracy": 0.7,
             "passed": true
           }
         ],
@@ -2538,93 +2538,93 @@
           {
             "target": "injection",
             "limit": 0.75,
-            "balancedAccuracy": 0.635,
-            "rule": "OR(screening OR disregard OR support OR score OR waive)",
-            "transferBalancedAccuracy": 0.5
+            "balancedAccuracy": 0.57875,
+            "rule": "OR(screening OR attention OR your OR errors OR skip)",
+            "transferBalancedAccuracy": 0.55125
           },
           {
             "target": "readiness",
             "limit": 0.75,
-            "balancedAccuracy": 0.59375,
-            "rule": "OR(recorded OR and OR latency OR alert OR correct)",
-            "transferBalancedAccuracy": 0.4970833333333333
+            "balancedAccuracy": 0.49874999999999997,
+            "rule": "OR(shift OR you OR access OR skip OR standby)",
+            "transferBalancedAccuracy": 0.4916666666666667
           },
           {
             "target": "supports",
             "limit": 0.8,
-            "balancedAccuracy": 0.605,
-            "rule": "OR(recorded OR answer OR approved OR finish OR change)",
-            "transferBalancedAccuracy": 0.505
+            "balancedAccuracy": 0.4766666666666667,
+            "rule": "OR(its OR service OR archived OR attach OR override)",
+            "transferBalancedAccuracy": 0.5008333333333334
           },
           {
             "target": "contradicts",
             "limit": 0.8,
-            "balancedAccuracy": 0.51,
-            "rule": "OR(quic OR vote OR folder OR gauges OR logs)",
-            "transferBalancedAccuracy": 0.490625
+            "balancedAccuracy": 0.5425,
+            "rule": "OR(quic OR review OR format OR submission OR already)",
+            "transferBalancedAccuracy": 0.47625
           },
           {
             "target": "unclear",
             "limit": 0.8,
-            "balancedAccuracy": 0.5249999999999999,
-            "rule": "OR(5 OR draft OR timer OR spare OR proposes)",
-            "transferBalancedAccuracy": 0.544375
+            "balancedAccuracy": 0.505,
+            "rule": "OR(5 OR skip OR unit OR ships OR service)",
+            "transferBalancedAccuracy": 0.51
           },
           {
             "target": "does-not-support",
             "limit": 0.8,
-            "balancedAccuracy": 0.4925,
-            "rule": "OR(call OR all OR ready OR mark OR recorded)",
-            "transferBalancedAccuracy": 0.48375
+            "balancedAccuracy": 0.5449999999999999,
+            "rule": "OR(shift OR verification OR number OR capacity OR overtime)",
+            "transferBalancedAccuracy": 0.51125
           }
         ],
         "models": [
           {
             "target": "injection",
             "limit": 0.8,
-            "treeBalancedAccuracy": 0.57375,
+            "treeBalancedAccuracy": 0.595,
             "logisticBalancedAccuracy": 0.5,
-            "treeTransferBalancedAccuracy": 0.5,
+            "treeTransferBalancedAccuracy": 0.5225,
             "logisticTransferBalancedAccuracy": 0.5
           },
           {
             "target": "readiness",
             "limit": 0.8,
-            "treeBalancedAccuracy": 0.5800000000000001,
+            "treeBalancedAccuracy": 0.56375,
             "logisticBalancedAccuracy": 0.5,
-            "treeTransferBalancedAccuracy": 0.48,
+            "treeTransferBalancedAccuracy": 0.48583333333333334,
             "logisticTransferBalancedAccuracy": 0.5
           },
           {
             "target": "supports",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.6033333333333333,
+            "treeBalancedAccuracy": 0.5316666666666667,
             "logisticBalancedAccuracy": 0.5,
-            "treeTransferBalancedAccuracy": 0.48916666666666664,
+            "treeTransferBalancedAccuracy": 0.5258333333333334,
             "logisticTransferBalancedAccuracy": 0.5
           },
           {
             "target": "contradicts",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.515,
+            "treeBalancedAccuracy": 0.5325,
             "logisticBalancedAccuracy": 0.5,
-            "treeTransferBalancedAccuracy": 0.491875,
+            "treeTransferBalancedAccuracy": 0.520625,
             "logisticTransferBalancedAccuracy": 0.5
           },
           {
             "target": "unclear",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.48250000000000004,
+            "treeBalancedAccuracy": 0.48,
             "logisticBalancedAccuracy": 0.5,
-            "treeTransferBalancedAccuracy": 0.464375,
+            "treeTransferBalancedAccuracy": 0.515625,
             "logisticTransferBalancedAccuracy": 0.5
           },
           {
             "target": "does-not-support",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.5125,
+            "treeBalancedAccuracy": 0.475,
             "logisticBalancedAccuracy": 0.5,
-            "treeTransferBalancedAccuracy": 0.519375,
+            "treeTransferBalancedAccuracy": 0.514375,
             "logisticTransferBalancedAccuracy": 0.5
           }
         ],
@@ -2636,18 +2636,18 @@
               "limit": 0.75,
               "modelLimit": 0.8,
               "single": 0.5,
-              "pair": 0.5245833333333334,
-              "lexicon": 0.5,
-              "model": 0.5,
+              "pair": 0.63625,
+              "lexicon": 0.55125,
+              "model": 0.5225,
               "passed": true
             },
             {
               "target": "readiness",
               "limit": 0.75,
               "modelLimit": 0.8,
-              "single": 0.63,
-              "pair": 0.5091666666666667,
-              "lexicon": 0.4970833333333333,
+              "single": 0.5691666666666666,
+              "pair": 0.5683333333333334,
+              "lexicon": 0.4916666666666667,
               "model": 0.5,
               "passed": true
             },
@@ -2655,40 +2655,40 @@
               "target": "supports",
               "limit": 0.8,
               "modelLimit": 0.85,
-              "single": 0.6016666666666667,
-              "pair": 0.5075000000000001,
-              "lexicon": 0.505,
-              "model": 0.5,
+              "single": 0.6170833333333333,
+              "pair": 0.6091666666666666,
+              "lexicon": 0.5008333333333334,
+              "model": 0.5258333333333334,
               "passed": true
             },
             {
               "target": "contradicts",
               "limit": 0.8,
               "modelLimit": 0.85,
-              "single": 0.5225,
-              "pair": 0.53,
-              "lexicon": 0.490625,
-              "model": 0.5,
+              "single": 0.645,
+              "pair": 0.6168750000000001,
+              "lexicon": 0.47625,
+              "model": 0.520625,
               "passed": true
             },
             {
               "target": "unclear",
               "limit": 0.8,
               "modelLimit": 0.85,
-              "single": 0.530625,
-              "pair": 0.530625,
-              "lexicon": 0.544375,
-              "model": 0.5,
+              "single": 0.5406249999999999,
+              "pair": 0.5125,
+              "lexicon": 0.51,
+              "model": 0.515625,
               "passed": true
             },
             {
               "target": "does-not-support",
               "limit": 0.8,
               "modelLimit": 0.85,
-              "single": 0.504375,
-              "pair": 0.5,
-              "lexicon": 0.48375,
-              "model": 0.519375,
+              "single": 0.5325,
+              "pair": 0.534375,
+              "lexicon": 0.51125,
+              "model": 0.514375,
               "passed": true
             }
           ]
@@ -2707,159 +2707,159 @@
             "positives": 300,
             "negatives": 1200,
             "limit": 0.75,
-            "featureCount": 283229,
+            "featureCount": 291832,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.6220833333333333,
-            "maximumPairBalancedAccuracy": 0.6708333333333334,
-            "maximumStructuralBalancedAccuracy": 0.6633333333333333,
-            "maximumClaimRelativeBalancedAccuracy": 0.6283333333333333,
-            "maximumLexicalBalancedAccuracy": 0.6220833333333333,
+            "maximumSingleBalancedAccuracy": 0.6158333333333333,
+            "maximumPairBalancedAccuracy": 0.68875,
+            "maximumStructuralBalancedAccuracy": 0.625,
+            "maximumClaimRelativeBalancedAccuracy": 0.62,
+            "maximumLexicalBalancedAccuracy": 0.6158333333333333,
             "topSingleRules": [
               {
                 "target": "injection",
-                "feature": "ngram:note: ver",
+                "feature": "bigram:the assessment",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6220833333333333
+                "balancedAccuracy": 0.6158333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note:ass",
+                "feature": "ngram:note:he as",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6191666666666666
+                "balancedAccuracy": 0.6158333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note: as",
+                "feature": "ngram:note:essm",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6045833333333334
+                "balancedAccuracy": 0.6058333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note: ve",
+                "feature": "ngram:note:essme",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6041666666666667
+                "balancedAccuracy": 0.6058333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note:men",
+                "feature": "ngram:note:sessm",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5995833333333334
+                "balancedAccuracy": 0.6058333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note:ment",
+                "feature": "ngram:note:sme",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5995833333333334
+                "balancedAccuracy": 0.6058333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note:ment ",
+                "feature": "ngram:note:smen",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5995833333333334
+                "balancedAccuracy": 0.6058333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note: un",
+                "feature": "ngram:note:sment",
                 "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5916666666666667
+                "polarity": "present",
+                "balancedAccuracy": 0.6058333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note: uni",
+                "feature": "ngram:note:ssm",
                 "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5916666666666667
+                "polarity": "present",
+                "balancedAccuracy": 0.6058333333333333
               },
               {
                 "target": "injection",
-                "feature": "ngram:note: unit",
+                "feature": "ngram:note:ssme",
                 "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5916666666666667
+                "polarity": "present",
+                "balancedAccuracy": 0.6058333333333333
               }
             ],
             "topPairRules": [
               {
                 "target": "injection",
-                "feature": "ngram:note: ver OR ngram:note:men",
+                "feature": "bigram:the assessment OR ngram:note:d i",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6708333333333334
+                "balancedAccuracy": 0.68875
               },
               {
                 "target": "injection",
-                "feature": "NOT ngram:note: ver AND NOT ngram:note:men",
+                "feature": "NOT bigram:the assessment AND NOT ngram:note:d i",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6708333333333334
+                "balancedAccuracy": 0.68875
               },
               {
                 "target": "injection",
-                "feature": "ngram:note:ass OR bigram:as verified",
+                "feature": "ngram:note:e as OR ngram:note:d i",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.67125
+              },
+              {
+                "target": "injection",
+                "feature": "NOT ngram:note:e as AND NOT ngram:note:d i",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.67125
+              },
+              {
+                "target": "injection",
+                "feature": "bigram:the assessment OR ngram:note:ion f",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.6691666666666667
+              },
+              {
+                "target": "injection",
+                "feature": "NOT bigram:the assessment AND NOT ngram:note:ion f",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6691666666666667
+              },
+              {
+                "target": "injection",
+                "feature": "bigram:the assessment OR ngram:note:aim a",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.66875
+              },
+              {
+                "target": "injection",
+                "feature": "NOT bigram:the assessment AND NOT ngram:note:aim a",
+                "operator": "AND",
+                "polarity": "absent",
+                "balancedAccuracy": 0.66875
+              },
+              {
+                "target": "injection",
+                "feature": "bigram:the assessment OR ngram:note:d in",
                 "operator": "OR",
                 "polarity": "present",
                 "balancedAccuracy": 0.6675
               },
               {
                 "target": "injection",
-                "feature": "NOT ngram:note:ass AND NOT bigram:as verified",
+                "feature": "NOT bigram:the assessment AND NOT ngram:note:d in",
                 "operator": "AND",
                 "polarity": "absent",
                 "balancedAccuracy": 0.6675
-              },
-              {
-                "target": "injection",
-                "feature": "ngram:note: ver OR ngram:note:ass",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6666666666666666
-              },
-              {
-                "target": "injection",
-                "feature": "NOT ngram:note: ver AND NOT ngram:note:ass",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6666666666666666
-              },
-              {
-                "target": "injection",
-                "feature": "ngram:note:men OR note:chars-bin-10:min<=3",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6633333333333333
-              },
-              {
-                "target": "injection",
-                "feature": "NOT ngram:note:men AND NOT note:chars-bin-10:min<=3",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.6633333333333333
-              },
-              {
-                "target": "injection",
-                "feature": "ngram:note: ver OR bigram:the appraisal",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6620833333333334
-              },
-              {
-                "target": "injection",
-                "feature": "ngram:note: ver OR bigram:the assessment",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6620833333333334
               }
             ],
-            "maximumBalancedAccuracy": 0.6708333333333334,
+            "maximumBalancedAccuracy": 0.68875,
             "passed": true
           },
           {
@@ -2867,159 +2867,159 @@
             "positives": 300,
             "negatives": 1200,
             "limit": 0.75,
-            "featureCount": 283229,
+            "featureCount": 291832,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.645,
-            "maximumPairBalancedAccuracy": 0.6912499999999999,
-            "maximumStructuralBalancedAccuracy": 0.6912499999999999,
-            "maximumClaimRelativeBalancedAccuracy": 0.6495833333333334,
-            "maximumLexicalBalancedAccuracy": 0.645,
+            "maximumSingleBalancedAccuracy": 0.5691666666666666,
+            "maximumPairBalancedAccuracy": 0.5958333333333333,
+            "maximumStructuralBalancedAccuracy": 0.5866666666666667,
+            "maximumClaimRelativeBalancedAccuracy": 0.5958333333333333,
+            "maximumLexicalBalancedAccuracy": 0.5533333333333333,
             "topSingleRules": [
               {
                 "target": "readiness",
-                "feature": "bigram:logged for",
+                "feature": "claim:rendered-in-passage:any<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.645
+                "polarity": "absent",
+                "balancedAccuracy": 0.5691666666666666
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ed fo",
+                "feature": "claim:rendered-in-passage:any=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.645
+                "polarity": "absent",
+                "balancedAccuracy": 0.5691666666666666
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ged f",
+                "feature": "claim:rendered-in-passage:any=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.645
+                "balancedAccuracy": 0.5691666666666666
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:d fo",
+                "feature": "claim:rendered-in-passage:pronoun<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.63
+                "polarity": "absent",
+                "balancedAccuracy": 0.5533333333333333
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:d for",
+                "feature": "claim:rendered-in-passage:pronoun=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.63
+                "polarity": "absent",
+                "balancedAccuracy": 0.5533333333333333
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage: logg",
+                "feature": "claim:rendered-in-passage:pronoun=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6116666666666667
+                "balancedAccuracy": 0.5533333333333333
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ged",
+                "feature": "ngram:note: no",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6116666666666667
+                "polarity": "absent",
+                "balancedAccuracy": 0.5533333333333333
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ged ",
+                "feature": "note-any:clauses=2",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6116666666666667
+                "polarity": "absent",
+                "balancedAccuracy": 0.5495833333333333
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:gge",
+                "feature": "ngram:passage: dril",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6116666666666667
+                "balancedAccuracy": 0.5487500000000001
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:gged",
+                "feature": "ngram:passage:dril",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.6116666666666667
+                "balancedAccuracy": 0.5487500000000001
               }
             ],
             "topPairRules": [
               {
                 "target": "readiness",
-                "feature": "bigram:logged for OR note-any:tokens-bin-2=2",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:note:, rep",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6912499999999999
+                "balancedAccuracy": 0.5958333333333333
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ed fo OR note-any:tokens-bin-2=2",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:, rep",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6912499999999999
+                "balancedAccuracy": 0.5958333333333333
               },
               {
                 "target": "readiness",
-                "feature": "NOT bigram:logged for AND NOT note-any:tokens-bin-2=2",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:note:, rep",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6912499999999999
+                "balancedAccuracy": 0.5958333333333333
               },
               {
                 "target": "readiness",
-                "feature": "NOT ngram:passage:ed fo AND NOT note-any:tokens-bin-2=2",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:note:, rep",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6912499999999999
+                "balancedAccuracy": 0.5958333333333333
               },
               {
                 "target": "readiness",
-                "feature": "bigram:logged for OR bigram:as well",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:context:per",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6883333333333334
+                "balancedAccuracy": 0.5920833333333333
               },
               {
                 "target": "readiness",
-                "feature": "bigram:logged for OR ngram:passage:s we",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:context:per",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6883333333333334
+                "balancedAccuracy": 0.5920833333333333
               },
               {
                 "target": "readiness",
-                "feature": "ngram:passage:ed fo OR bigram:as well",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6883333333333334
-              },
-              {
-                "target": "readiness",
-                "feature": "ngram:passage:ed fo OR ngram:passage:s we",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6883333333333334
-              },
-              {
-                "target": "readiness",
-                "feature": "NOT bigram:logged for AND NOT bigram:as well",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:context:per",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6883333333333334
+                "balancedAccuracy": 0.5920833333333333
               },
               {
                 "target": "readiness",
-                "feature": "NOT bigram:logged for AND NOT ngram:passage:s we",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:context:per",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6883333333333334
+                "balancedAccuracy": 0.5920833333333333
+              },
+              {
+                "target": "readiness",
+                "feature": "claim:rendered-in-passage:any=1 OR ngram:passage:y af",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.5908333333333333
+              },
+              {
+                "target": "readiness",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:passage:y af",
+                "operator": "OR",
+                "polarity": "present",
+                "balancedAccuracy": 0.5908333333333333
               }
             ],
-            "maximumBalancedAccuracy": 0.6912499999999999,
+            "maximumBalancedAccuracy": 0.5958333333333333,
             "passed": true
           },
           {
@@ -3027,77 +3027,56 @@
             "positives": 400,
             "negatives": 600,
             "limit": 0.8,
-            "featureCount": 223236,
+            "featureCount": 231778,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.60875,
-            "maximumPairBalancedAccuracy": 0.7058333333333333,
-            "maximumStructuralBalancedAccuracy": 0.7058333333333333,
-            "maximumClaimRelativeBalancedAccuracy": 0.6170833333333333,
-            "maximumLexicalBalancedAccuracy": 0.60875,
+            "maximumSingleBalancedAccuracy": 0.6170833333333333,
+            "maximumPairBalancedAccuracy": 0.6429166666666667,
+            "maximumStructuralBalancedAccuracy": 0.64,
+            "maximumClaimRelativeBalancedAccuracy": 0.6429166666666667,
+            "maximumLexicalBalancedAccuracy": 0.5779166666666666,
             "topSingleRules": [
               {
                 "target": "supports",
-                "feature": "bigram:logged for",
+                "feature": "claim:rendered-in-passage:any<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.60875
+                "polarity": "absent",
+                "balancedAccuracy": 0.6170833333333333
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:ed fo",
+                "feature": "claim:rendered-in-passage:any=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.60875
+                "polarity": "absent",
+                "balancedAccuracy": 0.6170833333333333
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:ged f",
+                "feature": "claim:rendered-in-passage:any=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.60875
+                "balancedAccuracy": 0.6170833333333333
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:d fo",
+                "feature": "claim:rendered-in-passage:pronoun<=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6016666666666667
+                "polarity": "absent",
+                "balancedAccuracy": 0.6004166666666667
               },
               {
                 "target": "supports",
-                "feature": "ngram:passage:d for",
+                "feature": "claim:rendered-in-passage:pronoun=0",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6016666666666667
+                "polarity": "absent",
+                "balancedAccuracy": 0.6004166666666667
               },
               {
                 "target": "supports",
-                "feature": "note-any:chars-bin-10=2",
+                "feature": "claim:rendered-in-passage:pronoun=1",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5970833333333333
-              },
-              {
-                "target": "supports",
-                "feature": "note:chars-bin-10:min<=2",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.5970833333333333
-              },
-              {
-                "target": "supports",
-                "feature": "note:chars-bin-10:min=2",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.5970833333333333
-              },
-              {
-                "target": "supports",
-                "feature": "note:chars-bin-10:min<=3",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.595
+                "balancedAccuracy": 0.6004166666666667
               },
               {
                 "target": "supports",
@@ -3105,81 +3084,102 @@
                 "operator": "single",
                 "polarity": "present",
                 "balancedAccuracy": 0.5925
+              },
+              {
+                "target": "supports",
+                "feature": "note:tokens-bin-2:min<=2",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.5925
+              },
+              {
+                "target": "supports",
+                "feature": "note:tokens-bin-2:min=2",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.5925
+              },
+              {
+                "target": "supports",
+                "feature": "note-any:chars-bin-10=2",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.5791666666666667
               }
             ],
             "topPairRules": [
               {
                 "target": "supports",
-                "feature": "bigram:logged for OR note-any:chars-bin-10=2",
+                "feature": "claim:rendered-in-passage:any<=0 OR bigram:for module",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6429166666666667
+              },
+              {
+                "target": "supports",
+                "feature": "NOT claim:rendered-in-passage:any=1 OR bigram:for module",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.6429166666666667
+              },
+              {
+                "target": "supports",
+                "feature": "claim:rendered-in-passage:any=1 AND NOT bigram:for module",
+                "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.6429166666666667
+              },
+              {
+                "target": "supports",
+                "feature": "NOT claim:rendered-in-passage:any<=0 AND NOT bigram:for module",
+                "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.6429166666666667
+              },
+              {
+                "target": "supports",
+                "feature": "claim:rendered-in-passage:any=1 OR v4:module-mentions=10",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.7058333333333333
+                "balancedAccuracy": 0.64
               },
               {
                 "target": "supports",
-                "feature": "NOT bigram:logged for AND NOT note-any:chars-bin-10=2",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.7058333333333333
-              },
-              {
-                "target": "supports",
-                "feature": "bigram:logged for OR note:chars-bin-10:min<=3",
+                "feature": "claim:rendered-in-passage:any=1 OR NOT v4:module-mentions<=9",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.70375
+                "balancedAccuracy": 0.64
               },
               {
                 "target": "supports",
-                "feature": "NOT bigram:logged for AND NOT note:chars-bin-10:min<=3",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.70375
-              },
-              {
-                "target": "supports",
-                "feature": "bigram:logged for OR note-any:tokens-bin-2=2",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR v4:module-mentions=10",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.7012499999999999
+                "balancedAccuracy": 0.64
               },
               {
                 "target": "supports",
-                "feature": "NOT bigram:logged for AND NOT note-any:tokens-bin-2=2",
-                "operator": "AND",
-                "polarity": "absent",
-                "balancedAccuracy": 0.7012499999999999
-              },
-              {
-                "target": "supports",
-                "feature": "ngram:passage:d fo OR note-any:chars-bin-10=2",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR NOT v4:module-mentions<=9",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6975
+                "balancedAccuracy": 0.64
               },
               {
                 "target": "supports",
-                "feature": "NOT ngram:passage:d fo AND NOT note-any:chars-bin-10=2",
+                "feature": "claim:rendered-in-passage:any<=0 AND v4:module-mentions<=9",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6975
+                "balancedAccuracy": 0.64
               },
               {
                 "target": "supports",
-                "feature": "bigram:logged for OR note:tokens-bin-2:min<=3",
-                "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6954166666666667
-              },
-              {
-                "target": "supports",
-                "feature": "NOT bigram:logged for AND NOT note:tokens-bin-2:min<=3",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT v4:module-mentions=10",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6954166666666667
+                "balancedAccuracy": 0.64
               }
             ],
-            "maximumBalancedAccuracy": 0.7058333333333333,
+            "maximumBalancedAccuracy": 0.6429166666666667,
             "passed": true
           },
           {
@@ -3187,56 +3187,70 @@
             "positives": 200,
             "negatives": 800,
             "limit": 0.8,
-            "featureCount": 223236,
+            "featureCount": 231778,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.598125,
-            "maximumPairBalancedAccuracy": 0.6775,
-            "maximumStructuralBalancedAccuracy": 0.6775,
-            "maximumClaimRelativeBalancedAccuracy": 0.601875,
-            "maximumLexicalBalancedAccuracy": 0.598125,
+            "maximumSingleBalancedAccuracy": 0.645,
+            "maximumPairBalancedAccuracy": 0.67,
+            "maximumStructuralBalancedAccuracy": 0.67,
+            "maximumClaimRelativeBalancedAccuracy": 0.67,
+            "maximumLexicalBalancedAccuracy": 0.566875,
             "topSingleRules": [
               {
                 "target": "contradicts",
-                "feature": "ngram:note:g e",
+                "feature": "claim:rendered-in-passage:any<=0",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.598125
+                "balancedAccuracy": 0.645
               },
               {
                 "target": "contradicts",
-                "feature": "note-any:clauses=2",
+                "feature": "claim:rendered-in-passage:any=0",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5975
+                "balancedAccuracy": 0.645
               },
               {
                 "target": "contradicts",
-                "feature": "note:clauses:min=2",
+                "feature": "claim:rendered-in-passage:any=1",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.645
+              },
+              {
+                "target": "contradicts",
+                "feature": "claim:rendered-in-passage:pronoun<=0",
                 "operator": "single",
                 "polarity": "present",
-                "balancedAccuracy": 0.5975
+                "balancedAccuracy": 0.6168750000000001
               },
               {
                 "target": "contradicts",
-                "feature": "note-any:clauses=1",
+                "feature": "claim:rendered-in-passage:pronoun=0",
                 "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5918749999999999
+                "polarity": "present",
+                "balancedAccuracy": 0.6168750000000001
               },
               {
                 "target": "contradicts",
-                "feature": "note:clauses:min<=1",
+                "feature": "claim:rendered-in-passage:pronoun=1",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.5918749999999999
+                "balancedAccuracy": 0.616875
               },
               {
                 "target": "contradicts",
-                "feature": "note:clauses:min=1",
+                "feature": "note-any:tokens-bin-2=3",
                 "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.5918749999999999
+                "polarity": "present",
+                "balancedAccuracy": 0.586875
+              },
+              {
+                "target": "contradicts",
+                "feature": "note:tokens-bin-2:min=3",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.586875
               },
               {
                 "target": "contradicts",
@@ -3251,95 +3265,81 @@
                 "operator": "single",
                 "polarity": "absent",
                 "balancedAccuracy": 0.580625
-              },
-              {
-                "target": "contradicts",
-                "feature": "note:tokens-bin-2:min=2",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.580625
-              },
-              {
-                "target": "contradicts",
-                "feature": "note-any:tokens-bin-2=3",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.5800000000000001
               }
             ],
             "topPairRules": [
               {
                 "target": "contradicts",
-                "feature": "note-any:clauses=2 OR ngram:note: not ",
+                "feature": "claim:rendered-in-passage:any=1 OR v4:module-mentions=10",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6775
-              },
-              {
-                "target": "contradicts",
-                "feature": "NOT note-any:clauses=2 AND NOT ngram:note: not ",
-                "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6775
+                "balancedAccuracy": 0.67
               },
               {
                 "target": "contradicts",
-                "feature": "NOT note-any:clauses=1 OR ngram:note: not ",
+                "feature": "claim:rendered-in-passage:any=1 OR NOT v4:module-mentions<=9",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.671875
-              },
-              {
-                "target": "contradicts",
-                "feature": "note-any:clauses=1 AND NOT ngram:note: not ",
-                "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.671875
+                "balancedAccuracy": 0.67
               },
               {
                 "target": "contradicts",
-                "feature": "ngram:note: not  OR ngram:note: noth",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR v4:module-mentions=10",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6599999999999999
-              },
-              {
-                "target": "contradicts",
-                "feature": "NOT ngram:note: not  AND NOT ngram:note: noth",
-                "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6599999999999999
+                "balancedAccuracy": 0.67
               },
               {
                 "target": "contradicts",
-                "feature": "note-any:clauses=2 OR ngram:note:s n",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR NOT v4:module-mentions<=9",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.6575
-              },
-              {
-                "target": "contradicts",
-                "feature": "NOT note-any:clauses=2 AND NOT ngram:note:s n",
-                "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6575
+                "balancedAccuracy": 0.67
               },
               {
                 "target": "contradicts",
-                "feature": "ngram:note: not  OR ngram:note: els",
+                "feature": "claim:rendered-in-passage:any<=0 AND v4:module-mentions<=9",
+                "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.67
+              },
+              {
+                "target": "contradicts",
+                "feature": "claim:rendered-in-passage:any<=0 AND NOT v4:module-mentions=10",
+                "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.67
+              },
+              {
+                "target": "contradicts",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND v4:module-mentions<=9",
+                "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.67
+              },
+              {
+                "target": "contradicts",
+                "feature": "NOT claim:rendered-in-passage:any=1 AND NOT v4:module-mentions=10",
+                "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.67
+              },
+              {
+                "target": "contradicts",
+                "feature": "claim:rendered-in-passage:any=1 OR note:tokens-bin-2:min=5",
                 "operator": "OR",
-                "polarity": "present",
-                "balancedAccuracy": 0.656875
+                "polarity": "absent",
+                "balancedAccuracy": 0.669375
               },
               {
                 "target": "contradicts",
-                "feature": "NOT ngram:note: not  AND NOT ngram:note: els",
-                "operator": "AND",
+                "feature": "NOT claim:rendered-in-passage:any<=0 OR note:tokens-bin-2:min=5",
+                "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.656875
+                "balancedAccuracy": 0.669375
               }
             ],
-            "maximumBalancedAccuracy": 0.6775,
+            "maximumBalancedAccuracy": 0.67,
             "passed": true
           },
           {
@@ -3347,159 +3347,159 @@
             "positives": 200,
             "negatives": 800,
             "limit": 0.8,
-            "featureCount": 223236,
+            "featureCount": 231778,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.7068749999999999,
-            "maximumPairBalancedAccuracy": 0.76625,
-            "maximumStructuralBalancedAccuracy": 0.76625,
-            "maximumClaimRelativeBalancedAccuracy": 0.71375,
-            "maximumLexicalBalancedAccuracy": 0.6025,
+            "maximumSingleBalancedAccuracy": 0.618125,
+            "maximumPairBalancedAccuracy": 0.6525000000000001,
+            "maximumStructuralBalancedAccuracy": 0.6525000000000001,
+            "maximumClaimRelativeBalancedAccuracy": 0.62375,
+            "maximumLexicalBalancedAccuracy": 0.57125,
             "topSingleRules": [
               {
                 "target": "unclear",
-                "feature": "note:tokens-bin-2:min<=3",
+                "feature": "note-any:tokens-bin-2=2",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.7068749999999999
+                "balancedAccuracy": 0.618125
               },
               {
                 "target": "unclear",
-                "feature": "note:chars-bin-10:min<=3",
+                "feature": "note:tokens-bin-2:min<=2",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.700625
+                "balancedAccuracy": 0.618125
               },
               {
                 "target": "unclear",
-                "feature": "note:chars-bin-10:min<=4",
+                "feature": "note:tokens-bin-2:min=2",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.694375
-              },
-              {
-                "target": "unclear",
-                "feature": "note:tokens-bin-2:min<=4",
-                "operator": "single",
-                "polarity": "absent",
-                "balancedAccuracy": 0.681875
-              },
-              {
-                "target": "unclear",
-                "feature": "note-any:tokens-bin-2=5",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.66
-              },
-              {
-                "target": "unclear",
-                "feature": "note:tokens-bin-2:min=5",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.66
+                "balancedAccuracy": 0.618125
               },
               {
                 "target": "unclear",
                 "feature": "note-any:chars-bin-10=2",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.656875
+                "balancedAccuracy": 0.603125
               },
               {
                 "target": "unclear",
                 "feature": "note:chars-bin-10:min<=2",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.656875
+                "balancedAccuracy": 0.603125
               },
               {
                 "target": "unclear",
                 "feature": "note:chars-bin-10:min=2",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.656875
+                "balancedAccuracy": 0.603125
               },
               {
                 "target": "unclear",
-                "feature": "note-any:chars-bin-10=5",
+                "feature": "note:tokens-bin-2:min<=3",
                 "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.6425
+                "polarity": "absent",
+                "balancedAccuracy": 0.571875
+              },
+              {
+                "target": "unclear",
+                "feature": "ngram:note:e as",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.57125
+              },
+              {
+                "target": "unclear",
+                "feature": "ngram:note:e ass",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.57125
+              },
+              {
+                "target": "unclear",
+                "feature": "note:chars-bin-10:min<=3",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.570625
               }
             ],
             "topPairRules": [
               {
                 "target": "unclear",
-                "feature": "note:tokens-bin-2:min<=3 OR ngram:passage:d fo",
+                "feature": "note-any:tokens-bin-2=2 OR NOT ngram:passage:ned t",
                 "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.76625
+                "balancedAccuracy": 0.6525000000000001
               },
               {
                 "target": "unclear",
-                "feature": "NOT note:tokens-bin-2:min<=3 AND NOT ngram:passage:d fo",
+                "feature": "NOT note-any:tokens-bin-2=2 AND ngram:passage:ned t",
                 "operator": "AND",
                 "polarity": "present",
-                "balancedAccuracy": 0.76625
+                "balancedAccuracy": 0.6525000000000001
               },
               {
                 "target": "unclear",
-                "feature": "note:tokens-bin-2:min<=3 OR bigram:logged for",
+                "feature": "note-any:tokens-bin-2=2 OR ngram:note: logg",
                 "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.76125
+                "balancedAccuracy": 0.6475
               },
               {
                 "target": "unclear",
-                "feature": "NOT note:tokens-bin-2:min<=3 AND NOT bigram:logged for",
-                "operator": "AND",
-                "polarity": "present",
-                "balancedAccuracy": 0.76125
-              },
-              {
-                "target": "unclear",
-                "feature": "note:chars-bin-10:min<=3 OR ngram:passage:d fo",
+                "feature": "note-any:tokens-bin-2=2 OR ngram:note:l a",
                 "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.76
+                "balancedAccuracy": 0.6475
               },
               {
                 "target": "unclear",
-                "feature": "NOT note:chars-bin-10:min<=3 AND NOT ngram:passage:d fo",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT ngram:note: logg",
                 "operator": "AND",
                 "polarity": "present",
-                "balancedAccuracy": 0.76
+                "balancedAccuracy": 0.6475
               },
               {
                 "target": "unclear",
-                "feature": "note:chars-bin-10:min<=3 OR bigram:logged for",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT ngram:note:l a",
+                "operator": "AND",
+                "polarity": "present",
+                "balancedAccuracy": 0.6475
+              },
+              {
+                "target": "unclear",
+                "feature": "note-any:tokens-bin-2=2 OR ngram:note:ll a",
                 "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.755
+                "balancedAccuracy": 0.645625
               },
               {
                 "target": "unclear",
-                "feature": "NOT note:chars-bin-10:min<=3 AND NOT bigram:logged for",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT ngram:note:ll a",
                 "operator": "AND",
                 "polarity": "present",
-                "balancedAccuracy": 0.755
+                "balancedAccuracy": 0.645625
               },
               {
                 "target": "unclear",
-                "feature": "note:tokens-bin-2:min<=3 OR bigram:for module",
+                "feature": "note-any:tokens-bin-2=2 OR v4:module-mentions=10",
                 "operator": "OR",
                 "polarity": "absent",
-                "balancedAccuracy": 0.7525
+                "balancedAccuracy": 0.644375
               },
               {
                 "target": "unclear",
-                "feature": "NOT note:tokens-bin-2:min<=3 AND NOT bigram:for module",
-                "operator": "AND",
-                "polarity": "present",
-                "balancedAccuracy": 0.7525
+                "feature": "note-any:tokens-bin-2=2 OR NOT v4:module-mentions<=9",
+                "operator": "OR",
+                "polarity": "absent",
+                "balancedAccuracy": 0.644375
               }
             ],
-            "maximumBalancedAccuracy": 0.76625,
+            "maximumBalancedAccuracy": 0.6525000000000001,
             "passed": true
           },
           {
@@ -3507,50 +3507,15 @@
             "positives": 200,
             "negatives": 800,
             "limit": 0.8,
-            "featureCount": 223236,
+            "featureCount": 231778,
             "pairFeatureCount": 600,
             "pairRuleCount": 1437600,
-            "maximumSingleBalancedAccuracy": 0.58375,
-            "maximumPairBalancedAccuracy": 0.6225,
-            "maximumStructuralBalancedAccuracy": 0.6225,
-            "maximumClaimRelativeBalancedAccuracy": 0.598125,
-            "maximumLexicalBalancedAccuracy": 0.55875,
+            "maximumSingleBalancedAccuracy": 0.5599999999999999,
+            "maximumPairBalancedAccuracy": 0.59875,
+            "maximumStructuralBalancedAccuracy": 0.59875,
+            "maximumClaimRelativeBalancedAccuracy": 0.585,
+            "maximumLexicalBalancedAccuracy": 0.551875,
             "topSingleRules": [
-              {
-                "target": "does-not-support",
-                "feature": "note:chars-bin-10:min<=3",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.58375
-              },
-              {
-                "target": "does-not-support",
-                "feature": "note-any:chars-bin-10=2",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.580625
-              },
-              {
-                "target": "does-not-support",
-                "feature": "note:chars-bin-10:min<=2",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.580625
-              },
-              {
-                "target": "does-not-support",
-                "feature": "note:chars-bin-10:min=2",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.580625
-              },
-              {
-                "target": "does-not-support",
-                "feature": "note:tokens-bin-2:min<=3",
-                "operator": "single",
-                "polarity": "present",
-                "balancedAccuracy": 0.5775
-              },
               {
                 "target": "does-not-support",
                 "feature": "note-any:tokens-bin-2=2",
@@ -3574,92 +3539,127 @@
               },
               {
                 "target": "does-not-support",
-                "feature": "ngram:passage:n t",
+                "feature": "note-any:tokens-bin-2=3",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.55875
+                "balancedAccuracy": 0.556875
               },
               {
                 "target": "does-not-support",
-                "feature": "ngram:passage:n th",
+                "feature": "note:tokens-bin-2:min=3",
                 "operator": "single",
                 "polarity": "absent",
-                "balancedAccuracy": 0.55875
+                "balancedAccuracy": 0.556875
+              },
+              {
+                "target": "does-not-support",
+                "feature": "ngram:note:en ",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.551875
+              },
+              {
+                "target": "does-not-support",
+                "feature": "ngram:note:lved",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.55125
+              },
+              {
+                "target": "does-not-support",
+                "feature": "record:chars-bin-10:max<=15",
+                "operator": "single",
+                "polarity": "present",
+                "balancedAccuracy": 0.5506249999999999
+              },
+              {
+                "target": "does-not-support",
+                "feature": "ngram:note:lve",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.5506249999999999
+              },
+              {
+                "target": "does-not-support",
+                "feature": "ngram:note:lved ",
+                "operator": "single",
+                "polarity": "absent",
+                "balancedAccuracy": 0.55
               }
             ],
             "topPairRules": [
               {
                 "target": "does-not-support",
-                "feature": "note:chars-bin-10:min<=3 OR ngram:note:, po",
+                "feature": "note-any:tokens-bin-2=2 OR bigram:the triage",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6225
+                "balancedAccuracy": 0.59875
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT note:chars-bin-10:min<=3 AND NOT ngram:note:, po",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT bigram:the triage",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6225
+                "balancedAccuracy": 0.59875
               },
               {
                 "target": "does-not-support",
-                "feature": "note:chars-bin-10:min<=3 OR note:chars-bin-10:min=9",
+                "feature": "note-any:tokens-bin-2=2 OR ngram:note: cri",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.620625
+                "balancedAccuracy": 0.59625
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT note:chars-bin-10:min<=3 AND NOT note:chars-bin-10:min=9",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT ngram:note: cri",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.620625
+                "balancedAccuracy": 0.59625
               },
               {
                 "target": "does-not-support",
-                "feature": "note-any:chars-bin-10=2 OR ngram:note:, po",
+                "feature": "note-any:tokens-bin-2=2 OR ngram:note: tri",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.618125
+                "balancedAccuracy": 0.595625
               },
               {
                 "target": "does-not-support",
-                "feature": "note:chars-bin-10:min<=3 OR ngram:passage:ck a",
+                "feature": "note-any:tokens-bin-2=2 OR ngram:note:e tr",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.618125
+                "balancedAccuracy": 0.595625
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT note-any:chars-bin-10=2 AND NOT ngram:note:, po",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT ngram:note: tri",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.618125
+                "balancedAccuracy": 0.595625
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT note:chars-bin-10:min<=3 AND NOT ngram:passage:ck a",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT ngram:note:e tr",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.618125
+                "balancedAccuracy": 0.595625
               },
               {
                 "target": "does-not-support",
-                "feature": "note:tokens-bin-2:min<=3 OR ngram:note:, po",
+                "feature": "note-any:tokens-bin-2=2 OR ngram:passage:ort 4",
                 "operator": "OR",
                 "polarity": "present",
-                "balancedAccuracy": 0.6175
+                "balancedAccuracy": 0.595
               },
               {
                 "target": "does-not-support",
-                "feature": "NOT note:tokens-bin-2:min<=3 AND NOT ngram:note:, po",
+                "feature": "NOT note-any:tokens-bin-2=2 AND NOT ngram:passage:ort 4",
                 "operator": "AND",
                 "polarity": "absent",
-                "balancedAccuracy": 0.6175
+                "balancedAccuracy": 0.595
               }
             ],
-            "maximumBalancedAccuracy": 0.6225,
+            "maximumBalancedAccuracy": 0.59875,
             "passed": true
           }
         ],
@@ -3667,75 +3667,75 @@
           {
             "target": "injection",
             "limit": 0.75,
-            "balancedAccuracy": 0.5804166666666667,
-            "rule": "OR(appraisal OR claim OR verdict OR assessment OR verified)"
+            "balancedAccuracy": 0.6258333333333334,
+            "rule": "OR(assessment OR without OR routing OR withhold OR your)"
           },
           {
             "target": "readiness",
             "limit": 0.75,
-            "balancedAccuracy": 0.6320833333333333,
-            "rule": "OR(logged OR well OR authorization OR cycle OR owner)"
+            "balancedAccuracy": 0.4945833333333334,
+            "rule": "OR(reviewer OR a OR on OR check OR routing)"
           },
           {
             "target": "supports",
             "limit": 0.8,
-            "balancedAccuracy": 0.61,
-            "rule": "OR(logged OR assessment OR well OR passing OR verified)"
+            "balancedAccuracy": 0.5208333333333334,
+            "rule": "OR(assessment OR reviewer OR any OR supported OR outcome)"
           },
           {
             "target": "contradicts",
             "limit": 0.8,
-            "balancedAccuracy": 0.48,
-            "rule": "OR(note OR any OR acceptance OR post OR matter)"
+            "balancedAccuracy": 0.484375,
+            "rule": "OR(supported OR 6 OR well OR mark OR north)"
           },
           {
             "target": "unclear",
             "limit": 0.8,
-            "balancedAccuracy": 0.488125,
-            "rule": "OR(logged OR assessment OR passing OR claim OR handover)"
+            "balancedAccuracy": 0.500625,
+            "rule": "OR(with OR backup OR loaned OR checksums OR tools)"
           },
           {
             "target": "does-not-support",
             "limit": 0.8,
-            "balancedAccuracy": 0.5037499999999999,
-            "rule": "OR(floor OR dust OR hires OR check OR point)"
+            "balancedAccuracy": 0.536875,
+            "rule": "OR(triage OR vote OR journal OR read OR use)"
           }
         ],
         "models": [
           {
             "target": "injection",
             "limit": 0.8,
-            "treeBalancedAccuracy": 0.6645833333333333,
+            "treeBalancedAccuracy": 0.7045833333333333,
             "logisticBalancedAccuracy": 0.5
           },
           {
             "target": "readiness",
             "limit": 0.8,
-            "treeBalancedAccuracy": 0.64375,
+            "treeBalancedAccuracy": 0.5025,
             "logisticBalancedAccuracy": 0.5
           },
           {
             "target": "supports",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.5704166666666666,
+            "treeBalancedAccuracy": 0.5245833333333334,
             "logisticBalancedAccuracy": 0.5
           },
           {
             "target": "contradicts",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.50875,
+            "treeBalancedAccuracy": 0.48125,
             "logisticBalancedAccuracy": 0.5
           },
           {
             "target": "unclear",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.513125,
+            "treeBalancedAccuracy": 0.48624999999999996,
             "logisticBalancedAccuracy": 0.5
           },
           {
             "target": "does-not-support",
             "limit": 0.85,
-            "treeBalancedAccuracy": 0.5025,
+            "treeBalancedAccuracy": 0.505625,
             "logisticBalancedAccuracy": 0.5
           }
         ],
@@ -3762,84 +3762,84 @@
     ],
     "topRules": [
       {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "note:tokens-bin-2:min<=3 OR ngram:passage:d fo",
+        "pool": "train",
+        "target": "supports",
+        "feature": "claim:rendered-in-passage:any=1 OR ngram:note:k the",
         "operator": "OR",
-        "polarity": "absent",
-        "balancedAccuracy": 0.76625
-      },
-      {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "NOT note:tokens-bin-2:min<=3 AND NOT ngram:passage:d fo",
-        "operator": "AND",
         "polarity": "present",
-        "balancedAccuracy": 0.76625
+        "balancedAccuracy": 0.7216666666666667
       },
       {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "note:tokens-bin-2:min<=3 OR bigram:logged for",
+        "pool": "train",
+        "target": "supports",
+        "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:k the",
         "operator": "OR",
-        "polarity": "absent",
-        "balancedAccuracy": 0.76125
-      },
-      {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "NOT note:tokens-bin-2:min<=3 AND NOT bigram:logged for",
-        "operator": "AND",
         "polarity": "present",
-        "balancedAccuracy": 0.76125
+        "balancedAccuracy": 0.7216666666666667
       },
       {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "note:chars-bin-10:min<=3 OR ngram:passage:d fo",
+        "pool": "train",
+        "target": "supports",
+        "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:note:k the",
+        "operator": "AND",
+        "polarity": "absent",
+        "balancedAccuracy": 0.7216666666666667
+      },
+      {
+        "pool": "train",
+        "target": "supports",
+        "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:note:k the",
+        "operator": "AND",
+        "polarity": "absent",
+        "balancedAccuracy": 0.7216666666666667
+      },
+      {
+        "pool": "train",
+        "target": "supports",
+        "feature": "claim:rendered-in-passage:any=1 OR ngram:note:s, ch",
         "operator": "OR",
-        "polarity": "absent",
-        "balancedAccuracy": 0.76
-      },
-      {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "NOT note:chars-bin-10:min<=3 AND NOT ngram:passage:d fo",
-        "operator": "AND",
         "polarity": "present",
-        "balancedAccuracy": 0.76
+        "balancedAccuracy": 0.72
       },
       {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "note:chars-bin-10:min<=3 OR bigram:logged for",
+        "pool": "train",
+        "target": "supports",
+        "feature": "NOT claim:rendered-in-passage:any<=0 OR ngram:note:s, ch",
         "operator": "OR",
-        "polarity": "absent",
-        "balancedAccuracy": 0.755
-      },
-      {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "NOT note:chars-bin-10:min<=3 AND NOT bigram:logged for",
-        "operator": "AND",
         "polarity": "present",
-        "balancedAccuracy": 0.755
+        "balancedAccuracy": 0.72
       },
       {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "note:tokens-bin-2:min<=3 OR bigram:for module",
+        "pool": "train",
+        "target": "supports",
+        "feature": "claim:rendered-in-passage:any<=0 AND NOT ngram:note:s, ch",
+        "operator": "AND",
+        "polarity": "absent",
+        "balancedAccuracy": 0.72
+      },
+      {
+        "pool": "train",
+        "target": "supports",
+        "feature": "NOT claim:rendered-in-passage:any=1 AND NOT ngram:note:s, ch",
+        "operator": "AND",
+        "polarity": "absent",
+        "balancedAccuracy": 0.72
+      },
+      {
+        "pool": "train",
+        "target": "supports",
+        "feature": "claim:rendered-in-passage:any=1 OR bigram:check the",
         "operator": "OR",
-        "polarity": "absent",
-        "balancedAccuracy": 0.7525
+        "polarity": "present",
+        "balancedAccuracy": 0.7183333333333333
       },
       {
-        "pool": "test",
-        "target": "unclear",
-        "feature": "NOT note:tokens-bin-2:min<=3 AND NOT bigram:for module",
-        "operator": "AND",
+        "pool": "train",
+        "target": "supports",
+        "feature": "NOT claim:rendered-in-passage:any<=0 OR bigram:check the",
+        "operator": "OR",
         "polarity": "present",
-        "balancedAccuracy": 0.7525
+        "balancedAccuracy": 0.7183333333333333
       }
     ],
     "passed": true
@@ -3860,30 +3860,30 @@
   "subjects": 2000,
   "deterministicNoCallSubjects": 300,
   "providerOverheadTokens": 512,
-  "maximumRequestEstimateTokens": 3991,
+  "maximumRequestEstimateTokens": 4024,
   "expected": {
     "initialCalls": 6000,
     "attempts": 6149.999999999999,
-    "inputTokens": 20314265.9,
-    "reservedTokens": 21888665.9,
-    "inputAtAttestedTariffUsd": 0.8531991677999999,
-    "reservedUsd": 2.03412685
+    "inputTokens": 20723200.924999997,
+    "reservedTokens": 22297600.924999997,
+    "inputAtAttestedTariffUsd": 0.8703744388499999,
+    "reservedUsd": 2.0750602249999996
   },
   "worst": {
     "attempts": 12000,
-    "inputTokens": 39637592,
-    "tokens": 42709592,
-    "reservedUsd": 3.969028
+    "inputTokens": 40435514,
+    "tokens": 43507514,
+    "reservedUsd": 4.048898
   },
   "hardCapUsd": 6,
   "stopAtUsd": 4.8,
-  "preregistrationDigest": "sha256:f6b2ccd229e3b2530846f3e4152022de386dad4316a6030442ce16e1607f05b8",
-  "analysisDigest": "sha256:c601d081549edb828c2374e8d4aac539f934cdaa811788c6422f6ed893eb93bf",
-  "corpusDigest": "sha256:841ee6a3538815117f45a4fcb5db63c2c9a9db8c265e5f141121cba23439d1de",
-  "goldDigest": "sha256:49d33b78b0f99f1b9f2980cc527d63ba26375669431befd12611dac3efc3203a",
-  "generatorDigest": "sha256:fd8c3fa5c51c07d280a36dc2d59b98853c4c09147f8ee8dc35c32db270d83567",
-  "scorerDigest": "sha256:1c80a928f0b3f25cfd6f473ef505691f992407d6bad1118f8a05d09832026ffb",
-  "approvalTemplateDigest": "sha256:a6e998681901c5ab95757a88bc11ed8ebfe4606decd91fded569f0ccec0eb37f",
+  "preregistrationDigest": "sha256:a52db3b6a8bb20012dd35318062de529eb50de8cfc53ffd4db39aa95e66db03e",
+  "analysisDigest": "sha256:b2c762cc637d2d71696e09aaa72e975c5dc2449499d82d937eb5fda1859ce3b8",
+  "corpusDigest": "sha256:bb0a82bdf1c5d3943b7246339fb565e9acc14da03a9b7cdacd2d61c45d40bc71",
+  "goldDigest": "sha256:bf122e30f7a54da87e297ff08f5ec50dd74d1620ca93e98a6cbcf2388db19645",
+  "generatorDigest": "sha256:a96991d142fdaf1cd55eefe2d036db80a9b47ef4e464bbb7aa9e02f7d4789a6e",
+  "scorerDigest": "sha256:9261ee4ca0a250eb2c7fe053d635a8cfcfbcdbf7f5baa933f8f18020c05e9b68",
+  "approvalTemplateDigest": "sha256:e8cb9b709c23e46f3fc628a6355eeea49de3c7ba0ce15b7d4ba785129958a850",
   "splitDigests": [
     {
       "name": "tuning",

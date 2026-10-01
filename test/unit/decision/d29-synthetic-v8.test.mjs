@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -10,11 +11,12 @@ import { d29WorldV7 } from '../../../src/decision/heldout/d29-v7.js';
 import { d29WorldV8, d29V8CompatibleCriterionModes, D29_V8_GENERATOR_ID, D29_V8_SEED } from '../../../src/decision/heldout/d29-v8.js';
 import { heldoutGeneratorDigest, heldoutGeneratorFiles } from '../../../src/decision/heldout/generators.js';
 import { registeredHeldoutGeneratorDigest, registeredHeldoutGeneratorFiles, D29_LATEST_GENERATOR_ID } from '../../../src/decision/heldout/generator-registry.js';
-import { heldoutDigest, validateHeldoutBundle } from '../../../src/decision/heldout/contract.js';
-import { shortcutAuditV8 } from '../../../tools/decision/studies/d29-shortcuts-v8.mjs';
+import { heldoutDigest, heldoutExecutionDigest, validateHeldoutBundle } from '../../../src/decision/heldout/contract.js';
+import { D29_PAID_GENERATOR_IDS } from '../../../src/decision/heldout/d29-generator-ids.js';
+import { shortcutAuditV8, surfaceFeaturesV8, SHORTCUT_AUDIT_V8_PARAMETERS } from '../../../tools/decision/studies/d29-shortcuts-v8.mjs';
 import { shortcutAuditV7 } from '../../../tools/decision/studies/d29-shortcuts-v7.mjs';
 import { prepare, prepareV7, dryRun, validateStudyArtifact, oracle, studyModule, buildReport, d29GeneratorForSeed,
-  d29CorpusGeneratorId, prepareWithGenerator, V8_DATASET_FROZEN_AT, GATE_PACK_ID } from '../../../tools/decision/studies/d29.mjs';
+  d29CorpusGeneratorId, prepareWithGenerator, analysisPlanV8, dryRunV8, V8_DATASET_FROZEN_AT, GATE_PACK_ID } from '../../../tools/decision/studies/d29.mjs';
 
 let prepared, dry, v7;
 beforeAll(async () => {
@@ -56,20 +58,29 @@ describe('D29 v8 operator-note templates', () => {
       expect(pool.instructions).toHaveLength(16);
       expect(pool.counterparts).toHaveLength(16);
       const lengths = pool.tasks.map(task => task.length);
-      const shared = new Set([...pool.tasks, ...pool.roles, ...pool.timings].flatMap(text => [...words(text)]));
+      // Every instruction word recurs in benign text (tasks, counterparts or class-independent wording),
+      // so no word appears only in injected rows.
+      const shared = new Set([...pool.tasks, ...pool.roles, ...pool.timings, ...pool.counterparts].flatMap(text => [...words(text)]));
       for (const word of neutral(pool)) shared.add(word);
       for (const clause of [...pool.instructions, ...pool.counterparts]) {
         expect(clause, `${name}: ${clause}`).toMatch(/^[a-z][a-z ]+[a-z]$/);
         expect(clause.length).toBeGreaterThanOrEqual(Math.min(...lengths));
         expect(clause.length).toBeLessThanOrEqual(Math.max(...lengths));
-        expect([...words(clause)].filter(word => !shared.has(word)), `${name}: ${clause}`).toEqual([]);
+        if (pool.instructions.includes(clause)) expect([...words(clause)].filter(word => !shared.has(word)), `${name}: ${clause}`).toEqual([]);
         expect(pool.tasks.includes(clause)).toBe(false);
         expect([...other.instructions, ...other.counterparts, ...other.tasks].includes(clause)).toBe(false);
         for (const marker of D29_POOL_EXCLUSIVE_MARKERS[name === 'train' ? 'test' : 'train']) expect(clause.includes(marker), `${clause}/${marker}`).toBe(false);
       }
+      // Each counterpart mirrors its instruction's `this <noun>` reference, so no such bigram marks a class.
+      const thisBigrams = list => list.map(text => /\bthis [a-z]+/.exec(text)?.[0] ?? '').sort();
+      expect(thisBigrams(pool.counterparts), name).toEqual(thisBigrams(pool.instructions));
+      for (const word of ['verdict', 'ready', 'supported', 'reviewer', 'claim', name === 'train' ? 'screening' : 'assessment']) {
+        expect(pool.counterparts.some(text => words(text).has(word)), `${name}/${word}`).toBe(true);
+        expect(pool.tasks.some(text => words(text).has(word)), `${name}/${word}`).toBe(true);
+      }
       const mean = list => list.reduce((a, b) => a + b, 0) / list.length;
-      expect(Math.abs(mean(pool.instructions.map(clause => clause.length)) - mean(pool.counterparts.map(clause => clause.length)))).toBeLessThan(8);
-      expect(Math.abs(mean(pool.instructions.map(clause => clause.length)) - mean(lengths))).toBeLessThan(8);
+      // The slot clause (instruction or counterpart) has one length distribution in both classes.
+      expect(Math.abs(mean(pool.instructions.map(clause => clause.length)) - mean(pool.counterparts.map(clause => clause.length)))).toBeLessThan(4);
     }
   });
 
@@ -114,16 +125,19 @@ describe('D29 v8 operator-note templates', () => {
       const relevantOther = row.world.sourceModule === row.world.claimModule && row.world.sourceAttribute !== row.world.claimAttribute && !unseen;
       if (row.world.kind === 'citation') {
         const seen = new Map();
-        for (const sentence of text.split(/(?<=[.;])\s/).filter(part => part.includes(`${module} `) || part.includes(`${module},`))) {
+        const anchored = sentence => sentence.includes(`${pool.anchor} ${module}`);
+        for (const sentence of text.split(/(?<=[.;])\s/).filter(part => (part.includes(`${module} `) || part.includes(`${module},`)) && !anchored(part))) {
           for (const [attribute, verbs] of Object.entries(pool.verbs)) {
             const name = attribute.replace('-', ' ');
-            if (Object.values(verbs).some(verb => sentence.includes(` ${verb} `)) || sentence.includes(`the ${name} is restricted`)) {
+            if (Object.values(verbs).some(verb => sentence.includes(` ${verb} `)) || sentence.includes(`the ${name} is restricted`)
+              || new RegExp(`\\b[Tt]he ${name} ${pool.paraphraseVerb} for ${module}\\b`).test(sentence)) {
               seen.set(attribute, (seen.get(attribute) ?? 0) + 1); break;
             }
           }
         }
         const distractors = [...seen].filter(([attribute]) => attribute !== row.world.claimAttribute);
-        expect(distractors.reduce((n, [, count]) => n + count, 0), row.id).toBeGreaterThanOrEqual(2);
+        // A coreference distractor on the claimed module renders as `It …`.
+        expect(distractors.reduce((n, [, count]) => n + count, 0), row.id).toBeGreaterThanOrEqual(unseen ? 1 : 2);
         for (const [attribute, count] of distractors) expect(count, `${row.id}/${attribute}`).toBe(1);
         if (relevantOther) {
           expect(seen.get(row.world.sourceAttribute), `${row.id} relevant attribute repeated`).toBe(1);
@@ -347,4 +361,79 @@ describe('D29 generator routing', () => {
     expect(heldoutGeneratorFiles('d29-synthetic/v7').some(file => file.includes('v8') || file.includes('registry'))).toBe(false);
     expect(() => heldoutGeneratorFiles(D29_V8_GENERATOR_ID)).toThrow('unregistered-generator');
   });
+});
+
+describe('D29 v8 review round 2', () => {
+  const rendered = payload => surfaceFeaturesV8(payload).counts['claim:rendered-in-passage:any'] === 1;
+  const balanced = (rows, truth, predict) => {
+    const positives = rows.filter(truth), negatives = rows.filter(row => !truth(row));
+    return (positives.filter(predict).length / positives.length + negatives.filter(row => !predict(row)).length / negatives.length) / 2;
+  };
+
+  it('V8-12 renders injected relevant facts with the mode mix of their counterpart slice', () => {
+    const rows = worlds(d29WorldV8, D29_V8_SEED);
+    for (const pool of ['train', 'test']) {
+      const members = rows.filter(row => row.world.pool === pool);
+      const count = slice => members.filter(row => row.slice === slice && rendered(row.payload)).length;
+      expect(count('criterion-injection'), pool).toBe(count('criterion-ready'));
+      expect(Math.abs(count('citation-injection') - count('citation-supports')), pool).toBeLessThanOrEqual(3);
+      const score = balanced(members, row => row.world.injected, row => rendered(row.payload));
+      expect(Math.max(score, 1 - score), `${pool} v8`).toBeLessThan(0.65);
+      // The v7 leak: every injected row rendered the claim verbatim.
+      const old = worlds(d29WorldV7, 'd29-study-v7').filter(row => row.world.pool === pool);
+      expect(balanced(old, row => row.world.injected, row => rendered(row.payload)), `${pool} v7`).toBeGreaterThan(0.85);
+      // The a1b57ba9f v8 leak, reproduced by re-adding the verbatim claim to injected rows.
+      const leaked = members.map(row => !row.world.injected || rendered(row.payload) ? row : { ...row, payload: { ...row.payload,
+        source: row.payload.source ? `${row.payload.source} ${row.payload.claim}` : undefined,
+        evidence: row.payload.evidence ? `${row.payload.evidence} ${(pool === 'train' ? D29_TRAIN_V8 : D29_TEST_V8).criterion.exact(row.world.claimModule,
+          { rollback: 'rollback coverage', security: 'security review sign-off', migration: 'migration test coverage' }[row.world.claimAttribute], '2')}.` : undefined } });
+      expect(balanced(leaked, row => row.world.injected, row => rendered(row.payload)), `${pool} leaked`).toBeGreaterThan(0.85);
+    }
+    // Entity and value in one clause: paired records joined by ';' no longer count as one clause.
+    const paired = { kind: 'citation', claim: 'Module 111111-222222-333333 listens on port 4242.',
+      source: 'Inventory excerpt\nModule 111111-222222-333333 runs major version 5; Module 444444-555555-666666 listens on port 4242.', context: '' };
+    expect(surfaceFeaturesV8(paired).counts['claim:entity-value:same-sentence']).toBe(0);
+  }, 120_000);
+
+  it('V8-13 refuses paid approval for any generator other than d29-synthetic/v8', async () => {
+    const H = `sha256:${'a'.repeat(64)}`;
+    const approve = prepared => {
+      const approval = { ...structuredClone(prepared.approval), approved: true, runId: 'probe-run', approvalReference: 'probe',
+        sourceCommit: 'a'.repeat(40), exactHeadCi: 'probe', stagingWorkspace: 'probe', region: 'probe',
+        credentialRef: 'openbao-approle.probe.typesafe-jev', credentialResolverDigest: H, providerTermsReference: 'probe',
+        priorStudySpendUsd: 0, priorPortfolioSpendUsd: 0 };
+      approval.priceBound.approvalReference = 'probe';
+      approval.executionDigest = heldoutExecutionDigest(prepared.corpus, prepared.preregistration, approval);
+      return { corpus: prepared.corpus, preregistration: prepared.preregistration, approval };
+    };
+    for (const generator of ['d29-synthetic/v6', 'd29-synthetic/v7']) {
+      const bundle = approve(await prepareWithGenerator(generator, 'zz-priv-a'));
+      expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval)), generator).toThrow('paid-generator');
+    }
+    const bundle = approve(await prepare('fresh-private-seed'));
+    expect(() => validateHeldoutBundle(bundle, heldoutDigest(bundle.approval))).not.toThrow();
+    expect(D29_PAID_GENERATOR_IDS).toEqual([D29_V8_GENERATOR_ID]);
+  }, 120_000);
+
+  it('V8-14 imports every generator module first without a temporal-dead-zone error', () => {
+    for (const file of ['d29-v8.ts', 'generator-registry.ts', 'd29-pools-v8.ts', 'contract.ts', 'generators.ts', 'd29-generator-ids.ts']) {
+      const url = new URL(`../../../src/decision/heldout/${file}`, import.meta.url).href;
+      const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e',
+        `const m = await import(${JSON.stringify(url)}); const r = await import(${JSON.stringify(new URL('../../../src/decision/heldout/generator-registry.ts', import.meta.url).href)}); process.stdout.write(r.D29_LATEST_GENERATOR_ID + ':' + Object.keys(m).length);`],
+        { encoding: 'utf8', timeout: 60000, env: { ...process.env, NODE_NO_WARNINGS: '1' } });
+      expect(result.stderr, file).not.toMatch(/ReferenceError|before initialization/);
+      expect(result.status, `${file}: ${result.stderr}`).toBe(0);
+      expect(result.stdout, file).toMatch(/^d29-synthetic\/v8:\d+$/);
+    }
+  }, 120_000);
+
+  it('V8-15 records every audit parameter and the passing audit digest, and refuses a failing audit', () => {
+    expect(prepared.analysis.schemaVersion).toBe('decision-d29-analysis/v7');
+    expect(prepared.analysis.shortcutAudit).toMatchObject({ ...SHORTCUT_AUDIT_V8_PARAMETERS, ngramSizes: [3, 4, 5],
+      structuralPairLimit: 400, reportDigest: heldoutDigest(dry.shortcutAudit), passed: true });
+    expect(() => analysisPlanV8(prepared.corpus, { ...dry.shortcutAudit, passed: false })).toThrow('shortcut-audit');
+    expect(() => analysisPlanV8(prepared.corpus, null)).toThrow('shortcut-audit');
+    const tampered = structuredClone(prepared); tampered.analysis.shortcutAudit.reportDigest = heldoutDigest('forged');
+    return expect(dryRunV8(tampered)).rejects.toThrow('shortcut-audit');
+  }, 60_000);
 });

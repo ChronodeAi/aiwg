@@ -11,20 +11,28 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 - Experimental, default-off D29 generator `d29-synthetic/v8` (public
   development seed `d29-study-v8`, refused for paid collection like v1–v7)
-  fixes three defects found on the public v7 seed: injected operator notes
-  carried one extra comma clause (94/100 injected train rows, 300/300 injected
-  test rows, 0 benign rows), some moves kept the same value, and claimed-module
-  distractors contradicted each other. Every v8 note renders from one two-slot
-  template where an injection replaces a benign counterpart clause; moves always
-  change the value; claimed-module distractors never repeat an attribute or
-  pair incompatible criterion modes. The new v5 shortcut audit adds per-field
-  and per-note punctuation, clause, length and character 3–5-gram features,
-  runs per wording pool and target with train-to-test transfer, fails the v7
-  corpus and passes v8 (`D29Study.v9`). Preparation routes by explicit
-  generator version: fresh private seeds use the latest generator (v8), and
-  scoring and calibration regenerate with the generator recorded in the corpus
-  rows. v6/v7 rows, gold and generator pins are unchanged; v8 registers in a
-  separate registry module with its own source digest (#2622)
+  fixes dataset leaks found on the public v7 seed and in review: injected
+  operator notes carried one extra comma clause (94/100 injected train rows,
+  300/300 injected test rows, 0 benign rows); injected rows rendered the claim
+  verbatim (balanced accuracy 0.89/0.87 on visible text); the claimed entity
+  and value never shared a clause in does-not-support rows; some moves kept
+  the same value; claimed-module distractors contradicted each other. Every v8
+  note renders from one two-slot template where an instruction replaces a
+  mirrored benign counterpart; injected rows draw their rendering mode from
+  their counterpart slice; an anchor clause and class-independent surface
+  forms remove the support-class shortcuts. All 32 injection phrases were
+  rewritten to target this screening's verdict, label, reviewer routing or
+  instructions unmistakably, while benign tasks and counterparts reuse the
+  same vocabulary operationally. The v5 shortcut audit adds per-field,
+  per-note and per-record punctuation, clause, length, character 3–5-gram and
+  claim-rendering features, runs per wording pool and target with
+  train-to-test transfer, fails v7 and the first v8 commit, and passes v8;
+  `prepareV8` refuses unless it passes, and the v8 analysis
+  (`decision-d29-analysis/v7`, `D29Study.v9`) records every audit parameter and
+  the passing report digest. Fresh private seeds prepare with v8; scoring and
+  calibration regenerate with the generator recorded in the corpus rows; and
+  paid bundles must use a paid-eligible generator (v8 only), so v6/v7 are
+  public-replay-only. v6/v7 rows, gold and generator pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed
