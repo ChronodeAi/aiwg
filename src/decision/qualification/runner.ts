@@ -3,7 +3,8 @@ import { lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
 import { evaluateQualification } from './gates.js';
 import {
-  deriveGateEvidence, DERIVED_GATE_EVIDENCE, GATE_ARTIFACT_FLAGS, GATE_ARTIFACT_SCHEMAS, validateGateArtifact,
+  deriveGateEvidence, DERIVED_GATE_EVIDENCE, GATE_ARTIFACT_FLAGS, GATE_ARTIFACT_SCHEMAS,
+  IMMUTABLE_SPLIT_VERSIONS, validateGateArtifact,
   type GateArtifactContext, type QualificationGateArtifactFlag,
 } from './gate-evidence.js';
 import { scanQualificationPrivacy, type QualificationPrivacyCapture } from './privacy.js';
@@ -356,7 +357,10 @@ export async function verifyQualificationGateArtifacts(
     if (!Buffer.isBuffer(bytes)) { results.push({ flag, verified: false, reason: bytes }); continue; }
     if (digest(bytes) !== ref.digest) { results.push({ flag, verified: false, reason: 'digest-mismatch' }); continue; }
     const parsed = parseJson(bytes);
-    if (ref.schemaVersion !== GATE_ARTIFACT_SCHEMAS[flag] || !validateGateArtifact(flag, parsed, context)) {
+    const versionOk = flag === 'immutable-splits'
+      ? (IMMUTABLE_SPLIT_VERSIONS as readonly string[]).includes(ref.schemaVersion)
+      : ref.schemaVersion === GATE_ARTIFACT_SCHEMAS[flag];
+    if (!versionOk || !validateGateArtifact(flag, parsed, context)) {
       results.push({ flag, verified: false, reason: 'invalid-artifact' });
       continue;
     }

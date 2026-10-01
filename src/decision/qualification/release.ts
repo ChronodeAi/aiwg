@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { canonicalSha256, matchEvidenceDigest, type EvidenceDigestMode } from '../../gates/stats/index.js';
 import type { LabelStabilityReport } from './drift.js';
 import type { BinarySliceMetrics } from './quality.js';
 import type { ExecutedQualification } from './runner.js';
@@ -113,8 +113,12 @@ export interface QualificationReleaseInputs {
   cacheLayers?: Readonly<Record<QualificationCacheLayer, QualificationCacheLayerEvidence>>;
 }
 
+export type QualificationReleaseVersion =
+  | 'decision-qualification-release/v1'
+  | 'decision-qualification-release/v2';
+
 export interface QualificationReleaseRecord {
-  schemaVersion: 'decision-qualification-release/v1';
+  schemaVersion: QualificationReleaseVersion;
   runId: string;
   sourceCommit: string;
   dirty: boolean;
@@ -220,7 +224,7 @@ export function buildQualificationReleaseRecord(
     || report.decision === 'ROLLBACK' || input.integrity.integrity_state === 'compromised' || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK'
     : complete && releaseDecision === 'PROMOTE' ? 'PROMOTE' : 'HOLD';
   const fields = {
-    schemaVersion: 'decision-qualification-release/v1' as const,
+    schemaVersion: 'decision-qualification-release/v2' as const,
     runId: manifest.runId, sourceCommit: manifest.sourceCommit, dirty: manifest.dirty,
     environment: input.environment, commands: [...input.commands],
     pins: Object.fromEntries(Object.entries(pinned).sort(([a], [b]) => a.localeCompare(b))),
@@ -234,7 +238,27 @@ export function buildQualificationReleaseRecord(
       caseIds: input.cacheLayers![layer].manifest.evidence.map(item => item.caseId).sort() }])) as QualificationReleaseRecord['cacheLayers'] : null,
     decision,
   };
-  return { ...fields, digest: `sha256:${createHash('sha256').update(JSON.stringify(fields)).digest('hex')}` };
+  return { ...fields, digest: canonicalSha256(fields) };
+}
+
+/**
+ * Verifies a release record digest without rebuilding it. Canonical-only by default;
+ * pass `{ digestModes: ['canonical', 'legacy'] }` to allowlist the versioned legacy
+ * (`JSON.stringify`) digest for pre-migration v1 evidence. Fresh v2 records are
+ * canonical-only: a legacy digest on v2 fields never verifies, even under an
+ * explicit allowlist. Returns the matching mode, or null when neither matches.
+ */
+export function verifyQualificationReleaseDigest(
+  record: QualificationReleaseRecord, options?: { digestModes?: readonly EvidenceDigestMode[] },
+): EvidenceDigestMode | null {
+  if (!record || typeof record !== 'object') return null;
+  if (record.schemaVersion !== 'decision-qualification-release/v1'
+    && record.schemaVersion !== 'decision-qualification-release/v2') return null;
+  const { digest, ...fields } = record;
+  const modes = record.schemaVersion === 'decision-qualification-release/v1'
+    ? options?.digestModes
+    : (options?.digestModes ?? (['canonical'] as const)).filter(mode => mode === 'canonical');
+  return matchEvidenceDigest(fields, digest, modes);
 }
 
 /** Deliberately excludes private callback details, stdout/stderr and raw captures. */
