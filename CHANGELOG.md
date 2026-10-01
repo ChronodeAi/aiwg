@@ -64,8 +64,8 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   framework, `aiwg-utils` unless `--no-utils`, and any addon its manifest lists
   under `dependencies.required`. It no longer sweeps every other addon and every
   extension, or registers their CLI namespaces, which `aiwg refresh` replayed on
-  each run. On omp, `film-production` drops from 62 agents, 81 rules, 75 prompts
-  and 13 addon CLI namespaces to 16, 38, 47 and none. `sdlc` is covered too:
+  each run. On omp, `film-production` drops from 62 agents, 38 rules, 75 prompts
+  and 13 addon CLI namespaces to 16, 29, 47 and none. `sdlc` is covered too:
   `deploy-agents.mjs` gains `--sweep-addons <list>` and `--no-addon-sweep` to
   narrow the all-addons sweep its `sdlc`, `general`, `both` and `all` modes add
   in every provider, and `aiwg use sdlc --no-utils` now really deploys no addon
