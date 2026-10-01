@@ -41,9 +41,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   variant or label. Distractor modes and surface forms (paraphrase,
   two-value, coreference) are now drawn per record independently of the
   variant, so no surface form on a non-relevant record is confined to or kept
-  out of any label; a shipped role-by-form scan enforces it on three seeds. Mode-family counts per row are drawn
-  independently of the label (no count rule reaches 0.70), and no passage
-  repeats a sentence. v6/v7 rows, gold and generator pins are unchanged (#2622)
+  out of any label, and no passage repeats a sentence. The whole distractor
+  layer (role counts, claimed-value carriers, modes, surface forms) is now
+  drawn from one label-independent distribution before the relevant record is
+  inserted, so no fixed total (claimed-value count, balancing record, criterion
+  length budget) is completed by the label-defining record. A shipped
+  blind-mode scan over records about unrelated modules plus layout finds no
+  precision-1.0 group or TRAIN-to-TEST tree reaching 0.75 on three seeds
+  (round 7: 1.000). The v5 audit scores the injection target only against
+  otherwise-supporting or otherwise-ready rows. v6/v7 rows, gold and generator
+  pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

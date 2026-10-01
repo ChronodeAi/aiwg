@@ -37,7 +37,28 @@ export const SHORTCUT_AUDIT_V8_PARAMETERS = Object.freeze({
   folds: FOLDS, treeDepth: TREE_DEPTH, ngramSizes: Object.freeze([...NGRAM_SIZES]),
   injection: LIMITS.injection, readiness: LIMITS.readiness, support: LIMITS.supports,
   modelInjection: MODEL_LIMITS.injection, modelReadiness: MODEL_LIMITS.readiness, modelSupport: MODEL_LIMITS.supports,
+  injectionPopulation: 'injected-or-otherwise-supporting-or-ready-evidence',
 });
+
+/**
+ * The injection target's population. Injected rows carry only supporting
+ * (citation) or ready (criterion) evidence by slice design, so over every row
+ * the injection flag is partly predictable from the evidence alone (a rule on
+ * the claimed fact reaches 0.875 citation / 0.75 criterion). The injection
+ * question is therefore audited as injected versus non-injected rows whose
+ * evidence would also be supporting or ready: citation rows whose gold support
+ * is `supports` (injection never changes support), and criterion rows whose
+ * relevant record verifies the required criterion currently, independently
+ * and completely on the claimed module (missing-artifact and failed-test rows
+ * included). Readiness gating is unchanged.
+ */
+export function injectionPopulationV8(world, gold) {
+  if (world.injected) return true;
+  if (world.kind === 'citation') return gold.support === 'supports';
+  return world.sourceModule === world.claimModule && world.sourceAttribute === world.claimAttribute
+    && !world.uncertain && !world.scoped && !world.temporal && world.current === true && world.independent === true
+    && world.complete === true && world.covered.includes(world.required);
+}
 const sentencePattern = /[.!?](?=\s|$|[)\]]|-->)/g;
 const recordPattern = /\bModule\s+[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/;
 const tokenize = text => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
@@ -487,16 +508,18 @@ export function shortcutAuditV8(corpus, gold) {
     const vocabularies = new Map(), targets = [], lexicon = [], models = [], transfers = [];
     for (const [target, limit] of Object.entries(LIMITS)) {
       const support = !['injection', 'readiness'].includes(target);
-      const members = pooled[pool].filter(row => !support || row.gold.support !== null);
+      const inPopulation = row => target === 'injection' ? injectionPopulationV8(row.world, row.gold) : !support || row.gold.support !== null;
+      const members = pooled[pool].filter(inPopulation);
       const truth = targetTruth(members, target);
       const positives = truth.filter(Boolean).length, negatives = members.length - positives;
       if (!positives || !negatives) throw new Error('shortcut-audit-support');
-      if (!vocabularies.has(support)) vocabularies.set(support, vocabularyOf(members.map(row => row.extracted)));
-      const rules = ruleScores(vocabularies.get(support), truth, target);
+      const population = target === 'injection' ? 'injection' : support;
+      if (!vocabularies.has(population)) vocabularies.set(population, vocabularyOf(members.map(row => row.extracted)));
+      const rules = ruleScores(vocabularies.get(population), truth, target);
       const tokens = members.map(tokensOf);
       let transfer = null;
       if (pool === 'train') {
-        const testMembers = pooled.test.filter(row => !support || row.gold.support !== null);
+        const testMembers = pooled.test.filter(inPopulation);
         transfer = { truth: targetTruth(testMembers, target), tokens: testMembers.map(tokensOf), extracted: testMembers.map(row => row.extracted) };
       }
       const lexiconScore = lexiconScores(tokens, truth, target, transfer);
@@ -519,7 +542,7 @@ export function shortcutAuditV8(corpus, gold) {
   }
   const topRules = pools.flatMap(entry => entry.targets.flatMap(target => [...target.topSingleRules, ...target.topPairRules]
     .map(rule => ({ pool: entry.pool, ...rule })))).sort(compare).slice(0, 10);
-  return { schemaVersion: 'decision-d29-shortcut-audit/v5', pools,
+  return { schemaVersion: 'decision-d29-shortcut-audit/v5', pools, injectionPopulation: SHORTCUT_AUDIT_V8_PARAMETERS.injectionPopulation,
     pairFeatureLimit: PAIR_FEATURE_LIMIT, structuralPairLimit: STRUCTURAL_PAIR_LIMIT,
     pairSelection: 'strongest-distinct-bitsets-per-pool-and-target: structural-and-claim-relative-up-to-400-plus-lexical-up-to-200',
     lexiconSelection: 'greedy-or-up-to-5-over-supported-tokens-learned-on-training-folds',

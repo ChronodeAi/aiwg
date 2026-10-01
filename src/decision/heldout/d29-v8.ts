@@ -23,6 +23,10 @@ import type { HeldoutRow } from './types.js';
  *    module's own facts: citation distractors use pairwise distinct
  *    attributes (and never the relevant record's attribute), and criterion
  *    distractors that share a criterion carry compatible modes.
+ * 4. The distractor layer (seven records: roles, values, modes, surface
+ *    forms) is drawn from one distribution that never reads the variant, the
+ *    label or the relevant record, and the relevant record is inserted
+ *    afterwards, so no fixed total is completed by the label-defining record.
  *
  * Note text is drawn per family while note count, format and placement stay
  * scheduled by family offset, so slices keep matched layouts without sharing
@@ -103,11 +107,18 @@ function coreference(module: string, sentence: string, lead: string, pronoun: st
 
 const coreferenceLeads = ['completed its scheduled migration last week', 'finished its planned maintenance window yesterday', 'closed its rollout review this morning'];
 
-/** Mode families whose per-row counts are drawn independently of the variant. */
+/** Mode families: each distractor draws a family uniformly, then a mode inside it. */
 const CITATION_MODE_FAMILIES: Record<string, readonly string[]> = { exact: ['exact'], negated: ['negated'], moved: ['moved'],
   exclusive: ['exclusive-single', 'exclusive-restricted'], qualified: ['scoped', 'temporal', 'tentative'] };
 const CRITERION_MODE_FAMILIES: Record<string, readonly string[]> = { verified: ['exact', 'verified', 'checklist'],
   'explicit-none': ['explicit-none'], planned: ['planned'], stale: ['stale'], 'self-attested': ['self-attested'], partial: ['partial'] };
+
+/**
+ * Characters the seven criterion distractors may use beyond the default mix
+ * (every mode once, less the longest one, which the relevant record may take),
+ * so the budget rarely binds and no pair of long modes is excluded.
+ */
+const CRITERION_LENGTH_SLACK = 120;
 
 /** Distractor modes that may render as a paraphrase, and as a two-value list. */
 const PARAPHRASE_MODES = ['exact', 'scoped', 'temporal', 'tentative'];
@@ -122,20 +133,6 @@ function counterpartVariant(citation: boolean, claimAttribute: string, offset: n
   const applicable = variants.filter(variant => !(['multi-value', 'different-nonexclusive'].includes(variant) && !['port', 'protocol'].includes(claimAttribute)));
   const width = citation ? attributes.length : criteria.length;
   return applicable[(Math.floor(offset / width) + offset % width) % applicable.length];
-}
-
-/** Index combinations of `size` from `count`, in lexicographic order. */
-function* combinations(count: number, size: number): Generator<number[]> {
-  const pick = Array.from({ length: size }, (_, i) => i);
-  if (size > count) return;
-  for (;;) {
-    yield [...pick];
-    let i = size - 1;
-    while (i >= 0 && pick[i] === count - size + i) i--;
-    if (i < 0) return;
-    pick[i]++;
-    for (let j = i + 1; j < size; j++) pick[j] = pick[j - 1] + 1;
-  }
 }
 
 export function d29WorldV8(seed: string, ordinal: number) {
@@ -159,193 +156,122 @@ export function d29WorldV8(seed: string, ordinal: number) {
   // cannot mark the injected class. Their latent support is unchanged.
   const renderVariant = world.injected ? counterpartVariant(citation, world.claimAttribute, offset) : world.variant;
   const relevantMode = modes.includes(renderVariant) ? renderVariant : 'exact';
-  const relevantIndex = modes.indexOf(relevantMode);
   const identifier = () => Array.from({ length: 3 }, () => String(100000 + random(900000))).join('-');
-  const records = modes.map((mode, i) => ({ mode, module: i === relevantIndex ? world.sourceModule : identifier(),
-    attribute: i === relevantIndex ? world.sourceAttribute : world.claimAttribute,
-    value: i === relevantIndex ? world.sourceValue : '', different: '', pick: 0, k: '2', paraphrase: false, second: '' }));
-  // Distractor modes are drawn independently of the variant (with
-  // replacement), so the distractor layer never encodes the relevant mode by
-  // its absence (v7 rendered each mode exactly once per row).
-  // Mode families: the row's eight records draw their families i.i.d. and
-  // uniformly, conditioned only on the relevant record's family occurring
-  // once; the relevant record takes one slot of its family and the
-  // distractors fill the rest, each with a drawn mode inside its family. So a
-  // family's per-row count (qualified records, exact facts, negations, ...)
-  // shifts with the label only by that conditioning (P(count >= 1) is about
-  // 0.83 unconditioned), not by a whole record, and no family is ever
-  // guaranteed to distractors. A length budget on the drawn counts (each
-  // family at its longest mode) keeps every request inside the preregistered
-  // token bound; it reads only the drawn counts.
-  const modeDraw = drawD29Stream(base.split, `v8:${base.familyId}:modes`);
+  type Record8 = { role: 'relevant' | 'carrier' | 'claimed' | 'other'; mode: string; module: string; attribute: string; value: string;
+    different: string; pick: number; k: string; paraphrase: boolean; second: string };
+  const blank = { different: '', pick: 0, k: '2', paraphrase: false, second: '' };
+  const relevantRecord: Record8 = { ...blank, role: 'relevant', mode: relevantMode, module: world.sourceModule, attribute: world.sourceAttribute,
+    value: world.sourceValue };
+  const relevantOnClaimedModule = relevantRecord.module === world.claimModule;
+  // The distractor layer: seven records drawn from one distribution that never
+  // reads the variant, the label or the relevant record (round-8 review). Its
+  // role counts, values, modes and surface forms are the same in every slice,
+  // and the relevant record is inserted afterwards, so no total (records per
+  // role, claimed-value mentions, records per mode family) is completed by the
+  // relevant record: each total is a label-independent distractor count plus
+  // whatever the relevant record itself contributes.
+  // - slot 0, the carrier: another module, claim attribute (citation: the
+  //   claimed value, single-clause mode, carrying the anchor clause);
+  // - slots 1..n, n drawn uniformly from 1-3: the claimed module, pairwise
+  //   distinct non-claim attributes (criterion: non-claim criteria whose modes
+  //   agree with every other claimed-module record on that criterion);
+  // - the rest: other modules, claim attribute with probability 1/2
+  //   (citation: the claimed value with probability 1/2), else a non-claim
+  //   attribute.
+  // Modes: family uniform, then mode within the family, i.i.d. per record; a
+  // length budget on the seven distractors alone keeps requests inside the
+  // preregistered token bound with slack, independently of the relevant record.
+  const layer = drawD29Stream(base.split, `v8:${base.familyId}:layer`);
   const families = citation ? CITATION_MODE_FAMILIES : CRITERION_MODE_FAMILIES;
   const familyNames = Object.keys(families);
-  const familyOf = (mode: string) => familyNames.find(name => families[name].includes(mode))!;
+  const familyMode = () => { const family = families[familyNames[layer(familyNames.length)]]; return family[layer(family.length)]; };
   const modeLength = (mode: string) => citation
     ? (['scoped', 'temporal', 'tentative'].includes(mode) ? qualify(pool, train, fact(pool, train, 'X', 'protocol', 'QUIC', 'TCP', 'exact'), mode, 8)
       : fact(pool, train, 'X', 'protocol', 'QUIC', 'TCP', mode)).length
     : pool.criterion[mode]('X', 'security review sign-off', '2').length;
-  const familyLength = Object.fromEntries(familyNames.map(name => [name, Math.max(...families[name].map(modeLength))]));
-  // Citation requests are far below the bound, so their budget allows one more
-  // record of the longest family; criterion requests are the long ones.
-  const modeBudget = modes.map(modeLength).reduce((a, b) => a + b, 0) + (citation ? Math.max(...Object.values(familyLength)) : 0);
-  const drawDistractorModes = () => {
-    for (let attempt = 0; attempt < 256; attempt++) {
-      const counts: Record<string, number> = Object.fromEntries(familyNames.map(name => [name, 0]));
-      for (let slot = 0; slot < records.length; slot++) counts[familyNames[modeDraw(familyNames.length)]]++;
-      if (!counts[familyOf(relevantMode)]) continue;
-      if (familyNames.reduce((n, name) => n + counts[name] * familyLength[name], 0) > modeBudget) continue;
-      counts[familyOf(relevantMode)]--;
-      const slots = familyNames.flatMap(name => Array.from({ length: counts[name] }, () => name));
-      for (let i = slots.length - 1; i > 0; i--) { const at = modeDraw(i + 1); [slots[i], slots[at]] = [slots[at], slots[i]]; }
-      records.forEach((record, i) => {
-        if (i === relevantIndex) return;
-        const family = families[slots.shift()!];
-        record.mode = family[modeDraw(family.length)];
-      });
-      return;
-    }
-    throw new Error('generator-mode-budget');
-  };
-  drawDistractorModes();
-  const others = records.map((_, i) => i).filter(i => i !== relevantIndex);
-  for (let i = others.length - 1; i > 0; i--) {
-    const at = schedule(i + 1); [others[i], others[at]] = [others[at], others[i]];
-  }
-  // Claimed-module distractors: three mentions of the claimed module in every
-  // row. Their attributes never repeat the claim attribute or the relevant
-  // record's attribute on the same module, and never contradict each other.
-  const targetCount = world.sourceModule === world.claimModule ? 2 : 3;
-  const reserved = new Set<string>([world.claimAttribute]);
-  if (world.sourceModule === world.claimModule) reserved.add(world.sourceAttribute);
-  const available = (citation ? attributes : criteria).filter(attribute => !reserved.has(attribute));
-  const start = random(available.length);
-  const rotated = available.map((_, i) => available[(start + i) % available.length]);
-  // Structural balance draws use their own stream so the content draws above
-  // and below stay where they were.
-  const balance = drawD29Stream(base.split, `v8:${base.familyId}:balance`);
-  // Criterion rows whose relevant record names the required criterion on the
-  // claimed module have two distractors over two free criteria; half of
-  // them share one criterion (compatible modes), as wrong-attribute and
-  // wrong-subject rows always must, so a same-criterion pair is never
-  // exclusive to those variants.
-  const preferShared = !citation && world.sourceModule === world.claimModule && world.sourceAttribute === world.claimAttribute
-    && balance(2) === 0;
-  // Pairwise-distinct attributes first (or a shared pair first when
-  // preferred); criterion rows may share one criterion only between
-  // compatible modes.
-  const assign = (chosen: number[], pairOnly = false): (typeof available)[number][] | null => {
-    const total = rotated.length ** chosen.length;
-    for (const shared of pairOnly ? ['pair'] as const : [false, true] as const) {
-      for (let code = 0; code < total; code++) {
-        const assignment = chosen.map((_, i) => rotated[Math.floor(code / rotated.length ** i) % rotated.length]);
-        const valid = chosen.every((a, i) => chosen.every((b, j) => j <= i || assignment[i] !== assignment[j]
-          || (shared !== false && !citation && d29V8CompatibleCriterionModes(records[a].mode, records[b].mode))));
-        if (valid && (shared !== 'pair' || new Set(assignment).size < assignment.length)) return assignment;
-      }
-    }
-    return null;
-  };
-  let placed = false;
-  // Rare draws without any compatible criterion pair redraw the distractor
-  // modes (same stream), so placement never fails.
-  for (let attempt = 0; attempt < 32 && !placed; attempt++) {
-    if (attempt) drawDistractorModes();
-    // A preferred shared pair searches every combination for a compatible pair,
-    // exactly as wrong-attribute and wrong-subject rows must, before falling
-    // back to distinct criteria.
-    for (const pairOnly of preferShared ? [true, false] : [false]) {
-      for (const combination of combinations(others.length, targetCount)) {
-        const chosen = combination.map(i => others[i]);
-        const assignment = assign(chosen, pairOnly);
-        if (!assignment) continue;
-        chosen.forEach((index, i) => { records[index].module = world.claimModule; records[index].attribute = assignment[i]; });
-        placed = true;
-        break;
-      }
-      if (placed) break;
-    }
-  }
-  if (!placed) throw new Error('generator-claim-distractors');
-
-  // Role-count invariant: every row has three claimed-module records, five
-  // claim-attribute records and three non-claim records. Rows whose relevant
-  // record names the claim attribute on the claimed module therefore give one
-  // other-module record a non-claim attribute (a "free" record); in every other
-  // row the claimed module already holds the three non-claim records. Role
-  // counts are thus a fixed function of the relevant record's role, which is
-  // label-defining, and carry nothing beyond it (asserted by V8-19).
-  const sameModuleClaim = records[relevantIndex].module === world.claimModule && records[relevantIndex].attribute === world.claimAttribute;
-  const nonClaim = others.filter(i => records[i].module !== world.claimModule);
-  const freeCount = sameModuleClaim ? 1 : 0;
-  const frees: number[] = [];
-  // The last other-module record becomes the balancing record; the anchor
-  // falls back to a drawn single-clause mode when no carrier has one.
-  for (const i of [...nonClaim].reverse()) {
-    if (frees.length === freeCount) break;
-    frees.push(i);
-  }
-  const usedByClaimModule = new Set(records.filter(record => record.module === world.claimModule).map(record => record.attribute));
-  frees.forEach((free, n) => {
-    const extra = (citation ? rotated.filter(attribute => !usedByClaimModule.has(attribute)) : rotated)
-      .filter(attribute => !frees.slice(0, n).some(j => records[j].attribute === attribute) || !citation);
-    records[free].attribute = extra[random(extra.length)];
+  const lengths = modes.map(modeLength);
+  const distractorBudget = citation ? Infinity : lengths.reduce((a, b) => a + b, 0) - Math.max(...lengths) + CRITERION_LENGTH_SLACK;
+  const claimSet: readonly string[] = citation ? attributes : criteria;
+  const nonClaim = claimSet.filter(attribute => attribute !== world.claimAttribute);
+  const claimedCount = 1 + layer(3);
+  const distractors: Record8[] = Array.from({ length: 7 }, (_, i) => {
+    const role = i === 0 ? 'carrier' : i <= claimedCount ? 'claimed' : 'other';
+    const onClaim = role === 'carrier' || (role === 'other' && layer(2) === 0);
+    return { ...blank, role, mode: '', module: role === 'claimed' ? world.claimModule : identifier(),
+      attribute: role === 'claimed' ? '' : onClaim ? world.claimAttribute : nonClaim[layer(nonClaim.length)], value: '' };
   });
-  let anchorIndex = -1;
+  const total = () => distractors.reduce((n, record) => n + modeLength(record.mode), 0);
+  const claimed = distractors.filter(record => record.role === 'claimed');
+  const sharesRelevant = !citation && relevantOnClaimedModule && relevantRecord.attribute !== world.claimAttribute;
+  /**
+   * Criterion rows: a criterion shared by two claimed-module records needs
+   * compatible (never identical) modes, so the claimed module's own records
+   * never contradict each other; returns false when a distractor has no
+   * compatible criterion (the layer is then redrawn whole).
+   */
+  const placeCriteria = (): boolean => {
+    const placed: Record8[] = sharesRelevant ? [relevantRecord] : [];
+    for (const record of claimed) {
+      const options = nonClaim.filter(criterion => placed.every(other => other.attribute !== criterion || d29V8CompatibleCriterionModes(other.mode, record.mode)));
+      if (!options.length) return false;
+      record.attribute = options[layer(options.length)];
+      placed.push(record);
+    }
+    return true;
+  };
+  for (let attempt = 0; ; attempt++) {
+    if (attempt === 1024) throw new Error('generator-distractor-layer');
+    for (const record of distractors) record.mode = citation && record.role === 'carrier' ? ANCHOR_MODES[layer(ANCHOR_MODES.length)] : familyMode();
+    if (total() > distractorBudget) continue;
+    if (citation || placeCriteria()) break;
+  }
+  if (citation) {
+    // Pairwise distinct attributes, never the claim attribute or the relevant
+    // record's attribute on the claimed module (three remain in every row).
+    const free = nonClaim.filter(attribute => !(relevantOnClaimedModule && attribute === relevantRecord.attribute));
+    for (let i = free.length - 1; i > 0; i--) { const at = layer(i + 1); [free[i], free[at]] = [free[at], free[i]]; }
+    claimed.forEach((record, i) => { record.attribute = free[i]; });
+  }
   if (world.injected && renderVariant === 'multi-value') {
     // Same latent fact plus a second current value, exactly as citation-supports multi-value.
     world.sourceValues = [drawValue(random, world.claimAttribute, world.claimValue), world.claimValue];
   }
   if (citation) {
-    for (const record of records) {
-      record.value ||= drawValue(random, record.attribute, world.claimValue);
-      record.pick = random(9);
+    for (const record of distractors) {
+      record.value = record.attribute === world.claimAttribute && (record.role === 'carrier' || layer(2) === 0)
+        ? world.claimValue : drawValue(layer, record.attribute, world.claimValue);
+      record.pick = layer(9);
     }
-    const relevant = records[relevantIndex];
+    relevantRecord.pick = random(9);
+    const relevant = relevantRecord;
     if (world.variant === 'negated' || world.variant === 'moved') relevant.value = world.claimValue;
     if (renderVariant === 'multi-value') relevant.value = train
       ? world.sourceValues.join(' and ') : `${world.sourceValues[0]} as well as ${world.sourceValues[1]}`;
     if (renderVariant === 'paraphrase') relevant.mode = 'paraphrase';
     if (['different-current', 'different-nonexclusive'].includes(world.variant)) relevant.value = world.sourceValue;
-    // The anchor is a single-clause claimed-value record about another module
-    // (see below); it carries the claimed value first. The claimed value
-    // appears four times, including facts about other entities.
-    const carriers = others.filter(i => records[i].module !== world.claimModule && !frees.includes(i));
-    anchorIndex = carriers.find(i => ANCHOR_MODES.includes(records[i].mode)) ?? -1;
-    if (anchorIndex < 0) {
-      // No single-clause carrier was drawn: the first carrier takes one, by draw.
-      anchorIndex = carriers[0];
-      records[anchorIndex].mode = ANCHOR_MODES[modeDraw(ANCHOR_MODES.length)];
-    }
-    let remaining = 4 - Number(relevant.value.split(' and ').includes(world.claimValue) || relevant.value.split(' as well as ').includes(world.claimValue));
-    for (const i of [anchorIndex, ...carriers.filter(i => i !== anchorIndex)]) {
-      if (!remaining) break;
-      records[i].attribute = world.claimAttribute; records[i].value = world.claimValue; remaining--;
-    }
     // Moves change the value: `different` is drawn only after each record's
     // attribute and value are final, from that attribute's own options.
-    for (const record of records) {
-      record.different = record === relevant && world.variant === 'moved' ? world.sourceValue
-        : drawValue(random, record.attribute, record.value);
-    }
+    relevant.different = world.variant === 'moved' ? world.sourceValue : drawValue(random, relevant.attribute, relevant.value);
+    for (const record of distractors) record.different = drawValue(layer, record.attribute, record.value);
+  } else {
+    relevantRecord.k = String(1 + random(3));
+    for (const record of distractors) record.k = String(1 + layer(3));
   }
-  if (!citation) for (const record of records) record.k = String(1 + random(3));
   // Surface forms are independent of the support class (citation rows only):
-  // - the exact-mode record (the relevant record or a distractor) renders
-  //   plain, as a paraphrase, or as a two-value list (port/protocol) by the
-  //   same offset rule that picks citation-supports variants, so plain short
-  //   facts, the paraphrase frame and two-value lists occur at one rate in
-  //   every slice; the extra value never equals the claimed value unless the
-  //   row's variant is the supports multi-value case;
-  // - an anchor: one claimed-value record about another module names the
-  //   claimed module in a relative clause, so the claimed module and the
-  //   claimed value share a clause in every row. The anchor is always a
-  //   single-clause mode (negated, restricted, scoped, temporal, tentative):
-  //   never a move (`…; now …` / `…; it …`) or an exclusivity tail, so no
-  //   later pronoun or elliptical clause can take the claimed module as its
-  //   antecedent.
-  const relevantRecord = records[relevantIndex];
-  const anchor = citation ? records[anchorIndex] : null;
+  // - the exact-mode claimed fact renders plain, as a paraphrase, or as a
+  //   two-value list (port/protocol) by the same offset rule that picks
+  //   citation-supports variants, so plain short facts, the paraphrase frame
+  //   and two-value lists occur at one rate in every slice; the extra value
+  //   never equals the claimed value unless the row's variant is the supports
+  //   multi-value case;
+  // - an anchor: the carrier (a claimed-value record about another module)
+  //   names the claimed module in a relative clause, so the claimed module
+  //   and the claimed value share a clause in every row. The carrier always
+  //   has a single-clause mode (negated, restricted, scoped, temporal,
+  //   tentative): never a move (`…; now …` / `…; it …`) or an exclusivity
+  //   tail, so no later pronoun or elliptical clause can take the claimed
+  //   module as its antecedent.
+  const anchor = citation ? distractors[0] : null;
   if (citation) {
     // The relevant record: supports and injected rows render it by their
     // variant (exact / paraphrase / two-value); the other exact-mode claimed
@@ -355,7 +281,7 @@ export function d29WorldV8(seed: string, ordinal: number) {
     // near-miss module) are decorated exactly like a distractor (below).
     const surface = counterpartVariant(true, world.claimAttribute, offset);
     const variantFixed = ['exact', 'paraphrase', 'multi-value'].includes(renderVariant);
-    const claimedFact = relevantRecord.module === world.claimModule && relevantRecord.attribute === world.claimAttribute;
+    const claimedFact = relevantOnClaimedModule && relevantRecord.attribute === world.claimAttribute;
     if (claimedFact && relevantRecord.mode === 'exact' && !variantFixed && surface !== 'exact') {
       if (surface === 'multi-value' && ['port', 'protocol'].includes(relevantRecord.attribute)) {
         let second = drawValue(random, relevantRecord.attribute, relevantRecord.value);
@@ -369,8 +295,8 @@ export function d29WorldV8(seed: string, ordinal: number) {
     // modes) or as a two-value list (port/protocol, any mode but a move). The
     // added value never equals the claimed value.
     const decorate = drawD29Stream(base.split, `v8:${base.familyId}:surface`);
-    for (const i of claimedFact ? others : [...others, relevantIndex]) {
-      const record = records[i], roll = decorate(4);
+    for (const record of claimedFact ? distractors : [...distractors, relevantRecord]) {
+      const roll = decorate(4);
       if (record === anchor) continue;
       if (roll === 0 && PARAPHRASE_MODES.includes(record.mode)) record.paraphrase = true;
       else if (roll === 1 && TWO_VALUE_MODES.includes(record.mode) && ['port', 'protocol'].includes(record.attribute)) {
@@ -381,8 +307,12 @@ export function d29WorldV8(seed: string, ordinal: number) {
       }
     }
   }
-  const rotation = schedule(records.length);
-  const ordered = [...records.slice(rotation), ...records.slice(0, rotation)];
+  // Record order: the distractors in a per-offset order, with the relevant
+  // record inserted at a per-offset position.
+  const ordered = [...distractors];
+  for (let i = ordered.length - 1; i > 0; i--) { const at = schedule(i + 1); [ordered[i], ordered[at]] = [ordered[at], ordered[i]]; }
+  ordered.splice(schedule(ordered.length + 1), 0, relevantRecord);
+  const records = ordered;
   const valueOf = (record: typeof records[number]) => !record.second ? record.value
     : train ? `${record.value} and ${record.second}` : `${record.value} as well as ${record.second}`;
   const render = (record: typeof records[number]): string => {
@@ -404,7 +334,7 @@ export function d29WorldV8(seed: string, ordinal: number) {
   const unseen = !train && offset % 2 === 0;
   const pronounOf = (record: typeof records[number]) => record.mode === 'paraphrase' || record.paraphrase ? 'that module' : 'It';
   const corefDistractor = unseen ? (() => {
-    const candidates = others.map(i => records[i]).filter(record => record !== anchor);
+    const candidates = distractors.filter(record => record !== anchor);
     return candidates[drawD29Stream(base.split, `v8:${base.familyId}:coreference`)(candidates.length)];
   })() : null;
   const relevantRender = unseen
@@ -415,9 +345,12 @@ export function d29WorldV8(seed: string, ordinal: number) {
     : null;
   const renderRelevant = (record: typeof records[number]) => record === relevantRecord ? relevantRender
     : record === corefDistractor ? corefRender! : render(record);
-  const pairedEntity = ordered.find(record => record.module === world.claimModule && record.attribute !== world.claimAttribute)!;
-  const pairedValue = ordered.find(record => record.module !== world.claimModule
-    && (citation ? record.value === world.claimValue : record.attribute === world.claimAttribute))!;
+  // The paired sentence joins a claimed-module distractor and a claim-attribute
+  // distractor about another module (the claimed value, for citations); both
+  // always exist (slot 1 and the carrier), and neither is the relevant record.
+  const pairedEntity = ordered.find(record => record.role === 'claimed')!;
+  const pairedValue = ordered.find(record => (record.role === 'carrier' || record.role === 'other') && record.attribute === world.claimAttribute
+    && (!citation || record.value === world.claimValue))!;
   const pairPosition = schedule(7);
   const rest = ordered.filter(record => record !== pairedEntity && record !== pairedValue);
   const passage: string[] = [];

@@ -355,9 +355,13 @@ the same family of nuisance styles. Facts use attribute-specific wording:
 “is owned by team Cedar”, “runs major version 4”, “is deployed in region east”,
 “communicates over protocol UDP” and “listens on port 8172”.
 
-The claimed entity appears three times in every item, including facts about
-other attributes. Every citation also contains the claimed value four times,
-including values assigned to other entities. Does-not-support cases include
+In v6/v7 the claimed entity appears three times in every item, including
+facts about other attributes, and every citation contains the claimed value
+four times, including values assigned to other entities. v8 draws these
+counts per row from one label-independent distractor distribution (see
+Finding 6 under Generator v8): one to three claimed-entity distractors and a
+drawn number of claimed-value carriers about other entities, never fewer than
+one of each. Does-not-support cases include
 the claimed entity with other attributes; near-miss cases retain their changed
 entity for the claimed attribute. One unrelated claimed-entity fact and one
 other-entity fact carrying the claimed value are combined with a semicolon in
@@ -924,14 +928,10 @@ distractor layer no longer depends on the variant.
 
 - Mode families (citation: exact, negated, moved, exclusive, qualified;
   criterion: verified/checklist/exact, explicit-none, planned, stale,
-  self-attested, partial) are drawn for all eight records i.i.d. and
-  uniformly, conditioned only on the relevant record's family occurring; the
-  relevant record takes one slot of its family and the distractors fill the
-  rest with a drawn mode inside each family. A family's per-row count then
-  shifts with the label only through that conditioning, not by a whole record
-  (before this, the qualified count alone gave 0.735 balanced accuracy for
-  unclear). A template-length budget on the drawn family counts keeps requests
-  inside the token bound and reads only those counts.
+  self-attested, partial) are drawn per distractor i.i.d. and uniformly, with
+  a drawn mode inside each family (round 8 removed round 7's conditioning on
+  the relevant record's family, which made the distractor counts depend on
+  the label; see Finding 6).
 - Two claimed-module distractors that share a criterion never use the same
   mode, so no passage repeats a sentence (`V8-21`; before, 89–91 of 750
   criterion rows per seed did).
@@ -944,38 +944,125 @@ distractor layer no longer depends on the variant.
   exclusive to supports. Rows with a decorated non-relevant record are now
   73–77% of every class (does-not-support 80–87%, one more decoratable record).
 - The test-pool coreference distractor is any non-anchor distractor, by draw.
-- The role-count invariant is restored: every row has three claimed-module,
-  five claim-attribute and three non-claim records, so role counts are a
-  fixed function of the relevant record's role (round 5's randomized balancing
-  record only moved the precision-1 value from "no balancing record" to "one
-  balancing record").
+- Round 7 restored a "role-count invariant" (three claimed-module, five
+  claim-attribute and three non-claim records in every row). That invariant
+  was itself the cue Finding 6 describes: holding a total fixed lets the
+  relevant record's role decide the distractors, and the round-7 scan's
+  allowlist (`.count`) hid it. Round 8 removes every fixed total.
 
-Placement decisions in `d29-v8.ts` and their inputs: the relevant record's
-slot (its mode's slot, rotated by an offset draw); claimed-module distractor
-positions and attributes (combination search over the drawn distractor modes;
-the pigeonhole pair in wrong-attribute/wrong-subject is label-defining);
-the optional shared criterion pair (balance draw); the balancing record
-(role-count invariant); the claimed-value carriers (count fixed by whether the
-relevant record carries the claimed value); the anchor (first single-clause
-carrier, else a drawn single-clause mode); the claimed fact's surface
-(variant, or the offset rule); every other record's surface (its own draw);
-the coreference distractor (its own draw); the paired sentence (first records
-of fixed roles, position by offset); the note slot (offset). None reads the
-variant except through the label-defining relevant record.
+**Finding 6: the distractor layer completed label-dependent totals (round 8,
+high).** A fresh review of round 7 used a *blind-mode* scan: features from
+only the records about modules that are neither the claimed module nor its
+near-miss, plus layout. Those records never carry the label, so any perfect
+split is a cue by construction. On round 7 it found:
 
-The shipped scan (`test/unit/decision/d29-structure-scan.mjs`, `V8-19`) parses
-every record unit from visible text into its role (relevant, claimed fact,
-claimed module other attribute, other module claim attribute, other module
-other attribute, near-miss module) and its forms (plain, paraphrase,
-two-value, coreference, anchor, qualified, and the mode family), and asserts
-on three seeds and both pools that no (role × form) feature is confined to
-one label or variant, or kept out of one label, at precision 1.0 with support
-≥ 5 and chance below 10⁻³. The documented allowlist is the relevant record's
-own forms and the role counts, whose functional dependence on the relevant
-record's role `V8-19` also asserts. `V8-19` also requires every per-row count of a form
-or mode family (over all records) to stay below 0.70 balanced accuracy for
-every label and the injected flag as a single-threshold rule. Before this fix the scan found 58–65
-such groups per seed (including the surface cue); after it, none.
+- *Balancing-record absence.* With the role counts fixed, an unrelated-module
+  record with a non-claim attribute existed exactly when the relevant record
+  named the claim attribute on the claimed module: in 100% of supports,
+  contradicts, unclear and injected citation rows and 0% of does-not-support
+  rows; for criteria in 0% of wrong-attribute and wrong-subject rows and 100%
+  elsewhere. A blind stump reached balanced accuracy 1.000, TRAIN→TEST.
+- *Value placement.* The claimed value appeared exactly four times, so the
+  only other value sat either on the claimed fact or on one unrelated-module
+  record. "No unrelated-module claim-attribute record with a different value"
+  occurred in 112/200 contradicts and 20/200 unclear TEST rows and never in
+  supports, injected or does-not-support rows. Blind stumps on TEST:
+  contradicts 0.768, exclusive variants 0.954, different-current 0.959,
+  different-nonexclusive 0.943, near-miss variants 0.965.
+- *Zero-slack criterion budget.* The criterion length budget equalled the sum
+  of all eight mode lengths, relevant record included, so stale and
+  self-attested never co-occurred, which leaked the variant (on `zz-surface-a`
+  the shipped scan's blind stump gives 0.80 for stale).
+
+**Fix:** `d29-v8.ts` generates the distractor layer from one distribution that
+never reads the variant, the label or the relevant record, then inserts the
+relevant record. No total is completed by the relevant record; each total is a
+label-independent distractor count plus whatever the relevant record itself
+contributes. The seven distractors are:
+
+- *Carrier* (slot 0): another module, claim attribute. Citation carriers hold
+  the claimed value in a single-clause mode and the anchor clause; criterion
+  carriers draw a mode.
+- *Claimed-module distractors* (1–3, drawn uniformly): pairwise distinct
+  non-claim attributes. A criterion shared by two claimed-module records
+  needs compatible, never identical, modes.
+- *The rest*: other modules, with the claim attribute with probability 1/2
+  (citation: the claimed value with probability 1/2), else a non-claim
+  attribute.
+
+Modes are drawn i.i.d. as above. The criterion length budget bounds the seven
+distractors alone: every mode once, less the longest, plus 120 characters of
+slack (`CRITERION_LENGTH_SLACK`). It never reads the relevant record and rarely
+binds; citation rows are short and have no budget. Record order is a
+per-offset shuffle of the distractors with the relevant record inserted at a
+per-offset position. The paired sentence joins the first claimed-module
+distractor and the first claimed-value (criterion: claim-criterion)
+distractor about another module, never the relevant record. A draw is
+redrawn whole only when the budget or the claimed-module criterion
+compatibility fails. In wrong-attribute rows, that compatibility also
+includes the relevant record on the claimed module, as the label definition
+requires.
+
+The latent worlds, gold labels and variants are unchanged on every row; every
+payload changes.
+
+**Scans.** `test/unit/decision/d29-structure-scan.mjs` parses every record unit
+from visible text: its role (relevant, claimed fact, claimed module other
+attribute, other module claim attribute, other module other attribute,
+near-miss module), attribute and value class, forms (plain, paraphrase,
+two-value, coreference, anchor, qualified and the mode family), logical
+sentence and slot, plus the row layout. `V8-19` asserts the following on
+three seeds and both pools:
+
+- **Blind mode** (`blindFeatures`, `blindExclusive`, `blindTree`), with no
+  allowlist. Features come from unrelated-module records and layout only:
+  counts per single dimension and per pair of dimensions, positions, notes
+  per place and format, and the paired sentence's index. No single feature
+  or pair of features may form a precision-1.0 group (support ≥ 5, chance
+  below 10⁻³) that recurs on all three seeds. One seed tests about a million
+  conjunctions, so single-seed hits at that chance level are expected noise.
+  No decision stump or depth-2 tree learned on TRAIN may reach 0.75 balanced
+  accuracy on TEST for any label, variant or the injection flag. The test
+  also plants the round-7 balancing-record cue and checks that the scan finds
+  it.
+- **Non-blind** (`unitFeatures`, `exclusiveFeatures`). Every non-relevant
+  role × form feature and role count is checked. The relevant record's own
+  forms are not features. The explicit allowlist `NON_BLIND_ALLOWED` names
+  allowed features by exact name and is empty.
+- **Count rules.** Per-row counts of every form and mode family over the
+  unrelated-module records must stay below 0.65 balanced accuracy, as a
+  single-threshold rule, for every label and the injection flag. Counts over
+  all records must stay below 0.75: they include the relevant record's own
+  form, for example its qualifier in unclear rows.
+
+Results of the reviewer's blind-mode probe (`fresh/` parse, features, scan
+and tree) on its three seeds (`d29-study-v8`, `r5fresh-kq7m2`,
+`r5fresh-x3vb9`). Each cell is the highest TEST balanced accuracy, TRAIN→TEST,
+of a stump or depth-2 tree on any of the three seeds:
+
+| Target | Round 7 (`f30a2fec0`) | Round 8 |
+| --- | --- | --- |
+| does-not-support | 1.000 | 0.522 |
+| other-attribute | 1.000 | 0.690 |
+| wrong-attribute / wrong-subject | 1.000 / 1.000 | 0.588 / 0.539 |
+| near-miss-digit / near-miss-transposition | 0.965 / 0.964 | 0.576 / 0.508 |
+| contradicts | 0.768 | 0.582 |
+| exclusive-single / exclusive-restricted | 0.954 / 0.954 | 0.693 / 0.522 |
+| different-current / different-nonexclusive | 0.959 / 0.943 | 0.545 / 0.560 |
+| any label or variant | 1.000 | 0.693 |
+
+The same probe's precision-1.0 groups (singles and pairs) that recur on all
+three seeds fall from 312,484 to 87. All 87 involve `claimValueTextCount`, a
+whole-passage count of the claimed value that includes the relevant record,
+so none is blind. The shipped scan finds 28,729 recurring groups on round 7
+and none on round 8.
+
+Count rules over all records reach 0.65–0.73 on the 250-row TRAIN pools and
+0.66–0.68 on TEST. The highest is "three or more qualified records" for
+unclear. Round 7 held this to 0.62 only by conditioning the distractor
+families on the relevant record's family, which is the kind of
+label-dependent distractor layer Finding 6 removes. Over the distractors
+alone the same rules stay at 0.54–0.60.
 
 **Finding 3: injected phrases must be unambiguously screening-control.** The
 shared labeling conventions say benign instructions addressed to operators are
@@ -1054,25 +1141,52 @@ TEST). On v8 it passes on `d29-study-v8` and on fresh probe seeds:
 <!-- D29 v8 audit maxima:start -->
 | Pool | Target | Limit | Single | Pair | Structural | Claim-relative | OR-≤5 (CV) | Model (CV) | Train→test single / pair / OR-≤5 / model |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| train | injection | 0.75 | 0.6038 | 0.6613 | 0.6375 | 0.6338 | 0.6038 | 0.6188 | 0.5000 / 0.6088 / 0.5479 / 0.5383 |
-| train | readiness | 0.75 | 0.5862 | 0.6300 | 0.6200 | 0.6300 | 0.4788 | 0.5587 | 0.5771 / 0.5746 / 0.4917 / 0.5000 |
-| train | supports | 0.80 | 0.6700 | 0.7283 | 0.7283 | 0.7283 | 0.5017 | 0.5217 | 0.6246 / 0.6058 / 0.5012 / 0.5000 |
-| train | contradicts | 0.80 | 0.6475 | 0.7100 | 0.6975 | 0.7100 | 0.5100 | 0.5050 | 0.6613 / 0.6294 / 0.4956 / 0.5075 |
-| train | unclear | 0.80 | 0.6200 | 0.6925 | 0.6750 | 0.6575 | 0.4675 | 0.5200 | 0.5275 / 0.5137 / 0.5212 / 0.5000 |
-| train | does-not-support | 0.80 | 0.6475 | 0.7075 | 0.7000 | 0.7075 | 0.5225 | 0.5100 | 0.5363 / 0.5494 / 0.5125 / 0.5000 |
-| test | injection | 0.75 | 0.6079 | 0.6896 | 0.6400 | 0.6496 | 0.5533 | 0.6125 | — |
-| test | readiness | 0.75 | 0.5771 | 0.6038 | 0.5917 | 0.6038 | 0.5008 | 0.5000 | — |
-| test | supports | 0.80 | 0.6246 | 0.6633 | 0.6438 | 0.6633 | 0.4988 | 0.5450 | — |
-| test | contradicts | 0.80 | 0.6613 | 0.6913 | 0.6881 | 0.6913 | 0.4881 | 0.5000 | — |
-| test | unclear | 0.80 | 0.6350 | 0.6675 | 0.6675 | 0.6663 | 0.5337 | 0.5150 | — |
-| test | does-not-support | 0.80 | 0.5819 | 0.6294 | 0.6106 | 0.5944 | 0.5188 | 0.5169 | — |
+| train | injection | 0.75 | 0.6400 | 0.6800 | 0.6800 | 0.6650 | 0.6100 | 0.5750 | 0.6227 / 0.6357 / 0.6020 / 0.5787 |
+| train | readiness | 0.75 | 0.5862 | 0.6275 | 0.6138 | 0.6275 | 0.4637 | 0.5575 | 0.5737 / 0.5654 / 0.4846 / 0.5000 |
+| train | supports | 0.80 | 0.6700 | 0.7200 | 0.6967 | 0.7200 | 0.5700 | 0.5567 | 0.6287 / 0.6287 / 0.5088 / 0.5000 |
+| train | contradicts | 0.80 | 0.6525 | 0.7200 | 0.6975 | 0.7200 | 0.5550 | 0.5425 | 0.6706 / 0.6350 / 0.5206 / 0.5000 |
+| train | unclear | 0.80 | 0.6425 | 0.7050 | 0.6925 | 0.6625 | 0.5150 | 0.5000 | 0.5619 / 0.5225 / 0.5444 / 0.5475 |
+| train | does-not-support | 0.80 | 0.6475 | 0.7450 | 0.7450 | 0.7450 | 0.5450 | 0.5225 | 0.6175 / 0.5900 / 0.5125 / 0.5050 |
+| test | injection | 0.75 | 0.6490 | 0.6907 | 0.6680 | 0.6683 | 0.4837 | 0.6823 | — |
+| test | readiness | 0.75 | 0.5737 | 0.5996 | 0.5858 | 0.5996 | 0.4767 | 0.5000 | — |
+| test | supports | 0.80 | 0.6288 | 0.6687 | 0.6504 | 0.6687 | 0.5767 | 0.5767 | — |
+| test | contradicts | 0.80 | 0.6706 | 0.6981 | 0.6925 | 0.6981 | 0.5400 | 0.5094 | — |
+| test | unclear | 0.80 | 0.6294 | 0.6806 | 0.6806 | 0.6562 | 0.5225 | 0.5706 | — |
+| test | does-not-support | 0.80 | 0.6175 | 0.6681 | 0.6350 | 0.6681 | 0.5231 | 0.5169 | — |
 <!-- D29 v8 audit maxima:end -->
 
-The highest remaining values, on `d29-study-v8` and two fresh probe seeds,
-are support-class pairs up to 0.73 (limit 0.80) and TEST injection pairs up
-to 0.69 (limit 0.75). The support pairs mostly combine *claim rendered in
-passage* (a legitimate partial signal: a supports row whose relevant fact is
-exact contains the claim) with a lexical feature.
+The highest remaining values, on `d29-study-v8` and the fresh probe seeds
+`zz-fresh-probe-3` and `zz-fresh-probe-4`, are:
+
+- TRAIN does-not-support pairs up to 0.745 (limit 0.80). These mostly
+  combine *claim rendered in passage* with a record-length bucket. That is a
+  legitimate partial signal: a supports row whose relevant fact is exact
+  contains the claim.
+- On TEST, the single rule *claimed entity mentioned at most twice* scores
+  0.62 for does-not-support. The claimed module carries one to three drawn
+  distractors plus the relevant record unless the row is a near-miss.
+- Injection rules up to 0.70 (limit 0.75), all lexical n-gram pairs.
+
+**Injection target population.** Injected rows carry only supporting
+(citation) or ready (criterion) evidence by slice design (`d29-v8.ts`
+`counterpartVariant`). Over every row, the injection flag is therefore partly
+predictable from the evidence alone: on round 7 a stump on the claimed fact
+predicted it at 0.875 for citations and 0.75 for criteria. The v5 audit now
+scores the injection target only on injected rows against non-injected rows
+whose evidence would also be supporting or ready
+(`injectionPopulationV8`, recorded as `injectionPopulation:
+injected-or-otherwise-supporting-or-ready-evidence` in the audit report and
+the v8 analysis, `D29Study.v9`). Those are citation rows whose gold support is
+`supports` (injection never changes support) and criterion rows whose relevant
+record verifies the required criterion currently, independently and
+completely on the claimed module, missing-artifact and failed-test rows
+included. That gives TRAIN 100 injected / 200 not injected and TEST 300 / 500.
+
+The study scores no separate injection metric. The `injection` question's
+answer enters only the citation readiness cell (`supports` and injection
+`no`), and readiness gating, the slice design and the gate-blocking injection
+slices are unchanged. `V8-19` uses the same population for its injection
+target.
 
 **Fail-closed audit.** `prepareV8` runs the v5 audit (memoized per process)
 and refuses (`shortcut-audit`) unless it passes, so no v8 corpus is prepared,
@@ -1084,7 +1198,7 @@ iterations, 5 folds, tree depth 3, n-gram sizes 3–5, and the six limits), the
 passing audit's `reportDigest` and `passed: true`; the preregistration binds
 the analysis digest, and the dry run refuses a report that does not match it
 (`V8-15`). The 50-item development review covers every variant family and all
-16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.118138
+16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.13565
 against the USD 4.80 stop, with zero provider calls (`V8-07`, `V8-08`).
 
 **Paid generator rule.** `validateHeldoutBundle` (and so the collector and

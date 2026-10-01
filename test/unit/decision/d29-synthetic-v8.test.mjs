@@ -139,8 +139,10 @@ describe('D29 v8 operator-note templates', () => {
           }
         }
         const distractors = [...seen].filter(([attribute]) => attribute !== row.world.claimAttribute);
-        // A coreference distractor on the claimed module renders as `It …`.
-        expect(distractors.reduce((n, [, count]) => n + count, 0), row.id).toBeGreaterThanOrEqual(unseen ? 1 : 2);
+        // One to three claimed-module distractors (a label-independent draw), plus the relevant record when it names another attribute.
+        const total = distractors.reduce((n, [, count]) => n + count, 0) - Number(relevantOther);
+        expect(total, row.id).toBeGreaterThanOrEqual(1);
+        expect(total, row.id).toBeLessThanOrEqual(3);
         for (const [attribute, count] of distractors) expect(count, `${row.id}/${attribute}`).toBe(1);
         if (relevantOther) {
           expect(seen.get(row.world.sourceAttribute), `${row.id} relevant attribute repeated`).toBe(1);
@@ -157,8 +159,9 @@ describe('D29 v8 operator-note templates', () => {
             if (mode === 'partial' || k === '2') for (let n = 0; n < occurrences; n++) found.push({ criterion, mode });
           }
         }
-        const expected = row.world.sourceModule === row.world.claimModule ? 2 : 3;
-        expect(found.length, row.id).toBe(expected + Number(relevantOther));
+        // One to three claimed-module distractors (a label-independent draw), plus the relevant record when it names another criterion.
+        expect(found.length - Number(relevantOther), row.id).toBeGreaterThanOrEqual(1);
+        expect(found.length - Number(relevantOther), row.id).toBeLessThanOrEqual(3);
         for (const a of found) for (const b of found) {
           if (a !== b && a.criterion === b.criterion) expect(d29V8CompatibleCriterionModes(a.mode, b.mode), `${row.id}: ${a.mode}/${b.mode}`).toBe(true);
         }
@@ -575,39 +578,66 @@ describe('D29 v8 review round 5', () => {
 });
 
 describe('D29 v8 review round 6', () => {
-  it('V8-19 keeps every (record role × surface form) feature off any single label or variant on three seeds and both pools', async () => {
-    const { recordUnits, unitFeatures, exclusiveFeatures, ROLES, countFeatures, countRuleBalancedAccuracy } = await import('./d29-structure-scan.mjs');
+  it('V8-19 separates no label or variant from unrelated-module records plus layout (blind mode), on three seeds and both pools', async () => {
+    const { recordUnits, blindFeatures, blindExclusive, blindTree, unitFeatures, exclusiveFeatures, BLIND_ROLES,
+      countFeatures, countRuleBalancedAccuracy } = await import('./d29-structure-scan.mjs');
+    const { injectionPopulationV8 } = await import('../../../tools/decision/studies/d29-shortcuts-v8.mjs');
     const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
+    const targetsOf = kind => ({
+      label: row => kind === 'citation' ? oracle(row.world).support : String(oracle(row.world).ready),
+      variant: row => row.slice.endsWith('-injection') ? 'injection' : row.world.variant,
+      // The injection flag is scored against otherwise-supporting / otherwise-ready rows only (see the v5 audit).
+      injected: row => injectionPopulationV8(row.world, oracle(row.world)) ? String(row.world.injected) : undefined });
+    const recurring = [];
     for (const seed of [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b']) {
       const rows = worlds(d29WorldV8, seed);
       const parsed = new Map(rows.map(row => [row, recordUnits(row, pools)]));
-      for (const kind of ['citation', 'phase-criterion']) for (const pool of ['train', 'test']) {
-        const members = rows.filter(row => row.world.kind === kind && row.world.pool === pool);
-        const labelOf = row => kind === 'citation' ? oracle(row.world).support : String(oracle(row.world).ready);
-        const found = exclusiveFeatures(members, row => unitFeatures(parsed.get(row).units), {
-          variant: row => row.slice.endsWith('-injection') ? 'injection' : row.world.variant,
-          label: labelOf, injected: row => String(row.world.injected) }, { onlyDirection: ['variant'] });
-        expect(found.map(item => `${item.target}:${item.feature}=${item.value} ${item.direction} ${item.label} (n=${item.support})`), `${seed}/${kind}/${pool}`).toEqual([]);
-        // Role counts (allowlisted) are a fixed function of the relevant record's role.
-        const byRelevantRole = new Map();
-        for (const row of members) {
-          const { units } = parsed.get(row);
-          const relevantRole = `${row.world.sourceModule === row.world.claimModule}/${row.world.sourceAttribute === row.world.claimAttribute}`;
-          const counts = ROLES.map(role => units.filter(unit => unit.role === role).length).join(',');
-          if (!byRelevantRole.has(relevantRole)) byRelevantRole.set(relevantRole, new Set());
-          byRelevantRole.get(relevantRole).add(counts);
+      const blind = new Map(rows.map(row => [row, blindFeatures(parsed.get(row))]));
+      const hits = new Set();
+      for (const kind of ['citation', 'phase-criterion']) {
+        const targets = targetsOf(kind);
+        for (const pool of ['train', 'test']) {
+          const members = rows.filter(row => row.world.kind === kind && row.world.pool === pool);
+          for (const hit of blindExclusive(members, members.map(row => blind.get(row)), targets, { onlyDirection: ['variant'] })) hits.add(`${kind}/${pool}|${hit}`);
+          // Non-blind: every non-relevant role, with the explicit (empty) allowlist.
+          const found = exclusiveFeatures(members, row => unitFeatures(parsed.get(row).units), targets, { onlyDirection: ['variant'] });
+          expect(found.map(item => `${item.target}:${item.feature}=${item.value} ${item.direction} ${item.label} (n=${item.support})`), `${seed}/${kind}/${pool}`).toEqual([]);
+          // Count rules: distractor-only counts carry nothing; counts over every record carry only the relevant record's own form.
+          for (const targetOf of [targets.label, targets.injected]) {
+            const scoped = members.filter(row => targetOf(row) !== undefined);
+            const [blindBest] = countRuleBalancedAccuracy(scoped, row => countFeatures(parsed.get(row).units.filter(unit => BLIND_ROLES.includes(unit.role))), targetOf);
+            expect(blindBest.balancedAccuracy, `${seed}/${kind}/${pool} blind ${blindBest.feature}>=${blindBest.threshold} ${blindBest.label}`).toBeLessThan(0.65);
+            const [best] = countRuleBalancedAccuracy(scoped, row => countFeatures(parsed.get(row).units), targetOf);
+            expect(best.balancedAccuracy, `${seed}/${kind}/${pool} ${best.feature}>=${best.threshold} ${best.label}`).toBeLessThan(0.75);
+          }
         }
-        for (const [role, counts] of byRelevantRole) expect([...counts], `${seed}/${kind}/${pool}/${role}`).toHaveLength(1);
-        // Per-row counts of every form and mode family (all records) carry no single-threshold label rule >= 0.70.
-        for (const targetOf of [labelOf, row => String(row.world.injected)]) {
-          const [best] = countRuleBalancedAccuracy(members, row => countFeatures(parsed.get(row).units), targetOf);
-          expect(best.balancedAccuracy, `${seed}/${kind}/${pool} ${best.feature}>=${best.threshold} ${best.label}`).toBeLessThan(0.7);
+        const train = rows.filter(row => row.world.kind === kind && row.world.pool === 'train');
+        const test = rows.filter(row => row.world.kind === kind && row.world.pool === 'test');
+        for (const result of blindTree(train, train.map(row => blind.get(row)), test, test.map(row => blind.get(row)), targets)) {
+          expect(Math.max(result.stump, result.tree), `${seed}/${kind} ${result.target}:${result.label} [${result.treeFeatures.join(' | ')}]`).toBeLessThan(0.75);
         }
       }
+      recurring.push(hits);
       // Every unit parses, apart from a handful of rendering forms the scan's parser does not cover.
       expect([...parsed.values()].reduce((n, item) => n + item.unparsed, 0), seed).toBeLessThan(20);
     }
-  }, 180_000);
+    // Precision-1.0 groups (support >= 5, chance < 1e-3) over single blind features and pairs: one seed tests about a
+    // million conjunctions, so a group counts as a cue when it recurs on all three seeds.
+    expect([...recurring[0]].filter(hit => recurring.every(set => set.has(hit)))).toEqual([]);
+    // The scan has power: dropping the unrelated-module non-claim records from does-not-support rows (the round-7
+    // balancing-record cue) is found by the blind tree and the precision scan.
+    const rows = worlds(d29WorldV8, D29_V8_SEED).filter(row => row.world.kind === 'citation');
+    const planted = new Map(rows.map(row => {
+      const { units, layout } = recordUnits(row, pools);
+      const dropped = oracle(row.world).support === 'does-not-support' ? units.filter(unit => unit.role !== 'other-other') : units;
+      return [row, blindFeatures({ units: dropped, layout })];
+    }));
+    const train = rows.filter(row => row.world.pool === 'train'), test = rows.filter(row => row.world.pool === 'test');
+    const label = { label: targetsOf('citation').label };
+    const dns = blindTree(train, train.map(row => planted.get(row)), test, test.map(row => planted.get(row)), label).find(item => item.label === 'does-not-support');
+    expect(dns.stump).toBeGreaterThan(0.9);
+    expect([...blindExclusive(test, test.map(row => planted.get(row)), label)].some(hit => hit.startsWith('label|does-not-support|'))).toBe(true);
+  }, 300_000);
 
   it('V8-20 decorates distractors at one rate in every label (the round-4 surface-placement cue)', async () => {
     const { recordUnits } = await import('./d29-structure-scan.mjs');

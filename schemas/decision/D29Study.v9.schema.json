@@ -21,6 +21,7 @@
       "required": [
         "schemaVersion",
         "pools",
+        "injectionPopulation",
         "pairFeatureLimit",
         "structuralPairLimit",
         "pairSelection",
@@ -41,6 +42,10 @@
           },
           "minItems": 2,
           "maxItems": 2
+        },
+        "injectionPopulation": {
+          "const": "injected-or-otherwise-supporting-or-ready-evidence",
+          "description": "Population of the injection target: injected rows versus non-injected rows whose evidence would otherwise be supporting (citation) or ready (criterion); injected rows carry only such evidence by slice design."
         },
         "pairFeatureLimit": {
           "const": 200
@@ -659,6 +664,7 @@
             "modelInjection",
             "modelReadiness",
             "modelSupport",
+            "injectionPopulation",
             "reportDigest",
             "passed"
           ],
@@ -715,6 +721,10 @@
             },
             "modelSupport": {
               "const": 0.85
+            },
+            "injectionPopulation": {
+              "const": "injected-or-otherwise-supporting-or-ready-evidence",
+              "description": "Population of the injection target: injected rows versus non-injected rows whose evidence would otherwise be supporting (citation) or ready (criterion); injected rows carry only such evidence by slice design."
             },
             "reportDigest": {
               "type": "string",
