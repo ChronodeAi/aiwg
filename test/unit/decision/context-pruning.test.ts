@@ -9,6 +9,7 @@ import {
   classifyContextPruningCandidates,
   classifyContextPruningCandidate,
   computeContextBudgetManagerBaseline,
+  CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS,
   CONTEXT_PRUNING_QUALITY_METRICS,
   contextPruningDigest,
   contextPruningPairSetDigest,
@@ -178,7 +179,8 @@ function report(
   metrics: ContextPruningPairedMetrics,
   options: { gate?: 'PROMOTE' | 'HOLD' | 'ROLLBACK'; preregistration?: ContextPruningPreregistration;
     holdoutAccessedAt?: string | null; trustedDigest?: `sha256:${string}`; missingInputs?: string[];
-    runs?: PruningRunEvidence[]; trustedReceiptSetDigest?: `sha256:${string}` } = {},
+    runs?: PruningRunEvidence[]; trustedReceiptSetDigest?: `sha256:${string}`;
+    evaluationNow?: () => number } = {},
 ) {
   // By default the preregistration froze exactly the pair set being reported.
   const preregistration = options.preregistration ?? preregister({}, now(), metrics.pairs);
@@ -192,6 +194,7 @@ function report(
     pruningRuns: runs,
     trustedReceiptSetDigest: options.trustedReceiptSetDigest ?? contextPruningReceiptSetDigest(runs.flatMap(run => run.receipts)),
     missingInputs: options.missingInputs,
+    evaluationNow: options.evaluationNow,
   });
 }
 
@@ -801,6 +804,31 @@ describe('D26 context pruning pilot', () => {
     expect(() => report(goodMetrics(), { preregistration: loosened, trustedDigest: anchored.digest })).toThrow('trusted digest');
     expect(() => report(goodMetrics(), { preregistration: { ...anchored, thresholds: { ...anchored.thresholds, minimumSliceN: 1 } } }))
       .toThrow('digest mismatch');
+  });
+
+  it('I: rejects a holdout access attested after the evaluation clock beyond skew', () => {
+    // Fake evaluation clock: fixed epoch ms, so the check never reads Date.now.
+    const evaluationMs = Date.parse('2026-10-01T12:00:00.000Z');
+    const evaluationNow = () => evaluationMs;
+    // A far-future attestation is refused before report construction, even
+    // though it satisfies the preregistration ordering check.
+    expect(() => report(goodMetrics(), { holdoutAccessedAt: '2099-06-01T00:00:00.000Z', evaluationNow }))
+      .toThrow('future holdout access');
+    // One millisecond past the documented skew allowance is still in the future.
+    const pastSkew = new Date(evaluationMs + CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS + 1).toISOString();
+    expect(() => report(goodMetrics(), { holdoutAccessedAt: pastSkew, evaluationNow })).toThrow('future holdout access');
+    // Exactly at the allowance the attestation is accepted and recorded.
+    const atSkew = new Date(evaluationMs + CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS).toISOString();
+    expect(report(goodMetrics(), { holdoutAccessedAt: atSkew, evaluationNow }).holdoutAccessedAt).toBe(atSkew);
+  });
+
+  it('J: accepts a valid prior holdout timestamp against the injected clock', () => {
+    const evaluationNow = () => Date.parse('2026-10-01T12:00:00.000Z');
+    const result = report(goodMetrics(), { evaluationNow });
+    expect(result).toMatchObject({ decision: 'PROMOTE', advisory: null, holdoutAccessedAt: HOLDOUT_AT });
+    const unrecorded = report(goodMetrics(), { holdoutAccessedAt: null, evaluationNow });
+    expect(unrecorded).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+    expect(unrecorded.findings).toEqual(['holdout-access-unrecorded']);
   });
 
   it('keeps protected-retention breaches on ROLLBACK and preserves missing-input advisories', () => {
