@@ -147,6 +147,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- The D24 preprocessing gate and the recorded `RulesetResult` now share one
+  immutable snapshot of the host-supplied lineage and verification, taken before
+  the result is constructed. Caller-owned mutation during evaluation can no
+  longer change the gate verdict or the recorded lineage; malformed lineage is
+  still refused without dispatch. Experimental, default-off (#2783)
+
 - Bind experimental, default-off held-out collector baselines to the independent
   durable spend head. Changed or missing baselines fail before credential access
   even after run deletion; legacy heads require operator reconciliation (#2778)
