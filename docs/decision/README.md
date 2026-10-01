@@ -108,3 +108,10 @@ ledger verification for D17/D29 study modules. Explicit diagnostic, staged
 calibration/test, and pre-existing artifact bindings keep collection scope and
 scorer identity separate from D09 qualification. Live studies, calibration, human
 review and study-specific statistical reports remain pending.
+
+The experimental, default-off [gates capability phase 1 core](gates.md)
+adds declarative gate packs, a pure offline evaluator with digest-bound
+reports, an exact Clopper-Pearson interval, and canonical-JSON evidence
+digests with a versioned legacy mode. There is no CLI, no project floor
+enforcement, no addon provider loading and no migrated study; live criteria
+remain pending.

@@ -9,6 +9,46 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Tightened the experimental, default-off gates core addendum: every scope
+  transition now requires the child to cover a superset of the parent's
+  slices under every slice universe (`listed -> each` must except none of
+  the parent's listed slices, `all -> each` allows no exceptions),
+  `onInsufficient` is HOLD-only in schema and runtime (ROLLBACK needs an
+  observed blocking failure), and the D17 source dry-run pins are refreshed
+  for the resulting source digest while the corpus and split/gold pins are
+  unchanged. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
+- Hardened the experimental, default-off gates core fix round 2: the
+  evaluator re-resolves through pure `resolveGateBinding`/`composeGatePack`/
+  `applyGateExtends` over a standalone authored-pack snapshot and rejects
+  non-`GateRegistry` registries, so subclassed or duck-typed registries cannot
+  empty gates or loosen parameters; holdout inputs are sealed
+  `sealGateHoldout` records with re-derived digests, null allowed only when
+  the binding declares no held-out split, and the report records the sealed
+  holdout; benchmark and release builders emit canonical-only `/v2` records
+  with legacy allowlisted only for `/v1` pre-migration evidence; child-drops-
+  default is documented as P7 binding freedom with project floors as the
+  future check. Live CLI, project floors, provider loading and study adoption
+  remain pending (#2824)
+
+- Hardened the experimental, default-off gates core against independent review
+  findings: the evaluator resolves the binding internally and refuses
+  caller-supplied resolution, `extends` is a full parent pin with the composed
+  pack digest pinned in bindings and reports, holdout freeze comes only from
+  required trusted inputs, reports must re-derive byte-identically, per-gate
+  `onFail`/`onInsufficient` replace severity with insufficient defaulting to
+  HOLD and ceiling gates mirroring upstream, parameters are namespaced per
+  pack, unpinned providers and vacuous scopes fail closed, and evidence
+  digests verify canonical-only by default with an explicit pre-migration
+  legacy allowlist. Live CLI, project floors, provider loading and study
+  adoption remain pending (#2824)
+
+- Refreshed experimental, default-off D17 source dry-run pins after the gates
+  phase 1 core moved the qualification statistics and canonicalised evidence
+  digests; the corpus and split/gold pins are unchanged. Live evidence and
+  approval remain pending (#2824)
+
 - The Fortemi prebuilt-package gate (`npm run lint:fortemi-prebuilt-package`)
   ran `npm pack` with no timeout, so a wedged pack held the CI job until the
   runner timeout. The call is now bounded at 5 minutes, overridable with
@@ -249,6 +289,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   transport offers no provider-side output cap, so the reservation, the breach
   refusal and the run stop are the per-call enforcement; ordinary decision
   behavior is unchanged (#2800).
+
+- Experimental, default-off gates capability phase 1 core: closed versioned
+  GatePack/GateBinding/GateReport schemas with catalog entries, a namespaced
+  registry with monotone-tightening `extends` proofs, a pure deterministic
+  offline evaluator with digest-bound never-upgrade reports, four pinned core
+  metric providers, an exact Clopper-Pearson interval, and canonical-JSON
+  qualification evidence digests with a versioned legacy mode. There is no
+  CLI, no project floor enforcement, no addon provider loading and no
+  migrated study; live criteria remain pending (#2824)
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
