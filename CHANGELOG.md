@@ -372,6 +372,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Caller cancellation during experimental, default-off routing dispatch now
+  records the `cancelled` terminal reason while keeping unknown-cost accounting
+  (null spend and usage) in the receipt; non-cancellation unknown-cost failures
+  still record `cost-unknown` (#2792).
 - The routing control drill reports an active-run-pin mismatch through
   `RoutingControlDrillError` with the before and after pins beside the current
   circuit, policy and rollback state, instead of a stateless contract error.

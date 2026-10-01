@@ -246,9 +246,10 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
         }
         break routes;
       }
-      if (spent === null) { stop('cost-unknown'); break routes; }
-      if (spent > limits.limitMicros) { stop('budget-exceeded'); break routes; }
+      // A known overrun outranks everything; cancellation outranks an unknown cost it caused.
+      if (spent !== null && spent > limits.limitMicros) { stop('budget-exceeded'); break routes; }
       if (result.reason === 'cancelled') { stop('cancelled'); break routes; }
+      if (spent === null) { stop('cost-unknown'); break routes; }
       if (CIRCUIT_REASONS.has(result.reason)) {
         openProviders.add(route.model.provider);
         body.fallbacks.push(route.id);
