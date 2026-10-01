@@ -457,7 +457,17 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
     'require-recertification': contain('require-recertification'),
   });
   const after = control.activeRunPins();
-  if (canonicalJson(after) !== canonicalJson(before)) throw new RoutingContractError('active run pins changed during the drift response');
+  if (canonicalJson(after) !== canonicalJson(before)) {
+    return fail('active run pins changed during the drift response', {
+      policyRestored: restoredPolicy !== null,
+      aliasRolledBack: rollbackEvent !== null,
+      compensated: false,
+      consistent: false,
+      currentPolicy: control.policyHistory().at(-1) ?? previousPolicy,
+      activeRunPinsBefore: [...before],
+      activeRunPinsAfter: frozenRoutingClone([...after]),
+    });
+  }
   return { driftResponse: drift.executed, previousPolicy, restoredPolicy, rollbackEvent, jevCircuitOpen, activeRunPins: structuredClone([...after]) };
 }
 
