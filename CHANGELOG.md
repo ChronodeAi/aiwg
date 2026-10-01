@@ -147,6 +147,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off D26 context-pruning reports hold bounded
+  zero-variance reads at small n: a bounded quality metric whose per-pair
+  differences are all identical (a zero-width bootstrap interval) is
+  insufficient below the new preregistered `minimumZeroVarianceN`, even with
+  passing economics and integrity, while an adequate identical sample remains
+  eligible for PROMOTE. Ordinary decision behavior is unchanged (#2785)
+
 - Bind experimental, default-off held-out collector baselines to the independent
   durable spend head. Changed or missing baselines fail before credential access
   even after run deletion; legacy heads require operator reconciliation (#2778)
