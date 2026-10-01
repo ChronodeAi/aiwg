@@ -9,6 +9,7 @@
     "schemaVersion",
     "id",
     "pilotPack",
+    "calibration",
     "dataset",
     "slices",
     "thresholds",
@@ -19,6 +20,27 @@
     "schemaVersion": { "const": "decision-issue-triage-evaluation-manifest/v1" },
     "id": { "type": "string", "minLength": 1 },
     "pilotPack": { "$ref": "#/$defs/pin" },
+    "calibration": {
+      "description": "Calibration registry, policy and per-sample request rule frozen before holdout access; all null pins no registry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registryDigest", "policyDigest", "requestRule"],
+      "properties": {
+        "registryDigest": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$" },
+        "policyDigest": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$" },
+        "requestRule": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["requestedAlias", "runIdPrefix", "calibrationArtifactId", "notBefore"],
+          "properties": {
+            "requestedAlias": { "type": "string", "minLength": 1 },
+            "runIdPrefix": { "type": "string", "minLength": 1 },
+            "calibrationArtifactId": { "type": ["string", "null"], "minLength": 1 },
+            "notBefore": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    },
     "dataset": {
       "type": "object",
       "additionalProperties": false,
