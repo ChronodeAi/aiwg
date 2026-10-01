@@ -411,7 +411,19 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
       try {
         restored = control.restorePolicy(prior, input.approvalReference, input.at);
       } catch (error) {
-        return fail(`routing policy restore failed: ${messageOf(error)}`, unchanged);
+        // The restore may have installed `prior` before throwing, so re-read the
+        // history and derive the reported state from what is actually current.
+        const current = control.policyHistory().at(-1) ?? previousPolicy;
+        const installedPrior = canonicalJson(current) === canonicalJson(prior);
+        return fail(`routing policy restore failed: ${messageOf(error)}`, {
+          policyRestored: installedPrior,
+          aliasRolledBack: false,
+          compensated: false,
+          // Consistent only when nothing changed: any other installed policy (prior or
+          // something else entirely) leaves policy and alias out of step.
+          consistent: canonicalJson(current) === canonicalJson(previousPolicy),
+          currentPolicy: current,
+        });
       }
       if (!installed(prior, restored)) {
         return fail('routing policy restore did not install the prior pinned policy', { ...unchanged, consistent: false, currentPolicy: control.policyHistory().at(-1) ?? previousPolicy });
