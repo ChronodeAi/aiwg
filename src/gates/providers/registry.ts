@@ -7,10 +7,14 @@ export class MetricProviderRegistry {
   register(provider: MetricProvider): void {
     if (!provider || typeof provider.id !== 'string' || !provider.id.trim()
       || typeof provider.version !== 'string' || !provider.version.trim()
-      || typeof provider.sourceDigest !== 'string'
+      || typeof provider.sourceDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(provider.sourceDigest)
       || !provider.metrics || typeof provider.metrics !== 'object'
       || typeof provider.compute !== 'function') {
       throw new Error('metric provider registration requires id, version, sourceDigest, metrics and compute');
+    }
+    if (provider.codeDigest !== undefined
+      && (typeof provider.codeDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(provider.codeDigest))) {
+      throw new Error(`metric provider ${provider.id} code digest is unknown`);
     }
     if (this.providers.has(provider.id)) throw new Error(`duplicate metric provider: ${provider.id}`);
     this.providers.set(provider.id, provider);

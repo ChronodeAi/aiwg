@@ -106,7 +106,8 @@
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "minLength": 1 },
-        "sourceDigest": { "$ref": "#/$defs/digest" }
+        "sourceDigest": { "$ref": "#/$defs/digest" },
+        "codeDigest": { "$ref": "#/$defs/digest", "description": "Code digest for addon/extension bundle providers (#2831). Absent for core providers." }
       }
     },
     "statisticEvidence": {

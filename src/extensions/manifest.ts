@@ -62,6 +62,11 @@ const safeModuleFile = z.string().regex(
   'must be a relative .mjs path (alphanumeric + _-, no leading slash, no ..)'
 );
 
+const safeJsonFile = z.string().regex(
+  /^[a-zA-Z0-9_-]+(?:\/[a-zA-Z0-9_-]+)*\.json$/,
+  'must be a relative .json path (alphanumeric + _-, no leading slash, no ..)'
+);
+
 // Single-char ids are allowed; multi-char ids must end with alphanumeric
 // (no trailing hyphen). This pattern: `[a-z0-9]([a-z0-9-]*[a-z0-9])?`
 const bundleNamePattern = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -170,6 +175,56 @@ export const ProviderConfigSchema = z.object({
   capabilities: ProviderCapabilityOverridesSchema.optional(),
 }).strict();
 
+/**
+ * Review attestation for one gate metric provider (#2831).
+ *
+ * A reviewer records who reviewed which exact provider bytes and when. The
+ * `codeDigest` must equal the loader-computed code digest over the provider
+ * module plus its resolved local imports (and lockfile-pinned externals);
+ * registration refuses absent attestations and digest mismatches. Null or
+ * unknown digests never verify: they fail closed.
+ */
+export const GateProviderReviewSchema = z.object({
+  reviewer: z.string().min(1).max(128),
+  reviewedAt: z.string().datetime(),
+  codeDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/, 'must be a sha256 digest'),
+}).strict();
+
+export type GateProviderReview = z.infer<typeof GateProviderReviewSchema>;
+
+/**
+ * One addon/extension gate metric provider declared by a bundle manifest
+ * (#2831). The module is loaded ONLY through the gates registry from this
+ * declaration, inside the bundle root (no traversal, no escaping symlinks,
+ * no absolute paths, size-limited), never by arbitrary import. Core
+ * providers remain the default; this field is optional and disabled unless
+ * the caller explicitly enables bundle providers.
+ */
+export const GateProviderEntrySchema = z.object({
+  id: z.string().min(1).max(128).regex(
+    /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/,
+    'must be a namespaced provider id <scope>/<name> (alphanumeric plus . _ -)',
+  ),
+  version: z.string().regex(/^\d+\.\d+\.\d+/, 'CalVer or SemVer (X.Y.Z[...])'),
+  module: safeModuleFile,
+  description: z.string().min(1).max(512),
+  review: GateProviderReviewSchema.optional(),
+  reviewFile: safeJsonFile.optional(),
+}).strict().refine(
+  (entry) => (entry.review !== undefined) !== (entry.reviewFile !== undefined),
+  { message: 'exactly one of review or reviewFile is required' },
+);
+
+export type GateProviderEntry = z.infer<typeof GateProviderEntrySchema>;
+
+export const GateProvidersSchema = z.array(GateProviderEntrySchema).max(20).refine(
+  (entries) => new Set(entries.map((entry) => entry.id)).size === entries.length,
+  { message: 'gate provider ids must be unique within a bundle' },
+).refine(
+  (entries) => new Set(entries.map((entry) => entry.module)).size === entries.length,
+  { message: 'gate provider modules must be unique within a bundle' },
+);
+
 export const CliCommandsSchema = z.object({
   namespace: z.string()
     .min(1)
@@ -241,6 +296,13 @@ export const BundleManifestSchema = z.object({
   // Expandable CLI namespace contributed by an addon-shaped bundle.
   // The same block is accepted by bundled addon manifests.
   cli_commands: CliCommandsSchema.optional(),
+
+  // Addon/extension gate metric providers (#2831). Optional and disabled by
+  // default: the gates loader resolves each `module` inside the bundle root
+  // only, verifies the review attestation digest against the computed code
+  // digest, and registers the provider through the gates registry. Core
+  // providers remain the default when this field is absent.
+  gateProviders: GateProvidersSchema.optional(),
 })
   .strict()
   .refine(

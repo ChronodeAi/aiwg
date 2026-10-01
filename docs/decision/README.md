@@ -110,5 +110,7 @@ reports, an exact Clopper-Pearson interval, and canonical-JSON evidence
 digests with a versioned legacy mode. Project floors from `aiwg.config`
 `gates` (including the default integrity-ceiling floor) are enforced only
 when the caller passes them as trusted registry/evaluator input; without
-that input behavior is unchanged. There is no CLI, no addon provider loading
-and no migrated study; live criteria remain pending.
+that input behavior is unchanged. Addon/extension [bundle
+providers](gate-providers.md) load only with an explicit opt-in and a
+verified code digest plus review attestation. There is no CLI and no migrated
+study; live criteria remain pending.

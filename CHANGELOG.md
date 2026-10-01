@@ -70,6 +70,21 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off addon/extension bundle metric providers for gates:
+  `gateProviders` bundle-manifest declarations (Zod plus TS) loaded only
+  through the gates registry from bundle-relative paths, code digests over
+  module bytes plus resolved local imports (bare externals by bundle lockfile
+  integrity), mandatory review attestations verified at load, sealed metric
+  sections bound to the trusted code and records digests, and
+  reserve-before-dispatch timeouts with fail-closed timeout, budget,
+  rejection and cancellation paths. Bindings carry an optional `codeDigest`
+  pin verified against the loaded provider; core-only evaluation stays
+  byte-identical when the opt-in is absent. Ships one reviewed fixture
+  extension example with offline conformance vectors. The D17 source dry-run
+  pins are refreshed for the new provider sources; the corpus and split/gold
+  pins are unchanged. Live qualification, real held-out data, human sign-off
+  and production rollout remain pending (#2831)
+
 - Experimental, default-off project gate floors in `aiwg.config` `gates`:
   inline `project:` floor packs and/or pins over registered packs whose
   composed gates every binding must include and tighten (reusing the per-kind

@@ -659,6 +659,18 @@ export function resolveGateBinding(
     if (provider.version !== pin.version || provider.sourceDigest !== pin.sourceDigest) {
       throw new GateRegistryError(`binding ${binding.metadata.id} provider pin mismatch for ${pin.id}`);
     }
+    // Bundle providers (#2831): the pin must carry the loader-computed code
+    // digest, verified here against the loaded provider. A byte change moves
+    // the digest, so an old pin refuses until re-pinned. Null never verifies.
+    const expectedCode = (provider as { codeDigest?: unknown }).codeDigest;
+    const pinnedCode = (pin as { codeDigest?: unknown }).codeDigest;
+    if (typeof expectedCode === 'string') {
+      if (typeof pinnedCode !== 'string' || pinnedCode !== expectedCode) {
+        throw new GateRegistryError(`binding ${binding.metadata.id} provider code pin mismatch for ${pin.id}`);
+      }
+    } else if (pinnedCode !== undefined) {
+      throw new GateRegistryError(`binding ${binding.metadata.id} provider code pin mismatch for ${pin.id}`);
+    }
   }
   const requiredProviders = new Set<string>();
   for (const pack of packs) {

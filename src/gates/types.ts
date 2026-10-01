@@ -129,6 +129,19 @@ export interface GateReference {
  */
 export const qualifyGateParameter = (packId: string, name: string): string => `${packId}.${name}`;
 
+/** Pin over one metric provider: descriptor digest plus, for bundle providers, the code digest. */
+export interface GateProviderPin {
+  id: string;
+  version: string;
+  sourceDigest: Sha256Digest;
+  /**
+   * Code digest for bundle providers (#2831). Absent for core providers.
+   * When the registry provider carries a code digest the pin must match it;
+   * a byte change moves the digest, so an old pin refuses until re-pinned.
+   */
+  codeDigest?: Sha256Digest;
+}
+
 export interface GateBinding {
   apiVersion: typeof GATES_API_VERSION;
   kind: 'GateBinding';
@@ -140,7 +153,7 @@ export interface GateBinding {
     slices: string[];
     sliceGroups?: Record<string, string[]>;
     references: GateReference[];
-    metricProviders: { id: string; version: string; sourceDigest: Sha256Digest }[];
+    metricProviders: GateProviderPin[];
     ceiling?: GateOutcome;
     registeredAt: string;
     frozenAt: string;
@@ -197,6 +210,14 @@ export interface MetricSeries {
 export interface ProviderMetrics {
   version: string;
   sourceDigest: Sha256Digest;
+  /**
+   * Trusted code digest for bundle providers (#2831), sealed by the host via
+   * `sealProviderSection` (never provider-declared). The evaluator verifies it
+   * against the binding pin and the loaded provider.
+   */
+  codeDigest?: Sha256Digest;
+  /** Digest of the input records the section was computed from. */
+  recordsDigest?: Sha256Digest;
   metrics: Record<string, MetricSeries>;
 }
 
@@ -255,7 +276,7 @@ export interface GateReport {
   metadata: GateMetadata;
   binding: ArtifactPinLike;
   packs: GatePackPin[];
-  metricProviders: { id: string; version: string; sourceDigest: Sha256Digest }[];
+  metricProviders: GateProviderPin[];
   metricsDigest: Sha256Digest;
   holdout: GateHoldoutRecord;
   gateEvidence: GateEvidence[];
