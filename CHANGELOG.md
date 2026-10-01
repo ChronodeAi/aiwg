@@ -181,6 +181,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- The experimental, default-off routing pilot now carries the remaining-cost cap
+  into every reservation and dispatch, so a fallback admitted under its estimate
+  cannot authorize spend above the remaining run budget; attempts without known
+  charged spend stop before dispatch instead of counting unknown cost as zero.
+  Post-dispatch overrun detection is retained as a safety check (#2789).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
