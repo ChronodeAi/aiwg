@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplayIntegrity.v1.schema.json",
+  "title": "DecisionComparativeReplayIntegrity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "sample_n",
+    "uncertainty",
+    "paired_baseline",
+    "integrity_mode",
+    "fresh_workspace_required",
+    "fresh_workspace_verified",
+    "integrity_state",
+    "trusted_score_source",
+    "compromise_labels",
+    "weak_signal_reason",
+    "release_gate"
+  ],
+  "properties": {
+    "sample_n": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "uncertainty": {},
+    "paired_baseline": {},
+    "integrity_mode": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fresh_workspace_required": {
+      "type": "boolean"
+    },
+    "fresh_workspace_verified": {
+      "type": "boolean"
+    },
+    "integrity_state": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trusted_score_source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "compromise_labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "weak_signal_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "release_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "reasons"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "PROMOTE",
+            "HOLD",
+            "ROLLBACK"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

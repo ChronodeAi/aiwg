@@ -1,0 +1,619 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyNativeTemplates.v1.schema.json",
+  "title": "D17StudyNativeTemplates",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "approved",
+    "policy",
+    "comparison",
+    "instructions"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-native-templates/v1"
+    },
+    "approved": {
+      "const": false
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "id",
+        "version",
+        "mode",
+        "riskTiers",
+        "definition",
+        "primitive",
+        "options",
+        "compatibleUncertaintyProfiles",
+        "requiredCapabilities",
+        "members",
+        "aggregation",
+        "disagreement",
+        "acceptance",
+        "calibration",
+        "ceilings"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-ensemble-policy/v1"
+        },
+        "id": {
+          "const": "d17-heldout-three-sample"
+        },
+        "version": {
+          "const": "1.0.0"
+        },
+        "mode": {
+          "const": "disabled"
+        },
+        "riskTiers": {
+          "type": "array",
+          "const": [
+            "synthetic-study"
+          ]
+        },
+        "definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "properties": {
+            "id": {
+              "const": "d17-synthetic-entailment"
+            },
+            "version": {
+              "const": "1.0.0"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "primitive": {
+          "const": "choice"
+        },
+        "options": {
+          "type": "array",
+          "const": [
+            "yes",
+            "no"
+          ]
+        },
+        "compatibleUncertaintyProfiles": {
+          "type": "array",
+          "const": [
+            "typesafe-distribution-v1"
+          ]
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "const": [
+            "choice"
+          ]
+        },
+        "members": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "memberType",
+                "definition",
+                "binding",
+                "adapter",
+                "model",
+                "primitive",
+                "uncertaintyProfile",
+                "requiredCapabilities",
+                "capabilities",
+                "calibration",
+                "samples",
+                "fallbackDepth",
+                "estimate",
+                "approvalReference"
+              ],
+              "properties": {
+                "id": {
+                  "const": "jev-repeated-sample"
+                },
+                "memberType": {
+                  "const": "repeated-sample"
+                },
+                "definition": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "version",
+                    "digest"
+                  ],
+                  "properties": {
+                    "id": {
+                      "const": "d17-synthetic-entailment"
+                    },
+                    "version": {
+                      "const": "1.0.0"
+                    },
+                    "digest": {
+                      "type": "string",
+                      "pattern": "^sha256:[a-f0-9]{64}$"
+                    }
+                  }
+                },
+                "binding": {
+                  "type": "null"
+                },
+                "adapter": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "version"
+                  ],
+                  "properties": {
+                    "id": {
+                      "const": "jev"
+                    },
+                    "version": {
+                      "const": "1.0.0"
+                    }
+                  }
+                },
+                "model": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "provider",
+                    "backend",
+                    "requested",
+                    "pinnedVersion"
+                  ],
+                  "properties": {
+                    "provider": {
+                      "const": "jev"
+                    },
+                    "backend": {
+                      "const": "jev"
+                    },
+                    "requested": {
+                      "const": "jev-1.13.0"
+                    },
+                    "pinnedVersion": {
+                      "const": "jev-1.13.0"
+                    }
+                  }
+                },
+                "primitive": {
+                  "const": "choice"
+                },
+                "uncertaintyProfile": {
+                  "const": "typesafe-distribution-v1"
+                },
+                "requiredCapabilities": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "prefixItems": [
+                    {
+                      "const": "choice"
+                    }
+                  ],
+                  "items": false
+                },
+                "capabilities": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "prefixItems": [
+                    {
+                      "const": "choice"
+                    }
+                  ],
+                  "items": false
+                },
+                "calibration": {
+                  "type": "null"
+                },
+                "samples": {
+                  "const": 3
+                },
+                "fallbackDepth": {
+                  "const": 0
+                },
+                "estimate": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "attemptsPerSample",
+                    "tokensPerAttempt",
+                    "costMicrosPerAttempt",
+                    "deadlineMsPerAttempt"
+                  ],
+                  "properties": {
+                    "attemptsPerSample": {
+                      "const": 2
+                    },
+                    "tokensPerAttempt": {
+                      "const": 4000
+                    },
+                    "costMicrosPerAttempt": {
+                      "const": 400
+                    },
+                    "deadlineMsPerAttempt": {
+                      "const": 60000
+                    }
+                  }
+                },
+                "approvalReference": {
+                  "type": "null"
+                }
+              }
+            }
+          ],
+          "items": false
+        },
+        "aggregation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "algorithm",
+            "tieRule"
+          ],
+          "properties": {
+            "algorithm": {
+              "const": "mean-probability-v1"
+            },
+            "tieRule": {
+              "const": "defer"
+            }
+          }
+        },
+        "disagreement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "metric",
+            "thresholdBps",
+            "onExceeded"
+          ],
+          "properties": {
+            "metric": {
+              "const": "jensen-shannon-v1"
+            },
+            "thresholdBps": {
+              "const": 1000
+            },
+            "onExceeded": {
+              "const": "defer"
+            }
+          }
+        },
+        "acceptance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "minimumSuccessfulMembers",
+            "onInsufficientMembers",
+            "highAgreementWarningBps"
+          ],
+          "properties": {
+            "minimumSuccessfulMembers": {
+              "const": 3
+            },
+            "onInsufficientMembers": {
+              "const": "defer"
+            },
+            "highAgreementWarningBps": {
+              "const": 100
+            }
+          }
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "requirement"
+          ],
+          "properties": {
+            "requirement": {
+              "const": "required"
+            }
+          }
+        },
+        "ceilings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "members",
+            "attempts",
+            "deadlineMs",
+            "tokens",
+            "costMicros",
+            "concurrency",
+            "fallbackDepth",
+            "unknownCost"
+          ],
+          "properties": {
+            "members": {
+              "const": 3
+            },
+            "attempts": {
+              "const": 6
+            },
+            "deadlineMs": {
+              "const": 360000
+            },
+            "tokens": {
+              "const": 24000
+            },
+            "costMicros": {
+              "const": 2400
+            },
+            "concurrency": {
+              "const": 1
+            },
+            "fallbackDepth": {
+              "const": 0
+            },
+            "unknownCost": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rule"
+              ],
+              "properties": {
+                "rule": {
+                  "const": "reject"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "id",
+        "alias",
+        "champion",
+        "challenger",
+        "inputSet",
+        "pairedMetrics",
+        "preregistration",
+        "eligibilityId",
+        "evaluationIntegrityReport",
+        "approval",
+        "rollbackTarget"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-champion-challenger/v1"
+        },
+        "id": {
+          "const": "d17-heldout-paired"
+        },
+        "alias": {
+          "type": "null"
+        },
+        "champion": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "identityDigest",
+            "actualModel",
+            "binding",
+            "adapter",
+            "calibration",
+            "ensemblePolicy",
+            "aliasRevision"
+          ],
+          "properties": {
+            "identityDigest": {
+              "type": "null"
+            },
+            "actualModel": {
+              "const": "jev-1.13.0"
+            },
+            "binding": {
+              "type": "null"
+            },
+            "adapter": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "version"
+              ],
+              "properties": {
+                "id": {
+                  "const": "jev"
+                },
+                "version": {
+                  "const": "1.0.0"
+                }
+              }
+            },
+            "calibration": {
+              "type": "null"
+            },
+            "ensemblePolicy": {
+              "type": "null"
+            },
+            "aliasRevision": {
+              "type": "null"
+            }
+          }
+        },
+        "challenger": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "identityDigest",
+            "actualModel",
+            "binding",
+            "adapter",
+            "calibration",
+            "ensemblePolicy"
+          ],
+          "properties": {
+            "identityDigest": {
+              "type": "null"
+            },
+            "actualModel": {
+              "const": "jev-1.13.0"
+            },
+            "binding": {
+              "type": "null"
+            },
+            "adapter": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "version"
+              ],
+              "properties": {
+                "id": {
+                  "const": "jev"
+                },
+                "version": {
+                  "const": "1.0.0"
+                }
+              }
+            },
+            "calibration": {
+              "type": "null"
+            },
+            "ensemblePolicy": {
+              "type": "null"
+            }
+          }
+        },
+        "inputSet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "digest",
+            "itemCount",
+            "frozenAt",
+            "purpose"
+          ],
+          "properties": {
+            "id": {
+              "const": "d17-final-test"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "itemCount": {
+              "const": 1200
+            },
+            "frozenAt": {
+              "const": "2026-09-30T00:00:00Z"
+            },
+            "purpose": {
+              "const": "held-out"
+            }
+          }
+        },
+        "pairedMetrics": {
+          "$ref": "https://aiwg.io/schemas/decision/D17StudyProtocol.v1.schema.json#/properties/native"
+        },
+        "preregistration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "thresholdsDigest",
+            "registeredAt",
+            "holdoutAccessedAt"
+          ],
+          "properties": {
+            "thresholdsDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "registeredAt": {
+              "const": "2026-09-30T00:00:00Z"
+            },
+            "holdoutAccessedAt": {
+              "type": "null"
+            }
+          }
+        },
+        "eligibilityId": {
+          "type": "null"
+        },
+        "evaluationIntegrityReport": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "digest"
+          ],
+          "properties": {
+            "id": {
+              "type": "null"
+            },
+            "digest": {
+              "type": "null"
+            }
+          }
+        },
+        "approval": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "reference",
+            "approvedAt"
+          ],
+          "properties": {
+            "reference": {
+              "type": "null"
+            },
+            "approvedAt": {
+              "type": "null"
+            }
+          }
+        },
+        "rollbackTarget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "aliasRevision",
+            "identityDigest"
+          ],
+          "properties": {
+            "aliasRevision": {
+              "type": "null"
+            },
+            "identityDigest": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    },
+    "instructions": {
+      "const": "Complete all null pins from immutable D09/execution records, validate native policy and comparison, and externally approve before use. Templates confer no eligibility or promotion."
+    }
+  }
+}
