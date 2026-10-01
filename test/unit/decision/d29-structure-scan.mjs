@@ -103,10 +103,11 @@ function claimOf(payload, kind, all) {
 }
 
 /**
- * Record units of one generated row from visible text: { role, forms, attr,
- * value, sentence, slot } per record, plus the row layout. Only `role ===
- * 'relevant'` reads the latent world (to name the label-defining record); every
- * other field, and the blind roles, come from the claim and passage text.
+ * Record units of one generated row from visible text: { role, forms,
+ * attribute, attr, value, sentence, slot } per record, plus the row layout.
+ * Only `role === 'relevant'` reads generator metadata (the rendered position of
+ * the label-defining record, `world.factPosition`); every other field, and the
+ * blind roles, come from the claim and passage text.
  */
 export function recordUnits(row, pools) {
   const { payload, world } = row, kind = world.kind, train = world.pool === 'train';
@@ -152,7 +153,11 @@ export function recordUnits(row, pools) {
       const groups = hit.re.exec(part).groups, module = groups.m ?? leadModule;
       const attribute = kind === 'citation' ? hit.attribute : Object.entries(CRITERIA).find(([, name]) => name === groups.a)[0];
       const near = module !== claim.module && module.split('-').filter((group, i) => group === claim.module.split('-')[i]).length === 2;
-      const relevant = module === world.sourceModule && attribute === world.sourceAttribute;
+      // The relevant record by its rendered identity: the generator records the
+      // passage sentence that holds it (`world.factPosition`), and it is never
+      // paired. Matching module and attribute instead would also catch a
+      // claimed-module distractor that shares the relevant criterion.
+      const relevant = sentenceIndex === world.factPosition && records.length === 1;
       const role = relevant ? 'relevant' : near ? 'near' : module === claim.module ? attribute === claim.attribute ? 'claimed-fact' : 'claimed-other'
         : attribute === claim.attribute ? 'other-claim' : 'other-other';
       const forms = [hit.mode];
@@ -163,7 +168,7 @@ export function recordUnits(row, pools) {
       if (forms.length === 1 && hit.mode === 'exact') forms.push('plain');
       const value = kind !== 'citation' || attribute !== claim.attribute ? 'none'
         : groups.v.split(/ (?:and|as well as) /).includes(claim.value) ? 'claimed' : 'other';
-      units.push({ role, forms, attr: attribute === claim.attribute ? 'claim' : 'other', value, sentence: sentenceIndex,
+      units.push({ role, forms, attribute, attr: attribute === claim.attribute ? 'claim' : 'other', value, sentence: sentenceIndex,
         slot: records.length === 1 ? 'single' : position === 0 ? 'left' : 'right' });
     });
   });
@@ -463,4 +468,79 @@ export function blindTree(trainRows, trainSets, testRows, testSets, targets) {
     }
   }
   return results;
+}
+
+const VERIFIED_FAMILY = ['exact', 'verified', 'checklist'];
+
+/**
+ * Claimed-module distractor features (a set of names): every record about the
+ * claimed module with a non-claim attribute or criterion except the relevant
+ * record itself (identified by rendered position). Counts, per-family counts,
+ * per-attribute multiplicity, the family multiset of each same-attribute
+ * group, verified-family records per group, and family pairs within a group.
+ */
+export function claimedDistractorFeatures({ units }) {
+  const mine = units.filter(unit => unit.role === 'claimed-other');
+  const features = new Set([`cd.n=${mine.length}`]);
+  const familyOf = unit => unit.forms.includes('qualified') ? 'qualified' : unit.forms[0];
+  const families = new Map();
+  for (const unit of mine) families.set(familyOf(unit), (families.get(familyOf(unit)) ?? 0) + 1);
+  for (const [family, count] of families) for (let t = 1; t <= count; t++) features.add(`cd.fam.${family}>=${t}`);
+  const groups = new Map();
+  for (const unit of mine) groups.set(unit.attribute, [...(groups.get(unit.attribute) ?? []), familyOf(unit)]);
+  const sizes = [...groups.values()].map(group => group.length).sort();
+  features.add(`cd.distinct=${groups.size}`);
+  features.add(`cd.mult=${sizes.join(',')}`);
+  features.add(`cd.maxGroup=${Math.max(0, ...sizes)}`);
+  const verified = [...groups.values()].map(group => group.filter(family => VERIFIED_FAMILY.includes(family)).length);
+  features.add(`cd.maxVerifiedGroup=${Math.max(0, ...verified)}`);
+  for (const group of groups.values()) {
+    features.add(`cd.group=${[...group].sort().join('+')}`);
+    for (let i = 0; i < group.length; i++) for (let j = i + 1; j < group.length; j++) features.add(`cd.pair=${[group[i], group[j]].sort().join('+')}`);
+  }
+  return features;
+}
+
+/** Numeric claimed-module distractor counts for single-threshold count rules. */
+export function claimedDistractorCounts({ units }) {
+  const mine = units.filter(unit => unit.role === 'claimed-other');
+  const groups = new Map();
+  for (const unit of mine) groups.set(unit.attribute, [...(groups.get(unit.attribute) ?? []), unit.forms[0]]);
+  const counts = { 'cd.n': mine.length, 'cd.distinct': groups.size, 'cd.maxGroup': Math.max(0, ...[...groups.values()].map(group => group.length)),
+    'cd.maxVerifiedGroup': Math.max(0, ...[...groups.values()].map(group => group.filter(mode => VERIFIED_FAMILY.includes(mode)).length)) };
+  for (const tag of [...MODE_FORMS, 'qualified']) counts[`cd.count:${tag}`] = mine.filter(unit => unit.forms.includes(tag)).length;
+  counts['cd.count:verified-family'] = mine.filter(unit => VERIFIED_FAMILY.some(tag => unit.forms.includes(tag))).length;
+  return counts;
+}
+
+/**
+ * Count rules learned on one pool and scored on another: per target value and
+ * count feature, the best single-threshold rule (`>= t` or `< t`) on the
+ * training rows, scored by balanced accuracy on the evaluation rows. Returns
+ * the rules sorted by evaluation score.
+ */
+export function countRuleTransfer(trainRows, testRows, countsOf, labelOf) {
+  const out = [];
+  const tableTrain = trainRows.map(countsOf), tableTest = testRows.map(countsOf);
+  const yTrain = trainRows.map(labelOf), yTest = testRows.map(labelOf);
+  const score = (values, labels, label, threshold) => {
+    let tp = 0, fp = 0, positives = 0;
+    values.forEach((value, i) => { const positive = labels[i] === label; positives += positive; if (value >= threshold) { if (positive) tp++; else fp++; } });
+    const negatives = values.length - positives;
+    return positives && negatives ? (tp / positives + (negatives - fp) / negatives) / 2 : 0.5;
+  };
+  for (const label of new Set(yTrain)) {
+    for (const name of Object.keys(tableTrain[0] ?? {})) {
+      const train = tableTrain.map(features => features[name]), test = tableTest.map(features => features[name]);
+      let best = { score: 0 };
+      for (const threshold of new Set(train)) {
+        const s = score(train, yTrain, label, threshold);
+        if (Math.max(s, 1 - s) > best.score) best = { score: Math.max(s, 1 - s), threshold, flip: s < 0.5 };
+      }
+      if (best.threshold === undefined) continue;
+      const s = score(test, yTest, label, best.threshold);
+      out.push({ label, feature: name, threshold: best.threshold, train: best.score, balancedAccuracy: best.flip ? 1 - s : s });
+    }
+  }
+  return out.sort((a, b) => b.balancedAccuracy - a.balancedAccuracy);
 }

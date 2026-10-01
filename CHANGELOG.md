@@ -49,8 +49,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   blind-mode scan over records about unrelated modules plus layout finds no
   precision-1.0 group or TRAIN-to-TEST tree reaching 0.75 on three seeds
   (round 7: 1.000). The v5 audit scores the injection target only against
-  otherwise-supporting or otherwise-ready rows. v6/v7 rows, gold and generator
-  pins are unchanged (#2622)
+  otherwise-supporting or otherwise-ready rows that have provider requests.
+  Distractor placement now reserves one claimed-module attribute in every row
+  (rendered only as the other-attribute / wrong-attribute relevant record), so
+  no variant's relevant record conditions placement; the shipped scan names
+  the relevant record by rendered position and checks claimed-module
+  distractors with trees and count rules against a round-8 positive control.
+  v6/v7 rows, gold and generator pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

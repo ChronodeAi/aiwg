@@ -159,9 +159,9 @@ describe('D29 v8 operator-note templates', () => {
             if (mode === 'partial' || k === '2') for (let n = 0; n < occurrences; n++) found.push({ criterion, mode });
           }
         }
-        // One to three claimed-module distractors (a label-independent draw), plus the relevant record when it names another criterion.
+        // One to four claimed-module distractors (a label-independent draw), plus the relevant record when it names another criterion.
         expect(found.length - Number(relevantOther), row.id).toBeGreaterThanOrEqual(1);
-        expect(found.length - Number(relevantOther), row.id).toBeLessThanOrEqual(3);
+        expect(found.length - Number(relevantOther), row.id).toBeLessThanOrEqual(4);
         for (const a of found) for (const b of found) {
           if (a !== b && a.criterion === b.criterion) expect(d29V8CompatibleCriterionModes(a.mode, b.mode), `${row.id}: ${a.mode}/${b.mode}`).toBe(true);
         }
@@ -529,16 +529,20 @@ describe('D29 v8 review round 5', () => {
           || clause.includes(`the ${name.replace('-', ' ')} is restricted`) || clause.includes(`${name.replace('-', ' ')} ${pool.paraphraseVerb} for`))?.[0];
         return { module, attribute, anchored: clause.includes(`${pool.anchor} Module ${w.claimModule}`) };
       });
-      // Role counts are a fixed function of the relevant record's role (V8-19); only anchors are checked here.
+      // Role counts and forms are scanned in V8-19; only anchors are checked here.
       features.add(`cit:anchors=${records.filter(record => record.anchored).length}`);
     } else {
       const records = criterionPatterns[w.pool].flatMap(p => [...text.matchAll(p.re)].map(m => ({ module: m[1], criterion: p.criterion, mode: p.mode })));
-      const relevant = record => record.module === w.sourceModule && record.criterion === w.sourceAttribute;
-      const claimed = records.filter(record => record.module === w.claimModule && record.criterion !== w.claimAttribute);
+      // The relevant record itself, and only it: a wrong-attribute relevant record is the one exact record on its
+      // criterion (a distractor sharing that criterion never repeats its mode), so matching module and criterion
+      // alone would also drop the distractors beside it.
+      const relevantAt = records.findIndex(record => record.module === w.sourceModule && record.criterion === w.sourceAttribute
+        && (w.sourceAttribute === w.claimAttribute || record.mode === 'exact'));
+      const claimed = records.filter((record, i) => i !== relevantAt && record.module === w.claimModule && record.criterion !== w.claimAttribute);
       const counts = {}; for (const record of claimed) counts[record.criterion] = (counts[record.criterion] ?? 0) + 1;
       features.add(`crit:claimed-pair=${Object.values(counts).some(n => n > 1)}`);
       for (const [criterion, n] of Object.entries(counts)) if (n > 1) features.add(`crit:pair-modes=${claimed.filter(r => r.criterion === criterion).map(r => r.mode).sort().join('+')}`);
-      for (const record of claimed.filter(record => !relevant(record))) features.add(`crit:claimed-mode=${record.mode}`);
+      for (const record of claimed) features.add(`crit:claimed-mode=${record.mode}`);
     }
     return features;
   };
@@ -668,4 +672,45 @@ describe('D29 v8 review round 7', () => {
       }
     }
   }, 120_000);
+});
+
+describe('D29 v8 review round 9', () => {
+  it('V8-22 keeps claimed-module distractors (relevant record excluded by rendered position) off every label and variant, and catches the round-8 placement', async () => {
+    const { recordUnits, claimedDistractorFeatures, claimedDistractorCounts, countRuleTransfer, blindTree } = await import('./d29-structure-scan.mjs');
+    const { injectionPopulationV8 } = await import('../../../tools/decision/studies/d29-shortcuts-v8.mjs');
+    const pools = { train: D29_TRAIN_V8, test: D29_TEST_V8 };
+    const seeds = [D29_V8_SEED, 'zz-surface-a', 'zz-surface-b'];
+    /** Highest TRAIN→TEST and TEST→TRAIN score of claimed-distractor trees and count rules, pooled over the three seeds. */
+    const scan = options => {
+      const rows = seeds.flatMap(seed => Array.from({ length: 2000 }, (_, ordinal) => d29WorldV8(seed, ordinal, options)));
+      const parsed = new Map(rows.map(row => [row, recordUnits(row, pools)]));
+      for (const row of rows) expect(parsed.get(row).units.filter(unit => unit.role === 'relevant'), row.id).toHaveLength(1);
+      const sets = new Map(rows.map(row => [row, claimedDistractorFeatures(parsed.get(row))]));
+      const found = [];
+      for (const kind of ['citation', 'phase-criterion']) {
+        const targets = { label: row => kind === 'citation' ? oracle(row.world).support : String(oracle(row.world).ready),
+          variant: row => row.slice.endsWith('-injection') ? 'injection' : row.world.variant,
+          injected: row => injectionPopulationV8(row.world, oracle(row.world)) ? String(row.world.injected) : undefined };
+        const train = rows.filter(row => row.world.kind === kind && row.world.pool === 'train');
+        const test = rows.filter(row => row.world.kind === kind && row.world.pool === 'test');
+        for (const [from, to] of [[train, test], [test, train]]) {
+          for (const result of blindTree(from, from.map(row => sets.get(row)), to, to.map(row => sets.get(row)), targets)) {
+            found.push({ score: Math.max(result.stump, result.tree), what: `${kind} tree ${result.target}:${result.label} [${result.treeFeatures.join(' | ')}]` });
+          }
+          for (const [name, targetOf] of Object.entries(targets)) {
+            const a = from.filter(row => targetOf(row) !== undefined), b = to.filter(row => targetOf(row) !== undefined);
+            const [best] = countRuleTransfer(a, b, row => claimedDistractorCounts(parsed.get(row)), targetOf);
+            found.push({ score: best.balancedAccuracy, what: `${kind} count ${name}:${best.label} ${best.feature}>=${best.threshold}` });
+          }
+        }
+      }
+      return found.sort((a, b) => b.score - a.score);
+    };
+    const [worst] = scan({});
+    expect(worst.score, worst.what).toBeLessThan(0.7);
+    // Positive control: the round-8 placement (only a wrong-attribute relevant record entered criterion placement).
+    const control = scan({ legacyRelevantPlacement: true });
+    expect(control[0].score, control[0].what).toBeGreaterThanOrEqual(0.7);
+    expect(control[0].what).toContain('wrong-attribute');
+  }, 600_000);
 });

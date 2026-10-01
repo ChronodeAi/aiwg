@@ -135,7 +135,13 @@ function counterpartVariant(citation: boolean, claimAttribute: string, offset: n
   return applicable[(Math.floor(offset / width) + offset % width) % applicable.length];
 }
 
-export function d29WorldV8(seed: string, ordinal: number) {
+/**
+ * `legacyRelevantPlacement` reproduces the round-8 placement, in which only a
+ * relevant record on the claimed module with a non-claim attribute entered
+ * distractor placement. It exists solely as the positive control of the
+ * structure scan (V8-22); the registered generator never sets it.
+ */
+export function d29WorldV8(seed: string, ordinal: number, { legacyRelevantPlacement = false }: { legacyRelevantPlacement?: boolean } = {}) {
   const base = d29WorldV4(seed, ordinal);
   const train = base.split !== 'test';
   const pool = train ? D29_TRAIN_V8 : D29_TEST_V8;
@@ -172,9 +178,13 @@ export function d29WorldV8(seed: string, ordinal: number) {
   // whatever the relevant record itself contributes.
   // - slot 0, the carrier: another module, claim attribute (citation: the
   //   claimed value, single-clause mode, carrying the anchor clause);
-  // - slots 1..n, n drawn uniformly from 1-3: the claimed module, pairwise
-  //   distinct non-claim attributes (criterion: non-claim criteria whose modes
-  //   agree with every other claimed-module record on that criterion);
+  // - slots 1..n, n drawn uniformly from 1-3 (criterion: 1-4): the claimed
+  //   module, pairwise distinct non-claim attributes other than the reserved
+  //   one (criterion: non-claim criteria whose modes agree with every other
+  //   claimed-module record on that criterion, the reserved exact record
+  //   included). Four criterion distractors over two criteria let the
+  //   reserved criterion's occupancy in other rows approach the
+  //   wrong-attribute rows, where it always holds the relevant record;
   // - the rest: other modules, claim attribute with probability 1/2
   //   (citation: the claimed value with probability 1/2), else a non-claim
   //   attribute.
@@ -193,7 +203,7 @@ export function d29WorldV8(seed: string, ordinal: number) {
   const distractorBudget = citation ? Infinity : lengths.reduce((a, b) => a + b, 0) - Math.max(...lengths) + CRITERION_LENGTH_SLACK;
   const claimSet: readonly string[] = citation ? attributes : criteria;
   const nonClaim = claimSet.filter(attribute => attribute !== world.claimAttribute);
-  const claimedCount = 1 + layer(3);
+  const claimedCount = 1 + layer(citation || legacyRelevantPlacement ? 3 : 4);
   const distractors: Record8[] = Array.from({ length: 7 }, (_, i) => {
     const role = i === 0 ? 'carrier' : i <= claimedCount ? 'claimed' : 'other';
     const onClaim = role === 'carrier' || (role === 'other' && layer(2) === 0);
@@ -202,7 +212,18 @@ export function d29WorldV8(seed: string, ordinal: number) {
   });
   const total = () => distractors.reduce((n, record) => n + modeLength(record.mode), 0);
   const claimed = distractors.filter(record => record.role === 'claimed');
-  const sharesRelevant = !citation && relevantOnClaimedModule && relevantRecord.attribute !== world.claimAttribute;
+  // Placement conditioning is the same in every row (round-9 review): every
+  // row reserves one non-claim attribute of the claimed module for an exact
+  // record, drawn uniformly by its own stream. It is rendered only when it is
+  // the relevant record (other-attribute / wrong-attribute rows, whose
+  // relevant attribute d29WorldV4 draws uniformly among the non-claim
+  // attributes, with mode exact). Citation distractors never take the reserved
+  // attribute; criterion distractors on the reserved criterion must agree with
+  // an exact record. No other variant's relevant record enters placement.
+  const relevantOther = relevantOnClaimedModule && relevantRecord.attribute !== world.claimAttribute;
+  const reserved: Record8 = relevantOther ? relevantRecord
+    : { ...blank, role: 'relevant', mode: 'exact', module: world.claimModule, attribute: nonClaim[drawD29Stream(base.split, `v8:${base.familyId}:reserved`)(nonClaim.length)], value: '' };
+  if (reserved.mode !== 'exact') throw new Error('generator-reserved-mode');
   /**
    * Criterion rows: a criterion shared by two claimed-module records needs
    * compatible (never identical) modes, so the claimed module's own records
@@ -210,7 +231,7 @@ export function d29WorldV8(seed: string, ordinal: number) {
    * compatible criterion (the layer is then redrawn whole).
    */
   const placeCriteria = (): boolean => {
-    const placed: Record8[] = sharesRelevant ? [relevantRecord] : [];
+    const placed: Record8[] = legacyRelevantPlacement ? relevantOther ? [relevantRecord] : [] : [reserved];
     for (const record of claimed) {
       const options = nonClaim.filter(criterion => placed.every(other => other.attribute !== criterion || d29V8CompatibleCriterionModes(other.mode, record.mode)));
       if (!options.length) return false;
@@ -226,9 +247,9 @@ export function d29WorldV8(seed: string, ordinal: number) {
     if (citation || placeCriteria()) break;
   }
   if (citation) {
-    // Pairwise distinct attributes, never the claim attribute or the relevant
-    // record's attribute on the claimed module (three remain in every row).
-    const free = nonClaim.filter(attribute => !(relevantOnClaimedModule && attribute === relevantRecord.attribute));
+    // Pairwise distinct attributes, never the claim attribute or the reserved
+    // attribute (three remain in every row).
+    const free = nonClaim.filter(attribute => legacyRelevantPlacement ? !(relevantOther && attribute === relevantRecord.attribute) : attribute !== reserved.attribute);
     for (let i = free.length - 1; i > 0; i--) { const at = layer(i + 1); [free[i], free[at]] = [free[at], free[i]]; }
     claimed.forEach((record, i) => { record.attribute = free[i]; });
   }

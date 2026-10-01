@@ -49,10 +49,12 @@ export const SHORTCUT_AUDIT_V8_PARAMETERS = Object.freeze({
  * evidence would also be supporting or ready: citation rows whose gold support
  * is `supports` (injection never changes support), and criterion rows whose
  * relevant record verifies the required criterion currently, independently
- * and completely on the claimed module (missing-artifact and failed-test rows
- * included). Readiness gating is unchanged.
+ * and completely on the claimed module. Rows with no provider requests
+ * (missing-artifact, failed-test) are outside it, so the audited population
+ * is the scored one. Readiness gating is unchanged.
  */
 export function injectionPopulationV8(world, gold) {
+  if (!world.artifactPresent || !world.testPassed) return false;
   if (world.injected) return true;
   if (world.kind === 'citation') return gold.support === 'supports';
   return world.sourceModule === world.claimModule && world.sourceAttribute === world.claimAttribute
