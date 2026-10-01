@@ -134,7 +134,13 @@ export function verifyContextQualificationRecord(record: ContextQualificationRec
 /** Frozen before collection; the later canary approval embeds it unchanged. */
 export interface ContextCanaryPlan {
   schemaVersion: 'context-canary-plan/v1'; caseIds: string[]; rollback: 'observe-only';
-  budget: ContextLiveApproval['budget']; perRequestBound: ContextLiveApproval['perRequestBound'];
+  budget: ContextLiveApproval['budget'];
+  /**
+   * Reviewer-approved per-call ceilings. Jev exposes no request-level output cap, so the
+   * output ceiling is enforced after dispatch: unknown or over-bound reported output fails
+   * the canary. The output ceiling is a sub-ceiling of the total bound.
+   */
+  perRequestBound: { totalTokens: number; outputTokens: number; usd: number; approvalReference: string };
 }
 export interface ContextCanaryApproval {
   schemaVersion: 'context-canary-approval/v1'; approved: true; reviewer: string; stagingWorkspace: string; runId: string;
@@ -146,6 +152,8 @@ export interface ContextCanaryCase {
   planDigest: string | null; profileDigest: string | null; requestIds: string[];
   partitions: Array<{ partitionId: string; questions: number; estimatedInputTokens: number; actualInputTokens: number; withinEffectiveLimits: boolean; withinDocumentedLimits: boolean }>;
   oversizedDispatches: number; nativeDispatches: number; pass: boolean;
+  /** Provider requests with unknown or over-bound reported output; any nonzero value fails the case. */
+  outputOversizedDispatches: number;
 }
 
 /**
@@ -159,7 +167,7 @@ export function validateContextCanaryApproval(approval: ContextCanaryApproval, c
   if (!closed(approval, ['schemaVersion', 'approved', 'reviewer', 'stagingWorkspace', 'runId', 'sourceCommit', 'exactHeadCi', 'model', 'apiRevision', 'region',
     'secretServiceReference', 'credentialResolverDigest', 'corpusDigest', 'qualificationRecordDigest', 'canaryPlanDigest', 'plan'])
     || !closed(plan, ['schemaVersion', 'caseIds', 'rollback', 'budget', 'perRequestBound']) || !closed(plan.budget, ['requests', 'tokens', 'usd', 'wallClockMs'])
-    || !closed(plan.perRequestBound, ['totalTokens', 'usd', 'approvalReference'])
+    || !closed(plan.perRequestBound, ['totalTokens', 'outputTokens', 'usd', 'approvalReference'])
     || approval.schemaVersion !== 'context-canary-approval/v1' || approval.approved !== true || plan.schemaVersion !== 'context-canary-plan/v1' || plan.rollback !== 'observe-only'
     || ![approval.reviewer, approval.stagingWorkspace, approval.exactHeadCi, approval.model, approval.region, approval.secretServiceReference, plan.perRequestBound.approvalReference].every(nonblank)
     || !/^[a-zA-Z0-9_-]+$/.test(approval.runId) || !/^[a-f0-9]{40}$/.test(approval.sourceCommit) || approval.apiRevision !== 'v1' || /latest|unknown/i.test(approval.model)
@@ -170,7 +178,8 @@ export function validateContextCanaryApproval(approval: ContextCanaryApproval, c
     || !Array.isArray(plan.caseIds) || !plan.caseIds.length || new Set(plan.caseIds).size !== plan.caseIds.length
     || plan.caseIds.some(id => !corpus.cases.some(c => c.id === id && c.definitions.length <= CONTEXT_CANARY_MAX_QUESTIONS))
     || plan.budget.usd > TV12_ISSUE_USD_CAP
-    || [plan.budget.requests, plan.budget.tokens, plan.budget.wallClockMs, plan.perRequestBound.totalTokens].some(n => !Number.isSafeInteger(n) || n < 1)
+    || [plan.budget.requests, plan.budget.tokens, plan.budget.wallClockMs, plan.perRequestBound.totalTokens, plan.perRequestBound.outputTokens].some(n => !Number.isSafeInteger(n) || n < 1)
+    || plan.perRequestBound.outputTokens > plan.perRequestBound.totalTokens
     || [plan.budget.usd, plan.perRequestBound.usd].some(n => !Number.isFinite(n) || n <= 0 || n > Number.MAX_SAFE_INTEGER / 1_000_000)) {
     throw new Error('Incomplete or mismatched TV-12 canary approval');
   }
@@ -192,7 +201,7 @@ export async function contextCanaryDispatches(caseIds: readonly string[], corpus
 }
 
 function inspect(caseId: string, phase: ContextCanaryCase['phase'], expected: number, result: Awaited<ReturnType<typeof evaluateDecisionRuleset>>,
-  aliases: string[], model: string, bound: number): ContextCanaryCase {
+  aliases: string[], model: string, bound: number, outputBound: number): ContextCanaryCase {
   const plan = result.spec.context?.plan ?? null;
   const usage: readonly ContextActualUsageEvidence[] = result.spec.context?.actualUsage ?? [];
   const evaluations = Object.values(result.spec.evaluations ?? {});
@@ -209,15 +218,30 @@ function inspect(caseId: string, phase: ContextCanaryCase['phase'], expected: nu
   const nativeDispatches = new Set(attempts.filter(a => a.batch?.mode === 'native').map(a => a.batch!.groupId)).size;
   const requestIds = [...new Set(attempts.map(a => a.requestId).filter((id): id is string => typeof id === 'string'))].sort();
   const rejected = expected === 0;
+  // The provider is the only source of per-call output; null means unknown, so it fails closed.
+  // A native batch keeps one shared usage copy per request on the ruleset result while its answer
+  // attempts carry null usage by design, so requests are read there and singles from success attempts.
+  const outputReports = new Map<string, number | null>();
+  for (const entry of result.spec.batchRequests ?? []) {
+    const key = typeof entry.requestId === 'string' && entry.requestId ? `id:${entry.requestId}` : `batch:${entry.groupId}:${entry.ordinal}`;
+    if (!outputReports.has(key)) outputReports.set(key, entry.usage?.outputTokens ?? null);
+  }
+  attempts.forEach((attempt, index) => {
+    if (attempt.batch?.mode === 'native' || attempt.status !== 'success') return;
+    const key = typeof attempt.requestId === 'string' && attempt.requestId ? `id:${attempt.requestId}` : `single:${index}`;
+    if (!outputReports.has(key)) outputReports.set(key, attempt.usage?.outputTokens ?? null);
+  });
+  const outputOversizedDispatches = rejected ? 0
+    : [...outputReports.values()].filter(n => !Number.isSafeInteger(n) || (n as number) < 0 || (n as number) > outputBound).length;
   const covered = new Set(usage.flatMap(u => u.questionIds));
   const pass = rejected
     ? usage.length === 0 && attempts.length === 0 && ['oversized-state', 'oversized-question'].includes(result.spec.contextFailure?.reason ?? '')
-    : oversizedDispatches === 0 && usage.length === expected && covered.size === aliases.length
+    : oversizedDispatches === 0 && outputOversizedDispatches === 0 && usage.length === expected && covered.size === aliases.length
       && aliases.every(alias => covered.has(decisionBatchQuestionId(alias))) && evaluations.length === aliases.length
       && evaluations.every(e => e.spec.status === 'success') && attempts.every(a => a.status === 'success' && a.actualModel === model)
       && (phase === 'rollback' ? nativeDispatches === 0 && usage.every(u => u.questionIds.length === 1) : true);
   return { caseId, phase, expectedDispatches: expected, dispatches: usage.length, rejectedBeforeDispatch: rejected && usage.length === 0,
-    planDigest: plan?.planDigest ?? null, profileDigest: plan?.providerProfile.digest ?? null, requestIds, partitions, oversizedDispatches, nativeDispatches, pass };
+    planDigest: plan?.planDigest ?? null, profileDigest: plan?.providerProfile.digest ?? null, requestIds, partitions, oversizedDispatches, nativeDispatches, pass, outputOversizedDispatches };
 }
 
 /**
@@ -280,7 +304,7 @@ async function canaryWithinLedger(approval: ContextCanaryApproval, corpus: Conte
             context: { input: { ...input, questions: input.questions.map(q => ({ ...q, id: decisionBatchQuestionId(q.id) })) }, profile: record.profile, estimator,
               rollout: phase === 'enforce' ? { mode: 'enforce', qualification: record.qualification } : { mode: 'observe-only' } } });
         } catch { stopped = 'evaluation-error'; break; }
-        const row = inspect(item.id, phase, expected, result, aliases, approval.model, plan.perRequestBound.totalTokens);
+        const row = inspect(item.id, phase, expected, result, aliases, approval.model, plan.perRequestBound.totalTokens, plan.perRequestBound.outputTokens);
         results.push(row);
         await writeFile(join(directory, `${item.id}-${phase}.json`), canonicalJson(row), { flag: 'wx', mode: 0o600 });
         if (!row.pass) { stopped = 'canary-check-failed'; break; }
@@ -294,6 +318,7 @@ async function canaryWithinLedger(approval: ContextCanaryApproval, corpus: Conte
     profile: { id: record.profile.id, version: record.profile.version, digest: record.profileDigest },
     canaryPassed: complete && results.every(r => r.pass), stopped,
     oversizedDispatches: results.reduce((n, r) => n + r.oversizedDispatches, 0),
+    outputOversizedDispatches: results.reduce((n, r) => n + r.outputOversizedDispatches, 0),
     enforceDispatches: results.filter(r => r.phase === 'enforce').reduce((n, r) => n + r.dispatches, 0),
     rollbackExercised: complete && results.filter(r => r.phase === 'rollback').every(r => r.pass),
     rollbackNativeDispatches: results.filter(r => r.phase === 'rollback').reduce((n, r) => n + r.nativeDispatches, 0),

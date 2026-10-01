@@ -9,6 +9,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
+  per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
+  bound) and fails the canary on unknown or over-bound reported output, stopping
+  further dispatch. Jev exposes no request-level output cap, so enforcement is
+  after dispatch, fail-closed. Offline coverage only; live evidence remains
+  pending (#2799)
+
 - Refreshed experimental, default-off D17 source dry-run pins after the shared
   acceptance threshold fix entered the source digest; the corpus and split/gold
   pins are unchanged. Live evidence and approval remain pending (#2611)
