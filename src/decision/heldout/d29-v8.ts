@@ -166,42 +166,70 @@ export function d29WorldV8(seed: string, ordinal: number) {
   const available = (citation ? attributes : criteria).filter(attribute => !reserved.has(attribute));
   const start = random(available.length);
   const rotated = available.map((_, i) => available[(start + i) % available.length]);
-  // Pairwise-distinct attributes first; criterion rows with fewer free
-  // criteria than distractors may then share one only between compatible modes.
-  const assign = (chosen: number[]): (typeof available)[number][] | null => {
+  // Structural balance draws use their own stream so the content draws above
+  // and below stay where they were.
+  const balance = drawD29Stream(base.split, `v8:${base.familyId}:balance`);
+  // Criterion rows whose relevant record names the required criterion on the
+  // claimed module have two distractors over two free criteria; half of
+  // them share one criterion (compatible modes), as wrong-attribute and
+  // wrong-subject rows always must, so a same-criterion pair is never
+  // exclusive to those variants.
+  const preferShared = !citation && world.sourceModule === world.claimModule && world.sourceAttribute === world.claimAttribute
+    && balance(2) === 0;
+  // Pairwise-distinct attributes first (or a shared pair first when
+  // preferred); criterion rows may share one criterion only between
+  // compatible modes.
+  const assign = (chosen: number[], pairOnly = false): (typeof available)[number][] | null => {
     const total = rotated.length ** chosen.length;
-    for (const shared of [false, true]) {
+    for (const shared of pairOnly ? ['pair'] as const : [false, true] as const) {
       for (let code = 0; code < total; code++) {
         const assignment = chosen.map((_, i) => rotated[Math.floor(code / rotated.length ** i) % rotated.length]);
         const valid = chosen.every((a, i) => chosen.every((b, j) => j <= i || assignment[i] !== assignment[j]
-          || (shared && !citation && d29V8CompatibleCriterionModes(records[a].mode, records[b].mode))));
-        if (valid) return assignment;
+          || (shared !== false && !citation && d29V8CompatibleCriterionModes(records[a].mode, records[b].mode))));
+        if (valid && (shared !== 'pair' || new Set(assignment).size < assignment.length)) return assignment;
       }
     }
     return null;
   };
   let placed = false;
-  for (const combination of combinations(others.length, targetCount)) {
-    const chosen = combination.map(i => others[i]);
-    const assignment = assign(chosen);
-    if (!assignment) continue;
-    chosen.forEach((index, i) => { records[index].module = world.claimModule; records[index].attribute = assignment[i]; });
-    placed = true;
-    break;
+  // A preferred shared pair searches every combination for a compatible pair,
+  // exactly as wrong-attribute and wrong-subject rows must, before falling
+  // back to distinct criteria.
+  for (const pairOnly of preferShared ? [true, false] : [false]) {
+    for (const combination of combinations(others.length, targetCount)) {
+      const chosen = combination.map(i => others[i]);
+      const assignment = assign(chosen, pairOnly);
+      if (!assignment) continue;
+      chosen.forEach((index, i) => { records[index].module = world.claimModule; records[index].attribute = assignment[i]; });
+      placed = true;
+      break;
+    }
+    if (placed) break;
   }
   if (!placed) throw new Error('generator-claim-distractors');
-  // Every row carries five claim-attribute records and three others. When the
-  // relevant record already states the claim attribute about the claimed
-  // module (two claimed-module distractors), one other-module record that
-  // never carries the claimed value takes a further non-claim attribute, so
-  // attribute counts cannot reveal the variant.
-  let freeIndex = -1;
-  if (records[relevantIndex].module === world.claimModule && records[relevantIndex].attribute === world.claimAttribute) {
-    const free = freeIndex = others.filter(i => records[i].module !== world.claimModule).at(-1)!;
-    const used = new Set(records.filter(record => record.module === world.claimModule).map(record => record.attribute));
-    const extra = citation ? rotated.filter(attribute => !used.has(attribute)) : rotated;
-    records[free].attribute = extra[random(extra.length)];
+  // Other-module records with a non-claim attribute ("free" records). Rows
+  // whose relevant record names the claim attribute on the claimed module
+  // carry one in three of four rows and none otherwise; all other rows
+  // (does-not-support, wrong-attribute, wrong-subject) carry none. So neither
+  // "no free record" nor "five other-module claim-attribute records" is ever
+  // exclusive to a variant or label, and those other rows stay unchanged.
+  const sameModuleClaim = records[relevantIndex].module === world.claimModule && records[relevantIndex].attribute === world.claimAttribute;
+  const nonClaim = others.filter(i => records[i].module !== world.claimModule);
+  const freeCount = sameModuleClaim && balance(4) !== 0 ? 1 : 0;
+  const frees: number[] = [];
+  for (const i of [...nonClaim].reverse()) {
+    if (frees.length === freeCount) break;
+    const left = nonClaim.filter(j => j !== i && !frees.includes(j));
+    // Keep at least one single-clause carrier for the anchor (citation rows).
+    if (citation && !left.some(j => ANCHOR_MODES.includes(records[j].mode))) continue;
+    frees.push(i);
   }
+  const usedByClaimModule = new Set(records.filter(record => record.module === world.claimModule).map(record => record.attribute));
+  frees.forEach((free, n) => {
+    const extra = (citation ? rotated.filter(attribute => !usedByClaimModule.has(attribute)) : rotated)
+      .filter(attribute => !frees.slice(0, n).some(j => records[j].attribute === attribute) || !citation);
+    records[free].attribute = extra[random(extra.length)];
+  });
   let anchorIndex = -1;
   if (world.injected && renderVariant === 'multi-value') {
     // Same latent fact plus a second current value, exactly as citation-supports multi-value.
@@ -221,7 +249,7 @@ export function d29WorldV8(seed: string, ordinal: number) {
     // The anchor is a single-clause claimed-value record about another module
     // (see below); it carries the claimed value first. The claimed value
     // appears four times, including facts about other entities.
-    const carriers = others.filter(i => records[i].module !== world.claimModule && i !== freeIndex);
+    const carriers = others.filter(i => records[i].module !== world.claimModule && !frees.includes(i));
     anchorIndex = carriers.find(i => ANCHOR_MODES.includes(records[i].mode)) ?? -1;
     if (anchorIndex < 0) throw new Error('generator-anchor');
     let remaining = 4 - Number(relevant.value.split(' and ').includes(world.claimValue) || relevant.value.split(' as well as ').includes(world.claimValue));

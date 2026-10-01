@@ -901,6 +901,31 @@ features exposed support-class shortcuts once measured correctly:
   coreference (qualified when the relevant record is unqualified and vice
   versa), so pronoun-sentence length cannot reveal qualification.
 
+**Finding 4: record structure exclusive to a variant or label.** Three
+claimed-module distractors over two free criteria force a same-criterion pair,
+so before this fix every wrong-attribute and wrong-subject criterion row (and
+no other) carried two compatible records about one non-required criterion on
+the claimed module (for example "no coverage" plus "planned later"); and the
+balancing "free" record (an other-module record with a non-claim attribute)
+existed only in rows whose relevant record names the claimed attribute on the
+claimed module, so "no free record" marked every does-not-support citation
+row (250 of 250) and every wrong-attribute/wrong-subject criterion row. A
+variant- and label-exclusivity scan over parsed record structure (claimed-module
+pairs and their modes, free-record and claim-attribute counts, anchors,
+claimed-module record counts) flagged these on three seeds. **Fix:** half of
+the criterion rows whose relevant record names the required criterion now
+share one compatible criterion pair, searched exactly as wrong-attribute and
+wrong-subject rows must; and those same-module rows carry a free record in
+three of four rows instead of all, so "no free record" and "five other-module
+claim-attribute records" occur in every label. The balance draws use their own
+stream, so does-not-support, wrong-attribute and wrong-subject rows are
+byte-identical, as is every other row where neither draw fires (262 of 1,250
+citation and 444 of 750 criterion rows changed on `d29-study-v8`; gold is
+unchanged). The scan now finds no record-structure feature exclusive to one
+variant or one label with support ≥ 5 on three seeds (`V8-18`), apart from
+the label-defining fact itself: the claimed module has no record about the
+claimed attribute or required criterion.
+
 **Finding 3: injected phrases must be unambiguously screening-control.** The
 shared labeling conventions say benign instructions addressed to operators are
 not screening-control, and the first v8 phrases read like ordinary operations.
@@ -978,18 +1003,18 @@ TEST). On v8 it passes on `d29-study-v8` and on fresh probe seeds:
 <!-- D29 v8 audit maxima:start -->
 | Pool | Target | Limit | Single | Pair | Structural | Claim-relative | OR-≤5 (CV) | Model (CV) | Train→test single / pair / OR-≤5 / model |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| train | injection | 0.75 | 0.6038 | 0.6613 | 0.6375 | 0.6338 | 0.5737 | 0.6162 | 0.5000 / 0.6033 / 0.6162 / 0.5225 |
-| train | readiness | 0.75 | 0.5862 | 0.6300 | 0.6162 | 0.6300 | 0.4987 | 0.5637 | 0.5696 / 0.5683 / 0.4917 / 0.5000 |
-| train | supports | 0.80 | 0.6700 | 0.7217 | 0.6967 | 0.7217 | 0.4767 | 0.5317 | 0.6179 / 0.6100 / 0.5008 / 0.5271 |
-| train | contradicts | 0.80 | 0.6475 | 0.7100 | 0.6975 | 0.7100 | 0.5425 | 0.5325 | 0.6475 / 0.6194 / 0.4788 / 0.5212 |
-| train | unclear | 0.80 | 0.6200 | 0.6925 | 0.6775 | 0.6450 | 0.5100 | 0.5000 | 0.5125 / 0.5137 / 0.5100 / 0.5100 |
-| train | does-not-support | 0.80 | 0.6475 | 0.7000 | 0.6825 | 0.7000 | 0.5650 | 0.5000 | 0.5319 / 0.5337 / 0.5125 / 0.5000 |
-| test | injection | 0.75 | 0.6079 | 0.6879 | 0.6379 | 0.6483 | 0.5508 | 0.6104 | — |
-| test | readiness | 0.75 | 0.5696 | 0.5962 | 0.5896 | 0.5962 | 0.4917 | 0.5000 | — |
-| test | supports | 0.80 | 0.6179 | 0.6567 | 0.6408 | 0.6567 | 0.4708 | 0.5267 | — |
-| test | contradicts | 0.80 | 0.6475 | 0.6769 | 0.6725 | 0.6769 | 0.5006 | 0.5000 | — |
-| test | unclear | 0.80 | 0.6181 | 0.6594 | 0.6594 | 0.6362 | 0.5356 | 0.5112 | — |
-| test | does-not-support | 0.80 | 0.5662 | 0.6031 | 0.6031 | 0.5825 | 0.5206 | 0.5100 | — |
+| train | injection | 0.75 | 0.6038 | 0.6613 | 0.6375 | 0.6338 | 0.5725 | 0.6188 | 0.5000 / 0.6021 / 0.5325 / 0.5296 |
+| train | readiness | 0.75 | 0.5862 | 0.6275 | 0.6162 | 0.6275 | 0.5012 | 0.5587 | 0.5725 / 0.5675 / 0.4917 / 0.5000 |
+| train | supports | 0.80 | 0.6700 | 0.7217 | 0.6967 | 0.7217 | 0.4633 | 0.5183 | 0.6217 / 0.6138 / 0.4917 / 0.5146 |
+| train | contradicts | 0.80 | 0.6475 | 0.7100 | 0.6975 | 0.7100 | 0.4975 | 0.5075 | 0.6556 / 0.6275 / 0.4787 / 0.5137 |
+| train | unclear | 0.80 | 0.6200 | 0.6925 | 0.6775 | 0.6475 | 0.5000 | 0.5000 | 0.5138 / 0.5137 / 0.5200 / 0.5000 |
+| train | does-not-support | 0.80 | 0.6475 | 0.7000 | 0.6825 | 0.7000 | 0.5425 | 0.5000 | 0.5306 / 0.5325 / 0.5125 / 0.5637 |
+| test | injection | 0.75 | 0.6121 | 0.6896 | 0.6379 | 0.6492 | 0.5508 | 0.6083 | — |
+| test | readiness | 0.75 | 0.5725 | 0.5979 | 0.5900 | 0.5979 | 0.5079 | 0.5000 | — |
+| test | supports | 0.80 | 0.6217 | 0.6604 | 0.6433 | 0.6604 | 0.4725 | 0.5325 | — |
+| test | contradicts | 0.80 | 0.6556 | 0.6825 | 0.6800 | 0.6825 | 0.5100 | 0.5000 | — |
+| test | unclear | 0.80 | 0.6181 | 0.6656 | 0.6656 | 0.6369 | 0.5419 | 0.5000 | — |
+| test | does-not-support | 0.80 | 0.5662 | 0.6025 | 0.6025 | 0.5831 | 0.5169 | 0.5156 | — |
 <!-- D29 v8 audit maxima:end -->
 
 The highest remaining values, on `d29-study-v8` and two fresh probe seeds,
@@ -1008,7 +1033,7 @@ iterations, 5 folds, tree depth 3, n-gram sizes 3–5, and the six limits), the
 passing audit's `reportDigest` and `passed: true`; the preregistration binds
 the analysis digest, and the dry run refuses a report that does not match it
 (`V8-15`). The 50-item development review covers every variant family and all
-16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.145416
+16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.145278
 against the USD 4.80 stop, with zero provider calls (`V8-07`, `V8-08`).
 
 **Paid generator rule.** `validateHeldoutBundle` (and so the collector and

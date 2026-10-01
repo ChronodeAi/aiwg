@@ -35,7 +35,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   v6/v7 and relabelled non-D29 generators are refused. The anchor clause sits
   only in single-clause records, so no pronoun or ellipsis can resolve to the
   claimed module, and v8 prompts use v8-only labeling conventions that decide
-  screening-control by target rather than addressee. v6/v7 rows, gold and generator pins are unchanged (#2622)
+  screening-control by target rather than addressee. A same-criterion distractor pair and
+  the missing balancing record no longer mark wrong-attribute/wrong-subject or
+  does-not-support rows: no record-structure feature is exclusive to one
+  variant or label. v6/v7 rows, gold and generator pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

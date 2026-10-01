@@ -493,3 +493,73 @@ describe('D29 v8 review round 3', () => {
     for (const definition of definitions()) expect(definition.spec.question).toContain(LABELING_CONVENTIONS);
   });
 });
+
+describe('D29 v8 review round 5', () => {
+  const NAMES = { rollback: 'rollback coverage', security: 'security review sign-off', migration: 'migration test coverage' };
+  const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const ID = '(\\d{6}-\\d{6}-\\d{6})';
+  const patterns = pool => Object.keys(pool.criterion).flatMap(mode => Object.entries(NAMES).map(([criterion, name]) => ({ mode, criterion,
+    re: new RegExp(escape(pool.criterion[mode]('MODULEX', name, 'KX')).replace('MODULEX', ID).replace('KX', '[1-3]'), 'g') })));
+  const criterionPatterns = { train: patterns(D29_TRAIN_V8), test: patterns(D29_TEST_V8) };
+  /**
+   * Record-structure features of the distractor layer, parsed from visible text. Features that encode the
+   * label itself are excluded: whether the claimed module has any record about the claimed attribute or
+   * required criterion (that absence is what does-not-support / wrong-attribute / wrong-subject mean).
+   */
+  const structure = row => {
+    const w = row.world, pool = w.pool === 'train' ? D29_TRAIN_V8 : D29_TEST_V8, features = new Set();
+    const text = (row.payload.source ?? row.payload.evidence).split('\n').slice(1).join(' ')
+      .replace(/Module (\d{6}-\d{6}-\d{6}) (?:completed its scheduled migration last week|finished its planned maintenance window yesterday|closed its rollout review this morning)\. ([^.]*?)\b(It|it|that module|That module)\b/g,
+        (_, id, before) => `${before}Module ${id}`);
+    if (w.kind === 'citation') {
+      const records = text.split(/(?<=[.;])\s+/).filter(clause => /Module \d/.test(clause)).map(clause => {
+        const module = /Module (\d{6}-\d{6}-\d{6})/.exec(clause)[1];
+        const attribute = Object.entries(pool.verbs).find(([name, verbs]) => Object.values(verbs).some(verb => clause.includes(` ${verb} `))
+          || clause.includes(`the ${name.replace('-', ' ')} is restricted`) || clause.includes(`${name.replace('-', ' ')} ${pool.paraphraseVerb} for`))?.[0];
+        return { module, attribute, anchored: clause.includes(`${pool.anchor} Module ${w.claimModule}`) };
+      });
+      const others = records.filter(record => record.module !== w.claimModule);
+      features.add(`cit:other-nonclaim=${others.filter(record => record.attribute !== w.claimAttribute).length}`);
+      features.add(`cit:other-claim=${others.filter(record => record.attribute === w.claimAttribute).length}`);
+      features.add(`cit:claim-total=${records.filter(record => record.attribute === w.claimAttribute).length}`);
+      features.add(`cit:claimed-module=${records.filter(record => record.module === w.claimModule).length}`);
+      features.add(`cit:anchors=${records.filter(record => record.anchored).length}`);
+    } else {
+      const records = criterionPatterns[w.pool].flatMap(p => [...text.matchAll(p.re)].map(m => ({ module: m[1], criterion: p.criterion, mode: p.mode })));
+      const relevant = record => record.module === w.sourceModule && record.criterion === w.sourceAttribute;
+      const claimed = records.filter(record => record.module === w.claimModule && record.criterion !== w.claimAttribute);
+      const counts = {}; for (const record of claimed) counts[record.criterion] = (counts[record.criterion] ?? 0) + 1;
+      features.add(`crit:claimed-pair=${Object.values(counts).some(n => n > 1)}`);
+      for (const [criterion, n] of Object.entries(counts)) if (n > 1) features.add(`crit:pair-modes=${claimed.filter(r => r.criterion === criterion).map(r => r.mode).sort().join('+')}`);
+      for (const record of claimed.filter(record => !relevant(record))) features.add(`crit:claimed-mode=${record.mode}`);
+      const others = records.filter(record => record.module !== w.claimModule);
+      features.add(`crit:other-nonclaim=${others.filter(record => record.criterion !== w.claimAttribute).length}`);
+      features.add(`crit:other-claim=${others.filter(record => record.criterion === w.claimAttribute).length}`);
+      features.add(`crit:claim-total=${records.filter(record => record.criterion === w.claimAttribute).length}`);
+      features.add(`crit:records=${records.length}`);
+    }
+    return features;
+  };
+
+  it('V8-18 keeps every record-structure feature off any single variant and any single label', () => {
+    for (const seed of [D29_V8_SEED, 'zz-exclusive-a', 'zz-exclusive-b']) {
+      const byVariant = new Map(), byLabel = new Map();
+      for (const row of worlds(d29WorldV8, seed)) {
+        const label = row.world.kind === 'citation' ? oracle(row.world).support : oracle(row.world).ready ? 'ready' : 'not-ready';
+        const variant = `${row.world.kind}:${row.slice.endsWith('-injection') ? 'injection' : row.world.variant}`;
+        for (const feature of structure(row)) {
+          for (const [map, key] of [[byVariant, variant], [byLabel, `${row.world.kind}:${label}`]]) {
+            if (!map.has(feature)) map.set(feature, new Map());
+            map.get(feature).set(key, (map.get(feature).get(key) ?? 0) + 1);
+          }
+        }
+      }
+      const exclusive = map => [...map].filter(([, where]) => where.size === 1 && [...where.values()][0] >= 5)
+        .map(([feature, where]) => `${feature} -> ${[...where.keys()][0]}`);
+      expect(exclusive(byVariant), `${seed} variant`).toEqual([]);
+      expect(exclusive(byLabel), `${seed} label`).toEqual([]);
+      // A same-criterion pair on the claimed module occurs in ready rows too, not only wrong-attribute/wrong-subject.
+      expect(byVariant.get('crit:claimed-pair=true').size, seed).toBeGreaterThan(4);
+    }
+  }, 120_000);
+});
