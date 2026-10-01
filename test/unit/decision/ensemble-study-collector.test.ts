@@ -125,15 +125,19 @@ describe('D17 diagnostic collection through the shared collector', () => {
   });
   it.each(['cancel', 'timeout', 'rejected', 'model', 'unknown-usage'])('AC3/5 retains a completed pair and stopping reservation after %s', async kind => {
     const c = await setup(); const controller = new AbortController(); let calls = 0;
-    if (kind === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    c.bundle.preregistration.requestTimeoutMs = 25;
+    // requestTimeoutMs also bounds the evaluator's AbortSignal.timeout total deadline, which runs on real time and
+    // cannot be faked. Keep the frozen 60s bound (longer than the 30s test timeout) so no dispatch is ever cut short
+    // by host load; the collector's request timer is a faked setTimeout that only the timeout case advances.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const timeoutMs = c.bundle.preregistration.requestTimeoutMs;
+    expect(timeoutMs).toBeGreaterThan(30_000);
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       if (++calls <= 4) return reply(init);
       if (kind === 'rejected') throw new Error('private dispatch failure');
       if (kind === 'model') return reply(init, { model: 'unknown-model' });
       if (kind === 'unknown-usage') return reply(init, { usage: {} });
       if (kind === 'cancel') controller.abort();
-      if (kind === 'timeout') await vi.advanceTimersByTimeAsync(26);
+      if (kind === 'timeout') await vi.advanceTimersByTimeAsync(timeoutMs + 1);
       return new Promise<Response>((_resolve, reject) => {
         if (init?.signal?.aborted) reject(new Error('aborted'));
         else init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
