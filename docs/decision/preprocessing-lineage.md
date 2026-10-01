@@ -115,15 +115,34 @@ and before receipt acquisition, credential resolution and adapter dispatch:
 - **Allowed**: the request continues on the normal projection and dispatch
   path.
 
-The verdict is recorded as `preprocessingLineage.dispatchGate`. A result cache
+The verdict is recorded as `preprocessingLineage.dispatchGate`. The gate and
+the recorded lineage share one immutable snapshot of the host-supplied
+`preprocessingLineage` and `preprocessingVerification` taken before the result
+is constructed, so caller-owned mutation during evaluation cannot change the
+verdict or the recorded lineage. A result cache
 is refused for requests that carry lineage, because a cache hit would bypass the
 gate. Input bindings come only from the host's `preprocessingVerification`. The
 lineage carries no pointer or text digest, and the evaluator never uses a stored
 digest. Checks run on the decision input the evaluator projects and dispatches;
 D10 projection can drop or redact a field but cannot substitute it. Every string
-value and every object key is a text-bearing position. A bound pointer covers
+value and every object key is a text-bearing position. Numeric, boolean, and
+null values are outside text-leaf binding: they carry no text, collect no value
+pointers, and are never compared against lineage text, so a scalar value can
+never satisfy a binding. Their object keys remain text-bearing member
+positions, so each scalar field's pointer must still be covered by a binding or
+a `nonLineagePointers` entry (in practice a declaration, since a bound scalar
+never equals the verified text). A bound pointer covers
 exactly its own string. A `nonLineagePointers` entry covers its whole subtree,
-keys included. Any other position is refused as `input-undeclared`.
+keys included. The root pointer (`''`) is rejected as malformed host
+verification (`unverified` review, nothing dispatched): it would otherwise mark
+every text-bearing position as covered. Any other text-bearing position is
+refused as `input-undeclared`.
+For example, `{ "message": "<verified lineage text>", "attempt": 3,
+"dryRun": false, "note": null }` binds only `/message` to the lineage
+manifests while `/attempt`, `/dryRun`, and `/note` are declared in
+`nonLineagePointers`: the `3`, `false`, and `null` values are not text and are
+never text-compared, whereas an extra string value at any uncovered pointer is
+refused as `input-undeclared`.
 
 When the host supplies `preprocessingVerification` but the lineage is empty or
 absent, the evaluator does not fall back to the text-native path. It returns a

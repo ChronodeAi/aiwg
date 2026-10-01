@@ -37,6 +37,8 @@
         "slices",
         "minimumOverallN",
         "minimumSliceN",
+        "minimumZeroVarianceN",
+        "minimumProtectedN",
         "powerRule",
         "qualityNonInferiorityMarginBps",
         "positiveTotalTokenTarget",
@@ -130,6 +132,14 @@
         "minimumSliceN": {
           "type": "integer",
           "minimum": 1
+        },
+        "minimumZeroVarianceN": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "minimumProtectedN": {
+          "type": "integer",
+          "minimum": 2
         },
         "powerRule": {
           "type": [

@@ -32,6 +32,13 @@ runtime-backed capabilities, validation, pattern runs, live plans, and
 explicitly enabled evaluation. See
 [the decision CLI/MCP driver guide](../../../../docs/decision/cli-mcp-driver.md).
 
+The addon also ships a declarative gate pack in [`gate-packs/`](gate-packs/integrity-ceiling.gatepack.yaml)
+(`aiwg:decision-engine/integrity-ceiling`, one `upstream-ceiling` floor gate).
+Gate packs are experimental, default-off data: no decision-runtime path
+evaluates them. The offline `aiwg gates validate|evaluate|show|list` CLI
+validates and evaluates packs from files with a fake-clock `--now`. See
+[the gates guide](../../../../docs/decision/gates.md).
+
 The packaged dispatcher exposes public JSON fields for artifact paths,
 credential environment mappings, adapter selection, projection policies, and
 named `hostPolicies` references. The referenced advanced runtime objects are
@@ -42,6 +49,14 @@ request fields fail closed.
 
 See [the operator guide](docs/operations.md) and the repository-level
 [decision specification](../../../../docs/decision/specification.md).
+
+## Offline comparative sensitivity replay
+
+The experimental D23 comparative replay runner is source-checkout-only and
+default-off. It reuses stored synthetic evidence with zero provider calls and
+exports a digest-bound HOLD report and 44-assessment operator review packet.
+See [comparative replay](../../../../docs/decision/comparative-replay.md) for the
+explicit command, passing diagnostic gates, exact artifacts and pending review.
 
 ## Experimental D17 study
 

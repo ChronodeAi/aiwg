@@ -4,6 +4,7 @@ import {
   checkRoutingSchema,
   evaluateRoutingEligibility,
   freezeRoutingPreregistration,
+  RoutingControlDrillError,
   runRoutingControlDrill,
   runRoutingPilot,
   routingDigest,
@@ -216,6 +217,53 @@ describe('D28 routing pilot (#2620)', () => {
     expect(result.activeRunPins).toEqual(runs);
   });
 
+  it('ROUTE-D17-02 reports the installed policy as inconsistent when restore throws after installing', async () => {
+    const drill = restoreDrill({ installBeforeThrow: true });
+    const error = await runRoutingControlDrill(drill.input).then(
+      () => { throw new Error('the drill should have thrown'); },
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(RoutingControlDrillError);
+    expect((error as RoutingControlDrillError).state).toEqual({
+      jevCircuitOpen: true,
+      policyRestored: true,
+      aliasRolledBack: false,
+      compensated: false,
+      consistent: false,
+      currentPolicy: drill.prior,
+    });
+  });
+
+  it('ROUTE-D17-03 reports the unchanged policy when restore throws before installing', async () => {
+    const drill = restoreDrill({ installBeforeThrow: false });
+    const error = await runRoutingControlDrill(drill.input).then(
+      () => { throw new Error('the drill should have thrown'); },
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(RoutingControlDrillError);
+    expect((error as RoutingControlDrillError).state).toEqual({
+      jevCircuitOpen: true,
+      policyRestored: false,
+      aliasRolledBack: false,
+      compensated: false,
+      consistent: true,
+      currentPolicy: drill.previous,
+    });
+  });
+
+  it('ROUTE-D17-04 reports an unexpected installed policy as inconsistent when restore throws', async () => {
+    const drill = restoreDrill({ installBeforeThrow: true, installOther: true });
+    const error = await runRoutingControlDrill(drill.input).then(
+      () => { throw new Error('the drill should have thrown'); },
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(RoutingControlDrillError);
+    const state = (error as RoutingControlDrillError).state;
+    expect(state.policyRestored).toBe(false);
+    expect(state.consistent).toBe(false);
+    expect(state.currentPolicy).toEqual({ id: 'routing-pilot', version: '9.9.9', digest: hash('9') });
+  });
+
   it('ROUTE-SCHEMA-01 validates closed routing policy shape', () => {
     expect(() => validateRoutingPolicy(policy())).not.toThrow();
     expect(() => validateRoutingPolicy({ ...policy(), extra: true })).toThrow(/schema/);
@@ -223,3 +271,50 @@ describe('D28 routing pilot (#2620)', () => {
     expect(validateRoutingPolicy(policy()).digest).toBe(validateRoutingPolicy(policy({ candidates: [...policy().candidates].reverse() })).digest);
   });
 });
+
+/** Drill input whose policy restore either installs `prior` then throws, or throws first. */
+function restoreDrill({ installBeforeThrow, installOther = false }: { installBeforeThrow: boolean; installOther?: boolean }) {
+  const record = records<DecisionChampionChallenger>('champion-challenger.v1.valid.json').get('triage-champion-challenger-2026-09')!;
+  const driftPolicy = records<DecisionDriftResponse>('drift-response.v1.valid.json').get('triage-drift-response')!;
+  const history: AliasEvent[] = [{
+    revision: 1, alias: record.alias, actualIdentityDigest: record.champion.identityDigest, actualModel: record.champion.actualModel,
+    recordedAt: '2026-09-01T00:00:00.000Z', kind: 'observed', promotionEligibilityId: null,
+  }, {
+    revision: 2, alias: record.alias, actualIdentityDigest: record.challenger.identityDigest, actualModel: record.challenger.actualModel,
+    recordedAt: '2026-09-15T00:00:00.000Z', kind: 'promoted', promotionEligibilityId: record.eligibilityId,
+  }];
+  const signal: DriftSignal = {
+    source: 'label-drift', id: 'label-drift-1', alias: record.alias, metric: 'label-error-rate-delta-v1', valueBps: 500,
+    sampleN: 250, thresholdsVersion: driftPolicy.thresholds.version, observedAt: '2026-09-29T00:00:00.000Z',
+  };
+  const pins: RoutingPin[] = [{ id: 'routing-pilot', version: '1.0.0', digest: hash('1') }, { id: 'routing-pilot', version: '1.1.0', digest: hash('2') }];
+  const prior = pins[0]!;
+  const previous = pins[1]!;
+  const runs = [{ runId: 'run-a', policy: previous, aliasRevision: 2, identityDigest: record.challenger.identityDigest }];
+  return {
+    prior,
+    previous,
+    input: {
+      championChallenger: record,
+      driftPolicy,
+      driftSignal: signal,
+      approvalReference: 'review-2790',
+      gateway: {
+        aliasHistory: () => history,
+        promotionEligibility: () => null,
+        promoteAlias: () => { throw new Error('promotion is out of scope for rollback drill'); },
+        rollbackAlias: (): AliasEvent => { throw new Error('rollback must not run when the policy restore fails'); },
+      },
+      control: {
+        policyHistory: () => [...pins],
+        restorePolicy: (target: RoutingPin) => {
+          if (installBeforeThrow) pins.push(installOther ? { id: 'routing-pilot', version: '9.9.9', digest: hash('9') } : target);
+          throw new Error('restore failed');
+        },
+        openJevCircuit: () => undefined,
+        activeRunPins: () => runs,
+      },
+      at: '2026-09-29T00:00:00.000Z',
+    },
+  };
+}

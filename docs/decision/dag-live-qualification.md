@@ -84,8 +84,13 @@ Before every call, the reservation is taken from the whole-run and per-pattern
 ceilings, before credential resolution and transport. It covers the 4000-token worst
 case at the larger of the attested price and a USD 0.10 per 1M floor, and it is never
 below `perRequestUsd`. Settlement replaces the reservation with the reported usage at
-the same rates, including usage above the reservation. A call with missing usage
-keeps at least its whole reservation, and calls are never refunded.
+the same rates, including usage above the reservation. A call reporting more than its
+4000-token per-call bound records a budget breach: its observed spend is still charged
+in full, and every later reservation is refused (`budget-run-usage-bound`), which stops
+the run. Usage exactly at the bound settles normally. A call with missing usage
+keeps at least its whole reservation, and calls are never refunded. The Jev request
+carries no provider-side output cap, so the reservation, the breach refusal and the
+run stop are the per-call enforcement.
 
 An approval cannot raise the USD cap above the **USD 2.00** hard cap, and that cap
 spans reruns. The artifact root must be the canonical AIWG artifact root itself,
@@ -198,13 +203,18 @@ helper, then reads the secret over Node HTTPS with certificate verification alwa
 also revokes a helper token that fails validation, if the token can be sent as a
 header at all, and it revokes when the read failed.
 
+The token-helper runner, TLS refusal, request options, bounded HTTPS GET and KV v2
+envelope reader in that file are the single shared implementation (#2798): the D10
+egress resolver (`tools/decision/openbao-kv-credential-resolver.mjs`) delegates to
+them. The D12 file stays self-contained apart from `node:` built-ins so the runner
+can keep loading it through the digest-pinned `data:` import; any edit still needs a
+new approval pinning the new digest. The TV-12 resolver
+(`tools/decision/jev-credential-resolver.mjs`) remains a separate module with its own
+binding reference format.
+
 Errors carry a fixed category only, so no key, path, token or helper text reaches an
 error, log or artifact. The runner reads the key once per run and zeroes its copy at
 the end.
-
-This resolver mirrors the TV-12 resolver proposed in #2770, which is not on main and
-uses a logical reference that does not fit this runner's binding `credentialRef`.
-The duplication stays until one shared resolver lands.
 
 ## Evidence
 
