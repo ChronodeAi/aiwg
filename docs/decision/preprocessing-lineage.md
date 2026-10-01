@@ -121,9 +121,21 @@ gate. Input bindings come only from the host's `preprocessingVerification`. The
 lineage carries no pointer or text digest, and the evaluator never uses a stored
 digest. Checks run on the decision input the evaluator projects and dispatches;
 D10 projection can drop or redact a field but cannot substitute it. Every string
-value and every object key is a text-bearing position. A bound pointer covers
+value and every object key is a text-bearing position. Numeric, boolean, and
+null values are outside text-leaf binding: they carry no text, collect no value
+pointers, and are never compared against lineage text, so a scalar value can
+never satisfy a binding. Their object keys remain text-bearing member
+positions, so each scalar field's pointer must still be covered by a binding or
+a `nonLineagePointers` entry (in practice a declaration, since a bound scalar
+never equals the verified text). A bound pointer covers
 exactly its own string. A `nonLineagePointers` entry covers its whole subtree,
-keys included. Any other position is refused as `input-undeclared`.
+keys included. Any other text-bearing position is refused as `input-undeclared`.
+For example, `{ "message": "<verified lineage text>", "attempt": 3,
+"dryRun": false, "note": null }` binds only `/message` to the lineage
+manifests while `/attempt`, `/dryRun`, and `/note` are declared in
+`nonLineagePointers`: the `3`, `false`, and `null` values are not text and are
+never text-compared, whereas an extra string value at any uncovered pointer is
+refused as `input-undeclared`.
 
 When the host supplies `preprocessingVerification` but the lineage is empty or
 absent, the evaluator does not fall back to the text-native path. It returns a

@@ -9,6 +9,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Documented the text-only scope of experimental, default-off D24 input
+  binding: numeric, boolean, and null values sit outside text-leaf binding and
+  are never compared against lineage text, while their object keys remain
+  text-bearing member positions that still need binding or
+  `nonLineagePointers` coverage. No runtime behavior changes (#2784)
+
 - Refreshed experimental, default-off D17 source dry-run pins after the shared
   acceptance threshold fix entered the source digest; the corpus and split/gold
   pins are unchanged. Live evidence and approval remain pending (#2611)
