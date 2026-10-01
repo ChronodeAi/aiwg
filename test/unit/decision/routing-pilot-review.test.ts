@@ -401,6 +401,43 @@ describe('D28 routing pilot review regressions (#2620)', () => {
       expect(inflight.receipt.status).toBe('review');
       expectValidReceipt(inflight.receipt);
     });
+
+    it('ROUTE-EXIT-03 abort during dispatch records cancelled with unknown cost (#2792)', async () => {
+      const late = new AbortController();
+      let markStarted!: () => void;
+      const dispatchStarted = new Promise<void>(resolve => { markStarted = resolve; });
+      const pending = shadowRun(policy(), task(), {
+        signal: late.signal,
+        timer: () => new Promise<never>(() => undefined),
+        dispatch: () => { markStarted(); return new Promise<RoutingDispatchResult>(() => undefined); },
+      });
+      await dispatchStarted;
+      late.abort();
+      const { receipt } = await pending;
+      expectValidReceipt(receipt);
+      expect(receipt.status).toBe('review');
+      expect(receipt.reason).toBe('cancelled');
+      expect(receipt.attempts).toMatchObject([{ status: 'failed', reason: 'cancelled' }]);
+      expect(receipt.budget.spentMicros).toBeNull();
+      expect(receipt.usage?.costMicros).toBeNull();
+
+      // A non-cancellation failure with unknown cost still records cost-unknown.
+      const unknown = await shadowRun(policy(), task(), {
+        dispatch: async () => failure('timeout', null),
+      });
+      expectValidReceipt(unknown.receipt);
+      expect(unknown.receipt.status).toBe('review');
+      expect(unknown.receipt.reason).toBe('cost-unknown');
+      expect(unknown.receipt.attempts).toMatchObject([{ status: 'failed', reason: 'timeout' }]);
+      expect(unknown.receipt.budget.spentMicros).toBeNull();
+
+      // A cancelled attempt that is known to have overrun the budget still reports the overrun.
+      const overrun = await shadowRun(policy(), task(), {
+        dispatch: async () => failure('cancelled', 1_000_000_000),
+      });
+      expectValidReceipt(overrun.receipt);
+      expect(overrun.receipt.reason).toBe('budget-exceeded');
+    });
   });
 
   describe('shadow Jev never delays the authoritative result', () => {

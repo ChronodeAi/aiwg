@@ -75,7 +75,9 @@ same route, up to its `maxAttempts`, only when the dispatch itself reported a
 at its attempt deadline has no known cost, so the run stops with
 `cost-unknown`. Circuit failures move to the next route.
 Other failures stop the run, and cancellation stops before the next attempt
-and aborts an attempt in flight.
+and aborts an attempt in flight. A caller abort during dispatch records
+`cancelled` while keeping the unknown cost (null spend and usage) in the
+receipt; any other unknown-cost failure records `cost-unknown`.
 
 Every path after policy validation returns a receipt. Hook failures are
 contained:
