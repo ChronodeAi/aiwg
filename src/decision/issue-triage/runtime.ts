@@ -21,13 +21,18 @@ import {
   type QualificationSplit,
 } from '../qualification/quality.js';
 import { artifactDigest } from '../validate.js';
+import type { CalibrationRegistry } from '../calibration/registry.js';
+import type { CompatibilityPolicy } from '../calibration/types.js';
 import type {
   BinaryMetrics,
   IssueTriageBatchQuestion,
   IssueTriageCalibrationContext,
+  IssueTriageCalibrationPin,
+  IssueTriageCalibrationRequestRule,
   IssueTriageCandidateInput,
   IssueTriageCandidateLineage,
   IssueTriageDuplicateCandidate,
+  IssueTriageEvaluationCalibration,
   IssueTriageEvaluationInput,
   IssueTriageEvaluationManifest,
   IssueTriageEvaluationReport,
@@ -167,6 +172,14 @@ export function validateIssueTriageEvaluationManifest(value: unknown): IssueTria
   }
   const splitDigests = Object.values(manifest.dataset.splitDigests);
   if (new Set(splitDigests).size !== splitDigests.length) problems.push('split digests must be distinct');
+  const pinParts = [manifest.calibration.registryDigest, manifest.calibration.policyDigest, manifest.calibration.requestRule];
+  if (pinParts.some(part => part === null) && pinParts.some(part => part !== null)) {
+    problems.push('calibration pin must pin registry, policy and request rule together, or none of them');
+  }
+  const rule = manifest.calibration.requestRule;
+  if (rule && (!rule.requestedAlias.trim() || !rule.runIdPrefix.trim() || !Number.isFinite(Date.parse(rule.notBefore)))) {
+    problems.push('calibration request rule must pin an alias, run id prefix and notBefore instant');
+  }
   if (manifest.holdout.holdoutAccessedAt !== null
     && Date.parse(manifest.holdout.holdoutAccessedAt) <= Date.parse(manifest.holdout.thresholdsRegisteredAt)) {
     problems.push('thresholds must be preregistered before holdout access');
@@ -800,6 +813,28 @@ function scoredSamples(input: IssueTriageEvaluationInput, pack: IssueTriagePilot
   });
 }
 
+/**
+ * Freezes caller-supplied calibration evidence into a manifest pin: the canonical digest of the registry
+ * content (artifacts, relations and the alias history for the rule's alias) and of the policy, plus the
+ * rule every per-sample request must satisfy. Two registries built from the same content pin identically.
+ */
+export function pinIssueTriageCalibration(registry: CalibrationRegistry, policy: CompatibilityPolicy,
+  requestRule: IssueTriageCalibrationRequestRule): IssueTriageCalibrationPin {
+  if (!requestRule.requestedAlias.trim() || !requestRule.runIdPrefix.trim()
+    || !Number.isFinite(Date.parse(requestRule.notBefore))) {
+    throw new IssueTriagePilotError('issue triage calibration request rule must pin an alias, run id prefix and notBefore instant');
+  }
+  return {
+    registryDigest: digest({
+      artifacts: registry.artifactHistory(),
+      relations: registry.compatibilityHistory(),
+      aliases: registry.aliasHistory(requestRule.requestedAlias),
+    }),
+    policyDigest: digest(policy),
+    requestRule: { ...requestRule },
+  };
+}
+
 /** The evaluated pack must be exactly the pack the manifest preregistered: same id, version and canonical digest. */
 function verifyPilotPackPin(pack: IssueTriagePilotPack, manifest: IssueTriageEvaluationManifest): void {
   const pin = manifest.pilotPack;
@@ -808,11 +843,60 @@ function verifyPilotPackPin(pack: IssueTriagePilotPack, manifest: IssueTriageEva
   }
 }
 
+/**
+ * Caller-supplied calibration evidence must be exactly what the manifest preregistered: the registry
+ * content and policy digests must match, and every evaluated sample needs exactly one request satisfying
+ * the preregistered rule. Anything else is rejected before scoring, never absorbed into a finding.
+ */
+function verifyCalibrationPin(manifest: IssueTriageEvaluationManifest, calibration: IssueTriageEvaluationCalibration,
+  sampleIds: readonly string[]): void {
+  const pin = manifest.calibration;
+  const supplied = calibration.registry;
+  if (pin.registryDigest === null || pin.policyDigest === null || pin.requestRule === null) {
+    if (supplied) throw new IssueTriagePilotError('issue triage calibration registry was not preregistered in the manifest');
+    return;
+  }
+  if (!supplied) throw new IssueTriagePilotError('issue triage evaluation requires the preregistered calibration registry');
+  const rule = pin.requestRule;
+  if (digest({
+    artifacts: supplied.registry.artifactHistory(),
+    relations: supplied.registry.compatibilityHistory(),
+    aliases: supplied.registry.aliasHistory(rule.requestedAlias),
+  }) !== pin.registryDigest) {
+    throw new IssueTriagePilotError('issue triage calibration registry does not match the manifest pin');
+  }
+  if (digest(supplied.policy) !== pin.policyDigest) {
+    throw new IssueTriagePilotError('issue triage calibration policy does not match the manifest pin');
+  }
+  if (canonicalJson(Object.keys(supplied.requests).sort()) !== canonicalJson([...sampleIds].sort())) {
+    throw new IssueTriagePilotError('issue triage calibration requests do not cover the evaluated samples exactly once');
+  }
+  for (const id of sampleIds) {
+    const request = supplied.requests[id]!;
+    const where = `issue triage calibration request for sample ${id}`;
+    if (request.runId !== `${rule.runIdPrefix}${id}`) {
+      throw new IssueTriagePilotError(`${where} request runId ${request.runId} does not match the preregistered rule`);
+    }
+    if (request.requestedAlias !== rule.requestedAlias) {
+      throw new IssueTriagePilotError(`${where} requestedAlias ${request.requestedAlias} does not match the preregistered rule`);
+    }
+    if ((request.calibrationArtifactId ?? null) !== rule.calibrationArtifactId) {
+      throw new IssueTriagePilotError(`${where} calibrationArtifactId ${request.calibrationArtifactId ?? 'null'} does not match the preregistered rule`);
+    }
+    const at = Date.parse(request.at);
+    if (!Number.isFinite(at)) throw new IssueTriagePilotError(`${where} has an invalid at instant`);
+    if (at < Date.parse(rule.notBefore)) {
+      throw new IssueTriagePilotError(`${where} predates the preregistered rule`);
+    }
+  }
+}
+
 export function buildIssueTriageEvaluationReport(input: IssueTriageEvaluationInput): IssueTriageEvaluationReport {
   const pack = validateIssueTriagePilotPack(input.pack);
   const manifest = validateIssueTriageEvaluationManifest(input.manifest);
   verifyPilotPackPin(pack, manifest);
   if (!input.samples.length) throw new IssueTriagePilotError('issue triage evaluation requires at least one held-out sample');
+  verifyCalibrationPin(manifest, input.calibration, input.samples.map(sample => sample.id));
   const splits = verifiedSplits(manifest, input.splits, input.samples);
   const samples = scoredSamples(input, pack, manifest);
   const findings = new Set<string>();

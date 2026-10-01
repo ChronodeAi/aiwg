@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "decision-comparative-replay-freeze/v1",
+  "status": "local-unverified",
+  "sourceArtifacts": {
+    "corpus": "sha256:c70786bf3e6ed54235c66052f2dbe41e7f231b0433f5035d0ca0f6a1d45d72ac",
+    "gold": "sha256:02d6b37736af7dd6faa5fba342beb4883e168a9e693fe4780135a4ad6f5f0b85",
+    "split": "sha256:93d8b174cc60ac612a8876975c6b40ea38d4f000379d33e0334d56cd3fd6afd8",
+    "auditSample": "sha256:8e375726c0eeafd2867a65b59af52fac1921e6832bdbacbeaed3f73834d60e8d"
+  },
+  "generatorDigest": "sha256:70b3747cd8365d00a685a312b85aadb208a8acd450ce530d5696e281b76b6d34",
+  "preregistrationDigest": "sha256:54aaf7b55b2bc9c5e101860dca2b34862a6234a6cb4f49344cfeb8e1837cb798",
+  "operatorRecord": null,
+  "priorTestAccess": "development implementation inspected this synthetic regression corpus",
+  "contingencyUsd": 3,
+  "contingencySpentUsd": 0
+}

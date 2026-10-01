@@ -87,8 +87,9 @@ access:
 - the scale of every quality metric (`binary` 0/1 outcomes or `bounded` scores
   in [0, 1]) for downstream task success, requirement coverage, factual
   coverage, citation accuracy and human preference;
-- the slice list, minimum overall n, minimum per-slice n, and an optional power
-  rule;
+- the slice list, minimum overall n, minimum per-slice n, the minimum n for a
+  zero-variance bounded read (`minimumZeroVarianceN`), the minimum
+  protected-item n (`minimumProtectedN`), and an optional power rule;
 - an integer quality non-inferiority margin in bps (`-500` lets the candidate
   be at most 5 points worse);
 - positive total token and cost targets after fallbacks, cache effects and
@@ -98,6 +99,10 @@ access:
 `trustedPreregistrationDigest` (the same rule as
 `evaluatePreregisteredBinaryBenchmark`): a preregistration that does not match
 it, or whose `registeredAt` is not before `holdoutAccessedAt`, is rejected. A
+`holdoutAccessedAt` later than the evaluation clock
+(`evaluationNow`, default `Date.now`) plus the five-minute
+`CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS` allowance is rejected as a future
+attestation, so a future timestamp cannot satisfy the ordering check. A
 report with `holdoutAccessedAt: null` cannot `PROMOTE`. The preregistration
 also freezes the evaluation pair set: `pairSetDigest` is
 `contextPruningPairSetDigest()` of the sorted pair IDs with their slice
@@ -141,7 +146,10 @@ The report takes raw per-pair evidence, not aggregate deltas:
   the share of protected receipts whose proposed and applied actions are both
   `keep`; the caller's `protectedRetentionBps` must equal it or the report is
   refused, and with no protected receipts the report is
-  `INSUFFICIENT EVIDENCE`. The anchors are only as trustworthy as the record
+  `INSUFFICIENT EVIDENCE`. Protected receipts below the preregistered
+  `minimumProtectedN` (at least 2, so a single item can never suffice) yield
+  `insufficient-protected-sample` and `HOLD` with `INSUFFICIENT EVIDENCE`,
+  even at 100% retention. The anchors are only as trustworthy as the record
   that holds them; persisting receipts in a durable store is pending.
 
 Economics use provider-reported usage per arm, reported separately from
@@ -167,7 +175,12 @@ fails non-inferiority (`quality-non-inferiority-failed:<metric>`); it is
 bound is below 0 or its point estimate is below the margin. Otherwise the
 result is inconclusive (`quality-non-inferiority-inconclusive:<metric>`), for
 example identical arms at a small n, and yields `HOLD` with
-`INSUFFICIENT EVIDENCE`. Positive economics below the preregistered target,
+`INSUFFICIENT EVIDENCE`. A bounded metric whose per-pair differences are all
+identical reads a zero-width bootstrap interval, which carries no variability
+evidence: below the preregistered `minimumZeroVarianceN` it is
+`INSUFFICIENT EVIDENCE` (`insufficient-quality-support:<metric>`), even when
+its lower bound is at or above the margin. At or above that n an adequate
+identical sample remains eligible for `PROMOTE`. Positive economics below the preregistered target,
 unknown cost, unverified integrity or insufficient support yield `HOLD`; missing held-out
 data, human review, holdout access, live provider evidence or sample support
 also sets advisory-only `INSUFFICIENT EVIDENCE`.
