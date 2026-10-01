@@ -87,6 +87,18 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off project gate floors in `aiwg.config` `gates`:
+  inline `project:` floor packs and/or pins over registered packs whose
+  composed gates every binding must include and tighten (reusing the per-kind
+  tightening validator and scope-superset rule), optional per-study outcome
+  ceilings, and the operator default integrity-ceiling floor when no floors
+  are configured. Floors are a trusted registry/evaluator input loaded by the
+  caller; an absent input keeps resolution and evaluation byte-identical.
+  Config parsing errors fail closed. The D17 source dry-run pins are refreshed
+  for the new and changed gates sources; the corpus and split/gold pins are
+  unchanged. No CLI, no shipped floor pack and no
+  migrated study; live criteria remain pending (#2832)
+
 - Experimental, default-off D17 study regeneration for the shared collector's
   registered generator, closed seeds, free-output approval, byte-based input
   reservations and durable spend baseline. The uncollected corpus,

@@ -96,8 +96,9 @@ study version), never a silent bypass (P7 binding freedom). A child that
 drops a parent parameter default, making the parameter required, is
 equivalent to this freedom: the binding must then supply the value, and any
 value within the parameter's type range verifies. Project floors
-(`aiwg.config` `gates.floors`, #2832) are the future check for binding-level
-minima. Every provider used by
+(`aiwg.config` `gates`, #2832) are the check for binding-level minima: a
+binding parameter value that loosens a floor minimum is refused at
+resolution. Every provider used by
 any gate metric must be pinned, and every metric section consumed must be
 pinned; unpinned sections are refused. `holdout` is a sealed
 `sealGateHoldout({ frozenDigest, firstAccessedAt })` record from the
@@ -126,6 +127,70 @@ trusted. An `each` gate whose exclusions cover the whole inventory is a load
 error when statically determinable and `insufficient` otherwise, so no gate
 ever PROMOTEs vacuously. `sliceGroups` on a binding is validated against the
 slice inventory but never gates (pooled-of group references are deferred).
+
+## Project floors (`aiwg.config` `gates`, #2832)
+
+Experimental, default-off project policy over the core above. The `gates`
+section of `.aiwg/aiwg.config` holds `floors` (inline `project:` GatePacks
+and/or pins over registered packs whose composed gates all become floors)
+and optional per-study `ceilings` keyed by binding `metadata.id`. Inline
+floor packs validate against the closed GatePack schema at config load;
+pack-reference versions and authored digests are verified at resolution and
+composed through the pure `extends` chain, so a loosened parent moves the
+composed digest and breaks the pin. Every floor gate that binds a threshold
+parameter must declare a default for it: the default is the enforced
+minimum.
+
+Resolution refuses a binding that omits a floor gate or loosens any floor
+gate's threshold, parameter value, scope or outcome, reusing the per-kind
+`assertGateTightens` validator and the scope-superset rule. Binding threshold
+parameters are resolved to their preregistered values before comparison, so
+the check is value-against-minimum in the gate's declared direction. A
+binding whose ceiling sits below its configured per-study ceiling is refused;
+tighter ceilings resolve. `resolveGateBinding`, `GateRegistry.resolveBinding`
+and `evaluateGates` take floors as an optional trusted input loaded from
+`aiwg.config` by the caller (`resolveProjectFloors`), in the same trust
+class as `trustedBindingDigest` and the sealed holdout record: pins and
+composition are re-derived, never trusted. An absent floors input disables
+the check and keeps resolution and evaluation byte-identical.
+
+When no floors are configured, `resolveProjectFloors` injects the operator
+default: the `project:default-floors` pack, whose single `integrity-ceiling`
+`upstream-ceiling` gate requires every decision study to observe the
+eval-integrity ceiling. Configuring floors replaces the default only for the
+`integrity-ceiling` gate id itself: an inline floor pack that governs a gate
+with that id suppresses the default, anything else keeps it. There is no
+opt-out: a project that configures floors without governing the ceiling keeps
+the default ceiling. Config parsing errors fail closed at
+`readAiwgConfig`/`writeAiwgConfig` time.
+
+Example (every decision study observes the integrity ceiling and caps the
+false-ready rate; study `d29-synthetic-v8` can never promote):
+
+```json
+{
+  "gates": {
+    "floors": [
+      { "packRef": { "id": "aiwg:decision-engine/integrity-ceiling", "version": "1.0.0", "digest": "sha256:<pack-digest>" } },
+      { "pack": {
+        "apiVersion": "gates.aiwg.io/v1alpha1", "kind": "GatePack",
+        "metadata": { "id": "project:study-floors", "version": "1.0.0", "description": "Project false-ready floor." },
+        "spec": {
+          "metrics": { "false-ready": { "provider": "decision.screening/v1", "kind": "proportion" } },
+          "gates": [
+            { "id": "false-ready-upper", "kind": "interval-bound",
+              "metric": { "provider": "decision.screening/v1", "name": "false-ready" },
+              "statistic": { "kind": "interval-bound", "method": "wilson", "bound": "upper", "levelBps": 9500 },
+              "threshold": { "op": "lte", "value": 100 },
+              "scope": { "mode": "all" }, "direction": "lower-is-stricter", "onFail": "HOLD" }
+          ]
+        }
+      } }
+    ],
+    "ceilings": { "d29-synthetic-v8": "HOLD" }
+  }
+}
+```
 
 ## Digest migration (#2828)
 
@@ -189,3 +254,11 @@ binds the provider descriptor, not a code hash (#2831) — and no study
 migrates to bindings (#2833+). Rule `enforcedBy` coverage stays a stub
 (#2839). No live criterion is met; the harness above is what those phases
 build on.
+
+there is no CLI (`aiwg gates`, #2830), no addon/extension provider loading —
+providers register only through core modules and `sourceDigest` binds the
+provider descriptor, not a code hash (#2831) — and no study migrates to
+bindings (#2833+). Project floors in `aiwg.config` (#2832) are implemented as
+a trusted registry/evaluator input with the default integrity-ceiling floor,
+but no shipped floor pack exists yet and no study resolves with floors. No
+live criterion is met; the harness above is what those phases build on.

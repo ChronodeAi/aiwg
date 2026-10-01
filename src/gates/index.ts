@@ -16,10 +16,15 @@ export { GateSchemaError, validateGateDocument, type GateDocumentKind } from './
 export {
   GateRegistryError, GATE_NAMESPACES, splitPackId, validateResolvedPack, resolveThresholdDefault,
   assertGateTightens, applyGateExtends, composeGatePack, resolveGateBinding,
+  expandFloorPacks, enforceProjectFloors,
   authoredGatePacksOf, gateProvidersOf, GateRegistry,
   type AuthoredGatePackEntry, type AuthoredGatePackMap,
-  type GateNamespace, type ResolvedBinding, type ResolvedPack,
+  type ExpandedFloorPack, type GateNamespace, type ResolvedBinding, type ResolvedPack,
 } from './registry.js';
+export {
+  DEFAULT_PROJECT_FLOOR_PACK, projectCeilingSatisfied, resolveProjectFloors, validateGatesConfig,
+} from './floors.js';
+export type { ProjectFloors, ProjectFloorSource } from './floors.js';
 export {
   GateEvaluationError, maxOutcome, gateStatusOutcome, sealUpstream, sealGateHoldout,
   evaluateGates, type EvaluateGatesInput,

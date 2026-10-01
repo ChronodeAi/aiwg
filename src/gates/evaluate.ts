@@ -7,6 +7,7 @@ import { pairedMeanDifferenceBootstrap } from './stats/bootstrap.js';
 import { PairedDifferenceError } from './stats/error.js';
 import { pairedBinaryDifferenceInterval, pairedNonInferiority } from './stats/paired.js';
 import { GateRegistry, authoredGatePacksOf, gateProvidersOf, resolveGateBinding, type ResolvedBinding } from './registry.js';
+import type { ProjectFloors } from './floors.js';
 import { qualifyGateParameter } from './types.js';
 import type {
   GateBinding, GateDefinition, GateEvidence, GateHoldoutInputs, GateMetricsDocument, GateOutcome, GateReport,
@@ -45,6 +46,15 @@ export interface EvaluateGatesInput {
   holdout: GateHoldoutInputs;
   metrics: GateMetricsDocument;
   upstream: UpstreamCeiling | null;
+  /**
+   * Optional trusted project floors, loaded from `.aiwg/aiwg.config` by the
+   * caller via `resolveProjectFloors` (see `src/gates/floors.ts`). Like
+   * `trustedBindingDigest` and `holdout`, floors are caller-asserted project
+   * policy: the evaluator re-derives pack pins, composition and tightening
+   * from them but never fetches them. Absent disables the check and keeps
+   * evaluation byte-identical to the floors-unaware path.
+   */
+  floors?: ProjectFloors;
   /** Fake-clock timestamp (ISO date-time). Recorded as evaluatedAt, so identical inputs give identical bytes. */
   now: string;
   /**
@@ -416,7 +426,7 @@ function upstreamOutcome(upstream: UpstreamCeiling | null): { ceiling: GateOutco
  * conservative (wider) relative to a one-sided interval at the same level.
  */
 export function evaluateGates(input: EvaluateGatesInput): GateReport {
-  const { binding, registry, trustedBindingDigest, holdout, metrics, upstream, now } = input;
+  const { binding, registry, trustedBindingDigest, holdout, metrics, upstream, now, floors } = input;
   if ('resolved' in (input as unknown as Record<string, unknown>)
     && (input as unknown as Record<string, unknown>).resolved !== undefined) {
     fail('caller-supplied gate resolution is not accepted: pass the binding and registry');
@@ -429,7 +439,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
   // instance method is called for anything security-relevant, so a subclass
   // that overrides `resolveBinding` (or a duck-typed `{resolveBinding}`)
   // cannot empty gates, loosen parameters or forge digests.
-  const resolved = resolveGateBinding(binding, authoredGatePacksOf(registry), gateProvidersOf(registry));
+  const resolved = resolveGateBinding(binding, authoredGatePacksOf(registry), gateProvidersOf(registry), floors);
   const { packs, parameters } = resolved;
   // 1:1 pins<->packs: the pin list and the resolved packs must match exactly.
   if (packs.length !== binding.spec.packs.length) fail('binding pins do not match resolved packs 1:1');

@@ -114,3 +114,9 @@ the offline `aiwg gates validate|evaluate|show|list` CLI; the bundled
 `aiwg:decision-engine/integrity-ceiling` example pack validates. There is
 no project floor enforcement, no addon provider loading and no migrated
 study; live criteria remain pending.
+
+digests with a versioned legacy mode. Project floors from `aiwg.config`
+`gates` (including the default integrity-ceiling floor) are enforced only
+when the caller passes them as trusted registry/evaluator input; without
+that input behavior is unchanged. There is no CLI, no addon provider loading
+and no migrated study; live criteria remain pending.

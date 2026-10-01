@@ -36,6 +36,7 @@ import {
   type SecurityConfig,
 } from '../security/threat-assessment-config.js';
 import { defaultArtifactOutputs, validateArtifactOutputs, type ArtifactOutputsConfig } from '../artifacts/output-policy.js';
+import { validateGatesConfig, type ProjectFloors } from '../gates/floors.js';
 import { validateUhpConfig } from '../uhp/config.js';
 import type { UhpConfig } from '../uhp/types.js';
 export type { UhpConfig, UhpEndpointProfile } from '../uhp/types.js';
@@ -595,6 +596,17 @@ export interface AiwgConfig {
    * @implements #1692
    */
   build?: BuildConfig;
+
+  /**
+   * Project gate floors for decision studies. Lists the gate packs (or pack
+   * references) every binding in the project must include and tighten, plus
+   * optional per-study outcome ceilings. Optional — when absent, callers that
+   * load floors via `resolveProjectFloors` get the operator default
+   * integrity-ceiling floor; callers that never pass floors to the gates
+   * registry/evaluator keep legacy behavior unchanged.
+   * @implements #2832
+   */
+  gates?: ProjectFloors;
 }
 
 /** Research-complete framework settings (#1497). */
@@ -1696,6 +1708,9 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   const uhpErrors = validateUhpConfig(parsed.uhp);
   if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
 
+  const gatesErrors = validateGatesConfig(parsed.gates);
+  if (gatesErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${gatesErrors.join('\n')}`);
+
   return parsed;
 }
 
@@ -1716,6 +1731,8 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
   const uhpErrors = validateUhpConfig(config.uhp);
   if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
+  const gatesErrors = validateGatesConfig(config.gates);
+  if (gatesErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${gatesErrors.join('\n')}`);
   const localPath = getConfigPath(projectDir);
   const artifactDir = resolveProjectAiwgDir(projectDir);
   const artifactPath = join(artifactDir, CONFIG_FILENAME);
