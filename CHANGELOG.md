@@ -43,6 +43,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   preflight, delivery (loudness, true peak, black, stream list, frame count,
   hashes, captions) and edit-conform gates name the failures that production found.
 
+### Removed
+
+- **Ring Governance addon (`ring-governance`)** - The fork-only addon is removed
+  with its `governance-skeptic` agent, 5 rules, 3 skills, 5 templates, unit test,
+  `governance-skeptic` premium-model allowlist entry, and the 6 runtime behaviors
+  that enforced it (`evaluator-drift-watch`, `evolution-adapter-watch`,
+  `governance-boundary-sentinel`, `memory-proof-guard`, `provider-bridge-watch`,
+  `verdict-binding-check`). The shipped-component discovery count is now 64.
+
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed
