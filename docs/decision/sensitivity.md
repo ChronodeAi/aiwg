@@ -79,11 +79,17 @@ host-authenticated `probeIdentity` (tenant, workspace,
 project, principal) taken from the host's authentication context. A missing
 identity, or a plan whose tenant, workspace, project or actor differs from it,
 is rejected before inference. Probe counters are keyed by that identity, the
-probed subject (the digest of the source input together with the ruleset and
-binding IDs) and (for path counters) path. Neither the plan-authored
+probed subject (the digest of the source input together with the canonical
+ruleset and binding content: `apiVersion`, `kind` and `spec` only) and (for
+path counters) path. Caller-chosen artifact metadata (`id`, `version`,
+`description`) is not part of the key, and the binding's ruleset pin is
+normalized to the canonical ruleset digest, so renaming an otherwise identical
+ruleset or binding cannot mint a new budget for re-evaluating the same input.
+A genuinely new artifact version mints a distinct subject only through a change
+to the evaluated spec. Neither the plan-authored
 `sourceSubject.subjectRef` nor the caller-supplied source result artifact is
 part of the key, so rotating them cannot mint a new budget for re-evaluating
-the same input. A renamed ruleset or binding is a different subject. Counters use a window derived
+the same input. Counters use a window derived
 from the injected clock: `floor(now / windowMs)`, where `windowMs` is host-owned probe-state
 configuration (default one hour). The plan's `probeControl.windowId` is a
 descriptive label only and cannot reset a budget. Probe counters are enforced

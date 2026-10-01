@@ -147,6 +147,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Anchor experimental, default-off sensitivity probe subjects to canonical host
+  artifact content (`apiVersion`, `kind`, `spec`) instead of caller-chosen
+  artifact IDs: renaming an otherwise identical ruleset or binding shares the
+  existing subject budget, while a genuinely new version mints a distinct
+  subject only through a spec change. Ordinary decision behavior is unchanged (#2796)
+
 - Bind experimental, default-off held-out collector baselines to the independent
   durable spend head. Changed or missing baselines fail before credential access
   even after run deletion; legacy heads require operator reconciliation (#2778)
