@@ -9,6 +9,22 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D17 staged D09 calibration (#2611). `d17-study.mjs`
+  adds `--prepare-staged`, which keeps the same corpus, split and gold pins and
+  adds a calibrated `staged` preregistration over tuning and calibration plus a
+  v2 analysis. It also adds `--bundle`, which refuses until the 40 development
+  assessments are complete and agree with gold and the text oracle.
+  `--fit-calibration` and `--register-calibration` fit isotonic single-call and
+  three-sample-mean calibrators on calibration rows only and emit
+  `CalibrationArtifact.v1` files. They require an operator-reviewed,
+  D09-qualified calibration set before any test-phase approval form is usable.
+  `d17-score.mjs --staged` scores the test phase on calibrated probabilities with
+  the frozen native D17 gates; D17 has no gate binding. `--native-handoff` and
+  `--native` build the champion/challenger record and anchored integrity for
+  AC7/AC14. New schema versions (`D17StudyAnalysis.v2`, `D17StudyDryRun.v2`,
+  `D17StudyReport.v2`, `D17StudyCalibration.v1`) leave the v1 diagnostic
+  contracts unchanged. Decisions stay HOLD or ROLLBACK; no live collection
+  is included.
 - Experimental, default-off D29 generator `d29-synthetic/v8` (public
   development seed `d29-study-v8`, refused for paid collection like v1–v7)
   fixes dataset leaks found on the public v7 seed and in review: injected
