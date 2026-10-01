@@ -17,6 +17,7 @@ import {
   createContextPruningPreregistration,
   planContextPruningEvaluationRun,
   planContextPruningEvaluations,
+  validateContextPruningPreregistration,
   validateContextPruningReceipt,
   type ContextPruningCandidate,
   type ContextPruningDecisionEvidence,
@@ -136,6 +137,7 @@ function preregister(
       minimumOverallN: 40,
       minimumSliceN: 20,
       minimumZeroVarianceN: 30,
+      minimumProtectedN: 30,
       powerRule: 'fixture: reviewer-owned power analysis before held-out access',
       qualityNonInferiorityMarginBps: -500,
       positiveTotalTokenTarget: 100,
@@ -544,6 +546,8 @@ describe('D26 context pruning pilot', () => {
         minimumOverallN: 2,
         minimumSliceN: 1,
         minimumZeroVarianceN,
+        // One protected receipt per pair: keep the protected-item floor (#2786) satisfied at n=2.
+        minimumProtectedN: 2,
       }, now(), pairs);
     // Two identical pairs read a zero-width interval at the estimate, which carries no variability
     // evidence: the preregistered support rule withholds PROMOTE even though economics and integrity pass.
@@ -806,6 +810,40 @@ describe('D26 context pruning pilot', () => {
       .toThrow('digest mismatch');
   });
 
+  it('R3-5: protected retention below the preregistered support floor cannot PROMOTE, even at 100%', () => {
+    // The shared fixture carries 100 protected items at 100% retention.
+    const atFloor = report(goodMetrics(), { preregistration: preregister({ minimumProtectedN: 100 }) });
+    expect(atFloor.derived.protectedRetention).toEqual({ protectedItems: 100, retained: 100, bps: 10_000 });
+    expect(atFloor.findings).toEqual([]);
+    expect(atFloor).toMatchObject({ decision: 'PROMOTE', advisory: null });
+    const belowFloor = report(goodMetrics(), { preregistration: preregister({ minimumProtectedN: 101 }) });
+    expect(belowFloor.derived.protectedRetention).toEqual({ protectedItems: 100, retained: 100, bps: 10_000 });
+    expect(belowFloor.findings).toEqual(['insufficient-protected-sample']);
+    expect(belowFloor).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+  });
+
+  it('R3-5: zero protected items HOLDs with insufficient protected support', () => {
+    const ordinary = [candidate('note-a'), candidate('note-b')];
+    const runs = [...new Set(goodMetrics().pairs.map(pair => pair.pairId))].map(pairId => ({
+      pairId,
+      candidates: ordinary,
+      receipts: applyContextPruningPilot({ candidates: ordinary, policy, now, pairId,
+        evidence: [success('note-a', 'drop'), success('note-b', 'drop')] }).receipts,
+    }));
+    const result = report(goodMetrics(), { runs });
+    expect(result.derived.protectedRetention).toEqual({ protectedItems: 0, retained: 0, bps: null });
+    expect(result.findings).toEqual(expect.arrayContaining(['insufficient-protected-receipts', 'insufficient-protected-sample']));
+    expect(result).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+  });
+
+  it('R3-5: the preregistered protected-item floor is versioned and never blesses a single item', () => {
+    expect(() => preregister({ minimumProtectedN: 1 })).toThrow('invalid context pruning preregistration');
+    expect(() => preregister({ minimumProtectedN: 0 })).toThrow('invalid context pruning preregistration');
+    const legacy = JSON.parse(JSON.stringify(preregister())) as Record<string, any>;
+    delete legacy.thresholds.minimumProtectedN;
+    expect(() => validateContextPruningPreregistration(legacy as never)).toThrow('invalid context pruning preregistration');
+  });
+
   it('I: rejects a holdout access attested after the evaluation clock beyond skew', () => {
     // Fake evaluation clock: fixed epoch ms, so the check never reads Date.now.
     const evaluationMs = Date.parse('2026-10-01T12:00:00.000Z');
@@ -887,6 +925,10 @@ describe('D26 context pruning pilot', () => {
     expect(checkReceipt(run.receipts[0]), JSON.stringify(checkReceipt.errors)).toBe(true);
     expect(checkPreregistration(preregister()), JSON.stringify(checkPreregistration.errors)).toBe(true);
     expect(checkPreregistration({ ...preregister(), holdoutAccessedAt: null })).toBe(false);
+    expect(checkPreregistration({ ...preregister(), thresholds: { ...preregister().thresholds, minimumProtectedN: 1 } })).toBe(false);
+    const withoutFloor = JSON.parse(JSON.stringify(preregister())) as Record<string, unknown>;
+    delete (withoutFloor.thresholds as Record<string, unknown>).minimumProtectedN;
+    expect(checkPreregistration(withoutFloor)).toBe(false);
     for (const result of [report(goodMetrics()), report(goodMetrics(), { holdoutAccessedAt: null }),
       report(withQuality('factual-coverage', []))]) {
       expect(checkReport(result), JSON.stringify(checkReport.errors)).toBe(true);

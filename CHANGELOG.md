@@ -331,6 +331,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   recognize standalone `whsec_` and `glpat-` provider tokens, including inside
   base64-encoded blobs. Terminated blocks and all other token classes are
   unchanged (#2793)
+- Experimental, default-off decision-assisted context pruning now preregisters
+  a minimum protected-item count (`minimumProtectedN`, at least 2) in
+  `ContextPruningPreregistration.v1`. Reports with fewer validated protected
+  receipts HOLD with `insufficient-protected-sample` and
+  `INSUFFICIENT EVIDENCE`, even at 100% retention; the shadow pilot is
+  unchanged and live held-out quality/economics evidence remains pending (#2786)
 
 - Bind experimental, default-off held-out collector baselines to the independent
   durable spend head. Changed or missing baselines fail before credential access

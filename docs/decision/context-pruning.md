@@ -88,8 +88,8 @@ access:
   in [0, 1]) for downstream task success, requirement coverage, factual
   coverage, citation accuracy and human preference;
 - the slice list, minimum overall n, minimum per-slice n, the minimum n for a
-  zero-variance bounded read (`minimumZeroVarianceN`), and an optional power
-  rule;
+  zero-variance bounded read (`minimumZeroVarianceN`), the minimum
+  protected-item n (`minimumProtectedN`), and an optional power rule;
 - an integer quality non-inferiority margin in bps (`-500` lets the candidate
   be at most 5 points worse);
 - positive total token and cost targets after fallbacks, cache effects and
@@ -143,7 +143,10 @@ The report takes raw per-pair evidence, not aggregate deltas:
   the share of protected receipts whose proposed and applied actions are both
   `keep`; the caller's `protectedRetentionBps` must equal it or the report is
   refused, and with no protected receipts the report is
-  `INSUFFICIENT EVIDENCE`. The anchors are only as trustworthy as the record
+  `INSUFFICIENT EVIDENCE`. Protected receipts below the preregistered
+  `minimumProtectedN` (at least 2, so a single item can never suffice) yield
+  `insufficient-protected-sample` and `HOLD` with `INSUFFICIENT EVIDENCE`,
+  even at 100% retention. The anchors are only as trustworthy as the record
   that holds them; persisting receipts in a durable store is pending.
 
 Economics use provider-reported usage per arm, reported separately from
