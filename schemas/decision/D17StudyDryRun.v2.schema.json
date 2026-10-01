@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyDryRun.v2.schema.json",
+  "title": "D17StudyDryRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "providerCalls",
+    "syntheticOnly",
+    "subjects",
+    "splits",
+    "expected",
+    "worstCase",
+    "approvalCeilings",
+    "portfolioUsd",
+    "stopFraction",
+    "fitsStudyCapBeforeStop",
+    "sessionLimitMs",
+    "requiresResumableSessions",
+    "reviewAssessments",
+    "missingInputs",
+    "phases"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-dry-run/v2"
+    },
+    "providerCalls": {
+      "const": 0
+    },
+    "syntheticOnly": {
+      "const": true
+    },
+    "subjects": {
+      "const": 1800
+    },
+    "splits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tuning",
+        "calibration",
+        "test"
+      ],
+      "properties": {
+        "tuning": {
+          "const": 200
+        },
+        "calibration": {
+          "const": 400
+        },
+        "test": {
+          "const": 1200
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "firstAttempts",
+        "retryRateBps",
+        "attempts",
+        "inputTokens",
+        "outputTokens",
+        "usd",
+        "costSource"
+      ],
+      "properties": {
+        "firstAttempts": {
+          "const": 7200
+        },
+        "retryRateBps": {
+          "const": 250
+        },
+        "attempts": {
+          "const": 7380
+        },
+        "inputTokens": {
+          "const": 27630720
+        },
+        "outputTokens": {
+          "type": "null"
+        },
+        "usd": {
+          "const": 2.7675
+        },
+        "costSource": {
+          "const": "planning-bound-derived-not-provider-reported"
+        }
+      }
+    },
+    "worstCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempts",
+        "totalTokens",
+        "reservedUsd",
+        "priceFloorUsdPerMTok"
+      ],
+      "properties": {
+        "attempts": {
+          "const": 14400
+        },
+        "totalTokens": {
+          "const": 57600000
+        },
+        "reservedUsd": {
+          "const": 5.4
+        },
+        "priceFloorUsdPerMTok": {
+          "const": 0.1
+        }
+      }
+    },
+    "approvalCeilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calls",
+        "tokens",
+        "usd"
+      ],
+      "properties": {
+        "calls": {
+          "const": 18000
+        },
+        "tokens": {
+          "const": 72000000
+        },
+        "usd": {
+          "const": 8
+        }
+      }
+    },
+    "portfolioUsd": {
+      "const": 48
+    },
+    "stopFraction": {
+      "const": 0.8
+    },
+    "fitsStudyCapBeforeStop": {
+      "const": true
+    },
+    "sessionLimitMs": {
+      "const": 1800000
+    },
+    "requiresResumableSessions": {
+      "const": true
+    },
+    "reviewAssessments": {
+      "const": 88
+    },
+    "missingInputs": {
+      "type": "array",
+      "const": [
+        "completed 40-item development review",
+        "calibration-phase operator approval",
+        "exact-source CI evidence",
+        "provider terms",
+        "prior study and portfolio spend",
+        "region and credential resolver pin",
+        "calibration-phase live observations",
+        "fitted and operator-reviewed D09 calibration set",
+        "test-phase operator approval",
+        "test-phase live observations",
+        "blind human review"
+      ]
+    },
+    "phases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "calibration",
+        "test"
+      ],
+      "properties": {
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "splits",
+            "rows",
+            "firstAttempts",
+            "worstCaseAttempts"
+          ],
+          "properties": {
+            "splits": {
+              "type": "array",
+              "const": [
+                "tuning",
+                "calibration"
+              ]
+            },
+            "rows": {
+              "const": 600
+            },
+            "firstAttempts": {
+              "const": 2400
+            },
+            "worstCaseAttempts": {
+              "const": 4800
+            }
+          }
+        },
+        "test": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "splits",
+            "rows",
+            "firstAttempts",
+            "worstCaseAttempts"
+          ],
+          "properties": {
+            "splits": {
+              "type": "array",
+              "const": [
+                "test"
+              ]
+            },
+            "rows": {
+              "const": 1200
+            },
+            "firstAttempts": {
+              "const": 4800
+            },
+            "worstCaseAttempts": {
+              "const": 9600
+            }
+          }
+        }
+      }
+    }
+  },
+  "description": "Staged-calibration D17 dry run with per-phase planning bounds. v1 remains the diagnostic dry run."
+}

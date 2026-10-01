@@ -8,7 +8,10 @@ import type { prepareD17Study } from './corpus.js';
 
 const schemas = { analysis: 'D17StudyAnalysis', splits: 'D17StudySplits', gold: 'D17StudyGold',
   review: 'D17StudyReview', guide: 'D17StudyGuide', report: 'D17StudyReport',
-  nativeTemplates: 'D17StudyNativeTemplates', dryRun: 'D17StudyDryRun' } as const;
+  nativeTemplates: 'D17StudyNativeTemplates', dryRun: 'D17StudyDryRun',
+  // Staged D09 calibration (#2611): new schema versions; the v1 diagnostic schemas are unchanged.
+  analysisV2: 'D17StudyAnalysis.v2', dryRunV2: 'D17StudyDryRun.v2', reportV2: 'D17StudyReport.v2',
+  calibration: 'D17StudyCalibration' } as const;
 type Prepared = ReturnType<typeof prepareD17Study>;
 type Assessment = Omit<Prepared['reviewTemplate']['assessments'][number], 'reviewedAt' | 'goldAuditLabel'
   | 'goldAmbiguousOrIncorrect' | 'blindedResultAudit' | 'rationale'> & {
@@ -20,24 +23,29 @@ export type D17Review = Omit<Prepared['reviewTemplate'], 'reviewer' | 'preregist
 };
 type Artifacts = { analysis: Prepared['analysis']; splits: Prepared['splitManifest']; gold: Prepared['gold'];
   review: D17Review; guide: Prepared['guide']; report: Record<string, unknown>;
-  nativeTemplates: Prepared['nativeTemplates']; dryRun: Prepared['dryRun'] };
+  nativeTemplates: Prepared['nativeTemplates']; dryRun: Prepared['dryRun'];
+  analysisV2: Record<string, unknown>; dryRunV2: Record<string, unknown>; reportV2: Record<string, unknown>;
+  calibration: Record<string, unknown> };
 const here = dirname(fileURLToPath(import.meta.url));
 const schemaDir = [resolve(here, '../../../schemas/decision'), resolve(here, '../../../../schemas/decision')]
   .find(directory => existsSync(resolve(directory, 'D17StudyProtocol.v1.schema.json')));
 if (!schemaDir) throw new Error('D17 artifact schema directory is unavailable');
-const readSchema = (name: string) => JSON.parse(readFileSync(resolve(schemaDir, `${name}.v1.schema.json`), 'utf8'));
+const readSchema = (name: string) => JSON.parse(readFileSync(resolve(schemaDir, `${/\.v[0-9]+$/.test(name) ? name : `${name}.v1`}.schema.json`), 'utf8'));
 const ajv = new Ajv2020({ strict: true });
 ajv.addSchema(readSchema('D17StudyProtocol'));
 ajv.addSchema(readSchema('DecisionEnsembleAggregate'));
 ajv.addSchema(readSchema('DecisionEnsembleIntegrityReport'));
-const validators = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name, ajv.compile(readSchema(schema))]));
+const calibrationSchema = readSchema('D17StudyCalibration');
+ajv.addSchema(calibrationSchema);
+const validators = Object.fromEntries(Object.entries(schemas).map(([name, schema]) => [name,
+  name === 'calibration' ? ajv.getSchema(calibrationSchema.$id)! : ajv.compile(readSchema(schema))]));
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 8_388_608, properties: 100000, entries: 150000,
   arrayLength: 1800, memoryBytes: 33_554_432 };
 const reportLimits = { ...limits, serializedBytes: 33_554_432, properties: 500000, entries: 1000000, memoryBytes: 134_217_728 };
 
 /** Closed, bounded preparation artifacts; gold remains local and separate from provider input. */
 export function validateD17Artifact<K extends keyof Artifacts>(name: K, value: unknown): asserts value is Artifacts[K] {
-  admitEntry(value, name === 'report' ? reportLimits : limits);
+  admitEntry(value, name === 'report' || name === 'reportV2' ? reportLimits : limits);
   if (!validators[name]?.(value)) throw new Error(`D17 invalid ${name} artifact`);
   if (name === 'splits') {
     const manifest = value as Artifacts['splits'];
