@@ -181,6 +181,12 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- The experimental, default-off D26 context-pruning evaluation report rejects a
+  `holdoutAccessedAt` attested after the evaluation clock beyond a five-minute
+  skew allowance (`CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS`, injectable via
+  `evaluationNow` for deterministic tests), so a future timestamp can no longer
+  satisfy the preregistration ordering check. Ordinary decision behavior is
+  unchanged (#2787).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

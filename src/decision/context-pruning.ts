@@ -16,6 +16,12 @@ export const CONTEXT_PRUNING_CANDIDATE_SCHEMA = 'decision-context-candidate/v1' 
 export const CONTEXT_PRUNING_RECEIPT_SCHEMA = 'decision-context-pruning-receipt/v1' as const;
 export const CONTEXT_PRUNING_PREREGISTRATION_SCHEMA = 'decision-context-pruning-preregistration/v1' as const;
 export const CONTEXT_PRUNING_EVALUATION_REPORT_SCHEMA = 'decision-context-pruning-evaluation-report/v1' as const;
+/**
+ * Clock-skew allowance for `holdoutAccessedAt` attestations: the recorder that stamps holdout access and the
+ * evaluator that builds the report may disagree by up to five minutes. An attestation later than the
+ * evaluation clock plus this allowance is a future attestation and is rejected.
+ */
+export const CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
 export type ContextPruningSourceKind =
   | 'system'
@@ -686,6 +692,8 @@ export function validateContextPruningPreregistration(value: ContextPruningPrere
  * Builds the paired evaluation report. `trustedPreregistrationDigest` must come from a separately anchored
  * record made before holdout access (as evaluatePreregisteredBinaryBenchmark requires): a caller-created
  * preregistration cannot attest itself. A report without a recorded holdout access time cannot PROMOTE.
+ * A holdout access attested later than the evaluation clock plus CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS
+ * is rejected as a future attestation.
  */
 export function buildContextPruningEvaluationReport(input: {
   preregistration: ContextPruningPreregistration;
@@ -698,6 +706,11 @@ export function buildContextPruningEvaluationReport(input: {
   /** contextPruningReceiptSetDigest of every evaluated receipt, anchored separately from the report input. */
   trustedReceiptSetDigest: `sha256:${string}`;
   missingInputs?: readonly string[];
+  /**
+   * Injectable evaluation clock (epoch ms) the holdout-access attestation is compared against. Defaults to
+   * Date.now; tests pass a fake clock.
+   */
+  evaluationNow?: () => number;
 }): ContextPruningEvaluationReport {
   const preregistration = validateContextPruningPreregistration(input.preregistration);
   if (typeof input.trustedPreregistrationDigest !== 'string' || !SHA.test(input.trustedPreregistrationDigest)
@@ -705,9 +718,17 @@ export function buildContextPruningEvaluationReport(input: {
     throw new ContextPruningError('preregistration is not anchored to the trusted digest', 'semantic');
   }
   const holdoutAccessedAt = input.holdoutAccessedAt;
-  if (holdoutAccessedAt !== null && (typeof holdoutAccessedAt !== 'string' || !Number.isFinite(Date.parse(holdoutAccessedAt))
-    || Date.parse(holdoutAccessedAt) <= Date.parse(preregistration.registeredAt))) {
+  const holdoutAtMs = holdoutAccessedAt === null ? NaN : Date.parse(holdoutAccessedAt);
+  if (holdoutAccessedAt !== null && (typeof holdoutAccessedAt !== 'string' || !Number.isFinite(holdoutAtMs)
+    || holdoutAtMs <= Date.parse(preregistration.registeredAt))) {
     throw new ContextPruningError('holdout access must be recorded after preregistration', 'semantic');
+  }
+  if (Number.isFinite(holdoutAtMs)) {
+    const evaluationNowMs = (input.evaluationNow ?? Date.now)();
+    // Fail closed: an unknown evaluation time cannot vouch for the attestation.
+    if (!Number.isFinite(evaluationNowMs) || holdoutAtMs - evaluationNowMs > CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS) {
+      throw new ContextPruningError('future holdout access attestation is rejected', 'semantic');
+    }
   }
   validateIntegrity(input.integrity);
   const thresholds = preregistration.thresholds;

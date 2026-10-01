@@ -98,6 +98,10 @@ access:
 `trustedPreregistrationDigest` (the same rule as
 `evaluatePreregisteredBinaryBenchmark`): a preregistration that does not match
 it, or whose `registeredAt` is not before `holdoutAccessedAt`, is rejected. A
+`holdoutAccessedAt` later than the evaluation clock
+(`evaluationNow`, default `Date.now`) plus the five-minute
+`CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS` allowance is rejected as a future
+attestation, so a future timestamp cannot satisfy the ordering check. A
 report with `holdoutAccessedAt: null` cannot `PROMOTE`. The preregistration
 also freezes the evaluation pair set: `pairSetDigest` is
 `contextPruningPairSetDigest()` of the sorted pair IDs with their slice
