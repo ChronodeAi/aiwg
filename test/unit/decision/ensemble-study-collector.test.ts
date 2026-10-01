@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepare } from '../../../tools/decision/d17-study.mjs';
 import { evaluateDecisionRuleset } from '../../../src/decision/evaluate.js';
 import { collectHeldoutStudy, scoreHeldoutStudy } from '../../../src/decision/heldout/collector.js';
@@ -27,6 +27,12 @@ vi.mock('../../../src/decision/context-live-qualification.js', async original =>
 });
 
 const dirs: string[] = [];
+// Decision entry admission (admitEntry, artifactDigest) enforces a hardcoded 1s wall-clock budget via performance.now(),
+// with no injection seam. The scorer and native-report cases admit 1,200-observation reports many times, so a starved CI
+// runner can trip 'time-budget' before the asserted rejection. Freeze performance.now() so that budget never measures
+// host load; every structural admission limit still applies. Tests that also need fake setTimeout re-install with it.
+const ADMISSION_CLOCK = ['performance'] as const;
+beforeEach(() => { vi.useFakeTimers({ toFake: [...ADMISSION_CLOCK] }); });
 afterEach(async () => { vi.useRealTimers(); for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true }); });
 const pin = heldoutDigest('d17-offline-diagnostic');
 async function setup(scoring = false) {
@@ -125,15 +131,19 @@ describe('D17 diagnostic collection through the shared collector', () => {
   });
   it.each(['cancel', 'timeout', 'rejected', 'model', 'unknown-usage'])('AC3/5 retains a completed pair and stopping reservation after %s', async kind => {
     const c = await setup(); const controller = new AbortController(); let calls = 0;
-    if (kind === 'timeout') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    c.bundle.preregistration.requestTimeoutMs = 25;
+    // requestTimeoutMs also bounds the evaluator's AbortSignal.timeout total deadline, which runs on real time and
+    // cannot be faked. Keep the frozen 60s bound (longer than the 30s test timeout) so no dispatch is ever cut short
+    // by host load; the collector's request timer is a faked setTimeout that only the timeout case advances.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', ...ADMISSION_CLOCK] });
+    const timeoutMs = c.bundle.preregistration.requestTimeoutMs;
+    expect(timeoutMs).toBeGreaterThan(30_000);
     const transport = vi.fn(async (_url: unknown, init?: RequestInit) => {
       if (++calls <= 4) return reply(init);
       if (kind === 'rejected') throw new Error('private dispatch failure');
       if (kind === 'model') return reply(init, { model: 'unknown-model' });
       if (kind === 'unknown-usage') return reply(init, { usage: {} });
       if (kind === 'cancel') controller.abort();
-      if (kind === 'timeout') await vi.advanceTimersByTimeAsync(26);
+      if (kind === 'timeout') await vi.advanceTimersByTimeAsync(timeoutMs + 1);
       return new Promise<Response>((_resolve, reject) => {
         if (init?.signal?.aborted) reject(new Error('aborted'));
         else init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });

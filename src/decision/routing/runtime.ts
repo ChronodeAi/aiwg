@@ -4,7 +4,7 @@ import { admitEntry } from '../entry.js';
 import { projectDecisionState } from '../projection.js';
 import { executeDriftResponse, rollbackChampionForNewRuns } from '../ensemble/runtime.js';
 import type { AliasEvent } from '../calibration/types.js';
-import type { JevRoutingEvidence, RouteCandidate, RouteCandidateSummary, RouteAttemptReceipt, RoutingControlDrillInput,
+import type { JevRoutingEvidence, RouteCandidate, RouteCandidateSummary, RouteAttemptReceipt, RoutingAttemptBudget, RoutingControlDrillInput,
   RoutingControlDrillResult, RoutingControlDrillState, RoutingCounterfactual, RoutingDispatchResult, RoutingEligibleCandidate, RoutingExclusionReason,
   RoutingPin, RoutingPolicy, RoutingReceipt, RoutingRuntimeOptions, RoutingSkipReason, RoutingTask } from './types.js';
 import {
@@ -181,10 +181,14 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
       if (index > 0 && triesOnRoute === 0 && fallbacksUsed >= policy.ceilings.maxFallbacks) break routes;
       // Every attempt, including a fallback, re-checks the constraints that change during the run.
       if (openProviders.has(route.model.provider)) { skip(route.id, 'circuit-open'); continue routes; }
+      // Null means unknown, never zero: without known charged spend there is no enforceable
+      // remaining cap, so the run stops before any further dispatch.
+      if (spent === null) { stop('cost-unknown'); break routes; }
       // Price the attempt at the worst cost already seen for this route or provider, never below the pinned estimate.
       const cost = Math.max(route.operations.costMicrosPerAttempt!, observedCost.get(`route:${route.id}`) ?? 0,
         observedCost.get(`provider:${route.model.provider}`) ?? 0);
-      if (spent! + cost > limits.limitMicros) { skip(route.id, 'budget-exhausted'); continue routes; }
+      const remaining = limits.limitMicros - spent;
+      if (!Number.isSafeInteger(remaining) || remaining < 0 || cost > remaining) { skip(route.id, 'budget-exhausted'); continue routes; }
       const backoff = ordinal === 0 ? 0 : Math.min(policy.ceilings.retryDelayMs * 2 ** (ordinal - 1), MAX_BACKOFF_MS);
       if (clock() + backoff + route.operations.deadlineMs > limits.deadlineEpochMs) { skip(route.id, 'deadline-exhausted'); continue routes; }
       if (backoff > 0) {
@@ -199,14 +203,17 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
       }
       // Read the clock before reserving: nothing between a granted reservation and its release may throw.
       const attemptDeadline = clock() + route.operations.deadlineMs;
+      // The reservation and the dispatch both carry the remaining-cost cap, so a fallback admitted
+      // under its estimate cannot authorize spend above the remaining budget. A denial refuses it.
+      const budget: RoutingAttemptBudget = { remainingBudgetMicros: remaining, costCeilingMicros: remaining, estimatedCostMicros: cost };
       let granted = false;
-      try { granted = await reserve(route, ordinal + 1) === true; } catch { granted = false; }
+      try { granted = await reserve(route, ordinal + 1, budget) === true; } catch { granted = false; }
       if (!granted) { skip(route.id, 'reservation-denied'); continue routes; }
 
       ordinal += 1;
       triesOnRoute += 1;
       if (index > 0 && triesOnRoute === 1) fallbacksUsed += 1;
-      const outcome = await raceDispatch(dispatch, route, ordinal, attemptDeadline, route.operations.deadlineMs, timer, options.signal);
+      const outcome = await raceDispatch(dispatch, route, ordinal, attemptDeadline, route.operations.deadlineMs, timer, options.signal, budget.costCeilingMicros);
       const result = outcome.forced ? failedDispatch(outcome.forced) : outcome.result;
       const charged = result ? result.costMicros : null;
       // A failing release hook must not discard the attempt record; the receipt keeps the charge.
@@ -239,9 +246,10 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
         }
         break routes;
       }
-      if (spent === null) { stop('cost-unknown'); break routes; }
-      if (spent > limits.limitMicros) { stop('budget-exceeded'); break routes; }
+      // A known overrun outranks everything; cancellation outranks an unknown cost it caused.
+      if (spent !== null && spent > limits.limitMicros) { stop('budget-exceeded'); break routes; }
       if (result.reason === 'cancelled') { stop('cancelled'); break routes; }
+      if (spent === null) { stop('cost-unknown'); break routes; }
       if (CIRCUIT_REASONS.has(result.reason)) {
         openProviders.add(route.model.provider);
         body.fallbacks.push(route.id);
@@ -256,7 +264,8 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
 
 /** Races one dispatch against its attempt deadline and the caller's signal; a hung dispatch is aborted. */
 async function raceDispatch(dispatch: NonNullable<RoutingRuntimeOptions['dispatch']>, candidate: RouteCandidate, attemptOrdinal: number,
-  deadlineEpochMs: number, budgetMs: number, timer: NonNullable<RoutingRuntimeOptions['timer']>, parent: AbortSignal | undefined):
+  deadlineEpochMs: number, budgetMs: number, timer: NonNullable<RoutingRuntimeOptions['timer']>, parent: AbortSignal | undefined,
+  costCeilingMicros: number):
 Promise<{ result: RoutingDispatchResult | null; forced: 'timeout' | 'cancelled' | 'rejected' | null }> {
   const controller = new AbortController();
   const timerControl = new AbortController();
@@ -266,7 +275,7 @@ Promise<{ result: RoutingDispatchResult | null; forced: 'timeout' | 'cancelled' 
   type Outcome = { kind: 'result'; value: unknown } | { kind: 'rejected' } | { kind: 'timeout' } | { kind: 'cancelled' };
   let pending: Promise<unknown>;
   try {
-    pending = Promise.resolve(dispatch({ candidate, attemptOrdinal, deadlineEpochMs, signal: controller.signal }));
+    pending = Promise.resolve(dispatch({ candidate, attemptOrdinal, deadlineEpochMs, costCeilingMicros, signal: controller.signal }));
   } catch (error) {
     pending = Promise.reject(error);
   }
@@ -411,7 +420,19 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
       try {
         restored = control.restorePolicy(prior, input.approvalReference, input.at);
       } catch (error) {
-        return fail(`routing policy restore failed: ${messageOf(error)}`, unchanged);
+        // The restore may have installed `prior` before throwing, so re-read the
+        // history and derive the reported state from what is actually current.
+        const current = control.policyHistory().at(-1) ?? previousPolicy;
+        const installedPrior = canonicalJson(current) === canonicalJson(prior);
+        return fail(`routing policy restore failed: ${messageOf(error)}`, {
+          policyRestored: installedPrior,
+          aliasRolledBack: false,
+          compensated: false,
+          // Consistent only when nothing changed: any other installed policy (prior or
+          // something else entirely) leaves policy and alias out of step.
+          consistent: canonicalJson(current) === canonicalJson(previousPolicy),
+          currentPolicy: current,
+        });
       }
       if (!installed(prior, restored)) {
         return fail('routing policy restore did not install the prior pinned policy', { ...unchanged, consistent: false, currentPolicy: control.policyHistory().at(-1) ?? previousPolicy });
@@ -437,7 +458,17 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
     'require-recertification': contain('require-recertification'),
   });
   const after = control.activeRunPins();
-  if (canonicalJson(after) !== canonicalJson(before)) throw new RoutingContractError('active run pins changed during the drift response');
+  if (canonicalJson(after) !== canonicalJson(before)) {
+    return fail('active run pins changed during the drift response', {
+      policyRestored: restoredPolicy !== null,
+      aliasRolledBack: rollbackEvent !== null,
+      compensated: false,
+      consistent: false,
+      currentPolicy: control.policyHistory().at(-1) ?? previousPolicy,
+      activeRunPinsBefore: [...before],
+      activeRunPinsAfter: frozenRoutingClone([...after]),
+    });
+  }
   return { driftResponse: drift.executed, previousPolicy, restoredPolicy, rollbackEvent, jevCircuitOpen, activeRunPins: structuredClone([...after]) };
 }
 
