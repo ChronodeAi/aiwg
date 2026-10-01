@@ -603,6 +603,19 @@ describe('D26 context pruning pilot', () => {
     expect(partialRegression.decision).toBe('ROLLBACK');
   });
 
+  it('A: every remaining insufficient metric yields a finding and HOLD with INSUFFICIENT EVIDENCE', () => {
+    // 70 reported outcomes (n >= minimumOverallN) read as non-inferior, but 30
+    // recorded pairs are omitted, so the metric decision is insufficient.
+    const tied = PAIR_IDS.map((pairId, index) => {
+      const outcome = index % 10 === 0 ? 0 : 1;
+      return { pairId, baseline: outcome, candidate: outcome };
+    });
+    const partial = report(withQuality('downstream-task-success', tied.slice(30)));
+    expect(partial.derived.quality[0]).toMatchObject({ decision: 'insufficient', n: 70, missingPairs: 30 });
+    expect(partial.findings).toContain('insufficient-quality-evidence:downstream-task-success');
+    expect(partial).toMatchObject({ decision: 'HOLD', advisory: 'INSUFFICIENT EVIDENCE' });
+  });
+
   it('C2: slice support is computed per metric from its outcomes, so a slice omitted from every metric cannot PROMOTE', () => {
     // Probe 2: pair records keep docs=50, but every quality metric drops the docs pairs.
     const base = goodMetrics();

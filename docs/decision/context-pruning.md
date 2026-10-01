@@ -118,7 +118,10 @@ The report takes raw per-pair evidence, not aggregate deltas:
   `pairedMeanDifferenceBootstrap` from `src/decision/qualification/quality.ts`
   at the preregistered level and seed; `pairedNonInferiority` compares each
   lower bound with the margin. A metric below the minimum n is
-  `INSUFFICIENT EVIDENCE`.
+  `INSUFFICIENT EVIDENCE`. Any other insufficient metric decision at or above
+  the minimum n (an unreadable interval, or a passing verdict withheld for
+  omitted pairs) is reported as `insufficient-quality-evidence:<metric>` and
+  likewise yields `HOLD` with `INSUFFICIENT EVIDENCE`.
 - Every metric's outcomes must cover every recorded pair. A metric that omits
   any recorded pair (`quality-outcomes-incomplete:<metric>`) can never pass:
   it is insufficient, unless the outcomes it does report already show

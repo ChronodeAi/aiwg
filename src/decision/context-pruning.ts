@@ -755,6 +755,10 @@ export function buildContextPruningEvaluationReport(input: {
       findings.add(`quality-metric-missing:${result.metric}`);
     } else if (result.decision === 'insufficient' && result.n < thresholds.minimumOverallN) {
       findings.add(`insufficient-quality-sample:${result.metric}`);
+    } else if (result.decision === 'insufficient') {
+      // Interval construction failed, the verdict was unreadable, or a passing
+      // verdict was withheld for omitted pairs: adequate n is not evidence.
+      findings.add(`insufficient-quality-evidence:${result.metric}`);
     }
   }
 

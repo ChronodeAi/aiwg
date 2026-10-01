@@ -181,6 +181,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- The experimental, default-off D26 context pruning report records
+  `insufficient-quality-evidence:<metric>` for every remaining insufficient
+  quality decision at or above the overall minimum n, so it yields HOLD with
+  `INSUFFICIENT EVIDENCE` instead of omitting the decision from the findings (#2788).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
