@@ -7,6 +7,23 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- Experimental, default-off gate-pack discovery, manifest and CLI (#2830):
+  `gate-pack` joins the `aiwg discover`/`aiwg show` operational surface with
+  a `.gatepack.` extension boundary (HITL `gates/` files never classify),
+  `gatePacks`/`entry.gatePacks` manifest fields for frameworks, addons and
+  extensions, a bundle loader that registers shipped packs as
+  `aiwg:<bundle>/<name>` and rejects invalid packs with file-pathed
+  diagnostics, an offline `aiwg gates`
+  `validate|evaluate|show|list` CLI (fake-clock `--now`, sealed holdout and
+  upstream digests re-derived on every use, `--rule` enforcedBy coverage stays
+  a stub for #2839), and a validating bundled
+  `aiwg:decision-engine/integrity-ceiling` example pack. The decision runtime
+  stays disabled by default and byte-identical. Project floors (#2832),
+  addon/extension provider loading (#2831), study adoption (#2833+) and any
+  live, held-out, human-review or production evidence remain pending (#2830)
+
 ### Fixed
 
 - Tightened the experimental, default-off gates core addendum: every scope

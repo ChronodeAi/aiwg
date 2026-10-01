@@ -14,11 +14,13 @@
   "entry": {
     "skills": "skills/",
     "docs": "docs/",
-    "examples": "examples/"
+    "examples": "examples/",
+    "gatePacks": "gate-packs/"
   },
   "agents": [],
   "commands": [],
   "skills": ["decision-evaluate", "decision-playground"],
+  "gatePacks": ["integrity-ceiling"],
   "dependencies": {
     "required": ["aiwg-utils", "composition-engine"],
     "optional": []

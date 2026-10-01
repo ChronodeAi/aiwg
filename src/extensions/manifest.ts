@@ -79,6 +79,7 @@ const ArtifactListsSchema = z.object({
   hooks: z.array(z.string()).max(50).optional(),
   commands: z.array(z.string()).max(200).optional(),
   behaviors: z.array(z.string()).max(50).optional(),
+  gatePacks: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
 const EntryPathsSchema = z.object({
@@ -90,6 +91,7 @@ const EntryPathsSchema = z.object({
   hooks: safeRelativePath.optional(),
   commands: safeRelativePath.optional(),
   behaviors: safeRelativePath.optional(),
+  gatePacks: safeRelativePath.optional(),
 }).strict();
 
 export const AddonConfigSchema = z.object({
@@ -103,6 +105,10 @@ export const FrameworkConfigSchema = z.object({
   path: safeRelativePath.optional(),
   files: z.array(safeRelativePath).max(100).optional(),
   ignore: z.array(safeRelativePath).max(100).optional(),
+  gatePacks: z.array(z.string().min(1).max(128)).max(50).optional(),
+  entry: z.object({
+    gatePacks: safeRelativePath.optional(),
+  }).strict().optional(),
   contextContributions: z.object({
     hookFragment: safeRelativePath.optional(),
     sectionsDir: safeRelativePath.optional(),

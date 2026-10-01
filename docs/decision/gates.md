@@ -140,11 +140,52 @@ caller passes `{ digestModes: ['canonical', 'legacy'] }`, and `v2` intersects
 any caller allowlist with canonical-only. Existing v1 evidence still verifies
 under the allowlist; every other verifier defaults to canonical-only.
 
+## Discovery, manifest and CLI (#2830)
+
+Experimental, default-off and offline-only. `gate-pack` is on the
+`aiwg discover`/`aiwg show` operational surface (`src/artifacts/types.ts`,
+`parseGatePackDoc` in `src/artifacts/index-builder.ts`, corpus fallback in
+`src/artifacts/query-engine.ts`). Only `*.gatepack.yaml|yml|json` files
+classify: HITL `gates/*.yaml` (agent-persistence) never becomes a
+`gate-pack`, and schema-invalid packs are undiscoverable. `aiwg show
+gate-pack <id>` accepts the full id, the rest-path or the short pack name.
+
+Bundles declare packs with the `gatePacks`/`entry.gatePacks` manifest fields
+(`src/extensions/manifest.ts`: addon/extension lists plus framework support)
+and ship them as `<bundle>/gate-packs/*.gatepack.yaml|json` (never `gates/`).
+`src/gates/discovery.ts` loads and registers them: shipped packs as
+`aiwg:<bundle>/<name>`, project-local bundles under their own
+`framework:`/`addon:`/`extension:` namespace. Invalid packs are rejected at
+load with a file-pathed diagnostic and never enter the `GateRegistry`.
+
+`aiwg gates` (`src/cli/handlers/gates.ts`, `src/gates/driver.ts`) is pure
+and offline:
+
+- `validate <pack|binding|report> <path>` schema-checks plus pack semantics
+  (`validateResolvedPack`) and binding resolution; invalid files report
+  `valid: false` (exit 2) instead of throwing.
+- `evaluate --binding <file> --metrics <file> --holdout <file>
+  [--upstream <file>] --now <iso>` re-derives pack, provider, binding and
+  seal digests inside the evaluator and prints the `GateReport` JSON.
+  A breached threshold never promotes; upstream `HOLD`/`ROLLBACK` is never
+  upgraded; forged holdout/upstream seals are refused.
+- `show <id>` prints the resolved pack with authored and composed digests.
+- `list [--namespace <ns>] [--rule [<rule-id>]]` lists registered packs.
+  `--rule` enforcedBy coverage is a stub: it reports packs named by rules'
+  `enforcedBy` frontmatter when present and empty otherwise. Full coverage
+  is #2839.
+
+The decision-engine addon ships
+`agentic/code/addons/decision-engine/gate-packs/integrity-ceiling.gatepack.yaml`
+(`aiwg:decision-engine/integrity-ceiling`, one `upstream-ceiling` floor gate)
+so discovery has a real entry; it validates and registers.
+
 ## Pending (not in this phase)
 
 Live Jev calls, real held-out data, human reviewers and production rollout:
-there is no CLI (`aiwg gates`, #2830), no project floors in `aiwg.config`
-(#2832), no addon/extension provider loading — providers register only
-through core modules and `sourceDigest` binds the provider descriptor, not a
-code hash (#2831) — and no study migrates to bindings (#2833+). No live
-criterion is met; the harness above is what those phases build on.
+no project floors in `aiwg.config` (#2832), no addon/extension provider
+loading — providers register only through core modules and `sourceDigest`
+binds the provider descriptor, not a code hash (#2831) — and no study
+migrates to bindings (#2833+). Rule `enforcedBy` coverage stays a stub
+(#2839). No live criterion is met; the harness above is what those phases
+build on.

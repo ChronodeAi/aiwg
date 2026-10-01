@@ -28,3 +28,12 @@ export { validateGateReport, type GateReportValidation } from './report.js';
 export { createCoreProviderRegistry, evidenceProvider, pairedProvider, proportionProvider, scalarProvider } from './providers/index.js';
 export type { MetricProvider } from './providers/index.js';
 export { MetricProviderRegistry } from './providers/index.js';
+export {
+  GATE_PACKS_DIR, isGatePackFile, listGatePackFiles, readBundleGatePacksDeclaration,
+  loadGatePackFile, registerBundleGatePacks, discoverShippedGatePacks,
+} from './discovery.js';
+export {
+  buildGatesRegistry, validateGateFile, loadHoldoutFile, loadUpstreamFile,
+  evaluateGatesFromFiles, listGatePacks, showGatePack, packsReferencedByRule,
+} from './driver.js';
+export type { GatesDriverOptions, GateValidateKind, GateValidateResult, GatesEvaluateFiles, GatePackSummary } from './driver.js';
