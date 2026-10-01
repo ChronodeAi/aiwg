@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../../security/artifact-trust.js';
+import { matchEvidenceDigest } from '../../gates/stats/index.js';
 import { CalibrationRegistry, calibrationArtifactDigest } from '../calibration/registry.js';
 import type { CalibrationArtifact } from '../calibration/types.js';
 import { validateCaseInventory } from './manifest.js';
@@ -135,7 +136,8 @@ function validSplitPlan(value: unknown): value is FrozenBinaryBenchmarkPlan {
   if (!record(value) || value.schemaVersion !== GATE_ARTIFACT_SCHEMAS['immutable-splits']) return false;
   const { digest, ...fields } = value as unknown as FrozenBinaryBenchmarkPlan;
   try { verifyQualificationSplits(fields.splits); } catch { return false; }
-  return typeof digest === 'string' && sha256Pattern.test(digest) && digest === sha256(JSON.stringify(fields))
+  // Versioned legacy mode: pre-migration plans hashed JSON.stringify output. Both modes verify by default.
+  return typeof digest === 'string' && sha256Pattern.test(digest) && matchEvidenceDigest(fields, digest) !== null
     && sha256Pattern.test(String(fields.datasetDigest));
 }
 

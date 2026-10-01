@@ -1,0 +1,232 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/gates/GatePack.v1alpha1.schema.json",
+  "title": "GatePack",
+  "description": "Experimental, default-off reusable gate definitions for the gates capability (epic #2824). Packs are declarative data: no code, no network access, no expressions beyond DecisionPredicate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "gates.aiwg.io/v1alpha1" },
+    "kind": { "const": "GatePack" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metrics", "gates"],
+      "properties": {
+        "extends": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Parent pack id. A child may only tighten: thresholds move in their declared direction, minimumN only rises, severity only standard-to-blocking, scope only narrows, floor:true gates cannot be removed."
+        },
+        "parameters": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/parameter" }
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/metricDeclaration" }
+        },
+        "gates": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/gate" }
+        },
+        "combine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rule"],
+          "properties": {
+            "rule": { "const": "max-severity" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Namespaced pack id: aiwg:<bundle>/<name>, framework:<bundle>/<name>, addon:<bundle>/<name>, extension:<bundle>/<name> or project:<name>."
+        },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "direction"],
+      "properties": {
+        "type": { "enum": ["bps", "count", "level", "value"] },
+        "direction": { "enum": ["lower-is-stricter", "higher-is-stricter"] },
+        "default": { "type": "number" },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "metricDeclaration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "kind"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["proportion", "paired", "scalar", "differences", "evidence"] },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "metricReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "name"],
+      "properties": {
+        "provider": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 }
+      }
+    },
+    "statistic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["interval-bound", "paired-difference", "bootstrap-bound"] },
+        "method": { "enum": ["wilson", "clopper-pearson", "newcombe", "tango", "bootstrap"] },
+        "bound": { "enum": ["upper", "lower"] },
+        "levelBps": { "type": "integer", "minimum": 5001, "maximum": 9998 },
+        "mode": { "enum": ["non-inferiority", "superiority"] },
+        "marginBps": { "type": "integer", "minimum": -10000, "maximum": 10000 },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "resamples": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "bounds": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "type": "number", "minimum": -1, "maximum": 1 }
+        },
+        "vs": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Named reference arm the paired contrast was computed against. The arm is reported; the paired interval gates."
+        }
+      }
+    },
+    "threshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": { "enum": ["lte", "gte"] },
+        "value": { "type": "number" },
+        "param": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]*$" }
+      },
+      "anyOf": [
+        { "properties": { "value": {} }, "required": ["value"] },
+        { "properties": { "param": {} }, "required": ["param"] }
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["all", "each", "listed", "pooled"] },
+        "slices": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "except": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "decisionPredicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "op": { "enum": ["eq", "ne", "lt", "lte", "gt", "gte", "exists"] },
+        "left": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "pointer"],
+          "properties": {
+            "source": { "enum": ["input", "decision"] },
+            "alias": { "type": "string", "minLength": 1 },
+            "pointer": { "type": "string", "minLength": 1 }
+          }
+        },
+        "right": true,
+        "all": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/decisionPredicate" } },
+        "any": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/decisionPredicate" } },
+        "not": { "$ref": "#/$defs/decisionPredicate" }
+      },
+      "anyOf": [
+        { "properties": { "op": {}, "left": {} }, "required": ["op", "left"] },
+        { "properties": { "all": {} }, "required": ["all"] },
+        { "properties": { "any": {} }, "required": ["any"] },
+        { "properties": { "not": {} }, "required": ["not"] }
+      ]
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "severity", "direction", "scope"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+        "kind": {
+          "enum": ["interval-bound", "paired-difference", "bootstrap-bound", "count-max", "count-min",
+            "value-threshold", "minimum-n", "evidence", "predicate", "upstream-ceiling"]
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "metric": { "$ref": "#/$defs/metricReference" },
+        "statistic": { "$ref": "#/$defs/statistic" },
+        "threshold": { "$ref": "#/$defs/threshold" },
+        "minimumN": { "type": "integer", "minimum": 0 },
+        "scope": { "$ref": "#/$defs/scope" },
+        "severity": { "enum": ["standard", "blocking"] },
+        "direction": { "enum": ["lower-is-stricter", "higher-is-stricter"] },
+        "floor": { "type": "boolean" },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required"],
+          "properties": {
+            "required": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "predicate": { "$ref": "#/$defs/decisionPredicate" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "upstream-ceiling" } } },
+          "then": { "properties": { "metric": false } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "predicate" } } },
+          "then": { "properties": { "predicate": {} }, "required": [ "predicate" ] }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["interval-bound", "paired-difference", "bootstrap-bound", "count-max", "count-min", "value-threshold", "minimum-n", "evidence"] }
+            }
+          },
+          "then": { "properties": { "metric": {} }, "required": [ "metric" ] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["interval-bound", "paired-difference", "bootstrap-bound"] } } },
+          "then": { "properties": { "statistic": {} }, "required": [ "statistic" ] }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["interval-bound", "bootstrap-bound", "count-max", "count-min", "value-threshold"] } } },
+          "then": { "properties": { "threshold": {} }, "required": [ "threshold" ] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "evidence" } } },
+          "then": { "properties": { "evidence": {} }, "required": [ "evidence" ] }
+        }
+      ]
+    }
+  }
+}

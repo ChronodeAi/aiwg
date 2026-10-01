@@ -10,7 +10,7 @@ import { type ArtifactPin, type DecisionBinding, type DecisionDefinition,
   type DecisionBatchRequestUsage, type DecisionResult, type DecisionRuleset, type DecisionUsage, type RulesetResult } from './types.js';
 import { type DecisionLifecycleHold, type DecisionLifecyclePolicy, type DecisionLifecycleReference,
   type DecisionLifecycleReferenceState, type DecisionLifecycleStore, validateDecisionLifecyclePolicy } from './lifecycle.js';
-import type { QualificationIntegrityMetadata, QualificationReleaseRecord } from './qualification/release.js';
+import { verifyQualificationReleaseDigest, type QualificationIntegrityMetadata, type QualificationReleaseRecord } from './qualification/release.js';
 
 export const DECISION_FEATURE_EXPORT_VERSION = 'decision-feature-export/v1' as const;
 export const DECISION_FEATURE_SET_KIND = 'DecisionFeatureSet' as const;
@@ -1206,8 +1206,8 @@ function validateQualificationRelease(record: QualificationReleaseRecord): void 
     || !['PROMOTE', 'HOLD', 'ROLLBACK'].includes(record.decision) || !/^sha256:[0-9a-f]{64}$/.test(record.digest)) {
     throw new DecisionFeatureExportError('Feature export qualification release is invalid');
   }
-  const { digest, ...fields } = record;
-  if (digest !== `sha256:${createHash('sha256').update(JSON.stringify(fields)).digest('hex')}`) {
+  // Versioned legacy mode: pre-migration release records hashed JSON.stringify output. Both modes verify by default.
+  if (verifyQualificationReleaseDigest(record) === null) {
     throw new DecisionFeatureExportError('Feature export qualification release digest does not match its content');
   }
   validateQualificationIntegrity(record.integrity);

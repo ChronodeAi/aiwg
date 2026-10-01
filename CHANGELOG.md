@@ -9,6 +9,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Refreshed experimental, default-off D17 source dry-run pins after the gates
+  phase 1 core moved the qualification statistics and canonicalised evidence
+  digests; the corpus and split/gold pins are unchanged. Live evidence and
+  approval remain pending (#2824)
+
 - Refreshed experimental, default-off D17 source dry-run pins after the shared
   acceptance threshold fix entered the source digest; the corpus and split/gold
   pins are unchanged. Live evidence and approval remain pending (#2611)
@@ -213,6 +218,15 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+
+- Experimental, default-off gates capability phase 1 core: closed versioned
+  GatePack/GateBinding/GateReport schemas with catalog entries, a namespaced
+  registry with monotone-tightening `extends` proofs, a pure deterministic
+  offline evaluator with digest-bound never-upgrade reports, four pinned core
+  metric providers, an exact Clopper-Pearson interval, and canonical-JSON
+  qualification evidence digests with a versioned legacy mode. There is no
+  CLI, no project floor enforcement, no addon provider loading and no
+  migrated study; live criteria remain pending (#2824)
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

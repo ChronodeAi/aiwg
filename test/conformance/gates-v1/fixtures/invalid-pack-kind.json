@@ -1,0 +1,21 @@
+{
+  "apiVersion": "gates.aiwg.io/v1alpha1",
+  "kind": "GatePack",
+  "metadata": { "id": "aiwg:test-gates/invalid-kind", "version": "1.0.0", "description": "Unknown gate kind." },
+  "spec": {
+    "metrics": {
+      "false-ready": { "provider": "test.proportion/v1", "kind": "proportion" }
+    },
+    "gates": [
+      {
+        "id": "magic",
+        "kind": "magic-bound",
+        "metric": { "provider": "test.proportion/v1", "name": "false-ready" },
+        "threshold": { "op": "lte", "value": 100 },
+        "scope": { "mode": "all" },
+        "severity": "standard",
+        "direction": "lower-is-stricter"
+      }
+    ]
+  }
+}

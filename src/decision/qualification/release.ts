@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { canonicalSha256, matchEvidenceDigest, type EvidenceDigestMode } from '../../gates/stats/index.js';
 import type { LabelStabilityReport } from './drift.js';
 import type { BinarySliceMetrics } from './quality.js';
 import type { ExecutedQualification } from './runner.js';
@@ -234,7 +234,20 @@ export function buildQualificationReleaseRecord(
       caseIds: input.cacheLayers![layer].manifest.evidence.map(item => item.caseId).sort() }])) as QualificationReleaseRecord['cacheLayers'] : null,
     decision,
   };
-  return { ...fields, digest: `sha256:${createHash('sha256').update(JSON.stringify(fields)).digest('hex')}` };
+  return { ...fields, digest: canonicalSha256(fields) };
+}
+
+/**
+ * Verifies a release record digest without rebuilding it. Accepts the canonical digest
+ * and, by default, the versioned legacy (`JSON.stringify`) digest so pre-migration
+ * evidence still verifies. Returns the matching mode, or null when neither matches.
+ */
+export function verifyQualificationReleaseDigest(
+  record: QualificationReleaseRecord, options?: { digestModes?: readonly EvidenceDigestMode[] },
+): EvidenceDigestMode | null {
+  if (!record || typeof record !== 'object') return null;
+  const { digest, ...fields } = record;
+  return matchEvidenceDigest(fields, digest, options?.digestModes);
 }
 
 /** Deliberately excludes private callback details, stdout/stderr and raw captures. */
