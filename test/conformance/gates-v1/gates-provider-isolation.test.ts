@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { itSandboxed } from './sandbox-helper.js';
 import { artifactDigest } from '../../../src/decision/validate.js';
 import { evaluateGates, sealGateHoldout, sealUpstream } from '../../../src/gates/evaluate.js';
 import { validateGatesConfig } from '../../../src/gates/floors.js';
@@ -17,6 +18,9 @@ import {
   NOW, REGISTERED_AT, FROZEN_AT, cleanIntegrity, makeBindingForPack, makeUpstream,
   passingMetrics, projectPack, testHoldout, testRegistry, trustedDigest,
 } from './helper.js';
+
+/** invokeBundleProvider requires an explicit frozen clock (C5). */
+const INVOKE_CLOCK_MS = Date.parse(NOW);
 
 const EXAMPLE_ROOT = 'test/fixtures/gates-example-extension';
 // Reviewed bytes of the example provider (example.mjs + helper.mjs). The
@@ -125,13 +129,13 @@ describe('P1: providers run isolated from the parent process', () => {
     await expect(loadIsolated(output)).rejects.toMatchObject({ name: 'GateProviderError' });
   });
 
-  it('kills a synchronous infinite loop by wall-clock timeout and keeps serving (c/probe.mts loop)', async () => {
+  itSandboxed('kills a synchronous infinite loop by wall-clock timeout and keeps serving (c/probe.mts loop)', async () => {
     const output = writeBundle(honestSource(
       '    const start = Date.now();\n    while (Date.now() - start < 3000) {}\n    return { metrics: {} };'));
     pinManifest(output);
     const { provider } = await loadIsolated(output);
     const started = Date.now();
-    await expect(invokeBundleProvider(provider, [], { timeoutMs: 300 }))
+    await expect(invokeBundleProvider(provider, [], { timeoutMs: 300, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ name: 'GateProviderError', code: 'timeout' });
     // The parent event loop was never wedged: the kill landed near the deadline.
     expect(Date.now() - started).toBeLessThan(2500);
@@ -139,11 +143,11 @@ describe('P1: providers run isolated from the parent process', () => {
     const honest = writeBundle(honestSource(`    return ${SCALAR_RESULT}`));
     pinManifest(honest);
     const { provider: goodProvider } = await loadIsolated(honest);
-    const good = await invokeBundleProvider(goodProvider, [{ slice: 'a', failed: false }], { timeoutMs: 5000 });
+    const good = await invokeBundleProvider(goodProvider, [{ slice: 'a', failed: false }], { timeoutMs: 5000, clockMs: INVOKE_CLOCK_MS });
     expect((good as { metrics: unknown }).metrics).toBeDefined();
   });
 
-  it('freezes the clock and seeds randomness deterministically', async () => {
+  itSandboxed('freezes the clock and seeds randomness deterministically', async () => {
     const clocked = writeBundle(honestSource(
       '    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: Date.now() } } } };'));
     pinManifest(clocked);
@@ -159,19 +163,19 @@ describe('P1: providers run isolated from the parent process', () => {
       '    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: random() } } } };'));
     pinManifest(seeded);
     const { provider: randomProvider } = await loadIsolated(seeded);
-    const a = await invokeBundleProvider(randomProvider, [{ x: 1 }], { timeoutMs: 2000 });
-    const b = await invokeBundleProvider(randomProvider, [{ x: 1 }], { timeoutMs: 2000 });
+    const a = await invokeBundleProvider(randomProvider, [{ x: 1 }], { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS });
+    const b = await invokeBundleProvider(randomProvider, [{ x: 1 }], { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS });
     expect(value(a)).toBe(value(b));
 
     const native = writeBundle(honestSource(
       '    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: Math.random() } } } };'));
     pinManifest(native);
     const { provider: nativeProvider } = await loadIsolated(native);
-    await expect(invokeBundleProvider(nativeProvider, [], { timeoutMs: 2000 }))
+    await expect(invokeBundleProvider(nativeProvider, [], { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ name: 'GateProviderError', code: 'rejected' });
   });
 
-  it('denies process, require, timers and network to provider code', async () => {
+  itSandboxed('denies process, require, timers and network to provider code', async () => {
     // require() never reaches the child linker: the load-time scan refuses it.
     const requiring = writeBundle(honestSource('    return require(\'fs\');'));
     pinManifest(requiring);
@@ -185,21 +189,21 @@ describe('P1: providers run isolated from the parent process', () => {
       const output = writeBundle(honestSource(body));
       pinManifest(output);
       const { provider } = await loadIsolated(output);
-      await expect(invokeBundleProvider(provider, [], { timeoutMs: 2000 }), name)
+      await expect(invokeBundleProvider(provider, [], { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS }), name)
         .rejects.toMatchObject({ name: 'GateProviderError', code: 'rejected' });
     }
   });
 
-  it('caps isolated-run output: an oversized result rejects instead of flooding the parent', async () => {
+  itSandboxed('caps isolated-run output: an oversized result rejects instead of flooding the parent', async () => {
     const output = writeBundle(honestSource(
       '    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: "x".repeat(2 * 1024 * 1024) } } } };'));
     pinManifest(output);
     const { provider } = await loadIsolated(output);
-    await expect(invokeBundleProvider(provider, [], { timeoutMs: 5000 }))
+    await expect(invokeBundleProvider(provider, [], { timeoutMs: 5000, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ name: 'GateProviderError', code: 'rejected' });
   });
 
-  it('exposes only the documented minimal surface (fails if a future Node adds vm globals)', async () => {
+  itSandboxed('exposes only the documented minimal surface (fails if a future Node adds vm globals)', async () => {
     const absent = ['fetch', 'process', 'require', 'setTimeout', 'queueMicrotask', 'performance', 'crypto',
       'structuredClone', 'URL', 'navigator', 'Worker', 'eval', 'Function', 'WebAssembly', 'Proxy', 'Reflect',
       'console', 'Intl', 'Atomics', 'SharedArrayBuffer', 'FinalizationRegistry', 'WeakRef'];
@@ -210,7 +214,7 @@ describe('P1: providers run isolated from the parent process', () => {
       + '    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: 1 } } }, surface: out };'));
     pinManifest(output);
     const { provider } = await loadIsolated(output);
-    const result = await invokeBundleProvider(provider, [], { timeoutMs: 5000 }) as {
+    const result = await invokeBundleProvider(provider, [], { timeoutMs: 5000, clockMs: INVOKE_CLOCK_MS }) as {
       surface: Record<string, string>;
     };
     for (const name of absent) expect(result.surface[name], name).toBe('undefined');
@@ -218,13 +222,13 @@ describe('P1: providers run isolated from the parent process', () => {
     expect(result.surface.present).toBe('object,object,function,number,function');
   });
 
-  it('contains module top-level effects in the child: the parent global is untouched', async () => {
+  itSandboxed('contains module top-level effects in the child: the parent global is untouched', async () => {
     const output = writeBundle(
       'globalThis.__aiwgIsoTouched = true;\n'
       + honestSource('    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: globalThis.__aiwgIsoTouched === true ? 1 : 0 } } } };'));
     pinManifest(output);
     const { provider } = await loadIsolated(output);
-    const result = await invokeBundleProvider(provider, [], { timeoutMs: 2000 }) as {
+    const result = await invokeBundleProvider(provider, [], { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS }) as {
       metrics: { m: { pooled: { value: number } } };
     };
     expect(result.metrics.m.pooled.value).toBe(1);
@@ -268,7 +272,7 @@ describe('P2: provider code is pinned as a snapshot directory', () => {
     })).rejects.toMatchObject({ name: 'GateProviderError' });
   });
 
-  it('forbids bare external imports in phase 1 instead of lockfile-pinning them (c/probe.mts ext)', async () => {
+  itSandboxed('forbids bare external imports in phase 1 instead of lockfile-pinning them (c/probe.mts ext)', async () => {
     const output = writeBundle('import { v } from \'leftpad\';\n'
       + honestSource('    return { metrics: {} };'));
     // Even a perfectly pinned lockfile does not authorize a bare import.
@@ -297,18 +301,18 @@ describe('P2: provider code is pinned as a snapshot directory', () => {
     expect(() => computeProviderCodeDigest(output.dir, 'gp/p.mjs')).toThrow(/symlink/i);
   });
 
-  it('executes the snapshot bytes, not later source edits (no TOCTOU)', async () => {
+  itSandboxed('executes the snapshot bytes, not later source edits (no TOCTOU)', async () => {
     const output = writeBundle(honestSource(
       '    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: 7 } } } };'));
     pinManifest(output);
     const { provider, codeDigest } = await loadIsolated(output);
-    const snapshot = (provider as { snapshotDir: string }).snapshotDir;
-    expect(snapshot).toMatch(/.+/);
-    expect(readFileSync(join(snapshot, 'gp/p.mjs'), 'utf8')).toContain('value: 7');
+    // The pinned bytes live only in the loader's private in-memory record:
+    // there is no snapshot directory on disk to swap.
+    expect((provider as { snapshotDir?: unknown }).snapshotDir).toBeUndefined();
     writeFileSync(join(output.dir, 'gp/p.mjs'), honestSource(
       '    return { metrics: { m: { bySlice: {}, pooled: { n: 1, value: 999 } } } };'));
     expect(computeProviderCodeDigest(output.dir, 'gp/p.mjs').codeDigest).not.toBe(codeDigest);
-    const result = await invokeBundleProvider(provider, [], { timeoutMs: 2000 }) as {
+    const result = await invokeBundleProvider(provider, [], { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS }) as {
       metrics: { m: { pooled: { value: number } } };
     };
     expect(result.metrics.m.pooled.value).toBe(7);
@@ -422,7 +426,7 @@ describe('P4: metrics for provider-backed gates are reproduced, never asserted',
     // Caller asserts metrics computed from DIFFERENT records (possibly forged).
     const callerRecords = flakeRecords(callerFailures);
     const callerSection = sealProviderSection(provider, callerRecords,
-      await invokeBundleProvider(provider, callerRecords, { timeoutMs: 5000 }) as { metrics: unknown });
+      await invokeBundleProvider(provider, callerRecords, { timeoutMs: 5000, clockMs: INVOKE_CLOCK_MS }) as { metrics: unknown });
     return evaluateGates({
       floors: 'none-explicit-opt-out',
       binding, registry, trustedBindingDigest: trusted,
@@ -455,18 +459,18 @@ describe('P4: metrics for provider-backed gates are reproduced, never asserted',
     };
   }
 
-  it('uses the re-run output: forged alarming metrics do not roll back a clean re-run', async () => {
+  itSandboxed('uses the re-run output: forged alarming metrics do not roll back a clean re-run', async () => {
     const report = await evaluateWithRuntime({ a: 0, b: 5 }, { a: 0, b: 0 });
     expect(report.decision).toBe('PROMOTE');
   });
 
-  it('uses the re-run output: forged clean metrics do not hide a regressed re-run', async () => {
+  itSandboxed('uses the re-run output: forged clean metrics do not hide a regressed re-run', async () => {
     const report = await evaluateWithRuntime({ a: 0, b: 0 }, { a: 0, b: 1 });
     expect(report.decision).toBe('ROLLBACK');
     expect(report.gateEvidence.find(entry => entry.gateId === 'flakes-cap')?.outcome).toBe('ROLLBACK');
   });
 
-  it('refuses when the runtime records do not match the pinned records digest', async () => {
+  itSandboxed('refuses when the runtime records do not match the pinned records digest', async () => {
     const provider = await loadExampleProvider();
     const providers = createCoreProviderRegistry();
     providers.register(provider as never);
@@ -475,7 +479,7 @@ describe('P4: metrics for provider-backed gates are reproduced, never asserted',
     const binding = bundleBinding(provider, flakeRecords({ a: 0, b: 0 }));
     const trusted = artifactDigest(binding) as Sha256Digest;
     const callerSection = sealProviderSection(provider, flakeRecords({ a: 0, b: 0 }),
-      await invokeBundleProvider(provider, flakeRecords({ a: 0, b: 0 }), { timeoutMs: 5000 }) as { metrics: unknown });
+      await invokeBundleProvider(provider, flakeRecords({ a: 0, b: 0 }), { timeoutMs: 5000, clockMs: INVOKE_CLOCK_MS }) as { metrics: unknown });
     expect(() => evaluateGates({
       floors: 'none-explicit-opt-out',
       binding, registry, trustedBindingDigest: trusted,
@@ -486,7 +490,7 @@ describe('P4: metrics for provider-backed gates are reproduced, never asserted',
     })).toThrow(/records/);
   });
 
-  it('refuses provider-backed sections that cannot be reproduced (no runtime)', async () => {
+  itSandboxed('refuses provider-backed sections that cannot be reproduced (no runtime)', async () => {
     const provider = await loadExampleProvider();
     const providers = createCoreProviderRegistry();
     providers.register(provider as never);
@@ -496,7 +500,7 @@ describe('P4: metrics for provider-backed gates are reproduced, never asserted',
     const binding = bundleBinding(provider, records);
     const trusted = artifactDigest(binding) as Sha256Digest;
     const callerSection = sealProviderSection(provider, records,
-      await invokeBundleProvider(provider, records, { timeoutMs: 5000 }) as { metrics: unknown });
+      await invokeBundleProvider(provider, records, { timeoutMs: 5000, clockMs: INVOKE_CLOCK_MS }) as { metrics: unknown });
     expect(() => evaluateGates({
       floors: 'none-explicit-opt-out',
       binding, registry, trustedBindingDigest: trusted,
@@ -506,14 +510,14 @@ describe('P4: metrics for provider-backed gates are reproduced, never asserted',
     })).toThrow(/re-run|reproduced|runtime/);
   });
 
-  it('records the provider code and records digests in the report pins', async () => {
+  itSandboxed('records the provider code and records digests in the report pins', async () => {
     const report = await evaluateWithRuntime({ a: 0, b: 0 }, { a: 0, b: 0 });
     const pin = report.metricProviders.find(entry => entry.id === 'example.count/v1');
     expect(pin?.codeDigest).toBe(EXPECTED_CODE_DIGEST);
     expect(pin?.recordsDigest).toBe(artifactDigest(flakeRecords({ a: 0, b: 0 })));
   });
 
-  it('requires records digests on bundle pins and forbids them on core pins', async () => {
+  itSandboxed('requires records digests on bundle pins and forbids them on core pins', async () => {
     const provider = await loadExampleProvider();
     const providers = createCoreProviderRegistry();
     providers.register(provider as never);

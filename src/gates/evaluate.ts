@@ -10,7 +10,7 @@ import { GateRegistry, authoredGatePacksOf, gateProvidersOf, resolveGateBinding,
 import type { ProjectFloors } from './floors.js';
 import {
   GATE_PROVIDER_DEFAULT_TIMEOUT_MS, GATE_PROVIDER_MAX_OUTPUT_BYTES,
-  deriveIsolatedSeed, runIsolatedProviderSync, sealProviderSection,
+  deriveIsolatedSeed, isLoaderIssuedProvider, runIsolatedProviderSync, sealProviderSection,
 } from './providers/loader.js';
 import type { ProviderRuntime } from './providers/types.js';
 import { qualifyGateParameter } from './types.js';
@@ -441,13 +441,21 @@ function serializeRecordsOrFail(records: readonly unknown[], providerId: string)
 }
 
 function rerunProviderOrFail(
-  snapshot: Parameters<typeof runIsolatedProviderSync>[0],
-  args: { recordsJson: string; clockMs: number; seed: number; timeoutMs: number },
+  provider: Parameters<typeof runIsolatedProviderSync>[0],
+  args: { recordsJson: string; clockMs: number; seed: number; timeoutMs: number; codeDigest: Sha256Digest },
   providerId: string,
 ): unknown {
+  // C2: execute only the registry's loader-issued provider. The runner makes
+  // its own copy of the loader-captured bytes, re-digests exactly the bytes it
+  // sends to the sandbox and refuses unless they match the pinned digest.
+  // Caller-supplied runtime objects (snapshot paths, digests) are never used.
+  if (!isLoaderIssuedProvider(provider)) {
+    return fail(`metric provider ${providerId} was not issued by the bundle loader: refusing to re-run it`);
+  }
   try {
-    return runIsolatedProviderSync(snapshot, {
+    return runIsolatedProviderSync(provider, {
       mode: 'invoke', recordsJson: args.recordsJson, clockMs: args.clockMs, seed: args.seed,
+      expectedCodeDigest: args.codeDigest,
     }, { timeoutMs: args.timeoutMs, maxOutputBytes: GATE_PROVIDER_MAX_OUTPUT_BYTES }).result;
   } catch (error) {
     return fail(`metric provider ${providerId} re-run failed: ${error instanceof Error ? error.message : 'unknown'}`);
@@ -627,9 +635,10 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
       fail(`metric provider ${pin.id} records do not match the pinned records digest`);
     }
     const recordsJson = serializeRecordsOrFail(records, pin.id);
-    const reproduced = rerunProviderOrFail(snapshot, {
+    const reproduced = rerunProviderOrFail(registered as unknown as { id: string }, {
       recordsJson, clockMs: nowMs, seed: deriveIsolatedSeed(pinnedCode, pinnedRecords),
       timeoutMs: input.providerRuntime?.timeoutMs ?? GATE_PROVIDER_DEFAULT_TIMEOUT_MS,
+      codeDigest: pinnedCode as Sha256Digest,
     }, pin.id);
     try {
       effectiveProviders[pin.id] = sealProviderSection(

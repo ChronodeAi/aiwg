@@ -47,6 +47,7 @@ export type { GatesDriverOptions, GateValidateKind, GateValidateResult, GatesEva
 export {
   GateProviderError, computeProviderCodeDigest, deriveIsolatedSeed, loadGateBundleProviders, invokeBundleProvider,
   providerBindingPin, runIsolatedProvider, runIsolatedProviderSync, sealProviderSection, snapshotProviderDir,
+  isLoaderIssuedProvider, isolationLaunchPlan, isolationSandboxStatus, parseIsolatedFrame, probeIsolationSandbox,
   isBundleProvidersEnabled, GATE_PROVIDER_MAX_FILE_BYTES, GATE_PROVIDER_MAX_FILES, GATE_PROVIDER_MAX_TOTAL_BYTES,
   GATE_PROVIDER_DEFAULT_TIMEOUT_MS, GATE_PROVIDER_MAX_TIMEOUT_MS, GATE_PROVIDER_DEFAULT_MAX_RECORDS,
   GATE_PROVIDER_MAX_OUTPUT_BYTES,

@@ -32,24 +32,26 @@ export function providerSourceDigest(descriptor: { id: string; version: string; 
 /**
  * An addon/extension bundle provider loaded through the isolated runner
  * (#2831 rework). The provider NEVER executes in-process: `compute` throws
- * and every invocation spawns the permission-restricted child over the
- * private `snapshotDir`. The snapshot holds the pinned provider bytes; the
- * child loads only from it.
+ * and every invocation spawns the sandboxed child. The loader returns a
+ * frozen object and keeps the pinned provider bytes in a private record
+ * keyed by it: copies or hand-made objects carrying the same fields neither
+ * run nor register (`isLoaderIssuedProvider`).
  */
 export interface BundleMetricProvider<TRecord = unknown> extends MetricProvider<TRecord> {
   codeDigest: Sha256Digest;
   review: { reviewer: string; reviewedAt: string; codeDigest: Sha256Digest };
   bundleId: string;
   modulePath: string;
-  /** Private snapshot dir holding the pinned provider bytes (plus harness files). */
-  snapshotDir: string;
-  /** Bundle-relative posix paths of the snapshotted provider modules. */
+  /** Bundle-relative posix paths of the snapshotted provider modules (informational). */
   snapshotFiles: string[];
 }
 
 /** Isolated re-run inputs for bundle-provider bindings (records binding, P4). */
 export interface ProviderRuntime {
-  /** Loaded bundle providers (snapshots) available for re-runs. */
+  /**
+   * Loaded bundle providers declaring re-run coverage. Their fields are NOT
+   * trusted: re-runs execute the registry's loader-issued provider bytes.
+   */
   providers: BundleMetricProvider[];
   /** Input records per provider id; each must digest to the binding's records pin. */
   records: Record<string, readonly unknown[]>;

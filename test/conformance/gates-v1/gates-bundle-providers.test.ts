@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { itSandboxed } from './sandbox-helper.js';
 import { BundleManifestSchema } from '../../../src/extensions/manifest.js';
 import { artifactDigest } from '../../../src/decision/validate.js';
 import { evaluateGates, sealGateHoldout, sealUpstream } from '../../../src/gates/evaluate.js';
@@ -19,6 +20,8 @@ import type { GateBinding, GatePack, Sha256Digest } from '../../../src/gates/typ
 const here = dirname(fileURLToPath(import.meta.url));
 const EXAMPLE_ROOT = resolve(here, '../../../test/fixtures/gates-example-extension');
 const NOW = '2026-09-03T00:00:00.000Z';
+/** invokeBundleProvider requires an explicit frozen clock (C5). */
+const INVOKE_CLOCK_MS = Date.parse(NOW);
 const REGISTERED_AT = '2026-09-01T00:00:00.000Z';
 const FROZEN_AT = '2026-09-02T00:00:00.000Z';
 // Pinned by the reviewed example bytes (example.mjs + helper.mjs). The
@@ -106,7 +109,7 @@ function flakeRecords(failures: Record<string, number>): { slice: string; failed
 }
 
 describe('gates bundle providers', () => {
-  it('loads the reviewed example provider with a stable code digest', async () => {
+  itSandboxed('loads the reviewed example provider with a stable code digest', async () => {
     const { provider } = await loadExample();
     expect(provider.id).toBe('example.count/v1');
     expect(provider.codeDigest).toBe(EXPECTED_CODE_DIGEST);
@@ -206,7 +209,7 @@ describe('gates bundle providers', () => {
     }).success).toBe(false);
   });
 
-  it('refuses undeclared providers at binding resolution', async () => {
+  itSandboxed('refuses undeclared providers at binding resolution', async () => {
     const { provider } = await loadExample();
     const coreOnly = new GateRegistry(createCoreProviderRegistry());
     // Unknown providers fail at pack load, before any binding resolves.
@@ -216,7 +219,7 @@ describe('gates bundle providers', () => {
     expect(() => coreOnly.resolveBinding(binding)).toThrow(/unknown (provider|gate pack)/);
   });
 
-  it('refuses bindings pinned to the old code digest', async () => {
+  itSandboxed('refuses bindings pinned to the old code digest', async () => {
     const { provider } = await loadExample();
     const registry = bundleRegistry(provider);
     const records = flakeRecords({ a: 0, b: 0 });
@@ -228,7 +231,16 @@ describe('gates bundle providers', () => {
     writeFileSync(join(dir, 'gate-providers/helper.mjs'), `${readFileSync(join(dir, 'gate-providers/helper.mjs'), 'utf8')}\n// v2\n`);
     const nextDigest = computeProviderCodeDigest(dir, 'gate-providers/example.mjs').codeDigest;
     expect(nextDigest).not.toBe(provider.codeDigest);
-    const evolved = { ...provider, codeDigest: nextDigest };
+    // The evolved provider must itself be loader-issued (C3): re-review and
+    // re-allowlist the new bytes, then load them through the loader.
+    writeFileSync(join(dir, 'gate-providers/example-review.json'), JSON.stringify({
+      codeDigest: nextDigest, reviewedAt: '2026-08-15T00:00:00.000Z', reviewer: 'Example Reviewer',
+    }));
+    const [evolved] = await loadGateBundleProviders(dir, exampleManifest(), {
+      allowBundleProviders: true, now: NOW,
+      allowlist: [{ ...EXAMPLE_ALLOWLIST[0]!, codeDigest: nextDigest as Sha256Digest }],
+    });
+    expect(evolved!.codeDigest).toBe(nextDigest);
     const nextProviders = createCoreProviderRegistry();
     nextProviders.register(evolved as never);
     const nextRegistry = new GateRegistry(nextProviders);
@@ -249,10 +261,10 @@ describe('gates bundle providers', () => {
     expect(nextRegistry.resolveBinding(repinned).packs).toHaveLength(1);
   });
 
-  it('seals metrics with trusted digests and refuses forged sections', async () => {
+  itSandboxed('seals metrics with trusted digests and refuses forged sections', async () => {
     const { provider } = await loadExample();
     const records = flakeRecords({ a: 0, b: 0 });
-    const raw = (await invokeBundleProvider(provider, records, { timeoutMs: 1000 })) as { metrics: unknown };
+    const raw = (await invokeBundleProvider(provider, records, { timeoutMs: 1000, clockMs: INVOKE_CLOCK_MS })) as { metrics: unknown };
     // A lying provider that declares its own version/digest is overwritten.
     const lying = { metrics: (raw as { metrics: unknown }).metrics, version: '9.9.9', sourceDigest: provider.sourceDigest };
     const sealed = sealProviderSection(provider, records, lying);
@@ -294,7 +306,7 @@ describe('gates bundle providers', () => {
     })).toThrow(/pin mismatch/);
   });
 
-  it('gates bundle metrics offline: clean promotes, regressed rolls back, upstream holds', async () => {
+  itSandboxed('gates bundle metrics offline: clean promotes, regressed rolls back, upstream holds', async () => {
     const { provider } = await loadExample();
     const registry = bundleRegistry(provider);
     const clean = sealUpstream(cleanIntegrity());
@@ -302,7 +314,7 @@ describe('gates bundle providers', () => {
       const records = flakeRecords(failures);
       const binding = bundleBinding(provider, records);
       const trusted = artifactDigest(binding) as Sha256Digest;
-      const raw = (await invokeBundleProvider(provider, records, { timeoutMs: 2000 })) as { metrics: unknown };
+      const raw = (await invokeBundleProvider(provider, records, { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS })) as { metrics: unknown };
       const sealed = sealProviderSection(provider, records, raw);
       return evaluateGates({
       // Provider sealing under test, not project floors (#2832 covers floors).
@@ -323,7 +335,7 @@ describe('gates bundle providers', () => {
     const records = flakeRecords({ a: 0, b: 0 });
     const binding = bundleBinding(provider, records);
     const trusted = artifactDigest(binding) as Sha256Digest;
-    const raw = (await invokeBundleProvider(provider, records, { timeoutMs: 2000 })) as { metrics: unknown };
+    const raw = (await invokeBundleProvider(provider, records, { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS })) as { metrics: unknown };
     const sealed = sealProviderSection(provider, records, raw);
     const ceiling = evaluateGates({
       // Provider sealing under test, not project floors (#2832 covers floors).
@@ -336,7 +348,7 @@ describe('gates bundle providers', () => {
     expect(ceiling.decision).toBe('HOLD');
   });
 
-  it('fails closed on timeout, budget, rejection and cancellation without discarding completed work', async () => {
+  itSandboxed('fails closed on timeout, budget, rejection and cancellation without discarding completed work', async () => {
     const { provider } = await loadExample();
     const records = flakeRecords({ a: 0, b: 0 });
     // Timeout: a hanging provider refuses while the good provider still seals.
@@ -366,13 +378,13 @@ describe('gates bundle providers', () => {
       }],
     });
     const started = Date.now();
-    await expect(invokeBundleProvider(hanging!, records, { timeoutMs: 200 }))
+    await expect(invokeBundleProvider(hanging!, records, { timeoutMs: 200, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ code: 'timeout' });
     expect(Date.now() - started).toBeLessThan(4000);
-    const good = (await invokeBundleProvider(provider, records, { timeoutMs: 5000 })) as { metrics: unknown };
+    const good = (await invokeBundleProvider(provider, records, { timeoutMs: 5000, clockMs: INVOKE_CLOCK_MS })) as { metrics: unknown };
     expect(sealProviderSection(provider, records, good).codeDigest).toBe(provider.codeDigest);
     // Budget is reserved before dispatch: over-budget records refuse.
-    await expect(invokeBundleProvider(provider, records, { maxRecords: 1 }))
+    await expect(invokeBundleProvider(provider, records, { maxRecords: 1, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ code: 'budget-exceeded' });
     // Dispatch rejection fails closed: a throwing provider is reported, never trusted.
     const rejectingDir = mkdtempSync(join(tmpdir(), 'gates-reject-'));
@@ -400,24 +412,24 @@ describe('gates bundle providers', () => {
         reviewer: 'R', reviewedAt: NOW,
       }],
     });
-    await expect(invokeBundleProvider(rejecting!, records, { timeoutMs: 2000 }))
+    await expect(invokeBundleProvider(rejecting!, records, { timeoutMs: 2000, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ code: 'rejected' });
     // Pre-dispatch cancellation fails closed without spawning.
     const controller = new AbortController();
     controller.abort();
-    await expect(invokeBundleProvider(provider, records, { signal: controller.signal }))
+    await expect(invokeBundleProvider(provider, records, { signal: controller.signal, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ code: 'cancelled' });
     // Mid-flight cancellation kills the child.
     const slow = new AbortController();
-    const pending = invokeBundleProvider(hanging!, records, { timeoutMs: 10000, signal: slow.signal });
+    const pending = invokeBundleProvider(hanging!, records, { timeoutMs: 10000, signal: slow.signal, clockMs: INVOKE_CLOCK_MS });
     setTimeout(() => slow.abort(), 100);
     await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
     // Undefined records never reach canonical JSON: they refuse before dispatch.
-    await expect(invokeBundleProvider(provider, undefined as never, { timeoutMs: 1000 }))
+    await expect(invokeBundleProvider(provider, undefined as never, { timeoutMs: 1000, clockMs: INVOKE_CLOCK_MS }))
       .rejects.toMatchObject({ code: 'invalid-records' });
   });
 
-  it('forbids bare external imports in phase 1 instead of lockfile-pinning them', async () => {
+  itSandboxed('forbids bare external imports in phase 1 instead of lockfile-pinning them', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'gates-external-'));
     mkdirSync(join(dir, 'gp'), { recursive: true });
     writeFileSync(join(dir, 'gp/entry.mjs'), 'import x from \'fake-pkg\';\nexport const provider = { id: \'example.ext/v1\' };\n');
@@ -440,7 +452,7 @@ describe('gates bundle providers', () => {
     })).rejects.toMatchObject({ name: 'GateProviderError', code: 'invalid-module' });
   });
 
-  it('stays disabled by default and keeps core behavior byte-identical', async () => {
+  itSandboxed('stays disabled by default and keeps core behavior byte-identical', async () => {
     const manifest = exampleManifest();
     await expect(loadGateBundleProviders(EXAMPLE_ROOT, manifest, { now: NOW }))
       .rejects.toMatchObject({ code: 'disabled' });

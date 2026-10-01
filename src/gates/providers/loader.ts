@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
-  lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync,
+  closeSync, lstatSync, openSync, readSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { GateProviderEntrySchema, type GateProviderEntry } from '../../extensions/manifest.js';
 import { artifactDigest } from '../../decision/validate.js';
 import { providerSourceDigest } from './types.js';
@@ -17,18 +17,25 @@ export type { BundleMetricProvider } from './types.js';
 /**
  * Addon/extension metric-provider loading, isolated rework (P1-P5).
  *
- * Providers run ONLY in a separate child Node process started with the Node
- * permission model (`--permission`: fs-read allowed only for the provider
- * snapshot dir; no fs-write, no worker, no addons/wasi; child-process spawn
- * denied) with provider code evaluated in a `vm` context exposing only frozen
- * records, a frozen clock, a seeded RNG and a minimal pure standard library.
- * The `vm` context alone is NOT the boundary; the permission-restricted child
- * process (plus the parent's SIGKILL timeout and output caps) is.
+ * Providers run ONLY in a separate child Node process inside a bubblewrap
+ * sandbox (every namespace unshared, network included; cleared environment;
+ * no host filesystem beyond the read-only node runtime; die-with-parent),
+ * with node's permission model (`--permission`: no fs, no child processes,
+ * no workers) and `--disallow-code-generation-from-strings` as depth. If
+ * bwrap is missing or fails its capability self-test, bundle providers are
+ * REFUSED (`sandbox-unavailable`); there is no unsandboxed fallback. Provider
+ * code is evaluated in a `vm` context with string code generation disabled,
+ * frozen intrinsics and only context-realm objects (frozen records, frozen
+ * clock, seeded RNG, minimal pure standard library). The `vm` context is NOT
+ * the boundary; the sandboxed child (plus the parent's SIGKILL timeout,
+ * output cap and nonce-framed result channel) is.
  *
- * Provider code is the entire declared provider directory, copied into a
- * fresh private snapshot dir (no symlinks: lstat-checked, symlinks and
- * non-regular files refuse); the code digest covers the snapshot's sorted
- * module paths and bytes; the child loads only from that snapshot. Modules
+ * Provider code is the entire declared provider directory, read into an
+ * in-memory snapshot (no symlinks: lstat-checked, symlinks and non-regular
+ * files refuse); the code digest covers the snapshot's sorted module paths
+ * and bytes. The loader keeps those bytes in a private record keyed by the
+ * frozen provider object it issues; every run re-digests its own copy and
+ * sends exactly those bytes to the child over stdin. Modules
  * must be self-contained relative `.mjs` with static string specifiers only:
  * dynamic `import()`, `require`, bare/external imports and non-`.mjs`
  * relatives refuse at load. Bare package imports are FORBIDDEN in phase 1.
@@ -60,7 +67,7 @@ export class GateProviderError extends Error {
     readonly code:
       | 'disabled' | 'path-escape' | 'oversize' | 'missing-attestation' | 'attestation-mismatch'
       | 'invalid-module' | 'external-forbidden' | 'unregistered' | 'timeout' | 'cancelled' | 'rejected'
-      | 'budget-exceeded' | 'invalid-records' | 'duplicate',
+      | 'budget-exceeded' | 'invalid-records' | 'duplicate' | 'sandbox-unavailable',
   ) {
     super(message);
     this.name = 'GateProviderError';
@@ -84,8 +91,6 @@ export interface ProviderCodeDigest {
   codeDigest: Sha256Digest;
   files: ProviderFileDigest[];
   externals: ProviderExternalPin[];
-  /** Private snapshot dir the digest was computed over (and the child loads). */
-  snapshotDir: string;
 }
 
 export interface BundleProviderOptions {
@@ -96,7 +101,7 @@ export interface BundleProviderOptions {
   timeoutMs?: number;
   maxRecords?: number;
   maxOutputBytes?: number;
-  /** Frozen clock (epoch ms) injected into the isolated context. Defaults to the real clock. */
+  /** Frozen clock (epoch ms) injected into the isolated context. Required by `invokeBundleProvider`. */
   clockMs?: number;
   signal?: AbortSignal;
 }
@@ -138,15 +143,18 @@ interface SnapshotWalk {
 }
 
 /**
- * Copies the provider directory (the directory containing the entry module)
- * into a fresh private snapshot dir. Every entry is lstat-checked: symlinks
- * (files or dirs) and non-regular files refuse; only regular `.mjs` files are
- * copied (other regular files are inert: the loader never serves them, so
- * they are neither copied nor digested). The walk is sorted, so the snapshot
- * (and its digest) is deterministic.
+ * Reads the provider directory (the directory containing the entry module)
+ * into an in-memory snapshot. Every entry is lstat-checked: symlinks (files
+ * or dirs) and non-regular files refuse; only regular `.mjs` files are
+ * captured (other regular files are inert: the loader never serves them, so
+ * they are neither captured nor digested). Module bytes must be valid UTF-8
+ * (they round-trip exactly to the source text the sandbox compiles). The
+ * walk is sorted, so the snapshot (and its digest) is deterministic. Nothing
+ * is written to disk: runs receive the bytes over stdin.
  */
 export function snapshotProviderDir(bundleRoot: string, entryModule: string): {
-  snapshotDir: string; files: ProviderFileDigest[]; codeDigest: Sha256Digest; entryRel: string;
+  files: ProviderFileDigest[]; codeDigest: Sha256Digest; entryRel: string;
+  modules: Array<{ path: string; bytes: Buffer }>;
 } {
   const rel = assertDeclaredPath(entryModule, MODULE_PATTERN, 'provider module');
   const rootReal = bundleRootReal(bundleRoot);
@@ -216,6 +224,9 @@ export function snapshotProviderDir(bundleRoot: string, entryModule: string): {
       if (bytes.length > GATE_PROVIDER_MAX_FILE_BYTES) {
         throw new GateProviderError(`provider file exceeds size limit: ${relative(rootReal, abs)}`, 'oversize');
       }
+      if (!Buffer.from(bytes.toString('utf8'), 'utf8').equals(bytes)) {
+        throw new GateProviderError(`provider module is not valid UTF-8: ${relative(rootReal, abs)}`, 'invalid-module');
+      }
       total += bytes.length;
       if (total > GATE_PROVIDER_MAX_TOTAL_BYTES) {
         throw new GateProviderError('provider exceeds total size limit', 'oversize');
@@ -225,20 +236,15 @@ export function snapshotProviderDir(bundleRoot: string, entryModule: string): {
   };
   visit(providerDir);
   walk.modules.sort((a, b) => (a.path < b.path ? -1 : 1));
-  if (!walk.modules.some(file => file.path === relative(rootReal, entryReal).split(sep).join('/'))) {
+  const entryRel = relative(rootReal, entryReal).split(sep).join('/');
+  if (!walk.modules.some(file => file.path === entryRel)) {
     throw new GateProviderError(`provider module is missing from its snapshot: ${rel}`, 'path-escape');
   }
-  const snapshotDir = mkdtempSync(join(tmpdir(), 'aiwg-gates-provider-'));
-  const files: ProviderFileDigest[] = [];
-  for (const file of walk.modules) {
-    const target = join(snapshotDir, file.path);
-    mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, file.bytes);
-    files.push({ path: file.path, sha256: createHash('sha256').update(file.bytes).digest('hex') });
-  }
-  writeFileSync(join(snapshotDir, `${HARNESS_PREFIX}child.mjs`), ISOLATED_CHILD_SOURCE, 'utf8');
+  const files: ProviderFileDigest[] = walk.modules.map(file => ({
+    path: file.path, sha256: createHash('sha256').update(file.bytes).digest('hex'),
+  }));
   const codeDigest = artifactDigest({ externals: [], files }) as Sha256Digest;
-  return { snapshotDir, files, codeDigest, entryRel: relative(rootReal, entryReal).split(sep).join('/') };
+  return { files, codeDigest, entryRel, modules: walk.modules };
 }
 
 /**
@@ -246,16 +252,12 @@ export function snapshotProviderDir(bundleRoot: string, entryModule: string): {
  * content hashes) of the entire provider directory. Any byte change anywhere
  * in the directory moves the digest, so a binding pinned to the old digest
  * refuses until re-pinned. Bare/external imports are forbidden in phase 1;
- * the child linker is authoritative at load/invoke. Side effect: creates a
- * fresh private snapshot dir (mode 0700, OS-tmp reclamation) and returns it
- * for loading; digest-only callers may ignore it.
+ * the sandboxed linker is authoritative at load/invoke. Pure read: no
+ * snapshot is written anywhere.
  */
 export function computeProviderCodeDigest(bundleRoot: string, entryModule: string): ProviderCodeDigest {
   const snapshot = snapshotProviderDir(bundleRoot, entryModule);
-  return {
-    codeDigest: snapshot.codeDigest, files: snapshot.files, externals: [],
-    snapshotDir: snapshot.snapshotDir,
-  };
+  return { codeDigest: snapshot.codeDigest, files: snapshot.files, externals: [] };
 }
 
 const METRIC_KINDS = new Set(['proportion', 'paired', 'scalar', 'differences', 'evidence']);
@@ -313,15 +315,12 @@ function readReview(rootReal: string, entry: GateProviderEntry): { reviewer: str
 }
 
 interface IsolatedRunArgs {
-  snapshotDir: string;
-  entryRel: string;
-  files: string[];
-  expectedId: string;
-  expectedVersion: string;
   mode: 'inspect' | 'invoke';
   recordsJson?: string;
   clockMs: number;
   seed: number;
+  /** Pinned code digest the run must reproduce (evaluator re-runs). */
+  expectedCodeDigest?: string;
 }
 
 interface IsolatedRunLimits {
@@ -330,32 +329,406 @@ interface IsolatedRunLimits {
   signal?: AbortSignal;
 }
 
-function childArgs(snapshotDir: string): string[] {
-  return [
-    '--experimental-vm-modules',
-    '--permission',
-    `--allow-fs-read=${snapshotDir}`,
-    join(snapshotDir, `${HARNESS_PREFIX}child.mjs`),
-  ];
+/**
+ * Trusted, loader-owned state of an issued bundle provider (C2/C3). Held in
+ * a module-private WeakMap keyed by the frozen provider object the loader
+ * returned: the bytes, identity and digest the runner executes come ONLY
+ * from here, never from caller-visible fields (which a caller can copy and
+ * rewrite). Only `loadGateBundleProviders` adds entries.
+ */
+interface TrustedProviderRecord {
+  readonly id: string;
+  readonly version: string;
+  readonly codeDigest: Sha256Digest;
+  readonly entryRel: string;
+  readonly modules: ReadonlyArray<{ readonly path: string; readonly bytes: Buffer }>;
 }
 
-function writeIsolatedRequest(snapshotDir: string, args: IsolatedRunArgs): void {
-  writeFileSync(join(snapshotDir, `${HARNESS_PREFIX}request.json`), JSON.stringify({
-    entry: args.entryRel,
-    files: args.files,
+const ISSUED_PROVIDERS = new WeakMap<object, TrustedProviderRecord>();
+
+/** True only for the exact provider objects returned by `loadGateBundleProviders`. */
+export function isLoaderIssuedProvider(provider: unknown): boolean {
+  return typeof provider === 'object' && provider !== null && ISSUED_PROVIDERS.has(provider);
+}
+
+function issuedRecordOrThrow(provider: unknown): TrustedProviderRecord {
+  const record = typeof provider === 'object' && provider !== null ? ISSUED_PROVIDERS.get(provider) : undefined;
+  if (record === undefined) {
+    const id = typeof provider === 'object' && provider !== null ? String((provider as { id?: unknown }).id) : 'unknown';
+    throw new GateProviderError(
+      `provider ${id} was not issued by the bundle loader: refusing to run caller-supplied provider objects`, 'unregistered');
+  }
+  return record;
+}
+
+function digestModules(modules: ReadonlyArray<{ path: string; bytes: Buffer }>): Sha256Digest {
+  const files = [...modules]
+    .sort((a, b) => (a.path < b.path ? -1 : 1))
+    .map(file => ({ path: file.path, sha256: createHash('sha256').update(file.bytes).digest('hex') }));
+  return artifactDigest({ externals: [], files }) as Sha256Digest;
+}
+
+/**
+ * Builds the stdin payload for one run from the runner's OWN copy of the
+ * trusted bytes: the copy is re-digested and must equal the issued digest
+ * (and the pinned digest, for evaluator re-runs) before anything executes.
+ * The child receives exactly these bytes (UTF-8, round-trip checked at
+ * snapshot time) and nothing else; no file is read or shared between runs.
+ */
+function prepareIsolatedRun(record: TrustedProviderRecord, args: IsolatedRunArgs): { nonce: string; input: string } {
+  const copy = record.modules.map(module => ({ path: module.path, bytes: Buffer.from(module.bytes) }));
+  const digest = digestModules(copy);
+  if (digest !== record.codeDigest
+    || (args.expectedCodeDigest !== undefined && digest !== args.expectedCodeDigest)) {
+    throw new GateProviderError(`provider ${record.id} code does not match its pinned digest`, 'attestation-mismatch');
+  }
+  const modules: Record<string, string> = {};
+  for (const module of copy) modules[module.path] = module.bytes.toString('utf8');
+  const nonce = randomBytes(32).toString('hex');
+  const request = JSON.stringify({
+    entry: record.entryRel,
+    modules,
     mode: args.mode,
     ...(args.recordsJson === undefined ? {} : { recordsJson: args.recordsJson }),
     clockMs: args.clockMs,
     seed: args.seed,
-    expectedId: args.expectedId,
-    expectedVersion: args.expectedVersion,
-  }), 'utf8');
+    expectedId: record.id,
+    expectedVersion: record.version,
+  });
+  return { nonce, input: `${nonce}\n${request}` };
 }
 
-function parseIsolatedResponse(stdout: string, stderr: string, providerId: string): { descriptor?: Record<string, unknown>; result?: unknown } {
+// ---------------------------------------------------------------------------
+// OS sandbox (C1c/C1d): bubblewrap is the isolation boundary.
+// ---------------------------------------------------------------------------
+
+const BWRAP_CANDIDATES = ['/usr/bin/bwrap', '/bin/bwrap', '/usr/local/bin/bwrap'];
+const SANDBOX_NODE_PATH = '/aiwg/bin/node';
+const SANDBOX_CWD = '/tmp';
+const SANDBOX_SELF_TEST_TIMEOUT_MS = 15000;
+const SANDBOX_NAMESPACES = ['net', 'pid', 'ipc', 'uts', 'user', 'mnt'] as const;
+const DRIVER_NODE_ARGS = [
+  '--experimental-vm-modules', '--permission', '--disallow-code-generation-from-strings',
+  '--no-warnings', '--input-type=module', '-e', ISOLATED_CHILD_SOURCE,
+];
+const RESULT_FRAME = 'AIWG-RESULT ';
+
+/** Self-test body: run inside the sandbox WITHOUT node --permission, so it observes the OS layer alone. */
+const SANDBOX_SELF_TEST_SOURCE = [
+  "import fs from 'node:fs';",
+  "import net from 'node:net';",
+  "const input = JSON.parse(fs.readFileSync(0, 'utf8'));",
+  'const out = { env: {}, ns: {}, visible: [], connect: null };',
+  'for (const key of Object.keys(process.env)) out.env[key] = String(process.env[key]);',
+  "for (const name of input.namespaces) { try { out.ns[name] = fs.readlinkSync('/proc/self/ns/' + name); } catch { out.ns[name] = null; } }",
+  'for (const path of input.paths) { try { fs.lstatSync(path); out.visible.push(path); } catch { /* absent */ } }',
+  'if (typeof input.port === \'number\') {',
+  '  out.connect = await new Promise((resolve) => {',
+  "    const socket = net.connect({ host: '127.0.0.1', port: input.port });",
+  "    const timer = setTimeout(() => { socket.destroy(); resolve('timeout'); }, 3000);",
+  "    socket.on('connect', () => { clearTimeout(timer); socket.destroy(); resolve('connected'); });",
+  "    socket.on('error', (error) => { clearTimeout(timer); resolve('refused:' + error.code); });",
+  '  });',
+  '}',
+  'process.stdout.write(JSON.stringify(out));',
+].join('\n');
+
+let sandboxOverride: { bwrapPath?: string } | null = null;
+let sandboxVerdict: { key: string; ok: boolean; reason: string } | undefined;
+let runtimeBindCache: Array<[string, string]> | undefined;
+
+/**
+ * Test-only hook: point the runner at another bwrap path (for example a
+ * missing binary, or one that fails the self-test) or reset with `null`.
+ * It can only make the runner refuse: whatever path is configured must still
+ * pass the capability self-test before any provider runs.
+ */
+export function configureIsolationSandboxForTests(options: { bwrapPath?: string } | null): void {
+  sandboxOverride = options === null ? null : { ...options };
+  sandboxVerdict = undefined;
+}
+
+function resolveBwrapPath(): string | null {
+  const candidates = sandboxOverride?.bwrapPath !== undefined ? [sandboxOverride.bwrapPath] : BWRAP_CANDIDATES;
+  for (const candidate of candidates) {
+    try {
+      const status = statSync(candidate);
+      if (status.isFile() && (status.mode & 0o111) !== 0) return candidate;
+    } catch {
+      /* try the next candidate */
+    }
+  }
+  return null;
+}
+
+/** PT_INTERP of an ELF64 little-endian binary (the dynamic loader path), or null. */
+function elfInterpreter(binary: string): string | null {
+  let fd: number | undefined;
+  try {
+    fd = openSync(binary, 'r');
+    const header = Buffer.alloc(64);
+    if (readSync(fd, header, 0, 64, 0) !== 64) return null;
+    if (header.readUInt32BE(0) !== 0x7f454c46 || header[4] !== 2 || header[5] !== 1) return null;
+    const phoff = Number(header.readBigUInt64LE(0x20));
+    const phentsize = header.readUInt16LE(0x36);
+    const phnum = header.readUInt16LE(0x38);
+    const table = Buffer.alloc(phentsize * phnum);
+    readSync(fd, table, 0, table.length, phoff);
+    for (let index = 0; index < phnum; index++) {
+      const base = index * phentsize;
+      if (table.readUInt32LE(base) !== 3) continue;
+      const offset = Number(table.readBigUInt64LE(base + 8));
+      const size = Number(table.readBigUInt64LE(base + 32));
+      if (size <= 0 || size > 4096) return null;
+      const buffer = Buffer.alloc(size);
+      readSync(fd, buffer, 0, size, offset);
+      return buffer.toString('utf8').replace(/\0+$/, '');
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/**
+ * Read-only binds for the sandbox: the node binary (at a fixed path) and
+ * exactly the shared libraries this node process has mapped, plus their
+ * soname aliases and the ELF interpreter. No other host path is visible.
+ */
+function runtimeBinds(): Array<[string, string]> {
+  if (runtimeBindCache !== undefined) return runtimeBindCache;
+  const byTarget = new Map<string, string>();
+  const nodeReal = realpathSync(process.execPath);
+  byTarget.set(SANDBOX_NODE_PATH, nodeReal);
+  let maps = '';
+  try {
+    maps = readFileSync('/proc/self/maps', 'utf8');
+  } catch {
+    maps = '';
+  }
+  const libraries = new Set<string>();
+  for (const line of maps.split('\n')) {
+    const path = line.trim().split(/\s+/).slice(5).join(' ');
+    if (path.startsWith('/') && /\.so(?:\.\d+)*$/.test(path)) libraries.add(path);
+  }
+  for (const library of libraries) {
+    let real: string;
+    try {
+      real = realpathSync(library);
+    } catch {
+      continue;
+    }
+    byTarget.set(library, real);
+    const match = /^(.*\.so)((?:\.\d+)*)$/.exec(basename(library));
+    if (match === null) continue;
+    const versions = match[2]!.split('.').filter(Boolean);
+    for (let keep = versions.length - 1; keep >= 0; keep--) {
+      const alias = join(dirname(library), `${match[1]!}${versions.slice(0, keep).map(part => `.${part}`).join('')}`);
+      try {
+        if (realpathSync(alias) === real) byTarget.set(alias, real);
+      } catch {
+        /* no such alias */
+      }
+    }
+  }
+  const interpreter = elfInterpreter(nodeReal);
+  if (interpreter !== null && isAbsolute(interpreter)) {
+    try {
+      byTarget.set(interpreter, realpathSync(interpreter));
+    } catch {
+      /* the self-test will fail closed */
+    }
+  }
+  runtimeBindCache = [...byTarget.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([target, source]) => [source, target]);
+  return runtimeBindCache;
+}
+
+function sandboxCommand(nodeArgs: readonly string[]): { command: string; args: string[]; env: Record<string, string> } {
+  const bwrap = resolveBwrapPath();
+  if (bwrap === null) {
+    throw new GateProviderError(
+      'bundle providers require bubblewrap (bwrap) for OS-level isolation and none was found: refusing to run', 'sandbox-unavailable');
+  }
+  const args = [
+    '--unshare-all', '--unshare-user', '--disable-userns',
+    '--die-with-parent', '--new-session', '--clearenv', '--cap-drop', 'ALL',
+  ];
+  for (const [source, target] of runtimeBinds()) args.push('--ro-bind', source, target);
+  args.push('--tmpfs', SANDBOX_CWD, '--proc', '/proc', '--dev', '/dev', '--chdir', SANDBOX_CWD, '--', SANDBOX_NODE_PATH, ...nodeArgs);
+  return { command: bwrap, args, env: {} };
+}
+
+/**
+ * The exact sandboxed launch used for every provider run: bubblewrap with
+ * every namespace unshared (network included), no user namespaces inside,
+ * cleared environment, new session, die-with-parent, read-only node runtime
+ * binds, a private tmpfs, and node with `--permission` (no fs, no child
+ * processes, no workers) plus `--disallow-code-generation-from-strings`.
+ * The spawn environment itself is empty.
+ */
+export function isolationLaunchPlan(): { command: string; args: string[]; env: Record<string, string> } {
+  return sandboxCommand(DRIVER_NODE_ARGS);
+}
+
+interface SandboxSelfTestReport {
+  ok: boolean;
+  reason: string;
+  envKeys: string[];
+  sharedNamespaces: string[];
+  hostPathsVisible: string[];
+  connect: string | null;
+}
+
+function hostProbePaths(): string[] {
+  const targets = [...runtimeBinds().map(([, target]) => target), SANDBOX_CWD, '/proc', '/dev', '/aiwg'];
+  const candidates = [homedir(), process.cwd(), '/etc/passwd', '/home', '/root', '/var', '/run', '/srv'];
+  return [...new Set(candidates)].filter(path => {
+    if (!path || path === '/' || !isAbsolute(path)) return false;
+    if (targets.some(target => target === path || target.startsWith(`${path}/`) || path.startsWith(`${target}/`))) return false;
+    try {
+      lstatSync(path);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function selfTestInput(port: number | null): { paths: string[]; input: string } {
+  const paths = hostProbePaths();
+  return { paths, input: JSON.stringify({ namespaces: SANDBOX_NAMESPACES, paths, port }) };
+}
+
+function judgeSelfTest(stdout: string, status: number | null, paths: string[], port: number | null): SandboxSelfTestReport {
+  const report: SandboxSelfTestReport = {
+    ok: false, reason: '', envKeys: [], sharedNamespaces: [], hostPathsVisible: [], connect: null,
+  };
+  let observed: { env?: Record<string, string>; ns?: Record<string, string | null>; visible?: string[]; connect?: string | null };
+  try {
+    observed = JSON.parse(stdout) as typeof observed;
+  } catch {
+    report.reason = `sandbox self-test produced no report (exit ${String(status)})`;
+    return report;
+  }
+  if (status !== 0 || !observed || typeof observed !== 'object') {
+    report.reason = `sandbox self-test failed (exit ${String(status)})`;
+    return report;
+  }
+  // bwrap always exports PWD for the sandbox working directory; nothing else may leak.
+  const env = observed.env ?? {};
+  report.envKeys = Object.keys(env).filter(key => !(key === 'PWD' && env[key] === SANDBOX_CWD)).sort();
+  for (const name of SANDBOX_NAMESPACES) {
+    let host: string | null = null;
+    try {
+      host = readlinkSync(`/proc/self/ns/${name}`);
+    } catch {
+      host = null;
+    }
+    const inside = observed.ns?.[name] ?? null;
+    if (host === null || inside === null || host === inside) report.sharedNamespaces.push(name);
+  }
+  report.hostPathsVisible = (observed.visible ?? []).filter(path => paths.includes(path));
+  report.connect = observed.connect ?? null;
+  const problems: string[] = [];
+  if (report.envKeys.length) problems.push(`environment leaks ${report.envKeys.join(',')}`);
+  if (report.sharedNamespaces.length) problems.push(`namespaces not private: ${report.sharedNamespaces.join(',')}`);
+  if (report.hostPathsVisible.length) problems.push(`host paths visible: ${report.hostPathsVisible.join(',')}`);
+  if (port !== null && report.connect === 'connected') problems.push('host loopback network reachable');
+  report.ok = problems.length === 0;
+  report.reason = report.ok ? 'ok' : `sandbox self-test failed: ${problems.join('; ')}`;
+  return report;
+}
+
+/**
+ * Runs the sandbox capability self-test asynchronously and returns the
+ * observations (empty env, private namespaces, no host paths, optional
+ * loopback connect to a parent listener on `connectPort`).
+ */
+export function probeIsolationSandbox(options?: { connectPort?: number }): Promise<SandboxSelfTestReport> {
+  const port = typeof options?.connectPort === 'number' ? options.connectPort : null;
+  let plan: { command: string; args: string[]; env: Record<string, string> };
+  let probe: { paths: string[]; input: string };
+  try {
+    plan = sandboxCommand(['--no-warnings', '--input-type=module', '-e', SANDBOX_SELF_TEST_SOURCE]);
+    probe = selfTestInput(port);
+  } catch (error) {
+    return Promise.resolve({
+      ok: false, reason: error instanceof Error ? error.message : 'sandbox unavailable',
+      envKeys: [], sharedNamespaces: [], hostPathsVisible: [], connect: null,
+    });
+  }
+  return new Promise((resolvePromise) => {
+    const child = spawn(plan.command, plan.args, { env: plan.env, stdio: ['pipe', 'pipe', 'ignore'] });
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* exited */ } }, SANDBOX_SELF_TEST_TIMEOUT_MS);
+    child.stdout?.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+    child.stdin?.on('error', () => { /* reported via exit status */ });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      resolvePromise({
+        ok: false, reason: `sandbox failed to start: ${error.message}`,
+        envKeys: [], sharedNamespaces: [], hostPathsVisible: [], connect: null,
+      });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolvePromise(judgeSelfTest(Buffer.concat(chunks).toString('utf8'), code, probe.paths, port));
+    });
+    child.stdin?.end(probe.input);
+  });
+}
+
+/**
+ * Fail-closed gate before every provider run: bwrap must exist and pass the
+ * capability self-test (cached per bwrap path for the process lifetime).
+ * There is no unsandboxed fallback.
+ */
+function ensureIsolationSandbox(): void {
+  const key = resolveBwrapPath() ?? '<missing>';
+  if (sandboxVerdict === undefined || sandboxVerdict.key !== key) {
+    let verdict: { ok: boolean; reason: string };
+    try {
+      const plan = sandboxCommand(['--no-warnings', '--input-type=module', '-e', SANDBOX_SELF_TEST_SOURCE]);
+      const probe = selfTestInput(null);
+      const completed = spawnSync(plan.command, plan.args, {
+        env: plan.env, input: probe.input, encoding: 'utf8', timeout: SANDBOX_SELF_TEST_TIMEOUT_MS,
+        killSignal: 'SIGKILL', maxBuffer: 1024 * 1024, stdio: ['pipe', 'pipe', 'ignore'],
+      });
+      verdict = completed.error !== undefined
+        ? { ok: false, reason: `sandbox failed to start: ${completed.error.message}` }
+        : judgeSelfTest(typeof completed.stdout === 'string' ? completed.stdout : '', completed.status, probe.paths, null);
+    } catch (error) {
+      verdict = { ok: false, reason: error instanceof Error ? error.message : 'sandbox unavailable' };
+    }
+    sandboxVerdict = { key, ...verdict };
+  }
+  if (!sandboxVerdict.ok) {
+    throw new GateProviderError(
+      `bundle providers are refused: the OS isolation sandbox is unavailable (${sandboxVerdict.reason})`, 'sandbox-unavailable');
+  }
+}
+
+/**
+ * Whether bundle providers can run here: bwrap present and passing its
+ * capability self-test. Never throws; `reason` explains a refusal.
+ */
+export function isolationSandboxStatus(): { ok: boolean; reason: string } {
+  try {
+    ensureIsolationSandbox();
+    return { ok: true, reason: 'ok' };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'sandbox unavailable' };
+  }
+}
+
+function parseIsolatedResponse(body: string, stderr: string, providerId: string): { descriptor?: Record<string, unknown>; result?: unknown } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout.trim()) as unknown;
+    parsed = JSON.parse(body) as unknown;
   } catch {
     throw new GateProviderError(
       `provider ${providerId} returned an unreadable message${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected');
@@ -363,83 +736,82 @@ function parseIsolatedResponse(stdout: string, stderr: string, providerId: strin
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new GateProviderError(`provider ${providerId} returned an unreadable message`, 'rejected');
   }
-  const body = parsed as { ok?: unknown; error?: unknown; descriptor?: unknown; result?: unknown };
-  if (body.ok !== true) {
+  const message = parsed as { ok?: unknown; error?: unknown; descriptor?: unknown; result?: unknown };
+  if (message.ok !== true) {
     throw new GateProviderError(
-      `provider ${providerId} rejected: ${typeof body.error === 'string' && body.error ? body.error.slice(0, 300) : 'unknown'}`,
+      `provider ${providerId} rejected: ${typeof message.error === 'string' && message.error ? message.error.slice(0, 300) : 'unknown'}`,
       'rejected');
   }
-  return { descriptor: body.descriptor as Record<string, unknown> | undefined, result: body.result };
+  return { descriptor: message.descriptor as Record<string, unknown> | undefined, result: message.result };
 }
 
-/** Synchronous isolated run (evaluator re-runs): SIGKILL timeout, output cap. */
-export function runIsolatedProviderSync(
-  provider: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'>,
-  args: { mode: 'inspect' | 'invoke'; recordsJson?: string; clockMs: number; seed: number },
-  limits: IsolatedRunLimits,
+/**
+ * C1e: the parent accepts exactly one line on stdout, framed by the trusted
+ * driver with the per-run nonce it read from stdin before any provider code
+ * was compiled. Anything else (an unframed message, a wrong nonce, extra or
+ * missing bytes) is a forgery attempt and rejects.
+ */
+export function parseIsolatedFrame(
+  stdout: string, nonce: string, providerId: string, stderr = '',
 ): { descriptor?: Record<string, unknown>; result?: unknown } {
-  if (!provider.snapshotDir || !provider.modulePath || !provider.snapshotFiles) {
-    throw new GateProviderError(`provider ${provider.id} snapshot is unavailable`, 'invalid-module');
+  const prefix = `${RESULT_FRAME}${nonce} `;
+  if (!/^[0-9a-f]{64}$/.test(nonce) || !stdout.startsWith(prefix) || !stdout.endsWith('\n')
+    || stdout.indexOf('\n') !== stdout.length - 1) {
+    throw new GateProviderError(
+      `provider ${providerId} wrote outside its result frame${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected');
   }
-  writeIsolatedRequest(provider.snapshotDir, {
-    snapshotDir: provider.snapshotDir,
-    entryRel: provider.modulePath,
-    files: [...provider.snapshotFiles],
-    expectedId: provider.id,
-    expectedVersion: provider.version,
-    mode: args.mode,
-    ...(args.recordsJson === undefined ? {} : { recordsJson: args.recordsJson }),
-    clockMs: args.clockMs,
-    seed: args.seed,
-  });
-  const completed = spawnSync(process.execPath, childArgs(provider.snapshotDir), {
+  return parseIsolatedResponse(stdout.slice(prefix.length, -1), stderr, providerId);
+}
+
+function runIsolatedRecordSync(
+  record: TrustedProviderRecord, args: IsolatedRunArgs, limits: IsolatedRunLimits,
+): { descriptor?: Record<string, unknown>; result?: unknown } {
+  ensureIsolationSandbox();
+  const { nonce, input } = prepareIsolatedRun(record, args);
+  const plan = isolationLaunchPlan();
+  const completed = spawnSync(plan.command, plan.args, {
+    env: plan.env,
+    input,
     timeout: limits.timeoutMs,
     killSignal: 'SIGKILL',
     maxBuffer: limits.maxOutputBytes,
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
   const stderr = typeof completed.stderr === 'string' ? completed.stderr : '';
   if (completed.error !== undefined) {
     const code = (completed.error as NodeJS.ErrnoException).code;
     if (code === 'ETIMEDOUT' || completed.signal === 'SIGKILL') {
-      throw new GateProviderError(`provider ${provider.id} timed out`, 'timeout');
+      throw new GateProviderError(`provider ${record.id} timed out`, 'timeout');
     }
     if (code === 'ENOBUFS') {
-      throw new GateProviderError(`provider ${provider.id} exceeds its output cap`, 'rejected');
+      throw new GateProviderError(`provider ${record.id} exceeds its output cap`, 'rejected');
     }
-    throw new GateProviderError(`provider ${provider.id} failed to start: ${completed.error.message}`, 'rejected');
+    throw new GateProviderError(`provider ${record.id} failed to start: ${completed.error.message}`, 'rejected');
   }
   if (completed.status !== 0) {
     throw new GateProviderError(
-      `provider ${provider.id} rejected${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected');
+      `provider ${record.id} rejected${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected');
   }
-  return parseIsolatedResponse(completed.stdout as string, stderr, provider.id);
+  return parseIsolatedFrame(completed.stdout as string, nonce, record.id, stderr);
 }
 
-/** Asynchronous isolated run (loader + interactive invoke): abortable, SIGKILL timeout, output cap. */
-export function runIsolatedProvider(
-  provider: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'>,
-  args: { mode: 'inspect' | 'invoke'; recordsJson?: string; clockMs: number; seed: number },
-  limits: IsolatedRunLimits,
+function runIsolatedRecord(
+  record: TrustedProviderRecord, args: IsolatedRunArgs, limits: IsolatedRunLimits,
 ): Promise<{ descriptor?: Record<string, unknown>; result?: unknown }> {
-  if (!provider.snapshotDir || !provider.modulePath || !provider.snapshotFiles) {
-    return Promise.reject(new GateProviderError(`provider ${provider.id} snapshot is unavailable`, 'invalid-module'));
-  }
   if (limits.signal?.aborted === true) {
-    return Promise.reject(new GateProviderError(`provider ${provider.id} was cancelled before dispatch`, 'cancelled'));
+    return Promise.reject(new GateProviderError(`provider ${record.id} was cancelled before dispatch`, 'cancelled'));
   }
-  writeIsolatedRequest(provider.snapshotDir, {
-    snapshotDir: provider.snapshotDir,
-    entryRel: provider.modulePath,
-    files: [...provider.snapshotFiles],
-    expectedId: provider.id,
-    expectedVersion: provider.version,
-    mode: args.mode,
-    ...(args.recordsJson === undefined ? {} : { recordsJson: args.recordsJson }),
-    clockMs: args.clockMs,
-    seed: args.seed,
-  });
+  let nonce: string;
+  let input: string;
+  let plan: { command: string; args: string[]; env: Record<string, string> };
+  try {
+    ensureIsolationSandbox();
+    ({ nonce, input } = prepareIsolatedRun(record, args));
+    plan = isolationLaunchPlan();
+  } catch (error) {
+    return Promise.reject(error);
+  }
   return new Promise((resolvePromise, rejectPromise) => {
     let settled = false;
     const settle = (action: () => void): void => {
@@ -451,19 +823,19 @@ export function runIsolatedProvider(
     };
     let child: ChildProcess;
     try {
-      child = spawn(process.execPath, childArgs(provider.snapshotDir), { stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(plan.command, plan.args, { env: plan.env, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (error) {
       rejectPromise(new GateProviderError(
-        `provider ${provider.id} failed to start: ${error instanceof Error ? error.message : 'unknown'}`, 'rejected'));
+        `provider ${record.id} failed to start: ${error instanceof Error ? error.message : 'unknown'}`, 'rejected'));
       return;
     }
     const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* already exited */ }
-      settle(() => rejectPromise(new GateProviderError(`provider ${provider.id} timed out`, 'timeout')));
+      settle(() => rejectPromise(new GateProviderError(`provider ${record.id} timed out`, 'timeout')));
     }, limits.timeoutMs);
     const onAbort = (): void => {
       try { child.kill('SIGKILL'); } catch { /* already exited */ }
-      settle(() => rejectPromise(new GateProviderError(`provider ${provider.id} was cancelled`, 'cancelled')));
+      settle(() => rejectPromise(new GateProviderError(`provider ${record.id} was cancelled`, 'cancelled')));
     };
     limits.signal?.addEventListener('abort', onAbort, { once: true });
     const chunks: Buffer[] = [];
@@ -474,40 +846,74 @@ export function runIsolatedProvider(
       if (bytes > limits.maxOutputBytes) {
         capped = true;
         try { child.kill('SIGKILL'); } catch { /* already exited */ }
-        settle(() => rejectPromise(new GateProviderError(`provider ${provider.id} exceeds its output cap`, 'rejected')));
+        settle(() => rejectPromise(new GateProviderError(`provider ${record.id} exceeds its output cap`, 'rejected')));
         return;
       }
       chunks.push(chunk);
     });
     const errors: Buffer[] = [];
+    let errorBytes = 0;
     child.stderr?.on('data', (chunk: Buffer) => {
-      if (Buffer.concat([...errors, chunk]).length <= 4096) errors.push(chunk);
+      if (errorBytes + chunk.length <= 4096) {
+        errors.push(chunk);
+        errorBytes += chunk.length;
+      }
     });
+    child.stdin?.on('error', () => { /* the exit status reports a dead child */ });
     child.on('error', (error) => {
       settle(() => rejectPromise(new GateProviderError(
-        `provider ${provider.id} failed to start: ${error.message}`, 'rejected')));
+        `provider ${record.id} failed to start: ${error.message}`, 'rejected')));
     });
     child.on('close', (code) => {
       if (capped) return;
+      const stderr = Buffer.concat(errors).toString('utf8');
       if (code !== 0) {
-        const stderr = Buffer.concat(errors).toString('utf8');
         settle(() => rejectPromise(new GateProviderError(
-          `provider ${provider.id} rejected${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected')));
+          `provider ${record.id} rejected${stderr ? `: ${stderr.slice(0, 300)}` : ''}`, 'rejected')));
         return;
       }
       // Parse BEFORE settling: a throwing parse must still reach the
       // rejection below (settling first would swallow the settlement).
-      const stderr = Buffer.concat(errors).toString('utf8');
       let parsed: { descriptor?: Record<string, unknown>; result?: unknown };
       try {
-        parsed = parseIsolatedResponse(Buffer.concat(chunks).toString('utf8'), stderr, provider.id);
+        parsed = parseIsolatedFrame(Buffer.concat(chunks).toString('utf8'), nonce, record.id, stderr);
       } catch (error) {
         settle(() => rejectPromise(error));
         return;
       }
       settle(() => resolvePromise(parsed));
     });
+    child.stdin?.end(input);
   });
+}
+
+/**
+ * Synchronous isolated run of a LOADER-ISSUED provider (evaluator re-runs):
+ * sandboxed, SIGKILL timeout, output cap. Caller-supplied provider objects
+ * (copies, hand-made objects) refuse; the executed bytes come only from the
+ * loader's private record and are re-digested before every run.
+ */
+export function runIsolatedProviderSync(
+  provider: Pick<BundleMetricProvider, 'id'>,
+  args: IsolatedRunArgs,
+  limits: IsolatedRunLimits,
+): { descriptor?: Record<string, unknown>; result?: unknown } {
+  return runIsolatedRecordSync(issuedRecordOrThrow(provider), args, limits);
+}
+
+/** Asynchronous isolated run of a LOADER-ISSUED provider: abortable, sandboxed, SIGKILL timeout, output cap. */
+export function runIsolatedProvider(
+  provider: Pick<BundleMetricProvider, 'id'>,
+  args: IsolatedRunArgs,
+  limits: IsolatedRunLimits,
+): Promise<{ descriptor?: Record<string, unknown>; result?: unknown }> {
+  let record: TrustedProviderRecord;
+  try {
+    record = issuedRecordOrThrow(provider);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return runIsolatedRecord(record, args, limits);
 }
 
 /**
@@ -580,17 +986,16 @@ export async function loadGateBundleProviders(
     if (!DIGEST_PATTERN.test(snapshot.codeDigest)) {
       throw new GateProviderError(`provider ${entry.id} code digest is unknown`, 'attestation-mismatch');
     }
-    // Validate the module graph in the isolated child (parse + link over the
+    // Validate the module graph in the sandboxed child (parse + link over the
     // snapshot, identity-checked against the manifest). Dynamic import(),
     // require, bare/absolute/escaping/non-.mjs specifiers refuse here.
-    const provisional: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'> = {
-      id: entry.id, version: entry.version,
-      snapshotDir: snapshot.snapshotDir, modulePath: entry.module,
-      snapshotFiles: snapshot.files.map(file => file.path),
-    };
+    const record: TrustedProviderRecord = Object.freeze({
+      id: entry.id, version: entry.version, codeDigest: snapshot.codeDigest, entryRel: snapshot.entryRel,
+      modules: Object.freeze(snapshot.modules.map(module => Object.freeze({ path: module.path, bytes: Buffer.from(module.bytes) }))),
+    });
     let descriptor: Record<string, unknown>;
     try {
-      const inspected = await runIsolatedProvider(provisional, {
+      const inspected = await runIsolatedRecord(record, {
         mode: 'inspect', clockMs: nowMs, seed: 1,
       }, { timeoutMs, maxOutputBytes, signal: options?.signal });
       if (!inspected.descriptor || typeof inspected.descriptor !== 'object') {
@@ -599,7 +1004,7 @@ export async function loadGateBundleProviders(
       descriptor = inspected.descriptor;
     } catch (error) {
       if (error instanceof GateProviderError
-        && (error.code === 'timeout' || error.code === 'cancelled')) throw error;
+        && (error.code === 'timeout' || error.code === 'cancelled' || error.code === 'sandbox-unavailable')) throw error;
       throw new GateProviderError(
         `provider ${entry.id} module is invalid: ${error instanceof Error ? error.message : 'unknown'}`, 'invalid-module');
     }
@@ -614,25 +1019,40 @@ export async function loadGateBundleProviders(
       }
     }
     const sourceDigest = providerSourceDigest({ id: entry.id, version: entry.version, metrics });
-    loaded.push({
+    const provider: BundleMetricProvider = Object.freeze({
       id: entry.id, version: entry.version, description: descriptor.description as string,
-      metrics: metrics as BundleMetricProvider['metrics'], sourceDigest,
+      metrics: deepFreeze(metrics) as BundleMetricProvider['metrics'], sourceDigest,
       codeDigest: snapshot.codeDigest,
-      review: { reviewer: trusted.reviewer, reviewedAt: trusted.reviewedAt, codeDigest: snapshot.codeDigest },
+      review: Object.freeze({ reviewer: trusted.reviewer, reviewedAt: trusted.reviewedAt, codeDigest: snapshot.codeDigest }),
       bundleId: manifest.id, modulePath: entry.module,
-      snapshotDir: snapshot.snapshotDir, snapshotFiles: snapshot.files.map(file => file.path),
+      snapshotFiles: Object.freeze(snapshot.files.map(file => file.path)) as string[],
       compute: () => {
         throw new GateProviderError(
           `provider ${entry.id} cannot run in-process: use invokeBundleProvider (isolated child)`, 'invalid-module');
       },
     });
+    // C3: the loader-issued token. Only this exact frozen object runs or registers.
+    ISSUED_PROVIDERS.set(provider, record);
+    loaded.push(provider);
   }
   return loaded;
 }
 
-/** Reserve-then-dispatch isolated provider invocation with a SIGKILL timeout. */
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    for (const key of Object.keys(value as object)) deepFreeze((value as Record<string, unknown>)[key]);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/**
+ * Reserve-then-dispatch isolated provider invocation with a SIGKILL timeout.
+ * Only loader-issued providers run; the clock (`clockMs`) is required, so
+ * standalone invocations are reproducible (no real-clock default).
+ */
 export async function invokeBundleProvider(
-  provider: Pick<BundleMetricProvider, 'id' | 'version' | 'snapshotDir' | 'modulePath' | 'snapshotFiles'>,
+  provider: Pick<BundleMetricProvider, 'id'>,
   records: readonly unknown[],
   options?: BundleProviderOptions,
 ): Promise<unknown> {
@@ -665,15 +1085,15 @@ export async function invokeBundleProvider(
   } catch {
     throw new GateProviderError(`provider ${provider.id} records are not digestible`, 'invalid-records');
   }
-  const clockMs = options?.clockMs ?? Date.now();
-  if (!Number.isSafeInteger(clockMs)) throw new GateProviderError('provider clock is not an integer', 'invalid-records');
-  const codeDigest = (provider as { codeDigest?: unknown }).codeDigest;
-  if (typeof codeDigest !== 'string' || !DIGEST_PATTERN.test(codeDigest)) {
-    throw new GateProviderError(`provider ${provider.id} code digest is unknown`, 'attestation-mismatch');
+  const clockMs = options?.clockMs;
+  if (clockMs === undefined) {
+    throw new GateProviderError(`provider ${provider.id} invocation requires an explicit clockMs`, 'invalid-records');
   }
+  if (!Number.isSafeInteger(clockMs)) throw new GateProviderError('provider clock is not an integer', 'invalid-records');
+  const record = issuedRecordOrThrow(provider);
   try {
-    const ran = await runIsolatedProvider(provider, {
-      mode: 'invoke', recordsJson, clockMs, seed: deriveIsolatedSeed(codeDigest, recordsDigest),
+    const ran = await runIsolatedRecord(record, {
+      mode: 'invoke', recordsJson, clockMs, seed: deriveIsolatedSeed(record.codeDigest, recordsDigest),
     }, { timeoutMs, maxOutputBytes, signal: options?.signal });
     if (ran.result === undefined) throw new GateProviderError(`provider ${provider.id} returned no metrics`, 'rejected');
     return ran.result;
