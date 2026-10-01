@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/DecisionComparativeReplaySplit.v1.schema.json",
+  "title": "DecisionComparativeReplaySplit.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "generatorDigest",
+    "families",
+    "members"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-comparative-replay-split/v1"
+    },
+    "generatorDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "families": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "slice",
+          "split",
+          "operation"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "slice": {
+            "enum": [
+              "threshold-boundary",
+              "priority-loss",
+              "unchanged-control",
+              "unreplayable"
+            ]
+          },
+          "split": {
+            "enum": [
+              "tuning",
+              "calibration",
+              "test"
+            ]
+          },
+          "operation": {
+            "enum": [
+              "threshold-below",
+              "threshold-equal",
+              "threshold-above",
+              "priority-winner",
+              "loss-outcome",
+              "unchanged-threshold",
+              "unchanged-priority",
+              "unobserved-fallback",
+              "earlier-producing-target"
+            ]
+          }
+        }
+      },
+      "minItems": 600,
+      "maxItems": 600
+    },
+    "members": {
+      "allOf": [
+        {
+          "$ref": "https://aiwg.io/schemas/decision/DecisionComparativeReplayMembers.v1.schema.json"
+        },
+        {
+          "type": "array",
+          "minItems": 600,
+          "maxItems": 600
+        }
+      ]
+    }
+  }
+}
