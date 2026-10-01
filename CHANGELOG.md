@@ -310,6 +310,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- The D24 preprocessing gate and the recorded `RulesetResult` now share one
+  immutable snapshot of the host-supplied lineage and verification, taken before
+  the result is constructed. Caller-owned mutation during evaluation can no
+  longer change the gate verdict or the recorded lineage; malformed lineage is
+  still refused without dispatch. Experimental, default-off (#2783)
 - Anchor experimental, default-off sensitivity probe subjects to canonical host
   artifact content (`apiVersion`, `kind`, `spec`) instead of caller-chosen
   artifact IDs: renaming an otherwise identical ruleset or binding shares the
