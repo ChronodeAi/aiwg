@@ -451,6 +451,16 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   quality decision at or above the overall minimum n, so it yields HOLD with
   `INSUFFICIENT EVIDENCE` instead of omitting the decision from the findings (#2788).
 
+- Context-planned decision invocations preflight the worst-case completion result
+  envelope before dispatch: every evaluation is assumed to carry every usage
+  entry with the binding's full retry attempts and answer-domain distributions,
+  so a many-alias invocation whose per-evaluation plan clones cannot satisfy
+  entry admission now rejects with `invalid-input` before receipts, credentials
+  or transport instead of discarding completed provider work after dispatch.
+  Enforce invocations with 13–21 aliases now reject pre-dispatch (fail-closed).
+  The TV-12 enforce canary covers the 24-question `many-short` shape as
+  rejected-before-dispatch; fitting invocations are unchanged (#2797).
+
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
 ### Fixed
