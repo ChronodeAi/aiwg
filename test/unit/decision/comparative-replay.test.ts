@@ -317,5 +317,7 @@ describe('D23 comparative policy replay', () => {
     expect(packets.packets[0].context.changes).toHaveLength(1);
     expect(packets.packets[0].context.rules).toHaveLength(2);
     expect(JSON.stringify(packets)).not.toContain('d23-test-');
-  }, 30_000);
+    // 1,200 durable ledger appends: ~3.8s idle and ~6.3s under CPU contention locally, but over 30s on a loaded CI
+    // runner. 120s keeps ~4x headroom over the observed CI time without trimming the asserted evidence.
+  }, 120_000);
 });

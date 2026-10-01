@@ -6,10 +6,16 @@
  * performs only exact-path GET reads of KV data. It has no list, metadata or KV write
  * operation, so it cannot enumerate; its only other call revokes its own token on dispose. Errors carry a `category` only; values, tokens, locators and
  * response bodies never appear in errors or in the sanitized audit.
+ *
+ * Shared behavior (#2798): token acquisition, TLS refusal, request options, the bounded HTTPS
+ * GET and the KV v2 envelope reader are the single implementation in
+ * `tools/decision/jev-openbao-credential.mjs`, imported below. Only this file's resolver
+ * policy stays here: the host-only config schema, logical-ref mapping, caching, audit and
+ * dispose. `jev-openbao-credential.mjs` must not import this file in return: the D12 runner
+ * loads that file through a digest-pinned `data:` import, where a relative import would fail.
  */
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { request as httpsRequest } from 'node:https';
+import { isTlsVerificationDisabled, kvEnvelopeData, openBaoHttpsGet, openBaoHttpsOptions, runApproleTokenHelper } from './jev-openbao-credential.mjs';
 
 export class CredentialResolutionError extends Error {
   constructor(category) {
@@ -45,23 +51,23 @@ export function validateResolverConfig(config) {
 
 /** Runs the host token helper. Only stdout is read; stderr is discarded, never logged. */
 export function appRoleTokenProvider(config) {
-  return () => new Promise((resolve, reject) => {
-    execFile('bash', [config.tokenScript, 'approle', config.appRole], { timeout: 15_000, maxBuffer: 16 * 1024, encoding: 'utf8', windowsHide: true },
-      (error, stdout) => {
-        const token = typeof stdout === 'string' ? stdout.trim() : '';
-        if (error || !token || /\s/.test(token)) reject(new CredentialResolutionError('failed'));
-        else resolve(token);
-      });
-  });
+  return async () => {
+    let token;
+    try {
+      token = await runApproleTokenHelper(config.tokenScript, config.appRole, { timeoutMs: 15_000, maxBuffer: 16 * 1024 });
+    } catch { throw new CredentialResolutionError('failed'); }
+    if (/\s/.test(token)) throw new CredentialResolutionError('failed');
+    return token;
+  };
 }
 
 /** Certificate verification is always explicit; a CA file may only add trust, never disable it. */
 export function httpsRequestOptions(method, headers, ca) {
-  return { method, headers, timeout: 10_000, rejectUnauthorized: true, ...(ca ? { ca } : {}) };
+  return openBaoHttpsOptions(method, headers, ca, 10_000);
 }
 
 const assertTlsVerification = () => {
-  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') throw new CredentialResolutionError('configuration');
+  if (isTlsVerificationDisabled()) throw new CredentialResolutionError('configuration');
 };
 
 /** Minimal HTTPS request with bounded body and timeout. Returns status and parsed JSON (or null). */
@@ -70,21 +76,13 @@ export function httpsGetJson(config) {
   return async (url, headers, method = 'GET') => {
     assertTlsVerification();
     if (config.caFile && ca === undefined) ca = await readFile(config.caFile);
-    return new Promise((resolve, reject) => {
-      const req = httpsRequest(url, httpsRequestOptions(method, headers, ca), response => {
-        const chunks = []; let size = 0;
-        response.on('data', chunk => { size += chunk.length; if (size > MAX_BODY_BYTES) { req.destroy(); reject(new CredentialResolutionError('failed')); } else chunks.push(chunk); });
-        response.on('end', () => {
-          let json = null;
-          try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { json = null; }
-          resolve({ status: response.statusCode ?? 0, json });
-        });
-        response.on('error', () => reject(new CredentialResolutionError('failed')));
-      });
-      req.on('timeout', () => { req.destroy(); reject(new CredentialResolutionError('failed')); });
-      req.on('error', () => reject(new CredentialResolutionError('failed')));
-      req.end();
-    });
+    let result;
+    try {
+      result = await openBaoHttpsGet(url, { method, headers, ca, timeoutMs: 10_000, maxBodyBytes: MAX_BODY_BYTES });
+    } catch { throw new CredentialResolutionError('failed'); }
+    let json = null;
+    try { json = JSON.parse(result.body.toString('utf8')); } catch { json = null; }
+    return { status: result.status, json };
   };
 }
 
@@ -123,7 +121,7 @@ export function createOpenBaoKvResolver(rawConfig, seams = {}) {
       const status = response?.status ?? 0;
       if (status === 403) { record('read', ref, 'denied', status); throw new CredentialResolutionError('denied'); }
       if (status === 404) { record('read', ref, 'missing', status); throw new CredentialResolutionError('missing'); }
-      const data = status === 200 ? response.json?.data?.data : undefined;
+      const data = status === 200 ? kvEnvelopeData(response.json) : undefined;
       const keys = data && typeof data === 'object' && !Array.isArray(data) ? Object.keys(data) : [];
       const field = target.field ?? (keys.length === 1 ? keys[0] : undefined);
       const secret = field !== undefined && data ? data[field] : undefined;

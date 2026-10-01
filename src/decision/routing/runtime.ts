@@ -246,9 +246,10 @@ async function executeDeterministicChain(policy: RoutingPolicy, chain: RouteCand
         }
         break routes;
       }
-      if (spent === null) { stop('cost-unknown'); break routes; }
-      if (spent > limits.limitMicros) { stop('budget-exceeded'); break routes; }
+      // A known overrun outranks everything; cancellation outranks an unknown cost it caused.
+      if (spent !== null && spent > limits.limitMicros) { stop('budget-exceeded'); break routes; }
       if (result.reason === 'cancelled') { stop('cancelled'); break routes; }
+      if (spent === null) { stop('cost-unknown'); break routes; }
       if (CIRCUIT_REASONS.has(result.reason)) {
         openProviders.add(route.model.provider);
         body.fallbacks.push(route.id);
@@ -419,7 +420,19 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
       try {
         restored = control.restorePolicy(prior, input.approvalReference, input.at);
       } catch (error) {
-        return fail(`routing policy restore failed: ${messageOf(error)}`, unchanged);
+        // The restore may have installed `prior` before throwing, so re-read the
+        // history and derive the reported state from what is actually current.
+        const current = control.policyHistory().at(-1) ?? previousPolicy;
+        const installedPrior = canonicalJson(current) === canonicalJson(prior);
+        return fail(`routing policy restore failed: ${messageOf(error)}`, {
+          policyRestored: installedPrior,
+          aliasRolledBack: false,
+          compensated: false,
+          // Consistent only when nothing changed: any other installed policy (prior or
+          // something else entirely) leaves policy and alias out of step.
+          consistent: canonicalJson(current) === canonicalJson(previousPolicy),
+          currentPolicy: current,
+        });
       }
       if (!installed(prior, restored)) {
         return fail('routing policy restore did not install the prior pinned policy', { ...unchanged, consistent: false, currentPolicy: control.policyHistory().at(-1) ?? previousPolicy });
@@ -445,7 +458,17 @@ export async function runRoutingControlDrill(input: RoutingControlDrillInput): P
     'require-recertification': contain('require-recertification'),
   });
   const after = control.activeRunPins();
-  if (canonicalJson(after) !== canonicalJson(before)) throw new RoutingContractError('active run pins changed during the drift response');
+  if (canonicalJson(after) !== canonicalJson(before)) {
+    return fail('active run pins changed during the drift response', {
+      policyRestored: restoredPolicy !== null,
+      aliasRolledBack: rollbackEvent !== null,
+      compensated: false,
+      consistent: false,
+      currentPolicy: control.policyHistory().at(-1) ?? previousPolicy,
+      activeRunPinsBefore: [...before],
+      activeRunPinsAfter: frozenRoutingClone([...after]),
+    });
+  }
   return { driftResponse: drift.executed, previousPolicy, restoredPolicy, rollbackEvent, jevCircuitOpen, activeRunPins: structuredClone([...after]) };
 }
 

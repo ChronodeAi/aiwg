@@ -480,6 +480,113 @@ describe('preprocessed evidence evaluator integration', () => {
     expect(dispatched.result.spec.status).toBe('completed');
     expect(dispatched.evaluate).toHaveBeenCalledTimes(3);
   });
+
+  it('MML-SNAPSHOT-01 refuses denied lineage even when the caller mutates it during evaluation', async () => {
+    const value = manifest('scanned-document-ocr');
+    value.spec.policy.rawEgress = { allowed: true, destinations: [jevDestination] };
+    value.spec.policy.derivedEgress = { allowed: true, destinations: [{ provider: 'llm-subagent', origin: 'local://worker' }] };
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination, requireRawEgress: true });
+    const lineage = resolved.receiptEvidence;
+    const original = structuredClone(lineage);
+    const seen: unknown[] = [];
+    const adapter = spyAdapter(seen);
+    const evaluate = vi.spyOn(adapter, 'evaluate');
+    const resolveCredential = vi.fn(async () => new Uint8Array([1]));
+    const result = await evaluateDecisionRuleset({
+      ruleset: addon<DecisionRuleset>('ruleset.json'),
+      binding: addon<DecisionBinding>('binding-jev.json'),
+      definitions: {
+        category: addon<DecisionDefinition>('decision-category.json'),
+        severity: addon<DecisionDefinition>('decision-severity.json'),
+        core: addon<DecisionDefinition>('decision-core_unavailable.json'),
+      },
+      input: { message: resolved.state.text || 'Invoice 314 total 128.40 USD.' },
+      runId: 'run', invocationId: 'mml-snapshot-refused',
+      adapters: { jev: adapter },
+      resolveCredential,
+      // Caller-owned mutation during evaluation: the projection hook runs while the
+      // gate arguments are evaluated, after the result base was recorded. It flips
+      // the stored egress flag, but the gate must still see the snapshot.
+      projection: { resolve: () => {
+        lineage.references[0]!.policy.derivedEgressAllowed = true;
+        return projectionPolicy();
+      } },
+      preprocessingLineage: lineage,
+      preprocessingVerification: hostVerification([value]),
+    });
+    expect(result.spec.status).toBe('error');
+    expect(result.spec.reason).toBe('data-boundary-denied');
+    expect(result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['derived-egress-denied'] });
+    expect(result.spec.preprocessingLineage).toEqual({ ...original,
+      dispatchGate: { outcome: 'refused', reasons: ['derived-egress-denied'] } });
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(resolveCredential).not.toHaveBeenCalled();
+  });
+
+  it('MML-SNAPSHOT-02 gates and records the same snapshot when the caller mutates verification during evaluation', async () => {
+    const source = manifest('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([source], { destination: jevDestination, minQualityScore: 0.8 });
+    const lineage = resolved.receiptEvidence;
+    const original = structuredClone(lineage);
+    const verification = hostVerification([source]);
+    const calls: unknown[] = [];
+    const result = await evaluateDecisionRuleset({
+      ruleset: addon<DecisionRuleset>('ruleset.json'),
+      binding: addon<DecisionBinding>('binding-jev.json'),
+      definitions: {
+        category: addon<DecisionDefinition>('decision-category.json'),
+        severity: addon<DecisionDefinition>('decision-severity.json'),
+        core: addon<DecisionDefinition>('decision-core_unavailable.json'),
+      },
+      input: { message: resolved.state.text },
+      runId: 'run', invocationId: 'mml-snapshot-allowed',
+      adapters: { jev: spyAdapter(calls) },
+      resolveCredential: vi.fn(async () => new Uint8Array([1])),
+      // Caller-owned mutation during evaluation: the projection hook runs while the
+      // gate arguments are evaluated. It drops the current manifests, but the gate
+      // must still verify against the snapshot.
+      projection: { resolve: () => {
+        verification.manifests.length = 0;
+        return projectionPolicy();
+      } },
+      preprocessingLineage: lineage,
+      preprocessingVerification: verification,
+    });
+    expect(result.spec.status).toBe('completed');
+    expect(result.spec.preprocessingLineage).toEqual({ ...original, dispatchGate: { outcome: 'allowed', reasons: [] } });
+    expect(calls).toHaveLength(3);
+    validateDecisionDocument(result);
+  });
+
+  it('MML-SNAPSHOT-03 refuses pre-verdicted (malformed) lineage without dispatch', async () => {
+    const source = manifest('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([source], { destination: jevDestination, minQualityScore: 0.8 });
+    const lineage = { ...structuredClone(resolved.receiptEvidence),
+      dispatchGate: { outcome: 'allowed' as const, reasons: [] as string[] } };
+    const seen: unknown[] = [];
+    const adapter = spyAdapter(seen);
+    const evaluate = vi.spyOn(adapter, 'evaluate');
+    const result = await evaluateDecisionRuleset({
+      ruleset: addon<DecisionRuleset>('ruleset.json'),
+      binding: addon<DecisionBinding>('binding-jev.json'),
+      definitions: {
+        category: addon<DecisionDefinition>('decision-category.json'),
+        severity: addon<DecisionDefinition>('decision-severity.json'),
+        core: addon<DecisionDefinition>('decision-core_unavailable.json'),
+      },
+      input: { message: resolved.state.text },
+      runId: 'run', invocationId: 'mml-snapshot-malformed',
+      adapters: { jev: adapter },
+      resolveCredential: vi.fn(async () => new Uint8Array([1])),
+      projection: { resolve: () => projectionPolicy() },
+      preprocessingLineage: lineage,
+      preprocessingVerification: hostVerification([source]),
+    });
+    expect(result.spec.status).toBe('error');
+    expect(result.spec.reason).toBe('data-boundary-denied');
+    expect(result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['malformed-lineage'] });
+    expect(evaluate).not.toHaveBeenCalled();
+  });
 });
 
 describe('preprocessed evidence D10 lifecycle surface', () => {
@@ -929,6 +1036,32 @@ describe('D24 round-2 review regressions', () => {
     expect(declared.evaluate).toHaveBeenCalledTimes(3);
   });
 
+  it('MML-BIND-ROOT-01 rejects a root non-lineage declaration while a scoped declaration still covers its subtree', async () => {
+    const value = verified('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination });
+
+    // A root declaration would mark every text-bearing position as covered: it must never allow the gate.
+    const root = await runBound(value, resolved.receiptEvidence, { message: resolved.state.text, notes: 'operator note' },
+      hostVerification([value], { nonLineagePointers: [''] }), true);
+    expect(root.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'review', reasons: ['unverified'] });
+    expect(root.result.spec.status).toBe('review');
+    expect(root.evaluate).not.toHaveBeenCalled();
+    expect(root.resolveCredential).not.toHaveBeenCalled();
+
+    // A scoped declaration still covers its intended subtree.
+    const scoped = await runBound(value, resolved.receiptEvidence, { message: resolved.state.text, notes: 'operator note' },
+      hostVerification([value], { nonLineagePointers: ['/notes'] }), true);
+    expect(scoped.result.spec.status).toBe('completed');
+    expect(scoped.evaluate).toHaveBeenCalledTimes(3);
+
+    // Undeclared text beside the valid bound field is still refused.
+    const smuggled = await runBound(value, resolved.receiptEvidence, { message: resolved.state.text, notes: 'operator note' },
+      hostVerification([value]), true);
+    expect(smuggled.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-undeclared'] });
+    expect(smuggled.evaluate).not.toHaveBeenCalled();
+    expect(smuggled.resolveCredential).not.toHaveBeenCalled();
+  });
+
   it('MML-VERIFY-THRESHOLDS-01 routes to review when host quality/age thresholds are missing or not finite', async () => {
     const value = verified('scanned-document-ocr');
     const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination });
@@ -980,6 +1113,44 @@ describe('D24 round-2 review regressions', () => {
     const declared = await run(hostVerification([value], { nonLineagePointers: ['/meta'] }));
     expect(declared.result.spec.status).toBe('completed');
     expect(declared.evaluate).toHaveBeenCalledTimes(3);
+  });
+
+  it('MML-BIND-SCALARS-01 leaves numeric, boolean and null values outside text-leaf binding', async () => {
+    const value = verified('scanned-document-ocr');
+    const resolved = resolvePreprocessedEvidence([value], { destination: jevDestination });
+    const run = async (input: Record<string, unknown>, verification: unknown = hostVerification([value])) => {
+      const spy = spies();
+      const result = await evaluateDecisionRuleset(addonRequest({
+        input, invocationId: 'mml-bind-scalars',
+        ...notesArtifacts({ count: { type: 'number' }, flag: { type: 'boolean' }, nothing: { type: 'null' }, note: { type: 'string' } }),
+        adapters: { jev: spy.adapter }, resolveCredential: spy.resolveCredential,
+        preprocessingLineage: resolved.receiptEvidence, preprocessingVerification: verification }) as never);
+      return { result, ...spy };
+    };
+    const scalars = { count: 42, flag: true, nothing: null };
+
+    // Scalar values carry no text and are never compared against lineage text: with their
+    // key positions declared non-lineage, the bound string dispatches alongside them.
+    const declared = await run({ message: resolved.state.text, ...scalars },
+      hostVerification([value], { nonLineagePointers: ['/count', '/flag', '/nothing'] }));
+    expect(declared.result.spec.status).toBe('completed');
+    expect(declared.evaluate).toHaveBeenCalledTimes(3);
+
+    // The scalar keys are still text-bearing member positions: without coverage they are refused.
+    const uncovered = await run({ message: resolved.state.text, ...scalars });
+    expect(uncovered.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-undeclared'] });
+    expect(uncovered.evaluate).not.toHaveBeenCalled();
+    expect(uncovered.resolveCredential).not.toHaveBeenCalled();
+
+    // A scalar value can never satisfy a lineage binding: it never equals the verified text.
+    const misbound = await run({ message: resolved.state.text, count: 42 },
+      hostVerification([value], { inputBindings: [
+        { pointer: '/message', manifestIds: [value.metadata.id] },
+        { pointer: '/count', manifestIds: [value.metadata.id] },
+      ] }));
+    expect(misbound.result.spec.preprocessingLineage?.dispatchGate).toEqual({ outcome: 'refused', reasons: ['input-mismatch'] });
+    expect(misbound.evaluate).not.toHaveBeenCalled();
+    expect(misbound.resolveCredential).not.toHaveBeenCalled();
   });
 
   it('MML-LINEAGE-MISSING-01 routes to review when the host expects lineage but it is empty or absent', async () => {
