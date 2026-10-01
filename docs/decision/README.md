@@ -48,7 +48,12 @@ credential, attack-movement and canary evidence; no live run has been performed.
 The [ensemble, champion/challenger and drift-response contracts](ensembles.md)
 define versioned D17 schemas, pure validators, and an experimental default-off
 offline runtime with injected dispatch, registry and telemetry seams. Live
-qualification and production rollout evidence remain pending.
+qualification and production rollout evidence remain pending. The
+[source-only D17 held-out study](ensemble-heldout-study.md) adds a frozen
+synthetic corpus, priced approval and blind-review forms, and paired report
+scaffolding. Its only scope is uncalibrated diagnostics; D09 qualification,
+calibrated gates and promotion are unavailable. Live observations and calibration
+remain pending.
 
 The [routing pilot](routing-pilot.md) defines D28 default-off,
 capability-constrained route selection among already-eligible model/subagent
@@ -91,6 +96,11 @@ does not add native media support to Jev, and stores receipt/trace references
 
 Decision results are data, not authority. Any workflow action selected from an
 outcome must pass the existing AIWG policy and approval gates independently.
+
+[D23 offline comparative replay](comparative-replay.md) provides an experimental,
+default-off synthetic report and 44-assessment operator audit scaffold. The
+refreshed report passes its diagnostic gates but remains HOLD; independent
+integrity and human review remain pending.
 
 The experimental, default-off [shared held-out collector](heldout-collector.md)
 provides source-only preparation, bounded synthetic collection and D11 recorded
