@@ -310,6 +310,11 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Anchor experimental, default-off sensitivity probe subjects to canonical host
+  artifact content (`apiVersion`, `kind`, `spec`) instead of caller-chosen
+  artifact IDs: renaming an otherwise identical ruleset or binding shares the
+  existing subject budget, while a genuinely new version mints a distinct
+  subject only through a spec change. Ordinary decision behavior is unchanged (#2796)
 - Redact unterminated private-key blocks with a bounded fallback (header plus
   up to 100 complete base64 body lines, so following prose is preserved) and
   recognize standalone `whsec_` and `glpat-` provider tokens, including inside

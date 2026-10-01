@@ -214,15 +214,31 @@ function validateInputs(plan: SensitivityPlan, request: SensitivityRuntimeReques
   }
 }
 
-// The probed subject is the decision input under a named ruleset and binding. The caller-supplied
-// result artifact is not part of the key: re-pinning a cosmetically different result must not mint a
-// new budget for re-evaluating the same input.
+// The probed subject is the decision input under the canonical ruleset and binding content.
+// Caller-chosen metadata (id, version, description) is not part of the key: renaming an
+// otherwise identical artifact must not mint a new budget for re-evaluating the same input.
+// Any change to the evaluated spec does mint one, and the binding's ruleset pin is normalized
+// to the canonical ruleset digest so a re-pinned rename cannot mint a budget either.
+// The caller-supplied result artifact is not part of the key: re-pinning a cosmetically
+// different result must not mint a new budget for re-evaluating the same input.
 function probeSubjectDigest(request: SensitivityRuntimeRequest): string {
+  const ruleset = subjectArtifact(request.sourceRuleset);
+  const binding = {
+    apiVersion: request.sourceBinding.apiVersion,
+    kind: request.sourceBinding.kind,
+    spec: { ...request.sourceBinding.spec, ruleset: { digest: sensitivityDigest(ruleset) } },
+  };
   return sensitivityDigest({
     input: request.sourceInput as JsonValue,
-    ruleset: request.sourceRuleset.metadata.id,
-    binding: request.sourceBinding.metadata.id,
+    ruleset,
+    binding,
   });
+}
+
+// Canonical policy content for subject identity: apiVersion, kind and spec only.
+// Decision-definition renames that alter the ruleset spec still mint distinct subjects.
+function subjectArtifact(artifact: { apiVersion: string; kind: string; spec: unknown }): unknown {
+  return { apiVersion: artifact.apiVersion, kind: artifact.kind, spec: artifact.spec };
 }
 
 function requiresEvaluator(plan: SensitivityPlan, request: SensitivityRuntimeRequest): boolean {
