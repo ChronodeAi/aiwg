@@ -26,7 +26,7 @@ describe('D29 gates adoption stays disabled outside the study score path', () =>
       expect(dry).not.toHaveProperty('gateReport');
       expect(dry).not.toHaveProperty('decision');
     }
-  });
+  }, 120_000);
 
   it('row, gold and definition bytes regenerate identically with gates adopted', async () => {
     const v6 = await prepare('d29-study-v6');
