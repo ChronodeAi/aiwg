@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyAnalysis.v1.schema.json",
+  "title": "D17StudyAnalysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "protocol",
+    "sourceDigests",
+    "splitManifestDigest",
+    "nativeTemplatesDigest"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-analysis/v1"
+    },
+    "protocol": {
+      "$ref": "https://aiwg.io/schemas/decision/D17StudyProtocol.v1.schema.json"
+    },
+    "sourceDigests": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 10000,
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z0-9_./-]+$": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "splitManifestDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "nativeTemplatesDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  }
+}
