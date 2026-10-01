@@ -36,6 +36,7 @@ import {
   type SecurityConfig,
 } from '../security/threat-assessment-config.js';
 import { defaultArtifactOutputs, validateArtifactOutputs, type ArtifactOutputsConfig } from '../artifacts/output-policy.js';
+import { validateGatesConfig, type ProjectFloors } from '../gates/floors.js';
 import { validateUhpConfig } from '../uhp/config.js';
 import type { UhpConfig } from '../uhp/types.js';
 export type { UhpConfig, UhpEndpointProfile } from '../uhp/types.js';
@@ -595,6 +596,18 @@ export interface AiwgConfig {
    * @implements #1692
    */
   build?: BuildConfig;
+
+  /**
+   * Project gate floors for decision studies. Lists the gate packs (or pack
+   * references) every binding in the project must include and tighten, plus
+   * outcome ceilings keyed by study id (`'*'` is the project-wide default).
+   * Optional — when absent, the operator default integrity-ceiling floor
+   * (the shipped `aiwg:decision-engine/integrity-ceiling` pack, applied at
+   * expansion) still governs every evaluation. `evaluateGates` requires
+   * floors explicitly; invalid sections warn at read time and fail closed in
+   * gates entry points. @implements #2832
+   */
+  gates?: ProjectFloors;
 }
 
 /** Research-complete framework settings (#1497). */
@@ -1696,6 +1709,16 @@ export async function readAiwgConfig(projectDir: string): Promise<AiwgConfig | n
   const uhpErrors = validateUhpConfig(parsed.uhp);
   if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
 
+  // Gates errors warn (non-fatal): an invalid `gates` section must not brick
+  // every command that reads the config. Gates entry points (`aiwg gates
+  // evaluate`, binding resolution with floors) re-validate strictly via
+  // `validateGatesConfig` and fail closed there; `writeAiwgConfig` below
+  // stays strict so bad policy is never persisted.
+  const gatesErrors = validateGatesConfig(parsed.gates);
+  if (gatesErrors.length > 0) {
+    console.warn(`Invalid gates section in .aiwg/aiwg.config (ignored):\n${gatesErrors.join('\n')}`);
+  }
+
   return parsed;
 }
 
@@ -1716,6 +1739,8 @@ export async function writeAiwgConfig(projectDir: string, config: AiwgConfig): P
   if (artifactOutputErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${artifactOutputErrors.join('\n')}`);
   const uhpErrors = validateUhpConfig(config.uhp);
   if (uhpErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${uhpErrors.join('\n')}`);
+  const gatesErrors = validateGatesConfig(config.gates);
+  if (gatesErrors.length > 0) throw new Error(`Invalid .aiwg/aiwg.config:\n${gatesErrors.join('\n')}`);
   const localPath = getConfigPath(projectDir);
   const artifactDir = resolveProjectAiwgDir(projectDir);
   const artifactPath = join(artifactDir, CONFIG_FILENAME);

@@ -1,0 +1,53 @@
+{
+  "apiVersion": "gates.aiwg.io/v1alpha1",
+  "kind": "GatePack",
+  "metadata": {
+    "id": "aiwg:test-gates/coverage-floor",
+    "version": "1.0.0",
+    "description": "Coverage floor fixture: Wilson lower bound on accepted coverage."
+  },
+  "spec": {
+    "parameters": {
+      "coverageMinBps": {
+        "type": "bps",
+        "direction": "higher-is-stricter",
+        "default": 1500
+      }
+    },
+    "metrics": {
+      "coverage": {
+        "provider": "test.proportion/v1",
+        "kind": "proportion"
+      }
+    },
+    "gates": [
+      {
+        "id": "coverage-lower",
+        "kind": "interval-bound",
+        "description": "Wilson lower bound on accepted coverage.",
+        "metric": {
+          "provider": "test.proportion/v1",
+          "name": "coverage"
+        },
+        "statistic": {
+          "kind": "interval-bound",
+          "method": "wilson",
+          "bound": "lower",
+          "levelBps": 9500
+        },
+        "threshold": {
+          "op": "gte",
+          "param": "coverageMinBps"
+        },
+        "scope": {
+          "mode": "all"
+        },
+        "direction": "higher-is-stricter",
+        "onFail": "HOLD"
+      }
+    ],
+    "combine": {
+      "rule": "max-severity"
+    }
+  }
+}

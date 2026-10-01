@@ -65,7 +65,7 @@ describe('decision qualification release record', () => {
       budgets: { calls: 10 }, actuals: { calls: 0 }, reviewer: 'reviewed-by-operator', integrity: integrity(), benchmark,
       metrics, integritySnapshot };
     const record = buildQualificationReleaseRecord(executed, input);
-    expect(record).toMatchObject({ schemaVersion: 'decision-qualification-release/v1', decision: 'PROMOTE',
+    expect(record).toMatchObject({ schemaVersion: 'decision-qualification-release/v2', decision: 'PROMOTE',
       reviewer: 'reviewed-by-operator', budgets: { calls: 10 }, actuals: { calls: 0 } });
     expect(record.suites).toHaveLength(67);
     expect(record.suites.every(item => item.verified)).toBe(true);
