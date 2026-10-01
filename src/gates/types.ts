@@ -129,6 +129,42 @@ export interface GateReference {
  */
 export const qualifyGateParameter = (packId: string, name: string): string => `${packId}.${name}`;
 
+/**
+ * Trust-root record for one addon/extension bundle provider, stored in the
+ * project config (`aiwg.config` `gates.providers`). Registration requires a
+ * matching entry: the bundle id, provider id, isolated code digest and the
+ * reviewer identity/timestamp must all match. In-bundle review files are
+ * informational only; this allowlist is the authorization.
+ */
+export interface ProviderAllowlistEntry {
+  bundleId: string;
+  providerId: string;
+  codeDigest: Sha256Digest;
+  reviewer: string;
+  reviewedAt: string;
+}
+
+/** Pin over one metric provider: descriptor digest plus, for bundle providers, the code digest. */
+export interface GateProviderPin {
+  id: string;
+  version: string;
+  sourceDigest: Sha256Digest;
+  /**
+   * Code digest for bundle providers (#2831). Absent for core providers.
+   * When the registry provider carries a code digest the pin must match it;
+   * a byte change moves the digest, so an old pin refuses until re-pinned.
+   */
+  codeDigest?: Sha256Digest;
+  /**
+   * Digest of the input records the provider section is reproduced from
+   * (records binding, P4). Required on bundle-provider pins, forbidden on
+   * core-provider pins. Evaluation re-runs the pinned provider over records
+   * digesting to this value and uses the re-run output; caller-asserted
+   * metrics for provider-backed gates are never accepted.
+   */
+  recordsDigest?: Sha256Digest;
+}
+
 export interface GateBinding {
   apiVersion: typeof GATES_API_VERSION;
   kind: 'GateBinding';
@@ -140,7 +176,7 @@ export interface GateBinding {
     slices: string[];
     sliceGroups?: Record<string, string[]>;
     references: GateReference[];
-    metricProviders: { id: string; version: string; sourceDigest: Sha256Digest }[];
+    metricProviders: GateProviderPin[];
     ceiling?: GateOutcome;
     registeredAt: string;
     frozenAt: string;
@@ -197,6 +233,14 @@ export interface MetricSeries {
 export interface ProviderMetrics {
   version: string;
   sourceDigest: Sha256Digest;
+  /**
+   * Trusted code digest for bundle providers (#2831), sealed by the host via
+   * `sealProviderSection` (never provider-declared). The evaluator verifies it
+   * against the binding pin and the loaded provider.
+   */
+  codeDigest?: Sha256Digest;
+  /** Digest of the input records the section was computed from. */
+  recordsDigest?: Sha256Digest;
   metrics: Record<string, MetricSeries>;
 }
 
@@ -249,14 +293,26 @@ export interface GateHoldoutRecord {
   firstAccessedAt: string | null;
 }
 
+/**
+ * Which project floors an evaluation applied (R2). Either the canonical
+ * digest of the applied `ProjectFloors` input, or an explicit opt-out marker
+ * (only for tests or legacy callers with a documented reason). There is no
+ * absent state: reports always say which one governed them, and report
+ * validation re-derives the distinction.
+ */
+export type GateFloorsRecord =
+  | { mode: 'applied'; digest: Sha256Digest }
+  | { mode: 'opt-out' };
+
 export interface GateReport {
   apiVersion: typeof GATES_API_VERSION;
   kind: 'GateReport';
   metadata: GateMetadata;
   binding: ArtifactPinLike;
   packs: GatePackPin[];
-  metricProviders: { id: string; version: string; sourceDigest: Sha256Digest }[];
+  metricProviders: GateProviderPin[];
   metricsDigest: Sha256Digest;
+  floors: GateFloorsRecord;
   holdout: GateHoldoutRecord;
   gateEvidence: GateEvidence[];
   references: { name: string; kind: ReferenceKind; observed: boolean }[];
@@ -264,5 +320,13 @@ export interface GateReport {
   ceilings: { packOutcome: GateOutcome; upstreamCeiling: GateOutcome; bindingCeiling: GateOutcome };
   decision: GateOutcome;
   evaluatedAt: string;
+  /**
+   * Provenance of the trust ceremony behind this report. Present only on
+   * reports produced by the offline CLI (`evaluateGatesFromFiles`), whose
+   * trust inputs are caller-asserted files: `offline-cli` marks them
+   * distinguishable from reports built over a verified ceremony. Absent on
+   * library-produced reports; absence changes no bytes.
+   */
+  attestation?: 'offline-cli';
   digest: Sha256Digest;
 }

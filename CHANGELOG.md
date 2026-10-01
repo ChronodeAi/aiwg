@@ -7,6 +7,41 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ## [Unreleased]
 
+### Added
+
+- Reworked the experimental, default-off gates bundle-provider loader into an
+  isolated runner with config-allowlist trust and records reproduction
+  (#2831): providers execute only in a permission-restricted child Node
+  process over a pinned snapshot of the whole provider directory (static
+  relative `.mjs` only; dynamic `import()`, `require`, bare/external imports
+  and symlinks refuse; bare imports stay forbidden in phase 1), authorized by
+  a matching `aiwg.config` `gates.providers` allowlist entry (in-bundle
+  reviews are informational only) with an explicit `allowBundleProviders`
+  opt-in and no environment activation. Bindings pin the input-records digest
+  per provider section; evaluation re-runs the pinned provider over the
+  pinned records and uses the re-run output, refusing sections it cannot
+  reproduce. Reports record the applied project-floors digest or an explicit
+  opt-out marker; per-study ceilings require the `'*'` default; `validate
+  binding` resolves with the config floors; `--pack-dir` bundles are
+  project-scoped and cannot claim shipped or installed bundle ids. Core-only
+  behavior is unchanged when the feature is disabled. CLI re-runs from a
+  records file and vendored provider dependencies remain pending (#{{N}})
+
+- Experimental, default-off gate-pack discovery, manifest and CLI (#2830):
+  `gate-pack` joins the `aiwg discover`/`aiwg show` operational surface with
+  a `.gatepack.` extension boundary (HITL `gates/` files never classify),
+  `gatePacks`/`entry.gatePacks` manifest fields for frameworks, addons and
+  extensions, a bundle loader that registers shipped packs as
+  `aiwg:<bundle>/<name>` and rejects invalid packs with file-pathed
+  diagnostics, an offline `aiwg gates`
+  `validate|evaluate|show|list` CLI (fake-clock `--now`, sealed holdout and
+  upstream digests re-derived on every use, `--rule` enforcedBy coverage stays
+  a stub for #2839), and a validating bundled
+  `aiwg:decision-engine/integrity-ceiling` example pack. The decision runtime
+  stays disabled by default and byte-identical. Project floors (#2832),
+  addon/extension provider loading (#2831), study adoption (#2833+) and any
+  live, held-out, human-review or production evidence remain pending (#2830)
+
 ### Fixed
 
 - Tightened the experimental, default-off gates core addendum: every scope
@@ -44,6 +79,24 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   legacy allowlist. Live CLI, project floors, provider loading and study
   adoption remain pending (#2824)
 
+- Hardened the experimental, default-off gates discovery, CLI and floors
+  against review findings: `--pack-dir` files are always `project:` packs
+  (`aiwg:` stays reserved for the installed tree, never the cwd;
+  `addon:`/`framework:`/`extension:` load only from manifest-declared
+  bundles), manifest `gatePacks` dirs are contained by realpath with symlinks
+  rejected and a 256 KiB pre-read cap, CLI evaluation requires a
+  caller-asserted `--trusted-binding-digest` plus already-sealed holdout and
+  upstream files (no auto-sealing), a missing upstream refuses instead of
+  downgrading to HOLD, CLI reports carry `attestation: 'offline-cli'`,
+  project floors are a required evaluator input loaded from `aiwg.config`
+  (unreadable or invalid config refuses evaluation; reads only warn), the
+  default floor is the shipped integrity-ceiling pack itself (suppressed only
+  by a tightening all-scoped upstream-ceiling floor gate), ceilings gain a
+  project-wide `'*'` default that per-study keys may only tighten, and the
+  discovery fixture gains a second pack with same-type hard negatives and
+  paraphrase queries. Provider loading, study adoption and any live,
+  held-out, human-review or production evidence remain pending (#2830)
+
 - Refreshed experimental, default-off D17 source dry-run pins after the gates
   phase 1 core moved the qualification statistics and canonicalised evidence
   digests; the corpus and split/gold pins are unchanged. Live evidence and
@@ -74,6 +127,33 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   live evidence and operator approval remain pending (#2611)
 
 ### Added
+
+- Experimental, default-off addon/extension bundle metric providers for gates:
+  `gateProviders` bundle-manifest declarations (Zod plus TS) loaded only
+  through the gates registry from bundle-relative paths, code digests over
+  module bytes plus resolved local imports (bare externals by bundle lockfile
+  integrity), mandatory review attestations verified at load, sealed metric
+  sections bound to the trusted code and records digests, and
+  reserve-before-dispatch timeouts with fail-closed timeout, budget,
+  rejection and cancellation paths. Bindings carry an optional `codeDigest`
+  pin verified against the loaded provider; core-only evaluation stays
+  byte-identical when the opt-in is absent. Ships one reviewed fixture
+  extension example with offline conformance vectors. The D17 source dry-run
+  pins are refreshed for the new provider sources; the corpus and split/gold
+  pins are unchanged. Live qualification, real held-out data, human sign-off
+  and production rollout remain pending (#2831)
+
+- Experimental, default-off project gate floors in `aiwg.config` `gates`:
+  inline `project:` floor packs and/or pins over registered packs whose
+  composed gates every binding must include and tighten (reusing the per-kind
+  tightening validator and scope-superset rule), optional per-study outcome
+  ceilings, and the operator default integrity-ceiling floor when no floors
+  are configured. Floors are a trusted registry/evaluator input loaded by the
+  caller; an absent input keeps resolution and evaluation byte-identical.
+  Config parsing errors fail closed. The D17 source dry-run pins are refreshed
+  for the new and changed gates sources; the corpus and split/gold pins are
+  unchanged. No CLI, no shipped floor pack and no
+  migrated study; live criteria remain pending (#2832)
 
 - Experimental, default-off D23 offline comparative policy replay: closed schemas,
   a frozen 600-root synthetic corpus, digest-bound eval-integrity reports, and

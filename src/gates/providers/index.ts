@@ -5,7 +5,7 @@ import { MetricProviderRegistry } from './registry.js';
 import { scalarProvider } from './scalar.js';
 import type { MetricProvider } from './types.js';
 
-export type { MetricProvider } from './types.js';
+export type { BundleMetricProvider, MetricProvider, ProviderRuntime } from './types.js';
 export { MetricProviderRegistry } from './registry.js';
 export { evidenceProvider, type EvidenceRecord } from './evidence.js';
 export { pairedProvider, type PairedRecord } from './paired.js';

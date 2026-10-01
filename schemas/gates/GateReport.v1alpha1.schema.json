@@ -6,7 +6,7 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "metadata", "binding", "packs", "metricProviders",
-    "metricsDigest", "holdout", "gateEvidence", "references", "upstream", "ceilings", "decision", "evaluatedAt", "digest"],
+    "metricsDigest", "floors", "holdout", "gateEvidence", "references", "upstream", "ceilings", "decision", "evaluatedAt", "digest"],
   "properties": {
     "apiVersion": { "const": "gates.aiwg.io/v1alpha1" },
     "kind": { "const": "GateReport" },
@@ -23,6 +23,28 @@
       "items": { "$ref": "#/$defs/metricProviderPin" }
     },
     "metricsDigest": { "$ref": "#/$defs/digest" },
+    "floors": {
+      "description": "Which project floors governed the evaluation: the applied floors digest, or an explicit opt-out marker.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "digest"],
+          "properties": {
+            "mode": { "const": "applied" },
+            "digest": { "$ref": "#/$defs/digest" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode"],
+          "properties": {
+            "mode": { "const": "opt-out" }
+          }
+        }
+      ]
+    },
     "holdout": {
       "type": "object",
       "additionalProperties": false,
@@ -64,6 +86,7 @@
     },
     "decision": { "enum": ["PROMOTE", "HOLD", "ROLLBACK"] },
     "evaluatedAt": { "type": "string", "format": "date-time" },
+    "attestation": { "const": "offline-cli", "description": "Present only on reports produced by the offline CLI over caller-asserted files." },
     "digest": { "$ref": "#/$defs/digest" }
   },
   "$defs": {
@@ -106,7 +129,9 @@
       "properties": {
         "id": { "type": "string", "minLength": 1 },
         "version": { "type": "string", "minLength": 1 },
-        "sourceDigest": { "$ref": "#/$defs/digest" }
+        "sourceDigest": { "$ref": "#/$defs/digest" },
+        "codeDigest": { "$ref": "#/$defs/digest", "description": "Code digest for addon/extension bundle providers (#2831). Absent for core providers." },
+        "recordsDigest": { "$ref": "#/$defs/digest", "description": "Input-records digest reproduced by isolated re-run for bundle providers." }
       }
     },
     "statisticEvidence": {

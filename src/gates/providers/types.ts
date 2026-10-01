@@ -4,8 +4,9 @@ import type { GateMetricsDocument, MetricKind, MetricObservation, Sha256Digest }
 /**
  * A metric provider is a registered TypeScript module that computes a `GateMetricsDocument`
  * section from caller-supplied records. Packs stay declarative: they name the provider id
- * and metric name, never code. Addon and extension providers ship through this same
- * interface in a later issue (#2831); only core-registered modules load in v1alpha1.
+ * and metric name, never code. Core providers register directly; addon and extension
+ * providers load only through `loader.ts` from bundle-manifest `gateProviders`
+ * declarations with a verified code digest and review attestation (#2831).
  */
 export interface MetricProvider<TRecord = unknown> {
   id: string;
@@ -14,11 +15,48 @@ export interface MetricProvider<TRecord = unknown> {
   metrics: Record<string, { kind: MetricKind; description: string }>;
   /** Canonical digest of the provider descriptor. Pinned in every binding; a descriptor change changes the binding digest. */
   sourceDigest: Sha256Digest;
+  /**
+   * Digest of the provider CODE (module bytes plus resolved local imports and
+   * lockfile-pinned externals). Present only for bundle providers loaded via
+   * `loader.ts`; core providers leave it undefined and verify by descriptor
+   * only. Null never verifies: it fails closed.
+   */
+  codeDigest?: Sha256Digest;
   compute(records: readonly TRecord[]): GateMetricsDocument['providers'][string];
 }
 
 export function providerSourceDigest(descriptor: { id: string; version: string; metrics: unknown }): Sha256Digest {
   return artifactDigest(descriptor);
+}
+
+/**
+ * An addon/extension bundle provider loaded through the isolated runner
+ * (#2831 rework). The provider NEVER executes in-process: `compute` throws
+ * and every invocation spawns the sandboxed child. The loader returns a
+ * frozen object and keeps the pinned provider bytes in a private record
+ * keyed by it: copies or hand-made objects carrying the same fields neither
+ * run nor register (`isLoaderIssuedProvider`).
+ */
+export interface BundleMetricProvider<TRecord = unknown> extends MetricProvider<TRecord> {
+  codeDigest: Sha256Digest;
+  review: { reviewer: string; reviewedAt: string; codeDigest: Sha256Digest };
+  bundleId: string;
+  modulePath: string;
+  /** Bundle-relative posix paths of the snapshotted provider modules (informational). */
+  snapshotFiles: string[];
+}
+
+/** Isolated re-run inputs for bundle-provider bindings (records binding, P4). */
+export interface ProviderRuntime {
+  /**
+   * Loaded bundle providers declaring re-run coverage. Their fields are NOT
+   * trusted: re-runs execute the registry's loader-issued provider bytes.
+   */
+  providers: BundleMetricProvider[];
+  /** Input records per provider id; each must digest to the binding's records pin. */
+  records: Record<string, readonly unknown[]>;
+  /** Wall-clock ceiling per re-run spawn (default in loader). */
+  timeoutMs?: number;
 }
 
 /** Fail-closed record guard shared by core providers. */

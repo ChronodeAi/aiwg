@@ -7,10 +7,16 @@ import { pairedMeanDifferenceBootstrap } from './stats/bootstrap.js';
 import { PairedDifferenceError } from './stats/error.js';
 import { pairedBinaryDifferenceInterval, pairedNonInferiority } from './stats/paired.js';
 import { GateRegistry, authoredGatePacksOf, gateProvidersOf, resolveGateBinding, type ResolvedBinding } from './registry.js';
+import type { ProjectFloors } from './floors.js';
+import {
+  GATE_PROVIDER_DEFAULT_TIMEOUT_MS, GATE_PROVIDER_MAX_OUTPUT_BYTES,
+  deriveIsolatedSeed, isLoaderIssuedProvider, runIsolatedProviderSync, sealProviderSection,
+} from './providers/loader.js';
+import type { ProviderRuntime } from './providers/types.js';
 import { qualifyGateParameter } from './types.js';
 import type {
   GateBinding, GateDefinition, GateEvidence, GateHoldoutInputs, GateMetricsDocument, GateOutcome, GateReport,
-  GateStatus, MetricObservation, MetricSeries, Sha256Digest, UpstreamCeiling,
+  GateStatus, MetricObservation, MetricSeries, ProviderMetrics, Sha256Digest, UpstreamCeiling,
 } from './types.js';
 
 export class GateEvaluationError extends Error {
@@ -45,8 +51,34 @@ export interface EvaluateGatesInput {
   holdout: GateHoldoutInputs;
   metrics: GateMetricsDocument;
   upstream: UpstreamCeiling | null;
+  /**
+   * Required trusted project floors, loaded from `.aiwg/aiwg.config` by the
+   * caller via `resolveProjectFloors` (see `src/gates/floors.ts`). Like
+   * `trustedBindingDigest` and `holdout`, floors are caller-asserted project
+   * policy: the evaluator re-derives pack pins, composition and tightening
+   * from them but never fetches them. There is no absent state: pass
+   * `'none-explicit-opt-out'` only for tests or legacy callers with a
+   * documented reason, which skips the check exactly like the pre-floors
+   * path. An `undefined` floors input refuses evaluation.
+   */
+  floors: ProjectFloors | 'none-explicit-opt-out';
   /** Fake-clock timestamp (ISO date-time). Recorded as evaluatedAt, so identical inputs give identical bytes. */
   now: string;
+  /**
+   * Isolated re-run inputs for bundle-provider bindings (records binding,
+   * P4). Every binding pin carrying a code digest must be covered: the
+   * evaluator re-runs the pinned provider over records digesting to the
+   * pin's records digest and uses the re-run output. Caller-asserted metrics
+   * for provider-backed gates are never accepted. Absent coverage refuses
+   * evaluation (the file path cannot reproduce provider output).
+   */
+  providerRuntime?: ProviderRuntime;
+  /**
+   * Report provenance label, recorded in the report body (and its digest).
+   * The offline CLI passes `'offline-cli'`; library callers leave it absent,
+   * which keeps their reports byte-identical.
+   */
+  attestation?: 'offline-cli';
   /**
    * Removed: caller-supplied resolution is never accepted (it let callers drop
    * packs, empty gates or loosen parameters under a pinned digest). Present only
@@ -390,6 +422,46 @@ function evaluateObservation(gate: GateDefinition, observation: MetricObservatio
   }
 }
 
+function digestRecordsOrFail(records: readonly unknown[], providerId: string): Sha256Digest {
+  try {
+    return artifactDigest(records) as Sha256Digest;
+  } catch {
+    return fail(`metric provider ${providerId} records are not digestible`);
+  }
+}
+
+function serializeRecordsOrFail(records: readonly unknown[], providerId: string): string {
+  try {
+    const serialized = JSON.stringify(records);
+    if (typeof serialized !== 'string') throw new Error('unserializable');
+    return serialized;
+  } catch {
+    return fail(`metric provider ${providerId} records are not JSON-serializable`);
+  }
+}
+
+function rerunProviderOrFail(
+  provider: Parameters<typeof runIsolatedProviderSync>[0],
+  args: { recordsJson: string; clockMs: number; seed: number; timeoutMs: number; codeDigest: Sha256Digest },
+  providerId: string,
+): unknown {
+  // C2: execute only the registry's loader-issued provider. The runner makes
+  // its own copy of the loader-captured bytes, re-digests exactly the bytes it
+  // sends to the sandbox and refuses unless they match the pinned digest.
+  // Caller-supplied runtime objects (snapshot paths, digests) are never used.
+  if (!isLoaderIssuedProvider(provider)) {
+    return fail(`metric provider ${providerId} was not issued by the bundle loader: refusing to re-run it`);
+  }
+  try {
+    return runIsolatedProviderSync(provider, {
+      mode: 'invoke', recordsJson: args.recordsJson, clockMs: args.clockMs, seed: args.seed,
+      expectedCodeDigest: args.codeDigest,
+    }, { timeoutMs: args.timeoutMs, maxOutputBytes: GATE_PROVIDER_MAX_OUTPUT_BYTES }).result;
+  } catch (error) {
+    return fail(`metric provider ${providerId} re-run failed: ${error instanceof Error ? error.message : 'unknown'}`);
+  }
+}
+
 function upstreamOutcome(upstream: UpstreamCeiling | null): { ceiling: GateOutcome; problems: string[] } {
   if (upstream === null) return { ceiling: 'HOLD', problems: ['upstream-ceiling-missing'] };
   const problems = qualificationIntegrityAllowlistProblems(upstream.metadata);
@@ -422,6 +494,10 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     fail('caller-supplied gate resolution is not accepted: pass the binding and registry');
   }
   if (!(registry instanceof GateRegistry)) fail('a GateRegistry is required for internal resolution');
+  if (input.floors === undefined) {
+    fail('project floors are required: pass resolveProjectFloors(config) or \'none-explicit-opt-out\' with a documented reason');
+  }
+  const floors = input.floors === 'none-explicit-opt-out' ? undefined : input.floors;
   // Reserve before dispatch: resolve and fully validate the binding (pins,
   // providers, parameters, slices) before any gate observes any metric. The
   // resolution runs through the pure `resolveGateBinding` over a standalone
@@ -429,7 +505,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
   // instance method is called for anything security-relevant, so a subclass
   // that overrides `resolveBinding` (or a duck-typed `{resolveBinding}`)
   // cannot empty gates, loosen parameters or forge digests.
-  const resolved = resolveGateBinding(binding, authoredGatePacksOf(registry), gateProvidersOf(registry));
+  const resolved = resolveGateBinding(binding, authoredGatePacksOf(registry), gateProvidersOf(registry), floors);
   const { packs, parameters } = resolved;
   // 1:1 pins<->packs: the pin list and the resolved packs must match exactly.
   if (packs.length !== binding.spec.packs.length) fail('binding pins do not match resolved packs 1:1');
@@ -451,10 +527,31 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     }
   }
   // Every metric section consumed must be pinned; an unpinned section is
-  // refused rather than evaluated. Null version/digests never match.
+  // refused rather than evaluated. Null version/digests never match. Bundle
+  // sections (#2831 rework) additionally carry the trusted code digest and
+  // the input-records digest sealed by the host: the section code digest must
+  // match the binding pin (verified above against the loaded provider), never
+  // a provider-declared field on its own. Sections covered by an isolated
+  // re-run are reproduced below and their caller-asserted values ignored, so
+  // a missing caller section is tolerated only with runtime coverage.
+  const runtimeById = new Map((input.providerRuntime?.providers ?? []).map(provider => [provider.id, provider]));
+  const runtimeCovers = (id: string): boolean =>
+    runtimeById.has(id) && input.providerRuntime?.records[id] !== undefined;
   for (const pin of binding.spec.metricProviders) {
     const section = metrics.providers[pin.id];
+    if (section === undefined && runtimeCovers(pin.id)) continue;
     if (section === undefined || section.version !== pin.version || section.sourceDigest !== pin.sourceDigest) {
+      fail(`metric provider pin mismatch for ${pin.id}`);
+    }
+    const pinnedCode = (pin as { codeDigest?: unknown }).codeDigest;
+    const sectionCode = (section as { codeDigest?: unknown }).codeDigest;
+    const sectionRecords = (section as { recordsDigest?: unknown }).recordsDigest;
+    if (typeof pinnedCode === 'string') {
+      if (sectionCode !== pinnedCode) fail(`metric provider pin mismatch for ${pin.id}`);
+      if (typeof sectionRecords !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(sectionRecords)) {
+        fail(`metric provider pin mismatch for ${pin.id}`);
+      }
+    } else if (sectionCode !== undefined) {
       fail(`metric provider pin mismatch for ${pin.id}`);
     }
   }
@@ -465,6 +562,14 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
   }
   if (upstream !== null && artifactDigest(upstream.metadata) !== upstream.digest) {
     fail('upstream integrity digest does not match its report');
+  }
+  // Omitting the upstream record must never downgrade a bound ceiling to
+  // HOLD: when the resolved binding observes any upstream-ceiling gate
+  // (including the default floor's), evaluation without a sealed upstream is
+  // refused here in the evaluator, not just at the CLI.
+  if (upstream === null
+    && packs.some(pack => pack.resolved.spec.gates.some(gate => gate.kind === 'upstream-ceiling'))) {
+    fail('evaluation requires a sealed upstream record: the binding observes an upstream-ceiling gate');
   }
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs)) fail('evaluation timestamp is not a valid date-time');
@@ -501,11 +606,54 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     if (frozenAt >= accessedAt) fail('binding froze at or after holdout access: evaluation refused');
     if (accessedAt > nowMs) fail('holdout access timestamp is after the evaluation timestamp');
   }
+  // Records binding (P4): every bundle-provider pin is reproduced by an
+  // isolated re-run of the pinned provider over records digesting to the
+  // pin's records digest, and the re-run output replaces the caller-asserted
+  // section. Without runtime coverage the section cannot be reproduced and
+  // evaluation refuses (fail closed, including the file path).
+  const effectiveProviders: Record<string, ProviderMetrics> = { ...metrics.providers };
+  for (const pin of binding.spec.metricProviders) {
+    const pinnedCode = (pin as { codeDigest?: unknown }).codeDigest;
+    if (typeof pinnedCode !== 'string') continue;
+    const pinnedRecords = (pin as { recordsDigest?: unknown }).recordsDigest as Sha256Digest;
+    const snapshot = runtimeById.get(pin.id) ?? fail(`metric provider ${pin.id} requires an isolated re-run`
+      + ' over its pinned records: caller-asserted metrics cannot reproduce provider output');
+    const records = input.providerRuntime?.records[pin.id] ?? fail(`metric provider ${pin.id} requires an isolated re-run`
+      + ' over its pinned records: caller-asserted metrics cannot reproduce provider output');
+    const registered = gateProvidersOf(registry).get(pin.id) as {
+      version: string; sourceDigest: Sha256Digest; codeDigest?: unknown;
+    };
+    if (registered.version !== pin.version || registered.sourceDigest !== pin.sourceDigest
+      || (registered.codeDigest as unknown) !== pinnedCode
+      || snapshot.version !== pin.version || snapshot.sourceDigest !== pin.sourceDigest
+      || snapshot.codeDigest !== pinnedCode) {
+      fail(`metric provider pin mismatch for ${pin.id}`);
+    }
+    if (!Array.isArray(records)) fail(`metric provider ${pin.id} records must be an array`);
+    const actualRecordsDigest = digestRecordsOrFail(records, pin.id);
+    if (actualRecordsDigest !== pinnedRecords) {
+      fail(`metric provider ${pin.id} records do not match the pinned records digest`);
+    }
+    const recordsJson = serializeRecordsOrFail(records, pin.id);
+    const reproduced = rerunProviderOrFail(registered as unknown as { id: string }, {
+      recordsJson, clockMs: nowMs, seed: deriveIsolatedSeed(pinnedCode, pinnedRecords),
+      timeoutMs: input.providerRuntime?.timeoutMs ?? GATE_PROVIDER_DEFAULT_TIMEOUT_MS,
+      codeDigest: pinnedCode as Sha256Digest,
+    }, pin.id);
+    try {
+      effectiveProviders[pin.id] = sealProviderSection(
+        registered as { id: string; version: string; sourceDigest: Sha256Digest; codeDigest: Sha256Digest },
+        records, reproduced as { metrics: unknown });
+    } catch (error) {
+      fail(`metric provider ${pin.id} re-run failed: ${error instanceof Error ? error.message : 'unknown'}`);
+    }
+  }
+  const effectiveMetrics: GateMetricsDocument = { ...metrics, providers: effectiveProviders };
   const gateEvidence: GateEvidence[] = [];
   for (const pack of packs) {
     for (const gate of pack.resolved.spec.gates) {
       const kind = metricKindOf(gate, pack);
-      const series = seriesFor(gate, pack, metrics);
+      const series = seriesFor(gate, pack, effectiveMetrics);
       const targets = gate.kind === 'upstream-ceiling' || gate.kind === 'predicate'
         ? [{ slice: null as string | null, observation: null }]
         : expandScope(gate, kind, series, binding.spec.slices);
@@ -522,7 +670,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
       }
       for (const target of targets) {
         const evaluation = evaluateObservation(gate, target.observation,
-          { packId: pack.authored.metadata.id, parameters, metrics, upstream, nowMs,
+          { packId: pack.authored.metadata.id, parameters, metrics: effectiveMetrics, upstream, nowMs,
             slice: target.slice, slices: binding.spec.slices });
         // Upstream-ceiling gates mirror the upstream verdict exactly: compromise
         // rolls back, allowlist problems hold, clean promotes. The gate's own
@@ -557,11 +705,14 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     packs: packs.map(pack => ({ id: pack.authored.metadata.id, version: pack.authored.metadata.version,
       digest: pack.digest, resolvedDigest: pack.resolvedDigest })),
     metricProviders: binding.spec.metricProviders.map(pin => ({ ...pin })),
-    metricsDigest: artifactDigest(metrics),
+    metricsDigest: artifactDigest(effectiveMetrics),
+    floors: input.floors === 'none-explicit-opt-out'
+      ? { mode: 'opt-out' as const }
+      : { mode: 'applied' as const, digest: artifactDigest(input.floors) as Sha256Digest },
     holdout: { digest: sealed.digest as Sha256Digest, frozenDigest, firstAccessedAt },
     gateEvidence,
     references: binding.spec.references.map(reference => ({
-      name: reference.name, kind: reference.kind, observed: metrics.references?.[reference.name] !== undefined,
+      name: reference.name, kind: reference.kind, observed: effectiveMetrics.references?.[reference.name] !== undefined,
     })),
     upstream: upstream === null ? null : {
       decision: upstreamCeiling,
@@ -571,6 +722,7 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     ceilings: { packOutcome, upstreamCeiling, bindingCeiling },
     decision,
     evaluatedAt: now,
+    ...(input.attestation === undefined ? {} : { attestation: input.attestation }),
   };
   return { ...body, digest: artifactDigest(body) };
 }
