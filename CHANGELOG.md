@@ -181,6 +181,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Pin experimental, default-off D25 issue-triage held-out scoring to preregistered
+  calibration evidence: the evaluation manifest now freezes the calibration registry
+  and compatibility policy digests plus a per-sample request rule (requested alias,
+  sample-bound runId, calibration artifact, not-before instant), and the report
+  builder rejects swapped registry, policy or request inputs before scoring.
+  Manifests without a pin still score without a registry; live Jev evidence and
+  held-out labels remain pending (#2794).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 
