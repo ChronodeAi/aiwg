@@ -147,19 +147,28 @@ describe('D17 synthetic corpus and frozen preparation', () => {
     expect(dryRun.worstCase.reservedUsd).toBeLessThan(dryRun.approvalCeilings.usd * dryRun.stopFraction);
   });
   it('runs source-only offline planning with zero provider calls and no build', () => {
-    const child = spawnSync(process.execPath, ['tools/decision/d17-study.mjs', '--dry-run', 'd17-2611-v1'],
-      { cwd: process.cwd(), encoding: 'utf8', timeout: 60000, env: { ...process.env, AIWG_DECISION_HELDOUT_LIVE: '0' } });
-    expect(child.status, child.stderr).toBe(0);
-    const report = JSON.parse(child.stdout);
+    const dryRun = () => {
+      const child = spawnSync(process.execPath, ['tools/decision/d17-study.mjs', '--dry-run', 'd17-2611-v1'],
+        { cwd: process.cwd(), encoding: 'utf8', timeout: 60000, env: { ...process.env, AIWG_DECISION_HELDOUT_LIVE: '0' } });
+      expect(child.status, child.stderr).toBe(0);
+      return JSON.parse(child.stdout);
+    };
+    const report = dryRun();
     expect(report.providerCalls).toBe(0);
     expect(report.worstCase.attempts).toBe(14400);
     expect(report.maximumRequestEstimateTokens).toBeGreaterThan(0);
     expect(report.maximumRequestEstimateTokens).toBe(1179);
+    // Data pins are fixed: the corpus, frozen splits and gold do not depend on source bytes.
     expect(report.corpusDigest).toBe('sha256:7ff191dc38ad71663f7c65cbb61453cdb997d9a0412370f93ac6aec9b704d804');
-    expect(report.preregistrationDigest).toBe('sha256:2292382403d9f43f2d33811777d55ed71b628b58c8915e93abef9908513192ec');
-    expect(report.approvalTemplateDigest).toBe('sha256:6b80128671ce397136e2bb857776a2f371130bb5db00915d2913b291dd010624');
-    expect(report.analysisDigest).toBe('sha256:0adf0828d6bf93c598110938b77aca86cda21b72912cb5722637ab7529616187');
     expect(report.splitManifestDigest).toBe('sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f');
     expect(report.goldDigest).toBe('sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db');
-  }, 65000);
+    // Preregistration, approval template and analysis embed the digest of every source byte the
+    // study runs, so they move with any shared decision-source change. They are pinned at approval
+    // time against the exact source commit; here they must be well-formed and reproducible.
+    const again = dryRun();
+    for (const key of ['preregistrationDigest', 'approvalTemplateDigest', 'analysisDigest']) {
+      expect(report[key]).toMatch(/^sha256:[a-f0-9]{64}$/);
+      expect(again[key]).toBe(report[key]);
+    }
+  }, 125000);
 });
