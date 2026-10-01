@@ -473,10 +473,25 @@ export function evaluateGates(input: EvaluateGatesInput): GateReport {
     }
   }
   // Every metric section consumed must be pinned; an unpinned section is
-  // refused rather than evaluated. Null version/digests never match.
+  // refused rather than evaluated. Null version/digests never match. Bundle
+  // sections (#2831) additionally carry the trusted code digest and the
+  // input-records digest sealed by the host: the section code digest must
+  // match the binding pin (verified above against the loaded provider), never
+  // a provider-declared field on its own.
   for (const pin of binding.spec.metricProviders) {
     const section = metrics.providers[pin.id];
     if (section === undefined || section.version !== pin.version || section.sourceDigest !== pin.sourceDigest) {
+      fail(`metric provider pin mismatch for ${pin.id}`);
+    }
+    const pinnedCode = (pin as { codeDigest?: unknown }).codeDigest;
+    const sectionCode = (section as { codeDigest?: unknown }).codeDigest;
+    const sectionRecords = (section as { recordsDigest?: unknown }).recordsDigest;
+    if (typeof pinnedCode === 'string') {
+      if (sectionCode !== pinnedCode) fail(`metric provider pin mismatch for ${pin.id}`);
+      if (typeof sectionRecords !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(sectionRecords)) {
+        fail(`metric provider pin mismatch for ${pin.id}`);
+      }
+    } else if (sectionCode !== undefined) {
       fail(`metric provider pin mismatch for ${pin.id}`);
     }
   }

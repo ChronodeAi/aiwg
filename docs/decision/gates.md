@@ -18,6 +18,16 @@ are numerically identical to the pre-move implementations.
   `extends` monotone-tightening proofs and binding resolution (`registry.ts`),
   a pure deterministic evaluator (`evaluate.ts`), digest-bound report
   validation (`report.ts`) and four core metric providers (`providers/`).
+- `src/gates/providers/loader.ts` (#2831, experimental default-off):
+  addon/extension bundle providers declared in the bundle manifest
+  (`gateProviders`, Zod in `src/extensions/manifest.ts`), loaded only through
+  the gates registry from bundle-relative `.mjs` paths. The loader pins
+  provider CODE (module bytes plus resolved local imports, bare externals by
+  bundle lockfile integrity), verifies a mandatory review attestation, seals
+  metric sections with the trusted code and records digests, and invokes
+  providers with a reserve-before-dispatch timeout. See
+  [bundle providers](gate-providers.md). The fixture extension
+  `test/fixtures/gates-example-extension/` ships one reviewed example.
 - `src/gates/stats/`: the statistics moved out of
   `src/decision/qualification/quality.ts` (Wilson, Newcombe-10/Tango, seeded
   percentile bootstrap, non-inferiority, frozen-split helpers) plus the new
@@ -288,3 +298,14 @@ shipped integrity-ceiling pack plus the `coverage-floor` conformance fixture
 pack (`test/conformance/gates-v1/fixtures/`); live discovery ranking against
 a full index is not asserted. No live criterion is met; the harness above is
 what those phases build on.
+
+there is no CLI (`aiwg gates`, #2830) and no study migrates to bindings
+(#2833+). Addon/extension provider loading (#2831) is implemented as an
+experimental default-off offline harness (code digests, mandatory review,
+sealed sections, timeouts); live provider qualification, real held-out
+provider data, human review sign-off beyond the fixture attestation and
+production rollout remain pending. Project floors in `aiwg.config` (#2832)
+are implemented as a trusted registry/evaluator input with the default
+integrity-ceiling floor, but no shipped floor pack exists yet and no study
+resolves with floors. No live criterion is met; the harness above is what
+those phases build on.

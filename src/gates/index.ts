@@ -7,7 +7,7 @@ export { GATES_API_VERSION, qualifyGateParameter } from './types.js';
 export type {
   ArtifactPinLike, GateBinding, GateDefinition, GateEvidence, GateFailOutcome, GateHoldoutInputs,
   GateHoldoutRecord, GateKind, GateMetadata, GateMetricsDocument, GateOutcome, GatePack, GatePackPin, GateParameter,
-  GateParentPin, GateReference, GateReport, GateScope, GateScopeMode,
+  GateParentPin, GateProviderPin, GateReference, GateReport, GateScope, GateScopeMode,
   GateStatistic, GateStatus, GateThreshold, MetricKind, MetricObservation, MetricSeries, ParameterType,
   ProviderMetrics, ReferenceKind, Sha256Digest, StatisticEvidenceMethod, StatisticKind, StatisticMethod,
   TighteningDirection, UpstreamCeiling, UpstreamRecord,
@@ -44,3 +44,9 @@ export {
   showGatePack, packsReferencedByRule,
 } from './driver.js';
 export type { GatesDriverOptions, GateValidateKind, GateValidateResult, GatesEvaluateFiles, GatePackSummary, ShippedRootTrust } from './driver.js';
+export {
+  GateProviderError, computeProviderCodeDigest, loadGateBundleProviders, invokeBundleProvider, sealProviderSection,
+  isBundleProvidersEnabled, GATE_PROVIDER_MAX_FILE_BYTES, GATE_PROVIDER_MAX_FILES, GATE_PROVIDER_MAX_TOTAL_BYTES,
+  GATE_PROVIDER_DEFAULT_TIMEOUT_MS, GATE_PROVIDER_MAX_TIMEOUT_MS, GATE_PROVIDER_DEFAULT_MAX_RECORDS,
+} from './providers/loader.js';
+export type { BundleMetricProvider, BundleProviderOptions, ProviderCodeDigest, ProviderExternalPin, ProviderFileDigest } from './providers/loader.js';

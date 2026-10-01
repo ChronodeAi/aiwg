@@ -115,4 +115,11 @@ the offline `aiwg gates validate|evaluate|show|list` CLI; the bundled
 floors from `aiwg.config` `gates` (including the shipped default
 integrity-ceiling floor) are a required evaluator input; the opt-out is
 explicit and documented. There is no addon provider loading and no migrated
+
+digests with a versioned legacy mode. Project floors from `aiwg.config`
+`gates` (including the default integrity-ceiling floor) are enforced only
+when the caller passes them as trusted registry/evaluator input; without
+that input behavior is unchanged. Addon/extension [bundle
+providers](gate-providers.md) load only with an explicit opt-in and a
+verified code digest plus review attestation. There is no CLI and no migrated
 study; live criteria remain pending.
