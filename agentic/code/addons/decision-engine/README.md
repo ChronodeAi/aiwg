@@ -42,3 +42,22 @@ request fields fail closed.
 
 See [the operator guide](docs/operations.md) and the repository-level
 [decision specification](../../../../docs/decision/specification.md).
+
+## Offline comparative sensitivity replay
+
+The experimental D23 comparative replay runner is source-checkout-only and
+default-off. It reuses stored synthetic evidence with zero provider calls and
+exports a digest-bound HOLD report and 44-assessment operator review packet.
+See [comparative replay](../../../../docs/decision/comparative-replay.md) for the
+explicit command, passing diagnostic gates, exact artifacts and pending review.
+
+## Experimental D17 study
+
+The source-checkout [ensemble held-out study](../../../../docs/decision/ensemble-heldout-study.md)
+prepares a seeded synthetic corpus, frozen splits, priced approval template and
+88-assessment review form without a build or provider calls. It reuses the
+shared collector and native ensemble/statistical helpers. Collection requires
+separate operator approval in `uncalibrated-diagnostic` mode; no calibration
+artifact or fixture digest is accepted. Reports explicitly disclaim D09
+qualification and calibrated gates. Calibration, live measurements and human
+review remain pending. The study is default-off and cannot promote a model.

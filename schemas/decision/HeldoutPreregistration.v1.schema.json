@@ -101,6 +101,18 @@
       "maximum": 64000,
       "default": 512
     },
+    "regeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "previousCorpusDigest", "previousPreregistrationDigest", "previousApprovalTemplateDigest", "liveObservationsAtRegeneration"],
+      "properties": {
+        "reason": { "type": "string", "minLength": 1 },
+        "previousCorpusDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "previousPreregistrationDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "previousApprovalTemplateDigest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "liveObservationsAtRegeneration": { "const": false }
+      }
+    },
     "calibration": {
       "oneOf": [
         {
