@@ -78,6 +78,16 @@ const BUILTIN_PATTERNS: readonly CompiledPattern[] = [
     pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/g,
   },
   {
+    id: 'private-key',
+    // Bounded fallback for truncated input that never reaches an END marker.
+    // Only the header plus up to 100 complete base64 body lines are consumed,
+    // so following prose is preserved: a line extends the match only when the
+    // whole line is base64, an RFC 1421 header (e.g. `Proc-Type: 4,ENCRYPTED`,
+    // `DEK-Info: …`) or blank, so legacy encrypted bodies are still covered. Runs after the terminated pattern above, which
+    // already consumed every block that has an END marker.
+    pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----(?:[ \t]+[A-Za-z0-9+/=]{4,}[ \t]*(?=\r?\n|$))?(?:\r?\n(?:[ \t]*[A-Za-z0-9+/=]{4,}[ \t]*|[A-Za-z][A-Za-z0-9-]*:[^\r\n]*|[ \t]*)(?=\r?\n|$)){0,100}/g,
+  },
+  {
     id: 'authorization-header',
     pattern: /(\bAuthorization\s*:\s*)([^\r\n]+)/gi,
     preservePrefix: true,
@@ -116,7 +126,7 @@ const BUILTIN_PATTERNS: readonly CompiledPattern[] = [
   },
   {
     id: 'provider-token',
-    pattern: /\b(?:sk-(?:proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9._~+/=-]{6,}\b/g,
+    pattern: /\b(?:sk-(?:proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|xox[baprs]-|whsec_|glpat-|AKIA)[A-Za-z0-9._~+/=-]{6,}\b/g,
   },
   {
     id: 'bearer-token',
@@ -226,7 +236,7 @@ function decodedSecretClass(value: string): string | null {
     if (!decoded || decoded.includes('\uFFFD')) return null;
     if (/-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/.test(decoded)) return 'encoded-private-key';
     if (/(?:api[_-]?key|token|password|passwd|secret|authorization)\s*[:=]/i.test(decoded)) return 'encoded-secret';
-    if (/(?:sk-(?:proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|xox[baprs]-|AKIA)[A-Za-z0-9._~+/=-]{6,}/.test(decoded)) return 'encoded-secret';
+    if (/(?:sk-(?:proj-)?|[sr]k_(?:live|test)_|gh[pousr]_|github_pat_|xox[baprs]-|whsec_|glpat-|AKIA)[A-Za-z0-9._~+/=-]{6,}/.test(decoded)) return 'encoded-secret';
     return null;
   } catch {
     return null;
