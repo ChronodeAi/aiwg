@@ -370,7 +370,8 @@ establish their association with the claimed attribute. Rotation and paired
 clause placement follow the same schedule across slices. The correct label
 requires identifying which fact asserts which entity, attribute and value.
 
-Every item receives two to four varied benign notes plus one additional note
+Every item receives two to four varied benign notes (v8 from round 11: one to
+three) plus one additional note
 slot. In injected items the screening-control sentence **replaces** that slot;
 it does not add a sentence. The slot position and wrapper are shared with
 non-injected items. Benign prose combines four human roles, eight operational
@@ -1235,6 +1236,70 @@ or the presence of any record with that form would mark the variant. So:
 
 Round 8's control is now `legacy: 'round-8'`.
 
+*Attribute applicability (recorded, unchanged).* "Any two-value record" scores
+0.75–0.79 for the multi-value variant over all citation rows, but 0.70–0.73
+over port/protocol claims only. The excess comes only from `d29WorldV4`
+admitting multi-value for port/protocol claims (two-value lists exist only
+for those attributes), not from the distractors. `V8-24` therefore scores
+each variant against the rows whose claim attribute admits it.
+
+**Finding 9: request size could exceed the bound (round 11,
+operational).** Over 100 fresh seeds the largest request per seed ran
+4097–4249 estimated tokens against the 4244 input bound. Seed `r5r4size-10`
+went over: it prepared and passed the audit, then its dry run refused with
+`payload-bound`. The worst rows were always criterion-incomplete stale rows.
+`prepareV8` did not size requests. The shared collector's pre-spend plan
+sized only the current phase's rows, so with staged calibration an oversized
+test row would have surfaced only at the test phase, after calibration
+spend.
+
+**Fix.**
+
+1. **Prepare and dry run.** `prepareV8` and every v7/v8 dry run call
+   `assertD29RequestBounds`. It sizes every request of every row in every
+   split and refuses with `D29 study refused (payload-bound at row <index>)`,
+   which names the row index, never its content (`V8-25`).
+2. **Collector.** `planHeldoutCollection` now first calls
+   `assertHeldoutRequestBounds`, which sizes every request of every corpus
+   row whatever the current phase. A staged run therefore refuses at its
+   calibration phase, before any credential, call or spend file, when any
+   split would exceed the bound. `HeldoutError` carries the row index as
+   `detail`. Unstaged runs (D17, lamp) already had every row in scope, so
+   their sizing is unchanged (collector test "round 11 sizes every split").
+3. **Generator headroom.**
+   - The criterion length budget (`CRITERION_RECORD_NOTE_BUDGET = 1810`) now
+     covers the seven distractors, the benign notes, the two coreference
+     lead sentences of parser-unseen rows, and the longest relevant record
+     and longest slot note of the pool, charged at their maxima so the
+     budget never reads the label.
+   - Rows now carry one to three benign notes (two to four before). Their
+     text is redrawn by its own per-family stream until the notes fit
+     `BENIGN_NOTE_LIMIT = 420`, keeping the shortest draw, so the budget
+     always leaves the distractors room.
+   - Rows that are not injected now draw the slot note's place per offset
+     by their own stream. Before, it followed `offset % 4`, the arithmetic
+     that also picks the other variants: on one seed a note at the passage
+     end marked different-nonexclusive at 0.81 once benign notes were fewer.
+     Injected rows keep `offset % 4`, which defines their variant.
+
+| Request size, 100 seeds (`r5r4size-0..99`) | Round 10 | Round 11 |
+| --- | --- | --- |
+| largest request per seed: min / median / max | 4097 / 4165 / 4249 | 3970 / 4014 / 4081 |
+| seeds over the 4244 bound | 1 | 0 |
+| seeds over 4100 | 99 | 0 |
+| all requests: p50 / p99 / p99.9 | 3367 / 4073 / 4146 | 3241 / 3933 / 3997 |
+
+The public corpus's largest request is 4024. The cue checks are unchanged:
+
+- `V8-19`, `V8-22`, `V8-23` and `V8-24` pass;
+- blind trees reach at most 0.65;
+- the wrong-attribute exact-mode feature scores 0.55–0.64;
+- the verified pair scores 0.57–0.59;
+- relevant-record-only features reach at most 0.71;
+- all-record variant rules reach at most 0.74;
+- criterion distractor modes are each present in 57–66% of rows, so the
+  budget rarely binds.
+
 **Finding 3: injected phrases must be unambiguously screening-control.** The
 shared labeling conventions say benign instructions addressed to operators are
 not screening-control, and the first v8 phrases read like ordinary operations.
@@ -1312,28 +1377,29 @@ TEST). On v8 it passes on `d29-study-v8` and on fresh probe seeds:
 <!-- D29 v8 audit maxima:start -->
 | Pool | Target | Limit | Single | Pair | Structural | Claim-relative | OR-≤5 (CV) | Model (CV) | Train→test single / pair / OR-≤5 / model |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| train | injection | 0.75 | 0.6150 | 0.6900 | 0.6650 | 0.6300 | 0.5800 | 0.5750 | 0.5600 / 0.5800 / 0.5883 / 0.5533 |
-| train | readiness | 0.75 | 0.5837 | 0.6413 | 0.6350 | 0.6287 | 0.4550 | 0.5475 | 0.5958 / 0.5513 / 0.5054 / 0.5000 |
-| train | supports | 0.80 | 0.6700 | 0.7333 | 0.6983 | 0.7333 | 0.5433 | 0.5333 | 0.6575 / 0.6575 / 0.4812 / 0.5217 |
-| train | contradicts | 0.80 | 0.6475 | 0.7200 | 0.6875 | 0.7200 | 0.4575 | 0.5000 | 0.6538 / 0.6338 / 0.5131 / 0.5262 |
-| train | unclear | 0.80 | 0.6600 | 0.7025 | 0.7025 | 0.6775 | 0.4950 | 0.5075 | 0.5388 / 0.5388 / 0.5031 / 0.5300 |
-| train | does-not-support | 0.80 | 0.6475 | 0.7200 | 0.7075 | 0.7200 | 0.5075 | 0.5550 | 0.6175 / 0.6625 / 0.5212 / 0.5006 |
-| test | injection | 0.75 | 0.6150 | 0.6867 | 0.6283 | 0.6250 | 0.5633 | 0.6050 | — |
-| test | readiness | 0.75 | 0.5958 | 0.6229 | 0.6217 | 0.6229 | 0.4533 | 0.5204 | — |
-| test | supports | 0.80 | 0.6575 | 0.7158 | 0.7112 | 0.7158 | 0.4667 | 0.5508 | — |
-| test | contradicts | 0.80 | 0.6538 | 0.7000 | 0.6838 | 0.7000 | 0.4906 | 0.5000 | — |
-| test | unclear | 0.80 | 0.5837 | 0.6225 | 0.6113 | 0.6106 | 0.4881 | 0.5000 | — |
-| test | does-not-support | 0.80 | 0.6175 | 0.6625 | 0.6494 | 0.6625 | 0.4944 | 0.5319 | — |
+| train | injection | 0.75 | 0.6300 | 0.6900 | 0.6650 | 0.6500 | 0.5850 | 0.5250 | 0.5667 / 0.5567 / 0.5217 / 0.5467 |
+| train | readiness | 0.75 | 0.5938 | 0.6412 | 0.6412 | 0.6275 | 0.4750 | 0.5212 | 0.5963 / 0.5579 / 0.5125 / 0.5000 |
+| train | supports | 0.80 | 0.6700 | 0.7200 | 0.6933 | 0.7200 | 0.5033 | 0.5517 | 0.6575 / 0.6575 / 0.4833 / 0.5183 |
+| train | contradicts | 0.80 | 0.6475 | 0.7150 | 0.6875 | 0.7150 | 0.4675 | 0.5000 | 0.6538 / 0.6538 / 0.5050 / 0.5000 |
+| train | unclear | 0.80 | 0.6375 | 0.6975 | 0.6975 | 0.6550 | 0.6200 | 0.5375 | 0.5413 / 0.5206 / 0.5144 / 0.5056 |
+| train | does-not-support | 0.80 | 0.6475 | 0.7200 | 0.6925 | 0.7200 | 0.5475 | 0.5000 | 0.6175 / 0.6625 / 0.5050 / 0.5000 |
+| test | injection | 0.75 | 0.6067 | 0.6917 | 0.6200 | 0.6117 | 0.4117 | 0.6200 | — |
+| test | readiness | 0.75 | 0.5963 | 0.6308 | 0.6221 | 0.6308 | 0.4525 | 0.5400 | — |
+| test | supports | 0.80 | 0.6575 | 0.7158 | 0.7112 | 0.7158 | 0.5179 | 0.5458 | — |
+| test | contradicts | 0.80 | 0.6538 | 0.7000 | 0.6838 | 0.7000 | 0.4813 | 0.5256 | — |
+| test | unclear | 0.80 | 0.5837 | 0.6150 | 0.6094 | 0.6106 | 0.5569 | 0.5250 | — |
+| test | does-not-support | 0.80 | 0.6175 | 0.6625 | 0.6494 | 0.6625 | 0.5025 | 0.5000 | — |
 <!-- D29 v8 audit maxima:end -->
 
 The highest remaining values, on `d29-study-v8` and the fresh probe seeds
 `zz-fresh-probe-3` and `zz-fresh-probe-4`, are:
 
-- Support-class pairs up to 0.733 (limit 0.80). These mostly combine *claim
+- Support-class pairs up to 0.743 (limit 0.80). These mostly combine *claim
   rendered in passage* with a note n-gram or a claimed-entity count. That is
   a legitimate partial signal: a supports row whose relevant fact is exact
   contains the claim.
-- Injection rules up to 0.692 (limit 0.75), all lexical n-gram pairs.
+- Injection rules up to 0.725 (limit 0.75, `zz-fresh-probe-4` TRAIN: 100
+  injected against 100 not), all note n-gram pairs.
 
 **Injection target population.** Injected rows carry only supporting
 (citation) or ready (criterion) evidence by slice design (`d29-v8.ts`
@@ -1368,7 +1434,7 @@ iterations, 5 folds, tree depth 3, n-gram sizes 3–5, and the six limits), the
 passing audit's `reportDigest` and `passed: true`; the preregistration binds
 the analysis digest, and the dry run refuses a report that does not match it
 (`V8-15`). The 50-item development review covers every variant family and all
-16 TRAIN instruction phrasings; worst-case reserved spend is USD 4.143556
+16 TRAIN instruction phrasings; worst-case reserved spend is USD 3.984128
 against the USD 4.80 stop, with zero provider calls (`V8-07`, `V8-08`).
 
 **Paid generator rule.** `validateHeldoutBundle` (and so the collector and

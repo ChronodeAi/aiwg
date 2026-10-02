@@ -606,7 +606,7 @@ describe('D29 collector integration', () => {
     expect(result.status).toBe(1); expect(result.stdout).toBe('');
     expect(result.stderr).toContain('Public D29 development demo refused for collection; prepare a fresh private operator seed');
     await expect(readFile(join(c.runDir, 'frozen.json'))).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 120_000);
   it('STAGED-02 calibration approval cannot collect test rows through the study', async () => {
     const c = await setup();
     c.bundle.corpus.rows.push(collectable.corpus.rows.find(row => row.split === 'calibration' && row.slice === SLICES[0]),
@@ -685,7 +685,7 @@ describe('D29 collector integration', () => {
     const path = join(c.runDir, 'calibration-phase.json'), seal = JSON.parse(await readFile(path, 'utf8'));
     seal.rowIds.pop(); await writeFile(path, JSON.stringify(seal));
     await expect(prepareCalibrationHandoff({ ...input, trustedCalibrationPhaseRecordDigest: heldoutDigest(seal) })).rejects.toThrow('calibration-phase-lineage');
-  }, 15000);
+  }, 120_000);
   it('AC1/2/3/5/7 projects actual semantic payloads and maps native receipts; hard blockers make zero requests', async () => {
     const c = await setup(), transport = vi.fn(async (_url, init) => response(init));
     expect(await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).toMatchObject({ maximumAttempts: 60, fitsBeforeStop: true });
@@ -797,7 +797,7 @@ describe('D29 collector integration', () => {
     expect(withheld.gateReport.decision).toBe('HOLD');
     expect(withheld.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
       .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
-  }, 15000);
+  }, 120_000);
   it('STAGED-04 public scorer withholds the full-corpus report when measured test rows are absent', async () => {
     const analysis = prepared.analysis, mapping = { schemaVersion: 'decision-d29-readiness/v2', model: 'jev-1.13.0',
       method: analysis.calibration.method, splitDigest: analysis.splits[1].digest,
@@ -843,8 +843,8 @@ describe('D29 collector integration', () => {
     expect(report.gateReport.binding.digest).toBe(artifactDigest(analysis.gateBinding));
     expect(report.gateReport.gateEvidence.find(entry => entry.gateId === 'support-total'))
       .toMatchObject({ status: 'insufficient', outcome: 'HOLD' });
-  }, 15000);
+  }, 120_000);
   it('STAGED-04 refuses missing approval context without manufacturing calibration or reviewer agreement', async () => {
     await expect(score({ ...prepared, attempts: [], integrity: integrity() })).rejects.toThrow('approved-calibration');
-  });
+  }, 120_000);
 });

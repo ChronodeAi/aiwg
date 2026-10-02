@@ -41,13 +41,14 @@ const D29_PUBLIC_DEMO_CORPORA = new Set([
   'sha256:4635395bac1c4efc036729879a831d8fd827b8b00d5b3e704b614135123c6549',
   'sha256:c4a0f5d2a4000091cb435e75a3caca48ae0f4478b03f24a619132ce8bec260de',
   // Generator d29-synthetic/v8 public development corpus (seed d29-study-v8); refused preemptively.
-  'sha256:e77e5a24d76cb0ae84978e94edef15f99a0c4f4fb18df66c05028311101bbbfb',
+  'sha256:820bee0823532ac6e658f973c2131f7f40604823d89c95f11a8717025370d86f',
 ]);
 const limits = { ...DEFAULT_ENTRY_LIMITS, serializedBytes: 32_000_000, properties: 1_000_000,
   arrayLength: 20000, entries: 2_000_000, memoryBytes: 256_000_000 };
 const validators = new Map<string, ValidateFunction>();
 export class HeldoutError extends Error {
-  constructor(readonly category: string) { super(`Held-out collector refused (${category})`); }
+  /** `detail` names where (for example a corpus row index), never row content. */
+  constructor(readonly category: string, readonly detail?: string) { super(`Held-out collector refused (${category})${detail ? ` at ${detail}` : ''}`); }
 }
 export function checkHeldoutSchema(kind: 'Corpus' | 'Preregistration' | 'Approval' | 'Attempt' | 'Event' | 'Summary' | 'Frozen' | 'Baseline' | 'SpendEvent' | 'SpendHead' | 'CalibrationPhase', value: unknown): void {
   admitEntry(value, limits);
@@ -182,6 +183,15 @@ export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregi
   if (!heldoutRowsInScope({ corpus, preregistration: plan, approval }).some(item => item.id === row.id && sha256(item) === sha256(row))) {
     throw new HeldoutError('calibration-phase-row');
   }
+  return heldoutRequestSize(corpus, plan, approval, row, request);
+}
+/**
+ * The request a row would send and its preregistered size bound, for any row
+ * of the corpus whatever the current phase. Only sizing and planning call it
+ * directly; dispatch goes through heldoutRequest, which also checks the phase.
+ */
+export async function heldoutRequestSize(corpus: HeldoutCorpus, plan: HeldoutPreregistration, approval: HeldoutApproval,
+  row: HeldoutRow, request: HeldoutRequest) {
   const execution = heldoutExecution(corpus, plan, approval, request);
   const projected = await projectDecisionState(row.input, execution.projection);
   const wire = { state: partitionProjectedState(projected.state, projected.evidence), model: approval.model,
@@ -193,8 +203,24 @@ export async function heldoutRequest(corpus: HeldoutCorpus, plan: HeldoutPreregi
   if (redactStructured(projected.state).sensitivity !== 'none') throw new HeldoutError('credential-material');
   return { execution, requestDigest: sha256(wire), requestBytes, estimatedTokens: inputTokenBound };
 }
+/**
+ * Sizes every request of every corpus row, in every split, against the
+ * preregistered per-request bound and refuses (`payload-bound`, naming the row
+ * index) before any provider call. A staged run therefore learns at its
+ * calibration phase, before any spend, that a later phase could not dispatch.
+ */
+export async function assertHeldoutRequestBounds(corpus: HeldoutCorpus, plan: HeldoutPreregistration, approval: HeldoutApproval) {
+  for (const [index, row] of corpus.rows.entries()) for (const request of row.requests) {
+    try { await heldoutRequestSize(corpus, plan, approval, row, request); }
+    catch (error) {
+      if (error instanceof HeldoutError && error.category === 'payload-bound') throw new HeldoutError('payload-bound', `row ${index}`);
+      throw error;
+    }
+  }
+}
 export async function planHeldoutCollection(bundle: HeldoutBundle, digest: string) {
   validateHeldoutBundle(bundle, digest);
+  await assertHeldoutRequestBounds(bundle.corpus, bundle.preregistration, bundle.approval);
   let maximumRequestEstimateTokens = 0, tokens = 0, usdMicros = 0;
   const rows = heldoutRowsInScope(bundle);
   for (const row of rows) for (const request of row.requests) {

@@ -754,6 +754,26 @@ describe('held-out calibration scope and two-phase approval', () => {
     expect(score.mock.calls[0][0].approvedCalibration).toEqual((c.bundle.approval as any).calibration);
     expect(report).toMatchObject({ calibrated: null, d09Qualified: false, calibratedGate: false, calibrationArtifactValidation: 'not-performed' });
   });
+  it('round 11 sizes every split at the calibration phase and refuses an oversized test row before any call', async () => {
+    const { heldoutRequestSize } = await import('../../../src/decision/heldout/contract.js');
+    const c = await scoped();
+    // A two-digit, "off" test row renders three bytes longer than the calibration-phase rows; set the bound between them.
+    c.bundle.corpus.rows[2] = generateHeldoutRow('heldout-lamp-splits/v1', 'fresh-example:11:single:test'); c.refresh();
+    const size = async (row: any) => (await heldoutRequestSize(c.bundle.corpus, c.bundle.preregistration, c.bundle.approval, row, row.requests[0])).estimatedTokens;
+    const calibrationMax = Math.max(await size(c.bundle.corpus.rows[0]), await size(c.bundle.corpus.rows[1]));
+    expect(await size(c.bundle.corpus.rows[2])).toBeGreaterThan(calibrationMax);
+    c.bundle.preregistration.perRequestTokenBound = calibrationMax + c.bundle.preregistration.outputAndHiddenTokenAllowance; c.refresh();
+    // The calibration-phase plan never dispatches the test row, yet sizes and refuses it, naming only its index.
+    await expect(planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval))).rejects.toThrow('payload-bound) at row 2');
+    const transport = fake();
+    const refusal = String(await c.run(transport).catch(error => error));
+    expect(refusal).toContain('payload-bound) at row 2'); expect(refusal).not.toContain('lamp');
+    expect(transport).not.toHaveBeenCalled(); expect(c.host.resolveCredential).not.toHaveBeenCalled();
+    expect(await readdir(c.root)).toEqual([]);
+    // Unstaged (D17 / lamp) runs: every row was already in scope, so sizing is unchanged and a fitting corpus still runs.
+    const d17 = await setup(2); const d17Transport = fake();
+    expect(await d17.run(d17Transport)).toMatchObject({ completedRows: 2 }); expect(d17Transport).toHaveBeenCalledTimes(2);
+  });
   it('AC1/2 dry-run estimates only declared phase rows and forbids test requests in calibration', async () => {
     const c = await scoped();
     const estimate = await planHeldoutCollection(c.bundle, heldoutDigest(c.bundle.approval));

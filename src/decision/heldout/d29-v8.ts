@@ -127,8 +127,15 @@ const CRITERION_LENGTH_SLACK = 120;
  */
 const CRITERION_MODE_WEIGHTS: Record<string, number> = { 'explicit-none': 6, partial: 6, planned: 4 };
 
-/** Characters the seven criterion distractors and the benign notes may use together (round 10). */
-const CRITERION_RECORD_NOTE_BUDGET = 1500;
+/**
+ * Characters the seven criterion distractors, the benign notes, the longest
+ * relevant record and the longest slot note may use together (round 11; round
+ * 10 charged only distractors and benign notes, at 1500).
+ */
+const CRITERION_RECORD_NOTE_BUDGET = 1810;
+
+/** Characters the benign operator notes may use together (round 11), so the criterion budget always leaves the distractors room. */
+const BENIGN_NOTE_LIMIT = 420;
 
 /** Distractor modes that may render as a paraphrase, and as a two-value list. */
 const PARAPHRASE_MODES = ['exact', 'scoped', 'temporal', 'tentative'];
@@ -211,11 +218,36 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
     return `${subject}, ${clauses[0]}, ${clauses[1]} ${when}.`;
   };
   // Benign note count: drawn per offset (round 10; before, 2 + offset % 3).
-  const benign = Array.from({ length: 2 + (legacy ? offset % 3 : layout(3)) }, (_, i) => {
-    const text = note(null), format = layout(5), placement = i ? layout(4) : 0;
-    return { text: annotation(i === 1 ? `The human runbook says '${text.slice(0, -1)}'.` : text, format), placement };
-  });
+  const wrap = (text: string, i: number, format: number) => annotation(i === 1 ? `The human runbook says '${text.slice(0, -1)}'.` : text, format);
+  let benign: { text: string; placement: number }[];
+  if (legacy) {
+    benign = Array.from({ length: 2 + offset % 3 }, (_, i) => {
+      const text = note(null), format = layout(5), placement = i ? layout(4) : 0;
+      return { text: wrap(text, i, format), placement };
+    });
+  } else {
+    // Round 11: layout (count, format, placement) first, then note text; text
+    // is redrawn (by its own per-family stream, never the label) until the
+    // benign notes fit BENIGN_NOTE_LIMIT, keeping the shortest draw.
+    const shape = Array.from({ length: 1 + layout(3) }, (_, i) => ({ format: layout(5), placement: i ? layout(4) : 0 }));
+    let best: { text: string; placement: number }[] | null = null;
+    for (let attempt = 0; attempt < 64; attempt++) {
+      const drawn = shape.map(({ format, placement }, i) => ({ text: wrap(note(null), i, format), placement }));
+      const size = drawn.reduce((n, item) => n + item.text.length, 0);
+      if (!best || size < best.reduce((n, item) => n + item.text.length, 0)) best = drawn;
+      if (size <= BENIGN_NOTE_LIMIT) break;
+    }
+    benign = best!;
+  }
   const benignLength = benign.reduce((n, item) => n + item.text.length, 0);
+  // Parser-unseen rows and their lead phrases are drawn per offset (round 10;
+  // before, offset % 2 and offset % 3), so they never follow the offset
+  // arithmetic that also picks the variant. Their two lead sentences are
+  // charged to the criterion length budget (round 11).
+  const unseenDraw = drawD29Stream(base.split, `v8:${seedKey}:unseen:${offset}`);
+  const unseen = !train && (legacy ? offset % 2 === 0 : unseenDraw(2) === 0);
+  const leadAt = legacy ? offset % 3 : unseenDraw(3);
+  const leadLength = unseen ? coreferenceLeads[leadAt].length + coreferenceLeads[(leadAt + 1) % 3].length + 2 * 30 : 0;
   // The distractor layer: seven records drawn from one distribution that never
   // reads the variant, the label or the relevant record (round-8 review). Its
   // role counts, values, modes and surface forms are the same in every slice,
@@ -263,8 +295,14 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   // notes together, so rows with short notes leave long modes more room and
   // the worst request stays below the round-9 worst. Before: the distractors
   // alone, every mode once less the longest plus CRITERION_LENGTH_SLACK.
+  // Headroom (round 11): the longest relevant record (the longest mode, with a
+  // full module identifier) and the longest slot note are charged at their
+  // maxima, so the budget stays label-independent while bounding the request.
+  const longest = (items: readonly string[]) => Math.max(...items.map(item => item.length));
+  const relevantLimit = Math.max(...lengths) + 19;
+  const slotNoteLimit = longest(pool.roles) + longest(pool.tasks) + longest([...pool.instructions, ...pool.counterparts]) + longest(pool.timings) + 15;
   const distractorBudget = citation ? Infinity : legacy ? lengths.reduce((a, b) => a + b, 0) - Math.max(...lengths) + CRITERION_LENGTH_SLACK
-    : CRITERION_RECORD_NOTE_BUDGET - benignLength;
+    : CRITERION_RECORD_NOTE_BUDGET - benignLength - leadLength - relevantLimit - slotNoteLimit;
   const claimSet: readonly string[] = citation ? attributes : criteria;
   const nonClaim = claimSet.filter(attribute => attribute !== world.claimAttribute);
   const claimedCount = 1 + layer(citation || legacyRelevantPlacement ? 3 : 4);
@@ -436,12 +474,6 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   // Test-pool parser-unseen rows render the relevant record by coreference and
   // one distractor too, chosen by its own draw among the non-anchor
   // distractors, independently of the variant.
-  // Parser-unseen rows and their lead phrases are drawn per offset (round 10;
-  // before, offset % 2 and offset % 3), so they never follow the offset
-  // arithmetic that also picks the variant.
-  const unseenDraw = drawD29Stream(base.split, `v8:${seedKey}:unseen:${offset}`);
-  const unseen = !train && (legacy ? offset % 2 === 0 : unseenDraw(2) === 0);
-  const leadAt = legacy ? offset % 3 : unseenDraw(3);
   const pronounOf = (record: typeof records[number]) => record.mode === 'paraphrase' || record.paraphrase ? 'that module' : 'It';
   const corefDistractor = unseen ? (() => {
     const candidates = distractors.filter(record => record !== anchor);
@@ -485,7 +517,12 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   // clause otherwise; both replace one benign task in the same template.
   const counterpart = pool.counterparts[content(pool.counterparts.length)];
   const slotText = note(world.injected ? pool.instructions[world.injectionPhrase!] : counterpart);
-  add(annotation(slotText, layout(5)), offset % 4);
+  // The slot note's place: the injection variants (context / prefix / middle /
+  // suffix) are defined by it, so injected rows keep offset % 4; every other
+  // row draws it per offset by its own stream (round 11), so it never follows
+  // the offset arithmetic that picks the other variants.
+  const slotPlacement = legacy || world.injected ? offset % 4 : drawD29Stream(base.split, `v8:${seedKey}:slot:${offset}`)(4);
+  add(annotation(slotText, layout(5)), slotPlacement);
   const frame = pool.framing[citation ? 'citation' : 'criterion'];
   const payload = citation ? { kind: world.kind, claim: `${fact(pool, train, world.claimModule, world.claimAttribute, world.claimValue, '', 'exact')}.`,
     source: `${frame}\n${passage.join(' ')}`, context: context.join(' ') }

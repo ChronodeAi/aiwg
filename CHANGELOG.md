@@ -63,7 +63,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   budget covers distractors and benign notes together; note count and
   parser-unseen rows no longer follow the row offset. New relevant-record-only
   and all-record variant scans (round-9 positive control). Gold labels are
-  unchanged. v6/v7 rows, gold and generator pins are unchanged (#2622)
+  unchanged. Request size is now refused at preparation and dry run when any
+  row in any split exceeds the per-request bound (naming the row index), the
+  shared held-out collector sizes every split before the first call of a
+  staged run, and the v8 criterion budget charges the longest relevant
+  record, slot note and coreference leads, with one to three length-limited
+  benign notes: the worst request over 100 seeds falls from 4249 to 4081
+  (bound 4244). v6/v7 rows, gold and generator pins are unchanged (#2622)
 
 - Experimental, default-off D29 v8 review fixes: the binding decides (any
   native fail/insufficient caps at HOLD; the carried native verdict is renamed

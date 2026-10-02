@@ -93,12 +93,12 @@ describe('D29 v8 operator-note templates', () => {
     const rows = worlds(d29WorldV8, D29_V8_SEED);
     expect(commaCue(rows)).toEqual({ train: { injected: 0, injectedRows: 100, benign: 0, benignRows: 400 },
       test: { injected: 0, injectedRows: 300, benign: 0, benignRows: 1200 } });
-    // Three to five notes, drawn per offset (round 10): every slice at one offset shares the count.
+    // Two to four notes, drawn per offset (round 10; round 11: one to three benign notes): every slice at one offset shares the count.
     const countAt = new Map();
     for (const row of rows) {
       const notes = notesOf(row.payload), pool = row.world.pool === 'train' ? D29_TRAIN_V8 : D29_TEST_V8;
-      expect(notes.length, row.id).toBeGreaterThanOrEqual(3);
-      expect(notes.length, row.id).toBeLessThanOrEqual(5);
+      expect(notes.length, row.id).toBeGreaterThanOrEqual(2);
+      expect(notes.length, row.id).toBeLessThanOrEqual(4);
       const at = `${row.split}:${row.familyId.split('-').at(-1)}`;
       if (countAt.has(at)) expect(notes.length, row.id).toBe(countAt.get(at)); else countAt.set(at, notes.length);
       for (const note of notes) expect((note.match(/,/g) ?? []).length, `${row.id}: ${note}`).toBe(1);
@@ -763,5 +763,29 @@ describe('D29 v8 review round 10', () => {
     const [worst] = allRecordVariantScores(now.rows.filter(row => row.world.artifactPresent && row.world.testPassed), now.parsed);
     expect(worst.score, worst.what).toBeLessThan(0.75);
   }, 600_000);
+});
+
+describe('D29 v8 review round 11', () => {
+  it('V8-25 refuses at prepare and dry run any corpus whose request in any split exceeds the bound, naming only the row index', async () => {
+    const { assertD29RequestBounds } = await import('../../../tools/decision/studies/d29.mjs');
+    const { heldoutRequestSize } = await import('../../../src/decision/heldout/contract.js');
+    await expect(assertD29RequestBounds(prepared)).resolves.toBeUndefined();
+    // Lower the bound to just below the largest test-split request: calibration-phase rows alone would pass.
+    const approval = { ...prepared.approval, region: 'fixture-region', credentialRef: 'openbao-approle.fixture.typesafe-jev' };
+    const sizes = [];
+    for (const [index, row] of prepared.corpus.rows.entries()) for (const request of row.requests) {
+      sizes.push({ index, split: row.split, tokens: (await heldoutRequestSize(prepared.corpus, prepared.preregistration, approval, row, request)).estimatedTokens });
+    }
+    const top = sizes.reduce((a, b) => (b.tokens > a.tokens ? b : a));
+    const shrunk = structuredClone(prepared);
+    shrunk.preregistration.perRequestTokenBound = top.tokens + shrunk.preregistration.outputAndHiddenTokenAllowance - 1;
+    const first = sizes.find(item => item.tokens > top.tokens - 1).index;
+    const refusal = String(await assertD29RequestBounds(shrunk).catch(error => error));
+    expect(refusal).toContain(`D29 study refused (payload-bound at row ${first})`);
+    expect(refusal).not.toContain('Module');
+    await expect(dryRun(shrunk)).rejects.toThrow(`payload-bound at row ${first}`);
+    // The public corpus keeps headroom: its largest request stays at or below 4100 of the 4244 input bound.
+    expect(top.tokens).toBeLessThanOrEqual(4100);
+  }, 300_000);
 });
 
