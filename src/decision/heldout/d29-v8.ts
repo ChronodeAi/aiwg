@@ -129,10 +129,11 @@ const CRITERION_MODE_WEIGHTS: Record<string, number> = { 'explicit-none': 6, par
 
 /**
  * Characters the seven criterion distractors, the benign notes, the longest
- * relevant record and the longest slot note may use together (round 11; round
+ * relevant record and the longest slot note may use together (round 15: 1795,
+ * since the referent phrases lengthen instructions; rounds 11-14: 1810; round
  * 10 charged only distractors and benign notes, at 1500).
  */
-const CRITERION_RECORD_NOTE_BUDGET = 1810;
+const CRITERION_RECORD_NOTE_BUDGET = 1795;
 
 /** Characters the benign operator notes may use together (round 11), so the criterion budget always leaves the distractors room. */
 const BENIGN_NOTE_LIMIT = 420;
@@ -304,7 +305,7 @@ export function d29WorldV8(seed: string, ordinal: number, { legacy }: { legacy?:
   const relevantLimit = Math.max(...lengths) + 19;
   const slotNoteLimit = longest(pool.roles) + longest(pool.tasks) + longest([...pool.instructions, ...pool.counterparts]) + longest(pool.timings) + 15;
   const distractorBudget = citation ? Infinity : prior ? lengths.reduce((a, b) => a + b, 0) - Math.max(...lengths) + CRITERION_LENGTH_SLACK
-    : CRITERION_RECORD_NOTE_BUDGET - benignLength - leadLength - relevantLimit - slotNoteLimit;
+    : (legacy === 'round-11' ? 1810 : CRITERION_RECORD_NOTE_BUDGET) - benignLength - leadLength - relevantLimit - slotNoteLimit;
   const claimSet: readonly string[] = citation ? attributes : criteria;
   const nonClaim = claimSet.filter(attribute => attribute !== world.claimAttribute);
   const claimedCount = 1 + layer(citation || legacyRelevantPlacement ? 3 : 4);

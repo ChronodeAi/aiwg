@@ -1,4 +1,4 @@
-import { D29_TRAIN_V8 as D29_TRAIN, D29_TEST_V8 as D29_TEST } from '../../../src/decision/heldout/d29-pools-v8.js';
+import { D29_TRAIN_V8 as D29_TRAIN, D29_TEST_V8 as D29_TEST, D29_V8_REFERENT_PHRASES } from '../../../src/decision/heldout/d29-pools-v8.js';
 
 /**
  * D29 shortcut audit v5 (generator v8 onward).
@@ -39,7 +39,21 @@ export const SHORTCUT_AUDIT_V8_PARAMETERS = Object.freeze({
   modelInjection: MODEL_LIMITS.injection, modelReadiness: MODEL_LIMITS.readiness, modelSupport: MODEL_LIMITS.supports,
   injectionPopulation: 'injected-or-otherwise-supporting-or-ready-evidence',
   injectionLexiconTransfer: Object.freeze({ ngramSizes: Object.freeze([2, 3]), minSupport: 5, limit: LIMITS.injection }),
+  labelDefiningPhrases: Object.freeze([...D29_V8_REFERENT_PHRASES]),
 });
+
+/**
+ * Operator-accepted label-defining phrases (round 15): the fixed referent
+ * phrases every instruction carries to name THIS screening. They are masked
+ * from every lexical feature (tokens, bigrams, character n-grams, the lexicon
+ * and model token sets) and from the pool-transfer lexicon; n-grams never span
+ * a masked phrase. Structural counts keep the full text.
+ */
+const REFERENT_MARK = '\u0000';
+const referentPattern = new RegExp(`\\b(?:${D29_V8_REFERENT_PHRASES.map(phrase => phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'gi');
+export function maskReferentsV8(text) { return text.replace(referentPattern, REFERENT_MARK); }
+const lexicalSegments = text => maskReferentsV8(text).split(REFERENT_MARK);
+const segmentTokens = text => lexicalSegments(text).map(tokenizeText);
 
 /**
  * Pool-transfer n-gram lexicon for the injection target (round 12). The v5
@@ -51,10 +65,12 @@ export const SHORTCUT_AUDIT_V8_PARAMETERS = Object.freeze({
  * population, then scores "any lexicon n-gram present" on the other pool by
  * balanced accuracy. `rows` carry `{ injected, text }`.
  */
-export function injectionNgramLexiconTransfer(learnRows, scoreRows, { ngramSizes = [2, 3], minSupport = 5 } = {}) {
+export function injectionNgramLexiconTransfer(learnRows, scoreRows, { ngramSizes = [2, 3], minSupport = 5, maskReferents = true } = {}) {
   const grams = text => {
-    const tokens = tokenize(text), out = new Set();
-    for (const n of ngramSizes) for (let i = 0; i + n <= tokens.length; i++) out.add(tokens.slice(i, i + n).join(' '));
+    const out = new Set();
+    for (const tokens of maskReferents ? segmentTokens(text) : [tokenizeText(text)]) {
+      for (const n of ngramSizes) for (let i = 0; i + n <= tokens.length; i++) out.add(tokens.slice(i, i + n).join(' '));
+    }
     return out;
   };
   const learn = learnRows.map(row => ({ injected: row.injected, grams: grams(row.text) }));
@@ -93,6 +109,7 @@ export function injectionPopulationV8(world, gold) {
 const sentencePattern = /[.!?](?=\s|$|[)\]]|-->)/g;
 const recordPattern = /\bModule\s+[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*/;
 const tokenize = text => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+function tokenizeText(text) { return text.toLowerCase().match(/[a-z0-9]+/g) ?? []; }
 const punctuation = [['commas', /,/g], ['semicolons', /;/g], ['colons', /:/g], ['quotes', /['"“”‘’]/g]];
 const count = (text, pattern) => (text.match(pattern) ?? []).length;
 const lexical = feature => /^(?:token|bigram|ngram):/.test(feature);
@@ -238,13 +255,16 @@ export function surfaceFeaturesV8(payload) {
     counts[`${kind}:chars:mean-bin-5`] = lengths.length ? Math.floor(lengths.reduce((a, b) => a + b, 0) / lengths.length / 5) : -1;
   }
   for (const [name, value] of Object.entries(noteGrammarCounts(payload, 'passage-and-context'))) counts[`v4:${name}`.replace(/^v4:claim:/, 'claim:')] = value;
-  const tokens = tokenize(text.all);
-  for (const token of tokens) grams.add(`token:${token}`);
-  for (let i = 1; i < tokens.length; i++) grams.add(`bigram:${tokens[i - 1]} ${tokens[i]}`);
+  for (const tokens of segmentTokens(text.all)) {
+    for (const token of tokens) grams.add(`token:${token}`);
+    for (let i = 1; i < tokens.length; i++) grams.add(`bigram:${tokens[i - 1]} ${tokens[i]}`);
+  }
   const gramFields = { claim: text.claim, passage: text.passage, context: text.context, note: notes.join('\n') };
   for (const [name, value] of Object.entries(gramFields)) {
-    const lower = value.toLowerCase();
-    for (const size of NGRAM_SIZES) for (let i = 0; i + size <= lower.length; i++) grams.add(`ngram:${name}:${lower.slice(i, i + size)}`);
+    for (const segment of lexicalSegments(value)) {
+      const lower = segment.toLowerCase();
+      for (const size of NGRAM_SIZES) for (let i = 0; i + size <= lower.length; i++) grams.add(`ngram:${name}:${lower.slice(i, i + size)}`);
+    }
   }
   return { counts, presence, grams };
 }
@@ -531,7 +551,7 @@ export function shortcutAuditV8(corpus, gold) {
   if (!pooled.train.length || !pooled.test.length) throw new Error('shortcut-audit-splits');
   const tokenSets = new Map();
   const tokensOf = row => {
-    if (!tokenSets.has(row.id)) tokenSets.set(row.id, new Set(tokenize(fields(row.payload).all)));
+    if (!tokenSets.has(row.id)) tokenSets.set(row.id, new Set(segmentTokens(fields(row.payload).all).flat()));
     return tokenSets.get(row.id);
   };
   const pools = [];
@@ -581,6 +601,7 @@ export function shortcutAuditV8(corpus, gold) {
     return { fromPool: from, toPool: to, ...result, limit: lexiconLimit, passed: result.balancedAccuracy < lexiconLimit };
   });
   return { schemaVersion: 'decision-d29-shortcut-audit/v5', pools, injectionPopulation: SHORTCUT_AUDIT_V8_PARAMETERS.injectionPopulation,
+    labelDefiningPhrases: [...SHORTCUT_AUDIT_V8_PARAMETERS.labelDefiningPhrases],
     pairFeatureLimit: PAIR_FEATURE_LIMIT, structuralPairLimit: STRUCTURAL_PAIR_LIMIT,
     pairSelection: 'strongest-distinct-bitsets-per-pool-and-target: structural-and-claim-relative-up-to-400-plus-lexical-up-to-200',
     lexiconSelection: 'greedy-or-up-to-5-over-supported-tokens-learned-on-training-folds',
