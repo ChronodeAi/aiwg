@@ -42,6 +42,10 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
     v1 diagnostic route still refuses promotion.
   - The shared `scoreHeldoutStudy` wrapper reports a staged scorer's validation
     of the exact approved binding; D29 output is unchanged.
+  - The calibration review's reviewer must be the approval's named reviewer and
+    is bound into the approved artifacts. The staged approval template carries
+    the operator-authorized 24,000-call / 96M-token budget (USD 8 unchanged),
+    which leaves 4,800 calls of headroom over the 14,400-call two-phase worst case.
 - Experimental, default-off D29 generator `d29-synthetic/v8` (public
   development seed `d29-study-v8`, refused for paid collection like v1–v7)
   fixes dataset leaks found on the public v7 seed and in review: injected

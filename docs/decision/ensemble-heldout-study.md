@@ -260,6 +260,11 @@ oracle. Any `goldAmbiguousOrIncorrect: true` refuses and requires a revised
 generator and a new holdout. Blind-test and repeat assessments must still be
 blank at that point.
 
+The calibration review's `reviewer` must be the reviewer the approval names, and
+it is bound into each approved artifact's approval reference, so the same
+reference and time under another reviewer produce a different calibration set
+and are refused.
+
 Approvals carry no timestamp. So ordering is proved by digest: the
 calibration-phase approval's `approvalReference` must cite the completed review
 digest. The review therefore existed before the approval that authorized any
@@ -306,15 +311,14 @@ At the current request sizes and the USD 0.10/1M reservation floor:
 | Test (1,200 rows) | 9,600 | 12,997,056 | 1.058248 |
 | Both | 14,400 | 19,490,904 | 1.587024 |
 
-On a fresh ledger with the 18,000-call / 72M-token / USD 8 budget, the
-allowance at the 80% stop is 14,400 calls, 57.6M tokens and USD 6.4. The
-combined worst case fits with **zero call headroom**, 38.1M tokens and USD 4.81
-to spare. Attesting the USD 0.099052 already spent on the retired diagnostic
-corpus as the study floor leaves USD 4.73.
+The staged approval template carries the operator-authorized budget of 24,000
+calls, 96M tokens and USD 8; the USD 8 study cap is unchanged. On a fresh ledger
+the allowance at the 80% stop is 19,200 calls, 76.8M tokens and USD 6.4.
 
-Any prior D17 calls in the same ledger push the call worst case over the
-allowance. More call headroom needs a larger approved call budget, an operator
-decision; it does not change the USD 8 cap.
+The combined worst case fits with **4,800 calls**, 57.3M tokens and USD 4.81 to
+spare. Attesting the USD 0.099052 already spent on the retired diagnostic corpus
+as the study floor leaves USD 4.73. The previous 18,000-call budget left zero
+call headroom.
 
 A test-phase bundle additionally needs the calibration context (calibration run,
 registered directory and calibration review). `--bundle` re-derives the set and
@@ -365,7 +369,7 @@ ledger (`.claude/worktrees/d17-live`) was written at the pre-D29 generator
 digest and is refused there (`corpus-provenance`). Keep it as evidence, and
 attest its spend as the new approval's floors: USD 0.099052 study, and the
 program's current portfolio total. Every approval repeats the original budget
-and floors.
+(24,000 calls, 96M tokens, USD 8 for the staged study) and floors.
 
 ```bash
 aiwg artifacts path --json --check-write
