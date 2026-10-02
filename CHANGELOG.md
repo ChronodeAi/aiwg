@@ -185,6 +185,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Fixed
 
+- Experimental, default-off TV-12 enforce canary now carries a reviewer-approved
+  per-call output-token ceiling (`perRequestBound.outputTokens`, at most the total
+  bound) and fails the canary on unknown or over-bound reported output, stopping
+  further dispatch. Jev exposes no request-level output cap, so enforcement is
+  after dispatch, fail-closed. Offline coverage only; live evidence remains
+  pending (#2799)
+- Consolidated the D10 and D12 Jev OpenBao credential resolvers into one shared
+  implementation in `tools/decision/jev-openbao-credential.mjs`, with
+  `tools/decision/openbao-kv-credential-resolver.mjs` delegating to it. Both
+  live-run paths keep their logical-reference and approval-pin checks, the D12
+  resolver file stays loadable through its digest-pinned import, and the TV-12
+  resolver is unchanged. Live qualification remains approval-gated and no live
+  run was performed (#2798)
+
 - Tightened the experimental, default-off gates core addendum: every scope
   transition now requires the child to cover a superset of the parent's
   slices under every slice universe (`listed -> each` must except none of
@@ -248,6 +262,13 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   runner timeout. The call is now bounded at 5 minutes, overridable with
   `AIWG_FORTEMI_PACK_TIMEOUT_MS` (a positive integer of milliseconds), and a
   timed-out pack fails the gate with an error naming the bound (#2802)
+
+- Documented the text-only scope of experimental, default-off D24 input
+  binding: numeric, boolean, and null values sit outside text-leaf binding and
+  are never compared against lineage text, while their object keys remain
+  text-bearing member positions that still need binding or
+  `nonLineagePointers` coverage. No runtime behavior changes (#2784)
+
 - Refreshed experimental, default-off D17 source dry-run pins after the shared
   acceptance threshold fix entered the source digest; the corpus and split/gold
   pins are unchanged. Live evidence and approval remain pending (#2611)
@@ -466,11 +487,34 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   coverage for the incomplete criterion. A possible-world regression covers
   every rendered template; the public `d29-study-v2` demo and manifest pins
   supersede the ambiguous v1 corpus before any live collection (#2622)
+
+- Experimental, default-off D26 context-pruning reports hold bounded
+  zero-variance reads at small n: a bounded quality metric whose per-pair
+  differences are all identical (a zero-width bootstrap interval) is
+  insufficient below the new preregistered `minimumZeroVarianceN`, even with
+  passing economics and integrity, while an adequate identical sample remains
+  eligible for PROMOTE. Ordinary decision behavior is unchanged (#2785)
+- The D24 preprocessing gate and the recorded `RulesetResult` now share one
+  immutable snapshot of the host-supplied lineage and verification, taken before
+  the result is constructed. Caller-owned mutation during evaluation can no
+  longer change the gate verdict or the recorded lineage; malformed lineage is
+  still refused without dispatch. Experimental, default-off (#2783)
+- Anchor experimental, default-off sensitivity probe subjects to canonical host
+  artifact content (`apiVersion`, `kind`, `spec`) instead of caller-chosen
+  artifact IDs: renaming an otherwise identical ruleset or binding shares the
+  existing subject budget, while a genuinely new version mints a distinct
+  subject only through a spec change. Ordinary decision behavior is unchanged (#2796)
 - Redact unterminated private-key blocks with a bounded fallback (header plus
   up to 100 complete base64 body lines, so following prose is preserved) and
   recognize standalone `whsec_` and `glpat-` provider tokens, including inside
   base64-encoded blobs. Terminated blocks and all other token classes are
   unchanged (#2793)
+- Experimental, default-off decision-assisted context pruning now preregisters
+  a minimum protected-item count (`minimumProtectedN`, at least 2) in
+  `ContextPruningPreregistration.v1`. Reports with fewer validated protected
+  receipts HOLD with `insufficient-protected-sample` and
+  `INSUFFICIENT EVIDENCE`, even at 100% retention; the shadow pilot is
+  unchanged and live held-out quality/economics evidence remains pending (#2786)
 
 - Bind experimental, default-off held-out collector baselines to the independent
   durable spend head. Changed or missing baselines fail before credential access
@@ -506,6 +550,31 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 - Native decision batches without durable receipts now record shared usage once
   in `RulesetResult.spec.batchRequests`. Answers reference their request and carry
   null usage, preventing duplicated token totals in exports and reports (#2745).
+- Reject the root pointer in decision `nonLineagePointers` as malformed host
+  verification (`unverified` review, nothing dispatched) instead of treating it
+  as covering every text-bearing input position. Scoped subtree declarations are
+  unchanged (#2795).
+- Caller cancellation during experimental, default-off routing dispatch now
+  records the `cancelled` terminal reason while keeping unknown-cost accounting
+  (null spend and usage) in the receipt; non-cancellation unknown-cost failures
+  still record `cost-unknown` (#2792).
+- The routing control drill reports an active-run-pin mismatch through
+  `RoutingControlDrillError` with the before and after pins beside the current
+  circuit, policy and rollback state, instead of a stateless contract error.
+  Successful drill behavior is unchanged (#2791).
+- The experimental, default-off D26 context-pruning evaluation report rejects a
+  `holdoutAccessedAt` attested after the evaluation clock beyond a five-minute
+  skew allowance (`CONTEXT_PRUNING_HOLDOUT_CLOCK_SKEW_MS`, injectable via
+  `evaluationNow` for deterministic tests), so a future timestamp can no longer
+  satisfy the preregistration ordering check. Ordinary decision behavior is
+  unchanged (#2787).
+- The experimental, default-off routing control drill re-reads policy history
+  when a policy restore throws, so a throw-after-install reports the installed
+  policy as inconsistent instead of the stale pre-restore state (#2790).
+- The experimental, default-off egress live qualification runner now requires
+  the `AIWG_DECISION_EGRESS_LIVE=1` opt-in inside `runEgressLiveQualification`
+  before credential or transport use; in-process live calls without it are
+  refused, while the synthetic offline-transport path needs no opt-in (#2801).
 - Pin experimental, default-off D25 issue-triage held-out scoring to preregistered
   calibration evidence: the evaluation manifest now freezes the calibration registry
   and compatibility policy digests plus a per-sample request rule (requested alias,
@@ -534,6 +603,20 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
   qualification evidence digests with a versioned legacy mode. There is no
   CLI, no project floor enforcement, no addon provider loading and no
   migrated study; live criteria remain pending (#2824)
+- The experimental, default-off D26 context pruning report records
+  `insufficient-quality-evidence:<metric>` for every remaining insufficient
+  quality decision at or above the overall minimum n, so it yields HOLD with
+  `INSUFFICIENT EVIDENCE` instead of omitting the decision from the findings (#2788).
+
+- Context-planned decision invocations preflight the worst-case completion result
+  envelope before dispatch: every evaluation is assumed to carry every usage
+  entry with the binding's full retry attempts and answer-domain distributions,
+  so a many-alias invocation whose per-evaluation plan clones cannot satisfy
+  entry admission now rejects with `invalid-input` before receipts, credentials
+  or transport instead of discarding completed provider work after dispatch.
+  Enforce invocations with 13–21 aliases now reject pre-dispatch (fail-closed).
+  The TV-12 enforce canary covers the 24-question `many-short` shape as
+  rejected-before-dispatch; fitting invocations are unchanged (#2797).
 
 ## [2026.9.24] - 2026-09-27 - "Deterministic dispatch cap test"
 

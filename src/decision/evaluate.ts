@@ -218,10 +218,15 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
     rulesetPin = artifactPin(request.ruleset);
     bindingPin = artifactPin(request.binding);
     // Pin and execute immutable snapshots; adapters receive separate per-attempt copies.
+    // D24 lineage and verification are host-supplied too: the gate and the recorded
+    // result share one snapshot, so caller-owned mutation during evaluation cannot
+    // change the verdict or the recorded lineage.
     request = {
       ...request,
       ruleset: structuredClone(request.ruleset), binding: structuredClone(request.binding),
       definitions: structuredClone(request.definitions), input: structuredClone(request.input),
+      preprocessingLineage: snapshotPreprocessingLineage(request.preprocessingLineage),
+      preprocessingVerification: snapshotPreprocessingVerification(request.preprocessingVerification),
     };
     base = resultBase(request, rulesetPin, bindingPin);
     validateBinding(request.binding, request.ruleset);
@@ -270,6 +275,14 @@ async function evaluateDecisionRulesetUngated(request: DecisionEvaluationRequest
     || batchPolicy.maxCostMicros < 0 || !batchPolicy.unknownCostBound
     || batchPolicy.unknownCostBound.upperBoundMicros > batchPolicy.maxCostMicros)) {
     return failureResult(base, 'budget-exhausted');
+  }
+  // #2797: a context-planned invocation clones the full plan into every evaluation, so the
+  // completed result can exceed entry admission after provider work. Preflight the worst-case
+  // completion envelope here — before receipts, credentials, admission control and transport —
+  // and reject without dispatch when no completion could be admissible.
+  if (contextPlan && !contextResultEnvelopeFits(contextPlan, resolved, request.binding)) {
+    const rejected = failureResult(base, 'invalid-input');
+    return { ...rejected, spec: { ...rejected.spec, contextFailure: { schemaVersion: 'decision-context-failure/v1' as const, reason: 'invalid-input' as const } } };
   }
 
   const fingerprint = decisionInvocationFingerprint({
@@ -988,6 +1001,40 @@ async function invokeWithDeadline(
 const projectionBlockedAutomaticAction = new WeakSet<DecisionEvaluationRequest>();
 
 /**
+ * D24 snapshot of host-supplied lineage. Uncloneable content cannot be well-formed
+ * lineage, so it is passed through for the gate to refuse exactly as before.
+ */
+function snapshotPreprocessingLineage(
+  lineage: DecisionEvaluationRequest['preprocessingLineage'],
+): DecisionEvaluationRequest['preprocessingLineage'] {
+  if (lineage === undefined) return undefined;
+  try {
+    return structuredClone(lineage);
+  } catch {
+    return lineage;
+  }
+}
+
+/**
+ * D24 snapshot of host-supplied verification. Manifests, lifecycle and bindings are
+ * data and snapshotted with the lineage; `now` is host code and carried by reference
+ * like the other request callbacks. Uncloneable data is passed through for the gate
+ * to judge.
+ */
+function snapshotPreprocessingVerification(
+  verification: DecisionEvaluationRequest['preprocessingVerification'],
+): DecisionEvaluationRequest['preprocessingVerification'] {
+  if (verification === undefined) return undefined;
+  const { now, ...rest } = verification;
+  try {
+    const snapshot = structuredClone(rest);
+    return now === undefined ? snapshot : { ...snapshot, now };
+  } catch {
+    return verification;
+  }
+}
+
+/**
  * D24 applies when lineage is supplied or the host supplied verification expecting lineage.
  * Requests with neither keep the text-native path unchanged.
  */
@@ -1391,6 +1438,139 @@ function contextPartitionedBatchPlans(
     }
   }
   return split;
+}
+
+/**
+ * Minimal binding surface the envelope bound reads: the invocation-wide attempt cap and each
+ * alias's target retry ceilings. A full DecisionBinding satisfies this shape; predictors that
+ * never touch credentials (such as the canary dispatcher) pass a mirror of the dispatch binding
+ * instead of inventing a credential reference.
+ */
+export interface ContextEnvelopeBinding {
+  readonly spec: {
+    readonly maxAttempts: number;
+    readonly evaluations: Readonly<Record<string, { readonly targets: ReadonlyArray<{
+      readonly adapter: string;
+      readonly adapterVersion: string;
+      readonly model: string;
+      readonly subagent?: ArtifactPin | undefined;
+      readonly retry: { readonly maxRetries: number };
+    }> }>>;
+  };
+}
+
+/**
+ * Pre-dispatch worst-case bound (#2797) on the completed result envelope of a context-planned
+ * invocation.
+ *
+ * Every evaluation carries one full clone of the context plan alongside the ruleset-level plan,
+ * so the envelope grows with the alias count even when the provider request fits. Usage is
+ * recorded cumulatively as evaluations complete — evaluation i carries i+1 usage entries — and
+ * entries are upserted by key, so retries add none; every evaluation carrying all n entries is
+ * therefore the true upper bound. Attempts are bounded per alias by the binding: no alias can
+ * record more than its targets' retries plus one, nor more than the invocation-wide maxAttempts.
+ * Each probe attempt carries the same evidence a real single dispatch records (requestIdSource
+ * and the single-dispatch batch object), and each probe distribution spans the definition's full
+ * answer domain. Entry admission is monotonic in every counted dimension, so a probe that cannot
+ * satisfy admission proves no completion of the invocation could either; the caller must then
+ * reject before receipts, credentials, admission control or transport instead of discarding
+ * completed provider work after dispatch. A fitting envelope still passes through writer-version
+ * admission when the completed result is written. Null, unknown or non-safe-integer counts fail
+ * closed.
+ */
+export function contextResultEnvelopeFits(
+  plan: ContextPlan,
+  items: ReadonlyArray<{ alias: string; definition: DecisionDefinition }>,
+  binding: ContextEnvelopeBinding,
+): boolean {
+  if (!binding || !Number.isSafeInteger(binding.spec?.maxAttempts) || binding.spec.maxAttempts < 1) return false;
+  for (const item of items) {
+    const configured = binding.spec.evaluations?.[item.alias];
+    if (!configured || !Array.isArray(configured.targets) || !configured.targets.length) return false;
+    let perAlias = 0;
+    for (const target of configured.targets) {
+      const maxRetries = target?.retry?.maxRetries;
+      if (!Number.isSafeInteger(maxRetries) || (maxRetries as number) < 0) return false;
+      perAlias += (maxRetries as number) + 1;
+    }
+    if (!Number.isSafeInteger(perAlias) || Math.min(binding.spec.maxAttempts, perAlias) < 1) return false;
+    if (contextResultEnvelopeDistributionKeys(item.definition).length === 0) return false;
+  }
+  try {
+    admitEntry(contextResultEnvelopeProbe(plan, items, binding));
+    return true;
+  } catch (error) {
+    if (error instanceof EntryAdmissionError) return false;
+    throw error;
+  }
+}
+
+/** Answer-domain keys of a definition, matching distribution validation support. */
+function contextResultEnvelopeDistributionKeys(definition: DecisionDefinition): string[] {
+  const answer = definition?.spec?.answer;
+  if (!answer) return [];
+  if (answer.kind === 'choice') return answer.options.map(option => option.id);
+  if (answer.kind === 'ordinal-score') return answer.levels.map((_, index) => String(index));
+  return ['false', 'true'];
+}
+
+function contextResultEnvelopeProbe(
+  plan: ContextPlan,
+  items: ReadonlyArray<{ alias: string; definition: DecisionDefinition }>,
+  binding: ContextEnvelopeBinding,
+): unknown {
+  const pin = (id: string): ArtifactPin => ({ id, version: '1.0.0', digest: `sha256:${'0'.repeat(64)}` });
+  const firstPartition = plan.partitions[0];
+  const usageFor = (alias: string): ContextActualUsageEvidence => firstPartition && firstPartition.questionIds.length
+    ? recordContextActualUsage(plan, firstPartition.id, 0, firstPartition.questionIds.includes(alias) ? alias : firstPartition.questionIds[0]!)
+    : { schemaVersion: 'decision-context-usage/v1', planDigest: plan.planDigest, partitionId: 'probe', questionIds: [alias],
+      estimator: { ...plan.estimator }, providerProfile: { id: plan.providerProfile.id, version: plan.providerProfile.version },
+      estimatedInputTokens: 0, actualInputTokens: 0, estimationErrorTokens: 0, estimationErrorBps: null };
+  // Worst case: every evaluation carries every usage entry (cumulative recording, upserted by key).
+  const usages = items.map(item => usageFor(item.alias));
+  const evaluations = Object.fromEntries(items.map(item => {
+    const configured = binding.spec.evaluations[item.alias]!;
+    const target = configured.targets[0]!;
+    const questionId = decisionBatchQuestionId(item.alias);
+    let perAlias = 0;
+    for (const candidate of configured.targets) perAlias += candidate.retry.maxRetries + 1;
+    const attemptCount = Math.min(binding.spec.maxAttempts, perAlias);
+    const keys = contextResultEnvelopeDistributionKeys(item.definition);
+    const peak = keys.reduce((longest, key) => key.length >= longest.length ? key : longest, keys[0]!);
+    const value = item.definition.spec.answer.kind === 'ordinal-score' ? Number(peak)
+      : item.definition.spec.answer.kind === 'choice' ? peak : peak === 'true';
+    const distribution = Object.fromEntries(keys.map(key => [key, key === peak ? 1 : 0]));
+    const attempts: DecisionAttempt[] = Array.from({ length: attemptCount }, (_, index) => ({
+      ordinal: index + 1, adapter: target.adapter, adapterVersion: target.adapterVersion,
+      requestedModel: target.model, actualModel: target.model,
+      subagent: target.subagent ?? null, status: 'success', reason: 'none', durationMs: 0,
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: null },
+      requestId: 'probe', requestIdSource: 'typesafe', httpStatus: 200,
+      // A retried attempt records its backoff; only the final attempt has none.
+      ...(index < attemptCount - 1 ? { retryDelayMs: 0 } : {}),
+      // Single-dispatch evidence, as recorded when native batching does not apply. The native
+      // batch object carries a subset of these fields, so the single shape bounds both phases.
+      batch: { mode: 'single', groupId: `single_${questionId.slice(2)}`, questionId, degradationReason: 'unsupported' },
+    }));
+    return [item.alias, {
+      apiVersion: DECISION_API_VERSION_STRUCTURED, kind: 'DecisionResult',
+      metadata: { id: `context-result-envelope-probe-${item.alias}`, version: '1.0.0', description: `Decision result for ${item.alias}` },
+      spec: { decision: pin(`probe-${item.alias}`), ruleset: pin('probe-ruleset'), binding: pin('probe-binding'),
+        alias: item.alias, runId: 'context-result-envelope-probe', invocationId: 'context-result-envelope-probe',
+        status: 'success', value, reason: 'none',
+        uncertainty: { source: 'provider', profile: 'typesafe-distribution-v1', calibration: 'vendor-claimed', confidence: 1,
+          distribution, calibrationRef: null },
+        attempts, context: { plan: structuredClone(plan), actualUsage: usages.map(usage => structuredClone(usage)) } },
+    }];
+  }));
+  return { apiVersion: DECISION_API_VERSION_STRUCTURED, kind: 'RulesetResult',
+    metadata: { id: 'context-result-envelope-probe', version: '1.0.0', description: 'Context result envelope probe' },
+    // A matched completion carries its outcome and matched rule ids; ruleset-declared outcomes are
+    // bounded by artifact admission of the ruleset itself, so the probe carries representative ones.
+    spec: { ruleset: pin('probe-ruleset'), binding: pin('probe-binding'), runId: 'context-result-envelope-probe',
+      invocationId: 'context-result-envelope-probe', status: 'completed', reason: 'none', matchedRules: ['review'],
+      outcome: 'review',
+      evaluations, context: { plan: structuredClone(plan), actualUsage: usages } } };
 }
 
 function recordRuntimeContextUsage(

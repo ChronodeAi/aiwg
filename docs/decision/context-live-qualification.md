@@ -153,15 +153,30 @@ These steps are implemented and tested offline only. None has run against Jev.
    the first failed check, or on an evaluation error. A case passes when:
    - every dispatched partition is within the effective limits;
    - every reported input is within the documented aggregate limit and the approved bound;
+   - every per-call reported output is known and within the approved per-call output
+     ceiling (`perRequestBound.outputTokens`, a sub-ceiling of `totalTokens`);
    - an oversized case produces a context rejection with no dispatch;
    - the rollback sends no native batch.
 
+   Jev exposes no request-level output cap, so the output ceiling cannot be enforced
+   before dispatch: it is enforced after dispatch by failing the canary on unknown
+   or over-bound reported output, which stops further dispatch. A canary plan without
+   the ceiling, or with a ceiling above the total bound, is rejected before any
+   credential use or dispatch. Nothing here has run against Jev.
+
    Per-case rows and the summary are metadata only.
 
-A canary case may have at most 8 questions, so `many-short` is rejected. An invocation
-with context planning and 24 aliases currently produces a result document that exceeds the
-default entry limits (`property-count`). That error is raised after dispatch, and the canary
-treats it as a stop. D11 manifest linking from #2599 and #2604 remains pending.
+The evaluator preflights the worst-case completion result envelope before dispatch
+(#2797): every evaluation clones the full context plan, and usage is recorded
+cumulatively, so the probe assumes every evaluation carries every usage entry
+with the binding's full retry attempts and answer-domain distributions. An
+invocation with context planning and 24 aliases (`many-short`) rejects with
+`invalid-input` before receipts, credentials or transport instead of producing
+a result document that exceeds the default entry limits (`property-count`)
+after dispatch. The canary carries `many-short` as a rejected-before-dispatch
+case with zero dispatches in both phases; each phase checks the envelope with
+its own preflight call and the canary verifies the exact rejection reason per
+phase. D11 manifest linking from #2599 and #2604 remains pending.
 
 Missing inputs, source drift (including untracked files), changed corpus or
 preregistration digests, changed resolver digest, and reused run directories fail

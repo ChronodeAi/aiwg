@@ -7,7 +7,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { canonicalJson } from '../security/artifact-trust.js';
 import { admitEntry } from './entry.js';
-import { CanonicalJsonByteEstimator, ContextPlanError, planDecisionContext, type ContextProviderProfile, type ContextActualUsageEvidence } from './context-plan.js';
+import { CanonicalJsonByteEstimator, ContextPlanError, planDecisionContext, type ContextPlanFailureReason, type ContextProviderProfile, type ContextActualUsageEvidence } from './context-plan.js';
 import { assertContextQualified, compareContextUsage, type ContextComparison, type ContextQualification } from './context-qualification.js';
 import {
   assertContextArtifactRoot, assertContextLiveSource, compileContextLiveCase, contextLiveBinding, contextLiveDigest, contextLiveRequestCapacity,
@@ -16,7 +16,7 @@ import {
 } from './context-live-qualification.js';
 import { JevDecisionAdapter } from './adapters/jev.js';
 import { decisionBatchQuestionId } from './batch.js';
-import { evaluateDecisionRuleset } from './evaluate.js';
+import { contextResultEnvelopeFits, evaluateDecisionRuleset } from './evaluate.js';
 import type { DecisionDefinition } from './types.js';
 
 const estimator = new CanonicalJsonByteEstimator();
@@ -134,7 +134,13 @@ export function verifyContextQualificationRecord(record: ContextQualificationRec
 /** Frozen before collection; the later canary approval embeds it unchanged. */
 export interface ContextCanaryPlan {
   schemaVersion: 'context-canary-plan/v1'; caseIds: string[]; rollback: 'observe-only';
-  budget: ContextLiveApproval['budget']; perRequestBound: ContextLiveApproval['perRequestBound'];
+  budget: ContextLiveApproval['budget'];
+  /**
+   * Reviewer-approved per-call ceilings. Jev exposes no request-level output cap, so the
+   * output ceiling is enforced after dispatch: unknown or over-bound reported output fails
+   * the canary. The output ceiling is a sub-ceiling of the total bound.
+   */
+  perRequestBound: { totalTokens: number; outputTokens: number; usd: number; approvalReference: string };
 }
 export interface ContextCanaryApproval {
   schemaVersion: 'context-canary-approval/v1'; approved: true; reviewer: string; stagingWorkspace: string; runId: string;
@@ -146,20 +152,24 @@ export interface ContextCanaryCase {
   planDigest: string | null; profileDigest: string | null; requestIds: string[];
   partitions: Array<{ partitionId: string; questions: number; estimatedInputTokens: number; actualInputTokens: number; withinEffectiveLimits: boolean; withinDocumentedLimits: boolean }>;
   oversizedDispatches: number; nativeDispatches: number; pass: boolean;
+  /** Provider requests with unknown or over-bound reported output; any nonzero value fails the case. */
+  outputOversizedDispatches: number;
 }
 
 /**
- * Canary cases stay small: a context-planned invocation with many aliases (the 24-question `many-short`
- * case) produces a result document above the default entry limits, and that error surfaces after dispatch.
+ * The evaluator preflights the worst-case completion envelope before dispatch (#2797): every
+ * evaluation carries every usage entry with the binding's full retry attempts, so the 24-question
+ * `many-short` case rejects with `invalid-input` before any provider work instead of exceeding
+ * the default entry limits (`property-count`) after dispatch. The canary covers that shape as a
+ * rejected-before-dispatch case with zero dispatches in both phases.
  */
-export const CONTEXT_CANARY_MAX_QUESTIONS = 8;
 export function validateContextCanaryApproval(approval: ContextCanaryApproval, corpus: ContextLiveCorpus, record: ContextQualificationRecord): void {
   admitEntry(approval);
   const plan = approval?.plan;
   if (!closed(approval, ['schemaVersion', 'approved', 'reviewer', 'stagingWorkspace', 'runId', 'sourceCommit', 'exactHeadCi', 'model', 'apiRevision', 'region',
     'secretServiceReference', 'credentialResolverDigest', 'corpusDigest', 'qualificationRecordDigest', 'canaryPlanDigest', 'plan'])
     || !closed(plan, ['schemaVersion', 'caseIds', 'rollback', 'budget', 'perRequestBound']) || !closed(plan.budget, ['requests', 'tokens', 'usd', 'wallClockMs'])
-    || !closed(plan.perRequestBound, ['totalTokens', 'usd', 'approvalReference'])
+    || !closed(plan.perRequestBound, ['totalTokens', 'outputTokens', 'usd', 'approvalReference'])
     || approval.schemaVersion !== 'context-canary-approval/v1' || approval.approved !== true || plan.schemaVersion !== 'context-canary-plan/v1' || plan.rollback !== 'observe-only'
     || ![approval.reviewer, approval.stagingWorkspace, approval.exactHeadCi, approval.model, approval.region, approval.secretServiceReference, plan.perRequestBound.approvalReference].every(nonblank)
     || !/^[a-zA-Z0-9_-]+$/.test(approval.runId) || !/^[a-f0-9]{40}$/.test(approval.sourceCommit) || approval.apiRevision !== 'v1' || /latest|unknown/i.test(approval.model)
@@ -168,31 +178,68 @@ export function validateContextCanaryApproval(approval: ContextCanaryApproval, c
     || approval.canaryPlanDigest !== contextLiveDigest(plan) || approval.corpusDigest !== contextLiveDigest(corpus) || approval.corpusDigest !== record.corpusDigest
     || approval.qualificationRecordDigest !== contextLiveDigest(record) || approval.model !== record.model || approval.region !== record.region
     || !Array.isArray(plan.caseIds) || !plan.caseIds.length || new Set(plan.caseIds).size !== plan.caseIds.length
-    || plan.caseIds.some(id => !corpus.cases.some(c => c.id === id && c.definitions.length <= CONTEXT_CANARY_MAX_QUESTIONS))
+    || plan.caseIds.some(id => !corpus.cases.some(c => c.id === id))
     || plan.budget.usd > TV12_ISSUE_USD_CAP
-    || [plan.budget.requests, plan.budget.tokens, plan.budget.wallClockMs, plan.perRequestBound.totalTokens].some(n => !Number.isSafeInteger(n) || n < 1)
+    || [plan.budget.requests, plan.budget.tokens, plan.budget.wallClockMs, plan.perRequestBound.totalTokens, plan.perRequestBound.outputTokens].some(n => !Number.isSafeInteger(n) || n < 1)
+    || plan.perRequestBound.outputTokens > plan.perRequestBound.totalTokens
     || [plan.budget.usd, plan.perRequestBound.usd].some(n => !Number.isFinite(n) || n <= 0 || n > Number.MAX_SAFE_INTEGER / 1_000_000)) {
     throw new Error('Incomplete or mismatched TV-12 canary approval');
   }
   verifyContextQualificationRecord(record);
 }
 
-/** Dispatches each phase would need, derived from the qualified plan; oversized cases need none. */
+/** Expected dispatches per canary phase; a rejected phase needs none and names its reason. */
+export interface ContextCanaryDispatchExpectation {
+  caseId: string;
+  enforce: number;
+  rollback: number;
+  enforceRejection: ContextPlanFailureReason | null;
+  rollbackRejection: ContextPlanFailureReason | null;
+}
+
+/** Dispatches each phase would need, derived from the qualified plan; rejected phases need none. */
 export async function contextCanaryDispatches(caseIds: readonly string[], corpus: ContextLiveCorpus, record: ContextQualificationRecord) {
-  const rows = [];
+  const rows: ContextCanaryDispatchExpectation[] = [];
+  const adapterVersion = new JevDecisionAdapter({ region: record.region }).version;
   for (const id of caseIds) {
     const item = corpus.cases.find(c => c.id === id)!;
     const { input } = await compileContextLiveCase(item, record.model, record.region);
+    const aliases = item.definitions.map((_, index) => `q${index}`);
+    // Mirror of the dispatch binding the canary builds per phase (single target without retries,
+    // one attempt budget per alias); the probe reads only retry ceilings and identity, never
+    // credentials, so no credential reference is carried here.
+    const envelopeBinding = { spec: { maxAttempts: aliases.length,
+      evaluations: Object.fromEntries(aliases.map(alias => [alias, { targets: [{ adapter: 'jev', adapterVersion,
+        model: record.model, retry: { maxRetries: 0, initialDelayMs: 0, maxDelayMs: 0 } }] }])) } };
+    const envelopeItems = aliases.map((alias, index) => ({ alias, definition: item.definitions[index]! }));
     let enforce = 0, rollback = 0;
-    try { enforce = planDecisionContext(input, record.profile, estimator).partitions.length; rollback = input.questions.length; }
-    catch (error) { if (!(error instanceof ContextPlanError && ['oversized-state', 'oversized-question'].includes(error.reason))) throw error; }
-    rows.push({ caseId: id, enforce, rollback });
+    let enforceRejection: ContextPlanFailureReason | null = null;
+    let rollbackRejection: ContextPlanFailureReason | null = null;
+    try {
+      const planned = planDecisionContext(input, record.profile, estimator);
+      // Both phases evaluate every alias in one invocation, so both check the same worst-case
+      // envelope (#2797) — each phase with its own call. The worst-case single-dispatch shape
+      // bounds the native enforce batches as well as the single rollback dispatches, so a
+      // rejected envelope needs no dispatch in that phase.
+      for (const phase of ['enforce', 'rollback'] as const) {
+        if (!contextResultEnvelopeFits(planned, envelopeItems, envelopeBinding)) {
+          if (phase === 'enforce') enforceRejection = 'invalid-input';
+          else rollbackRejection = 'invalid-input';
+        } else if (phase === 'enforce') enforce = planned.partitions.length;
+        else rollback = input.questions.length;
+      }
+    }
+    catch (error) {
+      if (!(error instanceof ContextPlanError && ['oversized-state', 'oversized-question'].includes(error.reason))) throw error;
+      enforceRejection = error.reason; rollbackRejection = error.reason;
+    }
+    rows.push({ caseId: id, enforce, rollback, enforceRejection, rollbackRejection });
   }
   return rows;
 }
 
-function inspect(caseId: string, phase: ContextCanaryCase['phase'], expected: number, result: Awaited<ReturnType<typeof evaluateDecisionRuleset>>,
-  aliases: string[], model: string, bound: number): ContextCanaryCase {
+function inspect(caseId: string, phase: ContextCanaryCase['phase'], expected: number, expectedRejection: ContextPlanFailureReason | null,
+  result: Awaited<ReturnType<typeof evaluateDecisionRuleset>>, aliases: string[], model: string, bound: number, outputBound: number): ContextCanaryCase {
   const plan = result.spec.context?.plan ?? null;
   const usage: readonly ContextActualUsageEvidence[] = result.spec.context?.actualUsage ?? [];
   const evaluations = Object.values(result.spec.evaluations ?? {});
@@ -209,15 +256,30 @@ function inspect(caseId: string, phase: ContextCanaryCase['phase'], expected: nu
   const nativeDispatches = new Set(attempts.filter(a => a.batch?.mode === 'native').map(a => a.batch!.groupId)).size;
   const requestIds = [...new Set(attempts.map(a => a.requestId).filter((id): id is string => typeof id === 'string'))].sort();
   const rejected = expected === 0;
+  // The provider is the only source of per-call output; null means unknown, so it fails closed.
+  // A native batch keeps one shared usage copy per request on the ruleset result while its answer
+  // attempts carry null usage by design, so requests are read there and singles from success attempts.
+  const outputReports = new Map<string, number | null>();
+  for (const entry of result.spec.batchRequests ?? []) {
+    const key = typeof entry.requestId === 'string' && entry.requestId ? `id:${entry.requestId}` : `batch:${entry.groupId}:${entry.ordinal}`;
+    if (!outputReports.has(key)) outputReports.set(key, entry.usage?.outputTokens ?? null);
+  }
+  attempts.forEach((attempt, index) => {
+    if (attempt.batch?.mode === 'native' || attempt.status !== 'success') return;
+    const key = typeof attempt.requestId === 'string' && attempt.requestId ? `id:${attempt.requestId}` : `single:${index}`;
+    if (!outputReports.has(key)) outputReports.set(key, attempt.usage?.outputTokens ?? null);
+  });
+  const outputOversizedDispatches = rejected ? 0
+    : [...outputReports.values()].filter(n => !Number.isSafeInteger(n) || (n as number) < 0 || (n as number) > outputBound).length;
   const covered = new Set(usage.flatMap(u => u.questionIds));
   const pass = rejected
-    ? usage.length === 0 && attempts.length === 0 && ['oversized-state', 'oversized-question'].includes(result.spec.contextFailure?.reason ?? '')
-    : oversizedDispatches === 0 && usage.length === expected && covered.size === aliases.length
+    ? expectedRejection !== null && usage.length === 0 && attempts.length === 0 && result.spec.contextFailure?.reason === expectedRejection
+    : oversizedDispatches === 0 && outputOversizedDispatches === 0 && usage.length === expected && covered.size === aliases.length
       && aliases.every(alias => covered.has(decisionBatchQuestionId(alias))) && evaluations.length === aliases.length
       && evaluations.every(e => e.spec.status === 'success') && attempts.every(a => a.status === 'success' && a.actualModel === model)
       && (phase === 'rollback' ? nativeDispatches === 0 && usage.every(u => u.questionIds.length === 1) : true);
   return { caseId, phase, expectedDispatches: expected, dispatches: usage.length, rejectedBeforeDispatch: rejected && usage.length === 0,
-    planDigest: plan?.planDigest ?? null, profileDigest: plan?.providerProfile.digest ?? null, requestIds, partitions, oversizedDispatches, nativeDispatches, pass };
+    planDigest: plan?.planDigest ?? null, profileDigest: plan?.providerProfile.digest ?? null, requestIds, partitions, oversizedDispatches, nativeDispatches, pass, outputOversizedDispatches };
 }
 
 /**
@@ -251,9 +313,9 @@ async function canaryWithinLedger(approval: ContextCanaryApproval, corpus: Conte
   const results: ContextCanaryCase[] = [];
   let stopped: string | null = null;
   try {
-    for (const { caseId, enforce, rollback } of await contextCanaryDispatches(plan.caseIds, corpus, record)) {
+    for (const { caseId, enforce, rollback, enforceRejection, rollbackRejection } of await contextCanaryDispatches(plan.caseIds, corpus, record)) {
       const item = corpus.cases.find(c => c.id === caseId)!;
-      for (const [phase, expected] of [['enforce', enforce], ['rollback', rollback]] as const) {
+      for (const [phase, expected, expectedRejection] of [['enforce', enforce, enforceRejection], ['rollback', rollback, rollbackRejection]] as const) {
         try {
           for (let i = 0; i < expected; i++) budget.reserve();
         } catch { stopped = 'budget-exhausted'; break; }
@@ -280,7 +342,7 @@ async function canaryWithinLedger(approval: ContextCanaryApproval, corpus: Conte
             context: { input: { ...input, questions: input.questions.map(q => ({ ...q, id: decisionBatchQuestionId(q.id) })) }, profile: record.profile, estimator,
               rollout: phase === 'enforce' ? { mode: 'enforce', qualification: record.qualification } : { mode: 'observe-only' } } });
         } catch { stopped = 'evaluation-error'; break; }
-        const row = inspect(item.id, phase, expected, result, aliases, approval.model, plan.perRequestBound.totalTokens);
+        const row = inspect(item.id, phase, expected, expectedRejection, result, aliases, approval.model, plan.perRequestBound.totalTokens, plan.perRequestBound.outputTokens);
         results.push(row);
         await writeFile(join(directory, `${item.id}-${phase}.json`), canonicalJson(row), { flag: 'wx', mode: 0o600 });
         if (!row.pass) { stopped = 'canary-check-failed'; break; }
@@ -294,6 +356,7 @@ async function canaryWithinLedger(approval: ContextCanaryApproval, corpus: Conte
     profile: { id: record.profile.id, version: record.profile.version, digest: record.profileDigest },
     canaryPassed: complete && results.every(r => r.pass), stopped,
     oversizedDispatches: results.reduce((n, r) => n + r.oversizedDispatches, 0),
+    outputOversizedDispatches: results.reduce((n, r) => n + r.outputOversizedDispatches, 0),
     enforceDispatches: results.filter(r => r.phase === 'enforce').reduce((n, r) => n + r.dispatches, 0),
     rollbackExercised: complete && results.filter(r => r.phase === 'rollback').every(r => r.pass),
     rollbackNativeDispatches: results.filter(r => r.phase === 'rollback').reduce((n, r) => n + r.nativeDispatches, 0),

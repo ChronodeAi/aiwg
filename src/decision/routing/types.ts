@@ -404,9 +404,13 @@ export interface RoutingControlDrillState {
   policyRestored: boolean;
   aliasRolledBack: boolean;
   compensated: boolean;
-  /** False only when the routing policy and the D17 alias disagree. */
+  /** False when the routing policy and the D17 alias disagree, or when active-run pins changed during the response. */
   consistent: boolean;
   currentPolicy: RoutingPin;
+  /** Only set on an active-run-pin mismatch: the pins read before the drift response. */
+  activeRunPinsBefore?: RoutingActiveRunPin[];
+  /** Only set on an active-run-pin mismatch: the pins read after the drift response. */
+  activeRunPinsAfter?: RoutingActiveRunPin[];
 }
 
 export interface RoutingControlDrillResult {
