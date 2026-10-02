@@ -1,0 +1,1013 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17Multifact.v1.schema.json",
+  "title": "D17Multifact",
+  "description": "D17-MF calibrated multi-fact probe (#2850): analysis, development review (template and completed), report, shortcut audit and tradeoff-free decision.",
+  "$defs": {
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "protocol",
+        "sourceDigests",
+        "auditDigest",
+        "cells"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-analysis/v1"
+        },
+        "protocol": {
+          "type": "object",
+          "required": [
+            "schemaVersion",
+            "issue",
+            "study",
+            "generator",
+            "design",
+            "calibration",
+            "interval",
+            "hypotheses",
+            "decisionRules",
+            "shortcutAudit",
+            "promotion"
+          ],
+          "properties": {
+            "schemaVersion": {
+              "const": "decision-d17mf-protocol/v1"
+            },
+            "issue": {
+              "const": "roctinam/aiwg#2850"
+            },
+            "promotion": {
+              "const": "none: a diagnostic probe of the provider; the study decision is always HOLD"
+            },
+            "study": {
+              "const": "D17"
+            },
+            "generator": {
+              "const": "d17-multifact/v1"
+            },
+            "design": {
+              "type": "object"
+            },
+            "calibration": {
+              "type": "object"
+            },
+            "interval": {
+              "type": "object"
+            },
+            "hypotheses": {
+              "type": "array",
+              "minItems": 5,
+              "maxItems": 5
+            },
+            "decisionRules": {
+              "type": "object"
+            },
+            "shortcutAudit": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
+        "sourceDigests": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          }
+        },
+        "auditDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "cells": {
+          "type": "array",
+          "minItems": 72,
+          "maxItems": 72,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "split",
+              "key",
+              "rule",
+              "count"
+            ],
+            "properties": {
+              "split": {
+                "enum": [
+                  "tuning",
+                  "test"
+                ]
+              },
+              "key": {
+                "type": "string"
+              },
+              "rule": {
+                "enum": [
+                  "recursive",
+                  "d17"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "reviewTemplate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "reviewer",
+        "preregistrationReview",
+        "assessments",
+        "instructions"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-review/v1"
+        },
+        "reviewer": {
+          "const": null
+        },
+        "preregistrationReview": {
+          "const": null
+        },
+        "assessments": {
+          "type": "array",
+          "minItems": 40,
+          "maxItems": 40,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "assessmentId",
+              "rowId",
+              "cell",
+              "inputDigest",
+              "payload",
+              "reviewedAt",
+              "goldAuditLabel",
+              "goldAmbiguousOrIncorrect",
+              "rationale"
+            ],
+            "properties": {
+              "assessmentId": {
+                "type": "string",
+                "pattern": "^mf-assessment-[0-9]{2}$"
+              },
+              "rowId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "cell": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "inputDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "payload": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "reviewedAt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+                  }
+                ]
+              },
+              "goldAuditLabel": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "enum": [
+                      "yes",
+                      "no"
+                    ]
+                  }
+                ]
+              },
+              "goldAmbiguousOrIncorrect": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "rationale": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "instructions": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "reviewer",
+        "preregistrationReview",
+        "assessments",
+        "instructions"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-review/v1"
+        },
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "preregistrationReview": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "assessments": {
+          "type": "array",
+          "minItems": 40,
+          "maxItems": 40,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "assessmentId",
+              "rowId",
+              "cell",
+              "inputDigest",
+              "payload",
+              "reviewedAt",
+              "goldAuditLabel",
+              "goldAmbiguousOrIncorrect",
+              "rationale"
+            ],
+            "properties": {
+              "assessmentId": {
+                "type": "string",
+                "pattern": "^mf-assessment-[0-9]{2}$"
+              },
+              "rowId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "cell": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+              },
+              "inputDigest": {
+                "type": "string",
+                "pattern": "^sha256:[a-f0-9]{64}$"
+              },
+              "payload": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "reviewedAt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+                  }
+                ]
+              },
+              "goldAuditLabel": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "enum": [
+                      "yes",
+                      "no"
+                    ]
+                  }
+                ]
+              },
+              "goldAmbiguousOrIncorrect": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "rationale": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "instructions": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "issue",
+        "scope",
+        "calibrated",
+        "calibration",
+        "corpusDigest",
+        "preregistrationDigest",
+        "analysisDigest",
+        "integrityDigest",
+        "auditDigest",
+        "coverage",
+        "overall",
+        "cells",
+        "hypotheses",
+        "decision",
+        "promotion"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-report/v1"
+        },
+        "issue": {
+          "const": "roctinam/aiwg#2850"
+        },
+        "scope": {
+          "const": "synthetic-calibrated-probe"
+        },
+        "calibrated": {
+          "const": true
+        },
+        "calibration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "calibrationSetDigest",
+            "memberArtifactDigest",
+            "mappingDigest",
+            "compatibility",
+            "qualifiedAt"
+          ],
+          "properties": {
+            "mode": {
+              "const": "artifact"
+            },
+            "calibrationSetDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "memberArtifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "mappingDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "compatibility": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "state"
+              ],
+              "properties": {
+                "action": {
+                  "const": "allow"
+                },
+                "state": {
+                  "enum": [
+                    "exact",
+                    "approved-compatible"
+                  ]
+                }
+              }
+            },
+            "qualifiedAt": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+            }
+          }
+        },
+        "corpusDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "preregistrationDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "analysisDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "integrityDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "auditDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "coverage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "testRows",
+            "observed",
+            "developmentRows"
+          ],
+          "properties": {
+            "testRows": {
+              "type": "integer"
+            },
+            "observed": {
+              "type": "integer"
+            },
+            "developmentRows": {
+              "type": "integer"
+            }
+          }
+        },
+        "overall": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "observed",
+            "correct",
+            "accuracy",
+            "wilson95",
+            "rawAccuracy",
+            "saidYesRate",
+            "meanConfidence",
+            "confidenceMinusAccuracy",
+            "ece",
+            "calibrationUnreliable"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "observed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "correct": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "accuracy": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "wilson95": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "number"
+                  }
+                }
+              ]
+            },
+            "rawAccuracy": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "saidYesRate": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "meanConfidence": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "confidenceMinusAccuracy": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "ece": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "calibrationUnreliable": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          }
+        },
+        "cells": {
+          "type": "object",
+          "minProperties": 36,
+          "maxProperties": 36,
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "n",
+              "observed",
+              "correct",
+              "accuracy",
+              "wilson95",
+              "rawAccuracy",
+              "saidYesRate",
+              "meanConfidence",
+              "confidenceMinusAccuracy",
+              "ece",
+              "calibrationUnreliable"
+            ],
+            "properties": {
+              "n": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "observed": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "correct": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "accuracy": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "wilson95": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                ]
+              },
+              "rawAccuracy": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "saidYesRate": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "meanConfidence": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "confidenceMinusAccuracy": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "ece": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "calibrationUnreliable": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "hypotheses": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "H1",
+            "H2",
+            "H3",
+            "H3a",
+            "H4",
+            "replication"
+          ],
+          "properties": {
+            "H1": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "supported",
+                "byEncoding"
+              ],
+              "properties": {
+                "supported": {
+                  "type": "boolean"
+                },
+                "byEncoding": {
+                  "type": "array"
+                }
+              }
+            },
+            "H2": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "supported",
+                "byOutcome"
+              ],
+              "properties": {
+                "supported": {
+                  "type": "boolean"
+                },
+                "byOutcome": {
+                  "type": "array"
+                }
+              }
+            },
+            "H3": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "supported",
+                "byPool"
+              ],
+              "properties": {
+                "supported": {
+                  "type": "boolean"
+                },
+                "byPool": {
+                  "type": "array"
+                }
+              }
+            },
+            "H3a": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "verdict",
+                "byPool"
+              ],
+              "properties": {
+                "verdict": {
+                  "enum": [
+                    "contrastive-specific",
+                    "general",
+                    "mixed"
+                  ]
+                },
+                "byPool": {
+                  "type": "array"
+                }
+              }
+            },
+            "H4": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "supported",
+                "byPool"
+              ],
+              "properties": {
+                "supported": {
+                  "type": "boolean"
+                },
+                "byPool": {
+                  "type": "array"
+                }
+              }
+            },
+            "replication": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "replicated",
+                "cell"
+              ],
+              "properties": {
+                "replicated": {
+                  "type": "boolean"
+                },
+                "cell": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "n",
+                    "observed",
+                    "correct",
+                    "accuracy",
+                    "wilson95",
+                    "rawAccuracy",
+                    "saidYesRate",
+                    "meanConfidence",
+                    "confidenceMinusAccuracy",
+                    "ece",
+                    "calibrationUnreliable"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "observed": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "correct": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "accuracy": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "wilson95": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "array",
+                          "minItems": 2,
+                          "maxItems": 2,
+                          "items": {
+                            "type": "number"
+                          }
+                        }
+                      ]
+                    },
+                    "rawAccuracy": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "saidYesRate": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "meanConfidence": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "confidenceMinusAccuracy": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "ece": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "calibrationUnreliable": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "decision": {
+          "const": "HOLD"
+        },
+        "promotion": {
+          "const": "none: diagnostic probe"
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "limit",
+        "folds",
+        "groups",
+        "equalizedPasses",
+        "equalizedMax",
+        "controlMax"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "const": "decision-d17mf-shortcut-audit/v1"
+        },
+        "limit": {
+          "const": 0.6
+        },
+        "folds": {
+          "const": 5
+        },
+        "groups": {
+          "type": "array",
+          "minItems": 1
+        },
+        "equalizedPasses": {
+          "const": true
+        },
+        "equalizedMax": {
+          "type": "number",
+          "maximum": 0.6
+        },
+        "controlMax": {
+          "type": "number"
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/analysis"
+    },
+    {
+      "$ref": "#/$defs/reviewTemplate"
+    },
+    {
+      "$ref": "#/$defs/review"
+    },
+    {
+      "$ref": "#/$defs/report"
+    },
+    {
+      "$ref": "#/$defs/audit"
+    }
+  ]
+}
