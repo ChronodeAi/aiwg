@@ -1,0 +1,1319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aiwg.io/schemas/decision/D17StudyReport.v2.schema.json",
+  "title": "D17StudyReport",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "scope",
+    "calibrated",
+    "d09Qualified",
+    "calibratedGate",
+    "corpusDigest",
+    "preregistrationDigest",
+    "executionPins",
+    "integrityDigest",
+    "integrity",
+    "integrityProblems",
+    "statistics",
+    "statisticsDigest",
+    "pairs",
+    "observations",
+    "accounting",
+    "calibrationDiagnostics",
+    "pending",
+    "decision",
+    "calibration",
+    "developmentReviewDigest",
+    "calibrationReviewDigest",
+    "uncalibratedStatistics",
+    "gates"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "decision-d17-study-report/v2"
+    },
+    "scope": {
+      "const": "synthetic-staged-calibrated"
+    },
+    "calibrated": {
+      "const": true
+    },
+    "d09Qualified": {
+      "const": true
+    },
+    "calibratedGate": {
+      "const": true
+    },
+    "corpusDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "preregistrationDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "executionPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "definition",
+        "binding",
+        "model",
+        "adapter",
+        "aggregatePolicyDigest"
+      ],
+      "properties": {
+        "definition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "version",
+            "digest"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "binding": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "version",
+                "digest"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "digest": {
+                  "type": "string",
+                  "pattern": "^sha256:[a-f0-9]{64}$"
+                }
+              }
+            }
+          ]
+        },
+        "model": {
+          "const": "jev-1.13.0"
+        },
+        "adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "version"
+          ],
+          "properties": {
+            "id": {
+              "const": "jev"
+            },
+            "version": {
+              "const": "1.0.0"
+            }
+          }
+        },
+        "aggregatePolicyDigest": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            }
+          ]
+        }
+      }
+    },
+    "integrityDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "integrity": {
+      "$ref": "https://aiwg.io/schemas/decision/DecisionEnsembleIntegrityReport.v1.schema.json#/properties/integrity"
+    },
+    "integrityProblems": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sampleN",
+        "missingIds",
+        "slices",
+        "pairedDeltas",
+        "quality",
+        "brier",
+        "abstention",
+        "acceptedN",
+        "acceptedErrors",
+        "acceptedErrorUpperBps",
+        "coverageLowerBps",
+        "p95LatencyIncreaseMs",
+        "latencyDifferencesMs",
+        "netSavingsMicros",
+        "costBasis",
+        "benefitSupported",
+        "findings",
+        "statisticalGate",
+        "worstCaseFailureAsError"
+      ],
+      "properties": {
+        "sampleN": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "slices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "slice",
+              "n",
+              "qualityDelta",
+              "harm",
+              "descriptiveOnly"
+            ],
+            "properties": {
+              "slice": {
+                "type": "string"
+              },
+              "n": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "qualityDelta": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "harm": {
+                "type": "boolean"
+              },
+              "descriptiveOnly": {
+                "const": true
+              }
+            }
+          }
+        },
+        "pairedDeltas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric",
+              "pairs",
+              "delta"
+            ],
+            "properties": {
+              "metric": {
+                "enum": [
+                  "quality",
+                  "calibration",
+                  "risk-coverage",
+                  "abstention",
+                  "latency",
+                  "tokens",
+                  "cost",
+                  "slice"
+                ]
+              },
+              "pairs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delta": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "quality": {
+          "$ref": "#/$defs/interval"
+        },
+        "brier": {
+          "$ref": "#/$defs/interval"
+        },
+        "abstention": {
+          "$ref": "#/$defs/interval"
+        },
+        "acceptedN": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acceptedErrors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acceptedErrorUpperBps": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "coverageLowerBps": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "p95LatencyIncreaseMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "latencyDifferencesMs": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "netSavingsMicros": {
+          "type": "number"
+        },
+        "costBasis": {
+          "const": "nonrefundable-reservations-including-failed-attempts"
+        },
+        "benefitSupported": {
+          "type": "boolean"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "statisticalGate": {
+          "enum": [
+            "HOLD",
+            "pass"
+          ]
+        },
+        "worstCaseFailureAsError": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "championCorrect",
+            "challengerCorrect",
+            "missingPairsCountedAsErrors"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "championCorrect": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "challengerCorrect": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missingPairsCountedAsErrors": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "statisticsDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "pairs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "slice",
+          "champion",
+          "challenger"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slice": {
+            "type": "string"
+          },
+          "champion": {
+            "$ref": "#/$defs/arm"
+          },
+          "challenger": {
+            "$ref": "#/$defs/arm"
+          }
+        }
+      }
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "champion",
+          "challenger",
+          "aggregate"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "champion": {
+            "$ref": "#/$defs/observation"
+          },
+          "challenger": {
+            "$ref": "#/$defs/observation"
+          },
+          "aggregate": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "https://aiwg.io/schemas/decision/DecisionEnsembleAggregate.v1.schema.json"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "accounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allSplits",
+        "test"
+      ],
+      "properties": {
+        "allSplits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "attempts",
+            "reservedCostMicros"
+          ],
+          "properties": {
+            "attempts": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "reservedCostMicros": {
+              "type": "number"
+            }
+          }
+        },
+        "test": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "championReservedCostMicros",
+            "challengerReservedCostMicros",
+            "netSavingsMicros",
+            "complete"
+          ],
+          "properties": {
+            "championReservedCostMicros": {
+              "type": "number"
+            },
+            "challengerReservedCostMicros": {
+              "type": "number"
+            },
+            "netSavingsMicros": {
+              "type": "number"
+            },
+            "complete": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "calibrationDiagnostics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "champion",
+        "challenger",
+        "calibrated"
+      ],
+      "properties": {
+        "champion": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "overall",
+                "slices"
+              ],
+              "properties": {
+                "overall": {
+                  "$ref": "#/$defs/binaryMetrics"
+                },
+                "slices": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/binaryMetrics"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "challenger": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "overall",
+                "slices"
+              ],
+              "properties": {
+                "overall": {
+                  "$ref": "#/$defs/binaryMetrics"
+                },
+                "slices": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$ref": "#/$defs/binaryMetrics"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "calibrated": {
+          "const": true
+        }
+      }
+    },
+    "pending": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "decision": {
+      "enum": [
+        "HOLD",
+        "ROLLBACK"
+      ]
+    },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "calibrationSetDigest",
+        "calibrationPhaseRecordDigest",
+        "priorApprovalDigest",
+        "member",
+        "aggregate",
+        "qualifiedAt",
+        "applied"
+      ],
+      "properties": {
+        "mode": {
+          "const": "staged-test"
+        },
+        "calibrationSetDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "calibrationPhaseRecordDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "priorApprovalDigest": {
+          "type": "string",
+          "pattern": "^sha256:[a-f0-9]{64}$"
+        },
+        "member": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifactId",
+            "artifactDigest",
+            "mappingDigest",
+            "compatibility"
+          ],
+          "properties": {
+            "artifactId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "artifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "mappingDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "compatibility": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "state",
+                "pinId"
+              ],
+              "properties": {
+                "action": {
+                  "const": "allow"
+                },
+                "state": {
+                  "enum": [
+                    "exact",
+                    "approved-compatible"
+                  ]
+                },
+                "pinId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "aggregate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "artifactId",
+            "artifactDigest",
+            "mappingDigest",
+            "compatibility"
+          ],
+          "properties": {
+            "artifactId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "artifactDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "mappingDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "compatibility": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "state",
+                "pinId"
+              ],
+              "properties": {
+                "action": {
+                  "const": "allow"
+                },
+                "state": {
+                  "enum": [
+                    "exact",
+                    "approved-compatible"
+                  ]
+                },
+                "pinId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        },
+        "qualifiedAt": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{3})?Z$"
+        },
+        "applied": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "champion",
+            "challenger"
+          ],
+          "properties": {
+            "champion": {
+              "const": "member"
+            },
+            "challenger": {
+              "const": "aggregate"
+            }
+          }
+        }
+      }
+    },
+    "developmentReviewDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    },
+    "uncalibratedStatistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sampleN",
+        "missingIds",
+        "slices",
+        "pairedDeltas",
+        "quality",
+        "brier",
+        "abstention",
+        "acceptedN",
+        "acceptedErrors",
+        "acceptedErrorUpperBps",
+        "coverageLowerBps",
+        "p95LatencyIncreaseMs",
+        "latencyDifferencesMs",
+        "netSavingsMicros",
+        "costBasis",
+        "benefitSupported",
+        "findings",
+        "statisticalGate",
+        "worstCaseFailureAsError"
+      ],
+      "properties": {
+        "sampleN": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missingIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "slices": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "slice",
+              "n",
+              "qualityDelta",
+              "harm",
+              "descriptiveOnly"
+            ],
+            "properties": {
+              "slice": {
+                "type": "string"
+              },
+              "n": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "qualityDelta": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "harm": {
+                "type": "boolean"
+              },
+              "descriptiveOnly": {
+                "const": true
+              }
+            }
+          }
+        },
+        "pairedDeltas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "metric",
+              "pairs",
+              "delta"
+            ],
+            "properties": {
+              "metric": {
+                "enum": [
+                  "quality",
+                  "calibration",
+                  "risk-coverage",
+                  "abstention",
+                  "latency",
+                  "tokens",
+                  "cost",
+                  "slice"
+                ]
+              },
+              "pairs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delta": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "quality": {
+          "$ref": "#/$defs/interval"
+        },
+        "brier": {
+          "$ref": "#/$defs/interval"
+        },
+        "abstention": {
+          "$ref": "#/$defs/interval"
+        },
+        "acceptedN": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acceptedErrors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "acceptedErrorUpperBps": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "coverageLowerBps": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "p95LatencyIncreaseMs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "latencyDifferencesMs": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "netSavingsMicros": {
+          "type": "number"
+        },
+        "costBasis": {
+          "const": "nonrefundable-reservations-including-failed-attempts"
+        },
+        "benefitSupported": {
+          "type": "boolean"
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "statisticalGate": {
+          "enum": [
+            "HOLD",
+            "pass"
+          ]
+        },
+        "worstCaseFailureAsError": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "n",
+            "championCorrect",
+            "challengerCorrect",
+            "missingPairsCountedAsErrors"
+          ],
+          "properties": {
+            "n": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "championCorrect": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "challengerCorrect": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "missingPairsCountedAsErrors": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "gateBinding",
+        "statisticalGate",
+        "findings",
+        "promotion"
+      ],
+      "properties": {
+        "source": {
+          "const": "d17-native-protocol"
+        },
+        "gateBinding": {
+          "const": null
+        },
+        "statisticalGate": {
+          "enum": [
+            "pass",
+            "HOLD"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "promotion": {
+          "const": "not-authorized: requires separate extra-cost tradeoff approval and D09 promotion eligibility"
+        }
+      }
+    },
+    "calibrationReviewDigest": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  },
+  "$defs": {
+    "interval": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "lowerBps",
+            "upperBps",
+            "estimateBps",
+            "n",
+            "method"
+          ],
+          "properties": {
+            "lowerBps": {
+              "type": "integer"
+            },
+            "upperBps": {
+              "type": "integer"
+            },
+            "estimateBps": {
+              "type": "integer"
+            },
+            "n": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "method": {
+              "enum": [
+                "newcombe-hybrid-score",
+                "percentile-bootstrap"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "arm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "probability",
+        "accepted",
+        "correct",
+        "brier",
+        "latencyMs",
+        "tokens",
+        "reservedCostMicros"
+      ],
+      "properties": {
+        "probability": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "boolean"
+        },
+        "brier": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "latencyMs": {
+          "type": "number"
+        },
+        "tokens": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "reservedCostMicros": {
+          "type": "number"
+        }
+      }
+    },
+    "observation": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "inputDigest",
+            "receiptDigest",
+            "quality",
+            "calibration",
+            "riskCoverage",
+            "abstention",
+            "latencyMs",
+            "tokens",
+            "costMicros",
+            "slice"
+          ],
+          "properties": {
+            "inputDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "receiptDigest": {
+              "type": "string",
+              "pattern": "^sha256:[a-f0-9]{64}$"
+            },
+            "quality": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "calibration": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "riskCoverage": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "abstention": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "latencyMs": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "tokens": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "costMicros": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "slice": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "binaryMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sampleN",
+        "errorRate",
+        "brier",
+        "logLoss",
+        "expectedCalibrationError",
+        "coverage",
+        "reviewRate",
+        "selectiveRisk",
+        "errorWilson95",
+        "latencyMs",
+        "inputTokens",
+        "outputTokens",
+        "costUsd",
+        "calls",
+        "retries",
+        "fallbacks"
+      ],
+      "properties": {
+        "sampleN": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errorRate": {
+          "type": "number"
+        },
+        "brier": {
+          "type": "number"
+        },
+        "logLoss": {
+          "type": "number"
+        },
+        "expectedCalibrationError": {
+          "type": "number"
+        },
+        "coverage": {
+          "type": "number"
+        },
+        "reviewRate": {
+          "type": "number"
+        },
+        "selectiveRisk": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "errorWilson95": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "type": "number"
+          }
+        },
+        "latencyMs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "p50",
+            "p95",
+            "p99"
+          ],
+          "properties": {
+            "p50": {
+              "type": "number"
+            },
+            "p95": {
+              "type": "number"
+            },
+            "p99": {
+              "type": "number"
+            }
+          }
+        },
+        "inputTokens": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "outputTokens": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "costUsd": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fallbacks": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  "description": "Staged-calibration D17 test-phase report: native gates evaluated on D09-qualified calibrated probabilities. v1 remains the uncalibrated diagnostic report. Never PROMOTE."
+}

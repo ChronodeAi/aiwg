@@ -9,6 +9,43 @@ and this project uses [Calendar Versioning (CalVer)](https://calver.org/) with n
 
 ### Added
 
+- Experimental, default-off D17 staged D09 calibration (#2611). `d17-study.mjs`
+  adds `--prepare-staged`, which keeps the same corpus, split and gold pins and
+  adds a calibrated `staged` preregistration over tuning and calibration plus a
+  v2 analysis. It also adds `--bundle`, which refuses until the 40 development
+  assessments are complete and agree with gold and the text oracle.
+  `--fit-calibration` and `--register-calibration` fit isotonic single-call and
+  three-sample-mean calibrators on calibration rows only and emit
+  `CalibrationArtifact.v1` files. They require an operator-reviewed,
+  D09-qualified calibration set before any test-phase approval form is usable.
+  `d17-score.mjs --staged` scores the test phase on calibrated probabilities with
+  the frozen native D17 gates; D17 has no gate binding. `--native-handoff` and
+  `--native` build the champion/challenger record and anchored integrity for
+  AC7/AC14. New schema versions (`D17StudyAnalysis.v2`, `D17StudyDryRun.v2`,
+  `D17StudyReport.v2`, `D17StudyCalibration.v1`) leave the v1 diagnostic
+  contracts unchanged. Decisions stay HOLD or ROLLBACK; no live collection
+  is included.
+- Experimental, default-off D17 staged calibration hardening (#2611).
+  - Test scoring re-derives the calibration set from the sealed calibration
+    phase: re-fit, out-of-fold metrics and both anchored reviews. It refuses
+    registered files that differ.
+  - The scoring clock may not precede the calibration review or the first test
+    access, and the D09 registry refuses resolution before an artifact's
+    `effectiveAt`.
+  - Qualification metrics are slice-stratified 5-fold out-of-fold.
+  - The calibration-phase approval must cite the development review digest.
+  - A seed whose corpus has diagnostic observations is refused.
+  - `--bundle` and `--dry-run-phases` check that both phases fit before spend.
+  - The staged native path has a preregistered promotion route. Its
+    locked-snapshot integrity gate needs an anchored extra-cost tradeoff
+    approval, and D09 eligibility is passed to `promoteChampionChallenger`. The
+    v1 diagnostic route still refuses promotion.
+  - The shared `scoreHeldoutStudy` wrapper reports a staged scorer's validation
+    of the exact approved binding; D29 output is unchanged.
+  - The calibration review's reviewer must be the approval's named reviewer and
+    is bound into the approved artifacts. The staged approval template carries
+    the operator-authorized 24,000-call / 96M-token budget (USD 8 unchanged),
+    which leaves 4,800 calls of headroom over the 14,400-call two-phase worst case.
 - Experimental, default-off D29 generator `d29-synthetic/v8` (public
   development seed `d29-study-v8`, refused for paid collection like v1–v7)
   fixes dataset leaks found on the public v7 seed and in review: injected

@@ -301,7 +301,17 @@ export async function scoreHeldoutStudy(input: { run: string; trustedEvidenceDig
     || 'decision' in diagnostics && diagnostics.decision === 'PROMOTE'
     || 'd09Qualified' in diagnostics && diagnostics.d09Qualified !== false
     || 'calibratedGate' in diagnostics && diagnostics.calibratedGate !== false)) throw new HeldoutError('uncalibrated-report');
+  // The collector validates no artifact itself. When a staged test-phase scorer reports that it validated the exact
+  // approved calibration binding (its `calibration.calibrationSetDigest`), the top level reflects that study claim;
+  // every other scorer (including D29, which reports no such binding) keeps the collector's not-performed default.
+  const study = diagnostics as { calibrated?: unknown; d09Qualified?: unknown; calibratedGate?: unknown;
+    calibration?: { mode?: unknown; calibrationSetDigest?: unknown } } | null;
+  const studyValidated = approvedCalibration.mode === 'staged' && approvedCalibration.phase === 'test' && calibrated === null
+    && study?.calibrated === true && study.d09Qualified === true && study.calibration?.mode === 'staged-test'
+    && study.calibration.calibrationSetDigest === approvedCalibration.calibrationArtifactDigest;
   return { schemaVersion: 'decision-heldout-score/v1', source: frozen.priorRuns.some(run => run.source === 'injected-transport') ? 'injected-transport' : frozen.source, evidenceDigest: input.trustedEvidenceDigest, integrityDigest: input.trustedIntegrityDigest,
-    complete, diagnostics, approvedCalibration, calibrated, d09Qualified: false, calibratedGate: false, calibrationArtifactValidation: 'not-performed', integrityProblems: problems, decision: input.integrity.release_gate.decision === 'ROLLBACK'
+    complete, diagnostics, approvedCalibration, calibrated: studyValidated ? true : calibrated, d09Qualified: studyValidated,
+    calibratedGate: studyValidated && study?.calibratedGate === true,
+    calibrationArtifactValidation: studyValidated ? 'performed-by-study-scorer' : 'not-performed', integrityProblems: problems, decision: input.integrity.release_gate.decision === 'ROLLBACK'
       || input.integrity.compromise_labels.length > 0 ? 'ROLLBACK' as const : 'HOLD' as const };
 }

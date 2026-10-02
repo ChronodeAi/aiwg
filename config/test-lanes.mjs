@@ -29,6 +29,13 @@ export const nodeFiles = [
 // (test:d29-slow) so they never push the shared test:ci step past its cap;
 // test/unit/decision/d29-synthetic-v8-smoke.test.mjs keeps fast single-seed
 // coverage in the default lane.
+// Heavy D17 staged-calibration suite: full 1,800-row preparation, 1,200-row calibrated
+// scoring, seal re-derivation and promotion-route replays (about 30 s of one worker).
+// It runs in the same slow job; the D17 diagnostic, corpus, artifact and statistics
+// files keep fast coverage in the default lane.
+export const d17SlowFiles = [
+  'test/unit/decision/ensemble-study-staged.test.ts',
+];
 export const d29SlowFiles = [
   'test/unit/decision/d29-synthetic-v8.test.mjs',
   'test/unit/decision/d29-study.test.mjs',

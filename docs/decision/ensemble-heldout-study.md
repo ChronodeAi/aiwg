@@ -5,14 +5,26 @@ deterministic synthetic corpus, preregistration, operator forms and offline
 analysis on top of the [shared held-out collector](heldout-collector.md).
 It changes no existing decision workflow. No live Jev collection, fitted D09
 calibration, completed human audit or production qualification is supplied.
-The operator-selected scope is explicitly **UNCALIBRATED diagnostic**:
-preregistration declares `calibration: { scope: 'uncalibrated-diagnostic',
-allowedModes: ['uncalibrated-diagnostic'] }`, and the approval declares
-`calibration: { mode: 'uncalibrated-diagnostic' }`. No genuine D09 artifact
-exists for this study; a fixture digest must never stand in for one.
-Study reports carry `calibrated: false`, `d09Qualified: false` and
-`calibratedGate: false`, and stay HOLD or preserve an upstream ROLLBACK.
-Artifact and staged calibration approvals are refused under this preregistration.
+
+The module prepares one corpus under two preregistration scopes:
+
+- **UNCALIBRATED diagnostic** (v1, `--prepare`): preregistration declares
+  `calibration: { scope: 'uncalibrated-diagnostic', allowedModes:
+  ['uncalibrated-diagnostic'] }`, and the approval declares `calibration: { mode:
+  'uncalibrated-diagnostic' }`. Study reports carry `calibrated: false`,
+  `d09Qualified: false` and `calibratedGate: false`, and stay HOLD or preserve an
+  upstream ROLLBACK. Artifact and staged calibration approvals are refused under
+  this preregistration. It cannot close AC7/AC14.
+- **Staged D09 calibration** (v2 analysis, `--prepare-staged`): a calibration
+  phase on the tuning and calibration splits, an operator-reviewed and
+  D09-qualified calibration set fitted on calibration rows only, then a separate
+  test-phase approval and calibrated scoring of the test split. This is the path
+  that makes AC7/AC14 evaluable; see [Staged D09 calibration](#staged-d09-calibration).
+
+Both scopes share the same corpus, split manifest, gold, review template and
+native templates for a given seed. No genuine D09 artifact exists until a
+staged calibration phase is collected, fitted and reviewed; a fixture digest
+must never stand in for one.
 
 ## Frozen population and arms
 
@@ -152,6 +164,258 @@ not D09 qualification or calibrated gates. D09 compatibility, blind review,
 protected integrity evidence and separate operational approval remain external
 inputs for a future qualified study; they cannot enable promotion under this scope.
 
+## Staged D09 calibration
+
+`src/decision/ensemble-study/staged.ts` reuses the diagnostic corpus, gold,
+split manifest, review template and native templates unchanged; the corpus
+module and its corpus pin do not move. Only these differ:
+
+- Preregistration `calibration: { scope: 'calibrated', allowedModes: ['staged'],
+  calibrationPhaseSplits: ['tuning', 'calibration'] }`, bound to a
+  `decision-d17-analysis/v2` analysis.
+- The v2 analysis adds the frozen `D17_CALIBRATION` protocol
+  (`schemas/decision/D17StudyCalibration.v1.schema.json`).
+- The approval form starts at `{ mode: 'staged', phase: 'calibration' }`.
+- The dry run (`decision-d17-dry-run/v2`) splits the same 7,200 first attempts
+  into a 2,400-attempt calibration phase (600 rows) and a 4,800-attempt test
+  phase (1,200 rows).
+
+The v1 schemas are unchanged; the staged artifacts use new schema versions
+(`D17StudyAnalysis.v2`, `D17StudyDryRun.v2`, `D17StudyReport.v2` and
+`D17StudyCalibration.v1`).
+
+### Calibrators
+
+Two calibrators are fitted on **calibration-split rows only**. Tuning rows are
+collected and sealed with the phase but never fitted; test rows are outside the
+calibration phase and the collector refuses them. The library fit also refuses
+any attempt pinned to another study, corpus or preregistration.
+
+| Calibrator | Input | Fitted on | Applied to |
+| --- | --- | --- | --- |
+| `d17-single-call-isotonic` (member) | One fresh call's native P(yes) | All four single calls of every calibration row | The champion |
+| `d17-three-sample-mean-isotonic` (aggregate) | Raw mean P(yes) of the three ensemble members | One mean per calibration row | The challenger |
+
+Both use `isotonic-pav-laplace-v1`: pool-adjacent-violators on the observed
+frequencies, blocks of at least 10 observations, Laplace-smoothed block
+frequencies `(yes + 1) / (n + 2)` and a final monotone pass. The result is a
+non-decreasing step function. Fitting requires at least 380 observed rows for
+each calibrator (the 5% failure tolerance of 400).
+
+At test time a calibrated probability of exactly 0.5 defers. The challenger is
+accepted only when the native aggregate accepts (three members, Jensen–Shannon
+disagreement, tie rule) **and** its calibrated value is not a tie.
+
+### Qualification metrics are out-of-fold
+
+An isotonic fit is nearly perfectly calibrated on the rows it was fitted on,
+even for uninformative scores, so in-sample ECE cannot gate anything. The
+deployed mapping is fitted on the full calibration split, but its qualification
+metrics are cross-fitted:
+
+- Calibration rows are assigned to 5 folds, stratified by slice: record-ID order
+  within each slice, index modulo 5. The assignment is deterministic.
+- Each row is scored by calibrators fitted on the other four folds.
+- ECE, selective risk and the Wilson intervals are computed on those
+  out-of-fold probabilities.
+
+Each mapping records both the out-of-fold and the in-sample metrics. The
+`CalibrationArtifact.v1` metrics, and therefore D09 qualification, use the
+out-of-fold numbers.
+
+The artifact profile (at least 380 samples, 95 per slice, Wilson 95%, ECE at
+most 0.1, selective-risk Wilson upper bound at most 0.1, 30-day expiry) is
+frozen in the analysis. The approval carries one `calibrationArtifactDigest`
+slot, so it binds the digest of a `decision-d17-calibration-set/v1` record that
+pins both artifacts, both mapping digests, the phase seal and the
+calibration-phase approval.
+
+### The scorer re-derives the calibration set
+
+Test scoring trusts no registered file. Before any row is scored, `--staged`:
+
+1. Re-reads the calibration phase through the verified collector seal.
+2. Re-fits both calibrators deterministically, recomputes the out-of-fold
+   metrics, and re-applies the anchored development and calibration reviews.
+3. Requires the resulting set digest to equal the approved
+   `calibrationArtifactDigest`.
+4. Requires the registered set, artifacts and mappings to be canonically
+   identical to that re-derivation.
+
+A mapping fitted on other observations, an artifact hand-marked approved, or a
+set without its calibration review is therefore refused.
+
+The scoring clock (`evaluatedAt`) cannot be in the future. It must also be no
+earlier than the calibration review and no earlier than the collector's
+recorded first test access (`frozen.testPhaseAccessAt`). Both artifacts must
+qualify at that clock. The D09 registry also refuses any resolution before an
+artifact's `effectiveAt`.
+
+### Development review precondition
+
+The 40 development assessments must be complete before calibrated work can
+proceed: reviewer, preregistration review, review time, rationale, and a gold
+audit label that agrees with both the generator gold and the independent text
+oracle. Any `goldAmbiguousOrIncorrect: true` refuses and requires a revised
+generator and a new holdout. Blind-test and repeat assessments must still be
+blank at that point.
+
+The calibration review's `reviewer` must be the reviewer the approval names, and
+it is bound into each approved artifact's approval reference, so the same
+reference and time under another reviewer produce a different calibration set
+and are refused.
+
+Approvals carry no timestamp. So ordering is proved by digest: the
+calibration-phase approval's `approvalReference` must cite the completed review
+digest. The review therefore existed before the approval that authorized any
+spend. The review and this binding are enforced against the operator's anchored
+review digest at four points:
+
+1. `d17-study.mjs --bundle` assembles the calibration-phase bundle only with a
+   completed review that the approval cites.
+2. `--fit-calibration` additionally requires every development review time to
+   precede the phase seal.
+3. `--register-calibration` re-checks the review.
+4. Staged test scoring re-checks it before scoring any row.
+
+The shared collector cannot enforce the review itself. It is study-agnostic and
+its `decision-heldout-approval/v1` schema is closed. A hand-assembled bundle can
+therefore still collect calibration-phase observations, but without the cited
+review no calibration can be fitted or registered and no calibrated report can
+be produced.
+
+### Seeds, ledgers and both-phase budgets
+
+The staged corpus is the diagnostic corpus for the same seed. A seed whose
+corpus already has observations under the diagnostic preregistration cannot be
+reused:
+
+- the collector refuses it (`changed-preregistration`);
+- `--dry-run-phases` refuses it before any spend.
+
+Always prepare a staged study from a fresh, uninspected seed.
+
+Both phases are checked before the calibration phase spends anything:
+
+- `--bundle` checks the combined worst case of both phases against the
+  approval's allowance on a fresh ledger.
+- `--dry-run-phases BUNDLE APPROVAL_DIGEST ARTIFACT_ROOT` checks it against the
+  real ledger, after every prior charge.
+- `--dry-run-staged` prints the computed per-phase plan.
+
+At the current request sizes and the USD 0.10/1M reservation floor:
+
+| Phase | Worst-case attempts | Reserved tokens | Reserved USD |
+| --- | --- | --- | --- |
+| Calibration (600 rows) | 4,800 | 6,493,848 | 0.528776 |
+| Test (1,200 rows) | 9,600 | 12,997,056 | 1.058248 |
+| Both | 14,400 | 19,490,904 | 1.587024 |
+
+The staged approval template carries the operator-authorized budget of 24,000
+calls, 96M tokens and USD 8; the USD 8 study cap is unchanged. On a fresh ledger
+the allowance at the 80% stop is 19,200 calls, 76.8M tokens and USD 6.4.
+
+The combined worst case fits with **4,800 calls**, 57.3M tokens and USD 4.81 to
+spare. Attesting the USD 0.099052 already spent on the retired diagnostic corpus
+as the study floor leaves USD 4.73. The previous 18,000-call budget left zero
+call headroom.
+
+A test-phase bundle additionally needs the calibration context (calibration run,
+registered directory and calibration review). `--bundle` re-derives the set and
+requires it to be reviewed, qualified and unexpired at assembly time.
+
+### Gates and the promotion route
+
+D17 has no `GateBinding`. The D29 gate-pack pattern does not apply, and the
+calibrated report uses the frozen D17 native protocol (the table above),
+evaluated on the calibrated champion and challenger measurements (`gates.source:
+'d17-native-protocol'`, `gateBinding: null`). The uncalibrated v1 statistics are
+retained alongside as `uncalibratedStatistics`, a descriptive comparison only.
+
+The v2 report carries `calibrated: true`, `d09Qualified: true` and
+`calibratedGate: true`. These mean that both re-derived, approved artifacts
+resolved as `allow` in the D09 registry at the scoring clock and stayed within
+the frozen profile and the out-of-fold selective-risk interval. The collector's
+`scoreHeldoutStudy` wrapper reflects this at its top level only when the scorer
+names the exact approved calibration binding; other studies, including D29, keep
+the collector's `not-performed` default.
+
+The study report's decision stays HOLD or a preserved ROLLBACK. Promotion is a
+separate, preregistered route (`D17_CALIBRATION.promotion`):
+
+1. `--native-handoff` derives the eval-integrity gate from the locked artifact
+   snapshot, with no HOLD cap. A PROMOTE gate survives only if the calibrated
+   study gate passes, the quality lower bound is positive and an anchored
+   `decision-d17-tradeoff-approval/v1` approves this exact report. That approval
+   must accept at least the measured additional reservation cost. Otherwise
+   PROMOTE is held, with each missing piece listed as a reason, and the integrity
+   metadata binds the tradeoff digest.
+2. `buildD17NativeReport` accepts an optional D09 `PromotionEligibility`, which
+   must be canonically equal to the registry's stored record for
+   `record.eligibilityId`. It also accepts an upstream PROMOTE only with that
+   bound tradeoff approval.
+3. `promoteChampionChallenger` moves the alias through the D09 gateway.
+
+The diagnostic v1 report keeps refusing PROMOTE and eligibility exactly as
+before. The `--native` CLI has no persisted D09 registry, so it serializes
+without eligibility (HOLD, `d09-eligibility-missing`). The host D09 gateway
+supplies the eligibility and performs the promotion.
+
+### Operator procedure
+
+Use one fresh artifact root for both phases. The collector re-validates every
+frozen bundle in a ledger at the current source. The 2026-10-01 diagnostic
+ledger (`.claude/worktrees/d17-live`) was written at the pre-D29 generator
+digest and is refused there (`corpus-provenance`). Keep it as evidence, and
+attest its spend as the new approval's floors: USD 0.099052 study, and the
+program's current portfolio total. Every approval repeats the original budget
+(24,000 calls, 96M tokens, USD 8 for the staged study) and floors.
+
+```bash
+aiwg artifacts path --json --check-write
+nice -n 19 node tools/decision/d17-study.mjs --dry-run-staged FRESH_OPERATOR_SEED
+nice -n 19 node tools/decision/d17-study.mjs --prepare-staged FRESH_OPERATOR_SEED PREPARED_DIR
+# Complete the 40 development assessments in a copy of reviewTemplate.json; anchor DEV_REVIEW_DIGEST.
+# Complete approval-template.json; its approvalReference must cite DEV_REVIEW_DIGEST. Anchor its digest.
+nice -n 19 node tools/decision/d17-study.mjs --bundle PREPARED_DIR APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST CAL_BUNDLE.json
+nice -n 19 node tools/decision/d17-study.mjs --dry-run-phases CAL_BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT
+nice -n 19 node tools/decision/heldout-study.mjs --dry-run CAL_BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT
+AIWG_DECISION_HELDOUT_LIVE=1 nice -n 19 node tools/decision/heldout-study.mjs \
+  --collect-approved CAL_BUNDLE.json APPROVAL_DIGEST ARTIFACT_ROOT
+# Resume each 30-minute checkpoint with a new run ID and the same budget and floors,
+# until summary.calibrationPhaseRecordDigest is set (the phase seal).
+nice -n 19 node tools/decision/d17-study.mjs --fit-calibration RUN APPROVAL_DIGEST SEAL_DIGEST \
+  DEV_REVIEW.json DEV_REVIEW_DIGEST FIT_DIR
+# Review FIT_DIR (both mappings record out-of-fold and in-sample metrics); complete calibration-review-template.json; anchor its digest.
+nice -n 19 node tools/decision/d17-study.mjs --register-calibration RUN APPROVAL_DIGEST SEAL_DIGEST \
+  DEV_REVIEW.json DEV_REVIEW_DIGEST CAL_REVIEW.json CAL_REVIEW_DIGEST REGISTERED_DIR
+# Anchor the calibration-set digest. Complete REGISTERED_DIR/test-approval-template.json; anchor its digest.
+# CALIBRATION_CONTEXT.json: { calibrationRun, calibrationDir: REGISTERED_DIR, calibrationReviewFile, trustedCalibrationReviewDigest }
+nice -n 19 node tools/decision/d17-study.mjs --bundle PREPARED_DIR TEST_APPROVAL.json DEV_REVIEW.json DEV_REVIEW_DIGEST \
+  TEST_BUNDLE.json CALIBRATION_CONTEXT.json
+AIWG_DECISION_HELDOUT_LIVE=1 nice -n 19 node tools/decision/heldout-study.mjs \
+  --collect-approved TEST_BUNDLE.json TEST_APPROVAL_DIGEST ARTIFACT_ROOT
+nice -n 19 node tools/decision/d17-score.mjs --staged STAGED_CONFIG.json SCORE.json
+# Optional, only to pursue promotion: complete and anchor a decision-d17-tradeoff-approval/v1 for the report.
+nice -n 19 node tools/decision/d17-score.mjs --native-handoff HANDOFF_CONFIG.json NATIVE_DIR
+# Anchor the record and integrity digests.
+nice -n 19 node tools/decision/d17-score.mjs --native NATIVE_CONFIG.json NATIVE_REPORT_DIR
+```
+
+The `--staged` config adds `calibrationRun`, `calibrationDir`,
+`trustedCalibrationSetDigest`, `calibrationReviewFile`,
+`trustedCalibrationReviewDigest`, `developmentReviewFile`,
+`trustedDevelopmentReviewDigest` and `evaluatedAt` to the diagnostic keys.
+
+`--native-handoff` adds `report`, `trustedReportDigest`, `operator` (`alias`,
+`aliasRevision`, `eligibilityId`, `integrityReportId`, `approvalReference`,
+`approvedAt`), `tradeoffApprovalFile` and `trustedTradeoffApprovalDigest`. The
+two tradeoff fields may be null.
+
+`--native-handoff` re-scores under a locked artifact snapshot and requires the
+anchored report digest to reproduce. It then emits the champion/challenger
+record, with each role citing its D09 artifact, and the eval-integrity metadata.
+
 ## Price, budget and live operator handoff
 
 The template records the task-supplied USD 0.042 per million input-token rate,
@@ -223,11 +487,14 @@ not independent or inter-rater agreement. Also review the preregistration and
 final disposition; neither artifact review is one of the 88 assessments.
 
 Offline tests establish deterministic generation, isolation, transport/budget
-failure handling and statistical/report gates. AC7's measured ensemble report
-and AC14's live integrity report remain **scaffolded-pending D09**: genuine
-compatible member/aggregate D09 artifacts, actual Jev observations, externally
-anchored integrity and completed blind review are missing. This diagnostic
-collection cannot close AC7/AC14 or qualify calibrated gates. Production risk-tier
+failure handling, statistical/report gates and the staged path: phase sealing,
+calibration-only fitting with out-of-fold qualification, review-gated
+registration, D09 qualification, seal-re-derived calibrated scoring, the AC7/AC14
+native record and the D09 promotion route. AC7's measured ensemble
+report and AC14's live integrity report remain **pending a staged live run**:
+actual Jev observations for both phases, the operator-reviewed calibration set,
+externally anchored integrity and completed blind review are still missing.
+The diagnostic collection cannot close AC7/AC14 or qualify calibrated gates. Production risk-tier
 benefit, independent-provider ensembles,
 operational drift/rollback, actual promotion and rollout remain open. These
 synthetic worlds cannot establish representative production performance.
@@ -240,15 +507,18 @@ operator approval, durable freeze or collected evaluation:
 
 | Artifact | Digest |
 | --- | --- |
-| Corpus | `sha256:5af15c96869d09ab57bef405bff242d8b655e6b5d9a636c1ee6a697660221987` |
+| Corpus | `sha256:e268bf40c8f03d3b2b30a9919520705535bce6104b9fd892412388d20d2216b7` |
 | Preregistration | source-derived: emitted by `--dry-run` at the approved source commit |
 | Unapproved priced template | source-derived: emitted by `--dry-run` at the approved source commit |
 | Split manifest | `sha256:09e2934e06781d8d64c65d104b8ee72ee87f3c48952eb2fe9333bb345862540f` |
 | Analysis | source-derived: emitted by `--dry-run` at the approved source commit |
+| Staged preregistration and v2 analysis | source-derived: emitted by `--dry-run-staged` at the approved source commit |
 | Private gold | `sha256:865f5f28321f93a10be477a2b9095cbb2fa97cb3f5ee33b8f0fcd66b089d68db` |
 
-Corpus rows, split and gold are data pins and stay fixed; the corpus digest moves
-only through provenance.generatorDigest, which pins the shared generator registry.
+Corpus rows, split and gold are data pins and stay fixed, and are identical under
+both scopes. The corpus digest moves only through `provenance.generatorDigest`,
+which pins the D17 corpus module bytes; the staged scope lives in a separate
+module so that it does not move this pin.
 Preregistration, the
 priced template and analysis embed the digest of every source byte the study
 runs, so they change with any shared decision-source change; they are bound at

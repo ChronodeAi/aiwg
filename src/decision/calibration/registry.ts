@@ -163,6 +163,8 @@ function calibrationUsability(artifact: CalibrationArtifact, at: string): string
   if (artifact.metrics.perSliceSamples < artifact.profile.minimumPerSliceSamples) reasons.push('insufficient-slice-samples');
   if (artifact.metrics.calibrationError > artifact.profile.maximumCalibrationError) reasons.push('calibration-bound-exceeded');
   if (artifact.metrics.selectiveRisk > artifact.profile.maximumSelectiveRisk) reasons.push('selective-risk-bound-exceeded');
+  // An artifact is unusable before it takes effect: a back-dated request cannot borrow a later calibration.
+  if (validDate(at) < validDate(artifact.effectiveAt)) reasons.push('calibration-not-yet-effective');
   if (validDate(at) >= validDate(artifact.effectiveAt) + artifact.profile.expiresAfterDays * 86_400_000) reasons.push('calibration-expired');
   return reasons;
 }

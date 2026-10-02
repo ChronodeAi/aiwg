@@ -381,7 +381,7 @@ The following remain open, with no live acceptance claim:
 
 | Study work | Exact missing input |
 | --- | --- |
-| D17 measured ensemble report, AC7/AC14 | Genuine D09 member/aggregate calibration (outside the current uncalibrated-diagnostic scope), actual Jev observations, externally anchored integrity, approved extra-cost tradeoff and blind review; generator, split/threshold freeze, mapper and statistical scaffolding now exist in the [D17 module](ensemble-heldout-study.md) |
+| D17 measured ensemble report, AC7/AC14 | Actual Jev observations for both phases of the [staged D09 study](ensemble-heldout-study.md#staged-d09-calibration), the operator-reviewed and D09-qualified calibration set, externally anchored integrity, approved extra-cost tradeoff and blind review; staged preparation, calibration-only fitting, review-gated registration, calibrated scoring and the native record now exist in the D17 module |
 | D29 measured screening report, AC8/AC9/AC13 | [Study module](d29-heldout-study.md) implements the corpus/oracle, individual question mapping, calibration recipe and the absolute GateBinding. Actual observations, compatible D09 artifact, operator gold/reviewer audit and protected integrity/access records remain missing. |
 | Staged D09/test handoff | Sealed real calibration observations, genuinely qualified/registered D09 artifact, protected artifact/seal/approval anchors and human test-phase approval |
 | Any live collection | Priced approval with real evidence references, clean source/CI attestation, canonical root, actual prior spend, resolver pin, synthetic privacy approval and provider terms record |
